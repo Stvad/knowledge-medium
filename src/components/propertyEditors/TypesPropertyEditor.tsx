@@ -15,6 +15,14 @@ interface TypeOption {
 const normalizedTypes = (value: readonly string[]): readonly string[] =>
   Array.from(new Set(value.map(type => type.trim()).filter(Boolean)))
 
+/** A user-defined type's id is the type-definition block's uuid —
+ *  meaningless to a human picking the type. Hide it from the dropdown
+ *  so a long uuid can't visually drown the label even in narrow panels;
+ *  kernel ids ("page", "block-type", etc.) are short and human-readable
+ *  and stay visible as disambiguation alongside their label. */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const isOpaqueId = (id: string): boolean => UUID_PATTERN.test(id)
+
 export function TypesPropertyEditor({
   value,
   block,
@@ -181,12 +189,12 @@ export function TypesPropertyEditor({
           >
             <Plus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
             <span className="min-w-0 flex-1 truncate">{option.label}</span>
-            {option.label !== option.id && (
-              // Auxiliary id badge: cap with `max-w-[12rem]` so a long
-              // id (e.g. a user-defined type's UUID) can't push the
-              // flex-1 label span to zero width. `min-w-0` lets the
-              // cap shrink further if the parent is narrow. `truncate`
-              // applies inside whichever width wins.
+            {option.label !== option.id && !isOpaqueId(option.id) && (
+              // Auxiliary id badge — shown only for human-readable ids
+              // (kernel: "page", "block-type", "panel:properties"). User-
+              // defined types have uuid ids that carry no signal to the
+              // picker; hiding them keeps the label fully visible even
+              // in narrow panel widths.
               <span className="min-w-0 max-w-[12rem] truncate text-xs text-muted-foreground">{option.id}</span>
             )}
           </button>
