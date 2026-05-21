@@ -2,8 +2,9 @@ import { MouseEvent } from 'react'
 import { Block } from '@/data/block'
 import { BlockContextType } from '@/types.ts'
 import { BlockComponent } from '@/components/BlockComponent.tsx'
-import { NestedBlockContextProvider } from '@/context/block.tsx'
+import { NestedBlockContextProvider, useBlockContext } from '@/context/block.tsx'
 import { buildAppHash } from '@/utils/routing.ts'
+import { handleBlockLinkClick, useNavigate } from '@/utils/navigation.ts'
 import { cn } from '@/lib/utils.ts'
 
 interface BreadcrumbListProps {
@@ -11,8 +12,7 @@ interface BreadcrumbListProps {
   workspaceId: string
   overrides: Partial<BlockContextType>
   // When provided, plain primary clicks call onSelect (e.g. inline unfurl).
-  // Modifier/middle/right clicks always fall through to the href so the user
-  // can navigate or open in a panel the way the rest of the app's links work.
+  // Other clicks follow the same modifier policy as block links.
   onSelect?: (parent: Block) => void
   className?: string
   itemClassName?: string
@@ -31,6 +31,9 @@ export const BreadcrumbList = ({
   itemClassName,
   separatorClassName,
 }: BreadcrumbListProps) => {
+  const navigate = useNavigate()
+  const {panelId} = useBlockContext()
+
   if (parents.length === 0) return null
 
   return (
@@ -45,12 +48,24 @@ export const BreadcrumbList = ({
             onClickCapture={(event: MouseEvent) => {
               // Capture before nested markdown links/block refs can stop the
               // event; the breadcrumb item owns clicks on its preview content.
-              event.stopPropagation()
-              if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
-              if (event.button !== 0) return
-              if (!onSelect) return
-              event.preventDefault()
-              onSelect(parent)
+              if (
+                onSelect &&
+                event.button === 0 &&
+                !event.metaKey &&
+                !event.ctrlKey &&
+                !event.shiftKey &&
+                !event.altKey
+              ) {
+                event.stopPropagation()
+                event.preventDefault()
+                onSelect(parent)
+                return
+              }
+
+              handleBlockLinkClick(event, navigate, panelId, {
+                blockId: parent.id,
+                workspaceId,
+              })
             }}
           >
             <span className={INNER_CLASS}>
