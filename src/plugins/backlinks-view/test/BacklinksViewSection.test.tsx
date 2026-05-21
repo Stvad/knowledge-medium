@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { defineVariant } from '@/extensions/variantFacet.ts'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.ts'
@@ -61,5 +61,31 @@ describe('BacklinksViewSection', () => {
 
     expect(screen.getByRole('group', {name: 'Backlinks view'})).toBeInTheDocument()
     expect(screen.getByText('visible backlinks')).toBeInTheDocument()
+  })
+
+  it('does not bubble backlink surface clicks to the parent block shell', () => {
+    const surfaceClick = vi.fn()
+    const parentBlockClick = vi.fn()
+    const BacklinkVariant = () => (
+      <div data-testid="backlink-surface" onClick={surfaceClick}>
+        Backlink chrome
+      </div>
+    )
+    const runtime = resolveFacetRuntimeSync([
+      backlinksViewFacet.of(() => defineVariant('empty', 'Empty', BacklinkVariant), {source: 'test'}),
+    ])
+
+    render(
+      <div onClick={parentBlockClick}>
+        <AppRuntimeContextProvider value={runtime}>
+          <BacklinksViewSection block={block} resolveContext={resolveContext}/>
+        </AppRuntimeContextProvider>
+      </div>,
+    )
+
+    fireEvent.click(screen.getByTestId('backlink-surface'))
+
+    expect(surfaceClick).toHaveBeenCalledOnce()
+    expect(parentBlockClick).not.toHaveBeenCalled()
   })
 })

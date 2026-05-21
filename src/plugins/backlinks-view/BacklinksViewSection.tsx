@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, type MouseEvent } from 'react'
 import type { BlockRenderer, BlockRendererProps } from '@/types.ts'
 import type {
   BlockChildrenFooterContribution,
@@ -69,7 +69,11 @@ export function BacklinksViewSection({block, resolveContext}: Props) {
     </div>
   )
 
-  return <Selected block={block} controls={controls || undefined}/>
+  return (
+    <div onClick={(event: MouseEvent<HTMLDivElement>) => event.stopPropagation()}>
+      <Selected block={block} controls={controls || undefined}/>
+    </div>
+  )
 }
 
 /** Coordinator footer contribution. Captures the resolve context so
