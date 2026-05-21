@@ -240,6 +240,25 @@ Cold-start traces show this matters when the page mounts dozens of concurrent re
 
 **Trigger to build.** Estimated 1–2 weeks of careful work for path 2. Worth it only if a future regression makes single-connection serialization the dominant cold-start cost again, *and* path 1 hasn't materialized. Concrete signal: `db.getAll.maxMs` consistently above ~200 ms with `writeTransaction` activity correlated, *and* batching/deferral can't eliminate the contention at the call-site level. Until then: continue cutting reads at the call site (batched queries, prefetch) and writes off the critical path (`scheduleIdle`, fast-path before opening a tx). Re-check PowerSync's changelog at each major version bump.
 
+## Explicit typed events for state changes (event-sourcing discipline)
+
+Today every state change goes through `repo.tx` → kernel mutators → row writes on `blocks`. `command_events.mutator_calls` records the mutator-name + args per tx, which is morally close to an event log but not enforced: a mutator body is free to read state and call `tx.update(...)` based on what it sees, so the recorded `mutator_calls` row is not guaranteed to be a *replayable* description of the change. The row write is the truth; the call record is a hint.
+
+**Discipline shift:** treat every state change as a named, typed event. The mutator becomes a pure function `(event-args, current-state) → row writes` — i.e. a materializer. The recorded `mutator_calls` row is then a complete, replayable description of the change.
+
+**Why this is worth flagging now:**
+
+- **PITR / time-travel feature** ([discussed in this thread, see also the local-only PITR work on `row_events`]): row-state history reconstructs *what* a block looked like at time T but not *what operation* produced that state. Typed events give the operation back. "I see a deletion at 3pm — what command issued it?" becomes a direct lookup instead of inferred from diffs.
+- **Cross-device history (sidecar `block_events` table):** clients can push their `command_events` upstream to give every device a uniform global event stream, without going to a full LiveStore-style event-sourced sync. The richness of what's worth pushing is bounded by how disciplined the mutator surface is — diffuse "do-whatever" mutators don't compress to useful events.
+- **Future architectural optionality:** if event-sourced sync ever becomes the right answer (per-edit cross-device history, deterministic conflict resolution), the migration cost scales with how close mutators already are to materializers. Tightening them now lowers that cost for free; doing it under pressure later is expensive.
+- **Testability / clarity** as standalone wins: an event whose effect is `(args, state) → writes` is dramatically easier to test, audit, and reason about than an opaque mutator body.
+
+**Why deferred:** no current feature *requires* this; the existing mutator surface works. The shift is mostly invisible from outside the data layer. It's a refactoring direction, not a feature.
+
+**Trigger to build:** (a) PITR UI lands and people start asking "what command did this?" not just "what state was this?", (b) a serious sidecar event-stream feature is on the table, (c) the next time the mutator surface is being reworked for another reason and the cost of doing this alongside is marginal, or (d) we're seriously evaluating an event-sourced sync engine and want to know how close we already are.
+
+**Adjacent direction:** if pursued, the natural next refactor is making `mutator_calls` the audit primary key instead of `row_events`. `row_events` becomes a derived index for fast row-state reconstruction; `command_events` carries the user-meaningful operation log. Pruning policies on each can then be independent.
+
 ## Generic "move type" / "move property" primitive
 
 SRS now has a dedicated cut/paste swipe action ([src/plugins/srs-rescheduling/moveSrsState.ts](src/plugins/srs-rescheduling/moveSrsState.ts) + [srsClipboard.ts](src/plugins/srs-rescheduling/srsClipboard.ts), wired through `srs.cut` / `srs.paste` in [index.ts](src/plugins/srs-rescheduling/index.ts)). The shape generalises: every `TypeContribution` declares its own field list via `properties` ([src/data/api/blockType.ts](src/data/api/blockType.ts)), so a kernel-or-shared-util "move type with fields" operation could subsume the SRS case once a second caller appears.
