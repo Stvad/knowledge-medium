@@ -69,13 +69,45 @@ const currentInstance = (
 }
 
 /**
+ * Holding down a nav key fires the handler dozens of times per
+ * second. Writing focusedBlockId / focusedVisualTargetKey to the
+ * panel block on every step would queue that many IndexedDB txs
+ * behind the user — each notifies subscribers and the queue depth
+ * compounds the perceived lag. The persisted props only matter for
+ * re-mount recovery, so we debounce them: the final destination is
+ * what gets written when the user pauses. The activePanelId write
+ * (panel hop) still fires immediately, because that one affects
+ * which panel is "active" for other UI surfaces and shouldn't lag
+ * behind the focus indicator.
+ */
+const PERSIST_FOCUS_DEBOUNCE_MS = 200
+let pendingPersist: {
+  panelBlock: Block
+  blockId: string
+  instanceKey: string
+  timer: ReturnType<typeof setTimeout>
+} | null = null
+
+const schedulePersistFocus = (panelBlock: Block, blockId: string, instanceKey: string) => {
+  if (pendingPersist) clearTimeout(pendingPersist.timer)
+  const timer = setTimeout(() => {
+    const pending = pendingPersist
+    pendingPersist = null
+    if (!pending) return
+    void focusVisualTarget(pending.panelBlock, pending.blockId, pending.instanceKey).catch(error => {
+      console.error('[spatial-navigation] focusVisualTarget failed', error)
+    })
+  }, PERSIST_FOCUS_DEBOUNCE_MS)
+  pendingPersist = {panelBlock, blockId, instanceKey, timer}
+}
+
+/**
  * Push focus onto `el`. DOM side-effects (focus, scroll, position
  * memory) run synchronously so the very next keystroke sees the
- * updated `document.activeElement`. Prop writes (focusedBlockId /
- * focusedVisualTargetKey on the panel block; activePanelId on the
- * layout session) fire-and-forget — they're persistent state for
- * re-mount recovery, not on the navigation hot path. Awaiting them
- * would stall the perceived response to held-down keys.
+ * updated `document.activeElement`. The focus props on the panel
+ * block are debounced — see schedulePersistFocus above. The
+ * activePanelId write (only fires on a panel change) posts in the
+ * background but is not debounced.
  */
 const focusInstance = (
   el: HTMLElement,
@@ -98,12 +130,8 @@ const focusInstance = (
   }
   el.focus({preventScroll: true})
 
-  // Fire-and-forget prop writes. If anything goes wrong, log — there's
-  // no recovery the user can take and the DOM is already correct.
   const panelBlock = repo.block(panelId)
-  void focusVisualTarget(panelBlock, blockId, instanceKey).catch(error => {
-    console.error('[spatial-navigation] focusVisualTarget failed', error)
-  })
+  schedulePersistFocus(panelBlock, blockId, instanceKey)
 
   const layoutEl = panel.closest<HTMLElement>('[data-layout-session-id]')
   const layoutSessionId = layoutEl?.dataset.layoutSessionId
