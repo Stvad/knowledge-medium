@@ -1,25 +1,10 @@
-import { useCallback, useId, useMemo, useSyncExternalStore } from 'react'
+import { useCallback, useId, useMemo } from 'react'
 import type { Ref, FocusEvent, PointerEvent } from 'react'
 import type {
   BlockShellDecoratorProps,
   BlockShellState,
 } from '@/extensions/blockInteraction.ts'
 import { surfaceFromContext } from './surface.ts'
-import {
-  getSpatialFocusedInstance,
-  subscribeSpatialFocus,
-} from './focusStore.ts'
-
-// Matches the kernel `BlockFocusShellDecorator` rule so our highlight
-// looks identical to the default focused-block treatment. Reused
-// during the debounce window when the persisted prop hasn't moved
-// yet but spatial nav has.
-const FOCUSED_BLOCK_CLASS = '[&>.block-body>div:first-child]:bg-muted/95'
-
-const mergeClassName = (...parts: Array<string | undefined>): string | undefined => {
-  const className = parts.filter(Boolean).join(' ')
-  return className.length ? className : undefined
-}
 
 const applyRef = (ref: Ref<HTMLDivElement> | undefined, el: HTMLDivElement | null): void => {
   if (!ref) return
@@ -70,6 +55,11 @@ export function SpatialNavigationShellDecorator({
   const panelId = typeof blockContext.panelId === 'string' ? blockContext.panelId : undefined
 
   const upstreamRef = state.shellProps.ref
+  // Callback ref runs synchronously the instant React attaches the
+  // element. Switched from useEffect because the parent decorator's
+  // effect would observe `shellRef.current === null` for some blocks
+  // (notably the panel's top-level block, where the inner Collapsible
+  // hadn't committed by the time the decorator's effect ran).
   const wrappedRef = useCallback((el: HTMLDivElement | null) => {
     applyRef(upstreamRef, el)
     if (el) {
@@ -79,25 +69,10 @@ export function SpatialNavigationShellDecorator({
     }
   }, [instanceId, panelId, surface, upstreamRef])
 
-  // Snapshot is a single string per render; the selector below returns
-  // a boolean. `useSyncExternalStore`'s Object.is bail-out means only
-  // the two blocks whose membership flips actually re-render — so the
-  // fan-out across a large panel is bounded.
-  const focusedInstance = useSyncExternalStore(
-    subscribeSpatialFocus,
-    getSpatialFocusedInstance,
-    getSpatialFocusedInstance,
-  )
-  const spatiallyFocused = focusedInstance === instanceId
-
   const nextState = useMemo<BlockShellState>(() => ({
     shellProps: {
       ...state.shellProps,
       ref: wrappedRef,
-      className: mergeClassName(
-        state.shellProps.className,
-        spatiallyFocused ? FOCUSED_BLOCK_CLASS : undefined,
-      ),
       onFocus: (event: FocusEvent<HTMLElement>) => {
         state.shellProps.onFocus?.(event)
       },
@@ -109,7 +84,7 @@ export function SpatialNavigationShellDecorator({
       ...state.shortcutSurfaceOptions,
       visualTargetId: instanceId,
     },
-  }), [instanceId, spatiallyFocused, state.shellProps, state.shortcutSurfaceOptions, wrappedRef])
+  }), [instanceId, state.shellProps, state.shortcutSurfaceOptions, wrappedRef])
 
   return <>{children(nextState)}</>
 }

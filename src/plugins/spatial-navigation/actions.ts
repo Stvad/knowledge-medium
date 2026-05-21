@@ -25,7 +25,6 @@ import {
   rememberInstancePosition,
   verticalNeighbor,
 } from './walker.ts'
-import { setSpatialFocusedInstance } from './focusStore.ts'
 
 /**
  * Find the DOM instance currently driving navigation. Order of
@@ -161,14 +160,6 @@ const focusInstance = (
   if (!blockId || !instanceKey) return
 
   rememberInstancePosition(panelId, el)
-
-  // Synchronously update the in-memory focused-instance store so the
-  // shell decorator can re-render the highlight on this keystroke
-  // without waiting for the debounced prop write to commit. Without
-  // this the only focus indicator (BlockFocusShellDecorator's bg
-  // class, driven by `useInFocus` reading the persisted prop) lags
-  // 200ms behind a held-down nav key, and the plugin feels frozen.
-  setSpatialFocusedInstance(instanceKey)
 
   if (typeof el.scrollIntoView === 'function') {
     el.scrollIntoView({block: 'nearest', inline: 'nearest'})
