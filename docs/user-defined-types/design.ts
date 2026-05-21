@@ -20,7 +20,6 @@ import type {
   TypeRegistrySnapshot,
 } from '@/data/api'
 import type {SameTxEvent, SameTxCtx} from '@/data/api/sameTxProcessor'
-import type {ChangedRow} from '@/data/api/processor'
 import {
   ChangeScope,
   codecs,
@@ -274,11 +273,10 @@ export class UserTypesService {
 // wired to the row_events tail.
 // ──────────────────────────────────────────────────────────────────────
 
-/** Delta helpers added to src/data/properties.ts (or equivalent).
- *  Null-safe on both ends — hard-deletes have row.after=null,
- *  inserts have row.before=null. */
-export const addedTypes = (_row: ChangedRow): readonly string[] => []
-export const removedTypes = (_row: ChangedRow): readonly string[] => []
+/** Delta helpers shipped in src/data/properties.ts (Phase 2 — landed).
+ *  Re-imported here so the design's example processor (below) keeps
+ *  compiling against the real helpers, not a local stub. */
+export { addedTypes, removedTypes } from '@/data/properties'
 
 /** Example: a type-defined per-instance template materializer. Runs
  *  inside the same tx as the type-add via the same-tx processor

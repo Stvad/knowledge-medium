@@ -56,39 +56,16 @@ export interface TypeContribution {
   /** Optional longer description for hover tooltips in type pickers and
    *  the property panel section header. */
   readonly description?: string
-  /** Optional escape hatch for type-add work that needs more than the
-   *  per-call `initialValues` arg can express. Runs once when `addType`
-   *  first applies this type to a block, after the caller-provided
-   *  initial values are written, inside the same tx. See §3a-setup.
-   *  Use sparingly — it's a code-execution hatch in the type registry.
-   *  Common cases: child-block templates (meeting → Attendees / Agenda /
-   *  Action items), computed initial values (`due = now() + 7 days`),
-   *  cross-block wiring at add time. Setup callbacks that write
-   *  block-level fields they don't strictly own should follow
-   *  init-if-missing semantics so a re-add or competing call doesn't
-   *  clobber a user value. */
-  readonly setup?: TypeSetup
 }
 
-export interface TypeSetupContext {
-  readonly tx: Tx
-  /** The block the type is being added to. */
-  readonly id: string
-  /** For ordinary repo operations — opening tx-internal queries, etc.
-   *  Not for type/schema registry reads: those registries are private
-   *  on Repo. Use the snapshots below instead. */
-  readonly repo: Repo
-  /** Type registry snapshotted at addType-call time, parallel to the
-   *  ProcessorCtx.propertySchemas pattern (§7a). Lets a setup look up
-   *  related type contributions (e.g. the parent's type) without
-   *  reaching into Repo internals. */
-  readonly types: ReadonlyMap<string, TypeContribution>
-  /** Property-schema registry snapshotted at addType-call time. Lets
-   *  setup encode values via a schema's codec when needed. */
-  readonly propertySchemas: ReadonlyMap<string, AnyPropertySchema>
-}
-
-export type TypeSetup = (ctx: TypeSetupContext) => void | Promise<void>
+// Historical note: an earlier draft of this design carried a `setup`
+// callback on TypeContribution (run once inside `addType`'s tx, after
+// `initialValues`). The user-defined-types design replaces that with
+// same-tx processors that watch the `properties` field (see
+// `docs/user-defined-types/design.html` Phase 2 and
+// `src/data/properties.ts` `addedTypes` / `removedTypes` helpers).
+// Every property write now flows through the same processor pipeline
+// regardless of who wrote it; the type registry stays data-only.
 
 /** Identity-typed helper for full type inference at definition sites,
  *  parallel to `defineProperty`. Does not register — registration is
@@ -254,7 +231,7 @@ This sidesteps Tana-style per-supertag schema scoping (which makes "set status o
 What still belongs on the type contribution rather than on the schema:
 
 - **Per-type `properties[]` membership** → which schemas appear in this type's section of the property panel; a flat `statusProp` listed by both `todo` and `task` shows up under both.
-- **Per-type `setup` callbacks** → child-block templates, computed initial values, cross-block wiring at add time (§3a-setup).
+- **Type-add behaviors** (child-block templates, computed initial values, cross-block wiring on first tag) → ride on top of `sameTxProcessorsFacet` contributions that watch the `properties` field and key off `addedTypes(row).includes(typeId)`. The type registry itself stays data-only; behaviors compose through the existing processor pipeline. See `docs/user-defined-types/design.html` Phase 2.
 
 Defaults belong on the schema (one global per field), not on per-type overrides — the §3 hybrid rule covers value-space differences by namespacing into a different field rather than by overriding a shared field's default. Ref-target constraints — "this `tasks` field accepts only Task-typed blocks" — live on the codec itself, also not on per-type overrides; see §5.
 
@@ -274,13 +251,14 @@ export const hasBlockType = (
 ): boolean => getBlockTypes(data).includes(typeId)
 
 /** Returns a new `properties` map with `typeId` appended if absent.
- *  Does NOT materialise per-call `initialValues` and does NOT run
- *  `setup`. Type contributions don't carry defaults (schema-level
- *  defaultValue is read-time fallback only — see §3); the only
- *  per-add-call materialisation is `initialValues` passed into
- *  `repo.addType` / `repo.addTypeInTx`, which is what callers
- *  should route through if they want fields populated atomically
- *  with the membership write. */
+ *  Does NOT materialise per-call `initialValues`. Type contributions
+ *  don't carry defaults (schema-level defaultValue is read-time
+ *  fallback only — see §3); the only per-add-call materialisation
+ *  is `initialValues` passed into `repo.addType` / `repo.addTypeInTx`.
+ *  Type-add behaviors (templates, computed initial values, cross-
+ *  block wiring) live in same-tx processors that watch the
+ *  `properties` field, so any membership write — including this
+ *  raw helper followed by a `tx.update` — triggers them. */
 export const addBlockTypeToProperties = (
   properties: Record<string, unknown>,
   typeId: string,
@@ -294,17 +272,17 @@ export const addBlockTypeToProperties = (
 }
 ```
 
-These are deliberately small. Registry resolution, `initialValues` materialisation, and `setup` all happen inside `repo.addType` — these helpers don't replicate any of that.
+These are deliberately small. Registry resolution and `initialValues` materialisation happen inside `repo.addType` — these helpers don't replicate any of that. **Type-add behaviors that need to fire on the transition itself ride on the same-tx processor pipeline**, keyed off `addedTypes(row).includes(typeId)`. Any path that ends up writing `typesProp` — `repo.addType`, `repo.addTypeInTx`, or a raw `tx.update({properties: ...})` — produces a row event the watcher consumes, so behaviors aren't tied to a specific orchestration entry point.
 
-**Important: `addBlockTypeToProperties` does NOT run `setup` or apply `initialValues`.** It's a *raw membership writer* for paths that genuinely can't reach `repo.addType` — fixture construction in tests, processor snapshot rewrites, importer **plan** code that builds row shapes before commit. **Don't pre-write membership and then call `repo.addType` expecting `setup` to fire**: `repo.addType` will still run init-if-missing materialisation against any `initialValues` you pass on a re-call, but `setup` only fires when `addType` actually transitions the block from "doesn't have type" to "does have type." Pre-writing typesProp via raw `tx.update` makes that transition invisible to `addType` — `setup` never runs.
+**Important: `addBlockTypeToProperties` does NOT apply `initialValues`.** It's a *raw membership writer* for paths that genuinely can't reach `repo.addType` — fixture construction in tests, processor snapshot rewrites, importer **plan** code that builds row shapes before commit.
 
-The right boundary: paths that need full type-add semantics (`initialValues` materialisation + `setup`) call the type-system orchestration entry point directly without prewriting. App-level callers outside an existing tx use `repo.addType`. The Roam importer's apply phase is already inside chunked `repo.tx` calls — it must use `repo.addTypeInTx(tx, blockId, 'todo', initialValues?, snapshot?)` per row to share atomicity with the surrounding `upsertImportedBlock` writes; calling the public `repo.addType` from inside an active tx would either fail against the writer slot or open a separate tx and lose the atomicity guarantee. Either way the importer does **not** stamp `typesProp` itself. Plan code that constructs `BlockData` rows pre-tx (deterministic-id paths) can use `addBlockTypeToProperties` — those paths get tagged blocks but don't get `setup` execution or `initialValues` materialisation. Read fallbacks come from `PropertySchema.defaultValue` automatically; `initialValues` skipped here just means the block reads its schema default until something writes the field.
+The right boundary: paths that need full type-add semantics (`initialValues` materialisation) call the type-system orchestration entry point. App-level callers outside an existing tx use `repo.addType`. The Roam importer's apply phase is already inside chunked `repo.tx` calls — it must use `repo.addTypeInTx(tx, blockId, 'todo', initialValues?, snapshot?)` per row to share atomicity with the surrounding `upsertImportedBlock` writes; calling the public `repo.addType` from inside an active tx would either fail against the writer slot or open a separate tx and lose the atomicity guarantee. Either way the importer does **not** stamp `typesProp` itself. Plan code that constructs `BlockData` rows pre-tx (deterministic-id paths) can use `addBlockTypeToProperties` — those paths get tagged blocks but don't get `initialValues` materialisation. Read fallbacks come from `PropertySchema.defaultValue` automatically; `initialValues` skipped here just means the block reads its schema default until something writes the field. Type-add same-tx processors still fire on the membership change regardless of which write path produced it, so a `tx.update` that adds a type id stays equivalent in behavior to an `addType` call.
 
-#### 3a. `addType` / `removeType` — orchestration that owns membership, init values, and setup
+#### 3a. `addType` / `removeType` — orchestration that owns membership and initial values
 
-Type tagging needs a central orchestration point that materialises caller-supplied initial values and runs any `setup` callback in the same tx as the membership write. Without it, every tag-mapping path (importer, command, agent action) has to hand-roll the sequence and forget pieces. Schema-level defaults still surface via `block.get` for unset fields without any per-call work — that path is unchanged. Per-call `initialValues` (typically the source-specific app-owned values an importer wants to apply atomically with the tag) flow through `addType`'s materialisation pass.
+Type tagging needs a central orchestration point that materialises caller-supplied initial values in the same tx as the membership write. Without it, every tag-mapping path (importer, command, agent action) has to hand-roll the sequence and forget pieces. Schema-level defaults still surface via `block.get` for unset fields without any per-call work — that path is unchanged. Per-call `initialValues` (typically the source-specific app-owned values an importer wants to apply atomically with the tag) flow through `addType`'s materialisation pass. Type-add behaviors (templates, cross-block wiring) live in same-tx processors and fire on the membership change regardless of which write path produced it.
 
-**API surface: `repo.addType` / `repo.removeType` are `Repo` methods, not registered mutators.** The `Mutator.apply: (tx, args) => Promise<R>` signature ([src/data/api/mutator.ts:9](src/data/api/mutator.ts:9)) deliberately doesn't carry runtime/registry access, and `addType` needs `typesFacet` (to look up the contribution's `setup` callback and verify the type id is registered) and the **merged `_propertySchemas` registry** (§1a — populated from both `propertySchemasFacet.of(...)` and type contributions' `properties[]`) to encode caller-supplied `initialValues` through the right codec. A schema reachable via the merged registry is a valid `initialValues` target regardless of which path registered it — type-lifted-only schemas (declared on a `TypeContribution.properties` and never on `propertySchemasFacet` directly) work the same as direct registrations. Adding a context arg to the mutator surface is a broad change for one call site; making `addType` a `Repo` method is the conservative fit — `Repo` is the natural home for orchestration that spans facet lookups + tx writes. (Pattern parallel: `repo.tx`, `repo.mutate.X` for low-level ops; `repo.addType` for type-system orchestration that needs registry access.) There are no per-type defaults to apply — schema-level `defaultValue` is read-time fallback only, surfaced through `block.get` without any registry lookup at write time.
+**API surface: `repo.addType` / `repo.removeType` are `Repo` methods, not registered mutators.** The `Mutator.apply: (tx, args) => Promise<R>` signature ([src/data/api/mutator.ts:9](src/data/api/mutator.ts:9)) deliberately doesn't carry runtime/registry access, and `addType` needs `typesFacet` (to verify the type id is registered) and the **merged `_propertySchemas` registry** (§1a — populated from both `propertySchemasFacet.of(...)` and type contributions' `properties[]`) to encode caller-supplied `initialValues` through the right codec. A schema reachable via the merged registry is a valid `initialValues` target regardless of which path registered it — type-lifted-only schemas (declared on a `TypeContribution.properties` and never on `propertySchemasFacet` directly) work the same as direct registrations. Adding a context arg to the mutator surface is a broad change for one call site; making `addType` a `Repo` method is the conservative fit — `Repo` is the natural home for orchestration that spans facet lookups + tx writes. (Pattern parallel: `repo.tx`, `repo.mutate.X` for low-level ops; `repo.addType` for type-system orchestration that needs registry access.) There are no per-type defaults to apply — schema-level `defaultValue` is read-time fallback only, surfaced through `block.get` without any registry lookup at write time.
 
 **`Repo` must retain the registries it needs.** `Repo.setFacetRuntime` ([src/data/repo.ts:738](src/data/repo.ts:738)) today only extracts `mutators`, `processors`, `invalidationRules`, and `queries` — it does NOT store the runtime, `typesFacet`, or `propertySchemasFacet`. Phase 1 must extend `setFacetRuntime` to also retain narrower registries needed by type-system orchestration:
 
@@ -366,22 +344,20 @@ private async _addTypeInTx(
   if (!contribution) {
     // Verify the type id is registered. Silently persisting an
     // unknown type id papers over typos / load-order mistakes /
-    // missing plugins, and skips `setup` for a type the caller
-    // believed was registered. The §3 facade comment explicitly
-    // says blocks may carry types whose contribution is not yet
-    // registered (sync from another device, deferred type-def
-    // block, dynamic extension still loading) — but those rows
-    // arrive via raw row writes from sync, NOT through this
-    // orchestration entry point. Anything that goes through
-    // addType is a deliberate local action and the type id should
-    // resolve. Throw and let the caller decide whether to import
-    // the contribution, fall back to addBlockTypeToProperties for
-    // raw membership, or fix the typo.
+    // missing plugins. The §3 facade comment explicitly says blocks
+    // may carry types whose contribution is not yet registered (sync
+    // from another device, deferred type-def block, dynamic extension
+    // still loading) — but those rows arrive via raw row writes from
+    // sync, NOT through this orchestration entry point. Anything that
+    // goes through addType is a deliberate local action and the type
+    // id should resolve. Throw and let the caller decide whether to
+    // import the contribution, fall back to addBlockTypeToProperties
+    // for raw membership, or fix the typo.
     throw new Error(
       `[addType] type id ${JSON.stringify(typeId)} is not registered. ` +
       `Register the contribution via typesFacet before calling addType, ` +
       `or use addBlockTypeToProperties for raw membership writes that ` +
-      `intentionally bypass setup / initialValues.`,
+      `intentionally bypass initialValues materialisation.`,
     )
   }
   const block = await tx.get(blockId)
@@ -421,7 +397,11 @@ private async _addTypeInTx(
     }
   }
   if (propsChanged) await tx.update(blockId, { properties: next })
-  if (wasNew) await contribution.setup?.({ tx, id: blockId, repo: this, types, propertySchemas })
+  // Type-add behaviors are NOT invoked from here. They ride on the
+  // same-tx processor pipeline keyed off `addedTypes(row)` — the
+  // membership write above produces a row event the processors
+  // consume, so the behavior fires for every write path that lands
+  // a new type on the row, not just this one. See §3a-setup.
 }
 
 private async _removeTypeInTx(tx: Tx, blockId: string, typeId: string): Promise<void> {
@@ -626,56 +606,45 @@ Every tag-mapping path goes through the type-system orchestration entry points �
 
 No type-aware read-time overlay exists. `block.get` returns `schema.defaultValue` for unset properties (current behaviour, unchanged); `useProperty` does the same; the typed-query primitive (§8) reads materialised state directly. The §3 hybrid rule means a value-space difference becomes a different schema with its own default rather than a per-type override of a shared field, which keeps the read paths simple — no cross-registry lookup needed for the unset-property case.
 
-#### 3a-setup. The `setup` escape hatch beyond `initialValues`
+#### 3a-setup. Type-add behaviors via same-tx processors
 
-`initialValues` covers static caller-supplied values per add. A handful of legitimate type-add behaviors fall outside that:
+An earlier draft of this design carried a `setup` callback on `TypeContribution` — a closure run once inside `repo.addType` after `initialValues` were written. That field is gone; type-add work that needs more than `initialValues` (child-block templates, computed initial values, cross-block wiring on first tag, side effects sharing the tx) is implemented as same-tx processor contributions that watch the `properties` field and key off `addedTypes(row).includes(typeId)`.
 
-- **Child-block templates.** `meeting` creates child blocks for *Attendees*, *Agenda*, *Action items*. `project` creates *Tasks* and *Notes* container children. `daily-note` pre-populates the daily template structure.
-- **Computed initial values defined by the type** (not supplied by every caller). `due = now() + 7 days`. `weekNumber = isoWeek(today)`. Type-specific computations the caller shouldn't have to reproduce.
-- **Cross-block wiring at add time.** Setting `project = parent.id` when a `task` is added under a `project`-typed parent. (Borderline — react-to-context fits workflow rules better, but if it should fire *only* on the initial tag, `setup` is the place.)
-- **Side effects sharing the tx.** Append a row to a side table or an "All Tasks" inbox subtree, with the same tx so undo of the type-add cleanly removes everything together.
-
-The hook fires inside `repo.addType` after `initialValues` are written, in the same tx. `removeType` doesn't run a teardown — use the same "we don't clean up on remove in v1" rule as for properties; types that ship complex setups should be ones users add and rarely undo.
+Why the move: `setup` only fired when a caller went through `repo.addType` / `repo.addTypeInTx`. Any path that wrote `typesProp` via raw `tx.update` — Roam-isa retag, future cross-device sync apply, agent code that builds property maps directly — silently bypassed it. A same-tx processor watches the row event, so every write path triggers the same behavior. The trade-off is one extra branch (`addedTypes(row).includes(typeId)`) per processor invocation, paid by all property writes; in exchange the type registry is data-only and the bypass footgun is gone. See `docs/user-defined-types/design.html` Phase 2 for the migration record.
 
 ```ts
-import { createChild } from '@/data/internals/kernelMutators'  // 'core.createChild' mutator
+import { addedTypes } from '@/data/properties'
+import { defineSameTxProcessor, sameTxProcessorsFacet } from '@/data/api'
+import { createChild } from '@/data/internals/kernelMutators'
 
-typesFacet.of(defineBlockType({
-  id: 'meeting',
-  label: 'Meeting',
-  properties: [meetingDateProp, meetingAttendeesProp],
-  setup: async ({ tx, id }) => {
-    // Type-defined computed initial value, init-if-missing. Setup runs
-    // AFTER caller-supplied initialValues are written, so a meeting
-    // imported with an explicit date (or one already set on the row
-    // via sync) will already be present here — read first, skip the
-    // write if so, otherwise compute today() and stamp it.
-    const block = await tx.get(id)
-    if (!block) return
-    if (block.properties[meetingDateProp.name] === undefined) {
-      const next = { ...block.properties, [meetingDateProp.name]: meetingDateProp.codec.encode(today()) }
-      await tx.update(id, { properties: next })
-    }
-    for (const label of ['Attendees:', 'Agenda:', 'Action items:']) {
-      // tx.run dispatches a registered mutator inside this tx so the
-      // child writes share the same transactional bucket as the
-      // addType writes — undo of the type-add cleanly removes the
-      // template subtree.
-      const childId = await tx.run(createChild, { parentId: id, position: { kind: 'last' } })
-      await tx.update(childId, { content: label })
+sameTxProcessorsFacet.of(defineSameTxProcessor({
+  name: 'meeting.materializeTemplate',
+  watches: {kind: 'field', table: 'blocks', fields: ['properties']},
+  apply: async (event, ctx) => {
+    for (const row of event.changedRows) {
+      if (!addedTypes(row).includes('meeting')) continue
+      const block = await ctx.tx.get(row.id)
+      if (!block) continue
+      // Init-if-missing for type-defined computed values. The
+      // initialValues path runs before this processor, so a caller-
+      // supplied or sync-applied date is already visible on row.after.
+      if (block.properties[meetingDateProp.name] === undefined) {
+        await ctx.tx.update(row.id, {
+          properties: {...block.properties, [meetingDateProp.name]: meetingDateProp.codec.encode(today())},
+        })
+      }
+      for (const label of ['Attendees:', 'Agenda:', 'Action items:']) {
+        const childId = await ctx.tx.run(createChild, {parentId: row.id, position: {kind: 'last'}})
+        await ctx.tx.update(childId, {content: label})
+      }
     }
   },
-}), { source: 'meeting' })
+}), {source: 'meeting'})
 ```
 
-`tx.run(mutator, args)` ([src/data/api/tx.ts:130](src/data/api/tx.ts:130)) is the in-tx mutator dispatch — different from `repo.mutate.createChild(...)` which would open a separate tx and break the atomicity property `setup` exists for. Setup callbacks should always use `tx.run`, never `repo.mutate.X`. Setup callbacks that write block-level fields they don't strictly own should be init-if-missing too — read the existing value via `tx.get` first and skip writes for fields already set.
+Processors that write fields they don't strictly own should be init-if-missing — read via `ctx.tx.get` first and skip writes for fields already set, so re-fires (e.g. an unrelated `properties` write on the same row in a later tx) don't clobber user values. `removeType` runs no teardown — same "we don't clean up on remove in v1" rule as for properties.
 
-**Use sparingly** — it's a code-execution hatch in the type registry. `initialValues` (caller-supplied static map) and `PropertySchema.defaultValue` (read-time fallback) cover the static cases without code. `setup` is opaque code at add time. Two specific gotchas to flag at implementation time:
-
-- **Bulk-write asymmetry.** `setup` fires from `repo.addType` / `repo.addTypeInTx`. A bulk path that writes `typesProp = ['task', 'meeting']` directly via `tx.update` *bypasses* both `setup` and `initialValues` materialisation. Tag-mapping callers should use the orchestration entry point appropriate to their context — `repo.addType` outside an existing tx, `repo.addTypeInTx(tx, blockId, typeId, initialValues?, snapshot?)` inside one. The Roam importer's apply phase runs inside chunked `repo.tx` calls (see §3-pure), so it must use `repo.addTypeInTx` per type per row to share atomicity with the surrounding `upsertImportedBlock` writes; calling the public `repo.addType` from inside an active tx would either fail against the writer slot or open a separate tx and lose the atomicity guarantee.
-- **Reimport runs setup again.** A Roam reimport that adds `task` to a block where the type wasn't previously present *will* run `setup`. That's usually correct (first-time-for-this-block tag), but means import paths can trigger child-block creation. Document in the importer.
-
-This naturally subsumes existing "create-and-stamp-type" code. [src/data/dailyNotes.ts:86](src/data/dailyNotes.ts:86)'s daily-note creation, which today writes `type='daily-note'` plus its own initial structure imperatively, becomes a `repo.addTypeInTx(tx, id, 'daily-note', {}, snapshot)` call **inside the same `repo.tx` block** that runs the existing `tx.create` / `tx.restore` for the journal and the daily-note row, with the `daily-note` type's `setup` carrying the template. Splitting type-add into a separate top-level `repo.addType` would leave a window where the row exists without its template if `setup` fails — atomicity with the create write is the whole point of using the in-tx variant. `snapshotTypeRegistries()` is called before opening the tx (or once per chunk) per §3a.
+This naturally subsumes existing "create-and-stamp-type" code. [src/data/dailyNotes.ts:86](src/data/dailyNotes.ts:86)'s daily-note creation can become a `repo.addTypeInTx(tx, id, 'daily-note', {}, snapshot)` call **inside the same `repo.tx` block** as the surrounding `tx.create` / `tx.restore`, with a registered same-tx processor materializing the template subtree on the `daily-note` add. Splitting the type-add into a separate top-level `repo.addType` would leave a window where the row exists without its template if the processor throws — atomicity with the create write is the whole point of using the in-tx variant. `snapshotTypeRegistries()` is called before opening the tx (or once per chunk) per §3a.
 
 **`Block` facade sugar** mirrors the existing `get`/`set`/`setContent`/`delete` pattern at [src/data/block.ts:159](src/data/block.ts:159)–[:228](src/data/block.ts:228):
 

@@ -23,10 +23,18 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { ChangeScope, codecs, defineProperty, type TypeContribution, type User } from '@/data/api'
+import {
+  ChangeScope,
+  codecs,
+  defineProperty,
+  defineSameTxProcessor,
+  type TypeContribution,
+  type User,
+} from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { typesFacet } from '@/data/facets'
+import { sameTxProcessorsFacet, typesFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
+import { addedTypes } from '@/data/properties'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { resolveFacetRuntimeSync } from '@/extensions/facet'
 import { Repo } from '../repo'
@@ -243,7 +251,7 @@ describe('getPluginPrefsBlock', () => {
     expect(events.at(-1)).toEqual({scope: ChangeScope.UserPrefs, source: 'user', workspace_id: WS})
   })
 
-  it('runs the registered type setup when bootstrapping a plugin prefs block', async () => {
+  it('runs a registered type-add same-tx processor when bootstrapping a plugin prefs block', async () => {
     const setupRanProp = defineProperty<boolean>('example-plugin-prefs:setup-ran', {
       codec: codecs.boolean,
       defaultValue: false,
@@ -253,11 +261,22 @@ describe('getPluginPrefsBlock', () => {
       id: 'setup-plugin-prefs',
       label: 'Setup plugin prefs',
       properties: [setupRanProp],
-      setup: async ({tx, id}) => {
-        await tx.setProperty(id, setupRanProp, true)
+    })
+    const setupProcessor = defineSameTxProcessor({
+      name: 'test.setupPluginPrefs',
+      watches: {kind: 'field', table: 'blocks', fields: ['properties']},
+      apply: async (event, ctx) => {
+        for (const row of event.changedRows) {
+          if (!addedTypes(row).includes('setup-plugin-prefs')) continue
+          await ctx.tx.setProperty(row.id, setupRanProp, true)
+        }
       },
     })
-    registerTypes(env.repo, [setupType])
+    env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      typesFacet.of(setupType, {source: 'test'}),
+      sameTxProcessorsFacet.of(setupProcessor, {source: 'test'}),
+    ]))
 
     const pluginPrefs = await getPluginPrefsBlock(env.repo, WS, USER, setupType)
 

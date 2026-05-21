@@ -1729,9 +1729,6 @@ export class Repo {
     if (propsChanged) {
       await tx.update(blockId, {properties: next})
     }
-    if (wasNew) {
-      await contribution.setup?.({tx, id: blockId, repo: this, types, propertySchemas})
-    }
   }
 
   private async _removeTypeInTx(tx: Tx, blockId: string, typeId: string): Promise<void> {

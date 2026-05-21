@@ -1,6 +1,4 @@
-import type { Tx } from './tx'
 import type { AnyPropertySchema } from './propertySchema'
-import type { Repo } from '../repo'
 
 export interface TypeContribution {
   /** Stable id; matches the string written into `typesProp`. */
@@ -11,19 +9,7 @@ export interface TypeContribution {
   readonly label?: string
   /** Optional longer description for tooltips / section headers. */
   readonly description?: string
-  /** Optional first-add setup hook, run inside the addType tx. */
-  readonly setup?: TypeSetup
 }
-
-export interface TypeSetupContext {
-  readonly tx: Tx
-  readonly id: string
-  readonly repo: Repo
-  readonly types: ReadonlyMap<string, TypeContribution>
-  readonly propertySchemas: ReadonlyMap<string, AnyPropertySchema>
-}
-
-export type TypeSetup = (ctx: TypeSetupContext) => void | Promise<void>
 
 export interface TypeRegistrySnapshot {
   readonly types: ReadonlyMap<string, TypeContribution>

@@ -8,11 +8,12 @@ import {
   codecs,
   defineBlockType,
   defineProperty,
+  defineSameTxProcessor,
 } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
-import { typesFacet } from '@/data/facets'
-import { getBlockTypes, typesProp } from '@/data/properties'
+import { sameTxProcessorsFacet, typesFacet } from '@/data/facets'
+import { addedTypes, getBlockTypes, typesProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
 
 let h: TestDb
@@ -51,7 +52,7 @@ afterEach(async () => {
 })
 
 describe('Repo type membership orchestration', () => {
-  it('adds a type, encodes initial values, and runs setup only on the first transition', async () => {
+  it('adds a type, encodes initial values, and runs a type-add same-tx processor only on the first transition', async () => {
     const dueProp = defineProperty<Date | undefined>('due', {
       codec: codecs.date,
       defaultValue: new Date(0),
@@ -66,20 +67,28 @@ describe('Repo type membership orchestration', () => {
     const taskType = defineBlockType({
       id: 'task',
       properties: [dueProp, setupCountProp],
-      setup: async ({tx, id}) => {
-        setupCalls++
-        const block = await tx.get(id)
-        if (!block) return
-        await tx.update(id, {
-          properties: {
-            ...block.properties,
-            [setupCountProp.name]: setupCountProp.codec.encode(setupCalls),
-          },
-        })
+    })
+    const taskAddProcessor = defineSameTxProcessor({
+      name: 'test.taskAdd',
+      watches: {kind: 'field', table: 'blocks', fields: ['properties']},
+      apply: async (event, ctx) => {
+        for (const row of event.changedRows) {
+          if (!addedTypes(row).includes('task')) continue
+          setupCalls++
+          const block = await ctx.tx.get(row.id)
+          if (!block) continue
+          await ctx.tx.update(row.id, {
+            properties: {
+              ...block.properties,
+              [setupCountProp.name]: setupCountProp.codec.encode(setupCalls),
+            },
+          })
+        }
       },
     })
     repo.setFacetRuntime(resolveFacetRuntimeSync([
       typesFacet.of(taskType, {source: 'test'}),
+      sameTxProcessorsFacet.of(taskAddProcessor, {source: 'test'}),
     ]))
     await createBlock('b1')
 
@@ -96,6 +105,40 @@ describe('Repo type membership orchestration', () => {
     expect(block.get(dueProp)?.toISOString()).toBe(due.toISOString())
     expect(block.get(setupCountProp)).toBe(1)
     expect(setupCalls).toBe(1)
+  })
+
+  it('fires the type-add same-tx processor for raw tx.update(typesProp) writes (no addType orchestration)', async () => {
+    const seenAdds: string[] = []
+    const recorder = defineSameTxProcessor({
+      name: 'test.recordTypeAdds',
+      watches: {kind: 'field', table: 'blocks', fields: ['properties']},
+      apply: async (event) => {
+        for (const row of event.changedRows) {
+          for (const t of addedTypes(row)) seenAdds.push(`${row.id}:${t}`)
+        }
+      },
+    })
+    repo.setFacetRuntime(resolveFacetRuntimeSync([
+      typesFacet.of(defineBlockType({id: 'task'}), {source: 'test'}),
+      sameTxProcessorsFacet.of(recorder, {source: 'test'}),
+    ]))
+    await createBlock('b1')
+
+    // Raw write — no repo.addType orchestration. The processor still fires
+    // because every property write produces a row event the watcher consumes.
+    await repo.tx(async tx => {
+      const block = await tx.get('b1')
+      if (!block) return
+      await tx.update('b1', {
+        properties: {
+          ...block.properties,
+          [typesProp.name]: typesProp.codec.encode(['task']),
+        },
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'raw type write'})
+
+    expect(seenAdds).toEqual(['b1:task'])
+    expect(getBlockTypes(repo.block('b1').data)).toEqual(['task'])
   })
 
   it('does not overwrite existing properties while materialising initial values', async () => {

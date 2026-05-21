@@ -16,7 +16,7 @@
  * via `block.set(schema, value)`.
  */
 import type { Block } from './block'
-import type { BlockData } from '@/data/api'
+import type { BlockData, ChangedRow } from '@/data/api'
 import { aliasesProp } from '@/data/internals/coreProperties'
 import {
   ChangeScope,
@@ -217,6 +217,23 @@ export const hasBlockType = (
   data: Pick<BlockData, 'properties'>,
   typeId: string,
 ): boolean => getBlockTypes(data).includes(typeId)
+
+/** Type-membership delta helpers for same-tx processors that watch the
+ *  `properties` field. `row.before` is null on insert; `row.after` is
+ *  null on hard-delete — both are null-safe here, returning the
+ *  appropriate one-sided diff. Order in the returned array matches
+ *  `typesProp.codec.decode` order on whichever side is non-null. */
+export const addedTypes = (row: ChangedRow): readonly string[] => {
+  const before = row.before ? new Set(getBlockTypes(row.before)) : new Set<string>()
+  const after = row.after ? getBlockTypes(row.after) : []
+  return after.filter(t => !before.has(t))
+}
+
+export const removedTypes = (row: ChangedRow): readonly string[] => {
+  const before = row.before ? getBlockTypes(row.before) : []
+  const after = row.after ? new Set(getBlockTypes(row.after)) : new Set<string>()
+  return before.filter(t => !after.has(t))
+}
 
 /** Raw membership writer for BlockData construction paths that do not
  *  have a Repo/Tx available. Does not run setup or materialise
