@@ -13,10 +13,11 @@ import type { BlockAction } from '@/shortcuts/blockActions.ts'
 import { bindBlockActionContext } from '@/shortcuts/blockActions.ts'
 import {
   activePanelIdProp,
-  focusVisualTarget,
   focusedBlockIdProp,
   focusedVisualTargetKeyProp,
+  isEditingProp,
 } from '@/data/properties'
+import { ChangeScope } from '@/data/api'
 import type { Block } from '@/data/block'
 import {
   horizontalNeighborPanel,
@@ -69,45 +70,22 @@ const currentInstance = (
 }
 
 /**
- * Holding down a nav key fires the handler dozens of times per
- * second. Writing focusedBlockId / focusedVisualTargetKey to the
- * panel block on every step would queue that many IndexedDB txs
- * behind the user — each notifies subscribers and the queue depth
- * compounds the perceived lag. The persisted props only matter for
- * re-mount recovery, so we debounce them: the final destination is
- * what gets written when the user pauses. The activePanelId write
- * (panel hop) still fires immediately, because that one affects
- * which panel is "active" for other UI surfaces and shouldn't lag
- * behind the focus indicator.
- */
-const PERSIST_FOCUS_DEBOUNCE_MS = 200
-let pendingPersist: {
-  panelBlock: Block
-  blockId: string
-  instanceKey: string
-  timer: ReturnType<typeof setTimeout>
-} | null = null
-
-const schedulePersistFocus = (panelBlock: Block, blockId: string, instanceKey: string) => {
-  if (pendingPersist) clearTimeout(pendingPersist.timer)
-  const timer = setTimeout(() => {
-    const pending = pendingPersist
-    pendingPersist = null
-    if (!pending) return
-    void focusVisualTarget(pending.panelBlock, pending.blockId, pending.instanceKey).catch(error => {
-      console.error('[spatial-navigation] focusVisualTarget failed', error)
-    })
-  }, PERSIST_FOCUS_DEBOUNCE_MS)
-  pendingPersist = {panelBlock, blockId, instanceKey, timer}
-}
-
-/**
  * Push focus onto `el`. DOM side-effects (focus, scroll, position
  * memory) run synchronously so the very next keystroke sees the
- * updated `document.activeElement`. The focus props on the panel
- * block are debounced — see schedulePersistFocus above. The
- * activePanelId write (only fires on a panel change) posts in the
- * background but is not debounced.
+ * updated `document.activeElement`. The prop writes (focusedBlockId
+ * / focusedVisualTargetKey on the destination panel block; optional
+ * activePanelId on the layout session) batch into a single tx
+ * fire-and-forget — atomic so subscribers see consistent state.
+ *
+ * Why batched: `useShortcutSurfaceActivations` gates `inFocus` on
+ * both `useInFocus(block.id)` (reads the panel block's focusedBlockId)
+ * AND `panelSurfaceActive` (reads the layout session's activePanelId).
+ * If these update in separate txs there's a moment where the source
+ * panel sees panelSurfaceActive=false while the destination's
+ * focusedBlockId hasn't committed yet. Source deactivates normal-mode
+ * before destination activates it → HotkeyReconciler tears down all
+ * normal-mode bindings → the next keystroke fires with no binding.
+ * Symptom: `l` works once but the next `k` does nothing.
  */
 const focusInstance = (
   el: HTMLElement,
@@ -123,26 +101,28 @@ const focusInstance = (
 
   rememberInstancePosition(panelId, el)
 
-  // Synchronous DOM focus — this is what the next keystroke's
-  // `currentInstance` call will read.
   if (typeof el.scrollIntoView === 'function') {
     el.scrollIntoView({block: 'nearest', inline: 'nearest'})
   }
   el.focus({preventScroll: true})
 
-  const panelBlock = repo.block(panelId)
-  schedulePersistFocus(panelBlock, blockId, instanceKey)
-
   const layoutEl = panel.closest<HTMLElement>('[data-layout-session-id]')
   const layoutSessionId = layoutEl?.dataset.layoutSessionId
-  if (layoutSessionId) {
-    const layoutSession = repo.block(layoutSessionId)
-    if (layoutSession.peekProperty(activePanelIdProp) !== panelId) {
-      void layoutSession.set(activePanelIdProp, panelId).catch(error => {
-        console.error('[spatial-navigation] activePanelId write failed', error)
-      })
+  const layoutSession = layoutSessionId ? repo.block(layoutSessionId) : null
+  const needsActivePanelUpdate = Boolean(
+    layoutSession && layoutSession.peekProperty(activePanelIdProp) !== panelId,
+  )
+
+  void repo.tx(async tx => {
+    await tx.setProperty(panelId, focusedBlockIdProp, blockId)
+    await tx.setProperty(panelId, focusedVisualTargetKeyProp, instanceKey)
+    await tx.setProperty(panelId, isEditingProp, false)
+    if (needsActivePanelUpdate && layoutSession) {
+      await tx.setProperty(layoutSession.id, activePanelIdProp, panelId)
     }
-  }
+  }, {scope: ChangeScope.UiState, description: 'spatial-navigation focus'}).catch(error => {
+    console.error('[spatial-navigation] focus tx failed', error)
+  })
 }
 
 /**
@@ -190,22 +170,7 @@ const moveHorizontal = (
     focusedBlockId: destPanelBlock.peekProperty(focusedBlockIdProp),
     focusedVisualTargetKey: destPanelBlock.peekProperty(focusedVisualTargetKeyProp),
   })
-  if (!dest) {
-    // Empty destination panel (rare — e.g. a panel mid-mount). Fall
-    // back to setting just `activePanelIdProp` so subsequent keystrokes
-    // see the layout settled on the new panel.
-    const layoutEl = destPanel.closest<HTMLElement>('[data-layout-session-id]')
-    const layoutSessionId = layoutEl?.dataset.layoutSessionId
-    if (layoutSessionId) {
-      const layoutSession = block.repo.block(layoutSessionId)
-      if (layoutSession.peekProperty(activePanelIdProp) !== destPanelId) {
-        void layoutSession.set(activePanelIdProp, destPanelId).catch(error => {
-          console.error('[spatial-navigation] activePanelId write failed', error)
-        })
-      }
-    }
-    return true
-  }
+  if (!dest) return false
   focusInstance(dest, block.repo)
   return true
 }
