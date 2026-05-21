@@ -60,6 +60,17 @@ export interface ExtensionVerificationResult {
     id: string
     contributionCount: number
   }>
+  /** Ids of the facet contributions this specific extension owns —
+   *  useful when an extension's verify lists facets/actions inherited
+   *  from other extensions and the agent needs to confirm what this
+   *  install actually added. Errors above include any structural
+   *  problems found in these contributions (e.g. a renderer whose
+   *  `renderer` field is not a function). */
+  contributions: {
+    renderers: string[]
+    appMounts: string[]
+    appEffects: string[]
+  }
 }
 
 export interface InstallExtensionResult {

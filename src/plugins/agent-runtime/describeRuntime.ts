@@ -1,10 +1,61 @@
 import { FacetRuntime } from '@/extensions/facet.ts'
-import { ActionConfig } from '@/shortcuts/types.ts'
+import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.ts'
 import { Repo } from '@/data/repo'
 import {
   describeAuthoringCatalog,
   type AuthoringCatalog,
 } from './authoringCatalog.ts'
+
+interface ContextDependencySchema {
+  acceptedKeys: readonly string[]
+  cliInputKeys: readonly string[]
+  runnableFromCli: boolean
+  notes?: string
+}
+
+// Keyed on ActionContextTypes; the bridge's run-action handler in
+// commands.ts mirrors these expectations when it assembles the
+// dependency bag from a CLI payload.
+const contextDependencyCatalog: Record<string, ContextDependencySchema> = {
+  [ActionContextTypes.GLOBAL]: {
+    acceptedKeys: ['uiStateBlock'],
+    cliInputKeys: ['uiStateBlockId'],
+    runnableFromCli: true,
+  },
+  [ActionContextTypes.NORMAL_MODE]: {
+    acceptedKeys: ['uiStateBlock', 'block', 'visualTargetId'],
+    cliInputKeys: ['uiStateBlockId', 'blockId'],
+    runnableFromCli: true,
+    notes: 'visualTargetId is a transient editor concept and is not accepted by the CLI bridge',
+  },
+  [ActionContextTypes.MULTI_SELECT_MODE]: {
+    acceptedKeys: ['uiStateBlock', 'selectedBlocks', 'anchorBlock'],
+    cliInputKeys: ['uiStateBlockId', 'selectedBlockIds', 'anchorBlockId'],
+    runnableFromCli: true,
+  },
+  [ActionContextTypes.EDIT_MODE_CM]: {
+    acceptedKeys: ['uiStateBlock', 'block', 'editorView'],
+    cliInputKeys: [],
+    runnableFromCli: false,
+    notes: 'editorView is a live CodeMirror handle that cannot be reconstructed from a JSON payload',
+  },
+  [ActionContextTypes.PROPERTY_EDITING]: {
+    acceptedKeys: ['uiStateBlock', 'block', 'input'],
+    cliInputKeys: [],
+    runnableFromCli: false,
+    notes: 'input is a live HTMLInputElement focused by the user and cannot be reconstructed from JSON',
+  },
+}
+
+const baseContextDependencySchema: ContextDependencySchema = {
+  acceptedKeys: ['uiStateBlock'],
+  cliInputKeys: ['uiStateBlockId'],
+  runnableFromCli: true,
+  notes: 'Unknown context type; assuming the BaseShortcutDependencies shape',
+}
+
+const dependencySchemaForContext = (context: string): ContextDependencySchema =>
+  contextDependencyCatalog[context] ?? baseContextDependencySchema
 
 export interface DescribeRuntimeContext {
   repo: Repo
@@ -32,16 +83,29 @@ export interface ApiSurfaceSummary {
   exports: string[]
 }
 
+export interface ActionSummary {
+  id: string
+  description: string
+  context: string
+  hasDefaultBinding: boolean
+  /** Whether `yarn agent run-action` can dispatch this action. False
+   *  for contexts whose dependencies are live UI handles (CodeMirror
+   *  view, focused input). */
+  runnableFromCli: boolean
+  /** Dependency keys the action handler receives at runtime. */
+  expectedDependencies: readonly string[]
+  /** Keys the CLI `depsJson` payload accepts. Empty when
+   *  runnableFromCli is false. */
+  cliDependencyKeys: readonly string[]
+  /** Extra context about CLI invocability, when worth noting. */
+  cliDependencyNotes?: string
+}
+
 export interface RuntimeDescription {
   activeWorkspaceId: string | null
   currentUser: {id: string, name?: string}
   safeMode: boolean
-  actions: Array<{
-    id: string
-    description: string
-    context: string
-    hasDefaultBinding: boolean
-  }>
+  actions: ActionSummary[]
   renderers: string[]
   facets: FacetSummary[]
   apiSurface: ApiSurfaceSummary
@@ -248,12 +312,19 @@ export const describeRuntime = async (
     safeMode: context.safeMode,
     actions: context.actions
       .filter(action => matchesAnyFilter(filters.actions, action.id, action.description, action.context))
-      .map(action => ({
-        id: action.id,
-        description: action.description,
-        context: action.context,
-        hasDefaultBinding: Boolean(action.defaultBinding),
-      })),
+      .map(action => {
+        const schema = dependencySchemaForContext(action.context)
+        return {
+          id: action.id,
+          description: action.description,
+          context: action.context,
+          hasDefaultBinding: Boolean(action.defaultBinding),
+          runnableFromCli: schema.runnableFromCli,
+          expectedDependencies: schema.acceptedKeys,
+          cliDependencyKeys: schema.cliInputKeys,
+          ...(schema.notes ? {cliDependencyNotes: schema.notes} : {}),
+        }
+      }),
     renderers: Object.keys(context.renderers),
     facets: describeFacets(context.runtime)
       .filter(facet => matchesAnyFilter(filters.facets, facet.id)),

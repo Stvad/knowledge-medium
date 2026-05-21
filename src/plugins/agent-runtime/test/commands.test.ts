@@ -9,7 +9,7 @@ import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions'
 import { resolveFacetRuntimeSync } from '@/extensions/facet'
 import { __setCompileImplForTest } from '@/extensions/compileExtensionModule'
-import { actionsFacet } from '@/extensions/core'
+import { actionsFacet, appMountsFacet, blockRenderersFacet } from '@/extensions/core'
 import { ActionContextTypes } from '@/shortcuts/types'
 import { createAgentRuntimeContext, executeCommand } from '../commands'
 import type { AgentRuntimeContext, InstallExtensionResult } from '../protocol'
@@ -121,4 +121,35 @@ describe('agent runtime commands', () => {
       restore()
     }
   })
+
+  it('verify lists per-extension contribution ids (renderers, appMounts)', async () => {
+    const renderer = () => null
+    const Component = () => null
+    const restore = __setCompileImplForTest(async () => ({
+      default: [
+        blockRenderersFacet.of({id: 'demo-renderer', renderer}),
+        appMountsFacet.of({id: 'demo-mount', component: Component}),
+      ],
+    }))
+
+    try {
+      const result = await executeCommand({
+        commandId: 'install-contributions',
+        type: 'install-extension',
+        // Distinct content so the compile cache (keyed by content hash)
+        // doesn't serve a prior test's stubbed module.
+        source: 'STUBBED-renderer-and-mount',
+        label: 'Contributions verify',
+        reload: false,
+        verify: true,
+      }, env.context) as InstallExtensionResult
+
+      expect(result.verification?.ok).toBe(true)
+      expect(result.verification?.contributions.renderers).toContain('demo-renderer')
+      expect(result.verification?.contributions.appMounts).toContain('demo-mount')
+    } finally {
+      restore()
+    }
+  })
+
 })

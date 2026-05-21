@@ -28,7 +28,8 @@ Usage:
   yarn agent [--profile <name>] <command>
 
 Commands:
-  yarn agent connect              open app pairing flow and persist pasted token
+  yarn agent connect [--force]    open app pairing flow and persist pasted token
+                                  (no-op when an active connection already exists; --force re-pairs)
   yarn agent connect <token>      persist token directly (or use AGENT_RUNTIME_TOKEN env)
   yarn agent disconnect           remove the selected profile token
   yarn agent remove-profile <name>  remove a saved CLI token profile
@@ -48,8 +49,10 @@ Commands:
   yarn agent update-block <json>
   yarn agent install-extension [--reload] [--verify] <file> [label]
   yarn agent run-action <id> [depsJson]
-  yarn agent eval <code>          run JS in the app; use "return ..." to print a value
+  yarn agent eval [--raw] <code>  run JS in the app; use "return ..." to print a value
   yarn agent eval --file <path>
+  yarn agent reload               hard-reload the app tab and wait for it to come back
+  yarn agent navigate <hash>      set window.location.hash (with or without leading #)
   yarn agent raw <json>
 
 Profile selection:
@@ -148,6 +151,27 @@ const parseDescribeRuntimeArgs = args => {
     ...(filters.components.length > 0 ? {components: filters.components} : {}),
     ...(filters.storage ? {storage: true} : {}),
   }
+}
+
+const evalReturnedUndefined = value =>
+  value !== null
+  && typeof value === 'object'
+  && !Array.isArray(value)
+  && value.type === 'undefined'
+  && Object.keys(value).length === 1
+
+const formatCliOutput = (verb, args, value) => {
+  if (verb !== 'eval') return JSON.stringify(value, null, 2)
+  if (args.includes('--raw')) return JSON.stringify(value, null, 2)
+  // Eval handlers commonly run for side effects and don't `return` —
+  // surface that as a single legible token instead of `{type:
+  // 'undefined'}`, which is easy to mistake for an error. Same idea
+  // for the explicit string "undefined" some callers return from
+  // `repo.db.execute(...)` etc.
+  if (value === undefined || value === null || evalReturnedUndefined(value)) {
+    return '<ok: eval completed, no return value (use `return ...` to print one; pass --raw for the wire format)>'
+  }
+  return JSON.stringify(value, null, 2)
 }
 
 const parseInstallExtensionArgs = args => {
@@ -464,6 +488,49 @@ const whoamiWithToken = token =>
     headers: {authorization: `Bearer ${token}`},
   })
 
+const reloadAppAndWait = async ({timeoutMs = 30_000} = {}) => {
+  const token = await resolveToken()
+  if (!token) {
+    throw new Error(`No agent token configured for profile "${selectedProfileName}". Run \`yarn agent --profile ${selectedProfileName} connect\` first.`)
+  }
+
+  const before = await whoamiWithToken(token).catch(() => null)
+  if (!before?.connected) {
+    throw new Error('No app tab is currently connected — nothing to reload. Open the app, then retry.')
+  }
+  const previousClientId = before.clientId
+
+  // Schedule the reload after a short delay so the eval result reaches
+  // the bridge before the JS context is torn down. Otherwise the
+  // bridge sees a delivered-but-never-completed command.
+  await runCommand({
+    type: 'eval',
+    code: 'setTimeout(() => window.location.reload(), 100)',
+  })
+
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    await sleep(250)
+    const info = await whoamiWithToken(token).catch(() => null)
+    if (info?.connected && info.clientId !== previousClientId) {
+      return info
+    }
+  }
+  throw new Error(`App did not reconnect within ${Math.round(timeoutMs / 1000)}s`)
+}
+
+const navigateAppHash = async hash => {
+  if (typeof hash !== 'string') {
+    throw new Error('navigate requires a hash string')
+  }
+  const normalized = hash.startsWith('#') ? hash.slice(1) : hash
+  // JSON.stringify both escapes and quotes the value safely.
+  return runCommand({
+    type: 'eval',
+    code: `window.location.hash = ${JSON.stringify(normalized)}`,
+  })
+}
+
 const waitForTokenAudience = async token => {
   const startedAt = Date.now()
   let lastError = null
@@ -511,7 +578,39 @@ const connectWithToken = async (token, options = {}) => {
   }
 }
 
-const connectInteractively = async () => {
+const describeExistingConnection = async () => {
+  const token = await loadStoredToken()
+  if (!token) return null
+
+  try {
+    await ensureBridgeRunning()
+    return {token, info: await whoamiWithToken(token)}
+  } catch {
+    return {token, info: null}
+  }
+}
+
+const connectInteractively = async ({force = false} = {}) => {
+  if (!force) {
+    const existing = await describeExistingConnection()
+    if (existing?.info?.connected) {
+      const audience = existing.info.audience ?? {}
+      process.stdout.write(
+        `Profile "${selectedProfileName}" is already paired with a connected app tab.\n` +
+        `User: ${audience.userId ?? '?'}\n` +
+        `Workspace: ${audience.workspaceId ?? '?'}\n` +
+        `Pass --force to re-pair (revokes nothing on its own — generate a new token in the app first if you want to rotate).\n`,
+      )
+      return
+    }
+    if (existing) {
+      process.stdout.write(
+        `Profile "${selectedProfileName}" has a saved token but no app tab is currently connected.\n` +
+        `Open or focus the app tab, or run \`yarn agent whoami\` to recheck. Re-pairing anyway…\n\n`,
+      )
+    }
+  }
+
   await ensureBridgeRunning()
   const url = await pairingUrl(bridgeUrl, {openTokensDialog: true})
   process.stdout.write(
@@ -666,17 +765,18 @@ const commandFromArgs = async args => {
     }
 
     case 'eval': {
-      if (rest[0] === '--file') {
-        if (!rest[1]) throw new Error('eval --file requires <path>')
+      const evalArgs = rest.filter(a => a !== '--raw')
+      if (evalArgs[0] === '--file') {
+        if (!evalArgs[1]) throw new Error('eval --file requires <path>')
         return {
           type: 'eval',
-          code: await fs.readFile(rest[1], 'utf8'),
+          code: await fs.readFile(evalArgs[1], 'utf8'),
         }
       }
 
       return {
         type: 'eval',
-        code: rest.join(' '),
+        code: evalArgs.join(' '),
       }
     }
 
@@ -701,11 +801,14 @@ const main = async () => {
   const verb = args[0]
 
   if (verb === 'connect') {
-    const token = args[1]?.trim() || process.env.AGENT_RUNTIME_TOKEN?.trim()
+    const forceIdx = args.indexOf('--force')
+    const force = forceIdx > 0
+    const positional = args.slice(1).filter(a => a !== '--force')
+    const token = positional[0]?.trim() || process.env.AGENT_RUNTIME_TOKEN?.trim()
     if (token) {
       await connectWithToken(token)
     } else {
-      await connectInteractively()
+      await connectInteractively({force})
     }
     return
   }
@@ -773,10 +876,26 @@ const main = async () => {
     return
   }
 
+  if (verb === 'reload') {
+    await ensureBridgeRunning()
+    const info = await reloadAppAndWait()
+    process.stdout.write(`${JSON.stringify({ok: true, reconnected: info}, null, 2)}\n`)
+    return
+  }
+
+  if (verb === 'navigate') {
+    const hash = args[1]
+    if (hash === undefined) throw new Error('navigate requires a hash')
+    await ensureBridgeRunning()
+    await navigateAppHash(hash)
+    process.stdout.write(`${JSON.stringify({ok: true, hash: hash.startsWith('#') ? hash : `#${hash}`}, null, 2)}\n`)
+    return
+  }
+
   await ensureBridgeRunning()
   const command = await commandFromArgs(args)
   const value = await runCommand(command)
-  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
+  process.stdout.write(`${formatCliOutput(verb, args, value)}\n`)
 }
 
 main().catch(error => {

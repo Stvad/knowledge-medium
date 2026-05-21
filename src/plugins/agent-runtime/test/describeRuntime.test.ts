@@ -214,8 +214,24 @@ describe('describeRuntime', () => {
     expect(description.safeMode).toBe(false)
 
     expect(description.actions).toEqual([
-      {id: 'a1', description: 'Description for a1', context: 'global', hasDefaultBinding: true},
-      {id: 'a2', description: 'Description for a2', context: 'global', hasDefaultBinding: false},
+      {
+        id: 'a1',
+        description: 'Description for a1',
+        context: 'global',
+        hasDefaultBinding: true,
+        runnableFromCli: true,
+        expectedDependencies: ['uiStateBlock'],
+        cliDependencyKeys: ['uiStateBlockId'],
+      },
+      {
+        id: 'a2',
+        description: 'Description for a2',
+        context: 'global',
+        hasDefaultBinding: false,
+        runnableFromCli: true,
+        expectedDependencies: ['uiStateBlock'],
+        cliDependencyKeys: ['uiStateBlockId'],
+      },
     ])
 
     expect(description.renderers.sort()).toEqual(['custom', 'default'])

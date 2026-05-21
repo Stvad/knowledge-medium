@@ -6,7 +6,12 @@ import { ChangeScope, type BlockData, type BlockReference } from '@/data/api'
 import { aliasesProp, extensionNameProp } from '@/data/properties.ts'
 import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { keyAtEnd } from '@/data/orderKey.ts'
-import { actionsFacet, blockRenderersFacet } from '@/extensions/core.ts'
+import {
+  actionsFacet,
+  appEffectsFacet,
+  appMountsFacet,
+  blockRenderersFacet,
+} from '@/extensions/core.ts'
 import { readRuntimeActions } from '@/extensions/runtimeActions.ts'
 import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
 import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions.ts'
@@ -116,6 +121,16 @@ const serializeVerificationError = (blockId: string, error: Error) => ({
   message: error.message,
 })
 
+// Dynamic extension contributions are tagged with `block:<id>...`
+// sources (see prefixContributionSource in dynamicExtensions.ts). We
+// match the prefix so we capture both the bare `block:<id>` form and
+// any nested `block:<id>/<inner-source>` from enables chains.
+const isExtensionContribution = (source: unknown, blockId: string): boolean => {
+  if (typeof source !== 'string') return false
+  const prefix = `block:${blockId}`
+  return source === prefix || source.startsWith(`${prefix}/`)
+}
+
 const verifyExtensionBlock = async (
   repo: Repo,
   context: AgentRuntimeContext,
@@ -162,6 +177,22 @@ const verifyExtensionBlock = async (
     },
   )
 
+  const renderersContribs = verificationRuntime.contributionsById(blockRenderersFacet.id)
+  const appMountsContribs = verificationRuntime.contributionsById(appMountsFacet.id)
+  const appEffectsContribs = verificationRuntime.contributionsById(appEffectsFacet.id)
+
+  const filterToExtension = <T extends {source?: unknown, value: unknown}>(contribs: readonly T[]): T[] =>
+    contribs.filter(c => isExtensionContribution(c.source, blockId))
+
+  const extensionRenderers = filterToExtension(renderersContribs)
+  const extensionAppMounts = filterToExtension(appMountsContribs)
+  const extensionAppEffects = filterToExtension(appEffectsContribs)
+
+  const idOf = (value: unknown): string | undefined =>
+    typeof value === 'object' && value !== null && typeof (value as {id?: unknown}).id === 'string'
+      ? (value as {id: string}).id
+      : undefined
+
   return {
     ok: errors.length === 0,
     errors,
@@ -174,6 +205,11 @@ const verifyExtensionBlock = async (
       id: facet.id,
       contributionCount: facet.contributionCount,
     })),
+    contributions: {
+      renderers: extensionRenderers.map(c => idOf(c.value)).filter((id): id is string => Boolean(id)),
+      appMounts: extensionAppMounts.map(c => idOf(c.value)).filter((id): id is string => Boolean(id)),
+      appEffects: extensionAppEffects.map(c => idOf(c.value)).filter((id): id is string => Boolean(id)),
+    },
   }
 }
 
@@ -428,18 +464,32 @@ const runRuntimeAction = async (
   const selectedBlocks = selectedBlockIds.map(id => context.repo.block(id))
   const anchorBlock = runtimeBlock(context.repo, dependencies.anchorBlockId)
 
-  const result = await action.handler({
-    uiStateBlock,
-    block,
-    selectedBlocks,
-    anchorBlock,
-  }, new CustomEvent('agent-runtime:run-action', {detail: {actionId}}))
+  let returned: unknown
+  try {
+    returned = await action.handler({
+      uiStateBlock,
+      block,
+      selectedBlocks,
+      anchorBlock,
+    }, new CustomEvent('agent-runtime:run-action', {detail: {actionId}}))
+  } catch (handlerError) {
+    // Bubble up with action context so the CLI shows "which action
+    // failed", not just an opaque dispatcher message.
+    const prefix = `Action ${action.id} (${action.context}) threw: `
+    if (handlerError instanceof Error) {
+      handlerError.message = `${prefix}${handlerError.message}`
+      throw handlerError
+    }
+    throw new Error(`${prefix}${String(handlerError)}`, {cause: handlerError})
+  }
 
   return {
     id: action.id,
     description: action.description,
     context: action.context,
-    result,
+    ok: true,
+    returnedUndefined: returned === undefined,
+    returned: returned === undefined ? null : returned,
   }
 }
 
