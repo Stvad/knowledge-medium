@@ -18,21 +18,37 @@ import { actionsFacet, appMountsFacet, type AppMountContribution } from '@/exten
 import type { AppExtension } from '@/extensions/facet.ts'
 import { ExtractTypeDialog } from './ExtractTypeDialog.tsx'
 import { FindSimilarDialog } from './FindSimilarDialog.tsx'
-import { extractTypeAction, findSimilarAction } from './action.ts'
+import { FindTypeInstancesDialog } from './FindTypeInstancesDialog.tsx'
+import {
+  extractTypeAction,
+  findSimilarAction,
+  findTypeInstancesAction,
+} from './action.ts'
 
-export { extractTypeAction, findSimilarAction, EXTRACT_TYPE_ACTION_ID, FIND_SIMILAR_ACTION_ID } from './action.ts'
+export {
+  extractTypeAction,
+  findSimilarAction,
+  findTypeInstancesAction,
+  EXTRACT_TYPE_ACTION_ID,
+  FIND_SIMILAR_ACTION_ID,
+  FIND_TYPE_INSTANCES_ACTION_ID,
+} from './action.ts'
 export {
   openExtractTypeDialog,
   openExtractTypeDialogEvent,
   openFindSimilarDialog,
   openFindSimilarDialogEvent,
+  openFindTypeInstancesDialog,
+  openFindTypeInstancesDialogEvent,
 } from './events.ts'
 export type {
   OpenExtractTypeDialogEventDetail,
   OpenFindSimilarDialogEventDetail,
+  OpenFindTypeInstancesDialogEventDetail,
 } from './events.ts'
 export { ExtractTypeDialog } from './ExtractTypeDialog.tsx'
 export { FindSimilarDialog } from './FindSimilarDialog.tsx'
+export { FindTypeInstancesDialog } from './FindTypeInstancesDialog.tsx'
 
 const extractTypeDialogMount: AppMountContribution = {
   id: 'extract-type.dialog',
@@ -44,9 +60,16 @@ const findSimilarDialogMount: AppMountContribution = {
   component: FindSimilarDialog,
 }
 
+const findTypeInstancesDialogMount: AppMountContribution = {
+  id: 'extract-type.find-type-instances-dialog',
+  component: FindTypeInstancesDialog,
+}
+
 export const extractTypePlugin: AppExtension = [
   actionsFacet.of(extractTypeAction, {source: 'extract-type'}),
   actionsFacet.of(findSimilarAction, {source: 'extract-type'}),
+  actionsFacet.of(findTypeInstancesAction, {source: 'extract-type'}),
   appMountsFacet.of(extractTypeDialogMount, {source: 'extract-type'}),
   appMountsFacet.of(findSimilarDialogMount, {source: 'extract-type'}),
+  appMountsFacet.of(findTypeInstancesDialogMount, {source: 'extract-type'}),
 ]

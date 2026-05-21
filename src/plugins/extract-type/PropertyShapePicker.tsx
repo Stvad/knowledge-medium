@@ -16,6 +16,7 @@
 import type { Repo } from '@/data/repo'
 import {
   aliasesProp,
+  blockTypePropertiesProp,
   rendererNameProp,
   rendererProp,
   typesProp,
@@ -70,6 +71,36 @@ export const buildPropertyShapeChoices = (
   }))
 }
 
+/** Build picker choices from an existing block-type block's properties
+ *  refList. Unlike `buildPropertyShapeChoices` which reads a prototype's
+ *  properties_json (instance values), this reads the TYPE definition
+ *  — each entry corresponds to a property-schema block the type's
+ *  refList points at. No per-property `value` field (the type itself
+ *  carries no instance values), so callers should pass
+ *  `showMatchValue=false` to the picker. */
+export const buildTypeShapeChoices = (
+  repo: Repo,
+  typeBlock: BlockData,
+): readonly PropertyShapeChoice[] => {
+  const raw = typeBlock.properties[blockTypePropertiesProp.name]
+  const schemaIds = raw === undefined
+    ? blockTypePropertiesProp.defaultValue
+    : blockTypePropertiesProp.codec.decode(raw)
+  const out: PropertyShapeChoice[] = []
+  for (const schemaId of schemaIds) {
+    const schema = repo.userSchemas.getSchemaForBlockId(schemaId)
+    if (!schema) continue
+    out.push({
+      name: schema.name,
+      picked: true,
+      matchValue: false,
+      value: undefined,
+      schemaBlockId: schemaId,
+    })
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name))
+}
+
 export const formatPropertyValue = (value: unknown): string => {
   if (value === undefined) return ''
   if (value === null) return 'null'
@@ -95,6 +126,14 @@ export interface PropertyShapePickerProps {
    *  candidate query; extract-type wants the note to explain why some
    *  properties won't be added to the new type definition. */
   showNoSchemaNote?: boolean
+  /** Show the per-row "match value" toggle. Default true. The
+   *  find-type-instances flow passes false: the type definition
+   *  carries no per-property instance values to match against. */
+  showMatchValue?: boolean
+  /** Replacement string shown in the value preview slot when the
+   *  choice has no value (e.g. find-type-instances, where the type
+   *  definition has no instance values). Default '' (renders empty). */
+  emptyValuePlaceholder?: string
 }
 
 export function PropertyShapePicker({
@@ -103,6 +142,8 @@ export function PropertyShapePicker({
   disabled = false,
   idPrefix = 'shape-pick',
   showNoSchemaNote = false,
+  showMatchValue = true,
+  emptyValuePlaceholder = '',
 }: PropertyShapePickerProps) {
   if (choices.length === 0) return null
   return (
@@ -142,21 +183,25 @@ export function PropertyShapePicker({
                 )}
               </div>
               <div className="truncate text-xs text-muted-foreground">
-                {formatPropertyValue(choice.value)}
+                {choice.value === undefined
+                  ? emptyValuePlaceholder
+                  : formatPropertyValue(choice.value)}
               </div>
             </div>
-            <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-              <Checkbox
-                checked={choice.matchValue}
-                onCheckedChange={next => {
-                  onChange(choices.map((c, i) =>
-                    i === idx ? {...c, matchValue: next === true} : c,
-                  ))
-                }}
-                disabled={disabled || !choice.picked}
-              />
-              match value
-            </label>
+            {showMatchValue && (
+              <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+                <Checkbox
+                  checked={choice.matchValue}
+                  onCheckedChange={next => {
+                    onChange(choices.map((c, i) =>
+                      i === idx ? {...c, matchValue: next === true} : c,
+                    ))
+                  }}
+                  disabled={disabled || !choice.picked}
+                />
+                match value
+              </label>
+            )}
           </li>
         )
       })}
