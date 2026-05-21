@@ -1,30 +1,52 @@
 /** extract-type plugin — UI surface for the user-defined-types Phase
- *  3 extract-type-from-prototype flow.
+ *  3 extract-type-from-prototype flow plus a sibling find-similar
+ *  command that surfaces the same candidate discovery without
+ *  creating a type.
  *
  *  Contributes:
  *   - `extractTypeAction` (NORMAL_MODE) — "Extract type from this
  *     block" via the command palette / shortcut binding. Dispatches
  *     a window event the dialog listens for.
- *   - `ExtractTypeDialog` (global app mount) — the two-step dialog
- *     that names the type, picks the property subset, surfaces
- *     candidates, and calls the typeExtraction primitives. */
+ *   - `findSimilarAction` (NORMAL_MODE) — "Find blocks with similar
+ *     properties." Same property-picker UI as extract-type step 1
+ *     but the result is just a navigable list — useful when you
+ *     want to discover matching blocks without committing to a type.
+ *   - `ExtractTypeDialog` + `FindSimilarDialog` (global app mounts) —
+ *     the two dialogs that listen for their respective events. */
 
 import { actionsFacet, appMountsFacet, type AppMountContribution } from '@/extensions/core.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
 import { ExtractTypeDialog } from './ExtractTypeDialog.tsx'
-import { extractTypeAction } from './action.ts'
+import { FindSimilarDialog } from './FindSimilarDialog.tsx'
+import { extractTypeAction, findSimilarAction } from './action.ts'
 
-export { extractTypeAction, EXTRACT_TYPE_ACTION_ID } from './action.ts'
-export { openExtractTypeDialog, openExtractTypeDialogEvent } from './events.ts'
-export type { OpenExtractTypeDialogEventDetail } from './events.ts'
+export { extractTypeAction, findSimilarAction, EXTRACT_TYPE_ACTION_ID, FIND_SIMILAR_ACTION_ID } from './action.ts'
+export {
+  openExtractTypeDialog,
+  openExtractTypeDialogEvent,
+  openFindSimilarDialog,
+  openFindSimilarDialogEvent,
+} from './events.ts'
+export type {
+  OpenExtractTypeDialogEventDetail,
+  OpenFindSimilarDialogEventDetail,
+} from './events.ts'
 export { ExtractTypeDialog } from './ExtractTypeDialog.tsx'
+export { FindSimilarDialog } from './FindSimilarDialog.tsx'
 
 const extractTypeDialogMount: AppMountContribution = {
   id: 'extract-type.dialog',
   component: ExtractTypeDialog,
 }
 
+const findSimilarDialogMount: AppMountContribution = {
+  id: 'extract-type.find-similar-dialog',
+  component: FindSimilarDialog,
+}
+
 export const extractTypePlugin: AppExtension = [
   actionsFacet.of(extractTypeAction, {source: 'extract-type'}),
+  actionsFacet.of(findSimilarAction, {source: 'extract-type'}),
   appMountsFacet.of(extractTypeDialogMount, {source: 'extract-type'}),
+  appMountsFacet.of(findSimilarDialogMount, {source: 'extract-type'}),
 ]
