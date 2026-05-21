@@ -43,6 +43,14 @@ export class UserSchemasService {
    *  `contributions`, so it's always in sync. */
   private nameToBlockId = new Map<string, string>()
 
+  /** Reverse of `nameToBlockId`: maps a property-schema block id to
+   *  the schema it resolves to in the runtime bucket. Used by
+   *  `UserTypesService` to resolve `block-type:properties` refList
+   *  entries (which carry block ids) to live schema records without
+   *  peeking the schema block directly — a peek would silently drop
+   *  refs whose row hasn't been hydrated by BlockCache yet. */
+  private blockIdToSchema = new Map<string, AnyPropertySchema>()
+
   /** Active block-subscription disposer, set by `start()`. */
   private subscriptionDisposer: Unsubscribe | null = null
 
@@ -62,6 +70,15 @@ export class UserSchemasService {
    *  don't have backing blocks) or names that aren't registered. */
   getSchemaBlockId(name: string): string | undefined {
     return this.nameToBlockId.get(name)
+  }
+
+  /** Look up the published user-data schema for a property-schema
+   *  block id. Returns undefined for blocks that aren't currently
+   *  materializing a schema — including blocks pending hydration,
+   *  blocks failing `tryBuildSchema` validation (empty name, unknown
+   *  preset, invalid config), and ids that simply don't exist. */
+  getSchemaForBlockId(blockId: string): AnyPropertySchema | undefined {
+    return this.blockIdToSchema.get(blockId)
   }
 
   start(): () => void {
@@ -84,15 +101,18 @@ export class UserSchemasService {
       const presets = this.repo.valuePresets
       const next: AnyPropertySchema[] = []
       const nextNameToBlockId = new Map<string, string>()
+      const nextBlockIdToSchema = new Map<string, AnyPropertySchema>()
       for (const block of blocks) {
         const built = this.tryBuildSchema(block, presets)
         if (built) {
           next.push(built)
           nextNameToBlockId.set(built.name, block.id)
+          nextBlockIdToSchema.set(block.id, built)
         }
       }
       this.contributions = next
       this.nameToBlockId = nextNameToBlockId
+      this.blockIdToSchema = nextBlockIdToSchema
       this.repo.setRuntimeContributions(propertySchemasFacet, USER_DATA_SOURCE_ID, this.contributions)
     }
 
@@ -180,6 +200,7 @@ export class UserSchemasService {
       schema,
     ]
     this.nameToBlockId.set(schema.name, blockId)
+    this.blockIdToSchema.set(blockId, schema)
     this.repo.setRuntimeContributions(propertySchemasFacet, USER_DATA_SOURCE_ID, this.contributions)
   }
 

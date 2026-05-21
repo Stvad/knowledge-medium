@@ -9,6 +9,7 @@ import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import { propertySchemasFacet, valuePresetsFacet } from '@/data/facets'
+import { propertyNameProp } from '@/data/properties'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import type { UserSchemasService } from './userSchemasService'
 import { Repo } from './repo'
@@ -166,6 +167,75 @@ describe('UserSchemasService subscription', () => {
       presetId: 'refList',
       config: {targetTypes: ['ok', 42]},
     })).rejects.toThrow(/invalid config/)
+  })
+})
+
+describe('UserSchemasService.getSchemaForBlockId', () => {
+  // Required by UserTypesService (Phase 1 of user-defined-types): the
+  // block-type:properties refList resolves through this lookup instead
+  // of peeking the referenced schema block directly, to avoid
+  // BlockCache hydration races and re-deriving the workspace/type/name
+  // invariants that the publish path already validated.
+
+  it('returns the registered schema after addSchema (synchronous appendUserSchema path)', async () => {
+    env = await setup()
+    const schema = await env.service.addSchema({name: 'homepage', presetId: 'url'})
+    const blockId = env.service.getSchemaBlockId(schema.name)!
+    expect(blockId).toBeDefined()
+    expect(env.service.getSchemaForBlockId(blockId)).toBe(schema)
+  })
+
+  it('returns the registered schema after an external schema-block creation (subscription rebuild)', async () => {
+    env = await setup()
+    const propertiesPageId = env.repo.propertiesPageId!
+    const id = await env.repo.mutate.createChild({parentId: propertiesPageId})
+    await env.repo.tx(async tx => {
+      await tx.update(id, {
+        properties: {
+          types: ['property-schema'],
+          'property-schema:name': 'tags',
+          'property-schema:preset': 'string',
+          'property-schema:config': {},
+        },
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await new Promise(resolve => setTimeout(resolve, 50))
+
+    const resolved = env.service.getSchemaForBlockId(id)
+    expect(resolved?.name).toBe('tags')
+    expect(resolved?.codec.type).toBe('string')
+  })
+
+  it('returns undefined for unknown block ids', async () => {
+    env = await setup()
+    expect(env.service.getSchemaForBlockId('not-a-real-block-id')).toBeUndefined()
+  })
+
+  it('drops the reverse-map entry when a block stops resolving to a schema', async () => {
+    env = await setup()
+    const propertiesPageId = env.repo.propertiesPageId!
+    const id = await env.repo.mutate.createChild({parentId: propertiesPageId})
+    await env.repo.tx(async tx => {
+      await tx.update(id, {
+        properties: {
+          types: ['property-schema'],
+          'property-schema:name': 'tags',
+          'property-schema:preset': 'string',
+          'property-schema:config': {},
+        },
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(env.service.getSchemaForBlockId(id)?.name).toBe('tags')
+
+    // Blank the name — tryBuildSchema will now drop the block on the
+    // next rebuild tick.
+    await env.repo.tx(async tx => {
+      await tx.setProperty(id, propertyNameProp, '')
+    }, {scope: ChangeScope.BlockDefault})
+    await new Promise(resolve => setTimeout(resolve, 50))
+
+    expect(env.service.getSchemaForBlockId(id)).toBeUndefined()
   })
 })
 
