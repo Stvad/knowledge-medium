@@ -59,6 +59,7 @@ function PanelSlotView({
   stacked,
   wideScrollSurface,
   trackFocus,
+  columnId,
 }: {
   slot: Extract<RenderSlot, {kind: 'panel'}>
   layoutSessionBlock: Block
@@ -67,6 +68,11 @@ function PanelSlotView({
   stacked: boolean
   wideScrollSurface: boolean
   trackFocus: boolean
+  // `data-layout-column-id` only goes on the *outer* column wrapper.
+  // When a panel sits at the top level, this slot IS the column and
+  // tags itself. When stacked inside another column, the parent stack
+  // div carries the column attribute and this child must omit it.
+  columnId?: string
 }) {
   const markActivePanel = useCallback(() => {
     if (layoutSessionBlock.peekProperty(activePanelIdProp) === slot.id) return
@@ -86,6 +92,7 @@ function PanelSlotView({
       key={slot.id}
     >
       <div
+        data-layout-column-id={columnId}
         className={className}
         onPointerDownCapture={markActivePanel}
         onFocusCapture={trackFocus ? markActivePanel : undefined}
@@ -120,12 +127,14 @@ function SlotView({
       stacked={!topLevel}
       wideScrollSurface={wideScrollSurface}
       trackFocus={trackFocus}
+      columnId={topLevel ? slot.id : undefined}
     />
   }
 
   return (
     <div
       key={slot.id}
+      data-layout-column-id={topLevel ? slot.id : undefined}
       className={`${topLevel ? TOP_LEVEL_COLUMN_CLASS : STACK_CHILD_CLASS} flex flex-col gap-2 overflow-y-auto pr-1`}
     >
       {slot.children.map(child => (
@@ -176,7 +185,10 @@ export function LayoutRenderer({block}: BlockRendererProps) {
     void block.set(activePanelIdProp, fallbackActivePanelSlot.id)
   }, [block, activePanelId, activePanelSlot, fallbackActivePanelSlot])
 
-  return <div className="layout flex min-w-0 flex-row flex-grow justify-start overflow-x-auto h-full">
+  return <div
+    data-layout-session-id={block.id}
+    className="layout flex min-w-0 flex-row flex-grow justify-start overflow-x-auto h-full"
+  >
     {slotsToRender.map(slot => (
       <SlotView
         key={slot.id}

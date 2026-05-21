@@ -181,9 +181,11 @@ export function PanelRenderer({block}: BlockRendererProps) {
   )
 
   return (
-    <div className={`panel min-w-0 max-w-full flex flex-col relative ${
-      stackedPanel ? 'overflow-visible' : 'h-full flex-grow overflow-hidden'
-    }`}>
+    <div
+      data-panel-id={block.id}
+      className={`panel min-w-0 max-w-full flex flex-col relative ${
+        stackedPanel ? 'overflow-visible' : 'h-full flex-grow overflow-hidden'
+      }`}>
       <PanelMultiSelectActionContext/>
       {wideScrollSurface ? (
         <div className="pointer-events-none absolute inset-x-0 top-1 z-10">

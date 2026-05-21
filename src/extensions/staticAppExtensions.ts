@@ -22,7 +22,7 @@ import { leftSidebarPlugin } from '@/plugins/left-sidebar'
 import { mobileBottomNavPlugin } from '@/plugins/mobile-bottom-nav'
 import { mobileKeyboardToolbarPlugin } from '@/plugins/mobile-keyboard-toolbar'
 import { swipeQuickActionsPlugin } from '@/plugins/swipe-quick-actions'
-import { visualNavigationPlugin } from '@/plugins/visual-navigation'
+import { spatialNavigationPlugin } from '@/plugins/spatial-navigation'
 import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
 import { videoPlayerPlugin } from '@/plugins/video-player'
 import { aliasPlugin } from '@/plugins/alias'
@@ -84,7 +84,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   mobileBottomNavPlugin,
   mobileKeyboardToolbarPlugin,
   swipeQuickActionsPlugin,
-  visualNavigationPlugin,
+  spatialNavigationPlugin,
   vimNormalModePlugin({repo}),
   videoPlayerPlugin,
   referencesPlugin,
