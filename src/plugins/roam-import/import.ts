@@ -232,7 +232,11 @@ export const importRoam = async (
   log(`Patched references on ${plan.descendants.length + plan.pages.length} blocks (${sinceLastPhase()})`)
 
   const typeSnapshot = repo.snapshotTypeRegistries()
-  const typeCandidates = collectTypeCandidates(plan, typeSnapshot.types)
+  const typeCandidates = collectTypeCandidates(
+    plan,
+    typeSnapshot.types,
+    aliasResolution.aliasIdMap,
+  )
   if (typeCandidates.length > 0) {
     log(`Found ${typeCandidates.length} isa:: type candidates`)
   }

@@ -15,7 +15,14 @@ export interface RoamTypeCandidateProperty {
 
 export interface RoamTypeCandidate {
   alias: string
-  typeId: string
+  /** Deterministic block id the alias resolves to via the import's
+   *  seat-materialization pass (the `aliasIdMap` populated in
+   *  `resolveAliases`). The block-id IS the type id under the
+   *  user-defined-types design (block-id = type-id; see
+   *  `docs/user-defined-types/design.html`). `null` when the alias
+   *  appeared in an `isa::` value but has no resolvable target — e.g.
+   *  a tag that doesn't match any imported page or live block. */
+  targetBlockId: string | null
   count: number
   commonProperties: RoamTypeCandidateProperty[]
 }
@@ -27,7 +34,7 @@ export interface RoamTypeCandidateReportSection {
 
 interface TypeCandidateAccumulator {
   alias: string
-  typeId: string
+  targetBlockId: string | null
   count: number
   propCounts: Map<string, number>
 }
@@ -45,15 +52,6 @@ const MAX_COMMON_PROPS_IN_REPORT = 5
 
 const isPureTokenString = (value: string): boolean => {
   return parsePageTokenList(value) !== null
-}
-
-const typeIdFromIsaAlias = (alias: string): string => {
-  const slug = alias
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-  return slug || alias.trim()
 }
 
 const uniqueNonEmpty = (values: readonly string[]): string[] => {
@@ -98,6 +96,7 @@ const reportablePropertyNames = (properties: Record<string, unknown>): string[] 
 const addTypeCandidateSource = (
   groups: Map<string, TypeCandidateAccumulator>,
   registeredTypes: ReadonlyMap<string, unknown>,
+  aliasIdMap: ReadonlyMap<string, string>,
   properties: Record<string, unknown>,
 ) => {
   const aliases = collectIsaAliases(properties[ROAM_ISA_PROP])
@@ -105,12 +104,15 @@ const addTypeCandidateSource = (
   const props = reportablePropertyNames(properties)
 
   for (const alias of aliases) {
-    const typeId = typeIdFromIsaAlias(alias)
-    if (registeredTypes.has(typeId) || registeredTypes.has(alias)) continue
+    const targetBlockId = aliasIdMap.get(alias) ?? null
+    // With block-id-as-type-id, a candidate whose target block is
+    // already registered as a type means the user already promoted
+    // this page — skip the suggestion.
+    if (targetBlockId !== null && registeredTypes.has(targetBlockId)) continue
 
     let group = groups.get(alias)
     if (!group) {
-      group = {alias, typeId, count: 0, propCounts: new Map()}
+      group = {alias, targetBlockId, count: 0, propCounts: new Map()}
       groups.set(alias, group)
     }
     group.count += 1
@@ -123,15 +125,16 @@ const addTypeCandidateSource = (
 export const collectTypeCandidates = (
   plan: RoamImportPlan,
   registeredTypes: ReadonlyMap<string, unknown>,
+  aliasIdMap: ReadonlyMap<string, string>,
 ): RoamTypeCandidate[] => {
   const groups = new Map<string, TypeCandidateAccumulator>()
 
   for (const page of plan.pages) {
     const properties = page.data?.properties ?? page.promotedFromChildren
-    addTypeCandidateSource(groups, registeredTypes, properties)
+    addTypeCandidateSource(groups, registeredTypes, aliasIdMap, properties)
   }
   for (const desc of plan.descendants) {
-    addTypeCandidateSource(groups, registeredTypes, desc.data.properties)
+    addTypeCandidateSource(groups, registeredTypes, aliasIdMap, desc.data.properties)
   }
 
   return [...groups.values()]
@@ -150,7 +153,7 @@ export const collectTypeCandidates = (
         }))
       return {
         alias: group.alias,
-        typeId: group.typeId,
+        targetBlockId: group.targetBlockId,
         count: group.count,
         commonProperties,
       }
@@ -167,7 +170,12 @@ const typeCandidateLine = (candidate: RoamTypeCandidate): string => {
       .map(prop => `${prop.name} ${prop.count}/${candidate.count} (${prop.percent}%)`)
       .join(', ')
     : 'no recurring props'
-  return `[[${candidate.alias}]] -> type "${candidate.typeId}" (${nodeLabel}); common props: ${props}`
+  // Show the alias as the human label; the resolved block-id is
+  // metadata (in parens, after the node count) so the report stays
+  // readable and the id is still visible for debugging / spawn-promote
+  // call sites that need it.
+  const idLabel = candidate.targetBlockId ?? 'no live target'
+  return `[[${candidate.alias}]] (${idLabel}) — ${nodeLabel}; common props: ${props}`
 }
 
 const highConfidenceTypeCandidate = (candidate: RoamTypeCandidate): boolean =>

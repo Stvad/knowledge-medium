@@ -1194,12 +1194,17 @@ describe('importRoam', () => {
 
     expect(summary.typeCandidates.map(candidate => candidate.alias))
       .toEqual(['import-test-person', 'import-test-book'])
-    expect(summary.typeCandidates[0]).toMatchObject({
+    const personCandidate = summary.typeCandidates[0]
+    expect(personCandidate).toMatchObject({
       alias: 'import-test-person',
-      typeId: 'import-test-person',
       count: 2,
       commonProperties: [{name: 'roam:twitter', count: 2, percent: 100}],
     })
+    // targetBlockId resolves to a non-null block id via the seat-
+    // materialization pass — the "Person" page is referenced via
+    // isa:: so its alias is in aliasIdMap.
+    expect(typeof personCandidate.targetBlockId).toBe('string')
+    expect(personCandidate.targetBlockId).not.toBe('')
 
     const dailyId = dailyNoteBlockId(WORKSPACE, todayIso())
     const dailyChildren = await env.h.db.getAll<{
@@ -1231,9 +1236,10 @@ describe('importRoam', () => {
       'SELECT content FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id',
       [highConfidence!.id],
     )
-    expect(highConfidenceLines.map(line => line.content)).toEqual([
-      '[[import-test-person]] -> type "import-test-person" (2 nodes); common props: roam:twitter 2/2 (100%)',
-    ])
+    expect(highConfidenceLines).toHaveLength(1)
+    expect(highConfidenceLines[0].content).toMatch(
+      /^\[\[import-test-person\]\] \([0-9a-f-]+\) — 2 nodes; common props: roam:twitter 2\/2 \(100%\)$/,
+    )
 
     const lowerConfidence = confidenceSections.find(c => c.content === 'Lower-confidence / needs review (1)')
     expect(lowerConfidence).toBeDefined()
@@ -1241,9 +1247,10 @@ describe('importRoam', () => {
       'SELECT content FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id',
       [lowerConfidence!.id],
     )
-    expect(lowerConfidenceLines.map(line => line.content)).toEqual([
-      '[[import-test-book]] -> type "import-test-book" (1 node); common props: roam:author 1/1 (100%)',
-    ])
+    expect(lowerConfidenceLines).toHaveLength(1)
+    expect(lowerConfidenceLines[0].content).toMatch(
+      /^\[\[import-test-book\]\] \([0-9a-f-]+\) — 1 node; common props: roam:author 1\/1 \(100%\)$/,
+    )
   })
 
   it('merges imported pages through page_alias properties and reports the merge set', async () => {
