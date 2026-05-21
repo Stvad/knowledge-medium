@@ -26,13 +26,20 @@ import {
 } from './walker.ts'
 
 /**
- * Find the DOM instance currently driving navigation in the panel
- * holding `block`. Falls back through:
- *   1. `visualTargetId` from the shortcut surface (`data-block-instance`).
- *   2. `document.activeElement.closest('[data-block-instance]')`.
- *   3. `locateInstance(panelId, hints)` using the panel's stored focus
- *      props — the same 3-tier recovery walked by the post-navigation
- *      ensure-focus path.
+ * Find the DOM instance currently driving navigation. Order of
+ * preference:
+ *
+ *   1. `document.activeElement.closest('[data-block-instance]')` —
+ *      the freshest possible source. Our own focusInstance() calls
+ *      el.focus() synchronously, so this updates BEFORE the React
+ *      shortcut surface re-binds. Using `visualTargetId` from deps
+ *      first would read a stale value during held-down keys and
+ *      walk repeatedly from the previous block.
+ *   2. `visualTargetId` from the shortcut surface — the React-bound
+ *      target id. Used when the user just arrived via something
+ *      other than focus (e.g. tab from outside, click).
+ *   3. `locateInstance(panelId, hints)` — full 3-tier recovery
+ *      from the panel's stored focus props.
  */
 const currentInstance = (
   visualTargetId: string | undefined,
@@ -40,17 +47,17 @@ const currentInstance = (
 ): HTMLElement | null => {
   if (typeof document === 'undefined') return null
 
+  const active = document.activeElement
+  if (active instanceof HTMLElement) {
+    const closest = active.closest<HTMLElement>('[data-block-instance]')
+    if (closest) return closest
+  }
+
   if (visualTargetId) {
     const exact = document.querySelector<HTMLElement>(
       `[data-block-instance="${CSS.escape(visualTargetId)}"]`,
     )
     if (exact) return exact
-  }
-
-  const active = document.activeElement
-  if (active instanceof HTMLElement) {
-    const closest = active.closest<HTMLElement>('[data-block-instance]')
-    if (closest) return closest
   }
 
   // uiStateBlock IS the panel block when we're inside a panel context,
@@ -62,16 +69,18 @@ const currentInstance = (
 }
 
 /**
- * Push focus onto `el`: write the panel block's focused props (so the
- * shell highlights), update the layout session's active panel if it
- * changed, record the positional-index hint, scroll into view, and
- * give the DOM focus to the element so the shortcut-surface picks it
- * up on the next keystroke.
+ * Push focus onto `el`. DOM side-effects (focus, scroll, position
+ * memory) run synchronously so the very next keystroke sees the
+ * updated `document.activeElement`. Prop writes (focusedBlockId /
+ * focusedVisualTargetKey on the panel block; activePanelId on the
+ * layout session) fire-and-forget — they're persistent state for
+ * re-mount recovery, not on the navigation hot path. Awaiting them
+ * would stall the perceived response to held-down keys.
  */
-const focusInstance = async (
+const focusInstance = (
   el: HTMLElement,
   repo: Block['repo'],
-): Promise<void> => {
+): void => {
   const panel = el.closest<HTMLElement>('[data-panel-id]')
   if (!panel) return
   const panelId = panel.dataset.panelId
@@ -82,22 +91,30 @@ const focusInstance = async (
 
   rememberInstancePosition(panelId, el)
 
+  // Synchronous DOM focus — this is what the next keystroke's
+  // `currentInstance` call will read.
+  if (typeof el.scrollIntoView === 'function') {
+    el.scrollIntoView({block: 'nearest', inline: 'nearest'})
+  }
+  el.focus({preventScroll: true})
+
+  // Fire-and-forget prop writes. If anything goes wrong, log — there's
+  // no recovery the user can take and the DOM is already correct.
   const panelBlock = repo.block(panelId)
-  await focusVisualTarget(panelBlock, blockId, instanceKey)
+  void focusVisualTarget(panelBlock, blockId, instanceKey).catch(error => {
+    console.error('[spatial-navigation] focusVisualTarget failed', error)
+  })
 
   const layoutEl = panel.closest<HTMLElement>('[data-layout-session-id]')
   const layoutSessionId = layoutEl?.dataset.layoutSessionId
   if (layoutSessionId) {
     const layoutSession = repo.block(layoutSessionId)
     if (layoutSession.peekProperty(activePanelIdProp) !== panelId) {
-      await layoutSession.set(activePanelIdProp, panelId)
+      void layoutSession.set(activePanelIdProp, panelId).catch(error => {
+        console.error('[spatial-navigation] activePanelId write failed', error)
+      })
     }
   }
-
-  if (typeof el.scrollIntoView === 'function') {
-    el.scrollIntoView({block: 'nearest', inline: 'nearest'})
-  }
-  el.focus({preventScroll: true})
 }
 
 /**
@@ -107,17 +124,17 @@ const focusInstance = async (
  * data-walker implementation (defensive — under normal mount every
  * visible block is tagged).
  */
-const moveVertical = async (
+const moveVertical = (
   deps: BlockShortcutDependencies,
   direction: 'up' | 'down',
-): Promise<boolean> => {
+): boolean => {
   const {block, uiStateBlock, visualTargetId} = deps
   if (!block || !uiStateBlock) return false
   const current = currentInstance(visualTargetId, uiStateBlock)
   if (!current) return false
   const next = verticalNeighbor(current, direction)
   if (!next) return false
-  await focusInstance(next, block.repo)
+  focusInstance(next, block.repo)
   return true
 }
 
@@ -128,10 +145,10 @@ const moveVertical = async (
  * written every time spatial nav settled in that panel, so they
  * survive across the user's column hops.
  */
-const moveHorizontal = async (
+const moveHorizontal = (
   deps: BlockShortcutDependencies,
   direction: 'left' | 'right',
-): Promise<boolean> => {
+): boolean => {
   const {block, uiStateBlock, visualTargetId} = deps
   if (!block || !uiStateBlock) return false
   const current = currentInstance(visualTargetId, uiStateBlock)
@@ -154,12 +171,14 @@ const moveHorizontal = async (
     if (layoutSessionId) {
       const layoutSession = block.repo.block(layoutSessionId)
       if (layoutSession.peekProperty(activePanelIdProp) !== destPanelId) {
-        await layoutSession.set(activePanelIdProp, destPanelId)
+        void layoutSession.set(activePanelIdProp, destPanelId).catch(error => {
+          console.error('[spatial-navigation] activePanelId write failed', error)
+        })
       }
     }
     return true
   }
-  await focusInstance(dest, block.repo)
+  focusInstance(dest, block.repo)
   return true
 }
 
@@ -172,7 +191,7 @@ export function getSpatialNavigationActions(): ActionConfig<typeof ActionContext
       id: 'move_left',
       description: 'Move focus to the panel on the left',
       handler: async (deps: BlockShortcutDependencies) => {
-        await moveHorizontal(deps, 'left')
+        moveHorizontal(deps, 'left')
       },
       defaultBinding: {keys: ['left', 'j']},
     }),
@@ -180,7 +199,7 @@ export function getSpatialNavigationActions(): ActionConfig<typeof ActionContext
       id: 'move_right',
       description: 'Move focus to the panel on the right',
       handler: async (deps: BlockShortcutDependencies) => {
-        await moveHorizontal(deps, 'right')
+        moveHorizontal(deps, 'right')
       },
       defaultBinding: {keys: ['right', 'l']},
     }),
@@ -198,7 +217,7 @@ const verticalDecorator = (
     ...action,
     description,
     handler: async (deps, trigger) => {
-      if (await moveVertical(deps, direction)) return
+      if (moveVertical(deps, direction)) return
       // Defensive fallback: nothing in the DOM matched. Let the
       // underlying vim-normal-mode handler do its data-model walk.
       await action.handler(deps, trigger)

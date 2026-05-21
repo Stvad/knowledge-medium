@@ -4,8 +4,6 @@ import type {
   BlockShellDecoratorProps,
   BlockShellState,
 } from '@/extensions/blockInteraction.ts'
-import { focusedBlockIdProp, focusedVisualTargetKeyProp } from '@/data/properties'
-import { usePropertyValue } from '@/hooks/block'
 import { surfaceFromContext } from './surface.ts'
 
 const applyRef = (ref: Ref<HTMLDivElement> | undefined, el: HTMLDivElement | null): void => {
@@ -17,21 +15,28 @@ const applyRef = (ref: Ref<HTMLDivElement> | undefined, el: HTMLDivElement | nul
 /**
  * Shell-decorator contract for spatial navigation:
  *   - tag the shell element with data attributes the walker queries.
- *   - mirror the panel-block's focused props into `active` so the
- *     block can render its highlight without going through any
- *     registry.
+ *   - expose the instance id to the shortcut surface so action
+ *     handlers can locate the source DOM element.
  *
- * Distinct from the old visual-navigation decorator in two ways:
- *   (1) NO `registerVisualNavigationTarget` — no JS-side registry.
- *       Mounting just sets data attributes; unmounting just removes
- *       them. Re-renders that recreate the DOM element pick up the
- *       attributes again on the new node — there is no stale state
- *       to clear.
- *   (2) Instance identity comes from React `useId()`. Two mount
- *       positions of the same block (e.g. two backlink entries
- *       pulling the same block under different groups) get distinct
- *       instance ids by construction, so the walker can move past
- *       both without looping.
+ * What this decorator deliberately does NOT do:
+ *   - subscribe to per-panel focused props. Reading focusedBlockId /
+ *     focusedVisualTargetKey via usePropertyValue here would attach
+ *     a hook subscription per block in the panel; every focus change
+ *     then re-renders every block in the panel. That's the
+ *     performance pitfall the user hit with the previous plugin.
+ *     `useShortcutSurfaceActivations` already reads focus reactively
+ *     via `useInFocus(block.id)` — that hook is per-block by
+ *     construction, so it doesn't fan out the way subscribing on the
+ *     panel block does.
+ *   - own a visual "active" highlight class. Focus is communicated by
+ *     the browser's native focus on the shell element (the shell has
+ *     tabIndex=0 and we call .focus() on navigation). CSS targets
+ *     `:focus-visible` for the highlight.
+ *
+ * Instance identity comes from React `useId()` — stable across
+ * re-renders of the same React position, distinct across positions
+ * (so two backlink entries that pull the same block under different
+ * groups get distinct instance ids and the walker won't loop on them).
  *
  * Tagging is done via a callback ref wrapped around the original
  * shellRef. That way the data attributes are set synchronously the
@@ -44,26 +49,10 @@ export function SpatialNavigationShellDecorator({
   state,
   children,
 }: BlockShellDecoratorProps) {
-  const {block, uiStateBlock} = resolveContext
   const blockContext = resolveContext.blockContext ?? {}
-
   const surface = surfaceFromContext(blockContext)
-  // `instanceId` is stable across re-renders of the same React position
-  // and unique across positions, including two backlink entries that
-  // resolve to the same data block. The walker uses this as the
-  // `data-block-instance` value.
   const instanceId = useId()
   const panelId = typeof blockContext.panelId === 'string' ? blockContext.panelId : undefined
-
-  // Reactive read of which instance the panel block considers focused.
-  // Panel ui-state-block === panel block (see getUIStateBlock in
-  // src/data/stateBlocks.ts) so this naturally scopes to the panel.
-  const [focusedBlockId] = usePropertyValue(uiStateBlock, focusedBlockIdProp)
-  const [focusedVisualTargetKey] = usePropertyValue(uiStateBlock, focusedVisualTargetKeyProp)
-
-  const active =
-    focusedBlockId === block.id &&
-    (focusedVisualTargetKey == null || focusedVisualTargetKey === instanceId)
 
   const upstreamRef = state.shellProps.ref
   // Callback ref runs synchronously the instant React attaches the
@@ -93,10 +82,9 @@ export function SpatialNavigationShellDecorator({
     },
     shortcutSurfaceOptions: {
       ...state.shortcutSurfaceOptions,
-      surfaceActive: active,
       visualTargetId: instanceId,
     },
-  }), [active, instanceId, state.shellProps, state.shortcutSurfaceOptions, wrappedRef])
+  }), [instanceId, state.shellProps, state.shortcutSurfaceOptions, wrappedRef])
 
   return <>{children(nextState)}</>
 }
