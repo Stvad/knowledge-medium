@@ -1,13 +1,14 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState, type MouseEvent } from 'react'
 import { Block } from '@/data/block'
 import { BlockLoadingPlaceholder } from '@/components/BlockLoadingPlaceholder.tsx'
 import { BlockComponent } from '@/components/BlockComponent.tsx'
 import { BreadcrumbList } from '@/plugins/breadcrumbs/BreadcrumbList.tsx'
-import { NestedBlockContextProvider } from '@/context/block.tsx'
+import { NestedBlockContextProvider, useBlockContext } from '@/context/block.tsx'
 import { LazyViewportMount } from '@/components/util/LazyViewportMount.tsx'
 import type { LazyViewportPlaceholderProps } from '@/components/util/LazyViewportMount.tsx'
 import { useParents } from '@/hooks/block.ts'
 import { useRepo } from '@/context/repo.tsx'
+import { handleBlockLinkClick, useNavigate } from '@/utils/navigation.ts'
 import {
   backlinkEntryShortcutContextOverrides,
   findNextCollapsedBreadcrumb,
@@ -23,23 +24,35 @@ const BACKLINK_BLOCK_PLACEHOLDER_HEIGHT_PX = 32
 
 const EMPTY_PARENTS: readonly Block[] = []
 
-interface BreadcrumbListProps {
+interface BacklinkBreadcrumbListProps {
   parents: readonly Block[]
   workspaceId: string
   onSelect: (parent: Block) => void
 }
 
-const BacklinkBreadcrumbList = ({parents, workspaceId, onSelect}: BreadcrumbListProps) => (
-  <BreadcrumbList
-    parents={parents}
-    workspaceId={workspaceId}
-    overrides={BREADCRUMB_OVERRIDES}
-    onSelect={onSelect}
-    className="flex items-center gap-1 text-xs text-muted-foreground/80 mb-1 flex-wrap"
-    itemClassName="no-underline cursor-pointer truncate max-w-[24ch] hover:text-foreground"
-    separatorClassName="mx-1 text-muted-foreground/40"
-  />
-)
+const BacklinkBreadcrumbList = ({parents, workspaceId, onSelect}: BacklinkBreadcrumbListProps) => {
+  const navigate = useNavigate()
+  const {panelId} = useBlockContext()
+  const handleLinkClick = useCallback((event: MouseEvent, parent: Block) => {
+    handleBlockLinkClick(event, navigate, panelId, {
+      blockId: parent.id,
+      workspaceId,
+    })
+  }, [navigate, panelId, workspaceId])
+
+  return (
+    <BreadcrumbList
+      parents={parents}
+      workspaceId={workspaceId}
+      overrides={BREADCRUMB_OVERRIDES}
+      onSelect={onSelect}
+      onLinkClick={handleLinkClick}
+      className="flex items-center gap-1 text-xs text-muted-foreground/80 mb-1 flex-wrap"
+      itemClassName="no-underline cursor-pointer truncate max-w-[24ch] hover:text-foreground"
+      separatorClassName="mx-1 text-muted-foreground/40"
+    />
+  )
+}
 
 // Roam-style: breadcrumbs are the chain ABOVE the currently-shown block.
 // Click a segment to "unfurl" — promote it to the shown block. The
