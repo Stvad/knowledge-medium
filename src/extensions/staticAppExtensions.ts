@@ -40,6 +40,7 @@ import { srsReschedulingPlugin } from '@/plugins/srs-rescheduling'
 import { todoPlugin } from '@/plugins/todo'
 import { syncStatusPlugin } from '@/plugins/sync-status'
 import { extensionsSettingsPlugin } from '@/plugins/extensions-settings'
+import { extractTypePlugin } from '@/plugins/extract-type'
 import type { AppExtension } from '@/extensions/facet.ts'
 import { systemToggle } from '@/extensions/togglable.ts'
 
@@ -191,6 +192,9 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   }),
   sys('block-tagging', 'Block tagging', blockTaggingPlugin, {
     description: 'Add-tag action and the per-workspace tag-list preference.',
+  }),
+  sys('extract-type', 'Extract type from block', extractTypePlugin, {
+    description: 'Action + dialog that creates a user-defined type from a prototype block: name the type, pick the property subset, confirm matching candidates, retag.',
   }),
   sys('srs-rescheduling', 'SRS rescheduling', srsReschedulingPlugin, {
     description: 'Spaced-repetition scheduling for blocks with a next-review date.',
