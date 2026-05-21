@@ -90,6 +90,15 @@ const collectTargetIds = (value: unknown): readonly string[] => {
   return Array.from(new Set(ids))
 }
 
+/** Hard cap on candidates surfaced to the user at once. Above this
+ *  the picker becomes unwieldy (every row is a checkbox + live block
+ *  label) and we'd rather make the user narrow their filter. The cap
+ *  is local to this dialog — `findCandidatesByPropertyShape`'s own
+ *  default (1000) was too low for the retag flow and produced
+ *  suspicious round counts. When the result length equals the cap we
+ *  show an inline truncation hint. */
+const CANDIDATE_DISPLAY_LIMIT = 5000
+
 export function FindTypeInstancesDialog() {
   const repo = useRepo()
   const [open, setOpen] = useState(false)
@@ -97,6 +106,7 @@ export function FindTypeInstancesDialog() {
   const [step, setStep] = useState<DialogStep>('configure')
   const [choices, setChoices] = useState<readonly PropertyShapeChoice[]>([])
   const [candidates, setCandidates] = useState<readonly BlockData[]>([])
+  const [truncated, setTruncated] = useState(false)
   const [confirmed, setConfirmed] = useState<ReadonlySet<string>>(new Set())
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -112,6 +122,7 @@ export function FindTypeInstancesDialog() {
       setTypeBlock(data)
       setChoices(buildTypeShapeChoices(repo, data))
       setCandidates([])
+      setTruncated(false)
       setConfirmed(new Set())
       setError(null)
       setBusy(false)
@@ -127,6 +138,7 @@ export function FindTypeInstancesDialog() {
     setTypeBlock(null)
     setChoices([])
     setCandidates([])
+    setTruncated(false)
     setConfirmed(new Set())
     setError(null)
     setBusy(false)
@@ -170,7 +182,9 @@ export function FindTypeInstancesDialog() {
         // block-type:* fields, not the type's instance fields, so it
         // typically wouldn't match — but exclude defensively).
         exclude: [typeBlock.id],
+        limit: CANDIDATE_DISPLAY_LIMIT,
       })
+      setTruncated(ids.length >= CANDIDATE_DISPLAY_LIMIT)
       const rows = await Promise.all(ids.map(id => repo.load(id)))
       // Drop blocks that already carry this type — retagBlocks would
       // be a no-op for them and they clutter the picker.
@@ -255,8 +269,13 @@ export function FindTypeInstancesDialog() {
             <p className="text-sm">
               {candidates.length === 0
                 ? `No untagged blocks match this shape.`
-                : `${candidates.length} block${candidates.length === 1 ? '' : 's'} match this shape and aren’t yet tagged as ${typeLabel}.`}
+                : `${candidates.length.toLocaleString()} block${candidates.length === 1 ? '' : 's'} match this shape and aren’t yet tagged as ${typeLabel}.`}
             </p>
+            {truncated && (
+              <p className="text-sm text-amber-600 dark:text-amber-500">
+                More candidates exist — results were capped at {CANDIDATE_DISPLAY_LIMIT.toLocaleString()}. Narrow the filter to see the rest.
+              </p>
+            )}
             {candidates.length > 0 && (
               <ul className="max-h-72 space-y-1 overflow-auto rounded-md border p-2">
                 {candidates.map(candidate => (
