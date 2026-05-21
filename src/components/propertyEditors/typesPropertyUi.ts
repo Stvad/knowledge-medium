@@ -19,7 +19,7 @@ import {
   typesProp,
 } from '@/data/properties.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
-import { withSystemExtensionMetadata } from '@/extensions/togglable.ts'
+import { systemToggle } from '@/extensions/togglable.ts'
 import { TypesPropertyEditor } from './TypesPropertyEditor'
 
 export const typesPropertyUi = definePropertyEditorOverride<readonly string[]>({
@@ -51,10 +51,11 @@ const hiddenKernelPropertyUis = [
 
 /** Per-name editor overrides only — type-keyed editor selection now
  *  flows through `valuePresetsFacet`. See user-defined-properties §1-edit. */
-export const kernelPropertyUiExtension: AppExtension = withSystemExtensionMetadata({
+export const kernelPropertyUiExtension: AppExtension = systemToggle({
+  id: 'system:kernel-property-ui',
   name: 'Property editors',
   description: 'Editors for kernel property schemas (types, etc) and the hidden-property list for the property panel.',
-}, [
+}).of([
   propertyEditorOverridesFacet.of(typesPropertyUi, {source: 'kernel-ui'}),
   hiddenKernelPropertyUis.map(ui => propertyEditorOverridesFacet.of(ui, {source: 'kernel-ui'})),
 ])

@@ -51,7 +51,7 @@ import { pasteFromClipboard } from '@/utils/paste.ts'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.ts'
 import { AppExtension } from '@/extensions/facet.ts'
 import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
-import { withSystemExtensionMetadata } from '@/extensions/togglable.ts'
+import { systemToggle } from '@/extensions/togglable.ts'
 import { getLayoutSessionBlock, getUserPrefsBlock } from '@/data/stateBlocks.ts'
 import { getLayoutSessionId } from '@/utils/layoutSessionId.ts'
 import {
@@ -907,10 +907,12 @@ export function getDefaultActions({repo}: { repo: Repo }): ActionConfig[] {
   ] as ActionConfig[]
 }
 
-export const defaultActionContextsExtension: AppExtension = withSystemExtensionMetadata({
+export const defaultActionContextsExtension: AppExtension = systemToggle({
+  id: 'system:action-contexts',
   name: 'Action contexts',
   description: 'Registers the built-in shortcut contexts (global, normal mode, edit mode, property editing, multi-select) so activation validation remains available.',
-}, defaultActionContextConfigs.map(context => actionContextsFacet.of(context)))
+  essential: true,
+}).of(defaultActionContextConfigs.map(context => actionContextsFacet.of(context)))
 
 export function defaultActionsExtension({repo}: { repo: Repo }): AppExtension {
   const {
@@ -927,8 +929,9 @@ export function defaultActionsExtension({repo}: { repo: Repo }): AppExtension {
     ...multiSelectModeActions,
   ] as ActionConfig[]
 
-  return withSystemExtensionMetadata({
+  return systemToggle({
+    id: 'system:default-actions',
     name: 'Default keyboard shortcuts',
     description: 'Built-in shortcuts (Enter/Tab/Cmd+K-style). Disabling removes the default bindings; user-defined ones still work.',
-  }, actions.map(action => actionsFacet.of(action)))
+  }).of(actions.map(action => actionsFacet.of(action)))
 }

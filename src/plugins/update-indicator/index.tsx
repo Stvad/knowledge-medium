@@ -4,7 +4,7 @@ import {
 } from '@/extensions/blockInteraction.ts'
 import { appEffectsFacet } from '@/extensions/core.ts'
 import { AppExtension } from '@/extensions/facet.ts'
-import { withSystemExtensionMetadata } from '@/extensions/togglable.ts'
+import { systemToggle } from '@/extensions/togglable.ts'
 import { propertySchemasFacet } from '@/data/facets.ts'
 import { pluginPrefsExtension } from '@/data/pluginStateExtensions.ts'
 import { UpdateIndicator } from './UpdateIndicator.tsx'
@@ -32,10 +32,11 @@ const updateIndicatorDecorator: BlockContentDecoratorContribution = () => Inner 
   return Decorated
 }
 
-export const updateIndicatorPlugin: AppExtension = withSystemExtensionMetadata({
+export const updateIndicatorPlugin: AppExtension = systemToggle({
+  id: 'system:update-indicator',
   name: 'Update indicator',
   description: 'Subtle indicator when a new app build has been deployed since this tab loaded.',
-}, [
+}).of([
   appEffectsFacet.of(updateIndicatorLoadTimeEffect, {source: 'update-indicator'}),
   propertySchemasFacet.of(previousLoadTimeProp, {source: 'update-indicator'}),
   propertySchemasFacet.of(currentLoadTimeProp, {source: 'update-indicator'}),

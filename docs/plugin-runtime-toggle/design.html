@@ -199,7 +199,7 @@
     <div class="tldr">
       <h3>Design at a glance</h3>
       <ul>
-        <li><strong>Identity via a Compartment-style handle.</strong> Two constrained factories — <code>systemToggle({id, name, ...})</code> for code-defined plugins, <code>userExtensionToggle(block, hints?)</code> for blocks — both return a <code>Togglable</code> whose <code>.of(ext)</code> wraps a subtree with a boundary marker. Extensions stay plain values; the handle is the identity.</li>
+        <li><strong>Identity via a Compartment-style handle.</strong> Two constrained factories — <code>systemToggle({id, name, ...})</code> for code-defined plugins, <code>userExtensionToggle(block)</code> for blocks — both return a <code>Togglable</code> whose <code>.of(ext)</code> wraps a subtree with a boundary marker. Extensions stay plain values; the handle is the identity.</li>
         <li><strong>Dependencies are inclusion + dedup.</strong> Plugin A needs B → A's extension array contains B's contributions. Reference-equality dedup makes overlap free. Plugin authors export <em>both</em> a bare contributions const (hard-dep inclusion) <em>and</em> a wrapped togglable (user-facing toggle).</li>
         <li><strong>Ordering already exists</strong> as <code>precedence?: number</code> on <code>FacetContribution</code>. Keep it.</li>
         <li><strong>Implication via <code>enables</code>.</strong> A facet contribution can drag siblings along — they exist iff it does.</li>
@@ -211,9 +211,10 @@
 
     <h2>Where things stand today</h2>
     <ul>
-      <li><strong>Built-in extensions:</strong> flat array of <code>AppExtension</code> in
-        <code>src/extensions/staticAppExtensions.ts</code>. No identity beyond
-        <code>source</code> strings on individual contributions.</li>
+      <li><strong>Built-in extensions:</strong> each system extension wraps its own
+        contributions with <code>systemToggle(...).of(...)</code>. The central
+        <code>src/extensions/staticAppExtensions.ts</code> file is just the ordered
+        import list.</li>
       <li><strong>User extensions:</strong> blocks with a <code>system:disabled</code>
         property, filtered once at load in <code>src/extensions/dynamicExtensions.ts:71</code>.
         Toggling the property doesn't auto-rebuild — user must invoke "Reload extensions".</li>
@@ -295,23 +296,29 @@ function systemToggle(opts: {
 // Name + description come from block properties.
 function userExtensionToggle(block: BlockData): Togglable { /* ... */ }</code></pre>
 
-    <p>Usage in <code>staticAppExtensions.ts</code>:</p>
+    <p>Usage inside an extension module, with <code>staticAppExtensions.ts</code> only listing exports:</p>
 
-<pre><code>export const dailyNotesToggle = systemToggle({
-  id: 'daily-notes',
+<pre><code>export const dailyNotesPlugin = ({repo}) => systemToggle({
+  id: 'system:daily-notes',
   name: 'Daily notes',
   description: 'Auto-create dated pages and the today shortcut.',
-})
-export const commandPaletteToggle = systemToggle({
-  id: 'command-palette',
+}).of([
+  dailyNotesDataExtension,
+  actionsFacet.of(openTodayAction({repo}), {source: 'daily-notes'}),
+])
+
+export const commandPalettePlugin = systemToggle({
+  id: 'system:command-palette',
   name: 'Command palette',
   essential: true,
-})
+}).of([
+  appMountsFacet.of(commandPaletteMount, {source: 'command-palette'}),
+])
 
 export const staticAppExtensions = ({repo}) => [
-  kernelDataExtension,                                  // bare, no toggle
-  dailyNotesToggle.of(dailyNotesPlugin({repo})),
-  commandPaletteToggle.of(commandPalettePlugin),
+  kernelDataExtension,
+  dailyNotesPlugin({repo}),
+  commandPalettePlugin,
   /* ... */
 ]</code></pre>
 
@@ -1001,10 +1008,10 @@ async function discoverToggleTree(
         <code>systemToggle</code>, <code>userExtensionToggle</code>,
         <code>userExtensionShellToggle</code>, <code>getBoundary</code>, and
         <code>isEnabled</code>. Re-export the author-facing type surface from
-        <code>src/extensions/api.ts</code> following the existing convention. Wrap existing
-        built-in extensions in <code>systemToggle({id, name, ...}).of(...)</code>. Mark a
-        handful <code>essential: true</code> (kernel, prefs bootstrap, command
-        palette). At startup, log a warning when the overrides map contains ids that
+        <code>src/extensions/api.ts</code> following the existing convention. Each
+        built-in extension wraps itself in <code>systemToggle({id, name, ...}).of(...)</code>
+        and marks essential status locally where needed (kernel, prefs bootstrap,
+        command palette). At startup, log a warning when the overrides map contains ids that
         don't appear in the discovered toggle tree — catches the id-drift case
         (manifest rename leaves stored prefs orphaned) without forcing source/id
         equality, which would be wrong for cross-plugin bare inclusions

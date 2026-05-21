@@ -1,6 +1,6 @@
 import { headerItemsFacet, type HeaderItemContribution } from '@/extensions/core.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
-import { withSystemExtensionMetadata } from '@/extensions/togglable.ts'
+import { systemToggle } from '@/extensions/togglable.ts'
 import { AccountHeaderItem } from './AccountHeaderItem.tsx'
 
 export { AccountHeaderItem } from './AccountHeaderItem.tsx'
@@ -11,10 +11,11 @@ export const accountHeaderItem: HeaderItemContribution = {
   component: AccountHeaderItem,
 }
 
-export const accountHeaderPlugin: AppExtension = withSystemExtensionMetadata({
+export const accountHeaderPlugin: AppExtension = systemToggle({
+  id: 'system:account-header',
   name: 'Account header',
   description: 'User identity badge and logout entry in the header.',
-}, [
+}).of([
   headerItemsFacet.of(accountHeaderItem, {
     source: 'account-header',
     precedence: 50,

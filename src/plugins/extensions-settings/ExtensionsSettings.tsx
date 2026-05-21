@@ -26,9 +26,8 @@ import {buildAppHash} from '@/utils/routing.ts'
 
 /** Stable-sort the tree so essentials surface first within each level,
  *  then alphabetical (case-insensitive, locale-aware) within each
- *  (essential / non-essential) group. Catalog order in
- *  `staticAppExtensions.ts` stays the source of truth for plugin
- *  authors; the settings UI reorders purely for discoverability. */
+ *  (essential / non-essential) group. Static catalog order remains the
+ *  runtime order; the settings UI reorders purely for discoverability. */
 const nameComparator = new Intl.Collator(undefined, {sensitivity: 'base'})
 const compareNodes = (a: ToggleNode, b: ToggleNode): number => {
   const aEss = a.handle.essential === true ? 0 : 1

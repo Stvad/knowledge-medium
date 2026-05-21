@@ -1,7 +1,7 @@
 import { AppExtension } from '@/extensions/facet.ts'
 import { propertyEditorOverridesFacet } from '@/data/facets.ts'
 import { backlinksViewFacet } from '@/plugins/backlinks-view/facet.ts'
-import { withSystemExtensionMetadata } from '@/extensions/togglable.ts'
+import { systemToggle } from '@/extensions/togglable.ts'
 import { defineVariant } from '@/extensions/variantFacet.ts'
 import { LinkedReferences } from './LinkedReferences.tsx'
 import { backlinksDataExtension } from './dataExtension.ts'
@@ -12,10 +12,11 @@ import { backlinkBreadcrumbShortcutsExtension } from './backlinkBreadcrumbShortc
 // style: backlinks live with the page you're viewing, not inline beside every
 // nested bullet. The top-level gate is enforced by the backlinks-view
 // coordinator's footer contribution; this variant always offers itself.
-export const backlinksPlugin: AppExtension = withSystemExtensionMetadata({
+export const backlinksPlugin: AppExtension = systemToggle({
+  id: 'system:backlinks',
   name: 'Backlinks',
   description: 'Flat list of incoming references to the focused block.',
-}, [
+}).of([
   backlinksDataExtension,
   backlinkBreadcrumbShortcutsExtension,
   propertyEditorOverridesFacet.of(dailyNoteBacklinksDefaultsUi, {source: 'backlinks'}),

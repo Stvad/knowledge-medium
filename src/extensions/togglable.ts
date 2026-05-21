@@ -117,54 +117,6 @@ export function systemToggle(opts: SystemToggleOptions): Togglable {
   return handle
 }
 
-// ──────────────────────────────────────────────────────────────────────
-// System-extension metadata
-// ──────────────────────────────────────────────────────────────────────
-
-export interface SystemExtensionMetadata {
-  readonly name: string
-  readonly description?: string
-}
-
-const SYSTEM_EXTENSION_METADATA = Symbol('togglable.system-extension-metadata')
-
-type MetadataCarrier = object & {
-  [SYSTEM_EXTENSION_METADATA]?: SystemExtensionMetadata
-}
-
-/** Attach display metadata to a built-in AppExtension at its definition
- *  site. The static app catalog still decides id / essential policy,
- *  but names and descriptions travel with the extension itself. */
-export function withSystemExtensionMetadata(
-  metadata: SystemExtensionMetadata,
-  ext: AppExtension,
-): AppExtension {
-  if (ext && (typeof ext === 'object' || typeof ext === 'function')) {
-    Object.defineProperty(ext, SYSTEM_EXTENSION_METADATA, {
-      value: metadata,
-      enumerable: false,
-      configurable: true,
-    })
-    return ext
-  }
-
-  const wrapped: AppExtension[] = [ext]
-  Object.defineProperty(wrapped, SYSTEM_EXTENSION_METADATA, {
-    value: metadata,
-    enumerable: false,
-  })
-  return wrapped
-}
-
-export function getSystemExtensionMetadata(
-  ext: AppExtension,
-): SystemExtensionMetadata | undefined {
-  if (!ext || (typeof ext !== 'object' && typeof ext !== 'function')) {
-    return undefined
-  }
-  return (ext as MetadataCarrier)[SYSTEM_EXTENSION_METADATA]
-}
-
 /** Resolve a display name from block-level data only — no module
  *  compilation. Used as the disabled-shell name AND as the fallback
  *  for enabled extension boundaries. */

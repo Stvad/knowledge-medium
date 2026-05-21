@@ -1,7 +1,7 @@
 import { Check, ClipboardPaste, ClockArrowDown, Gauge, RotateCcw, Scissors, Sparkles } from 'lucide-react'
 import { actionDecoratorsFacet, actionsFacet } from '@/extensions/core.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
-import { withSystemExtensionMetadata } from '@/extensions/togglable.ts'
+import { systemToggle } from '@/extensions/togglable.ts'
 import type { Block } from '@/data/block'
 import type { BlockContentSurfaceContribution } from '@/extensions/blockInteraction.ts'
 import { blockContentSurfacePropsFacet } from '@/extensions/blockInteraction.ts'
@@ -360,10 +360,11 @@ const srsContentSurfaceDecoration: BlockContentSurfaceContribution = ({block}) =
   }
 }
 
-export const srsReschedulingPlugin: AppExtension = withSystemExtensionMetadata({
+export const srsReschedulingPlugin: AppExtension = systemToggle({
+  id: 'system:srs-rescheduling',
   name: 'SRS rescheduling',
   description: 'Spaced-repetition scheduling for blocks with a next-review date.',
-}, [
+}).of([
   srsReschedulingDataExtension,
   srsQuickActionItems.map(item =>
     quickActionItemsFacet.of(item, {source: 'srs-rescheduling'}),

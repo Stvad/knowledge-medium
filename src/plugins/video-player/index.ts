@@ -5,7 +5,7 @@ import {
 import { blockRenderersFacet } from '@/extensions/core.ts'
 import { propertySchemasFacet } from '@/data/facets.ts'
 import { AppExtension } from '@/extensions/facet.ts'
-import { withSystemExtensionMetadata } from '@/extensions/togglable.ts'
+import { systemToggle } from '@/extensions/togglable.ts'
 import { markdownExtensionsFacet } from '@/markdown/extensions.ts'
 import {
   videoPlayerActionsExtension,
@@ -18,10 +18,11 @@ import {
 import { videoPlayerMarkdownExtension } from './markdown.tsx'
 import { videoNotesPaneRatioProp, videoPlayerViewProp } from './view.ts'
 
-export const videoPlayerPlugin: AppExtension = withSystemExtensionMetadata({
+export const videoPlayerPlugin: AppExtension = systemToggle({
+  id: 'system:video-player',
   name: 'Video player',
   description: 'Inline playback for blocks whose content is a video URL.',
-}, [
+}).of([
   propertySchemasFacet.of(videoPlayerViewProp, {source: 'video-player'}),
   propertySchemasFacet.of(videoNotesPaneRatioProp, {source: 'video-player'}),
   blockRenderersFacet.of({id: 'videoPlayer', renderer: VideoPlayerRenderer}, {source: 'video-player'}),

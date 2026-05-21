@@ -4,7 +4,7 @@ import {
   shortcutSurfaceActivationsFacet,
 } from '@/extensions/blockInteraction.ts'
 import { AppExtension } from '@/extensions/facet.ts'
-import { withSystemExtensionMetadata } from '@/extensions/togglable.ts'
+import { systemToggle } from '@/extensions/togglable.ts'
 import { Repo } from '../../data/repo'
 import { vimNormalModeActionsExtension } from './actions.ts'
 import {
@@ -29,10 +29,11 @@ export const vimNormalModeInteractionExtension: AppExtension = [
 ]
 
 export const vimNormalModePlugin = ({repo}: { repo: Repo }): AppExtension =>
-  withSystemExtensionMetadata({
+  systemToggle({
+    id: 'system:vim-normal-mode',
     name: 'Vim normal mode',
     description: 'Vim-style normal-mode keybindings inside the editor.',
-  }, [
+  }).of([
     vimNormalModeInteractionExtension,
     vimNormalModeActionsExtension({repo}),
   ])

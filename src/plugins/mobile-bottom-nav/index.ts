@@ -1,6 +1,6 @@
 import { appMountsFacet, type AppMountContribution } from '@/extensions/core.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
-import { withSystemExtensionMetadata } from '@/extensions/togglable.ts'
+import { systemToggle } from '@/extensions/togglable.ts'
 import { MobileBottomNav } from './MobileBottomNav.tsx'
 import { mobileBottomNavItemsFacet } from './facet.ts'
 import {
@@ -34,10 +34,11 @@ export const mobileBottomNavMount: AppMountContribution = {
   component: MobileBottomNav,
 }
 
-export const mobileBottomNavPlugin: AppExtension = withSystemExtensionMetadata({
+export const mobileBottomNavPlugin: AppExtension = systemToggle({
+  id: 'system:mobile-bottom-nav',
   name: 'Mobile bottom nav',
   description: 'Bottom navigation bar shown on mobile viewports.',
-}, [
+}).of([
   appMountsFacet.of(mobileBottomNavMount, {source: 'mobile-bottom-nav'}),
   mobileBottomNavItemsFacet.of(openSidebarBottomNavItem, {
     source: 'mobile-bottom-nav',

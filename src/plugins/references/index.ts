@@ -1,16 +1,17 @@
 import { codeMirrorExtensionsFacet } from '@/extensions/editor.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
-import { withSystemExtensionMetadata } from '@/extensions/togglable.ts'
+import { systemToggle } from '@/extensions/togglable.ts'
 import { markdownExtensionsFacet } from '@/markdown/extensions.ts'
 import { referencesCodeMirrorExtensions } from './codeMirrorExtensions.ts'
 import { referencesDataExtension } from './dataExtension.ts'
 import { blockrefMarkdownExtension } from './markdown/blockrefs/index.tsx'
 import { wikilinkMarkdownExtension } from './markdown/wikilinks/index.tsx'
 
-export const referencesPlugin: AppExtension = withSystemExtensionMetadata({
+export const referencesPlugin: AppExtension = systemToggle({
+  id: 'system:references',
   name: 'References',
   description: 'Wikilink + block-ref parsing and the wikilink display decorator.',
-}, [
+}).of([
   referencesDataExtension,
   markdownExtensionsFacet.of(wikilinkMarkdownExtension, {source: 'references'}),
   markdownExtensionsFacet.of(blockrefMarkdownExtension, {source: 'references'}),

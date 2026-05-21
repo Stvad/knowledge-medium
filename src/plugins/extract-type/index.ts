@@ -15,7 +15,7 @@
 
 import { actionsFacet, appMountsFacet, type AppMountContribution } from '@/extensions/core.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
-import { withSystemExtensionMetadata } from '@/extensions/togglable.ts'
+import { systemToggle } from '@/extensions/togglable.ts'
 import { ExtractTypeDialog } from './ExtractTypeDialog.tsx'
 import { FindTypeInstancesDialog } from './FindTypeInstancesDialog.tsx'
 import {
@@ -52,10 +52,11 @@ const findTypeInstancesDialogMount: AppMountContribution = {
   component: FindTypeInstancesDialog,
 }
 
-export const extractTypePlugin: AppExtension = withSystemExtensionMetadata({
+export const extractTypePlugin: AppExtension = systemToggle({
+  id: 'system:extract-type',
   name: 'Extract type from block',
   description: 'Action + dialog that creates a user-defined type from a prototype block: name the type, pick the property subset, confirm matching candidates, retag.',
-}, [
+}).of([
   actionsFacet.of(extractTypeAction, {source: 'extract-type'}),
   actionsFacet.of(findTypeInstancesAction, {source: 'extract-type'}),
   appMountsFacet.of(extractTypeDialogMount, {source: 'extract-type'}),

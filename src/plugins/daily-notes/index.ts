@@ -43,7 +43,7 @@
  */
 import type { Repo } from '@/data/repo'
 import type { AppExtension } from '@/extensions/facet.ts'
-import { withSystemExtensionMetadata } from '@/extensions/togglable.ts'
+import { systemToggle } from '@/extensions/togglable.ts'
 import {
   actionsFacet,
   appMountsFacet,
@@ -165,40 +165,41 @@ export const openDailyNotePickerAction = (
 // dialog-using plugin is enabled. Dedup by FacetContribution reference
 // keeps the registry to exactly one appMountsFacet entry.
 export const dailyNotesPlugin = ({repo}: {repo: Repo}): AppExtension =>
-  withSystemExtensionMetadata({
+  systemToggle({
+    id: 'system:daily-notes',
     name: 'Daily notes',
     description: 'Date-keyed pages, the workspace-landing resolver that opens today on app open, and the prev/next/today shortcuts.',
-  }, [
-  dailyNotesDataExtension,
-  dialogAppMountExtension,
-  appMountsFacet.of(dailyNotePickerMount, {source: 'daily-notes'}),
-  appMountsFacet.of(reschedulePickerMount, {source: 'daily-notes'}),
-  appMountsFacet.of(dateScrubOverlayMount, {source: 'daily-notes'}),
-  dailyNotesActions({repo}).map(action =>
-    actionsFacet.of(action, {source: 'daily-notes'}),
-  ),
-  dateReferenceShiftActions.map(action =>
-    actionsFacet.of(action, {source: 'daily-notes'}),
-  ),
-  actionsFacet.of(rescheduleBlockDateAction, {source: 'daily-notes'}),
-  quickActionItemsFacet.of(rescheduleQuickActionItem, {source: 'daily-notes'}),
-  actionsFacet.of(spreadBlockDateAction, {source: 'daily-notes'}),
-  actionsFacet.of(spreadBlockDatesAction, {source: 'daily-notes'}),
-  groupedBacklinksGroupHeaderActionsFacet.of(
-    spreadBlockDatesGroupHeaderEntry,
-    {source: 'daily-notes'},
-  ),
-  blockDateAdapterFacet.of(referenceDateAdapter, {source: 'daily-notes'}),
-  wikilinkDisplayDecoratorFacet.of(dailyDateWikilinkDecorator, {source: 'daily-notes'}),
-  blockContentSurfacePropsFacet.of(dateScrubContentSurface, {source: 'daily-notes'}),
-  blockContentSurfacePropsFacet.of(dateWheelScrubContentSurface, {source: 'daily-notes'}),
-  actionsFacet.of(openDailyNotePickerAction({repo}), {source: 'daily-notes'}),
-  headerItemsFacet.of(dailyNotePickerHeaderItem, {
-    source: 'daily-notes',
-    precedence: 5,
-  }),
-  workspaceLandingFacet.of(todayDailyNoteLanding, {source: 'daily-notes'}),
-])
+  }).of([
+    dailyNotesDataExtension,
+    dialogAppMountExtension,
+    appMountsFacet.of(dailyNotePickerMount, {source: 'daily-notes'}),
+    appMountsFacet.of(reschedulePickerMount, {source: 'daily-notes'}),
+    appMountsFacet.of(dateScrubOverlayMount, {source: 'daily-notes'}),
+    dailyNotesActions({repo}).map(action =>
+      actionsFacet.of(action, {source: 'daily-notes'}),
+    ),
+    dateReferenceShiftActions.map(action =>
+      actionsFacet.of(action, {source: 'daily-notes'}),
+    ),
+    actionsFacet.of(rescheduleBlockDateAction, {source: 'daily-notes'}),
+    quickActionItemsFacet.of(rescheduleQuickActionItem, {source: 'daily-notes'}),
+    actionsFacet.of(spreadBlockDateAction, {source: 'daily-notes'}),
+    actionsFacet.of(spreadBlockDatesAction, {source: 'daily-notes'}),
+    groupedBacklinksGroupHeaderActionsFacet.of(
+      spreadBlockDatesGroupHeaderEntry,
+      {source: 'daily-notes'},
+    ),
+    blockDateAdapterFacet.of(referenceDateAdapter, {source: 'daily-notes'}),
+    wikilinkDisplayDecoratorFacet.of(dailyDateWikilinkDecorator, {source: 'daily-notes'}),
+    blockContentSurfacePropsFacet.of(dateScrubContentSurface, {source: 'daily-notes'}),
+    blockContentSurfacePropsFacet.of(dateWheelScrubContentSurface, {source: 'daily-notes'}),
+    actionsFacet.of(openDailyNotePickerAction({repo}), {source: 'daily-notes'}),
+    headerItemsFacet.of(dailyNotePickerHeaderItem, {
+      source: 'daily-notes',
+      precedence: 5,
+    }),
+    workspaceLandingFacet.of(todayDailyNoteLanding, {source: 'daily-notes'}),
+  ])
 
 export { DAILY_NOTE_TYPE, dailyNoteDateProp, dailyNoteType } from './schema.ts'
 export { dailyNotesDataExtension } from './dataExtension.ts'

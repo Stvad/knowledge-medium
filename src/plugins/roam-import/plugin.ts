@@ -18,15 +18,16 @@
 import type { Repo } from '@/data/repo'
 import type { AppExtension } from '@/extensions/facet.ts'
 import { actionsFacet, appEffectsFacet } from '@/extensions/core.ts'
-import { withSystemExtensionMetadata } from '@/extensions/togglable.ts'
+import { systemToggle } from '@/extensions/togglable.ts'
 import { importRoamAction } from './action.ts'
 import { roamImportWindowHookEffect } from './effect.ts'
 
 export const roamImportPlugin = ({repo}: {repo: Repo}): AppExtension =>
-  withSystemExtensionMetadata({
+  systemToggle({
+    id: 'system:roam-import',
     name: 'Roam import',
     description: 'Import a Roam .json export into the current workspace.',
-  }, [
+  }).of([
     actionsFacet.of(importRoamAction({repo}), {source: 'roam-import'}),
     appEffectsFacet.of(roamImportWindowHookEffect, {source: 'roam-import'}),
   ])

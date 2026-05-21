@@ -1,6 +1,6 @@
 import { actionsFacet, appMountsFacet, type AppMountContribution } from '@/extensions/core.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
-import { withSystemExtensionMetadata } from '@/extensions/togglable.ts'
+import { systemToggle } from '@/extensions/togglable.ts'
 import { mobileKeyboardToolbarActions } from './actions.ts'
 import { MobileKeyboardToolbar } from './MobileKeyboardToolbar.tsx'
 
@@ -12,10 +12,11 @@ export const mobileKeyboardToolbarMount: AppMountContribution = {
   component: MobileKeyboardToolbar,
 }
 
-export const mobileKeyboardToolbarPlugin: AppExtension = withSystemExtensionMetadata({
+export const mobileKeyboardToolbarPlugin: AppExtension = systemToggle({
+  id: 'system:mobile-keyboard-toolbar',
   name: 'Mobile keyboard toolbar',
   description: 'Editing toolbar that floats above the on-screen keyboard on mobile.',
-}, [
+}).of([
   mobileKeyboardToolbarActions.map(action => actionsFacet.of(action, {source: 'mobile-keyboard-toolbar'})),
   appMountsFacet.of(mobileKeyboardToolbarMount, {source: 'mobile-keyboard-toolbar'}),
 ])

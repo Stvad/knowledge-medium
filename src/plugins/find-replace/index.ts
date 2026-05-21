@@ -6,7 +6,7 @@ import {
   type HeaderItemContribution,
 } from '@/extensions/core.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
-import { systemToggle, withSystemExtensionMetadata } from '@/extensions/togglable.ts'
+import { systemToggle } from '@/extensions/togglable.ts'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.ts'
 import { Search } from 'lucide-react'
 import { FindReplaceDialog } from './FindReplaceDialog.tsx'
@@ -60,12 +60,14 @@ const findReplaceHeaderToggle = systemToggle({
   id: 'system:find-replace/header-item',
   name: 'Search icon in header',
   description: 'Disable to hide find-replace from the global header (Cmd+Shift+F still works).',
+  defaultEnabled: false,
 })
 
-export const findReplacePlugin: AppExtension = withSystemExtensionMetadata({
+export const findReplacePlugin: AppExtension = systemToggle({
+  id: 'system:find-replace',
   name: 'Find and replace',
   description: 'Cmd+Shift+F search-and-replace across the workspace.',
-}, [
+}).of([
   findReplaceDataExtension,
   appMountsFacet.of(findReplaceMount, {source: 'find-replace'}),
   actionsFacet.of(findReplaceAction, {source: 'find-replace'}),

@@ -21,7 +21,7 @@ import {
 } from '@/data/api'
 import { valuePresetsFacet } from '@/data/facets.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
-import { withSystemExtensionMetadata } from '@/extensions/togglable.ts'
+import { systemToggle } from '@/extensions/togglable.ts'
 import {
   BooleanPropertyEditor,
   DatePropertyEditor,
@@ -142,7 +142,9 @@ export const kernelValuePresets: readonly AnyValuePreset[] = [
   }),
 ]
 
-export const kernelValuePresetsExtension: AppExtension = withSystemExtensionMetadata({
+export const kernelValuePresetsExtension: AppExtension = systemToggle({
+  id: 'system:kernel-value-presets',
   name: 'Property value presets',
   description: "Default editor + glyph for each codec type, used by any property that doesn't ship a per-name override.",
-}, kernelValuePresets.map(preset => valuePresetsFacet.of(preset, {source: 'kernel-ui'})))
+  essential: true,
+}).of(kernelValuePresets.map(preset => valuePresetsFacet.of(preset, {source: 'kernel-ui'})))

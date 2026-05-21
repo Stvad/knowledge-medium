@@ -6,7 +6,7 @@ import {
 import { AppExtension } from '@/extensions/facet.ts'
 import { ActionContextTypes } from '@/shortcuts/types.ts'
 import { blockFocusShellDecorator } from '@/extensions/blockFocusShellDecorator.ts'
-import { withSystemExtensionMetadata } from '@/extensions/togglable.ts'
+import { systemToggle } from '@/extensions/togglable.ts'
 
 export const codeMirrorEditModeActivation: ShortcutActivationContribution = context => {
   if (context.surface !== 'codemirror' || !context.editorView) return null
@@ -20,10 +20,12 @@ export const codeMirrorEditModeActivation: ShortcutActivationContribution = cont
   }]
 }
 
-export const defaultEditorInteractionExtension: AppExtension = withSystemExtensionMetadata({
+export const defaultEditorInteractionExtension: AppExtension = systemToggle({
+  id: 'system:default-editor-interactions',
   name: 'Default editor interactions',
   description: 'Baseline block-interaction handlers (click-to-edit, selection, focus transitions).',
-}, [
+  essential: true,
+}).of([
   blockShellDecoratorsFacet.of(blockFocusShellDecorator, {
     precedence: 1000,
     source: 'default-block-focus',

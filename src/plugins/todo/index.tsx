@@ -8,7 +8,7 @@ import {
   type BlockContentDecoratorContribution,
 } from '@/extensions/blockInteraction.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
-import { withSystemExtensionMetadata } from '@/extensions/togglable.ts'
+import { systemToggle } from '@/extensions/togglable.ts'
 import { usePropertyValue } from '@/hooks/block.ts'
 import type { BlockRenderer, BlockRendererProps } from '@/types.ts'
 import { todoActionsExtension } from './actions.ts'
@@ -70,10 +70,11 @@ const decorateTodoContent: BlockContentDecorator = inner => {
 const todoContentDecoratorContribution: BlockContentDecoratorContribution =
   () => decorateTodoContent
 
-export const todoPlugin: AppExtension = withSystemExtensionMetadata({
+export const todoPlugin: AppExtension = systemToggle({
+  id: 'system:todo',
   name: 'Todo',
   description: 'Checkbox / done-state property on blocks.',
-}, [
+}).of([
   todoDataExtension,
   todoActionsExtension,
   blockContentDecoratorsFacet.of(todoContentDecoratorContribution, {source: 'todo'}),

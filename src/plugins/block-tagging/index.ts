@@ -2,7 +2,7 @@ import { actionsFacet } from '@/extensions/core.ts'
 import { propertyEditorOverridesFacet } from '@/data/facets.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
 import { dialogAppMountExtension } from '@/extensions/dialogAppMount.tsx'
-import { withSystemExtensionMetadata } from '@/extensions/togglable.ts'
+import { systemToggle } from '@/extensions/togglable.ts'
 import { groupedBacklinksGroupHeaderActionsFacet } from '@/plugins/grouped-backlinks/facet.ts'
 import { blockTaggingDataExtension } from './dataExtension.ts'
 import { blockTagsConfigUi } from './propertyEditorOverride.ts'
@@ -18,10 +18,11 @@ import {
 // resolver dedupes by FacetContribution reference, so importing the
 // same `dialogAppMountExtension` from every dialog-using plugin still
 // registers exactly one appMountsFacet contribution.
-export const blockTaggingPlugin: AppExtension = withSystemExtensionMetadata({
+export const blockTaggingPlugin: AppExtension = systemToggle({
+  id: 'system:block-tagging',
   name: 'Block tagging',
   description: 'Add-tag action and the per-workspace tag-list preference.',
-}, [
+}).of([
   blockTaggingDataExtension,
   dialogAppMountExtension,
   propertyEditorOverridesFacet.of(blockTagsConfigUi, {source: 'block-tagging'}),

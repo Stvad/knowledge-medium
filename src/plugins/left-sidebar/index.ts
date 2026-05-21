@@ -6,7 +6,7 @@ import {
   type HeaderItemContribution,
 } from '@/extensions/core.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
-import { withSystemExtensionMetadata } from '@/extensions/togglable.ts'
+import { systemToggle } from '@/extensions/togglable.ts'
 import { LeftSidebar, LeftSidebarCoreSection, LeftSidebarShortcutsSection } from './LeftSidebar.tsx'
 import { LeftSidebarHeaderItem } from './HeaderItem.tsx'
 import { leftSidebarSectionsFacet, type LeftSidebarSectionContribution } from './facet.ts'
@@ -54,10 +54,11 @@ export const leftSidebarShortcutsSection: LeftSidebarSectionContribution = {
   component: LeftSidebarShortcutsSection,
 }
 
-export const leftSidebarPlugin: AppExtension = withSystemExtensionMetadata({
+export const leftSidebarPlugin: AppExtension = systemToggle({
+  id: 'system:left-sidebar',
   name: 'Left sidebar',
   description: 'Collapsible sidebar with section contributions from other plugins.',
-}, [
+}).of([
   leftSidebarActions.map(action => actionsFacet.of(action, {source: 'left-sidebar'})),
   appMountsFacet.of(leftSidebarMount, {source: 'left-sidebar'}),
   headerItemsFacet.of(leftSidebarHeaderItem, {

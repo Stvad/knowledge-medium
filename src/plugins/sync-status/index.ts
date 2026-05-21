@@ -1,6 +1,6 @@
 import { headerItemsFacet, type HeaderItemContribution } from '@/extensions/core.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
-import { withSystemExtensionMetadata } from '@/extensions/togglable.ts'
+import { systemToggle } from '@/extensions/togglable.ts'
 import { SyncStatusHeaderItem } from './SyncStatusHeaderItem.tsx'
 
 export const syncStatusHeaderItem: HeaderItemContribution = {
@@ -9,10 +9,11 @@ export const syncStatusHeaderItem: HeaderItemContribution = {
   component: SyncStatusHeaderItem,
 }
 
-export const syncStatusPlugin: AppExtension = withSystemExtensionMetadata({
+export const syncStatusPlugin: AppExtension = systemToggle({
+  id: 'system:sync-status',
   name: 'Sync status',
   description: 'Header indicator showing online / syncing / error state of the data sync.',
-}, [
+}).of([
   headerItemsFacet.of(syncStatusHeaderItem, {
     source: 'sync-status',
     precedence: 40,

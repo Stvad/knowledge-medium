@@ -18,7 +18,7 @@
  */
 import { appEffectsFacet, type AppEffect } from '@/extensions/core.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
-import { withSystemExtensionMetadata } from '@/extensions/togglable.ts'
+import { systemToggle } from '@/extensions/togglable.ts'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks.ts'
 import { getLayoutSessionId } from '@/utils/layoutSessionId.ts'
 import { consumeAppIntent } from './appIntents.ts'
@@ -41,9 +41,11 @@ export const appIntentsBootstrapEffect: AppEffect = {
   },
 }
 
-export const appIntentsPlugin: AppExtension = withSystemExtensionMetadata({
+export const appIntentsPlugin: AppExtension = systemToggle({
+  id: 'system:app-intents',
   name: 'App intents',
   description: 'Bootstrap that dispatches PWA-shortcut / share-target / note-taker URL intents on app open.',
-}, [
+  essential: true,
+}).of([
   appEffectsFacet.of(appIntentsBootstrapEffect, {source: 'app-intents'}),
 ])
