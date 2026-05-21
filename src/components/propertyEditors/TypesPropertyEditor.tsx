@@ -182,7 +182,12 @@ export function TypesPropertyEditor({
             <Plus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
             <span className="min-w-0 flex-1 truncate">{option.label}</span>
             {option.label !== option.id && (
-              <span className="truncate text-xs text-muted-foreground">{option.id}</span>
+              // Auxiliary id badge: cap with `max-w-[12rem]` so a long
+              // id (e.g. a user-defined type's UUID) can't push the
+              // flex-1 label span to zero width. `min-w-0` lets the
+              // cap shrink further if the parent is narrow. `truncate`
+              // applies inside whichever width wins.
+              <span className="min-w-0 max-w-[12rem] truncate text-xs text-muted-foreground">{option.id}</span>
             )}
           </button>
         )) : (

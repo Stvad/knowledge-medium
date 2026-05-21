@@ -138,17 +138,22 @@ describe('UserTypesService subscription', () => {
     expect(env.repo.types.get(id)?.properties).toEqual([schema])
   })
 
-  it('disposes cleanly: post-dispose changes do not republish', async () => {
+  it('disposes cleanly: dispose clears the bucket and later block edits do not republish', async () => {
     env = await setup()
     const id = await createBlockTypeBlock(env.repo, {label: 'Person'})
     expect(env.repo.types.get(id)).toBeDefined()
     env.service.dispose()
+    // Dispose now clears the user-data bucket — the type is gone, not
+    // simply frozen at its pre-dispose value (see workspace-switch race
+    // fix below).
+    expect(env.repo.types.get(id)).toBeUndefined()
+    // A subsequent block edit MUST NOT trigger a republish from this
+    // disposed instance (no leaking subscription).
     await env.repo.tx(async tx => {
       await tx.setProperty(id, blockTypeLabelProp, 'Renamed')
     }, {scope: ChangeScope.BlockDefault})
     await new Promise(resolve => setTimeout(resolve, 50))
-    // The contribution still reflects the pre-dispose state.
-    expect(env.repo.types.get(id)?.label).toBe('Person')
+    expect(env.repo.types.get(id)).toBeUndefined()
   })
 
   it('double-start throws to surface lifecycle bugs', async () => {
@@ -174,5 +179,56 @@ describe('UserTypesService subscription', () => {
     // (RangeError: Maximum call stack size exceeded).
     await expect(env.repo.userSchemas.addSchema({name: 'mood', presetId: 'string'}))
       .resolves.toBeDefined()
+  })
+})
+
+describe('UserTypesService workspace switch', () => {
+  // Regression for reviewer feedback: AppRuntimeProvider starts
+  // userSchemas before userTypes; on workspace switch the new
+  // userSchemas service can publish before the new userTypes
+  // subscription has loaded, firing onPropertySchemasChange. Before
+  // the fix, UserTypesService would rebuild against the PREVIOUS
+  // workspace's latestBlocks, briefly republishing its types into
+  // typesFacet (cross-workspace leak). dispose() now drops
+  // latestBlocks AND clears the user-data bucket, and the schemas-
+  // listener rebuild is gated on the workspace-pinned subscription's
+  // first tick.
+
+  it('does not leak previous-workspace types after dispose+restart on a new workspace', async () => {
+    env = await setup()
+    // Create a type block in workspace W1.
+    const w1TypeBlockId = await createBlockTypeBlock(env.repo, {label: 'Person'})
+    expect(env.repo.types.get(w1TypeBlockId)?.label).toBe('Person')
+
+    // Workspace switch: dispose the service, set a new active workspace,
+    // bootstrap its pages, and start again. The user-data type bucket
+    // should be clear AFTER dispose — no leakage into W2.
+    env.service.dispose()
+    expect(env.repo.types.get(w1TypeBlockId)).toBeUndefined()
+
+    const W2 = 'ws-user-types-2'
+    env.repo.setActiveWorkspaceId(W2)
+    await getOrCreatePropertiesPage(env.repo, W2)
+    await getOrCreateTypesPage(env.repo, W2)
+    env.service.start()
+
+    // Mimics the React-effect remount sequence on workspace switch:
+    // the new workspace's userSchemas publishes first, firing
+    // onPropertySchemasChange. Pre-fix, that listener would rebuild
+    // against the previous workspace's latestBlocks and republish
+    // 'Person' into typesFacet under the new workspace. Post-fix it's
+    // a no-op (subscriptionPrimed=false + latestBlocks=[] after dispose).
+    await env.repo.userSchemas.addSchema({name: 'mood', presetId: 'string'})
+    await new Promise(resolve => setTimeout(resolve, 50))
+
+    expect(env.repo.types.get(w1TypeBlockId)).toBeUndefined()
+  })
+
+  it('clears the user-data type bucket on dispose()', async () => {
+    env = await setup()
+    const id = await createBlockTypeBlock(env.repo, {label: 'Person'})
+    expect(env.repo.types.has(id)).toBe(true)
+    env.service.dispose()
+    expect(env.repo.types.has(id)).toBe(false)
   })
 })

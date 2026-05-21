@@ -51,8 +51,20 @@ export class UserTypesService {
   private schemasListenerDisposer: (() => void) | null = null
 
   /** Latest blocks list captured by the subscription. Stored so the
-   *  schema-change re-resolve can run without a fresh DB read. */
+   *  schema-change re-resolve can run without a fresh DB read. Reset
+   *  on dispose so a stale workspace's blocks don't get republished
+   *  during the cross-workspace handoff. */
   private latestBlocks: readonly Block[] = []
+
+  /** True once the workspace-pinned subscription has delivered its
+   *  first tick. Gates the schemas-listener rebuild path: between
+   *  start() and the first subscription emit, `latestBlocks` is
+   *  guaranteed empty (we just reset it in start), but the gate also
+   *  prevents an early onPropertySchemasChange — fired by another
+   *  workspace's userSchemas first publish during the React-effect
+   *  remount sequence — from re-publishing something we don't own
+   *  yet. Reset on dispose. */
+  private subscriptionPrimed = false
 
   constructor(
     private readonly repo: Repo,
@@ -81,6 +93,7 @@ export class UserTypesService {
 
     const rebuildFromBlocks = (blocks: readonly Block[]): void => {
       this.latestBlocks = blocks
+      this.subscriptionPrimed = true
       const next: TypeContribution[] = []
       const nextBlockIdByTypeId = new Map<string, string>()
       for (const block of blocks) {
@@ -114,6 +127,17 @@ export class UserTypesService {
     )
 
     this.schemasListenerDisposer = this.repo.onPropertySchemasChange(() => {
+      // Ignore schema-change rebuilds until our own workspace-pinned
+      // subscription has delivered its first tick. Otherwise the
+      // React-effect remount sequence on workspace switch lets the new
+      // workspace's userSchemas service publish first, fire
+      // onPropertySchemasChange, and trigger a rebuild against
+      // latestBlocks — which would still be the previous workspace's
+      // data if any survived dispose. (We also reset latestBlocks in
+      // dispose, so this is belt-and-suspenders; the gate also catches
+      // the case where the schemas listener happens to fire between
+      // start() and the subscription's first emit.)
+      if (!this.subscriptionPrimed) return
       rebuildFromBlocks(this.latestBlocks)
     })
 
@@ -125,6 +149,16 @@ export class UserTypesService {
     this.subscriptionDisposer = null
     this.schemasListenerDisposer?.()
     this.schemasListenerDisposer = null
+    // Drop in-memory state so a subsequent start() (e.g. on workspace
+    // switch) can't accidentally rebuild from stale data. Also clear
+    // the user-data bucket on typesFacet so the previous workspace's
+    // user-defined types don't remain visible between dispose and the
+    // next subscription tick.
+    this.latestBlocks = []
+    this.contributions = []
+    this.blockIdByTypeId = new Map()
+    this.subscriptionPrimed = false
+    this.repo.setRuntimeContributions(typesFacet, USER_DATA_SOURCE_ID, [])
   }
 
   /** Field-wise equality on the contribution list. Element identity
