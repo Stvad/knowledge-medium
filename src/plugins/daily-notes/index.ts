@@ -43,6 +43,7 @@
  */
 import type { Repo } from '@/data/repo'
 import type { AppExtension } from '@/extensions/facet.ts'
+import { withSystemExtensionMetadata } from '@/extensions/togglable.ts'
 import {
   actionsFacet,
   appMountsFacet,
@@ -163,7 +164,11 @@ export const openDailyNotePickerAction = (
 // in here (same as block-tagging) so the host is present whenever any
 // dialog-using plugin is enabled. Dedup by FacetContribution reference
 // keeps the registry to exactly one appMountsFacet entry.
-export const dailyNotesPlugin = ({repo}: {repo: Repo}): AppExtension => [
+export const dailyNotesPlugin = ({repo}: {repo: Repo}): AppExtension =>
+  withSystemExtensionMetadata({
+    name: 'Daily notes',
+    description: 'Date-keyed pages, the workspace-landing resolver that opens today on app open, and the prev/next/today shortcuts.',
+  }, [
   dailyNotesDataExtension,
   dialogAppMountExtension,
   appMountsFacet.of(dailyNotePickerMount, {source: 'daily-notes'}),
@@ -193,7 +198,7 @@ export const dailyNotesPlugin = ({repo}: {repo: Repo}): AppExtension => [
     precedence: 5,
   }),
   workspaceLandingFacet.of(todayDailyNoteLanding, {source: 'daily-notes'}),
-]
+])
 
 export { DAILY_NOTE_TYPE, dailyNoteDateProp, dailyNoteType } from './schema.ts'
 export { dailyNotesDataExtension } from './dataExtension.ts'

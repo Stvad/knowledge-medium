@@ -13,6 +13,7 @@
  */
 import { actionsFacet, appMountsFacet, type AppMountContribution } from '@/extensions/core.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
+import { withSystemExtensionMetadata } from '@/extensions/togglable.ts'
 import { MergePicker } from './MergePicker.tsx'
 import { mergeIntoAction } from './mergeAction.ts'
 
@@ -28,7 +29,10 @@ const mergePickerMount: AppMountContribution = {
   component: MergePicker,
 }
 
-export const mergeBlocksPlugin: AppExtension = [
+export const mergeBlocksPlugin: AppExtension = withSystemExtensionMetadata({
+  name: 'Merge blocks',
+  description: 'Block-merge actions (Backspace at start of a block merges into the previous one).',
+}, [
   appMountsFacet.of(mergePickerMount, {source: 'merge-blocks'}),
   actionsFacet.of(mergeIntoAction, {source: 'merge-blocks'}),
-]
+])

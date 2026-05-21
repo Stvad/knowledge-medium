@@ -6,20 +6,19 @@
  *   - boundary marker survives standard array operations
  *   - isEnabled / applyToggle behaviour, especially around the
  *     `defaultEnabled ?? true` convention
- *   - authorHints round-trip
  */
 import {describe, expect, it} from 'vitest'
 import {aliasesProp} from '@/data/internals/coreProperties.ts'
 import {makeBlockData} from '@/data/test/factories.ts'
-import type {AppExtension} from '@/extensions/facet.ts'
+import {
+  extensionDescriptionProp,
+  extensionNameProp,
+} from '@/data/properties.ts'
 import {
   applyToggle,
-  authorHints,
-  getAuthorHints,
   getBoundary,
   isEnabled,
   systemToggle,
-  unwrapAuthorHints,
   userExtensionShellToggle,
   userExtensionToggle,
   type Overrides,
@@ -66,13 +65,27 @@ describe('systemToggle', () => {
 })
 
 describe('userExtensionToggle', () => {
-  it('forces id to block.id and defaultEnabled to true even if hints try to override', () => {
+  it('forces id to block.id and starts disabled until explicitly enabled', () => {
     const block = makeBlockData({id: 'block-123', workspaceId: 'ws'})
     const handle = userExtensionToggle(block)
     expect(handle.id).toBe('block-123')
-    expect(handle.defaultEnabled).toBe(true)
+    expect(handle.defaultEnabled).toBe(false)
     expect(handle.essential).toBe(false)
     expect(handle.kind).toBe('user')
+  })
+
+  it('uses extension metadata properties for display name and description', () => {
+    const block = makeBlockData({
+      id: 'block-meta',
+      workspaceId: 'ws',
+      properties: {
+        [extensionNameProp.name]: extensionNameProp.codec.encode('Property Name'),
+        [extensionDescriptionProp.name]: extensionDescriptionProp.codec.encode('Property description'),
+      },
+    })
+    const handle = userExtensionToggle(block)
+    expect(handle.name).toBe('Property Name')
+    expect(handle.description).toBe('Property description')
   })
 
   it('uses the first alias as the display name when present', () => {
@@ -87,53 +100,33 @@ describe('userExtensionToggle', () => {
     expect(handle.name).toBe('My Extension')
   })
 
-  it('falls back to a block-id snippet when no alias and no author hint', () => {
+  it('prefers the extension name property over aliases', () => {
+    const block = makeBlockData({
+      id: 'block-name-wins',
+      workspaceId: 'ws',
+      properties: {
+        [extensionNameProp.name]: extensionNameProp.codec.encode('Extension property'),
+        [aliasesProp.name]: aliasesProp.codec.encode(['Alias fallback']),
+      },
+    })
+    const handle = userExtensionToggle(block)
+    expect(handle.name).toBe('Extension property')
+  })
+
+  it('falls back to a block-id snippet when no name metadata exists', () => {
     const block = makeBlockData({id: 'abcdef1234567890', workspaceId: 'ws'})
     const handle = userExtensionToggle(block)
     expect(handle.name).toBe('Extension abcdef12')
   })
-
-  it('threads author hints for name and description', () => {
-    const block = makeBlockData({id: 'block-x', workspaceId: 'ws'})
-    const handle = userExtensionToggle(block, {
-      name: 'Author Provided',
-      description: 'desc',
-    })
-    expect(handle.name).toBe('Author Provided')
-    expect(handle.description).toBe('desc')
-  })
 })
 
 describe('userExtensionShellToggle', () => {
-  it('is the same shape as userExtensionToggle with no hints', () => {
+  it('is the same shape as userExtensionToggle without compiling code', () => {
     const block = makeBlockData({id: 'block-shell', workspaceId: 'ws'})
     const shell = userExtensionShellToggle(block)
     expect(shell.id).toBe('block-shell')
-    expect(shell.defaultEnabled).toBe(true)
+    expect(shell.defaultEnabled).toBe(false)
     expect(shell.name).toBe('Extension block-sh')
-  })
-})
-
-describe('authorHints', () => {
-  it('round-trips through getAuthorHints', () => {
-    const wrapped = authorHints({name: 'My Ext', description: 'd'}, [])
-    expect(getAuthorHints(wrapped)).toEqual({name: 'My Ext', description: 'd'})
-  })
-
-  it('attaches hints as a non-enumerable symbol property', () => {
-    const wrapped = authorHints({name: 'X'}, []) as object
-    const symbolKeys = Object.getOwnPropertySymbols(wrapped)
-    expect(symbolKeys.length).toBeGreaterThan(0)
-    for (const sym of symbolKeys) {
-      const descriptor = Object.getOwnPropertyDescriptor(wrapped, sym)
-      expect(descriptor?.enumerable).toBe(false)
-    }
-  })
-
-  it('unwrapAuthorHints peels the single-element array', () => {
-    const inner: AppExtension = []
-    const wrapped = authorHints({name: 'X'}, inner)
-    expect(unwrapAuthorHints(wrapped)).toBe(inner)
   })
 })
 

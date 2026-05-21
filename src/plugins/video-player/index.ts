@@ -5,6 +5,7 @@ import {
 import { blockRenderersFacet } from '@/extensions/core.ts'
 import { propertySchemasFacet } from '@/data/facets.ts'
 import { AppExtension } from '@/extensions/facet.ts'
+import { withSystemExtensionMetadata } from '@/extensions/togglable.ts'
 import { markdownExtensionsFacet } from '@/markdown/extensions.ts'
 import {
   videoPlayerActionsExtension,
@@ -17,7 +18,10 @@ import {
 import { videoPlayerMarkdownExtension } from './markdown.tsx'
 import { videoNotesPaneRatioProp, videoPlayerViewProp } from './view.ts'
 
-export const videoPlayerPlugin: AppExtension = [
+export const videoPlayerPlugin: AppExtension = withSystemExtensionMetadata({
+  name: 'Video player',
+  description: 'Inline playback for blocks whose content is a video URL.',
+}, [
   propertySchemasFacet.of(videoPlayerViewProp, {source: 'video-player'}),
   propertySchemasFacet.of(videoNotesPaneRatioProp, {source: 'video-player'}),
   blockRenderersFacet.of({id: 'videoPlayer', renderer: VideoPlayerRenderer}, {source: 'video-player'}),
@@ -25,4 +29,4 @@ export const videoPlayerPlugin: AppExtension = [
   markdownExtensionsFacet.of(videoPlayerMarkdownExtension, {source: 'video-player'}),
   shortcutSurfaceActivationsFacet.of(videoPlayerShortcutActivation, {source: 'video-player'}),
   videoPlayerActionsExtension,
-]
+])

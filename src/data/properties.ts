@@ -145,6 +145,24 @@ export const sourceBlockIdProp = defineProperty<string | undefined>('sourceBlock
   changeScope: ChangeScope.BlockDefault,
 })
 
+// ──── extension block fields ────
+
+/** Human-readable extension name. Kept on the block instead of inside
+ *  executable extension code so disabled extensions can still be
+ *  described in settings without compiling them. */
+export const extensionNameProp = defineProperty<string>('extension:name', {
+  codec: codecs.string,
+  defaultValue: '',
+  changeScope: ChangeScope.BlockDefault,
+})
+
+/** Optional extension description displayed in the settings surface. */
+export const extensionDescriptionProp = defineProperty<string>('extension:description', {
+  codec: codecs.string,
+  defaultValue: '',
+  changeScope: ChangeScope.BlockDefault,
+})
+
 // ──── property-schema kernel type fields (user-defined-properties §4) ────
 
 /** User-supplied property name on a `'property-schema'` block. */
@@ -342,6 +360,9 @@ export const KERNEL_PROPERTY_SCHEMAS: ReadonlyArray<PropertySchema<unknown>> = [
   createdAtProp,
   sourceBlockIdProp,
   aliasesProp,
+  // extension block fields
+  extensionNameProp,
+  extensionDescriptionProp,
   // property-schema fields
   propertyNameProp,
   presetIdProp,

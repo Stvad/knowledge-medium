@@ -8,10 +8,8 @@ import {
 } from '@/extensions/facet.ts'
 import {
   attachBoundary,
-  getAuthorHints,
   getBoundary,
   isEnabled,
-  unwrapAuthorHints,
   userExtensionShellToggle,
   userExtensionToggle,
   type Overrides,
@@ -50,14 +48,13 @@ export interface DynamicExtensionsOptions {
  *     presets) and is loaded as an ESM module via blob URL.
  *   - `module.default` must be a valid AppExtension:
  *     a FacetContribution, an array of AppExtension, an async/sync
- *     function returning AppExtension, or nullish/false.
- *   - Imports work through the page-global importmap. `import { x }
- *     from '@/extensions/api.js'` returns the *same* module instance
- *     the running app uses, so contribution facets match by identity.
- *   - Optional `authorHints({name, description}, ext)` wrapper provides
- *     a display name + description for the toggle row in settings.
- *     Platform-owned identity (block.id, defaultEnabled) is forced by
- *     the loader and cannot be overridden by the author.
+   *     function returning AppExtension, or nullish/false.
+   *   - Imports work through the page-global importmap. `import { x }
+   *     from '@/extensions/api.js'` returns the *same* module instance
+   *     the running app uses, so contribution facets match by identity.
+   *   - Display metadata comes from extension block properties, not
+   *     executable module code. That keeps settings rows descriptive
+   *     even when a block is disabled and intentionally not compiled.
  *
  * Provenance: every contribution emitted from a block has its `source`
  * field force-prefixed with `block:<id>`. If the author supplied a
@@ -66,12 +63,12 @@ export interface DynamicExtensionsOptions {
  * unambiguously.
  *
  * Toggle integration: each enabled extension is wrapped in a
- * `userExtensionToggle(block, hints)` boundary so the runtime resolver
+ * `userExtensionToggle(block)` boundary so the runtime resolver
  * can disable it without re-loading. Disabled blocks are NOT compiled
  * (their top-level module code never runs) — instead the loader emits
  * a `userExtensionShellToggle(block).of([])` so the row still appears
- * in the settings tree. Compile / hint-unwrap / validate failures
- * also emit a shell so a broken extension stays user-recoverable.
+ * in the settings tree. Compile / validate failures also emit a shell
+ * so a broken extension stays user-recoverable.
  *
  * Failure isolation: a block whose source fails to compile or whose
  * default export is shaped wrong is reported via `errorReporter` and
@@ -95,10 +92,10 @@ export const dynamicExtensionsExtension = (
 
   for (const block of extensionBlocks) {
     // Pre-compile skip — `userExtensionToggle.id` is always `block.id`
-    // and `defaultEnabled` is always true, so a disabled state requires
-    // an explicit `false` in the overrides map. This check is what
-    // makes the toggle meaningful: if we didn't skip here, the block's
-    // top-level module code would still execute every reload.
+    // and `defaultEnabled` is always false, so an enabled state requires
+    // an explicit `true` in the overrides map. This check is what makes
+    // the toggle meaningful: if we didn't skip here, the block's
+    // top-level module code would still execute before the user opted in.
     //
     // Safe mode skips the compile for every block, regardless of the
     // override state. Why this matters: the user typically lands in
@@ -114,18 +111,15 @@ export const dynamicExtensionsExtension = (
       continue
     }
 
-    // Compile + hint unwrap + validate are all per-block-fallible; any
-    // failure should still emit a shell so the row appears in settings
-    // and the user can disable the broken extension. Errors continue
-    // to flow through ExtensionLoadErrorStore for status-icon
-    // rendering at the row.
+    // Compile + validate are per-block-fallible; any failure should
+    // still emit a shell so the row appears in settings and the user
+    // can disable the broken extension. Errors continue to flow through
+    // ExtensionLoadErrorStore for status-icon rendering at the row.
     try {
       const {module} = await compileExtensionModule(block.content, block.id, cache)
       const exported = module.default as AppExtension
-      const hints = getAuthorHints(exported)
-      const inner = hints ? unwrapAuthorHints(exported) : exported
-      const handle = userExtensionToggle(block, hints)
-      const wrapped = handle.of(inner)
+      const handle = userExtensionToggle(block)
+      const wrapped = handle.of(exported)
       const validated = validateAndPrefix(wrapped, block.id)
       if (validated !== null) {
         collected.push(validated)

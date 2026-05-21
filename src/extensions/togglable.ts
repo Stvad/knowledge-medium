@@ -18,21 +18,20 @@
  *   - Two factories, deliberately not one:
  *       systemToggle({...})        — full surface
  *       userExtensionToggle(block) — id locked to block.id,
- *                                    defaultEnabled forced to true
+ *                                    defaultEnabled forced to false
  *     The asymmetry is type-enforced: user extensions are loaded by
- *     compiling a module, which we *skip* when an override is `false`,
- *     so we can't honour any author-supplied id or defaultEnabled
- *     (we'd need to compile to read them, defeating the skip).
- *
- *   - `authorHints({name?, description?}, ext)` is the only API a
- *     user-extension module can call. It doesn't take an id or
- *     defaultEnabled, so the asymmetry is unrepresentable at the type
- *     level.
+ *     compiling a module, which we *skip* unless an override is `true`,
+ *     so display metadata must come from block properties that can be
+ *     read without compiling executable code.
  */
 
 import type {AppExtension} from '@/extensions/facet.ts'
 import type {BlockData} from '@/data/api'
 import {aliasesProp} from '@/data/internals/coreProperties.ts'
+import {
+  extensionDescriptionProp,
+  extensionNameProp,
+} from '@/data/properties.ts'
 
 // ──────────────────────────────────────────────────────────────────────
 // Handle + boundary marker
@@ -50,7 +49,7 @@ export interface Togglable {
   readonly name: string
   readonly description?: string
   readonly essential?: boolean
-  /** undefined ≡ true. Honoured for built-in extensions; forced true for
+  /** undefined ≡ true. Honoured for built-in extensions; forced false for
    *  user extensions (see `userExtensionToggle`). */
   readonly defaultEnabled?: boolean
   readonly kind: TogglableKind
@@ -118,20 +117,81 @@ export function systemToggle(opts: SystemToggleOptions): Togglable {
   return handle
 }
 
-export interface UserExtensionAuthorHints {
-  readonly name?: string
+// ──────────────────────────────────────────────────────────────────────
+// System-extension metadata
+// ──────────────────────────────────────────────────────────────────────
+
+export interface SystemExtensionMetadata {
+  readonly name: string
   readonly description?: string
+}
+
+const SYSTEM_EXTENSION_METADATA = Symbol('togglable.system-extension-metadata')
+
+type MetadataCarrier = object & {
+  [SYSTEM_EXTENSION_METADATA]?: SystemExtensionMetadata
+}
+
+/** Attach display metadata to a built-in AppExtension at its definition
+ *  site. The static app catalog still decides id / essential policy,
+ *  but names and descriptions travel with the extension itself. */
+export function withSystemExtensionMetadata(
+  metadata: SystemExtensionMetadata,
+  ext: AppExtension,
+): AppExtension {
+  if (ext && (typeof ext === 'object' || typeof ext === 'function')) {
+    Object.defineProperty(ext, SYSTEM_EXTENSION_METADATA, {
+      value: metadata,
+      enumerable: false,
+      configurable: true,
+    })
+    return ext
+  }
+
+  const wrapped: AppExtension[] = [ext]
+  Object.defineProperty(wrapped, SYSTEM_EXTENSION_METADATA, {
+    value: metadata,
+    enumerable: false,
+  })
+  return wrapped
+}
+
+export function getSystemExtensionMetadata(
+  ext: AppExtension,
+): SystemExtensionMetadata | undefined {
+  if (!ext || (typeof ext !== 'object' && typeof ext !== 'function')) {
+    return undefined
+  }
+  return (ext as MetadataCarrier)[SYSTEM_EXTENSION_METADATA]
 }
 
 /** Resolve a display name from block-level data only — no module
  *  compilation. Used as the disabled-shell name AND as the fallback
- *  when an enabled extension didn't wrap its export with authorHints. */
+ *  for enabled extension boundaries. */
+function blockStringProperty(
+  block: BlockData,
+  schema: typeof extensionNameProp | typeof extensionDescriptionProp,
+): string | undefined {
+  const encoded = block.properties[schema.name]
+  if (encoded === undefined) return undefined
+  try {
+    const value = schema.codec.decode(encoded).trim()
+    return value.length > 0 ? value : undefined
+  } catch {
+    return undefined
+  }
+}
+
 function blockOnlyName(block: BlockData): string {
+  const extensionName = blockStringProperty(block, extensionNameProp)
+  if (extensionName) return extensionName
+
   const encoded = block.properties[aliasesProp.name]
   if (encoded !== undefined) {
     try {
       const aliases = aliasesProp.codec.decode(encoded)
-      if (aliases.length > 0) return aliases[0]
+      const firstAlias = aliases.find(alias => alias.trim().length > 0)
+      if (firstAlias) return firstAlias
     } catch {
       // Malformed alias data — fall through to the block-id fallback.
     }
@@ -142,62 +202,23 @@ function blockOnlyName(block: BlockData): string {
 
 export function userExtensionToggle(
   block: BlockData,
-  authoredHints?: UserExtensionAuthorHints,
 ): Togglable {
   const handle: Togglable = {
     id: block.id,
-    name: authoredHints?.name ?? blockOnlyName(block),
-    description: authoredHints?.description,
+    name: blockOnlyName(block),
+    description: blockStringProperty(block, extensionDescriptionProp),
     essential: false,
-    defaultEnabled: true,
+    defaultEnabled: false,
     kind: 'user',
     of: (ext) => markBoundary(handle, ext),
   }
   return handle
 }
 
-/** Disabled-shell variant. Same factory, no author hints — they're
- *  unavailable because the module is intentionally not compiled. */
+/** Disabled-shell variant. Same factory: all metadata is block-local,
+ *  so no module compilation is needed. */
 export function userExtensionShellToggle(block: BlockData): Togglable {
   return userExtensionToggle(block)
-}
-
-// ──────────────────────────────────────────────────────────────────────
-// Author-facing metadata wrapper
-// ──────────────────────────────────────────────────────────────────────
-
-const AUTHOR_HINTS = Symbol('togglable.author-hints')
-
-interface AuthorHintsArray extends Array<AppExtension> {
-  [AUTHOR_HINTS]?: UserExtensionAuthorHints
-}
-
-/** Wraps an AppExtension with non-enumerable display-name +
- *  description hints. The loader unwraps this layer and threads the
- *  hints into `userExtensionToggle`. */
-export function authorHints(
-  hints: UserExtensionAuthorHints,
-  ext: AppExtension,
-): AppExtension {
-  const wrapped: AuthorHintsArray = [ext]
-  Object.defineProperty(wrapped, AUTHOR_HINTS, {
-    value: hints,
-    enumerable: false,
-  })
-  return wrapped
-}
-
-export function getAuthorHints(
-  node: unknown,
-): UserExtensionAuthorHints | undefined {
-  if (!node || typeof node !== 'object') return undefined
-  return (node as AuthorHintsArray)[AUTHOR_HINTS]
-}
-
-/** Peel a one-element authorHints wrapper. Idempotent for non-wrappers. */
-export function unwrapAuthorHints(node: AppExtension): AppExtension {
-  if (Array.isArray(node) && node.length === 1) return node[0] as AppExtension
-  return node
 }
 
 // ──────────────────────────────────────────────────────────────────────

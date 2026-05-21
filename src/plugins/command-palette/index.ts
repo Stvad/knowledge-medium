@@ -7,6 +7,7 @@ import {
   type AppMountContribution,
 } from '@/extensions/core.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
+import { withSystemExtensionMetadata } from '@/extensions/togglable.ts'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.ts'
 import { Command } from 'lucide-react'
 import { focusBlock } from '@/data/properties.ts'
@@ -82,7 +83,10 @@ export const commandPaletteHeaderItem: HeaderItemContribution = {
   component: CommandPaletteHeaderItem,
 }
 
-export const commandPalettePlugin: AppExtension = [
+export const commandPalettePlugin: AppExtension = withSystemExtensionMetadata({
+  name: 'Command palette',
+  description: 'Cmd+K palette listing every registered action. Kept enabled in safe mode as the recovery entry point.',
+}, [
   appMountsFacet.of(commandPaletteMount, {source: 'command-palette'}),
   actionContextsFacet.of(commandPaletteActionContext, {source: 'command-palette'}),
   actionsFacet.of(commandPaletteAction, {source: 'command-palette'}),
@@ -92,4 +96,4 @@ export const commandPalettePlugin: AppExtension = [
     source: 'command-palette',
     precedence: 20,
   }),
-]
+])

@@ -8,6 +8,7 @@ import { PropertySchemaBlockRenderer } from '@/components/renderer/PropertySchem
 import { TopLevelRenderer } from '@/components/renderer/TopLevelRenderer.tsx'
 import { TypesPageBlockRenderer } from '@/components/renderer/TypesPageBlockRenderer.tsx'
 import { blockRenderersFacet, createRendererRegistry, RendererContribution } from '@/extensions/core.ts'
+import { withSystemExtensionMetadata } from '@/extensions/togglable.ts'
 import { markdownExtensionsFacet } from '@/markdown/extensions.ts'
 import { gfmMarkdownExtension } from '@/markdown/defaultMarkdownExtension.ts'
 
@@ -25,9 +26,12 @@ export const defaultRendererContributions: RendererContribution[] = [
 
 export const defaultRegistry = createRendererRegistry(defaultRendererContributions)
 
-export const defaultRenderersExtension = [
+export const defaultRenderersExtension = withSystemExtensionMetadata({
+  name: 'Default renderers',
+  description: 'Block renderer registry and the fallback renderer used when no plugin claims a block.',
+}, [
   markdownExtensionsFacet.of(gfmMarkdownExtension, {source: 'defaultRenderers'}),
   ...defaultRendererContributions.map(contribution =>
     blockRenderersFacet.of(contribution),
   ),
-]
+])

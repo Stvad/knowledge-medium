@@ -17,6 +17,10 @@ import type {
 } from '@/extensions/facet'
 import type {BlockData} from '@/data/api/blockData'
 import {aliasesProp} from '@/data/internals/coreProperties'
+import {
+  extensionDescriptionProp,
+  extensionNameProp,
+} from '@/data/properties'
 
 // ──────────────────────────────────────────────────────────────────────
 // 1. The Togglable primitive
@@ -32,7 +36,7 @@ export interface Togglable {
   readonly name: string
   readonly description?: string
   readonly essential?: boolean
-  /** undefined ≡ true. Honoured for built-in extensions; forced true for
+  /** undefined ≡ true. Honoured for built-in extensions; forced false for
    *  user extensions (see UserExtensionToggle).  */
   readonly defaultEnabled?: boolean
   of(ext: AppExtension): AppExtension
@@ -64,8 +68,8 @@ export function getBoundary(node: unknown): Togglable | undefined {
 //   and can express any field. User extensions live in blocks: their
 //   id is forced to block.id (so the pre-compile skip is consistent
 //   with post-compile identity), and their defaultEnabled is forced to
-//   true (we cannot honour `false` without compiling, which defeats
-//   the pre-compile skip). Authors get name + description hints only.
+//   false. Name + description are block properties so settings can
+//   display them without compiling disabled code.
 //
 //   The asymmetry lives in the type system here, not in prose rules.
 // ──────────────────────────────────────────────────────────────────────
@@ -86,18 +90,22 @@ export function systemToggle(opts: SystemToggleOptions): Togglable {
   return handle
 }
 
-export interface UserExtensionAuthorHints {
-  /** Display name. Used post-compile only — never available at
-   *  pre-compile shell time, since reading it requires running the
-   *  module. */
-  readonly name?: string
-  readonly description?: string
+function blockStringProperty(
+  block: BlockData,
+  schema: typeof extensionNameProp | typeof extensionDescriptionProp,
+): string | undefined {
+  const encoded = block.properties[schema.name]
+  if (encoded === undefined) return undefined
+  const value = schema.codec.decode(encoded).trim()
+  return value.length > 0 ? value : undefined
 }
 
 /** Resolve a name from block-level data only (no module compilation).
- *  Used for the disabled-shell case AND as the fallback when an
- *  enabled extension didn't wrap its export. */
+ *  Used for the disabled-shell case AND enabled extension boundaries. */
 function blockOnlyName(block: BlockData): string {
+  const extensionName = blockStringProperty(block, extensionNameProp)
+  if (extensionName) return extensionName
+
   const encoded = block.properties[aliasesProp.name]
   if (encoded !== undefined) {
     const aliases = aliasesProp.codec.decode(encoded)
@@ -109,67 +117,22 @@ function blockOnlyName(block: BlockData): string {
 
 export function userExtensionToggle(
   block: BlockData,
-  authoredHints?: UserExtensionAuthorHints,
 ): Togglable {
   const handle: Togglable = {
     id: block.id,                                // canonical, always
-    name: authoredHints?.name ?? blockOnlyName(block),
-    description: authoredHints?.description,
+    name: blockOnlyName(block),
+    description: blockStringProperty(block, extensionDescriptionProp),
     essential: false,
-    defaultEnabled: true,                        // see Togglable doc
+    defaultEnabled: false,                       // see Togglable doc
     of: (ext) => markBoundary(handle, ext),
   }
   return handle
 }
 
-/** Disabled-shell variant. Same factory, no author hints — they're
- *  unavailable because the module is intentionally not compiled. */
+/** Disabled-shell variant. Same factory: all metadata is block-local,
+ *  so no module compilation is needed. */
 export function userExtensionShellToggle(block: BlockData): Togglable {
   return userExtensionToggle(block)
-}
-
-// ──────────────────────────────────────────────────────────────────────
-// 2b. Author-facing metadata wrapper
-//
-//   User-extension authors don't have BlockData (it's the platform's),
-//   so they cannot call userExtensionToggle themselves. But they may
-//   still want to provide a display name + description. authorHints is
-//   the only API exposed to extension modules: it wraps the export
-//   with non-enumerable hint metadata; the loader reads it and threads
-//   it into userExtensionToggle. The type physically cannot accept id,
-//   essential, or defaultEnabled — those are platform-owned for user
-//   extensions, so they're unrepresentable in the author-facing API
-//   instead of "silently discarded by the loader."
-// ──────────────────────────────────────────────────────────────────────
-
-const AUTHOR_HINTS = Symbol('togglable.author-hints')
-
-interface AuthorHintsArray extends Array<AppExtension> {
-  [AUTHOR_HINTS]?: UserExtensionAuthorHints
-}
-
-export function authorHints(
-  hints: UserExtensionAuthorHints,
-  ext: AppExtension,
-): AppExtension {
-  const wrapped: AuthorHintsArray = [ext]
-  Object.defineProperty(wrapped, AUTHOR_HINTS, {
-    value: hints,
-    enumerable: false,
-  })
-  return wrapped
-}
-
-export function getAuthorHints(
-  node: unknown,
-): UserExtensionAuthorHints | undefined {
-  if (!node || typeof node !== 'object') return undefined
-  return (node as AuthorHintsArray)[AUTHOR_HINTS]
-}
-
-function unwrapAuthorHints(node: AppExtension): AppExtension {
-  if (Array.isArray(node) && node.length === 1) return node[0] as AppExtension
-  return node
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -429,9 +392,9 @@ export async function discoverToggleTree(
 // 6. Dynamic extension loader (the shape, not the implementation)
 //
 //   Demonstrates the integration with compileExtensionModule + the
-//   pre-compile skip. The author's wrapping (if any) is unwrapped for
-//   name/description hints; the platform always re-wraps with a
-//   userExtensionToggle whose identity is block.id.
+//   pre-compile skip. Metadata comes from block properties; the
+//   platform always wraps with a userExtensionToggle whose identity is
+//   block.id.
 // ──────────────────────────────────────────────────────────────────────
 
 interface CompiledModule {
@@ -457,28 +420,27 @@ export async function loadDynamicExtensions(
   for (const block of blocks) {
     // Pre-compile skip — possible because user-extension identity is
     // forced to block.id. An author-chosen id would not work here.
-    if (overrides.get(block.id) === false) {
-      collected.push(userExtensionShellToggle(block).of([]))
+    const shell = userExtensionShellToggle(block)
+    if (!isEnabled(shell, overrides)) {
+      collected.push(shell.of([]))
       continue
     }
 
-    // Compile + hint unwrap + validate are all per-block-fallible; any
+    // Compile + validate are per-block-fallible; any
     // failure should emit a shell so the row appears in settings and
     // the user can disable the broken extension. Errors continue to
     // flow through ExtensionLoadErrorStore for status icon rendering.
     try {
       const compiled = await compileExtensionModule(block.content, block.id)
       const exported = compiled.module.default
-      const hints = getAuthorHints(exported)
-      const inner = hints ? unwrapAuthorHints(exported) : exported
-      const handle = userExtensionToggle(block, hints)
-      const wrapped = handle.of(inner)
+      const handle = userExtensionToggle(block)
+      const wrapped = handle.of(exported)
       const validated = validateAndPrefix(wrapped, block.id)
       if (validated) collected.push(validated)
-      else collected.push(userExtensionShellToggle(block).of([]))
+      else collected.push(shell.of([]))
     } catch (error) {
       console.error(`Failed to load extension ${block.id}`, error)
-      collected.push(userExtensionShellToggle(block).of([]))
+      collected.push(shell.of([]))
     }
   }
 

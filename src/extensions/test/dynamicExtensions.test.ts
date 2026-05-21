@@ -52,6 +52,9 @@ const makeRepo = (blocks: BlockData[]): Repo => ({
   },
 }) as unknown as Repo
 
+const enableBlocks = (blocks: readonly BlockData[]): Overrides =>
+  new Map(blocks.map(block => [block.id, true]))
+
 // Stub compile that returns a canned module per block content.
 const stubCompileByBlockId = (
   modulesByBlockId: Record<string, ExtensionModule>,
@@ -86,6 +89,7 @@ describe('dynamicExtensionsExtension — happy paths', () => {
         workspaceId: 'ws-1',
         cache,
         safeMode: false,
+        overrides: enableBlocks(blocks),
       })
       const runtime = await resolveFacetRuntime(ext)
 
@@ -111,6 +115,7 @@ describe('dynamicExtensionsExtension — happy paths', () => {
         workspaceId: 'ws-1',
         cache,
         safeMode: false,
+        overrides: enableBlocks(blocks),
       })
       const runtime = await resolveFacetRuntime(ext)
 
@@ -136,6 +141,7 @@ describe('dynamicExtensionsExtension — happy paths', () => {
         workspaceId: 'ws-1',
         cache,
         safeMode: false,
+        overrides: enableBlocks(blocks),
       })
       const runtime = await resolveFacetRuntime(ext)
 
@@ -166,6 +172,7 @@ describe('dynamicExtensionsExtension — happy paths', () => {
         workspaceId: 'ws-1',
         cache,
         safeMode: false,
+        overrides: enableBlocks(blocks),
         errorReporter,
       })
       const runtime = await resolveFacetRuntime(ext)
@@ -196,6 +203,7 @@ describe('dynamicExtensionsExtension — provenance', () => {
         workspaceId: 'ws-1',
         cache,
         safeMode: false,
+        overrides: enableBlocks(blocks),
       })
       const runtime = await resolveFacetRuntime(ext)
 
@@ -232,11 +240,12 @@ describe('dynamicExtensionsExtension — provenance', () => {
         workspaceId: 'ws-1',
         cache,
         safeMode: false,
+        overrides: enableBlocks(blocks),
       })
       // resolveAppRuntime (not resolveFacetRuntime) is what production
       // uses — it's the one that recurses into `enables`.
       const {resolveAppRuntime} = await import('@/extensions/resolveAppRuntime.ts')
-      const runtime = await resolveAppRuntime([ext], {overrides: new Map()})
+      const runtime = await resolveAppRuntime([ext], {overrides: enableBlocks(blocks)})
 
       const sources = runtime.contributions(labelsFacet).map(c => c.source)
       expect(sources).toContain('block:ext-enables')
@@ -252,6 +261,29 @@ describe('dynamicExtensionsExtension — provenance', () => {
 })
 
 describe('dynamicExtensionsExtension — overrides-driven disable', () => {
+  it('leaves new user extension blocks disabled until an explicit true override exists', async () => {
+    const compileImpl = vi.fn().mockImplementation(async () => ({
+      default: labelsFacet.of('should-not-compile'),
+    }))
+    const restore = __setCompileImplForTest(compileImpl)
+    const blocks = [blockData({id: 'new-block', content: 'src-new'})]
+
+    try {
+      const ext = dynamicExtensionsExtension({
+        repo: makeRepo(blocks),
+        workspaceId: 'ws-1',
+        cache,
+        safeMode: false,
+      })
+      const runtime = await resolveFacetRuntime(ext)
+
+      expect(runtime.read(labelsFacet)).toEqual([])
+      expect(compileImpl).not.toHaveBeenCalled()
+    } finally {
+      restore()
+    }
+  })
+
   it('does not compile or contribute blocks that are disabled in overrides', async () => {
     const compileImpl = vi.fn().mockImplementation(async (content: string) => ({
       default: labelsFacet.of(`compiled:${content}`),
@@ -261,7 +293,10 @@ describe('dynamicExtensionsExtension — overrides-driven disable', () => {
       blockData({id: 'enabled-block', content: 'src-enabled'}),
       blockData({id: 'disabled-block', content: 'src-disabled'}),
     ]
-    const overrides: Overrides = new Map([['disabled-block', false]])
+    const overrides: Overrides = new Map([
+      ['enabled-block', true],
+      ['disabled-block', false],
+    ])
 
     try {
       const ext = dynamicExtensionsExtension({
@@ -292,7 +327,10 @@ describe('dynamicExtensionsExtension — overrides-driven disable', () => {
       blockData({id: 'visible-disabled', content: 'src-disabled', properties: {}}),
       blockData({id: 'visible-on', content: 'src-on'}),
     ]
-    const overrides: Overrides = new Map([['visible-disabled', false]])
+    const overrides: Overrides = new Map([
+      ['visible-disabled', false],
+      ['visible-on', true],
+    ])
 
     try {
       const ext = dynamicExtensionsExtension({
@@ -336,6 +374,7 @@ describe('dynamicExtensionsExtension — boundary tagging', () => {
         workspaceId: 'ws-1',
         cache,
         safeMode: false,
+        overrides: enableBlocks(blocks),
       })
       const factory = ext as (ctx: Record<string, unknown>) => Promise<AppExtension[]>
       const subtree = await factory({})
@@ -420,6 +459,7 @@ describe('dynamicExtensionsExtension — failure isolation', () => {
         workspaceId: 'ws-1',
         cache,
         safeMode: false,
+        overrides: enableBlocks(blocks),
         errorReporter,
       })
       const runtime = await resolveFacetRuntime(ext)
@@ -449,6 +489,7 @@ describe('dynamicExtensionsExtension — failure isolation', () => {
         workspaceId: 'ws-1',
         cache,
         safeMode: false,
+        overrides: enableBlocks(blocks),
         errorReporter,
       })
       const runtime = await resolveFacetRuntime(ext)

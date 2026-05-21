@@ -44,9 +44,12 @@ import {
   blockTypeDescriptionProp,
   blockTypeLabelProp,
   blockTypePropertiesProp,
+  extensionDescriptionProp,
+  extensionNameProp,
 } from '@/data/properties'
 import {
   BLOCK_TYPE_TYPE,
+  EXTENSION_TYPE,
   KERNEL_TYPE_CONTRIBUTIONS,
   PROPERTY_SCHEMA_TYPE,
   TYPES_PAGE_TYPE,
@@ -239,6 +242,16 @@ describe('typesFacet + schema lift', () => {
     for (const type of KERNEL_TYPE_CONTRIBUTIONS) {
       expect(registered.get(type.id)).toBe(type)
     }
+  })
+
+  it('Extension blocks lift name and description metadata properties', () => {
+    const runtime = resolveFacetRuntimeSync([kernelDataExtension])
+    const registered = runtime.read(typesFacet)
+    const extensionType = registered.get(EXTENSION_TYPE)
+
+    expect(extensionType?.properties).toEqual(
+      expect.arrayContaining([extensionNameProp, extensionDescriptionProp]),
+    )
   })
 
   it('Repo exposes schemas lifted from type contributions', () => {

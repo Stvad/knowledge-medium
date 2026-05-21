@@ -4,6 +4,8 @@ import {
   blockTypeDescriptionProp,
   blockTypeLabelProp,
   blockTypePropertiesProp,
+  extensionDescriptionProp,
+  extensionNameProp,
   presetConfigProp,
   presetIdProp,
   propertyNameProp,
@@ -29,7 +31,11 @@ export const BLOCK_TYPE_TYPE = 'block-type'
 export const TYPES_PAGE_TYPE = 'panel:types'
 
 export const KERNEL_TYPE_CONTRIBUTIONS: readonly TypeContribution[] = [
-  defineBlockType({id: EXTENSION_TYPE, label: 'Extension'}),
+  defineBlockType({
+    id: EXTENSION_TYPE,
+    label: 'Extension',
+    properties: [extensionNameProp, extensionDescriptionProp],
+  }),
   defineBlockType({id: PAGE_TYPE, label: 'Page', properties: [aliasesProp]}),
   defineBlockType({id: PANEL_TYPE, label: 'Panel'}),
   defineBlockType({id: PANEL_STACK_TYPE, label: 'Panel stack'}),

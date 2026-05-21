@@ -291,17 +291,9 @@ function systemToggle(opts: {
 }): Togglable { /* ... */ }
 
 // User extensions live in blocks. id is forced to block.id (so the
-// pre-compile skip can check by id); defaultEnabled is forced to true
-// (we can't honour `false` without compiling, which defeats the skip).
-// Authors get name + description hints only — and only post-compile.
-interface UserExtensionAuthorHints {
-  name?: string
-  description?: string
-}
-function userExtensionToggle(
-  block: BlockData,
-  authoredHints?: UserExtensionAuthorHints,
-): Togglable { /* ... */ }</code></pre>
+// pre-compile skip can check by id); defaultEnabled is forced to false.
+// Name + description come from block properties.
+function userExtensionToggle(block: BlockData): Togglable { /* ... */ }</code></pre>
 
     <p>Usage in <code>staticAppExtensions.ts</code>:</p>
 
@@ -358,10 +350,8 @@ export const staticAppExtensions = ({repo}) => [
   try {
     const {module} = await compileExtensionModule(block.content, block.id, cache)
     const exported = module.default as AppExtension
-    const hints = getAuthorHints(exported)
-    const inner = hints ? unwrapAuthorHints(exported) : exported
-    const handle = userExtensionToggle(block, hints)
-    const wrapped = handle.of(inner)
+    const handle = userExtensionToggle(block)
+    const wrapped = handle.of(exported)
     const validated = validateAndPrefix(wrapped, block.id)
     if (validated) collected.push(validated)
     else collected.push(userExtensionShellToggle(block).of([]))
@@ -372,7 +362,7 @@ export const staticAppExtensions = ({repo}) => [
 }</code></pre>
     <p>
       The disabled-shell line, <code>userExtensionToggle(block).of([])</code>, is just
-      the same factory with no <code>authoredHints</code> wrapping an empty extension —
+      the same block-local metadata factory wrapping an empty extension —
       a boundary that carries identity and no contributions. Discovery sees it and the
       settings UI renders the row; flipping it on triggers
       <code>refreshAppRuntime()</code>, which re-runs the loader and this time takes the
@@ -382,58 +372,44 @@ export const staticAppExtensions = ({repo}) => [
     <div class="decision">
       <strong>Display name for user extensions.</strong> Extension blocks carry
       <code>content</code> (the TS/JS module source) and <code>id</code>, not a
-      title field. Two paths:
+      title field. Metadata lives in block properties:
       <ul>
-        <li><strong>Compiled (enabled) blocks</strong> resolve name via
-          <code>authorHints?.name</code> ?? alias ?? "Extension {id-link}". The author's
-          <code>authorHints({name, description}, ext)</code> wrapping is consulted
-          post-compile for the label only.</li>
-        <li><strong>Shell (disabled) blocks</strong> resolve name via alias →
-          "Extension {id-link}". The author's name is unavailable because the module is
-          intentionally not compiled.</li>
+        <li><strong>Name</strong> comes from <code>extension:name</code>, then alias,
+          then "Extension {id-link}".</li>
+        <li><strong>Description</strong> comes from <code>extension:description</code>.
+          Both compiled and shell rows use the same path, because neither needs module
+          execution.</li>
       </ul>
     </div>
 
     <div class="decision">
-      <strong>How authors provide name + description: <code>authorHints</code>, the
-      third primitive.</strong> Authors don't have <code>BlockData</code> in their
-      module — that's the platform's. They also can't call <code>systemToggle</code>:
-      <code>id</code> / <code>essential</code> / <code>defaultEnabled</code> are
-      platform-owned for user extensions, so a primitive that accepts them would have
-      to "silently discard" — exactly the prose-rule anti-pattern the two-factory
-      design was meant to eliminate.
+      <strong>How authors provide name + description: block properties.</strong>
+      Authors set <code>extension:name</code> and <code>extension:description</code> on
+      the extension block. This keeps the settings surface informative even when the
+      extension starts disabled and its source is not compiled.
       <br><br>
-      Solution: a third, minimal primitive
-      <code>authorHints({name?, description?}, ext)</code> whose type physically cannot
-      accept anything else. The loader detects the hints via a non-enumerable symbol
-      and threads them into <code>userExtensionToggle(block, hints)</code>. Author
-      usage:
+      Author usage:
       <pre style="margin: 0.6rem 0;"><code>// Authors import from the curated public surface re-exported
 // through @/extensions/api.js (see src/extensions/api.ts for the
-// existing convention; this design adds the togglable primitives to
-// that re-export list).
-import { authorHints, actionsFacet } from '@/extensions/api.js'
+// existing convention).
+import { actionsFacet } from '@/extensions/api.js'
 
-export default authorHints(
-  { name: 'My slash command', description: 'Inserts a snippet' },
-  [
-    actionsFacet.of(myAction, { source: 'my-ext' }),
-  ],
-)</code></pre>
-      Three primitives total — <code>systemToggle</code>,
-      <code>userExtensionToggle</code>, <code>authorHints</code> — each carrying
-      exactly the fields its context can express.
+export default [
+  actionsFacet.of(myAction, { source: 'my-ext' }),
+]</code></pre>
+      Two toggle primitives remain — <code>systemToggle</code> and
+      <code>userExtensionToggle</code> — each carrying exactly the fields its context can
+      express.
     </div>
 
     <div class="warn">
-      <strong>Why <code>authorHints</code> can't carry id / defaultEnabled.</strong>
+      <strong>Why user metadata lives outside executable code.</strong>
       The type-system constraint is backed by real reasons:
       <ul>
         <li>Pre-compile skip can only check by <code>block.id</code> — an author-chosen
           id wouldn't be visible until the module ran, defeating the skip.</li>
-        <li>Setting <code>defaultEnabled: false</code> in module code is unhonorable on a
-          fresh install: we'd have to compile to read it, then disable, then have
-          compiled disabled code in the runtime.</li>
+        <li>User extensions now default disabled, so compiling just to read metadata
+          would execute code before opt-in.</li>
       </ul>
       If author-controlled <code>id</code> / <code>defaultEnabled</code> ever becomes
       necessary, the design path is a designated pre-compile block property (e.g.
@@ -859,7 +835,7 @@ export const videoPlayerPlugin: AppExtension = [
       modules can't be safely compiled just to populate the settings UI. The convention:
       a disabled user extension contributes a metadata-only
       <code>userExtensionToggle(block).of([])</code> — the same factory used for
-      enabled extensions, just with no <code>authorHints</code> and an empty subtree.
+      enabled extensions, just with block-property metadata and an empty subtree.
       The shell appears in the discovered tree with the right handle, but no inner
       contributions to walk into. For nested togglables that live <em>inside</em> a
       disabled parent's real subtree (an enabled child of a disabled system plugin),
@@ -1020,16 +996,12 @@ async function discoverToggleTree(
         additionally awaits function-valued extensions. Initial implementation only
         needs the dedup branch; the filter and <code>enables</code> branches land in
         later steps but live in the same walk.</li>
-      <li><strong>Introduce the three primitives in a new module.</strong> Create
+      <li><strong>Introduce the toggle primitives in a new module.</strong> Create
         <code>src/extensions/togglable.ts</code> defining <code>Togglable</code>,
         <code>systemToggle</code>, <code>userExtensionToggle</code>,
-        <code>userExtensionShellToggle</code>, <code>authorHints</code>,
-        <code>getBoundary</code>, <code>getAuthorHints</code>, <code>isEnabled</code>,
-        and the <code>BOUNDARY</code> / <code>AUTHOR_HINTS</code> symbols. Re-export
-        the author-facing surface (<code>authorHints</code>, the
-        <code>Togglable</code> type) from <code>src/extensions/api.ts</code> so
-        extension authors can <code>import &#123; authorHints &#125; from
-        '@/extensions/api.js'</code> following the existing convention. Wrap existing
+        <code>userExtensionShellToggle</code>, <code>getBoundary</code>, and
+        <code>isEnabled</code>. Re-export the author-facing type surface from
+        <code>src/extensions/api.ts</code> following the existing convention. Wrap existing
         built-in extensions in <code>systemToggle({id, name, ...}).of(...)</code>. Mark a
         handful <code>essential: true</code> (kernel, prefs bootstrap, command
         palette). At startup, log a warning when the overrides map contains ids that
@@ -1052,14 +1024,11 @@ async function discoverToggleTree(
         blocks with <code>system:disabled === true</code> into the overrides map as
         <code>{[block.id]: false}</code>; drop the property. Generalize the existing
         per-block skip at <code>dynamicExtensions.ts:72</code> to consult the overrides
-        map: if disabled, push <code>userExtensionToggle(block).of([])</code> (no
-        <code>authorHints</code>, empty subtree — name falls back to alias or block-id
-        link automatically because the module is intentionally <em>not</em> compiled)
-        and <em>skip <code>compileExtensionModule</code> entirely</em> so disabled
-        extension code never executes. Otherwise compile, read any
-        <code>authorHints({name, description}, ...)</code> wrapping via
-        <code>getAuthorHints</code>, and wrap the inner extension with
-        <code>userExtensionToggle(block, hints)</code>. <strong>On compile or
+        map: if disabled, push <code>userExtensionToggle(block).of([])</code> (empty
+        subtree; name/description come from block properties, then alias/block-id
+        fallback) and <em>skip <code>compileExtensionModule</code> entirely</em> so
+        disabled extension code never executes. Otherwise compile and wrap the extension
+        with <code>userExtensionToggle(block)</code>. <strong>On compile or
         validation failure for an enabled block, still emit
         <code>userExtensionShellToggle(block).of([])</code></strong> — otherwise a
         broken extension simply disappears from settings and the user can't toggle

@@ -9,11 +9,15 @@
  */
 
 import type {AppExtension} from '@/extensions/facet.ts'
+import {withSystemExtensionMetadata} from '@/extensions/togglable.ts'
 import {extensionsDataExtension} from './dataExtension.ts'
 
-export const extensionsSettingsPlugin: AppExtension = [
+export const extensionsSettingsPlugin: AppExtension = withSystemExtensionMetadata({
+  name: 'Extensions (toggle storage)',
+  description: 'Stores the overrides map and syncs each change into the localStorage cache so toggles take effect across reloads.',
+}, [
   extensionsDataExtension,
-]
+])
 
 export {
   extensionsOverridesProp,

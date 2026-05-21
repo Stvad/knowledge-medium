@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { BlockCache } from '@/data/blockCache'
 import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
-import { aliasesProp, typesProp } from '@/data/properties'
+import { aliasesProp, extensionNameProp, typesProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions'
@@ -66,6 +66,7 @@ describe('agent runtime commands', () => {
     expect(parent?.properties[typesProp.name]).toEqual([PAGE_TYPE])
 
     const installed = await env.repo.load(result.id)
+    expect(installed?.properties[extensionNameProp.name]).toEqual('Example extension')
     expect(installed?.properties[aliasesProp.name]).toEqual(['Example extension'])
     expect(installed?.properties[typesProp.name]).toEqual([EXTENSION_TYPE, PAGE_TYPE])
   })

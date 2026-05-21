@@ -8,6 +8,7 @@ import {
 import { propertySchemasFacet } from '@/data/facets.ts'
 import { pluginUIStateExtension } from '@/data/pluginStateExtensions.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
+import { withSystemExtensionMetadata } from '@/extensions/togglable.ts'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.ts'
 import { Search } from 'lucide-react'
 import { QuickFindHeaderItem } from './HeaderItem.tsx'
@@ -46,7 +47,10 @@ export const quickFindHeaderItem: HeaderItemContribution = {
   component: QuickFindHeaderItem,
 }
 
-export const quickFindPlugin: AppExtension = [
+export const quickFindPlugin: AppExtension = withSystemExtensionMetadata({
+  name: 'Quick find',
+  description: 'Cmd+P jump-to-block by alias, content, or relative date.',
+}, [
   appMountsFacet.of(quickFindMount, {source: 'quick-find'}),
   propertySchemasFacet.of(recentBlockIdsProp, {source: 'quick-find'}),
   ...pluginUIStateExtension(quickFindUIStateType, 'quick-find'),
@@ -55,4 +59,4 @@ export const quickFindPlugin: AppExtension = [
     source: 'quick-find',
     precedence: 10,
   }),
-]
+])

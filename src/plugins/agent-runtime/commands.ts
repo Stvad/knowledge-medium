@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom'
 import type { Repo } from '@/data/repo'
 import type { Block } from '@/data/block'
 import { ChangeScope, type BlockData, type BlockReference } from '@/data/api'
-import { aliasesProp } from '@/data/properties.ts'
+import { aliasesProp, extensionNameProp } from '@/data/properties.ts'
 import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { keyAtEnd } from '@/data/orderKey.ts'
 import { actionsFacet, blockRenderersFacet } from '@/extensions/core.ts'
@@ -146,12 +146,13 @@ const verifyExtensionBlock = async (
       repo: singleBlockRepo,
       workspaceId: block.workspaceId,
       safeMode: false,
+      overrides: new Map([[block.id, true]]),
       errorReporter: (reportedBlockId, error) => {
         errors.push(serializeVerificationError(reportedBlockId, error))
       },
     }),
     {
-      overrides: new Map(),
+      overrides: new Map([[block.id, true]]),
       context: {
         repo,
         workspaceId: repo.activeWorkspaceId,
@@ -253,8 +254,18 @@ const aliasValuesFromProperties = (properties: BlockProperties | undefined): str
   return Array.isArray(value) && value.every(isString) ? value : []
 }
 
-const extensionAliasValues = (data: BlockData | null): string[] =>
-  aliasValuesFromProperties(data?.properties)
+const extensionNameFromProperties = (properties: BlockProperties | undefined): string | null => {
+  const value = properties?.[extensionNameProp.name]
+  return isString(value) && value.trim().length > 0 ? value : null
+}
+
+const extensionAliasValues = (data: BlockData | null): string[] => {
+  const extensionName = extensionNameFromProperties(data?.properties)
+  return [
+    ...aliasValuesFromProperties(data?.properties),
+    ...(extensionName ? [extensionName] : []),
+  ]
+}
 
 const extensionBlockProperties = (
   existing: BlockProperties | undefined,
@@ -267,6 +278,7 @@ const extensionBlockProperties = (
 
   return {
     ...(existing ?? {}),
+    ...(label ? {[extensionNameProp.name]: extensionNameProp.codec.encode(label)} : {}),
     ...(aliases.size > 0 ? {[aliasesProp.name]: aliasesProp.codec.encode([...aliases])} : {}),
   }
 }

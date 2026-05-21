@@ -18,16 +18,23 @@ import type { Block } from '../data/block'
 import { ChangeScope } from '@/data/api'
 import { EXTENSION_TYPE } from '@/data/blockTypes'
 import { createChild } from '@/data/internals/kernelMutators'
+import {
+  extensionDescriptionProp,
+  extensionNameProp,
+} from '@/data/properties'
 
 export interface ExampleExtensionDefinition {
   /** Stable, kebab-case label used in commit history and source attribution. */
   id: string
+  /** Display name stored on the extension block. */
+  name: string
+  /** Description stored on the extension block. */
+  description: string
   /** ESM module text. */
   source: string
 }
 
 const HELLO_RENDERER_SOURCE = `import {
-  authorHints,
   blockContentRendererFacet,
   ChangeScope,
   codecs,
@@ -59,27 +66,20 @@ const HelloContent = ({ block }) => (
   </div>
 )
 
-export default authorHints(
-  {
-    name: 'Hello renderer',
-    description: "Content-renderer variant gated by 'user:hello = true'.",
-  },
-  [
-    // Register the schema so the value-preset / property-editor lookups
-    // can find this prop, and describeRuntime can list it.
-    propertySchemasFacet.of(helloProp),
-    blockContentRendererFacet.of((ctx) => {
-      if (!ctx.block.peekProperty(helloProp)) return null
-      return defineVariant('user.hello', 'Hello', HelloContent)
-    }),
-  ],
-)
+export default [
+  // Register the schema so the value-preset / property-editor lookups
+  // can find this prop, and describeRuntime can list it.
+  propertySchemasFacet.of(helloProp),
+  blockContentRendererFacet.of((ctx) => {
+    if (!ctx.block.peekProperty(helloProp)) return null
+    return defineVariant('user.hello', 'Hello', HelloContent)
+  }),
+]
 `
 
 const FOLD_ALL_ACTION_SOURCE = `import {
   actionsFacet,
   ActionContextTypes,
-  authorHints,
   ChangeScope,
   isCollapsedProp,
   topLevelBlockIdProp,
@@ -95,12 +95,7 @@ const FOLD_ALL_ACTION_SOURCE = `import {
 // Note on key syntax: this app uses hotkeys-js, which has no 'mod'
 // alias — list cmd and ctrl variants explicitly for cross-platform
 // support.
-export default authorHints(
-  {
-    name: 'Fold all',
-    description: 'Action that folds/unfolds every block in the current view (Cmd+Shift+F).',
-  },
-  actionsFacet.of({
+export default actionsFacet.of({
   id: 'user.fold-all',
   description: 'Fold/unfold every block in the current view',
   context: ActionContextTypes.NORMAL_MODE,
@@ -126,14 +121,12 @@ export default authorHints(
       }
     }, { scope: ChangeScope.BlockDefault, description: 'fold all' })
   },
-}),
-)
+})
 `
 
 const EMOJI_REACT_SOURCE = `import {
   actionsFacet,
   ActionContextTypes,
-  authorHints,
   blockClickHandlersFacet,
   blockContentDecoratorsFacet,
   ChangeScope,
@@ -172,12 +165,7 @@ const cycleReaction = async (block) => {
   await block.set(reactionsProp, [...current, nextEmoji])
 }
 
-export default authorHints(
-  {
-    name: 'Emoji reactions',
-    description: 'Multi-facet plugin: content decorator + click handler + keyboard action for adding emoji reactions to blocks.',
-  },
-  [
+export default [
   // Register the schema so the codec/editor lookups know about this
   // property and describeRuntime can list it.
   propertySchemasFacet.of(reactionsProp),
@@ -214,11 +202,10 @@ export default authorHints(
       return Decorated
     }
   }),
-  ],
-)
+]
 `
 
-const KUDOS_FACET_SOURCE = `import { authorHints, defineFacet, blockRenderersFacet } from '@/extensions/api.js'
+const KUDOS_FACET_SOURCE = `import { defineFacet, blockRenderersFacet } from '@/extensions/api.js'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
 
 // Demonstrates defining a brand-new facet inside an extension block,
@@ -249,23 +236,16 @@ const KudosBannerContent = ({ block }) => (
 const KudosBannerRenderer = (props) =>
   <DefaultBlockRenderer {...props} ContentRenderer={KudosBannerContent} />
 
-export default authorHints(
-  {
-    name: 'Kudos facet',
-    description: "Defines a brand-new facet and registers a property-keyed 'kudos-banner' renderer that other extensions can contribute to.",
-  },
-  [
-    kudosFacet.of({ from: 'self', message: 'Hello from the defining block' }),
-    blockRenderersFacet.of({
-      id: 'kudos-banner',
-      renderer: KudosBannerRenderer,
-    }),
-  ],
-)
+export default [
+  kudosFacet.of({ from: 'self', message: 'Hello from the defining block' }),
+  blockRenderersFacet.of({
+    id: 'kudos-banner',
+    renderer: KudosBannerRenderer,
+  }),
+]
 `
 
 const SPLIT_LAYOUT_SOURCE = `import {
-  authorHints,
   blockLayoutFacet,
   ChangeScope,
   codecs,
@@ -314,24 +294,18 @@ const SplitLayout = ({ Content, Children, Properties, Footer }) => (
 // {id, label, render} (or use defineVariant() sugar) so a future
 // picker UI could enumerate them. Returning null still means "this
 // variant doesn't apply here".
-export default authorHints(
-  {
-    name: 'Split layout',
-    description: "Block-layout variant for blocks tagged 'user:layout = split' — places content and children side by side.",
-  },
-  [
-    // Register the schema so describeRuntime / property-editor lookups
-    // know about this property.
-    propertySchemasFacet.of(layoutProp),
-    blockLayoutFacet.of((ctx) => {
-      if (ctx.block.peekProperty(layoutProp) !== 'split') return null
-      return defineVariant('split', 'Split (content / children)', SplitLayout)
-    }),
-  ],
-)
+export default [
+  // Register the schema so describeRuntime / property-editor lookups
+  // know about this property.
+  propertySchemasFacet.of(layoutProp),
+  blockLayoutFacet.of((ctx) => {
+    if (ctx.block.peekProperty(layoutProp) !== 'split') return null
+    return defineVariant('split', 'Split (content / children)', SplitLayout)
+  }),
+]
 `
 
-const LAYOUT_RENDERER_OVERRIDE_SOURCE = `import { authorHints, blockRenderersFacet } from '@/extensions/api.js'
+const LAYOUT_RENDERER_OVERRIDE_SOURCE = `import { blockRenderersFacet } from '@/extensions/api.js'
 import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.js'
 
 // Replaces the app-wide renderer registered under id 'layout', so
@@ -361,19 +335,13 @@ const DemoLayoutRenderer = (props) => (
 DemoLayoutRenderer.canRender = LayoutRenderer.canRender
 DemoLayoutRenderer.priority = LayoutRenderer.priority
 
-export default authorHints(
-  {
-    name: 'Layout renderer override',
-    description: "Overrides the app-wide 'layout' renderer id and wraps the normal panel layout with a custom frame.",
-  },
-  blockRenderersFacet.of({
-    id: 'layout',
-    renderer: DemoLayoutRenderer,
-  }),
-)
+export default blockRenderersFacet.of({
+  id: 'layout',
+  renderer: DemoLayoutRenderer,
+})
 `
 
-const DEFAULT_RENDERER_OVERRIDE_SOURCE = `import { authorHints, blockRenderersFacet } from '@/extensions/api.js'
+const DEFAULT_RENDERER_OVERRIDE_SOURCE = `import { blockRenderersFacet } from '@/extensions/api.js'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.js'
 
@@ -401,30 +369,53 @@ const PlaceholderDefaultRenderer = (props) => (
   <DefaultBlockRenderer {...props} ContentRenderer={PlaceholderContent} />
 )
 
-export default authorHints(
-  {
-    name: 'Default renderer placeholder',
-    description: "Overrides the fallback 'default' renderer id so ordinary empty blocks show a muted read-mode placeholder.",
-  },
-  blockRenderersFacet.of({
-    id: 'default',
-    renderer: PlaceholderDefaultRenderer,
-  }),
-)
+export default blockRenderersFacet.of({
+  id: 'default',
+  renderer: PlaceholderDefaultRenderer,
+})
 `
 
 export const exampleExtensions: readonly ExampleExtensionDefinition[] = [
-  {id: 'hello-renderer', source: HELLO_RENDERER_SOURCE},
-  {id: 'fold-all-action', source: FOLD_ALL_ACTION_SOURCE},
-  {id: 'emoji-react', source: EMOJI_REACT_SOURCE},
-  {id: 'kudos-facet', source: KUDOS_FACET_SOURCE},
-  {id: 'split-layout', source: SPLIT_LAYOUT_SOURCE},
+  {
+    id: 'hello-renderer',
+    name: 'Hello renderer',
+    description: "Content-renderer variant gated by 'user:hello = true'.",
+    source: HELLO_RENDERER_SOURCE,
+  },
+  {
+    id: 'fold-all-action',
+    name: 'Fold all',
+    description: 'Action that folds/unfolds every block in the current view (Cmd+Shift+F).',
+    source: FOLD_ALL_ACTION_SOURCE,
+  },
+  {
+    id: 'emoji-react',
+    name: 'Emoji reactions',
+    description: 'Multi-facet plugin: content decorator + click handler + keyboard action for adding emoji reactions to blocks.',
+    source: EMOJI_REACT_SOURCE,
+  },
+  {
+    id: 'kudos-facet',
+    name: 'Kudos facet',
+    description: "Defines a brand-new facet and registers a property-keyed 'kudos-banner' renderer that other extensions can contribute to.",
+    source: KUDOS_FACET_SOURCE,
+  },
+  {
+    id: 'split-layout',
+    name: 'Split layout',
+    description: "Block-layout variant for blocks tagged 'user:layout = split' — places content and children side by side.",
+    source: SPLIT_LAYOUT_SOURCE,
+  },
   {
     id: 'layout-renderer-override',
+    name: 'Layout renderer override',
+    description: "Overrides the app-wide 'layout' renderer id and wraps the normal panel layout with a custom frame.",
     source: LAYOUT_RENDERER_OVERRIDE_SOURCE,
   },
   {
     id: 'default-renderer-placeholder',
+    name: 'Default renderer placeholder',
+    description: "Overrides the fallback 'default' renderer id so ordinary empty blocks show a muted read-mode placeholder.",
     source: DEFAULT_RENDERER_OVERRIDE_SOURCE,
   },
 ]
@@ -445,11 +436,11 @@ To author your own:
 1. Create a block with property \`types = ['extension']\`.
 2. Set its content to a TS/JSX module whose \`default\` export is an \`AppExtension\` — a FacetContribution, an array, or a function returning one.
 3. Import what you need from \`@/extensions/api.js\` (\`Object.keys(km)\` to discover; or check the agent bridge's describeRuntime).
-4. Run the "Reload extensions" command (Cmd-K) to apply changes after editing.
+4. Open **Extensions** from the command palette, tick the extension row, then run "Reload extensions" after editing.
 
 To re-insert these examples beside any block, run **Insert example extensions** from the command palette.
 
-To turn an extension off without deleting it, open **Extensions** from the command palette and untick its row. The override is per-device and persists across reloads.`
+User extensions start disabled. To turn one on or off without deleting it, open **Extensions** from the command palette and toggle its row. The override is per-device and persists across reloads.`
 
 /**
  * Append the example-extension blocks under `parentBlock`. Used by the
@@ -468,7 +459,10 @@ export const insertExampleExtensionsUnder = async (
         parentId: parentBlock.id,
         content: example.source,
       })
-      await repo.addTypeInTx(tx, childId, EXTENSION_TYPE, {}, typeSnapshot)
+      await repo.addTypeInTx(tx, childId, EXTENSION_TYPE, {
+        [extensionNameProp.name]: example.name,
+        [extensionDescriptionProp.name]: example.description,
+      }, typeSnapshot)
       return childId
     }, {scope: ChangeScope.BlockDefault, description: 'insert example extension'})
     created.push(repo.block(id))

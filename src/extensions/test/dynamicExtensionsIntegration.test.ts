@@ -41,6 +41,9 @@ const makeRepo = (blocks: BlockData[]): Repo => ({
   },
 }) as unknown as Repo
 
+const enableBlocks = (blocks: readonly BlockData[]): Overrides =>
+  new Map(blocks.map(block => [block.id, true]))
+
 let cache: CompileCache
 
 beforeEach(() => {
@@ -68,6 +71,7 @@ describe('dynamicExtensionsExtension — full integration', () => {
         workspaceId: 'ws-1',
         cache,
         safeMode: false,
+        overrides: enableBlocks(blocks),
       })
       const runtime = await resolveFacetRuntime([baseExtension, ext])
 
@@ -98,6 +102,7 @@ describe('dynamicExtensionsExtension — full integration', () => {
         workspaceId: 'ws-1',
         cache,
         safeMode: false,
+        overrides: enableBlocks(blocks),
         errorReporter,
       })
       const runtime = await resolveFacetRuntime(ext)
@@ -118,7 +123,10 @@ describe('dynamicExtensionsExtension — full integration', () => {
     const restore = __setCompileImplForTest(async (content) => ({
       default: integrationFacet.of({label: content}),
     }))
-    const overrides: Overrides = new Map([['disabled', false]])
+    const overrides: Overrides = new Map([
+      ['enabled', true],
+      ['disabled', false],
+    ])
 
     try {
       const ext = dynamicExtensionsExtension({
@@ -160,6 +168,7 @@ describe('dynamicExtensionsExtension — full integration', () => {
         workspaceId: 'ws-1',
         cache,
         safeMode: false,
+        overrides: enableBlocks(blocks),
       })
       const runtime = await resolveFacetRuntime(ext)
 

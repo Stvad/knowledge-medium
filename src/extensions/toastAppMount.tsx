@@ -17,14 +17,18 @@
 import { Toaster } from 'sonner'
 import { appMountsFacet } from './core.ts'
 import type { AppExtension } from './facet.ts'
+import { withSystemExtensionMetadata } from './togglable.ts'
 
 export const ToastAppMount = () => (
   <Toaster position="top-center" richColors closeButton />
 )
 
-export const toastAppMountExtension: AppExtension = [
+export const toastAppMountExtension: AppExtension = withSystemExtensionMetadata({
+  name: 'Toasts',
+  description: 'Mount point for transient notifications. Disabling silently drops every toast.',
+}, [
   appMountsFacet.of(
     {id: 'core.toast', component: ToastAppMount},
     {source: 'core'},
   ),
-]
+])

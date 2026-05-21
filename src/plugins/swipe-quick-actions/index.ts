@@ -6,6 +6,7 @@ import {
   blockContentSurfacePropsFacet,
 } from '@/extensions/blockInteraction.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
+import { withSystemExtensionMetadata } from '@/extensions/togglable.ts'
 import { SwipeActionMenu } from './SwipeActionMenu.tsx'
 import {
   DEFAULT_QUICK_ACTION_ITEMS,
@@ -26,7 +27,10 @@ const swipeActionMenuPanelMount: PanelMountContribution = {
   component: SwipeActionMenu,
 }
 
-export const swipeQuickActionsPlugin: AppExtension = [
+export const swipeQuickActionsPlugin: AppExtension = withSystemExtensionMetadata({
+  name: 'Swipe quick actions',
+  description: 'Swipe gesture on a block to reveal a quick-action menu.',
+}, [
   blockContentSurfacePropsFacet.of(swipeQuickActionsContentSurface, {
     source: 'swipe-quick-actions',
   }),
@@ -39,4 +43,4 @@ export const swipeQuickActionsPlugin: AppExtension = [
   // the panel root — both naturally fall out of the mount being inside
   // `.panel`.
   panelMountsFacet.of(swipeActionMenuPanelMount, {source: 'swipe-quick-actions'}),
-]
+])

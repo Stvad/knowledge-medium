@@ -8,6 +8,7 @@ import {
   type BlockContentDecoratorContribution,
 } from '@/extensions/blockInteraction.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
+import { withSystemExtensionMetadata } from '@/extensions/togglable.ts'
 import { usePropertyValue } from '@/hooks/block.ts'
 import type { BlockRenderer, BlockRendererProps } from '@/types.ts'
 import { todoActionsExtension } from './actions.ts'
@@ -69,11 +70,14 @@ const decorateTodoContent: BlockContentDecorator = inner => {
 const todoContentDecoratorContribution: BlockContentDecoratorContribution =
   () => decorateTodoContent
 
-export const todoPlugin: AppExtension = [
+export const todoPlugin: AppExtension = withSystemExtensionMetadata({
+  name: 'Todo',
+  description: 'Checkbox / done-state property on blocks.',
+}, [
   todoDataExtension,
   todoActionsExtension,
   blockContentDecoratorsFacet.of(todoContentDecoratorContribution, {source: 'todo'}),
-]
+])
 
 export { cycleTodoState, todoActions } from './actions.ts'
 export { todoDataExtension } from './dataExtension.ts'

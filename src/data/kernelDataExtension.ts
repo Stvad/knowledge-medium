@@ -45,8 +45,12 @@ import { kernelInvalidationRule } from './internals/kernelInvalidation'
 import { KERNEL_PROPERTY_SCHEMAS } from '@/data/properties'
 import { KERNEL_TYPE_CONTRIBUTIONS } from '@/data/blockTypes'
 import type { AppExtension } from '@/extensions/facet'
+import { withSystemExtensionMetadata } from '@/extensions/togglable'
 
-export const kernelDataExtension: AppExtension = [
+export const kernelDataExtension: AppExtension = withSystemExtensionMetadata({
+  name: 'Kernel data',
+  description: 'Mutators, queries, post-commit processors, and invalidation rules the data layer requires.',
+}, [
   KERNEL_MUTATORS.map(m => mutatorsFacet.of(m, {source: 'kernel'})),
   KERNEL_PROCESSORS.map(p => postCommitProcessorsFacet.of(p, {source: 'kernel'})),
   KERNEL_SAME_TX_PROCESSORS.map(p => sameTxProcessorsFacet.of(p, {source: 'kernel'})),
@@ -54,4 +58,4 @@ export const kernelDataExtension: AppExtension = [
   KERNEL_PROPERTY_SCHEMAS.map(s => propertySchemasFacet.of(s, {source: 'kernel'})),
   KERNEL_TYPE_CONTRIBUTIONS.map(t => typesFacet.of(t, {source: 'kernel'})),
   invalidationRulesFacet.of(kernelInvalidationRule, {source: 'kernel'}),
-]
+])

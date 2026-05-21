@@ -13,6 +13,7 @@ import userEvent from '@testing-library/user-event'
 import {describe, expect, it, vi} from 'vitest'
 import type {ToggleNode} from '@/extensions/discoverToggleTree.ts'
 import {makeBlockData} from '@/data/test/factories.ts'
+import {extensionNameProp} from '@/data/properties.ts'
 import {
   systemToggle,
   userExtensionToggle,
@@ -42,11 +43,16 @@ const node = (
 
 const userNode = (
   blockId: string,
-  hintsName?: string,
+  name?: string,
 ): ToggleNode => ({
   handle: userExtensionToggle(
-    makeBlockData({id: blockId, workspaceId: 'ws'}),
-    hintsName ? {name: hintsName} : undefined,
+    makeBlockData({
+      id: blockId,
+      workspaceId: 'ws',
+      properties: name
+        ? {[extensionNameProp.name]: extensionNameProp.codec.encode(name)}
+        : {},
+    }),
   ),
   children: [],
 })

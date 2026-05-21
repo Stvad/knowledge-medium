@@ -2,6 +2,7 @@ import { PendingInvitations } from '@/components/workspace/PendingInvitations.ts
 import { WorkspaceSwitcher } from '@/components/workspace/WorkspaceSwitcher.tsx'
 import { headerItemsFacet, type HeaderItemContribution } from '@/extensions/core.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
+import { withSystemExtensionMetadata } from '@/extensions/togglable.ts'
 import {
   leftSidebarSectionsFacet,
   type LeftSidebarSectionContribution,
@@ -26,7 +27,10 @@ export const pendingInvitationsHeaderItem: HeaderItemContribution = {
   component: PendingInvitations,
 }
 
-export const workspaceHeaderPlugin: AppExtension = [
+export const workspaceHeaderPlugin: AppExtension = withSystemExtensionMetadata({
+  name: 'Workspace header',
+  description: 'Top-of-app header with the workspace switcher.',
+}, [
   leftSidebarSectionsFacet.of(workspaceSwitcherSidebarSection, {
     source: 'workspace-header',
     precedence: -20,
@@ -35,4 +39,4 @@ export const workspaceHeaderPlugin: AppExtension = [
     source: 'workspace-header',
     precedence: 30,
   }),
-]
+])

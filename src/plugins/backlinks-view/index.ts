@@ -1,6 +1,7 @@
 import { blockChildrenFooterFacet } from '@/extensions/blockInteraction.ts'
 import { pluginPrefsExtension } from '@/data/pluginStateExtensions.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
+import { withSystemExtensionMetadata } from '@/extensions/togglable.ts'
 import { backlinksViewFooterContribution } from './BacklinksViewSection.tsx'
 import { backlinksViewPrefsType } from './prop.ts'
 
@@ -8,7 +9,10 @@ import { backlinksViewPrefsType } from './prop.ts'
 // live in `./facet.ts` / `./prop.ts` and are imported directly by
 // callers — keeping them out of this barrel keeps the plugin entry
 // minimal and avoids forcing a JSX file via re-exports.
-export const backlinksViewPlugin: AppExtension = [
+export const backlinksViewPlugin: AppExtension = withSystemExtensionMetadata({
+  name: 'Backlinks view',
+  description: 'Picker that switches between the flat and grouped backlinks renderings.',
+}, [
   blockChildrenFooterFacet.of(backlinksViewFooterContribution, {source: 'backlinks-view'}),
   ...pluginPrefsExtension(backlinksViewPrefsType, 'backlinks-view'),
-]
+])

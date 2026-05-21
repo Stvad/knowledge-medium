@@ -1,5 +1,6 @@
 import { actionsFacet } from '@/extensions/core.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
+import { withSystemExtensionMetadata } from '@/extensions/togglable.ts'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.ts'
 import { toggleTheme } from './theme.ts'
 
@@ -15,8 +16,11 @@ export const toggleThemeAction: ActionConfig<typeof ActionContextTypes.GLOBAL> =
   },
 }
 
-export const themeTogglePlugin: AppExtension = [
+export const themeTogglePlugin: AppExtension = withSystemExtensionMetadata({
+  name: 'Theme toggle',
+  description: 'Switch between light and dark colour scheme.',
+}, [
   actionsFacet.of(toggleThemeAction, {
     source: 'theme-toggle',
   }),
-]
+])

@@ -6,6 +6,7 @@ import {
   type AppMountContribution,
 } from '@/extensions/core.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
+import { withSystemExtensionMetadata } from '@/extensions/togglable.ts'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.ts'
 import { AgentTokensDialogMount, openAgentTokensDialogEvent } from './AgentTokensDialog.tsx'
 import { agentRuntimeBridgeRestartEvent, startAgentRuntimeBridge } from './bridge.ts'
@@ -41,9 +42,12 @@ export const manageAgentTokensAction: ActionConfig<typeof ActionContextTypes.GLO
   },
 }
 
-export const agentRuntimePlugin: AppExtension = [
+export const agentRuntimePlugin: AppExtension = withSystemExtensionMetadata({
+  name: 'Agent runtime',
+  description: 'Bridge that lets external agents drive the app through a typed command protocol (also exposes per-token management UI).',
+}, [
   appEffectsFacet.of(agentRuntimeBridgeEffect, {source: 'agent-runtime'}),
   appMountsFacet.of(agentRuntimeTokensDialogMount, {source: 'agent-runtime'}),
   actionsFacet.of(restartAgentRuntimeBridgeAction, {source: 'agent-runtime'}),
   actionsFacet.of(manageAgentTokensAction, {source: 'agent-runtime'}),
-]
+])
