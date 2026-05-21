@@ -1,6 +1,8 @@
 # Follow-ups
 
-## Security
+Sorted by priority. **P0** = security/data-loss risk active. **P1** = clear user impact or near-term blocker. **P2** = improvement with a mild trigger present. **P3** = deferred until a measured trigger fires. The "Architectural ideas" section at the bottom holds shapes with no current trigger — they exist so future-us doesn't re-derive the analysis from scratch.
+
+## P0 — Security
 
 ### Explicit user enablement for synced extension blocks
 
@@ -8,63 +10,25 @@ Dynamic extension blocks are intentionally powerful: a `type = extension` block 
 
 Fix shape: keep the trust decision outside synced block properties so a collaborator cannot force-enable code for other members. Store an allowlist keyed by `(workspaceId, blockId, contentHash)` in device-local or user-owned settings, and require re-approval when the extension block's source changes. The existing `system:disabled` property can remain an authoring/convenience switch, but it is not a security control because it is synced and editable by workspace writers.
 
+## P1
+
 ### React identity contract for extensions
 
 Extensions that render into the app's React tree need to share the host app's React module identity. Today that is partly enforced by externalizing `react` / `react-dom` through the page import map, and partly accidental: Babel's current extension JSX transform emits `React.createElement(...)`, so extension blocks rely on `window.React` unless they import React explicitly.
 
 Fix shape: document React and ReactDOM as host-provided peer dependencies for extension authors and bundled extensions. Bundled extensions must externalize `react`, `react-dom`, `react/jsx-runtime`, and `react/jsx-dev-runtime`, then resolve those from the host environment. Tighten the in-browser compiler so JSX uses an explicit host import (`react/jsx-runtime` or an injected `import React from 'react'`) instead of the global. Keep import-map entries exact where possible, and integrity-pin any CDN-hosted host React modules.
 
-## Tx-bound read guards for reference processors
+### Tx-bound read guards for reference processors
 
 `core.parseReferences` and `core.cleanupOrphanAliases` now do their expensive reads before opening a write transaction to avoid the PowerSync queue deadlock shape documented in `tasks/processor-tx-deadlock.md`. That leaves two narrow TOCTOU windows: alias ownership can change between "alias missing" and deterministic target creation, and a newly inserted alias target can gain a reference between the orphan precheck and cleanup delete.
 
 Fix shape: add narrow tx-bound read helpers for the final guards, e.g. alias lookup by `(workspaceId, alias)` and "does any block reference this id?", implemented on the `Tx`/`TxImpl` path using the active write-transaction lock context. Keep the broad prefilter reads outside the tx, but re-check inside the tx immediately before creating the fallback alias target or deleting a cleanup candidate. Do not call the bare `ctx.db` from inside `repo.tx`; that reintroduces the queue deadlock.
 
-## CI guard on Postgres ↔ TS schema drift
+### CI guard on Postgres ↔ TS schema drift
 
 `scripts/gen-sync-config.ts` keeps the local-SQLite raw-table mapping and the PowerSync sync-stream SELECT in lockstep (both projected from the same `BLOCK_STORAGE_COLUMNS` / `WORKSPACE_*` arrays), but **Postgres is still drift-prone** — someone can edit `BLOCK_STORAGE_COLUMNS` without writing the matching `supabase/migrations/<…>.sql`, and nothing fails until `db push` (or worse, a runtime PATCH that references a missing column). Fix shape: a CI step that calls `npx supabase db query --linked "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name IN ('blocks','workspaces','workspace_members')"` and asserts the returned set is a superset of every name in the TS column lists. Costs: needs a Supabase-reachable env in CI (or a checked-in `supabase/schema-snapshot.json` you regenerate via a `yarn snapshot:schema` script and diff against). Lower-effort variant: parse the migration files as text and grep for `add column.*<name>` per TS column — no DB connection needed but misses migrations that drop a column.
 
-## Id-only collection handles for `subtree` / `ancestors` / `backlinks`
-
-`repo.childIds(id)` was added alongside `repo.children(id)` to give callers that only need the structural list a handle whose only dep is `parent-edge` — child property updates don't invalidate it, and the loader is a lighter `SELECT id` query. `useChildIds` and `useHasChildren` were rewritten on top of it; the symptom that motivated the split was an UI-state child mutation cascading a `useChildren`-driven re-render through `LayoutRenderer`.
-
-The same id-only shape would work for the other three list-handle factories in `Repo` (`subtree`, `ancestors`, `backlinks`) for the same reason: their React consumers all use `Block` facades for per-row reactivity, so the per-id `row` deps the handles currently declare are redundant — the row-grain subscriptions on each Block already cover content updates. But the leverage drops sharply:
-- `subtreeIds` — same shape of win in principle (row dep × many descendants), but no current hot consumer. Probably worth waiting for an actual callsite.
-- `ancestorIds` — Breadcrumbs is the only consumer; chains are typically O(depth) shallow and the breadcrumb labels need block content anyway.
-- `backlinkIds` — Backlinks UI also renders each backlink's content; row deps are bounded by the backlinks list size.
-
-Add when a measured hot path appears, not preemptively. Phase 4's `queriesFacet` (per `tasks/data-layer-redesign.md` §13.4) is the canonical place for these — `repo.childIds` will migrate alongside `repo.children` to `repo.query.childIds` with no callsite changes downstream of the hooks.
-
-## Reduce per-block flicker on lazy hierarchical loads
-
-`useChildIds` is backed by `repo.childIds` which hydrates the whole children list per parent on first read. That keeps the per-parent expand path fast, but as the user scrolls into deeper levels their grandchildren still load on `LazyBlockComponent` mount and visibly pop in. Standard fixes worth considering when this becomes noticeable:
-
-- **Skeleton with structural shape**: render a bullet at the right indent depth (data the parent already has) inside the LazyBlockComponent placeholder instead of the bare 32px `<div>`. Real content slots into the same shape rather than appearing from nothing — most of the perceived "pop" is the bullet + indent appearing, not the text.
-- **`useTransition` around expand toggles**: `startTransition`-wrap the `setIsCollapsed` write so React keeps showing the previous tree until the new descendant Suspense boundaries resolve, instead of flashing fallbacks during the load window.
-- **Tighter overscan / prefetch**: bump `OVERSCAN_PX` in `LazyBlockComponent` or have `BlockChildren` warm a few levels of `repo.childIds` ahead of intersection, so by the time a row mounts its data is already in cache.
-
-Cheap wins first (skeleton + maybe overscan); reach for `useTransition` if it still feels jumpy.
-
-## Periodic `row_events` trim
-
-`row_events` is the per-row audit + invalidation log. Trigger-written, never trimmed — it grew to 262 MB / 304k rows on the import-heavy DB. The fast path doesn't need history; the row_events tail consumes by ascending `id` and only needs rows newer than its high-watermark. Long-tail entries are dead weight on disk and on backup/export.
-
-Fix shape: at startup (or on a low-priority idle hook), `DELETE FROM row_events WHERE id < (MAX(id) - K)` for some K (e.g. 50 000), or `WHERE created_at < ?` with a 7-day window. Either runs in one statement and the index on `id` is the auto PK. Optional: bound `command_events` with the same shape (4 403 rows, ~negligible today, but the same unbounded shape).
-
-Note: PowerSync's CRUD-apply path still writes a row_event per sync write, so even a fully-synced read-only client will accumulate. Worth doing.
-
-## Drop unflushed `ps_crud` for local-only mode (and reduce import bloat)
-
-`ps_crud` is PowerSync's outgoing upload queue. The Roam import (run with `source='user'`) enqueued 304k rows ≈ 204 MB. If the user runs in `localOnly` mode (no remote sync) those entries can never drain; if remote sync is on but the import was massive, the queue still bloats local storage until it drains.
-
-Two angles:
-
-- **Cleanup option** — when `localOnly` is active, expose a `discardPendingUploads()` action that truncates `ps_crud` (PowerSync's API may have a helper for this; otherwise raw `DELETE FROM ps_crud` is fine since nothing reads it locally). Frees ~200 MB on this DB.
-- **Don't enqueue during import in the first place** — the upload trigger gates on `tx_context.source = 'user'`. Adding a fourth source value `'import'` (or letting the import set source to `'local-ephemeral'` with a temporary scope override) keeps the row_events audit happy while skipping `ps_crud`. Cleanest variant: add `'import'` source, both `row_events` and upload triggers learn to ignore it. The Roam import wraps its txs with `source: 'import'`. Then both `row_events` AND `ps_crud` stay small even on bulk import. Less-clean variant: drop the upload trigger before import, recreate after.
-
-The "don't enqueue" path also helps the `row_events` problem above — an `'import'` source that skips row_events trims an additional ~250 MB of audit-log bloat from the import.
-
-## Move agent-runtime tokens from localStorage to user-page blocks
+### Move agent-runtime tokens from localStorage to user-page blocks
 
 Today (commit `90a9047`) agent tokens live in localStorage keyed by `(userId, workspaceId)`, managed by `AgentTokenStore` in [src/agentRuntime/agentTokens.ts](src/agentRuntime/agentTokens.ts). localStorage isn't actually more secure than a block on the user page — same-origin is the boundary either way — and a block fits the "everything is a block" model better (undoable, exportable, manageable inline on the user page).
 
@@ -76,7 +40,44 @@ Blockers to land first:
 
 Once #1 lands, the migration is small: swap `AgentTokenStore` for a thin wrapper around `repo.tx({scope: DeviceLocal})` + `repo.query.children({parentId: userPage.id, kind: 'agent-token'})`. Bridge handshake and CLI stay identical.
 
-## Strict-mode-with-checked-overrides for name-keyed facets
+### Reschedule (and similar actions) emit multiple `BlockDefault` txs — one undo entry doesn't cover the whole action
+
+`rescheduleBlock` calls `getOrCreateDailyNote` twice (today + next-review date) before its own `tx.update`, and each of those can open its own `BlockDefault` tx — including a third for `getOrCreateJournalBlock` if the workspace's journal block doesn't exist yet. On a fresh workspace day a single user-perceived "Good" tap is therefore 2–4 entries on the undo stack, and cmd-Z (or the toast's Undo button — same `repo.undo()` target) only reverts the property write, leaving the newly created daily notes / journal page behind. The same shape applies to any action that opens N tx-emitting helpers before its own write — flagged on PR #31, but the daily-note coupling means it surfaces in most SRS first-touches.
+
+Fix shape: thread an optional `Tx` parameter through `getOrCreateDailyNote` / `getOrCreateJournalBlock` so callers that are already inside a tx can co-opt it. `rescheduleBlock` opens one outer `repo.tx`, calls a `getOrCreateDailyNoteInTx(tx, …)` helper for both daily notes, then performs its own update — collapses to a single undo entry. The standalone `repo`-only signature stays as a thin wrapper for the existing call sites (`actions.ts:98,109,141`) so this isn't a forced migration. Slight wrinkle: `getOrCreateDailyNote` reads outside the tx, then opens a new one to write; the in-tx variant has to do its existence check via `tx.get`, which matches the pattern already in `srsBlockDateAdapter.setIso`. Worth doing before any future surface that needs single-entry undo (e.g. "duplicate card with new schedule", calendar drag-to-reschedule).
+
+## P2
+
+### Reduce per-block flicker on lazy hierarchical loads
+
+`useChildIds` is backed by `repo.childIds` which hydrates the whole children list per parent on first read. That keeps the per-parent expand path fast, but as the user scrolls into deeper levels their grandchildren still load on `LazyBlockComponent` mount and visibly pop in. Standard fixes worth considering when this becomes noticeable:
+
+- **Skeleton with structural shape**: render a bullet at the right indent depth (data the parent already has) inside the LazyBlockComponent placeholder instead of the bare 32px `<div>`. Real content slots into the same shape rather than appearing from nothing — most of the perceived "pop" is the bullet + indent appearing, not the text.
+- **`useTransition` around expand toggles**: `startTransition`-wrap the `setIsCollapsed` write so React keeps showing the previous tree until the new descendant Suspense boundaries resolve, instead of flashing fallbacks during the load window.
+- **Tighter overscan / prefetch**: bump `OVERSCAN_PX` in `LazyBlockComponent` or have `BlockChildren` warm a few levels of `repo.childIds` ahead of intersection, so by the time a row mounts its data is already in cache.
+
+Cheap wins first (skeleton + maybe overscan); reach for `useTransition` if it still feels jumpy.
+
+### Periodic `row_events` trim
+
+`row_events` is the per-row audit + invalidation log. Trigger-written, never trimmed — it grew to 262 MB / 304k rows on the import-heavy DB. The fast path doesn't need history; the row_events tail consumes by ascending `id` and only needs rows newer than its high-watermark. Long-tail entries are dead weight on disk and on backup/export.
+
+Fix shape: at startup (or on a low-priority idle hook), `DELETE FROM row_events WHERE id < (MAX(id) - K)` for some K (e.g. 50 000), or `WHERE created_at < ?` with a 7-day window. Either runs in one statement and the index on `id` is the auto PK. Optional: bound `command_events` with the same shape (4 403 rows, ~negligible today, but the same unbounded shape).
+
+Note: PowerSync's CRUD-apply path still writes a row_event per sync write, so even a fully-synced read-only client will accumulate. Worth doing.
+
+### Drop unflushed `ps_crud` for local-only mode (and reduce import bloat)
+
+`ps_crud` is PowerSync's outgoing upload queue. The Roam import (run with `source='user'`) enqueued 304k rows ≈ 204 MB. If the user runs in `localOnly` mode (no remote sync) those entries can never drain; if remote sync is on but the import was massive, the queue still bloats local storage until it drains.
+
+Two angles:
+
+- **Cleanup option** — when `localOnly` is active, expose a `discardPendingUploads()` action that truncates `ps_crud` (PowerSync's API may have a helper for this; otherwise raw `DELETE FROM ps_crud` is fine since nothing reads it locally). Frees ~200 MB on this DB.
+- **Don't enqueue during import in the first place** — the upload trigger gates on `tx_context.source = 'user'`. Adding a fourth source value `'import'` (or letting the import set source to `'local-ephemeral'` with a temporary scope override) keeps the row_events audit happy while skipping `ps_crud`. Cleanest variant: add `'import'` source, both `row_events` and upload triggers learn to ignore it. The Roam import wraps its txs with `source: 'import'`. Then both `row_events` AND `ps_crud` stay small even on bulk import. Less-clean variant: drop the upload trigger before import, recreate after.
+
+The "don't enqueue" path also helps the `row_events` problem above — an `'import'` source that skips row_events trims an additional ~250 MB of audit-log bloat from the import.
+
+### Strict-mode-with-checked-overrides for name-keyed facets
 
 Every name-keyed facet in the codebase (`propertySchemasFacet`, `propertyUiFacet`, `postCommitProcessorsFacet`, `queriesFacet`, `mutatorsFacet`, `typesFacet`, `blockLayoutFacet`, etc.) follows the same convention: warn on duplicate name, last-wins. That's the existing override mechanism — plugins replace kernel registrations by registering after them. It works, but the warn is easy to miss in practice and accidental name collisions silently overwrite intended behavior.
 
@@ -86,26 +87,7 @@ Apply uniformly across every name-keyed facet — the convention should be consi
 
 **Trigger to build:** plugin authors stepping on each other's schema / mutator / processor names in the wild and the warn-and-last-wins not catching it in code review. Until then, the existing convention works for the alpha-stage plugin surface and the [docs/type-system.md §1a](docs/type-system.md) schema-lift handles the most acute case (object-identity dedup for multi-type-shared schemas means the warn fires only on real conflicts).
 
-## `rendererProp` silently no-ops on a misspelled renderer id
-
-[useRenderer](src/hooks/useRendererRegistry.tsx:26) reads `rendererProp` and only honors it via `if (rendererKey && registry[rendererKey])` — when the prop names a renderer id that isn't registered (typo, plugin not loaded, renderer renamed), the lookup silently fails and resolution falls through to the `canRender` predicate sort. The user's explicit override is lost with no signal.
-
-Fix shape: when `rendererKey` is set but absent from the registry, `console.warn` with the offending id + the available ids, and either (a) render `MissingDataRenderer`-style "renderer not found" placeholder so the lost override is visible, or (b) fall through with the warning. Pick (b) for now — less disruptive — but at least surface it. Independent of any larger renderer-resolution redesign; cheap fix.
-
-## Tighten render-surface model — enum + ideas from `renderer-resolution.md`
-
-The current render-surface model on `BlockContextType` ([src/types.ts:79](src/types.ts:79)) is an open flag bag: `isNestedSurface` (umbrella) + specific descriptors `isEmbedded` / `isBacklink` / `isBreadcrumb`, set by each non-document mount and consulted via `useIsFocalRender(block)` / `isFocalRender(ctx)` ([src/hooks/useIsFocalRender.ts](src/hooks/useIsFocalRender.ts)). This shape was picked as the smaller initial fix for the embed-of-focal-block bug ([docs/render-surface-vs-flags.html](render-surface-vs-flags.html) Option D + C) — it composes in nested cases, doesn't require a closed union, and adding a new surface only means setting the umbrella.
-
-Tighter shape worth considering when a third surface lands or when the open flag bag bites: replace the umbrella+descriptor flags with a single `renderSurface: 'document' | 'embed' | 'backlink' | 'breadcrumb'` enum (Option B in the design doc). Pros: real type-system enforcement on the surface set, mutually-exclusive states modeled as mutually exclusive, surfaces discoverable by reading a union rather than greping setters. Cons: closed set requires amending the union when a new surface lands, and nested cases (a backlink containing an embed) collapse to innermost-wins rather than composing. The composition concern is theoretical today — none of the five focal-affordance sites discriminates outer surface.
-
-[docs/renderer-resolution.md](renderer-resolution.md) is currently *not* on the roadmap, but it has adjacent ideas worth pulling in if/when this gets revisited:
-- The **mount site already knows** insight — `BlockEmbed` deciding "I'm an embed" at the mount site is the same shape as the doc's `frame` prop on `BlockComponent`. If the enum migration happens, passing `renderSurface` (or a frame slot) as an explicit `BlockComponent` prop is more honest than the current context-override sandwich.
-- **Separating dispatch metadata from React component identity** — the static-field `canRender` / `priority` shape on renderer components ([TopLevelRenderer.canRender](src/components/renderer/TopLevelRenderer.tsx), etc.) is the same legibility problem this redesign solves at the context-flag layer. Worth doing together if either gets touched.
-- **Explainability / reason chains** — orthogonal to surfaces but cheap to bolt on once dispatch metadata is structured.
-
-Trigger to revisit: a fourth render surface shows up (preview pane, sidebar peek), OR the flag-bag's open-set ergonomics produces a real bug (someone forgets to set `isNestedSurface` on a new mount).
-
-## Block facade soft-delete contract drift between `peek` / `data` / `load`
+### Block facade soft-delete contract drift between `peek` / `data` / `load`
 
 `Block`'s three read surfaces disagree on what a soft-deleted (`deleted: true`) row means:
 
@@ -118,6 +100,89 @@ The cache fast-path in [block.ts:96](src/data/block.ts:96) had to special-case t
 Coherent shape: all three surfaces return the snapshot (incl. tombstones), callers self-filter on `.deleted` for live-only views — same as today's `data` getter. Removes the inconsistency, removes the `markMissing` side-effect that wipes a cached tombstone, and removes the cache-fast-path's tombstone special case.
 
 **Trigger to build:** the next caller that gets bitten by the inconsistency, OR a refactor that makes `markMissing`'s "wipes cached snapshot" side-effect a problem (e.g. wanting to surface the tombstone to undo flows after a soft-delete-then-load sequence). Migration cost is real — every `await block.load()` site that uses `null` as "doesn't exist for me" needs to be revisited (`!data` → `!data || data.deleted`). Manageable but not zero.
+
+### Route swipe-quick-action invocation through the dispatcher
+
+`SwipeActionMenu.handleRun` calls `action.handler({block, uiStateBlock}, trigger)` directly — bypassing `useRunAction` / `runActionById`. The rationale is mobile-pragmatic: the swipe gesture targets blocks regardless of which one (if any) is currently focused, so requiring the action's declared context to be active upfront would mean the menu couldn't expose NORMAL_MODE actions on a non-focused block. Manufacturing `{block, uiStateBlock}` deps and invoking the handler lets the same primary-row items (copy, delete, etc.) work without first promoting the swiped block into focus.
+
+The cost surfaces when a handler doesn't just operate on its deps — when it opens UI that itself reads `useActiveContextsState`. The command palette is the canary: its action list is filtered by the currently-active context map, not by whatever deps got handed to a handler. So a "open palette for this block" quick action can't just dispatch the toggle event; it has to first make the swiped block the focused-and-not-editing block so NORMAL_MODE for it activates and the palette lists block-context actions for it. That dance lives inline in `commandPaletteForBlockAction.handler` (`await focusBlock(uiStateBlock, block.id)` before dispatching the toggle). It works, but every future "quick action that opens a context-aware UI" will need an analogous dance, and forgetting it produces a degraded-but-not-broken palette ("why does my action not show up?") that's easy to miss in review.
+
+Fix shape: have `handleRun` route through the dispatcher for actions whose `context` is not `GLOBAL`. The contract becomes "before invoking the handler, make this block the active one for `action.context`" — for NORMAL_MODE that means `focusBlock(uiStateBlock, block.id)` (or the broader `activateBlockNormalMode` if we add it; see the selection-clearing note in #4 above), then `runActionById(actionId, trigger)`. GLOBAL actions still pass through unchanged. The trade-off: every NORMAL_MODE action invoked from the swipe menu now flips the global focus to its target block as a side effect — desirable for the palette case, possibly surprising for "Copy" (a swipe on an unfocused block would now leave focus on that block after copying). Likely acceptable since the swipe-menu UX already implies "operate on this block," but worth confirming with a UX pass.
+
+Lower-effort variant: leave the direct-call pattern, but lift the focus dance into a helper that the action author opts into (e.g. `runWithBlockContext(deps, action)`) so the pattern is named and discoverable rather than retyped at each site. Doesn't centralize the invariant but at least flags the requirement.
+
+Originally surfaced while debugging codex-flagged P2s on PR #21 (palette quick-action race + edit-mode latch). The handler-level workaround landed; this is the architectural cleanup.
+
+### Schema-rename does not cascade — instance values orphan on rename
+
+When a user renames a `property-schema` block (editing `property-schema:name` via `PropertySchemaBlockRenderer`), the schema republishes under the new name but every instance block's `properties_json` is still keyed by the OLD name. The old name has values but no schema; the new name has a schema but no values. The renamed property silently disappears from the UI.
+
+Surfaced inline during the user-defined-types Phase 1 design review while pushing back on the rename-safety argument for block-id refs in `block-type:properties`: that argument keeps the type→schema pointer stable, but the instance values are already broken at a lower level.
+
+Two viable fixes:
+
+- **Cascade-rename**: on schema name change, walk every block where `properties_json` has the old key and rewrite the key to the new name in one tx. Surgical; no data-model change. Costs: high-fanout schemas (e.g. renaming `status` when 50K blocks have it) rewrite a lot of rows under PowerSync's serialized writer; conflict resolution mid-rename has to handle blocks that transiently carry both keys.
+- **Block-id keying**: `properties_json` keys become schema block-ids instead of names. Renames become free at the value layer (label decoupled from identity). Requires solving "what's the block-id for a kernel/plugin schema?" (see the block-id keying entry below) and a one-time migration of every existing `properties_json` blob. Reads stay 1× Map.get — no per-read indirection vs today.
+
+The user is currently leaning toward **block-id keying as the destination** (per the user-defined-types design review session) because it composes with the same "id-stable handle" decision already made for types and resolves the rename problem cleanly for every consumer at once. Cascade-rename remains a viable interim step that doesn't paint into a corner.
+
+## P3 — Deferred until trigger fires
+
+### Id-only collection handles for `subtree` / `ancestors` / `backlinks`
+
+`repo.childIds(id)` was added alongside `repo.children(id)` to give callers that only need the structural list a handle whose only dep is `parent-edge` — child property updates don't invalidate it, and the loader is a lighter `SELECT id` query. `useChildIds` and `useHasChildren` were rewritten on top of it; the symptom that motivated the split was an UI-state child mutation cascading a `useChildren`-driven re-render through `LayoutRenderer`.
+
+The same id-only shape would work for the other three list-handle factories in `Repo` (`subtree`, `ancestors`, `backlinks`) for the same reason: their React consumers all use `Block` facades for per-row reactivity, so the per-id `row` deps the handles currently declare are redundant — the row-grain subscriptions on each Block already cover content updates. But the leverage drops sharply:
+- `subtreeIds` — same shape of win in principle (row dep × many descendants), but no current hot consumer. Probably worth waiting for an actual callsite.
+- `ancestorIds` — Breadcrumbs is the only consumer; chains are typically O(depth) shallow and the breadcrumb labels need block content anyway.
+- `backlinkIds` — Backlinks UI also renders each backlink's content; row deps are bounded by the backlinks list size.
+
+Add when a measured hot path appears, not preemptively. Phase 4's `queriesFacet` (per `tasks/data-layer-redesign.md` §13.4) is the canonical place for these — `repo.childIds` will migrate alongside `repo.children` to `repo.query.childIds` with no callsite changes downstream of the hooks.
+
+### `rendererProp` silently no-ops on a misspelled renderer id
+
+[useRenderer](src/hooks/useRendererRegistry.tsx:26) reads `rendererProp` and only honors it via `if (rendererKey && registry[rendererKey])` — when the prop names a renderer id that isn't registered (typo, plugin not loaded, renderer renamed), the lookup silently fails and resolution falls through to the `canRender` predicate sort. The user's explicit override is lost with no signal.
+
+Fix shape: when `rendererKey` is set but absent from the registry, `console.warn` with the offending id + the available ids, and either (a) render `MissingDataRenderer`-style "renderer not found" placeholder so the lost override is visible, or (b) fall through with the warning. Pick (b) for now — less disruptive — but at least surface it. Independent of any larger renderer-resolution redesign; cheap fix.
+
+### Tighten render-surface model — enum + ideas from `renderer-resolution.md`
+
+The current render-surface model on `BlockContextType` ([src/types.ts:79](src/types.ts:79)) is an open flag bag: `isNestedSurface` (umbrella) + specific descriptors `isEmbedded` / `isBacklink` / `isBreadcrumb`, set by each non-document mount and consulted via `useIsFocalRender(block)` / `isFocalRender(ctx)` ([src/hooks/useIsFocalRender.ts](src/hooks/useIsFocalRender.ts)). This shape was picked as the smaller initial fix for the embed-of-focal-block bug ([docs/render-surface-vs-flags.html](render-surface-vs-flags.html) Option D + C) — it composes in nested cases, doesn't require a closed union, and adding a new surface only means setting the umbrella.
+
+Tighter shape worth considering when a third surface lands or when the open flag bag bites: replace the umbrella+descriptor flags with a single `renderSurface: 'document' | 'embed' | 'backlink' | 'breadcrumb'` enum (Option B in the design doc). Pros: real type-system enforcement on the surface set, mutually-exclusive states modeled as mutually exclusive, surfaces discoverable by reading a union rather than greping setters. Cons: closed set requires amending the union when a new surface lands, and nested cases (a backlink containing an embed) collapse to innermost-wins rather than composing. The composition concern is theoretical today — none of the five focal-affordance sites discriminates outer surface.
+
+[docs/renderer-resolution.md](renderer-resolution.md) is currently *not* on the roadmap, but it has adjacent ideas worth pulling in if/when this gets revisited:
+- The **mount site already knows** insight — `BlockEmbed` deciding "I'm an embed" at the mount site is the same shape as the doc's `frame` prop on `BlockComponent`. If the enum migration happens, passing `renderSurface` (or a frame slot) as an explicit `BlockComponent` prop is more honest than the current context-override sandwich.
+- **Separating dispatch metadata from React component identity** — the static-field `canRender` / `priority` shape on renderer components ([TopLevelRenderer.canRender](src/components/renderer/TopLevelRenderer.tsx), etc.) is the same legibility problem this redesign solves at the context-flag layer. Worth doing together if either gets touched.
+- **Explainability / reason chains** — orthogonal to surfaces but cheap to bolt on once dispatch metadata is structured.
+
+Trigger to revisit: a fourth render surface shows up (preview pane, sidebar peek), OR the flag-bag's open-set ergonomics produces a real bug (someone forgets to set `isNestedSurface` on a new mount).
+
+### Block-id keying for `properties_json` + kernel-schemas-as-blocks
+
+Companion to the schema-rename follow-up above. The longer-term direction is to key `properties_json` by the schema block's id rather than its name. That removes rename fragility everywhere properties are stored or referenced, and lines up with the user-defined-types "type id = block id" decision.
+
+Open sub-questions to resolve before committing:
+
+- **Kernel/plugin schemas without backing blocks.** Today `defineProperty` calls in code don't materialize a block. For block-id keying to work uniformly, kernel/plugin schemas need either:
+  - **Synthetic deterministic ids** — `uuid-v5(kernel:status)` etc. The runtime resolves them through a registry without persisting a row. Lowest cost, keeps source-of-truth in code.
+  - **Full materialization** — bootstrap a property-schema block per kernel/plugin schema per workspace. Composes with all block-based machinery (sync, history, future overrides), but moves source-of-truth from code to data and raises plugin-unload lifecycle questions ("does the orphan block stay?"). Per-workspace storage cost scales with kernel-schema growth × workspace count.
+  - The middle path that doesn't lock either choice: ship synthetic ids now; the same id space can later back real materialized blocks if a use case emerges.
+- **Migration cost.** Every existing `properties_json` blob needs rekeying. Doable as a one-shot pass at workspace open; safety-net by versioning the workspace so old clients don't write back with name keys.
+- **DB readability.** Raw `properties_json` becomes opaque to humans (`{"a3f9-…": "open"}` instead of `{"status": "open"}`). Debug-only friction; mitigate with a tooling pretty-printer that resolves ids via the schemas table.
+- **Properties-as-blocks (Tana-style) is a different question, not this one.** Tana-style means each VALUE is a block — different shape, real per-read indirection. Block-id keying just renames the JSON keys; reads stay 1× Map.get. Worth keeping these separate when discussing.
+
+Acceptance for landing this:
+1. Kernel/plugin schemas resolve through the same `getSchemaForBlockId` path as user schemas (synthetic or materialized — pick one).
+2. `block-type:properties` refs work uniformly across all schema kinds, replacing the current Phase-1 "hide kernel schemas in the picker" workaround in `BlockTypeBlockRenderer`.
+3. `properties_json` migration runs once at workspace open; idempotent.
+4. The schema-rename follow-up above is satisfied as a side effect (renames touch labels, never keys).
+
+### Investigate `referencesProcessor.test.ts` schema-swap flake
+
+`src/plugins/references/test/referencesProcessor.test.ts > parseReferences — schema-swap reprojection > removes stale field refs when a property stops being ref-typed` fails intermittently in the full suite but passes in isolation (`yarn test --run src/plugins/references/test/referencesProcessor.test.ts` is green). Observed once during the navigation refactor on master @ cf397f0; my edits don't import any backlinks code, and the failing assertion checks `references_json` for a stale `target-a` ref that should have been removed when the `reviewer` property was retyped away from `block-ref`.
+
+The shape suggests an ordering race: when run alongside the rest of the suite, the property-type cleanup fires before/after the assertion's `vi.waitFor` window in a way that the in-isolation run doesn't trigger. Likely candidates: a shared trigger-flush queue across tests in the same vitest worker, or a `repo.tx` that races with the schema-swap delete. Worth instrumenting next time it fails: dump `references_json` history for `src` plus the `row_events` trail across the swap window. If the pattern matches `cycle-detection-test-flake.md`, the fix may be the same shape (await processor quiescence before asserting).
 
 ---
 
@@ -175,21 +240,6 @@ Cold-start traces show this matters when the page mounts dozens of concurrent re
 
 **Trigger to build.** Estimated 1–2 weeks of careful work for path 2. Worth it only if a future regression makes single-connection serialization the dominant cold-start cost again, *and* path 1 hasn't materialized. Concrete signal: `db.getAll.maxMs` consistently above ~200 ms with `writeTransaction` activity correlated, *and* batching/deferral can't eliminate the contention at the call-site level. Until then: continue cutting reads at the call site (batched queries, prefetch) and writes off the critical path (`scheduleIdle`, fast-path before opening a tx). Re-check PowerSync's changelog at each major version bump.
 
-## Remove `@powersync/common` patch once 1.53.1+ is released
-
-`patches/@powersync+common+1.53.0.patch` backports [powersync-ja/powersync-js#960](https://github.com/powersync-ja/powersync-js/pull/960) — a race in the `injectable` async iterator wrapper that drops sync lines when a local write completes concurrently with an upstream `data` frame. Without it, ~1 in 3 user edits triggered a checksum mismatch and a full bucket re-download (see [`docs/powersync-bucket-wipe-bug-report.md`](powersync-bucket-wipe-bug-report.md) and [issue #954](https://github.com/powersync-ja/powersync-js/issues/954)). The fix is merged to powersync-js `main` and bundled in `@powersync/common@1.53.1`, which had not yet shipped to npm when the patch went in.
-
-Cleanup once a release containing the fix is on npm (verify by checking that the published `dist/bundle.mjs` contains `sourceFetchInFlight`):
-
-1. `yarn upgrade @powersync/common@<new-version>` (and bump `@powersync/web` / `@powersync/react` together if their pinned `@powersync/common` peer needs it).
-2. `rm patches/@powersync+common+1.53.0.patch`
-3. Drop `"postinstall": "patch-package"` from `package.json` scripts.
-4. `yarn remove patch-package` (only direct devDep that was added for this).
-5. Run `yarn install` — the `patches/` directory should now be empty (or gone) and `node_modules/@powersync/common/dist/bundle.mjs` should match the upstream tarball.
-6. Smoke-test by running the burst-edit scenario from the bug report; checksum mismatches should remain at zero and `ps_crud` should drain after each batch.
-
-The patch is intentionally minimal (touches only `dist/bundle.mjs`, the file the browser actually loads) so re-applying it against a different `@powersync/common` patch version is straightforward if upstream slips — see the `injectable` function around line 10835 of the bundle and the [PR diff](https://github.com/powersync-ja/powersync-js/pull/960/files).
-
 ## Generic "move type" / "move property" primitive
 
 SRS now has a dedicated cut/paste swipe action ([src/plugins/srs-rescheduling/moveSrsState.ts](src/plugins/srs-rescheduling/moveSrsState.ts) + [srsClipboard.ts](src/plugins/srs-rescheduling/srsClipboard.ts), wired through `srs.cut` / `srs.paste` in [index.ts](src/plugins/srs-rescheduling/index.ts)). The shape generalises: every `TypeContribution` declares its own field list via `properties` ([src/data/api/blockType.ts](src/data/api/blockType.ts)), so a kernel-or-shared-util "move type with fields" operation could subsume the SRS case once a second caller appears.
@@ -217,77 +267,3 @@ A "move property" primitive (one field, no type) is intentionally **not** part o
 Where the work lives is also a decision deferred to that point. The `mutatorsFacet` path ([src/data/facets.ts](src/data/facets.ts)) is preferred over a `Repo` method if it can read the type registry from extension context — that keeps it plugin-contributable rather than baking another type-aware operation into the kernel. The current `repo.addTypeInTx` / `repo.removeTypeInTx` are kernel methods only because they need privileged registry access, but a `moveType` mutator could just compose them.
 
 UX: the SRS cut/paste swipe pattern (per-type actions filtered by `QuickActionItem.canRun`) is the working model. For multiple types coexisting on a block, do not build a generic "which type to cut?" submenu — register `<type>.cut` / `<type>.paste` action pairs per contributing plugin and let the canRun filter sort visibility. This is what the SRS implementation already does for itself.
-
-## Investigate `referencesProcessor.test.ts` schema-swap flake
-
-`src/plugins/references/test/referencesProcessor.test.ts > parseReferences — schema-swap reprojection > removes stale field refs when a property stops being ref-typed` fails intermittently in the full suite but passes in isolation (`yarn test --run src/plugins/references/test/referencesProcessor.test.ts` is green). Observed once during the navigation refactor on master @ cf397f0; my edits don't import any backlinks code, and the failing assertion checks `references_json` for a stale `target-a` ref that should have been removed when the `reviewer` property was retyped away from `block-ref`.
-
-The shape suggests an ordering race: when run alongside the rest of the suite, the property-type cleanup fires before/after the assertion's `vi.waitFor` window in a way that the in-isolation run doesn't trigger. Likely candidates: a shared trigger-flush queue across tests in the same vitest worker, or a `repo.tx` that races with the schema-swap delete. Worth instrumenting next time it fails: dump `references_json` history for `src` plus the `row_events` trail across the swap window. If the pattern matches `cycle-detection-test-flake.md`, the fix may be the same shape (await processor quiescence before asserting).
-
-## Route swipe-quick-action invocation through the dispatcher
-
-`SwipeActionMenu.handleRun` calls `action.handler({block, uiStateBlock}, trigger)` directly — bypassing `useRunAction` / `runActionById`. The rationale is mobile-pragmatic: the swipe gesture targets blocks regardless of which one (if any) is currently focused, so requiring the action's declared context to be active upfront would mean the menu couldn't expose NORMAL_MODE actions on a non-focused block. Manufacturing `{block, uiStateBlock}` deps and invoking the handler lets the same primary-row items (copy, delete, etc.) work without first promoting the swiped block into focus.
-
-The cost surfaces when a handler doesn't just operate on its deps — when it opens UI that itself reads `useActiveContextsState`. The command palette is the canary: its action list is filtered by the currently-active context map, not by whatever deps got handed to a handler. So a "open palette for this block" quick action can't just dispatch the toggle event; it has to first make the swiped block the focused-and-not-editing block so NORMAL_MODE for it activates and the palette lists block-context actions for it. That dance lives inline in `commandPaletteForBlockAction.handler` (`await focusBlock(uiStateBlock, block.id)` before dispatching the toggle). It works, but every future "quick action that opens a context-aware UI" will need an analogous dance, and forgetting it produces a degraded-but-not-broken palette ("why does my action not show up?") that's easy to miss in review.
-
-Fix shape: have `handleRun` route through the dispatcher for actions whose `context` is not `GLOBAL`. The contract becomes "before invoking the handler, make this block the active one for `action.context`" — for NORMAL_MODE that means `focusBlock(uiStateBlock, block.id)` (or the broader `activateBlockNormalMode` if we add it; see the selection-clearing note in #4 above), then `runActionById(actionId, trigger)`. GLOBAL actions still pass through unchanged. The trade-off: every NORMAL_MODE action invoked from the swipe menu now flips the global focus to its target block as a side effect — desirable for the palette case, possibly surprising for "Copy" (a swipe on an unfocused block would now leave focus on that block after copying). Likely acceptable since the swipe-menu UX already implies "operate on this block," but worth confirming with a UX pass.
-
-Lower-effort variant: leave the direct-call pattern, but lift the focus dance into a helper that the action author opts into (e.g. `runWithBlockContext(deps, action)`) so the pattern is named and discoverable rather than retyped at each site. Doesn't centralize the invariant but at least flags the requirement.
-
-Originally surfaced while debugging codex-flagged P2s on PR #21 (palette quick-action race + edit-mode latch). The handler-level workaround landed; this is the architectural cleanup.
-
-## Reschedule (and similar actions) emit multiple `BlockDefault` txs — one undo entry doesn't cover the whole action
-
-`rescheduleBlock` calls `getOrCreateDailyNote` twice (today + next-review date) before its own `tx.update`, and each of those can open its own `BlockDefault` tx — including a third for `getOrCreateJournalBlock` if the workspace's journal block doesn't exist yet. On a fresh workspace day a single user-perceived "Good" tap is therefore 2–4 entries on the undo stack, and cmd-Z (or the toast's Undo button — same `repo.undo()` target) only reverts the property write, leaving the newly created daily notes / journal page behind. The same shape applies to any action that opens N tx-emitting helpers before its own write — flagged on PR #31, but the daily-note coupling means it surfaces in most SRS first-touches.
-
-Fix shape: thread an optional `Tx` parameter through `getOrCreateDailyNote` / `getOrCreateJournalBlock` so callers that are already inside a tx can co-opt it. `rescheduleBlock` opens one outer `repo.tx`, calls a `getOrCreateDailyNoteInTx(tx, …)` helper for both daily notes, then performs its own update — collapses to a single undo entry. The standalone `repo`-only signature stays as a thin wrapper for the existing call sites (`actions.ts:98,109,141`) so this isn't a forced migration. Slight wrinkle: `getOrCreateDailyNote` reads outside the tx, then opens a new one to write; the in-tx variant has to do its existence check via `tx.get`, which matches the pattern already in `srsBlockDateAdapter.setIso`. Worth doing before any future surface that needs single-entry undo (e.g. "duplicate card with new schedule", calendar drag-to-reschedule).
-
-## Schema-rename does not cascade — instance values orphan on rename
-
-When a user renames a `property-schema` block (editing `property-schema:name` via `PropertySchemaBlockRenderer`), the schema republishes under the new name but every instance block's `properties_json` is still keyed by the OLD name. The old name has values but no schema; the new name has a schema but no values. The renamed property silently disappears from the UI.
-
-Surfaced inline during the user-defined-types Phase 1 design review while pushing back on the rename-safety argument for block-id refs in `block-type:properties`: that argument keeps the type→schema pointer stable, but the instance values are already broken at a lower level.
-
-Two viable fixes:
-
-- **Cascade-rename**: on schema name change, walk every block where `properties_json` has the old key and rewrite the key to the new name in one tx. Surgical; no data-model change. Costs: high-fanout schemas (e.g. renaming `status` when 50K blocks have it) rewrite a lot of rows under PowerSync's serialized writer; conflict resolution mid-rename has to handle blocks that transiently carry both keys.
-- **Block-id keying**: `properties_json` keys become schema block-ids instead of names. Renames become free at the value layer (label decoupled from identity). Requires solving "what's the block-id for a kernel/plugin schema?" (see the block-id keying entry below) and a one-time migration of every existing `properties_json` blob. Reads stay 1× Map.get — no per-read indirection vs today.
-
-The user is currently leaning toward **block-id keying as the destination** (per the user-defined-types design review session) because it composes with the same "id-stable handle" decision already made for types and resolves the rename problem cleanly for every consumer at once. Cascade-rename remains a viable interim step that doesn't paint into a corner.
-
-## Block-id keying for `properties_json` + kernel-schemas-as-blocks
-
-Companion to the schema-rename follow-up above. The longer-term direction is to key `properties_json` by the schema block's id rather than its name. That removes rename fragility everywhere properties are stored or referenced, and lines up with the user-defined-types "type id = block id" decision.
-
-Open sub-questions to resolve before committing:
-
-- **Kernel/plugin schemas without backing blocks.** Today `defineProperty` calls in code don't materialize a block. For block-id keying to work uniformly, kernel/plugin schemas need either:
-  - **Synthetic deterministic ids** — `uuid-v5(kernel:status)` etc. The runtime resolves them through a registry without persisting a row. Lowest cost, keeps source-of-truth in code.
-  - **Full materialization** — bootstrap a property-schema block per kernel/plugin schema per workspace. Composes with all block-based machinery (sync, history, future overrides), but moves source-of-truth from code to data and raises plugin-unload lifecycle questions ("does the orphan block stay?"). Per-workspace storage cost scales with kernel-schema growth × workspace count.
-  - The middle path that doesn't lock either choice: ship synthetic ids now; the same id space can later back real materialized blocks if a use case emerges.
-- **Migration cost.** Every existing `properties_json` blob needs rekeying. Doable as a one-shot pass at workspace open; safety-net by versioning the workspace so old clients don't write back with name keys.
-- **DB readability.** Raw `properties_json` becomes opaque to humans (`{"a3f9-…": "open"}` instead of `{"status": "open"}`). Debug-only friction; mitigate with a tooling pretty-printer that resolves ids via the schemas table.
-- **Properties-as-blocks (Tana-style) is a different question, not this one.** Tana-style means each VALUE is a block — different shape, real per-read indirection. Block-id keying just renames the JSON keys; reads stay 1× Map.get. Worth keeping these separate when discussing.
-
-Acceptance for landing this:
-1. Kernel/plugin schemas resolve through the same `getSchemaForBlockId` path as user schemas (synthetic or materialized — pick one).
-2. `block-type:properties` refs work uniformly across all schema kinds, replacing the current Phase-1 "hide kernel schemas in the picker" workaround in `BlockTypeBlockRenderer`.
-3. `properties_json` migration runs once at workspace open; idempotent.
-4. The schema-rename follow-up above is satisfied as a side effect (renames touch labels, never keys).
-
-## Extract-type-from-prototype is the user-facing model — current `promoteToType` is the wrong primitive for it
-
-`promoteToType` as shipped in `src/plugins/roam-import/typePromotion.ts` is the Roam-isa adoption flow: take a *referenced* page, turn it into a `block-type`, retag blocks that point at it via `roam:isa`. That fits Roam migration but it isn't the model users actually want for "I have a Task block; turn this into a Task type."
-
-The real user model is **extract-type-from-prototype**:
-
-1. Start from a prototype block whose property bag is the shape the user wants to canonize (e.g. `{status: 'open', due: 2026-05-20, priority: 'high'}`).
-2. Action surface: "Extract type from this block." Prompt the user for the type *name* — the type's label is supplied at extraction time, not derived from the prototype's content (the prototype is just a data shape carrier; its content is unrelated to the type name).
-3. Create a **new** `block-type` block on the Types page (the prototype stays as one untouched instance — no in-place promotion). `block-type:properties` is populated by resolving each name on the prototype's `properties_json` to its property-schema block id via `userSchemas.getSchemaBlockId(name)` (and the eventual kernel-schemas-as-blocks bridge in the entry above for kernel/plugin schemas).
-4. Show the user a property-subset picker on extraction: which of the prototype's properties belong on the type vs. which are noise on this particular instance. Per-property optional value constraint — "match only when `status='open'`" vs. "match when `status` is set at all."
-5. Run a query for blocks whose property bag satisfies the picked subset (plus optional value filters). Surface the candidate list interactively — "47 blocks match this shape; retag which?" — and the user confirms. Auto-retag is wrong; the match is heuristic and the user is the arbiter.
-
-The current Roam-coupled `promoteToType` doesn't go away — it remains the right shape for "this Roam-isa target page IS the type" because the discovery there is reference-based, not property-shape-based. Both produce the same end state (a `block-type` block + retagged instances); they differ only in how instances are discovered. The underlying primitive that both should compose is something like `createTypeBlock(label, propertySchemaIds)` + `retagBlocks(typeId, instanceIds)`, with the two flows owning their own discovery logic. Pull that primitive out of `typePromotion.ts` when wiring the extract-type UI — the standalone Phase 3 task ("Promote page to type") is also a candidate consumer of the same primitive.
-
-Property-shape matching needs a query primitive that doesn't exist today: `typedBlocks` filters by type id, not by "has these property names set." Implementing it is a `block_properties` join (the indexed `properties_json` projection on individual property names — same shape as `block_references` but for `(blockId, propName)` pairs); cost goes up with property fanout but the query is bounded. Lower-effort interim: scan all blocks in the workspace and filter in memory — fine for the early-user MVP, untenable past O(10K) blocks.
-
