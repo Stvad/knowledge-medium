@@ -70,23 +70,83 @@ const currentInstance = (
 }
 
 /**
- * Push focus onto `el`. DOM side-effects (focus, scroll, position
- * memory) run synchronously so the very next keystroke sees the
- * updated `document.activeElement`. The prop writes (focusedBlockId
- * / focusedVisualTargetKey on the destination panel block; optional
- * activePanelId on the layout session) batch into a single tx
- * fire-and-forget — atomic so subscribers see consistent state.
+ * Why this is debounced for same-panel nav:
  *
- * Why batched: `useShortcutSurfaceActivations` gates `inFocus` on
- * both `useInFocus(block.id)` (reads the panel block's focusedBlockId)
- * AND `panelSurfaceActive` (reads the layout session's activePanelId).
- * If these update in separate txs there's a moment where the source
- * panel sees panelSurfaceActive=false while the destination's
- * focusedBlockId hasn't committed yet. Source deactivates normal-mode
- * before destination activates it → HotkeyReconciler tears down all
- * normal-mode bindings → the next keystroke fires with no binding.
- * Symptom: `l` works once but the next `k` does nothing.
+ * Writing `focusedBlockId` / `focusedVisualTargetKey` on the panel
+ * block invalidates every query that has it in scope — in practice
+ * the layout session's `core.subtree` query, which on large graphs
+ * runs ~500–800ms per invalidation. Held-down nav fires the handler
+ * dozens of times per second; per-step writes pile up multi-second
+ * tx queues and produce the "1 second per click" feel.
+ *
+ * The persisted props matter for:
+ *   1. `useInFocus(block.id)` driving normal-mode action-context
+ *      activation through `useShortcutSurfaceActivations`.
+ *   2. Reload recovery (so focus restores to where the user last was).
+ *
+ * For (1) we don't need to update the prop on every step. Whatever
+ * block was in-focus at the start of the burst keeps normal-mode
+ * activated — the binding is global. The handler uses
+ * `document.activeElement` to find the current target, not the prop.
+ * For (2) the FINAL destination is what we care about; intermediate
+ * positions during a burst are wasted state.
+ *
+ * So same-panel nav: schedule a debounced write of the final state.
+ * Cross-panel nav: must write immediately AND atomically with
+ * `activePanelId`, because `panelSurfaceActive` (which reads
+ * activePanelId) gates `inFocus` — if those two updates land in
+ * separate commits, source-panel `inFocus` flips false before
+ * destination's flips true, deactivating normal-mode and tearing
+ * down all bindings for the gap. Symptom of the broken sequence:
+ * `l` works once, the next `k` does nothing.
  */
+const PERSIST_FOCUS_DEBOUNCE_MS = 200
+
+interface PendingPersist {
+  panelId: string
+  blockId: string
+  instanceKey: string
+  repo: Block['repo']
+  timer: ReturnType<typeof setTimeout>
+}
+
+let pendingPersist: PendingPersist | null = null
+
+const persistedAlready = (panelId: string, blockId: string, instanceKey: string, repo: Block['repo']): boolean => {
+  const panelBlock = repo.block(panelId)
+  return panelBlock.peekProperty(focusedBlockIdProp) === blockId
+    && panelBlock.peekProperty(focusedVisualTargetKeyProp) === instanceKey
+}
+
+const flushPendingPersist = (pending: PendingPersist): void => {
+  const {panelId, blockId, instanceKey, repo} = pending
+  if (persistedAlready(panelId, blockId, instanceKey, repo)) return
+  const panelBlock = repo.block(panelId)
+  const wasEditing = panelBlock.peekProperty(isEditingProp) === true
+  void repo.tx(async tx => {
+    await tx.setProperty(panelId, focusedBlockIdProp, blockId)
+    await tx.setProperty(panelId, focusedVisualTargetKeyProp, instanceKey)
+    if (wasEditing) await tx.setProperty(panelId, isEditingProp, false)
+  }, {scope: ChangeScope.UiState, description: 'spatial-navigation focus (settle)'}).catch(error => {
+    console.error('[spatial-navigation] settle write failed', error)
+  })
+}
+
+const schedulePersistFocus = (
+  panelId: string,
+  blockId: string,
+  instanceKey: string,
+  repo: Block['repo'],
+): void => {
+  if (pendingPersist) clearTimeout(pendingPersist.timer)
+  const timer = setTimeout(() => {
+    const pending = pendingPersist
+    pendingPersist = null
+    if (pending) flushPendingPersist(pending)
+  }, PERSIST_FOCUS_DEBOUNCE_MS)
+  pendingPersist = {panelId, blockId, instanceKey, repo, timer}
+}
+
 const focusInstance = (
   el: HTMLElement,
   repo: Block['repo'],
@@ -109,20 +169,33 @@ const focusInstance = (
   const layoutEl = panel.closest<HTMLElement>('[data-layout-session-id]')
   const layoutSessionId = layoutEl?.dataset.layoutSessionId
   const layoutSession = layoutSessionId ? repo.block(layoutSessionId) : null
-  const needsActivePanelUpdate = Boolean(
+  const isPanelHop = Boolean(
     layoutSession && layoutSession.peekProperty(activePanelIdProp) !== panelId,
   )
 
-  void repo.tx(async tx => {
-    await tx.setProperty(panelId, focusedBlockIdProp, blockId)
-    await tx.setProperty(panelId, focusedVisualTargetKeyProp, instanceKey)
-    await tx.setProperty(panelId, isEditingProp, false)
-    if (needsActivePanelUpdate && layoutSession) {
-      await tx.setProperty(layoutSession.id, activePanelIdProp, panelId)
+  if (isPanelHop && layoutSession) {
+    // Cancel any pending same-panel debounce — the panel just changed
+    // and the queued state would write to a stale panel id.
+    if (pendingPersist) {
+      clearTimeout(pendingPersist.timer)
+      pendingPersist = null
     }
-  }, {scope: ChangeScope.UiState, description: 'spatial-navigation focus'}).catch(error => {
-    console.error('[spatial-navigation] focus tx failed', error)
-  })
+    const wasEditing = repo.block(panelId).peekProperty(isEditingProp) === true
+    void repo.tx(async tx => {
+      await tx.setProperty(panelId, focusedBlockIdProp, blockId)
+      await tx.setProperty(panelId, focusedVisualTargetKeyProp, instanceKey)
+      if (wasEditing) await tx.setProperty(panelId, isEditingProp, false)
+      await tx.setProperty(layoutSession.id, activePanelIdProp, panelId)
+    }, {scope: ChangeScope.UiState, description: 'spatial-navigation focus (panel hop)'}).catch(error => {
+      console.error('[spatial-navigation] panel-hop tx failed', error)
+    })
+    return
+  }
+
+  // Same-panel nav: debounce. The current panel keeps `useInFocus(prev)
+  // === true` for the original focus target until the debounce fires,
+  // which is enough to keep normal-mode bound and the handler firing.
+  schedulePersistFocus(panelId, blockId, instanceKey, repo)
 }
 
 /**
