@@ -106,11 +106,17 @@ export function FloatingListbox({
   void viewportVersion
 
   return createPortal(
+    // `pointer-events-auto` is load-bearing: when this listbox renders
+    // inside a Radix Dialog (or any modal that sets `body { pointer-
+    // events: none }`), the portaled element would inherit none and
+    // mouse clicks on options would silently no-op. The dialog itself
+    // re-enables pointer-events on its Content; we have to do the same
+    // for our portaled sibling.
     <div
       id={id}
       role={role}
       className={cn(
-        'fixed z-[1000] overflow-auto rounded-md border border-border bg-popover p-1 text-sm shadow-lg',
+        'pointer-events-auto fixed z-[1000] overflow-auto rounded-md border border-border bg-popover p-1 text-sm shadow-lg',
         className,
       )}
       style={placementStyle(anchorElement, {

@@ -184,7 +184,7 @@ function EmptyReference() {
   )
 }
 
-function ReferenceSearch({
+export function ReferenceSearch({
   owner,
   excludeIds,
   targetTypes,

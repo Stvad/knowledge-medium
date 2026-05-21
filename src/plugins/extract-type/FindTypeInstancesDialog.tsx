@@ -39,6 +39,12 @@ import {
   type PropertyShapeFilter,
 } from '@/data/typeExtraction'
 import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults.tsx'
+import { ReferenceSearch } from '@/components/propertyEditors/RefPropertyEditor.tsx'
+import type { Block } from '@/data/block'
+import type { AnyPropertySchema } from '@/data/api'
+import { useHandle } from '@/hooks/block.ts'
+import { labelForBlockData } from '@/utils/linkTargetAutocomplete.ts'
+import { X } from 'lucide-react'
 import {
   openFindTypeInstancesDialogEvent,
   type OpenFindTypeInstancesDialogEventDetail,
@@ -336,6 +342,8 @@ function TypeInstanceRows({
         const setChoice = (next: Partial<PropertyShapeChoice>) => {
           onChange(choices.map((c, i) => (i === idx ? {...c, ...next} : c)))
         }
+        const isRef = isRefCodec(display.schema.codec)
+        const isRefList = isRefListCodec(display.schema.codec)
         return (
           <li
             key={choice.name}
@@ -356,7 +364,15 @@ function TypeInstanceRows({
                 {choice.name}
               </Label>
               <div className={choice.picked ? '' : 'opacity-50 pointer-events-none'}>
-                {Editor !== undefined ? (
+                {isRef || isRefList ? (
+                  <RefFilterEditor
+                    schema={display.schema}
+                    owner={ownerBlock}
+                    isList={isRefList}
+                    value={choice.value}
+                    onChange={(next: unknown) => setChoice({value: next})}
+                  />
+                ) : Editor !== undefined ? (
                   <Editor
                     value={choice.value}
                     onChange={(next: unknown) => setChoice({value: next})}
@@ -374,5 +390,115 @@ function TypeInstanceRows({
         )
       })}
     </ul>
+  )
+}
+
+const EMPTY_IDS: readonly string[] = Object.freeze([])
+
+/** Compact ref / refList editor for the filter context.
+ *
+ *  Reuses the autocomplete (`ReferenceSearch`) from the standard
+ *  RefPropertyEditor so users see the same blocks they'd see in any
+ *  other ref picker. Replaces the full `BlockEmbed` display with a
+ *  one-line chip per picked block — `BlockEmbed` is meant for "show me
+ *  this block in context" and renders an entire BlockComponent, which
+ *  is overkill (and visually broken) for a filter input.
+ *
+ *  `isList === false` collapses the editor to a single picked value
+ *  (`ref` codec); `true` accumulates a list (`refList`). The shape is
+ *  `string | undefined` and `readonly string[]` respectively, matching
+ *  what the schema codecs decode to. */
+function RefFilterEditor({
+  schema,
+  owner,
+  isList,
+  value,
+  onChange,
+}: {
+  schema: AnyPropertySchema
+  owner: Block
+  isList: boolean
+  value: unknown
+  onChange: (next: unknown) => void
+}) {
+  const targetTypes = useMemo(() => {
+    if (isRefCodec(schema.codec) || isRefListCodec(schema.codec)) {
+      return schema.codec.targetTypes
+    }
+    return EMPTY_IDS
+  }, [schema])
+
+  const pickedIds: readonly string[] = useMemo(() => {
+    if (isList) return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : EMPTY_IDS
+    return typeof value === 'string' && value.length > 0 ? [value] : EMPTY_IDS
+  }, [isList, value])
+
+  const removeId = (id: string) => {
+    if (isList) onChange(pickedIds.filter(x => x !== id))
+    else onChange('')
+  }
+
+  const addId = (id: string) => {
+    if (isList) {
+      if (pickedIds.includes(id)) return
+      onChange([...pickedIds, id])
+    } else {
+      onChange(id)
+    }
+  }
+
+  // For `ref` we hide the picker once a value is set; the chip's X
+  // clears it. For `refList` the picker stays so the user can keep
+  // adding ids.
+  const showPicker = isList || pickedIds.length === 0
+
+  return (
+    <div className="min-w-0 space-y-1.5">
+      {pickedIds.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {pickedIds.map(id => (
+            <RefChip key={id} blockId={id} onRemove={() => removeId(id)} />
+          ))}
+        </div>
+      )}
+      {showPicker && (
+        <ReferenceSearch
+          owner={owner}
+          excludeIds={pickedIds}
+          targetTypes={targetTypes}
+          placeholder="Search blocks"
+          selectionMode={isList ? 'multiple' : 'single'}
+          onPick={addId}
+        />
+      )}
+    </div>
+  )
+}
+
+/** One-line chip showing the picked block's label + remove button.
+ *  Reactive: re-renders if the referenced block's content/aliases
+ *  change while the dialog is open. */
+function RefChip({blockId, onRemove}: {blockId: string; onRemove: () => void}) {
+  const repo = useRepo()
+  const handle = useMemo(() => repo.block(blockId), [repo, blockId])
+  const label = useHandle(handle, {
+    selector: data => labelForBlockData(data, `(${blockId.slice(0, 8)})`),
+  })
+  return (
+    <span className="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-muted/40 px-2 py-0.5 text-sm">
+      <span className="min-w-0 truncate" title={label}>{label}</span>
+      <button
+        type="button"
+        className="shrink-0 rounded-sm text-muted-foreground hover:text-destructive"
+        aria-label={`Remove ${label}`}
+        onClick={event => {
+          event.preventDefault()
+          event.stopPropagation()
+          onRemove()
+        }}
+      >
+        <X className="h-3 w-3" />
+      </button>
+    </span>
   )
 }

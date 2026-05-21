@@ -4,10 +4,10 @@
  *     property subset → create the type, then delegate to
  *     `findTypeInstancesAction` on the new type to find candidates
  *     to retag.
- *   - `findTypeInstancesAction` — opens the find-type-instances dialog:
- *     pick a subset of the type's properties (optionally with value
- *     filters) and retag matching blocks. Only surfaces on
- *     block-type blocks.
+ *   - `findTypeInstancesAction` — "Find block candidates for this
+ *     type." Opens the find-blocks-to-retag dialog: pick a subset of
+ *     the type's properties (optionally with value filters) and retag
+ *     matching blocks. Only surfaces on block-type blocks.
  *
  *  Same shape as `rescheduleBlockDateAction`: each handler dispatches
  *  a window CustomEvent the globally-mounted dialog listens for. */
@@ -41,7 +41,7 @@ export const FIND_TYPE_INSTANCES_ACTION_ID = 'block.find_type_instances'
 
 export const findTypeInstancesAction: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
   id: FIND_TYPE_INSTANCES_ACTION_ID,
-  description: 'Find instances of this type',
+  description: 'Find block candidates for this type',
   context: ActionContextTypes.NORMAL_MODE,
   icon: Users,
   // Only meaningful on a block-type block. Surfaces (command palette,
