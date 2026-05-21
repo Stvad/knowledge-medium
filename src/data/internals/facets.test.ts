@@ -409,8 +409,8 @@ describe('facet variance — typed plugin contributions register without widenin
 describe('Repo.onTypesChange', () => {
   // Symmetric to onPropertySchemasChange / onValuePresetsChange. Fires
   // when the rebuild step republishes the merged `_types` map — used by
-  // user-types adoption flows (e.g. promoteToType's Phase A→B handoff)
-  // to bridge between txs without polling.
+  // user-types adoption flows (e.g. createTypeBlock's commit→
+  // registration handoff) to bridge between txs without polling.
 
   it('fires when setRuntimeContributions publishes into the typesFacet user-data bucket', () => {
     repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension]))

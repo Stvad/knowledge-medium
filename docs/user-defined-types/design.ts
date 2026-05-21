@@ -27,9 +27,10 @@ import {
   defineProperty,
   defineSameTxProcessor,
 } from '@/data/api'
-import {hasBlockType, propertyNameProp} from '@/data/properties'
+import {addedTypes, hasBlockType, propertyNameProp} from '@/data/properties'
 import {PAGE_TYPE, PROPERTY_SCHEMA_TYPE} from '@/data/blockTypes'
 import {propertySchemasFacet, typesFacet} from '@/data/facets'
+import {createChild} from '@/data/internals/kernelMutators'
 
 // ──────────────────────────────────────────────────────────────────────
 // Phase 1 API addition: Repo.onTypesChange
@@ -40,9 +41,9 @@ import {propertySchemasFacet, typesFacet} from '@/data/facets'
 // after a typesFacet contribution change (e.g. UserTypesService's
 // setRuntimeContributions publish lands and the step re-runs).
 //
-// Used by the Roam-isa promotion flow's `waitForTypeRegistration`
-// helper to bridge Phase A (commit type-definition block) and Phase B
-// (retag instances) without polling.
+// Used by the extract-type flow's `createTypeBlock` to bridge the
+// commit of the type-definition block and the registration of its
+// contribution into the live `typesFacet` bucket without polling.
 //
 // Module augmentation here is intentional — the design file declares
 // the API addition concretely so consumers can compile against the
@@ -176,7 +177,7 @@ export const typesPageKernelType = defineBlockType({
 // withProvisionalSchema chased through PR #50 are NOT mirrored here;
 // callers needing in-tx dependents commit the type-definition block
 // in its own tx and let the subscription rebuild register the type
-// before opening the dependent tx (see §7 Roam-isa adoption).
+// before opening the dependent tx (see §7 extract-type flow).
 // ──────────────────────────────────────────────────────────────────────
 
 export class UserTypesService {
@@ -235,9 +236,8 @@ export class UserTypesService {
 // not a slug from the label. Two reasons:
 //
 //   - Renaming the label doesn't invalidate every instance's typesProp.
-//   - Roam-isa adoption is mechanical: `roam:isa = [[Person]]` already
-//     refs the Person block by id, so promotion just appends that id
-//     to typesProp on each instance (see §7).
+//   - retagBlocks is mechanical: append the type-definition block's id
+//     to typesProp on each picked candidate (see §7).
 //
 // The picker / panel UI shows blockTypeLabelProp, never the id.
 // ──────────────────────────────────────────────────────────────────────
@@ -355,196 +355,146 @@ export const templateCycleGuard = defineSameTxProcessor({
 // concurrency model stays trivial.
 //
 // UserTypesService deliberately does NOT mirror UserSchemasService's
-// withProvisionalSchema. The Roam-isa adoption flow uses two txs
-// (see §7). If a future caller genuinely needs single-tx atomicity
+// withProvisionalSchema. The extract-type flow uses two txs (see §7).
+// If a future caller genuinely needs single-tx atomicity
 // AND can prove single-caller-per-name semantics, a narrowly-scoped
 // withProvisionalType can be added then, with documented contract.
 // ──────────────────────────────────────────────────────────────────────
 
 // ──────────────────────────────────────────────────────────────────────
-// 7. Roam-isa adoption — two-tx flow
+// 7. Extract type from a prototype — three composable primitives
 //
-// Promote a Roam-isa target page (e.g. the [[Person]] page that's
-// referenced by N blocks via roam:isa) into a user-defined type AND
-// retag the referencing blocks.
+// User mental model: pick a prototype block that has the property shape
+// the user wants to canonize (a Task with `status` / `due` / `priority`
+// set), invoke "Extract type", pick a name + property subset (+ optional
+// per-property value constraint), confirm the candidate list, retag.
 //
-// Two-tx flow (see §6 lesson): the subscription rebuild bridges the
-// txs by registering the new type into the runtime bucket between
-// them. No appendUserType / withProvisionalType primitive needed.
+// The Roam-isa "promote referenced page" flow shipped as the original
+// Phase 3 was deliberately dropped — it required the user to already
+// have a tagging convention in place (the `isa::` reference). Property-
+// shape extraction is the right primary surface; reference-based
+// promotion can be added back later as a separate discovery wrapper if
+// a real migration use case arrives.
+//
+// Three primitives, split deliberately (not bundled into a single
+// orchestrator) because the candidate-confirmation step is interactive
+// and the UI owns the loop:
+//
+//   1. createTypeBlock — materializes a fresh `block-type` block on the
+//      Types page, awaits UserTypesService registration. Returns the
+//      new id (== type id).
+//   2. findCandidatesByPropertyShape — query for blocks whose
+//      `properties_json` carries the requested subset of property names
+//      (optionally constrained to specific values). Built on
+//      `repo.queryBlocks`; no new index needed.
+//   3. retagBlocks — apply a registered type to an explicit list of
+//      block ids in one tx. Idempotent per row.
+//
+// The commit→registration bridge between createTypeBlock and retagBlocks
+// still uses the §6 lesson (two txs, subscription rebuild bridges).
 // ──────────────────────────────────────────────────────────────────────
 
-export interface PromoteToTypeArgs {
-  /** The Roam-isa target page (e.g. the "Person" page). */
-  targetBlockId: string
-  /** Display label — pre-filled from the page's alias by the UI. */
+export interface CreateTypeBlockArgs {
+  /** Workspace the new type lives in (and where the Types page must
+   *  already exist via getOrCreateTypesPage). */
+  workspaceId: string
+  /** Display label. Required non-empty — UserTypesService.tryBuildType
+   *  silently drops empty-label blocks, which would surface as a
+   *  registration timeout instead of a clear pre-tx error. */
   label: string
-  /** Property-schema block ids picked from the candidate-prop list. */
+  /** Property-schema block ids the new type's panel section surfaces.
+   *  Each is validated pre-tx + re-checked in-tx (same invariants
+   *  tryBuildType applies at runtime). */
   propertySchemaIds: readonly string[]
-  /** Default false: leave roam:isa refs on each instance for review. */
-  rewriteIsaReferences?: boolean
-  /** Caller cancellation signal. Aborting between Phase A and Phase B
-   *  leaves the type-definition block committed but instances un-retagged;
-   *  the caller can re-run `promoteToType` to finish retagging (the
-   *  subscription will have registered the type by then, so the second
-   *  run skips the wait and goes straight to Phase B). */
   signal?: AbortSignal
-  /** Sanity bound on the Phase-A→Phase-B handoff. If the subscription
-   *  doesn't register the new type within this window, throw a clear
-   *  PromotionRegistrationTimeout so the caller can surface a recovery
-   *  prompt instead of hanging indefinitely. Default 10s — long enough
-   *  to absorb event-loop load / inactive-tab throttling spikes, short
-   *  enough that a genuine "the type-definition block didn't parse"
-   *  bug surfaces within an interactive UI window. */
+  /** Bound on the commit→registration handoff. Default 10s. */
   registrationTimeoutMs?: number
 }
 
-export class PromotionRegistrationTimeout extends Error {
+export class TypeRegistrationTimeout extends Error {
   constructor(
-    public readonly targetBlockId: string,
+    public readonly typeBlockId: string,
     public readonly typeLabel: string,
     public readonly timeoutMs: number,
   ) {
     super(
-      `promoteToType: type-definition block for "${typeLabel}" was committed ` +
+      `createTypeBlock: type-definition block for "${typeLabel}" was committed ` +
       `but did not appear in the runtime registry within ${timeoutMs}ms. ` +
-      `Phase A committed; Phase B (instance retag) was not run. ` +
-      `Re-run promoteToType to finish retagging — Phase A is idempotent ` +
-      `(addType no-ops on already-typed blocks; setProperty overwrites ` +
-      `label/properties to repair any stale values) so a second call ` +
-      `safely re-runs both phases.`,
+      `Likely cause: UserTypesService.tryBuildType rejected the block ` +
+      `(e.g. a referenced property-schema id doesn't resolve in the live ` +
+      `registry, or the workspace bucket hasn't reset since the last switch).`,
     )
-    this.name = 'PromotionRegistrationTimeout'
+    this.name = 'TypeRegistrationTimeout'
   }
 }
 
-/** Thrown by Phase B's in-tx guard when the target type is no longer
- *  in the live registry at the moment the retag tx opens. The
- *  realistic trigger is a sync-applied delete of the type-definition
- *  block between Phase A's commit and Phase B's tx-open that
- *  UserTypesService reacted to by dropping the user-data contribution.
- *  Distinct from PromotionRegistrationTimeout (which fires before
- *  Phase B's tx opens) so callers can branch on the recovery path:
- *  for this case the type was deleted from another device, so retry
- *  with the same args would just re-trigger the same race; the
- *  surface to the user is "the type was deleted while promotion was
- *  in progress; verify with the other device." */
-export class PromotionTypeUnregistered extends Error {
-  constructor(
-    public readonly targetBlockId: string,
-    public readonly typeLabel: string,
-  ) {
-    super(
-      `promoteToType: type "${typeLabel}" (${targetBlockId}) is no longer ` +
-      `registered when Phase B opened the retag tx. Likely a sync-applied ` +
-      `delete of the type-definition block from another device between ` +
-      `Phase A and Phase B. Phase A committed; Phase B aborted before ` +
-      `writing any retag. Verify whether the type-definition block should ` +
-      `still exist before retrying.`,
-    )
-    this.name = 'PromotionTypeUnregistered'
-  }
-}
-
-export async function promoteToType(
+/** Materialize a fresh block-type block on the workspace's Types page
+ *  + wait for `UserTypesService` to publish the contribution. Returns
+ *  the new block id (== type id, per the block-id-as-type-id rule). */
+export async function createTypeBlock(
   repo: Repo,
-  userTypes: UserTypesService,
   userSchemas: UserSchemasService,
-  args: PromoteToTypeArgs,
-): Promise<void> {
-  // Preflight: if the caller's signal is already aborted, return before
-  // touching the DB. waitForTypeRegistrationBounded handles abort during
-  // the Phase A→B wait, but doesn't help if abort happened before Phase
-  // A wrote anything — without this guard, an already-aborted call still
-  // commits the type-definition block and then throws, leaving an
-  // unexpected partial mutation despite cancellation.
+  args: CreateTypeBlockArgs,
+): Promise<string> {
   args.signal?.throwIfAborted()
 
-  // Pre-tx validation — fail fast on inputs that UserTypesService's
-  // tryBuildType will silently reject, before Phase A writes anything.
-  // Without this, a blank label (etc.) commits a block-type block,
-  // tryBuildType drops it, and Phase B's bounded wait surfaces
-  // PromotionRegistrationTimeout 10s later — a half-promotion the
-  // caller has to clean up manually. Validating upfront keeps the
-  // failure pre-commit so there's nothing to clean up.
   const trimmedLabel = args.label.trim()
   if (trimmedLabel === '') {
     throw new Error(
-      `promoteToType: label must be a non-empty string (got ${JSON.stringify(args.label)}). ` +
-      `UserTypesService.tryBuildType would silently skip a block-type block with an empty label, ` +
-      `so committing one would leave a half-promotion.`,
+      `createTypeBlock: label must be a non-empty string (got ${JSON.stringify(args.label)}). ` +
+      `UserTypesService.tryBuildType silently drops a block-type block with an empty label.`,
     )
   }
-  // Load the target first so workspaceId is available for cross-workspace
-  // checks below.
-  const target = await repo.load(args.targetBlockId)
-  if (!target) {
-    throw new Error(`promoteToType: target ${args.targetBlockId} not found`)
-  }
-  if (target.deleted) {
-    throw new Error(`promoteToType: target ${args.targetBlockId} is tombstoned`)
-  }
-  const workspaceId = target.workspaceId
 
-  // propertySchemaIds: every ref must survive the full set of invariants
-  // that UserTypesService.tryBuildType applies. tryBuildType silently
-  // drops a ref that fails any of these checks, which would leave the
-  // promoted type with missing panel slots — instances retag fine but
-  // the property panel surfaces nothing. The pre-tx validation enforces
-  // each invariant explicitly so the failure is loud and pre-commit:
-  //
-  //   - block exists and isn't tombstoned
-  //   - block carries the `property-schema` type tag (a plain block
-  //     wouldn't be a property-schema even if it had a propertyName)
-  //   - block is in the same workspace as the promotion target (refs
-  //     across workspaces would deference to nothing at materialization)
-  //   - the schema's name is non-empty (tryBuildType drops empty-name
-  //     blocks via UserSchemasService's same diagnostic path)
-  //   - the resolved name is registered in the merged propertySchemas
-  //     map (e.g. user-data schema hasn't been published yet because
-  //     its preset isn't loaded, or a typo'd kernel name)
-  const mergedSchemas = repo.propertySchemas
+  if (!repo.typesPageId) {
+    throw new Error(
+      `createTypeBlock: no Types page for workspace ${args.workspaceId}. ` +
+      `Call getOrCreateTypesPage during workspace bootstrap.`,
+    )
+  }
+  const typesPageId = repo.typesPageId
+
+  // Pre-tx validation: each property-schema ref must survive every
+  // invariant tryBuildType applies. Validating upfront surfaces the
+  // failure pre-commit instead of as a registration timeout 10s
+  // after the partial type is already persisted.
   for (const schemaId of args.propertySchemaIds) {
     const schemaBlock = await repo.load(schemaId)
-    if (!schemaBlock || schemaBlock.deleted) {
+    if (!schemaBlock) {
       throw new Error(
-        `promoteToType: property-schema ref ${schemaId} doesn't resolve to a live block. ` +
-        `Drop it from propertySchemaIds before retrying.`,
+        `createTypeBlock: property-schema ref ${schemaId} doesn't resolve ` +
+        `to a live block. Drop it before retrying.`,
       )
     }
-    if (schemaBlock.workspaceId !== workspaceId) {
+    if (schemaBlock.workspaceId !== args.workspaceId) {
       throw new Error(
-        `promoteToType: property-schema ref ${schemaId} is in workspace ` +
-        `${schemaBlock.workspaceId} but the target is in ${workspaceId}. ` +
+        `createTypeBlock: property-schema ref ${schemaId} is in workspace ` +
+        `${schemaBlock.workspaceId} but the new type is in ${args.workspaceId}. ` +
         `Cross-workspace property-schema refs aren't supported.`,
       )
     }
     if (!hasBlockType(schemaBlock, PROPERTY_SCHEMA_TYPE)) {
       throw new Error(
-        `promoteToType: ref ${schemaId} is not a property-schema block ` +
+        `createTypeBlock: ref ${schemaId} is not a property-schema block ` +
         `(missing the ${PROPERTY_SCHEMA_TYPE} type tag).`,
       )
     }
-    const name = schemaBlock.properties[propertyNameProp.name]
-    if (typeof name !== 'string' || name.trim() === '') {
+    const rawName = schemaBlock.properties[propertyNameProp.name]
+    const name = typeof rawName === 'string' ? rawName : ''
+    if (name.trim() === '') {
       throw new Error(
-        `promoteToType: property-schema block ${schemaId} has empty ` +
+        `createTypeBlock: property-schema block ${schemaId} has empty ` +
         `${propertyNameProp.name}; tryBuildType would silently drop it.`,
       )
     }
-    // Resolve by block id, not by name. tryBuildType uses
-    // userSchemas.getSchemaForBlockId(refId) — checking
-    // mergedSchemas.has(name) would let a name-match-only ref pass
-    // (e.g. a kernel schema with the same name as a user-defined
-    // one whose block is malformed/unpublished). The name-by-name
-    // check would say "registered" while the block-id lookup at
-    // runtime would silently drop the ref because UserSchemasService
-    // never published a contribution mapped to THIS block id.
-    // Validating via the same path tryBuildType uses keeps the
-    // preflight in lockstep with runtime resolution.
+    // Resolve by block id (same path tryBuildType uses at runtime),
+    // not by name — name-only lookup would let a kernel schema with
+    // the same name pass while the block-id lookup at runtime drops
+    // the ref because UserSchemasService never published this id.
     const resolved = userSchemas.getSchemaForBlockId(schemaId)
     if (!resolved) {
       throw new Error(
-        `promoteToType: property-schema block ${schemaId} ("${name}") isn't ` +
+        `createTypeBlock: property-schema block ${schemaId} ("${name}") isn't ` +
         `published by UserSchemasService — e.g. its preset isn't loaded, its ` +
         `config didn't validate, or the block hasn't synced yet. Fix the ` +
         `schema block before retrying.`,
@@ -552,159 +502,132 @@ export async function promoteToType(
     }
   }
 
-  // Re-check abort after the async validation reads — if the caller
-  // cancelled during schema-resolution awaits we still want to bail
-  // before committing anything.
   args.signal?.throwIfAborted()
 
-  // Phase A (tx A): turn the target page into a block-type block.
-  //   - In-tx existence guard: addTypeInTx is strict-by-default per
-  //     merged PR #49 — throws BlockNotFoundForTypeError if the target
-  //     was deleted concurrently between the pre-tx load() and tx-open.
-
   const typeSnapshot: TypeRegistrySnapshot = repo.snapshotTypeRegistries()
+  let newId = ''
   await repo.tx(async (tx: Tx) => {
-    // In-tx re-check of every schema ref. Mirrors the target's
-    // strict-addTypeInTx existence guard but for the schema refs:
-    // sync-applied writes between the preflight loop and tx-open can
-    // delete a schema block, move it to another workspace, or strip
-    // its property-schema type tag. Without re-checking, Phase A
-    // would commit block-type:properties referencing a now-stale
-    // schema id; tryBuildType would silently drop it at runtime,
-    // leaving the promoted type with missing panel slots. tx.get is
-    // cheap and same-tick (no interleaving possible during this
-    // synchronous body).
+    // In-tx re-check of every schema ref — closes the gap between
+    // pre-tx reads and tx-open (a sync-applied delete could land in
+    // that window).
     for (const schemaId of args.propertySchemaIds) {
       const row = await tx.get(schemaId)
       if (!row || row.deleted) {
-        throw new Error(`promoteToType: schema block ${schemaId} no longer exists`)
+        throw new Error(`createTypeBlock: schema block ${schemaId} no longer exists`)
       }
-      if (row.workspaceId !== workspaceId) {
-        throw new Error(`promoteToType: schema block ${schemaId} moved to a different workspace`)
+      if (row.workspaceId !== args.workspaceId) {
+        throw new Error(`createTypeBlock: schema block ${schemaId} moved to a different workspace`)
       }
       if (!hasBlockType(row, PROPERTY_SCHEMA_TYPE)) {
-        throw new Error(`promoteToType: schema block ${schemaId} no longer carries ${PROPERTY_SCHEMA_TYPE}`)
+        throw new Error(`createTypeBlock: schema block ${schemaId} no longer carries ${PROPERTY_SCHEMA_TYPE}`)
       }
     }
 
-    // Tag with BLOCK_TYPE_TYPE (idempotent on retry; addTypeInTx
-    // no-ops when the type is already present).
-    await repo.addTypeInTx(tx, args.targetBlockId, BLOCK_TYPE_TYPE, {}, typeSnapshot)
-    // The page also gets PAGE_TYPE so it stays navigable as a page —
-    // matches the "type flow" pattern (properties page / readwise
-    // root / plugin state / alias user pages).
-    await repo.addTypeInTx(tx, args.targetBlockId, PAGE_TYPE, {}, typeSnapshot)
-    // Set the type's metadata explicitly with tx.setProperty rather
-    // than via addTypeInTx's initialValues. initialValues is
-    // init-if-missing (per type-system.md §3a) — on a retry with a
-    // corrected label or different property set, the existing
-    // values would silently persist and the retry would never
-    // repair the type. setProperty unconditionally overwrites, which
-    // is what every retry actually wants.
-    await tx.setProperty(args.targetBlockId, blockTypeLabelProp, trimmedLabel)
-    await tx.setProperty(args.targetBlockId, blockTypePropertiesProp, args.propertySchemaIds)
-  }, {scope: ChangeScope.BlockDefault, description: `promoteToType:create ${trimmedLabel}`})
+    // Materialize a fresh block under the Types page — the new id IS
+    // the type id (block-id = type-id rule). The prototype the UI
+    // extracted FROM is left untouched.
+    newId = await tx.run(createChild, {parentId: typesPageId, content: trimmedLabel})
+    await repo.addTypeInTx(tx, newId, BLOCK_TYPE_TYPE, {}, typeSnapshot)
+    await repo.addTypeInTx(tx, newId, PAGE_TYPE, {}, typeSnapshot)
+    await tx.setProperty(newId, blockTypeLabelProp, trimmedLabel)
+    await tx.setProperty(newId, blockTypePropertiesProp, args.propertySchemaIds)
+  }, {scope: ChangeScope.BlockDefault, description: `createTypeBlock ${trimmedLabel}`})
 
-  // The subscription on `block-type` blocks fires between txs and
-  // registers args.targetBlockId in the user-data bucket on typesFacet.
-  // The next snapshotTypeRegistries() sees it. No synchronous-append
-  // dance — that was the withProvisional approach, deliberately
-  // dropped (§6).
-  //
-  // Bounded wait: if the subscription doesn't fire within the timeout
-  // (real cause: tryBuildType returned null, e.g. the block-type block
-  // failed to parse against current presets/schemas), surface
-  // PromotionRegistrationTimeout with a clear recovery message rather
-  // than hanging on the unbounded wait. The caller's AbortSignal
-  // composes with the internal timeout.
   await waitForTypeRegistrationBounded(
     repo,
-    args.targetBlockId,
+    newId,
     trimmedLabel,
     args.signal,
     args.registrationTimeoutMs ?? 10_000,
   )
 
-  // Phase B (tx B): query candidates outside the tx (avoids the
-  // bare-DB-read-inside-tx deadlock documented in
-  // tasks/processor-tx-deadlock.md), retag each in-tx with strict
-  // existence guards on every row.
+  return newId
+}
+
+export interface RetagBlocksArgs {
+  typeId: string
+  instanceIds: readonly string[]
+  signal?: AbortSignal
+}
+
+/** Apply an already-registered type to every block in `instanceIds`
+ *  in a single tx. Idempotent per row; silently skips ids that are
+ *  missing or tombstoned. */
+export async function retagBlocks(
+  repo: Repo,
+  args: RetagBlocksArgs,
+): Promise<void> {
   args.signal?.throwIfAborted()
-  const candidates = await repo.queryBlocks({
-    workspaceId,
-    referencedBy: {id: args.targetBlockId, sourceField: 'roam:isa'},
-  })
-  args.signal?.throwIfAborted()
+  if (!repo.types.has(args.typeId)) {
+    throw new Error(`retagBlocks: type ${args.typeId} is not registered`)
+  }
+  if (args.instanceIds.length === 0) return
 
   await repo.tx(async (tx: Tx) => {
-    // Capture the registry snapshot INSIDE the tx body, not before.
-    // Sync-applied writes between Phase A and Phase B could in
-    // principle delete the type-definition block on another device,
-    // which UserTypesService would react to by dropping the contribution
-    // from the user-data bucket. A pre-tx snapshot would still carry
-    // the type and pass addTypeInTx's existence check, then write
-    // orphan ids into instance block:types. Capturing inside the tx
-    // narrows the staleness window to a single event-loop tick (no
-    // other writer can interleave during the synchronous tx body).
     const snapshotInTx = repo.snapshotTypeRegistries()
-
-    // Belt-and-suspenders: even with the in-tx snapshot, sanity-check
-    // the target is still registered before fanning out tags. The
-    // realistic cause for this firing is a sync-applied delete of the
-    // type-definition block between Phase A and Phase B that
-    // UserTypesService reacted to by dropping the contribution. The
-    // tx body's first read settles whether the registry still has the
-    // type; if not, abort the retag rather than write orphan ids.
-    if (!snapshotInTx.types.has(args.targetBlockId)) {
-      throw new PromotionTypeUnregistered(args.targetBlockId, trimmedLabel)
+    if (!snapshotInTx.types.has(args.typeId)) {
+      throw new Error(
+        `retagBlocks: type ${args.typeId} was unregistered between caller ` +
+        `check and tx open — likely a sync-applied delete of the ` +
+        `type-definition block.`,
+      )
     }
-
-    for (const candidate of candidates) {
-      // tx.get re-check closes the TOCTOU window: the candidate may
-      // have been deleted or had its roam:isa rewritten between the
-      // pre-tx query and the tx open. (tx.get returns tombstoned
-      // rows as non-null, so check row.deleted too — a soft-deleted
-      // candidate that gets restored later shouldn't carry the
-      // promoted type id retroactively.)
-      const row = await tx.get(candidate.id)
+    for (const instanceId of args.instanceIds) {
+      const row = await tx.get(instanceId)
       if (!row || row.deleted) continue
-      const isaRefs = row.properties['roam:isa']
-      if (!Array.isArray(isaRefs) || !isaRefs.includes(args.targetBlockId)) continue
-      await repo.addTypeInTx(tx, candidate.id, args.targetBlockId, {}, snapshotInTx)
+      await repo.addTypeInTx(tx, instanceId, args.typeId, {}, snapshotInTx)
     }
-    if (args.rewriteIsaReferences) {
-      // ... rewrite roam:isa per instance, dropping the promoted alias
-    }
-  }, {scope: ChangeScope.BlockDefault, description: `promoteToType:retag ${trimmedLabel}`})
+  }, {scope: ChangeScope.BlockDefault, description: `retagBlocks ${args.typeId}`})
+}
+
+export interface PropertyShapeFilter {
+  name: string
+  /** Optional equality filter; when omitted, any value is acceptable
+   *  as long as the property is set. */
+  value?: unknown
+}
+
+export interface FindCandidatesByPropertyShapeArgs {
+  workspaceId: string
+  shape: readonly PropertyShapeFilter[]
+  /** Typical: the prototype block the user is extracting FROM. */
+  exclude?: ReadonlyArray<string>
+  /** Default 1000. */
+  limit?: number
+}
+
+/** Query for blocks whose `properties_json` carries every name in
+ *  `shape`, optionally constrained by per-property equality. Built
+ *  on `repo.queryBlocks` with `{exists: true}` / scalar-equality
+ *  where-operators — no new index. */
+export async function findCandidatesByPropertyShape(
+  repo: Repo,
+  args: FindCandidatesByPropertyShapeArgs,
+): Promise<readonly string[]> {
+  if (args.shape.length === 0) return []
+  const where: Record<string, unknown> = {}
+  for (const filter of args.shape) {
+    where[filter.name] = filter.value === undefined ? {exists: true} : filter.value
+  }
+  const rows = await repo.queryBlocks({workspaceId: args.workspaceId, where})
+  const excluded = new Set(args.exclude ?? [])
+  const limit = args.limit ?? 1000
+  const out: string[] = []
+  for (const row of rows) {
+    if (excluded.has(row.id)) continue
+    out.push(row.id)
+    if (out.length >= limit) break
+  }
+  return out
 }
 
 /** Wait for UserTypesService's subscription to publish `typeId` into
  *  the typesFacet runtime bucket. Event-driven via `repo.onTypesChange`
- *  (added in Phase 1, symmetric to the existing
- *  `onPropertySchemasChange` / `onValuePresetsChange`). The listener
- *  fires when the rebuild step republishes after the subscription
- *  tick, which can be delayed by event-loop load or inactive-tab
- *  throttling without harming correctness.
- *
- *  Three exit paths:
- *  1. Registration appears → resolve.
- *  2. Caller aborts via signal → reject with the abort reason.
- *  3. Timeout elapses → reject with PromotionRegistrationTimeout
- *     (the type-definition block committed but tryBuildType is rejecting
- *     it, e.g. because a referenced property-schema id doesn't resolve).
- *     The error message instructs the caller's recovery path (re-run
- *     promoteToType once the underlying issue is fixed; the second run
- *     skips Phase A and goes straight to Phase B).
- *
- *  Cleanup invariant: every exit path disposes the onTypesChange
- *  listener and clears the timer so a leaked listener can't accumulate
- *  across retries.
- *
- *  Declared on Repo as part of Phase 1 (alongside onPropertySchemasChange):
- *
- *    onTypesChange(listener: () => void): () => void
- *
- *  Fires when the rebuild step republishes the merged _types map. */
+ *  — fires when the rebuild step republishes after the subscription
+ *  tick. Three exit paths: registration appears → resolve; signal
+ *  aborts → reject with `signal.reason`; timeout elapses → reject
+ *  with `TypeRegistrationTimeout`. Every exit path disposes the
+ *  listener and clears the timer. */
 async function waitForTypeRegistrationBounded(
   repo: Repo,
   typeId: string,
@@ -713,15 +636,11 @@ async function waitForTypeRegistrationBounded(
   timeoutMs: number,
 ): Promise<void> {
   if (repo.types.has(typeId)) return
-  // Use signal.reason (standard AbortSignal API) so callers that pass
-  // a typed reason (DOMException, custom error class) get their typed
-  // value back instead of an opaque "promoteToType: aborted" string.
-  // throwIfAborted at the call sites uses the same convention.
   if (signal?.aborted) throw signal.reason
 
   await new Promise<void>((resolve, reject) => {
     let settled = false
-    let timer: ReturnType<typeof setTimeout> | undefined
+    const timerRef: {handle: ReturnType<typeof setTimeout> | null} = {handle: null}
     const dispose = repo.onTypesChange(() => {
       if (repo.types.has(typeId)) settle(resolve)
     })
@@ -729,35 +648,17 @@ async function waitForTypeRegistrationBounded(
     const settle = (cb: () => void) => {
       if (settled) return
       settled = true
-      if (timer !== undefined) clearTimeout(timer)
+      if (timerRef.handle !== null) clearTimeout(timerRef.handle)
       dispose()
       signal?.removeEventListener('abort', onAbort)
       cb()
     }
-    // Re-check AFTER attaching the listener. The registration can
-    // land in the gap between the early-return check at the top and
-    // the dispose-assignment above; if it does, no future
-    // onTypesChange event fires for it and we'd hang until timeout.
-    // Checking now closes the race — if the type is already there,
-    // settle immediately; if not, the listener catches the next
-    // event.
-    if (repo.types.has(typeId)) {
-      settle(resolve)
-      return
-    }
-    timer = setTimeout(
-      () => settle(() => reject(new PromotionRegistrationTimeout(typeId, typeLabel, timeoutMs))),
+    if (repo.types.has(typeId)) { settle(resolve); return }
+    timerRef.handle = setTimeout(
+      () => settle(() => reject(new TypeRegistrationTimeout(typeId, typeLabel, timeoutMs))),
       timeoutMs,
     )
     signal?.addEventListener('abort', onAbort)
-    // Re-check abort AFTER attaching the listener — same race shape
-    // as the type-registration check above. If signal.aborted flipped
-    // true in the window between the top-of-function check and the
-    // addEventListener call, the 'abort' event already fired and our
-    // listener missed it. Without this re-check we'd wait until the
-    // 10s timeout (or resolve on a real registration) despite the
-    // caller having cancelled. Re-checking now closes the race; if
-    // already aborted, settle synchronously.
     if (signal?.aborted) settle(() => reject(signal.reason))
   })
 }
@@ -767,7 +668,9 @@ async function waitForTypeRegistrationBounded(
 //
 // Phase 1: BLOCK_TYPE_TYPE + TYPES_PAGE_TYPE + UserTypesService + Types page bootstrap
 // Phase 2: setup → same-tx processor migration + addedTypes/removedTypes helpers
-// Phase 3: Roam-isa promoteToType
+// Phase 3: extract-type-from-prototype — createTypeBlock + retagBlocks +
+//          findCandidatesByPropertyShape primitives, plus the multi-step
+//          dialog UI the user invokes from any block.
 // Phase 4 (optional): block-type:template + materializer + cycle guard
 //
 // Deferred: extends overrides (see design.html §What's deferred). The cut
