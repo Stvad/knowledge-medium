@@ -13,239 +13,142 @@ import type { BlockAction } from '@/shortcuts/blockActions.ts'
 import { bindBlockActionContext } from '@/shortcuts/blockActions.ts'
 import {
   activePanelIdProp,
+  focusBlock,
   focusedBlockIdProp,
-  focusedVisualTargetKeyProp,
   isEditingProp,
 } from '@/data/properties'
 import { ChangeScope } from '@/data/api'
 import type { Block } from '@/data/block'
 import {
   horizontalNeighborPanel,
-  locateInstance,
-  rememberInstancePosition,
   verticalNeighbor,
 } from './walker.ts'
 
 /**
- * Find the DOM instance currently driving navigation. Order of
- * preference:
- *
- *   1. `document.activeElement.closest('[data-block-instance]')` —
- *      the freshest possible source. Our own focusInstance() calls
- *      el.focus() synchronously, so this updates BEFORE the React
- *      shortcut surface re-binds. Using `visualTargetId` from deps
- *      first would read a stale value during held-down keys and
- *      walk repeatedly from the previous block.
- *   2. `visualTargetId` from the shortcut surface — the React-bound
- *      target id. Used when the user just arrived via something
- *      other than focus (e.g. tab from outside, click).
- *   3. `locateInstance(panelId, hints)` — full 3-tier recovery
- *      from the panel's stored focus props.
+ * Locate the DOM instance for `(panelId, blockId)`. With the focused
+ * block tracked on the panel block via `focusedBlockIdProp` — the same
+ * primitive vim normal-mode uses — we drive everything from that prop
+ * + a DOM lookup. No `document.activeElement` reads, no in-memory
+ * shadow state. If the same block appears more than once in the panel
+ * (e.g. duplicate backlink references), we pick the first DOM
+ * occurrence; the second is unreachable via spatial nav until the
+ * surfacing plugin gives them distinct identities.
  */
-const currentInstance = (
-  visualTargetId: string | undefined,
-  uiStateBlock: Block,
-): HTMLElement | null => {
-  if (typeof document === 'undefined') return null
-
-  const active = document.activeElement
-  if (active instanceof HTMLElement) {
-    const closest = active.closest<HTMLElement>('[data-block-instance]')
-    if (closest) return closest
-  }
-
-  if (visualTargetId) {
-    const exact = document.querySelector<HTMLElement>(
-      `[data-block-instance="${CSS.escape(visualTargetId)}"]`,
-    )
-    if (exact) return exact
-  }
-
-  // uiStateBlock IS the panel block when we're inside a panel context,
-  // so its id is the panel id.
-  return locateInstance(uiStateBlock.id, {
-    focusedBlockId: uiStateBlock.peekProperty(focusedBlockIdProp),
-    focusedVisualTargetKey: uiStateBlock.peekProperty(focusedVisualTargetKeyProp),
-  })
-}
-
-/**
- * Why this is debounced for same-panel nav:
- *
- * Writing `focusedBlockId` / `focusedVisualTargetKey` on the panel
- * block invalidates every query that has it in scope — in practice
- * the layout session's `core.subtree` query, which on large graphs
- * runs ~500–800ms per invalidation. Held-down nav fires the handler
- * dozens of times per second; per-step writes pile up multi-second
- * tx queues and produce the "1 second per click" feel.
- *
- * The persisted props matter for:
- *   1. `useInFocus(block.id)` driving normal-mode action-context
- *      activation through `useShortcutSurfaceActivations`.
- *   2. Reload recovery (so focus restores to where the user last was).
- *
- * For (1) we don't need to update the prop on every step. Whatever
- * block was in-focus at the start of the burst keeps normal-mode
- * activated — the binding is global. The handler uses
- * `document.activeElement` to find the current target, not the prop.
- * For (2) the FINAL destination is what we care about; intermediate
- * positions during a burst are wasted state.
- *
- * So same-panel nav: schedule a debounced write of the final state.
- * Cross-panel nav: must write immediately AND atomically with
- * `activePanelId`, because `panelSurfaceActive` (which reads
- * activePanelId) gates `inFocus` — if those two updates land in
- * separate commits, source-panel `inFocus` flips false before
- * destination's flips true, deactivating normal-mode and tearing
- * down all bindings for the gap. Symptom of the broken sequence:
- * `l` works once, the next `k` does nothing.
- */
-const PERSIST_FOCUS_DEBOUNCE_MS = 200
-
-interface PendingPersist {
-  panelId: string
-  blockId: string
-  instanceKey: string
-  repo: Block['repo']
-  timer: ReturnType<typeof setTimeout>
-}
-
-let pendingPersist: PendingPersist | null = null
-
-const persistedAlready = (panelId: string, blockId: string, instanceKey: string, repo: Block['repo']): boolean => {
-  const panelBlock = repo.block(panelId)
-  return panelBlock.peekProperty(focusedBlockIdProp) === blockId
-    && panelBlock.peekProperty(focusedVisualTargetKeyProp) === instanceKey
-}
-
-const flushPendingPersist = (pending: PendingPersist): void => {
-  const {panelId, blockId, instanceKey, repo} = pending
-  if (persistedAlready(panelId, blockId, instanceKey, repo)) return
-  const panelBlock = repo.block(panelId)
-  const wasEditing = panelBlock.peekProperty(isEditingProp) === true
-  void repo.tx(async tx => {
-    await tx.setProperty(panelId, focusedBlockIdProp, blockId)
-    await tx.setProperty(panelId, focusedVisualTargetKeyProp, instanceKey)
-    if (wasEditing) await tx.setProperty(panelId, isEditingProp, false)
-  }, {scope: ChangeScope.UiState, description: 'spatial-navigation focus (settle)'}).catch(error => {
-    console.error('[spatial-navigation] settle write failed', error)
-  })
-}
-
-const schedulePersistFocus = (
+const findInstance = (
   panelId: string,
   blockId: string,
-  instanceKey: string,
-  repo: Block['repo'],
-): void => {
-  if (pendingPersist) clearTimeout(pendingPersist.timer)
-  const timer = setTimeout(() => {
-    const pending = pendingPersist
-    pendingPersist = null
-    if (pending) flushPendingPersist(pending)
-  }, PERSIST_FOCUS_DEBOUNCE_MS)
-  pendingPersist = {panelId, blockId, instanceKey, repo, timer}
+): HTMLElement | null => {
+  if (typeof document === 'undefined') return null
+  const panel = document.querySelector<HTMLElement>(`[data-panel-id="${CSS.escape(panelId)}"]`)
+  if (!panel) return null
+  return panel.querySelector<HTMLElement>(`[data-block-id="${CSS.escape(blockId)}"][data-block-instance]`)
 }
 
-const focusInstance = (
-  el: HTMLElement,
-  repo: Block['repo'],
-): void => {
-  const panel = el.closest<HTMLElement>('[data-panel-id]')
-  if (!panel) return
-  const panelId = panel.dataset.panelId
-  if (!panelId) return
-  const blockId = el.dataset.blockId
-  const instanceKey = el.dataset.blockInstance
-  if (!blockId || !instanceKey) return
-
-  rememberInstancePosition(panelId, el)
-
-  if (typeof el.scrollIntoView === 'function') {
-    el.scrollIntoView({block: 'nearest', inline: 'nearest'})
-  }
-  el.focus({preventScroll: true})
-
-  const layoutEl = panel.closest<HTMLElement>('[data-layout-session-id]')
-  const layoutSessionId = layoutEl?.dataset.layoutSessionId
-  const layoutSession = layoutSessionId ? repo.block(layoutSessionId) : null
-  const isPanelHop = Boolean(
-    layoutSession && layoutSession.peekProperty(activePanelIdProp) !== panelId,
-  )
-
-  if (isPanelHop && layoutSession) {
-    // Cancel any pending same-panel debounce — the panel just changed
-    // and the queued state would write to a stale panel id.
-    if (pendingPersist) {
-      clearTimeout(pendingPersist.timer)
-      pendingPersist = null
-    }
-    const wasEditing = repo.block(panelId).peekProperty(isEditingProp) === true
-    void repo.tx(async tx => {
-      await tx.setProperty(panelId, focusedBlockIdProp, blockId)
-      await tx.setProperty(panelId, focusedVisualTargetKeyProp, instanceKey)
-      if (wasEditing) await tx.setProperty(panelId, isEditingProp, false)
-      await tx.setProperty(layoutSession.id, activePanelIdProp, panelId)
-    }, {scope: ChangeScope.UiState, description: 'spatial-navigation focus (panel hop)'}).catch(error => {
-      console.error('[spatial-navigation] panel-hop tx failed', error)
-    })
-    return
-  }
-
-  // Same-panel nav: debounce. The current panel keeps `useInFocus(prev)
-  // === true` for the original focus target until the debounce fires,
-  // which is enough to keep normal-mode bound and the handler firing.
-  schedulePersistFocus(panelId, blockId, instanceKey, repo)
+const currentInstance = (
+  deps: BlockShortcutDependencies,
+): HTMLElement | null => {
+  const {block, uiStateBlock} = deps
+  if (!block || !uiStateBlock) return null
+  return findInstance(uiStateBlock.id, block.id)
 }
 
 /**
- * Try to move vertically in the registered DOM. Returns true on a
- * successful navigation; false signals "no spatial move available" so
- * the decorated `move_down` / `move_up` action can fall through to its
- * data-walker implementation (defensive — under normal mount every
- * visible block is tagged).
+ * Move spatial focus within a panel. Mirrors vim's `move_down` /
+ * `move_up` behavior exactly: write the new focused block id to the
+ * panel block via `focusBlock`. No DOM-focus call, no scroll — the
+ * kernel `BlockFocusShellDecorator` already drives both
+ * (highlight class via `useInFocus`, scroll via its own effect)
+ * off the same prop. Adding our own DOM mutations would just race.
+ *
+ * Returns true when navigation moved; false signals "no in-panel
+ * neighbor" so the underlying vim handler can attempt its
+ * data-model walk (in practice the walker covers every visible
+ * target so this fallback is defensive).
  */
-const moveVertical = (
+const moveVertical = async (
   deps: BlockShortcutDependencies,
   direction: 'up' | 'down',
-): boolean => {
-  const {block, uiStateBlock, visualTargetId} = deps
+): Promise<boolean> => {
+  const {block, uiStateBlock} = deps
   if (!block || !uiStateBlock) return false
-  const current = currentInstance(visualTargetId, uiStateBlock)
+  const current = currentInstance(deps)
   if (!current) return false
   const next = verticalNeighbor(current, direction)
   if (!next) return false
-  focusInstance(next, block.repo)
+  const destPanel = next.closest<HTMLElement>('[data-panel-id]')
+  if (!destPanel) return false
+  const destPanelId = destPanel.dataset.panelId
+  const destBlockId = next.dataset.blockId
+  if (!destPanelId || !destBlockId) return false
+
+  if (destPanelId === uiStateBlock.id) {
+    // Same-panel step — identical to vim's `focusBlock` write.
+    void focusBlock(uiStateBlock, destBlockId)
+    return true
+  }
+
+  // Crossed into a stack-sibling panel below/above. Activate the new
+  // panel atomically with the focus write so `useShortcutSurfaceActivations`
+  // doesn't see a window where source panel is inactive AND
+  // destination's focused block hasn't moved yet.
+  await crossPanelFocus(uiStateBlock, destPanelId, destBlockId)
   return true
 }
 
-/**
- * Cross-column move. On entering a destination panel, restores the
- * panel's last-known focused instance (sticky return) via the panel
- * block's `focusedBlockId` + `focusedVisualTargetKey` — these were
- * written every time spatial nav settled in that panel, so they
- * survive across the user's column hops.
- */
-const moveHorizontal = (
+const moveHorizontal = async (
   deps: BlockShortcutDependencies,
   direction: 'left' | 'right',
-): boolean => {
-  const {block, uiStateBlock, visualTargetId} = deps
+): Promise<boolean> => {
+  const {block, uiStateBlock} = deps
   if (!block || !uiStateBlock) return false
-  const current = currentInstance(visualTargetId, uiStateBlock)
+  const current = currentInstance(deps)
   if (!current) return false
   const destPanel = horizontalNeighborPanel(current, direction)
   if (!destPanel) return false
   const destPanelId = destPanel.dataset.panelId
   if (!destPanelId) return false
-  const destPanelBlock = block.repo.block(destPanelId)
-  const dest = locateInstance(destPanelId, {
-    focusedBlockId: destPanelBlock.peekProperty(focusedBlockIdProp),
-    focusedVisualTargetKey: destPanelBlock.peekProperty(focusedVisualTargetKeyProp),
-  })
-  if (!dest) return false
-  focusInstance(dest, block.repo)
+  const destPanelBlock = uiStateBlock.repo.block(destPanelId)
+  // Sticky-return: read the panel's stored focus, fall back to its
+  // top-level (the panel's `topLevelBlockIdProp` aligned to its
+  // outline root).
+  const destBlockId = destPanelBlock.peekProperty(focusedBlockIdProp)
+    ?? findFirstInstanceBlockId(destPanel)
+  if (!destBlockId) return false
+  await crossPanelFocus(uiStateBlock, destPanelId, destBlockId)
   return true
+}
+
+const findFirstInstanceBlockId = (panel: HTMLElement): string | undefined => {
+  const first = panel.querySelector<HTMLElement>('[data-block-instance]')
+  return first?.dataset.blockId
+}
+
+const crossPanelFocus = async (
+  sourcePanelBlock: Block,
+  destPanelId: string,
+  destBlockId: string,
+): Promise<void> => {
+  const repo = sourcePanelBlock.repo
+  const destPanelBlock = repo.block(destPanelId)
+  // Find the layout session by walking up the DOM — its id is on the
+  // outer layout div. Cheap; runs once per cross-panel keystroke.
+  const layoutEl = typeof document !== 'undefined'
+    ? document.querySelector<HTMLElement>('[data-layout-session-id]')
+    : null
+  const layoutSessionId = layoutEl?.dataset.layoutSessionId
+  // Single tx that flips both ends of the activation gate at once.
+  // Same shape as `focusBlock` but adds the activePanelId write on
+  // the layout-session block; row deps still resolve identically
+  // (same kind:'row' invalidation per touched block).
+  await repo.tx(async tx => {
+    if (layoutSessionId) {
+      await tx.setProperty(layoutSessionId, activePanelIdProp, destPanelId)
+    }
+    await tx.setProperty(destPanelBlock.id, focusedBlockIdProp, destBlockId)
+    if (destPanelBlock.peekProperty(isEditingProp) === true) {
+      await tx.setProperty(destPanelBlock.id, isEditingProp, false)
+    }
+  }, {scope: ChangeScope.UiState, description: 'spatial-navigation cross-panel focus'})
 }
 
 export function getSpatialNavigationActions(): ActionConfig<typeof ActionContextTypes.NORMAL_MODE>[] {
@@ -257,7 +160,7 @@ export function getSpatialNavigationActions(): ActionConfig<typeof ActionContext
       id: 'move_left',
       description: 'Move focus to the panel on the left',
       handler: async (deps: BlockShortcutDependencies) => {
-        moveHorizontal(deps, 'left')
+        await moveHorizontal(deps, 'left')
       },
       defaultBinding: {keys: ['left', 'j']},
     }),
@@ -265,7 +168,7 @@ export function getSpatialNavigationActions(): ActionConfig<typeof ActionContext
       id: 'move_right',
       description: 'Move focus to the panel on the right',
       handler: async (deps: BlockShortcutDependencies) => {
-        moveHorizontal(deps, 'right')
+        await moveHorizontal(deps, 'right')
       },
       defaultBinding: {keys: ['right', 'l']},
     }),
@@ -283,9 +186,7 @@ const verticalDecorator = (
     ...action,
     description,
     handler: async (deps, trigger) => {
-      if (moveVertical(deps, direction)) return
-      // Defensive fallback: nothing in the DOM matched. Let the
-      // underlying vim-normal-mode handler do its data-model walk.
+      if (await moveVertical(deps, direction)) return
       await action.handler(deps, trigger)
     },
   }),
