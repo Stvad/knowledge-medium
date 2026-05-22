@@ -236,7 +236,7 @@ describe('describeRuntime', () => {
     const rootSingleton = description.authoring.storage.patterns.find(
       pattern => pattern.id === 'plugin-root-singleton',
     )
-    expect(rootSingleton?.example?.code).toContain('uuidv5')
+    expect(rootSingleton?.example?.code).toContain('pluginBlockId')
 
     const userPrefs = description.authoring.storage.patterns.find(
       pattern => pattern.id === 'user-prefs-config',
@@ -245,13 +245,14 @@ describe('describeRuntime', () => {
     expect(userPrefs?.example?.code).toContain('defineBlockType')
   })
 
-  it('exposes uuidv5 on the public extension API surface', async () => {
+  it('exposes pluginBlockId on the public extension API surface', async () => {
     const surface = await getApiSurface()
-    // Without this, the agent has to import `uuid` directly — but
-    // blob-URL extensions don't have `uuid` in the page importmap, so
-    // the import fails at runtime. Re-exporting from api.ts is the
-    // path that actually works.
-    expect(surface.exports).toContain('uuidv5')
+    // The api.ts barrel re-exports *concepts*, not libraries. The
+    // agent gets a deterministic-id helper that encodes the
+    // per-plugin namespace convention — uuid lives behind that helper
+    // and isn't re-exported, so plugins don't grow ad-hoc lib deps.
+    expect(surface.exports).toContain('pluginBlockId')
+    expect(surface.exports).not.toContain('uuidv5')
   })
 
   it('produces a payload with activeWorkspaceId, currentUser, safeMode, actions, renderers, facets, apiSurface, authoring', async () => {

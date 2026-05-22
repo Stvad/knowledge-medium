@@ -168,10 +168,4 @@ export type {
   BlockContextType,
 } from '@/types.ts'
 
-// Deterministic-id helper for plugin-owned singletons (e.g. a "Library"
-// root block that all imports live under). Pick a stable namespace
-// UUID for your plugin *once* and hardcode it — re-deriving the same
-// ids on subsequent runs is what makes upserts idempotent across
-// reinstalls. See `@/plugins/roam-import/ids.ts` and
-// `@/plugins/daily-notes/dailyNotes.ts` for in-tree exemplars.
-export { v5 as uuidv5 } from 'uuid'
+export { pluginBlockId } from '@/extensions/pluginIds.ts'

@@ -47,7 +47,11 @@ Commands:
   yarn agent subtree <rootId> [--include-root]
   yarn agent create-block <json>
   yarn agent update-block <json>
-  yarn agent install-extension [--reload] [--verify] <file> [label]
+  yarn agent install-extension [--verify] <file> [label]
+                                  (reload is automatic; --verify reports the
+                                  facets/actions the extension contributes)
+  yarn agent enable-extension <id|label>
+  yarn agent disable-extension <id|label>
   yarn agent run-action <id> [depsJson]
   yarn agent eval [--raw] <code>  run JS in the app; use "return ..." to print a value
   yarn agent eval --file <path>
@@ -194,6 +198,16 @@ const parseInstallExtensionArgs = args => {
   const [file, ...labelParts] = rest
   if (!file) throw new Error('install-extension requires <file>')
   return {file, label: labelParts.join(' ').trim(), reload, verify}
+}
+
+// Accept "<id>" (UUID) or "<label>" — extensions installed via the
+// bridge are tagged with their label as an alias, so a single positional
+// arg can resolve to either.
+const parseExtensionHandle = (verb, args) => {
+  const [handle] = args
+  if (!handle) throw new Error(`${verb} requires <id|label>`)
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(handle)
+  return isUuid ? {id: handle} : {label: handle}
 }
 
 const normalizeProfileName = (value = '') => {
@@ -753,6 +767,12 @@ const commandFromArgs = async args => {
         ...(verify ? {verify: true} : {}),
       }
     }
+
+    case 'enable-extension':
+      return {type: 'enable-extension', ...parseExtensionHandle('enable-extension', rest)}
+
+    case 'disable-extension':
+      return {type: 'disable-extension', ...parseExtensionHandle('disable-extension', rest)}
 
     case 'run-action': {
       const [id, depsJson] = rest

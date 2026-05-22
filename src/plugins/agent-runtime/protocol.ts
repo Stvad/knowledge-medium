@@ -81,6 +81,23 @@ export interface InstallExtensionResult {
   verification?: ExtensionVerificationResult
 }
 
+export interface SetExtensionEnabledInput {
+  /** Extension block id. Either `id` or `label` is required. */
+  id?: string
+  /** Extension alias (the label passed at install time). */
+  label?: string
+  enabled: boolean
+}
+
+export interface SetExtensionEnabledResult {
+  id: string
+  label: string | null
+  enabled: boolean
+  /** Whether the override map actually changed. False when the extension
+   *  was already in the requested state. */
+  changed: boolean
+}
+
 export interface AgentRuntimeContext {
   repo: Repo
   db: Repo['db']
@@ -93,6 +110,7 @@ export interface AgentRuntimeContext {
   createBlock: (input?: CreateBlockInput) => Promise<BlockData | null>
   updateBlock: (input: UpdateBlockInput) => Promise<BlockData | null>
   installExtension: (input: InstallExtensionInput) => Promise<InstallExtensionResult>
+  setExtensionEnabled: (input: SetExtensionEnabledInput) => Promise<SetExtensionEnabledResult>
   actions: readonly ActionConfig[]
   renderers: ReturnType<typeof blockRenderersFacet.empty>
   refreshAppRuntime: typeof refreshAppRuntime

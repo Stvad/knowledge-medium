@@ -16,6 +16,12 @@ import { readRuntimeActions } from '@/extensions/runtimeActions.ts'
 import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
 import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions.ts'
 import { resolveAppRuntime } from '@/extensions/resolveAppRuntime.ts'
+import { applyToggle, userExtensionToggle } from '@/extensions/togglable.ts'
+import { getPluginPrefsBlock } from '@/data/stateBlocks.ts'
+import {
+  extensionsOverridesProp,
+  extensionsPrefsType,
+} from '@/plugins/extensions-settings/config.ts'
 import {
   describeFacets,
   describeRuntime,
@@ -31,6 +37,8 @@ import type {
   ExtensionVerificationResult,
   InstallExtensionInput,
   InstallExtensionResult,
+  SetExtensionEnabledInput,
+  SetExtensionEnabledResult,
   SqlMode,
   UpdateBlockInput,
 } from './protocol.ts'
@@ -357,6 +365,14 @@ const installRuntimeExtension = async (
         await repo.addTypeInTx(tx, existing.id, PAGE_TYPE, {[aliasesProp.name]: aliases}, typeSnapshot)
       }
     }, {scope: ChangeScope.BlockDefault, description: `agent runtime install extension ${label ?? existing.id}`})
+    // Run verify *before* refreshAppRuntime so the verify's isolated
+    // facet resolution doesn't contend with the app-wide runtime
+    // rebuild that the refresh kicks off. Without this ordering, an
+    // install --verify against a large workspace times out the bridge
+    // poll waiting for resolveAppRuntime to settle.
+    const verification = input.verify
+      ? await verifyExtensionBlock(repo, context, existing.id)
+      : undefined
     const reloaded = input.reload !== false
     if (reloaded) refreshAppRuntime()
     return {
@@ -364,7 +380,7 @@ const installRuntimeExtension = async (
       inserted: false,
       label,
       reloaded,
-      ...(input.verify ? {verification: await verifyExtensionBlock(repo, context, existing.id)} : {}),
+      ...(verification ? {verification} : {}),
     }
   }
 
@@ -411,6 +427,9 @@ const installRuntimeExtension = async (
     }
   }, {scope: ChangeScope.BlockDefault, description: `agent runtime install extension ${label ?? 'unnamed'}`})
 
+  const verification = input.verify
+    ? await verifyExtensionBlock(repo, context, installedId)
+    : undefined
   const reloaded = input.reload !== false
   if (reloaded) refreshAppRuntime()
   return {
@@ -418,8 +437,71 @@ const installRuntimeExtension = async (
     inserted: true,
     label,
     reloaded,
-    ...(input.verify ? {verification: await verifyExtensionBlock(repo, context, installedId)} : {}),
+    ...(verification ? {verification} : {}),
   }
+}
+
+const setExtensionEnabled = async (
+  repo: Repo,
+  input: SetExtensionEnabledInput,
+): Promise<SetExtensionEnabledResult> => {
+  const workspaceId = resolveWorkspaceId(repo)
+  const idHint = input.id?.trim()
+  const labelHint = input.label?.trim()
+  if (!idHint && !labelHint) {
+    throw new Error('set-extension-enabled requires `id` or `label`')
+  }
+
+  // Direct SQL — repo.query.findExtensionBlocks goes through the
+  // cached query layer, which doesn't reliably observe a freshly
+  // installed block when the kernel invalidation processors aren't
+  // active (e.g. in unit-test repos). We're authoring an explicit
+  // user action; a one-shot SQL read is the correct primitive.
+  const rows = await repo.db.getAll<{id: string, properties_json: string}>(
+    `SELECT b.id, b.properties_json
+       FROM blocks b
+       JOIN block_types bt ON bt.block_id = b.id AND bt.workspace_id = b.workspace_id
+      WHERE b.workspace_id = ? AND b.deleted = 0 AND bt.type = ?`,
+    [workspaceId, EXTENSION_TYPE],
+  )
+  const candidates = rows.map(row => {
+    const properties = (() => {
+      try { return JSON.parse(row.properties_json) as BlockProperties } catch { return {} }
+    })()
+    return {id: row.id, properties}
+  })
+  const match = idHint
+    ? candidates.find(block => block.id === idHint) ?? null
+    : candidates.find(block => extensionAliasValues(block as BlockData).includes(labelHint!)) ?? null
+  if (!match) {
+    const hint = idHint ?? labelHint
+    throw new Error(`No installed extension matches "${hint}"`)
+  }
+
+  const matchAsBlock: BlockData = {
+    ...(match as Partial<BlockData>),
+    id: match.id,
+    workspaceId,
+    properties: match.properties,
+  } as BlockData
+  const label = extensionAliasValues(matchAsBlock).find(value => value !== match.id) ?? null
+
+  const prefsBlock = await getPluginPrefsBlock(repo, workspaceId, repo.user, extensionsPrefsType)
+  const current = prefsBlock.peekProperty(extensionsOverridesProp) ?? new Map<string, boolean>()
+  // User-installed extensions have `defaultEnabled: false`, so the
+  // applyToggle convention is "absent = disabled, present-true = enabled".
+  // We reuse the same map normalization the settings UI uses so the
+  // override surface stays consistent between the two entry points.
+  const handle = userExtensionToggle(matchAsBlock)
+  const next = applyToggle(current, handle, input.enabled)
+  const changed = next.size !== current.size
+    || [...next.entries()].some(([id, value]) => current.get(id) !== value)
+
+  if (changed) {
+    await prefsBlock.set(extensionsOverridesProp, next)
+  }
+
+  return {id: match.id, label, enabled: input.enabled, changed}
 }
 
 const isActionDependenciesInput = (value: unknown): value is Record<string, unknown> =>
@@ -501,6 +583,11 @@ const executeArbitraryCode = async (
     new (...args: string[]): (context: AgentRuntimeContext) => Promise<unknown>
   }
 
+  // Wrap user code in a nested async IIFE so its `const`/`let` get a
+  // fresh block scope on every call. Without this, `const block = ...`
+  // in user code would collide with the destructured `block` binding
+  // exposed from ctx — the "Identifier 'block' has already been
+  // declared" papercut the agent kept hitting.
   const fn = new AsyncFunction(
     'ctx',
     `
@@ -516,6 +603,7 @@ const {
   createBlock,
   updateBlock,
   installExtension,
+  setExtensionEnabled,
   actions,
   renderers,
   refreshAppRuntime,
@@ -525,7 +613,9 @@ const {
   document,
 } = ctx
 
+return await (async () => {
 ${code}
+})()
 `,
   )
 
@@ -549,6 +639,7 @@ export const createAgentRuntimeContext = ({
     createBlock: input => createRuntimeBlock(repo, input),
     updateBlock: input => updateRuntimeBlock(repo, input),
     installExtension: input => installRuntimeExtension(repo, input, context),
+    setExtensionEnabled: input => setExtensionEnabled(repo, input),
     actions: readRuntimeActions(runtime),
     renderers: runtime.read(blockRenderersFacet),
     refreshAppRuntime,
@@ -660,6 +751,19 @@ export const executeCommand = async (
         verify: command.verify === undefined
           ? undefined
           : Boolean(command.verify),
+      })
+
+    case 'set-extension-enabled':
+    case 'enable-extension':
+    case 'disable-extension':
+      return context.setExtensionEnabled({
+        id: command.id === undefined ? undefined : requireString(command.id, 'id'),
+        label: command.label === undefined ? undefined : requireString(command.label, 'label'),
+        enabled: command.type === 'disable-extension'
+          ? false
+          : command.type === 'enable-extension'
+            ? true
+            : Boolean(command.enabled),
       })
 
     case 'run-action':

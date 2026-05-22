@@ -122,6 +122,54 @@ describe('agent runtime commands', () => {
     }
   })
 
+  it('enable-extension / disable-extension flip the overrides map', async () => {
+    // Install a bare extension so we have a block to toggle. reload:false
+    // keeps the test from racing with refreshAppRuntime.
+    const installed = await executeCommand({
+      commandId: 'install-toggle',
+      type: 'install-extension',
+      source: 'export default []',
+      label: 'Toggle target',
+      reload: false,
+    }, env.context) as InstallExtensionResult
+
+    // Enable by id
+    const enableResult = await executeCommand({
+      commandId: 'enable-1',
+      type: 'enable-extension',
+      id: installed.id,
+    }, env.context) as {id: string, label: string | null, enabled: boolean, changed: boolean}
+    expect(enableResult.id).toBe(installed.id)
+    expect(enableResult.enabled).toBe(true)
+    expect(enableResult.changed).toBe(true)
+
+    // Re-enabling is a no-op
+    const reEnable = await executeCommand({
+      commandId: 'enable-2',
+      type: 'enable-extension',
+      label: 'Toggle target',
+    }, env.context) as {changed: boolean, id: string}
+    expect(reEnable.id).toBe(installed.id)
+    expect(reEnable.changed).toBe(false)
+
+    // Disable removes the override (back to default `false`)
+    const disableResult = await executeCommand({
+      commandId: 'disable-1',
+      type: 'disable-extension',
+      id: installed.id,
+    }, env.context) as {enabled: boolean, changed: boolean}
+    expect(disableResult.enabled).toBe(false)
+    expect(disableResult.changed).toBe(true)
+  })
+
+  it('enable-extension errors when no extension matches', async () => {
+    await expect(executeCommand({
+      commandId: 'enable-missing',
+      type: 'enable-extension',
+      label: 'nonexistent-plugin',
+    }, env.context)).rejects.toThrow(/nonexistent-plugin/)
+  })
+
   it('verify lists per-extension contribution ids (renderers, appMounts)', async () => {
     const renderer = () => null
     const Component = () => null
