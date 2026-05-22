@@ -226,15 +226,15 @@
 }
 
 @layer components {
-  /* Active-panel indicator. Marks which panel currently owns keystrokes
-     (driven by `activePanelIdProp` on the layout session). Cross-panel
-     j/l navigation needs *some* signal that focus shifted when both
-     panels' focused blocks were already highlighted from a previous
-     visit; this is that signal. A thin top accent bar keeps it readable
-     without competing with the block-level focus highlight. */
+  /* Active-panel indicator. Marks which panel currently owns
+     keystrokes (driven by `activePanelIdProp` on the layout
+     session). Short top accent bar — tab-marker style: signals
+     "this pane is active" the same way browser tabs / editor
+     tabs do, without competing with the column divider running
+     down the panel's left edge. */
   .panel.panel-active::before {
     content: '';
-    @apply absolute top-0 left-0 right-0 h-0.5 bg-primary/60 rounded-sm pointer-events-none;
+    @apply absolute top-0 left-2 h-1 w-12 bg-primary rounded-b-md pointer-events-none;
   }
 
   .block {
