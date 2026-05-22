@@ -1,3 +1,12 @@
+// Pull every kernel primitive through `@/extensions/api.js`. Importing
+// deeper paths (`@/context/repo.js`, `@/utils/toast.js`, …) works under
+// the prod build but the dev server's dynamic-import loader sometimes
+// resolves those as a fresh module instance, producing a *second* copy
+// of React contexts / singletons (most visibly: `useRepo must be used
+// within a RepoContext` because the extension's `useRepo` reads a
+// different `RepoContext` object than the one `<RepoProvider>` wrote
+// to). The barrel is loaded eagerly by the kernel, so going through
+// it keeps every extension on the same instance the app uses.
 import {
   ActionContextTypes,
   ChangeScope,
@@ -9,8 +18,15 @@ import {
   typesFacet,
   defineProperty,
   codecs,
+  keyAtEnd,
+  keysBetween,
+  useRepo,
+  showSuccess,
+  showError,
+  showInfo,
+  showProgress,
+  dismissToast,
 } from '@/extensions/api.js'
-import {keyAtEnd, keysBetween} from '@/data/orderKey.js'
 import {
   Dialog,
   DialogContent,
@@ -24,8 +40,6 @@ import {Input} from '@/components/ui/input.js'
 import {Label} from '@/components/ui/label.js'
 import {Textarea} from '@/components/ui/textarea.js'
 import {Checkbox} from '@/components/ui/checkbox.js'
-import {useRepo} from '@/context/repo.js'
-import {showSuccess, showError, showInfo, showProgress, dismissToast} from '@/utils/toast.js'
 import {createElement as h, useCallback, useEffect, useState, useSyncExternalStore} from 'react'
 
 // ============================================================================
