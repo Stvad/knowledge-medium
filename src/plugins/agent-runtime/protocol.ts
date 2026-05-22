@@ -51,6 +51,13 @@ export interface ExtensionVerificationError {
   name?: string
 }
 
+export interface ExtensionLintWarning {
+  rule: string
+  message: string
+  catalogPattern: string
+  example?: string
+}
+
 export interface ExtensionVerificationResult {
   ok: boolean
   errors: ExtensionVerificationError[]
@@ -74,6 +81,11 @@ export interface ExtensionVerificationResult {
     appMounts: string[]
     appEffects: string[]
   }
+  /** Source-level lint warnings — anti-patterns the agent is likely
+   *  to fall into when not reading the authoring catalog carefully
+   *  (e.g. storing config in localStorage instead of a prefs block).
+   *  Advisory, not blocking: `ok` reflects only structural errors. */
+  warnings?: ExtensionLintWarning[]
 }
 
 export interface InstallExtensionResult {

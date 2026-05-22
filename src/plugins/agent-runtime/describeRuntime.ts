@@ -182,6 +182,19 @@ export interface RuntimeSummary {
       componentCount: number
       guides: string[]
     }
+    /** Storage decision tree, surfaced inline because picking the
+     *  wrong shape (e.g. localStorage for non-credential config) is
+     *  the single most common extension-authoring mistake and the
+     *  fix is a one-line rule, not a multi-step pattern lookup.
+     *  Agents should consult this *before* writing any new
+     *  storage-touching extension code. */
+    storage: {
+      principles: string[]
+      patterns: Array<{
+        id: string
+        when: string
+      }>
+    }
   }
   more: Array<{
     need: string
@@ -446,6 +459,13 @@ export const describeRuntimeSummary = async (
         moduleCount: authoring.modules.length,
         componentCount: authoring.components.length,
         guides: authoring.guides.map(guide => guide.id),
+      },
+      storage: {
+        principles: authoring.storage.principles,
+        patterns: authoring.storage.patterns.map(pattern => ({
+          id: pattern.id,
+          when: pattern.when,
+        })),
       },
     },
     more: [

@@ -232,6 +232,20 @@ describe('describeRuntime', () => {
     expect(summary.capabilities.authoring.guides).toContain('external-sync-plugin')
     expect(summary.capabilities.authoring.moduleCount).toBeGreaterThan(0)
     expect(summary.capabilities.authoring.componentCount).toBeGreaterThan(0)
+
+    // Storage decision tree surfaces inline in the summary — picking
+    // the wrong shape (e.g. localStorage for non-credential config) is
+    // the single most common extension-authoring mistake, and a deep
+    // `describe-runtime --guide block-backed-config` fetch is too much
+    // friction for the right decision at orient time.
+    expect(summary.capabilities.storage.principles.length).toBeGreaterThan(0)
+    expect(summary.capabilities.storage.principles.join(' ')).toMatch(/credentials.*localStorage/i)
+    expect(summary.capabilities.storage.principles.join(' ')).toMatch(/pluginBlockId|UserPrefs/)
+    const patternIds = summary.capabilities.storage.patterns.map(p => p.id)
+    expect(patternIds).toContain('user-prefs-config')
+    expect(patternIds).toContain('plugin-root-singleton')
+    expect(patternIds).toContain('imported-record-blocks')
+
     expect(summary.more.map(hint => hint.command)).toContain('yarn agent status')
     expect(JSON.stringify(summary)).not.toContain('valueSummary')
   })

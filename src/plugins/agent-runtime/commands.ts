@@ -18,6 +18,7 @@ import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions.js'
 import { resolveAppRuntime } from '@/extensions/resolveAppRuntime.js'
 import { applyToggle, userExtensionToggle } from '@/extensions/togglable.js'
 import { findExtensionBlock } from '@/extensions/extensionLookup.js'
+import { lintExtensionSource } from './extensionLint.ts'
 import { getPluginPrefsBlock } from '@/data/stateBlocks.js'
 import {
   extensionsOverridesProp,
@@ -204,6 +205,8 @@ const verifyExtensionBlock = async (
       ? (value as {id: string}).id
       : undefined
 
+  const warnings = lintExtensionSource(block.content ?? '')
+
   return {
     ok: errors.length === 0,
     errors,
@@ -221,6 +224,7 @@ const verifyExtensionBlock = async (
       appMounts: extensionAppMounts.map(c => idOf(c.value)).filter((id): id is string => Boolean(id)),
       appEffects: extensionAppEffects.map(c => idOf(c.value)).filter((id): id is string => Boolean(id)),
     },
+    ...(warnings.length > 0 ? {warnings} : {}),
   }
 }
 
