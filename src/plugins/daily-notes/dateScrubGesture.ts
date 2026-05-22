@@ -28,6 +28,7 @@
  *     stream.
  */
 import type { TouchEvent, WheelEvent } from 'react'
+import hotkeys from 'hotkeys-js'
 import {
   isInteractiveContentEvent,
   type BlockContentSurfaceContribution,
@@ -145,8 +146,17 @@ type KeyboardScrubTargetProvider = () => KeyboardScrubTarget | null
 
 interface KeyboardScrub {
   blockId: string
-  deltaDays: number
+  keyDeltaDays: number
+  wheelDx: number
 }
+
+const KEYBOARD_SCRUB_HOTKEYS = ['ctrl+alt+h', 'ctrl+alt+k', 'ctrl+alt+j', 'ctrl+alt+l'] as const
+const KEYBOARD_SCRUB_HOTKEY_DELTAS = new Map<string, number>([
+  ['ctrl+alt+h', 1],
+  ['ctrl+alt+k', -1],
+  ['ctrl+alt+j', -7],
+  ['ctrl+alt+l', 7],
+])
 
 /** First finger landed on a block but the second hasn't arrived yet —
  *  remember it so the eventual second-finger touchstart can promote
@@ -334,6 +344,9 @@ const keyboardDeltaDaysForKey = (event: KeyboardEvent): number | null => {
   }
 }
 
+const keyboardScrubTotalDays = (scrub: KeyboardScrub): number =>
+  clampDeltaDays(scrub.keyDeltaDays + computeDeltaDays(scrub.wheelDx))
+
 const clampDeltaDays = (deltaDays: number): number => {
   if (deltaDays > MAX_OFFSET_DAYS) return MAX_OFFSET_DAYS
   if (deltaDays < MIN_OFFSET_DAYS) return MIN_OFFSET_DAYS
@@ -356,7 +369,8 @@ const startKeyboardScrub = (target: KeyboardScrubTarget): KeyboardScrub | null =
 
   const next = {
     blockId: target.block.id,
-    deltaDays: 0,
+    keyDeltaDays: 0,
+    wheelDx: 0,
   }
   keyboardScrub = next
   return next
@@ -365,6 +379,28 @@ const startKeyboardScrub = (target: KeyboardScrubTarget): KeyboardScrub | null =
 const consumeKeyboardScrubEvent = (event: KeyboardEvent): void => {
   event.preventDefault()
   event.stopPropagation()
+}
+
+const updateKeyboardScrubByDays = (
+  scrub: KeyboardScrub,
+  deltaDays: number,
+  event: KeyboardEvent,
+): void => {
+  consumeKeyboardScrubEvent(event)
+  scrub.keyDeltaDays = clampDeltaDays(scrub.keyDeltaDays + deltaDays)
+  activeHandler?.update(keyboardScrubTotalDays(scrub), false)
+}
+
+const updateKeyboardScrubByWheel = (
+  scrub: KeyboardScrub,
+  event: WheelEvent | globalThis.WheelEvent,
+): void => {
+  const {dx} = normalizeWheelDelta(event)
+  if (dx === 0) return
+  event.preventDefault()
+  event.stopPropagation()
+  scrub.wheelDx += dx
+  activeHandler?.update(keyboardScrubTotalDays(scrub), false)
 }
 
 export const installDateKeyboardScrubListeners = (
@@ -383,9 +419,7 @@ export const installDateKeyboardScrubListeners = (
       const delta = keyboardDeltaDaysForKey(event)
       if (delta === null) return
 
-      consumeKeyboardScrubEvent(event)
-      keyboardScrub.deltaDays = clampDeltaDays(keyboardScrub.deltaDays + delta)
-      activeHandler?.update(keyboardScrub.deltaDays, false)
+      updateKeyboardScrubByDays(keyboardScrub, delta, event)
       return
     }
 
@@ -401,9 +435,22 @@ export const installDateKeyboardScrubListeners = (
     if (!current) return
 
     if (delta === null) return
-    consumeKeyboardScrubEvent(event)
-    current.deltaDays = clampDeltaDays(current.deltaDays + delta)
-    activeHandler?.update(current.deltaDays, false)
+    updateKeyboardScrubByDays(current, delta, event)
+  }
+
+  const handleHotkeyDelta = (event: KeyboardEvent, hotkeysEvent: {shortcut?: string}): boolean => {
+    const shortcut = hotkeysEvent.shortcut?.toLowerCase()
+    const delta = shortcut ? KEYBOARD_SCRUB_HOTKEY_DELTAS.get(shortcut) : undefined
+    if (delta === undefined) return true
+
+    const current = keyboardScrub ?? (() => {
+      const target = getTarget()
+      return target ? startKeyboardScrub(target) : null
+    })()
+    if (!current) return true
+
+    updateKeyboardScrubByDays(current, delta, event)
+    return false
   }
 
   const handleKeyUp = (event: KeyboardEvent): void => {
@@ -416,14 +463,28 @@ export const installDateKeyboardScrubListeners = (
     finishKeyboardScrub(false)
   }
 
+  const handleWheel = (event: globalThis.WheelEvent): void => {
+    if (!event.ctrlKey || !event.altKey) return
+    const current = keyboardScrub ?? (() => {
+      const target = getTarget()
+      return target ? startKeyboardScrub(target) : null
+    })()
+    if (!current) return
+    updateKeyboardScrubByWheel(current, event)
+  }
+
   window.addEventListener('keydown', handleKeyDown, true)
   window.addEventListener('keyup', handleKeyUp, true)
   window.addEventListener('blur', handleBlur)
+  window.addEventListener('wheel', handleWheel, {capture: true, passive: false})
+  for (const key of KEYBOARD_SCRUB_HOTKEYS) hotkeys(key, handleHotkeyDelta)
 
   return () => {
+    for (const key of KEYBOARD_SCRUB_HOTKEYS) hotkeys.unbind(key, handleHotkeyDelta)
     window.removeEventListener('keydown', handleKeyDown, true)
     window.removeEventListener('keyup', handleKeyUp, true)
     window.removeEventListener('blur', handleBlur)
+    window.removeEventListener('wheel', handleWheel, true)
     finishKeyboardScrub(false)
   }
 }

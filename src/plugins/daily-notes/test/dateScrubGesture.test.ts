@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WheelEvent } from 'react'
+import hotkeys from 'hotkeys-js'
 import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
 import type { PropertySchema } from '@/data/api'
@@ -86,6 +87,50 @@ const wheelEvent = ({
   stopPropagation: vi.fn(),
   target,
 } as unknown as WheelEvent<HTMLDivElement>)
+
+const dispatchHotkeyKeydown = ({
+  key,
+  keyCode,
+  ctrlKey = true,
+  altKey = true,
+}: {
+  key: string
+  keyCode: number
+  ctrlKey?: boolean
+  altKey?: boolean
+}): void => {
+  document.dispatchEvent(new KeyboardEvent('keydown', {
+    key,
+    keyCode,
+    which: keyCode,
+    ctrlKey,
+    altKey,
+    bubbles: true,
+    cancelable: true,
+  }))
+}
+
+const dispatchHotkeyKeyup = ({
+  key,
+  keyCode,
+  ctrlKey = true,
+  altKey = true,
+}: {
+  key: string
+  keyCode: number
+  ctrlKey?: boolean
+  altKey?: boolean
+}): void => {
+  document.dispatchEvent(new KeyboardEvent('keyup', {
+    key,
+    keyCode,
+    which: keyCode,
+    ctrlKey,
+    altKey,
+    bubbles: true,
+    cancelable: true,
+  }))
+}
 
 describe('date scrub wheel gesture', () => {
   let unregister: (() => void) | null = null
@@ -212,6 +257,7 @@ describe('date scrub keyboard gesture', () => {
   let handler: ScrubHandler
 
   beforeEach(() => {
+    hotkeys.unbind()
     setMobileViewport(false)
     handler = {
       start: vi.fn(() => true),
@@ -229,6 +275,7 @@ describe('date scrub keyboard gesture', () => {
     unregisterKeyboard = null
     unregisterHandler?.()
     unregisterHandler = null
+    hotkeys.unbind()
     document.body.innerHTML = ''
   })
 
@@ -291,6 +338,21 @@ describe('date scrub keyboard gesture', () => {
       ctrlKey: true,
       altKey: true,
     }))
+    expect(handler.update).toHaveBeenLastCalledWith(0, false)
+  })
+
+  it('routes ctrl-alt letter chords through hotkeys when Alt changes event.key', () => {
+    window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Alt',
+      ctrlKey: true,
+      altKey: true,
+    }))
+
+    dispatchHotkeyKeydown({key: '˙', keyCode: 72})
+    expect(handler.update).toHaveBeenLastCalledWith(1, false)
+    dispatchHotkeyKeyup({key: '˙', keyCode: 72})
+
+    dispatchHotkeyKeydown({key: '˚', keyCode: 75})
     expect(handler.update).toHaveBeenLastCalledWith(0, false)
   })
 
@@ -359,6 +421,29 @@ describe('date scrub keyboard gesture', () => {
 
     window.dispatchEvent(event)
 
+    expect(preventDefault).toHaveBeenCalled()
+  })
+
+  it('updates an active keyboard scrub from ctrl-alt horizontal wheel events', () => {
+    window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Alt',
+      ctrlKey: true,
+      altKey: true,
+    }))
+
+    const event = new WheelEvent('wheel', {
+      deltaMode: 0,
+      deltaX: 14,
+      deltaY: 0,
+      ctrlKey: true,
+      altKey: true,
+      cancelable: true,
+    })
+    const preventDefault = vi.spyOn(event, 'preventDefault')
+
+    window.dispatchEvent(event)
+
+    expect(handler.update).toHaveBeenLastCalledWith(1, false)
     expect(preventDefault).toHaveBeenCalled()
   })
 })
