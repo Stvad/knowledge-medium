@@ -109,19 +109,82 @@ const panelsInColumn = (column: HTMLElement): HTMLElement[] =>
 const clamp = (n: number, lo: number, hi: number): number =>
   Math.max(lo, Math.min(hi, n))
 
+/**
+ * Walk up from `instanceEl` to find the closest [data-block-instance]
+ * ancestor inside `panel`. Returns null when `instanceEl` is a
+ * top-level instance in the panel (no block-instance ancestor above it).
+ *
+ * Used by the sibling-lookup logic: two instances are "same-depth
+ * siblings" iff they share a `closestBlockAncestor`. That matches the
+ * data-tree structure (both are children of the same data-block) even
+ * across renderer-specific DOM wrappers (block-body divs, lazy mounts,
+ * backlink entry containers) because we only check for the nearest
+ * shell, ignoring any wrapper chrome in between.
+ */
+const closestBlockAncestor = (
+  instanceEl: HTMLElement,
+  panel: HTMLElement,
+): HTMLElement | null => {
+  let el: HTMLElement | null = instanceEl.parentElement
+  while (el && el !== panel) {
+    if (el.dataset.blockInstance && el.dataset.blockId) return el
+    el = el.parentElement
+  }
+  return null
+}
+
 const collectAncestorBlockIds = (
   instanceEl: HTMLElement,
   panel: HTMLElement,
 ): string[] => {
   const ancestors: string[] = []
-  let el: HTMLElement | null = instanceEl.parentElement
-  while (el && el !== panel) {
-    if (el.dataset.blockId && el.dataset.blockInstance) {
-      ancestors.push(el.dataset.blockId)
-    }
-    el = el.parentElement
+  let el = closestBlockAncestor(instanceEl, panel)
+  while (el) {
+    if (el.dataset.blockId) ancestors.push(el.dataset.blockId)
+    el = closestBlockAncestor(el, panel)
   }
   return ancestors
+}
+
+/**
+ * Find the previous or next data-tree-sibling of `instanceEl` inside
+ * `panel` — i.e. the nearest panel-instance in DOM order that shares
+ * the same closest [data-block-instance] ancestor.
+ *
+ * This is what makes recovery match the user's mental model in the
+ * tricky cases:
+ *
+ *   - Deleting `parent` from `[above, parent>[child, c2], below]`
+ *     puts focus on `below` (parent's same-depth next) rather than
+ *     stumbling onto `child` (DOM-flat next, which also disappeared).
+ *   - Collapsing a parent whose focused child is the only child
+ *     gives same-depth-prev/next = undefined, so the ancestor walk
+ *     wins and we land on the parent — same outcome as the multi-
+ *     child collapse case.
+ */
+const findSameDepthSibling = (
+  instanceEl: HTMLElement,
+  instances: readonly HTMLElement[],
+  panel: HTMLElement,
+  direction: 'prev' | 'next',
+): string | undefined => {
+  const idx = instances.indexOf(instanceEl)
+  if (idx < 0) return undefined
+  const own = closestBlockAncestor(instanceEl, panel)
+  if (direction === 'prev') {
+    for (let i = idx - 1; i >= 0; i--) {
+      if (closestBlockAncestor(instances[i], panel) === own) {
+        return instances[i].dataset.blockId
+      }
+    }
+  } else {
+    for (let i = idx + 1; i < instances.length; i++) {
+      if (closestBlockAncestor(instances[i], panel) === own) {
+        return instances[i].dataset.blockId
+      }
+    }
+  }
+  return undefined
 }
 
 /**
@@ -146,8 +209,8 @@ export const rememberInstancePosition = (
   lastPositionByPanel.set(panelId, {
     blockId,
     index: idx,
-    prevBlockId: instances[idx - 1]?.dataset.blockId,
-    nextBlockId: instances[idx + 1]?.dataset.blockId,
+    prevBlockId: findSameDepthSibling(instanceEl, instances, panel, 'prev'),
+    nextBlockId: findSameDepthSibling(instanceEl, instances, panel, 'next'),
     ancestorBlockIds: collectAncestorBlockIds(instanceEl, panel),
   })
 }

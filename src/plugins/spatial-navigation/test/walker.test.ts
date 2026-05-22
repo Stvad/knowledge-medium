@@ -412,6 +412,83 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     expect(findRecoveryAnchor('p1', 'A')).toBeNull()
   })
 
+  it("deleting a parent block: sibling walk crosses the subtree to the data-tree next sibling", () => {
+    // top
+    //   above
+    //   parent           ← focused, deleted
+    //     child
+    //     c2
+    //   below
+    // The previous "DOM-flat next" logic would have picked `child`
+    // (the first descendant) which also disappears, falling back to
+    // `above` (prev). With same-depth siblings, `parent.next = below`
+    // (the next child of `top`), so recovery picks that directly.
+    const panel = document.createElement('div')
+    panel.setAttribute('data-panel-id', 'p1')
+
+    const mkInstance = (blockId: string): HTMLElement => {
+      const el = document.createElement('div')
+      el.setAttribute('data-block-id', blockId)
+      el.setAttribute('data-block-instance', `p1:${blockId}`)
+      el.setAttribute('data-block-surface', 'outline')
+      return el
+    }
+
+    const top = mkInstance('top')
+    panel.appendChild(top)
+    top.appendChild(mkInstance('above'))
+    const parent = mkInstance('parent')
+    top.appendChild(parent)
+    parent.appendChild(mkInstance('child'))
+    parent.appendChild(mkInstance('c2'))
+    top.appendChild(mkInstance('below'))
+
+    document.body.appendChild(panel)
+
+    rememberInstancePosition('p1', findInstance('p1:parent'))
+    findInstance('p1:parent').remove()
+
+    expect(findRecoveryAnchor('p1', 'parent')?.dataset.blockId).toBe('below')
+  })
+
+  it("only-child collapse: same-depth siblings are empty so the ancestor wins", () => {
+    // top
+    //   above
+    //   parent
+    //     X              ← focused (only child)
+    //   below
+    // Without same-depth sibling semantics, X's DOM-flat next would
+    // be `below` (sitting alive even after the collapse), and we'd
+    // wrongly land there. With same-depth: X has no siblings inside
+    // parent, so we walk up to parent and focus that — matching the
+    // multi-child collapse case.
+    const panel = document.createElement('div')
+    panel.setAttribute('data-panel-id', 'p1')
+
+    const mkInstance = (blockId: string): HTMLElement => {
+      const el = document.createElement('div')
+      el.setAttribute('data-block-id', blockId)
+      el.setAttribute('data-block-instance', `p1:${blockId}`)
+      el.setAttribute('data-block-surface', 'outline')
+      return el
+    }
+
+    const top = mkInstance('top')
+    panel.appendChild(top)
+    top.appendChild(mkInstance('above'))
+    const parent = mkInstance('parent')
+    top.appendChild(parent)
+    parent.appendChild(mkInstance('X'))
+    top.appendChild(mkInstance('below'))
+
+    document.body.appendChild(panel)
+
+    rememberInstancePosition('p1', findInstance('p1:X'))
+    findInstance('p1:X').remove()
+
+    expect(findRecoveryAnchor('p1', 'X')?.dataset.blockId).toBe('parent')
+  })
+
   it('falls back to positional clamp when neighbors and ancestors are all gone', () => {
     // Edge case: build a scenario where prev/next/ancestor are all
     // missing but a positional fallback can still land somewhere.
