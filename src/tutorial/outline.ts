@@ -10,6 +10,7 @@
 // The non-vim variant lives at the alias `Tutorial (no vim)` and the
 // first bullet on each page cross-links to the other.
 
+import { v4 as uuidv4 } from 'uuid'
 import {
   extensionDescriptionProp,
   extensionNameProp,
@@ -18,6 +19,10 @@ import { EXTENSION_TYPE } from '@/data/blockTypes'
 import { exampleExtensions } from '@/extensions/exampleExtensions.ts'
 
 export type TutorialNode = {
+  /** Pre-allocated block id. When omitted the seeder generates a UUID.
+   *  Used by ref / embed demos so a later bullet can embed
+   *  `((<id>))` / `!((<id>))` pointing at this block by id. */
+  id?: string
   content: string
   /** Property overrides set directly on the row at create time. */
   properties?: Record<string, unknown>
@@ -102,6 +107,13 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       ? 'Prefer mouse / arrow keys instead of vim shortcuts? See [[Tutorial (no vim)]].'
       : 'Prefer vim shortcuts? See [[Tutorial]].'
 
+  // Stable per-variant id for the block-ref / embed demo target. The
+  // demo bullets below reference it via `((<id>))` and `!((<id>))` —
+  // markdown parsing resolves those to a clickable ref and an inline
+  // embed. Each variant gets its own demo target so the two Tutorial
+  // pages don't collide on block ids.
+  const refDemoTargetId = uuidv4()
+
   return [
     { content: altLabel },
 
@@ -109,7 +121,6 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       'This is a malleable thought medium. Every line below is a **block** you can fold, link, drag around, and extend — including this tutorial itself.',
       'Bullets are blocks. Bullets nest. Everything else builds on that.',
       "Don't just read — try the keys/clicks on each bullet as you go. Edit anything; this tutorial is just blocks in your workspace.",
-      'Want a coding agent to drive this workspace from your terminal? `yarn agent connect` pairs the CLI, then `yarn agent eval`, `yarn agent sql`, `yarn agent create-block`, and friends operate inside the live app runtime (with access to `repo`, `db`, `runtime`, the resolved facets, and arbitrary JS). See the **Agent Runtime Access** section of README.md for setup and the full binding list.',
     ]),
 
     sect('Try the basics', [
@@ -129,12 +140,19 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
 
     sect('Move around', [
       `Between blocks: ${km.move}.`,
-      `Between side-by-side panels: ${km.panelHop}.`,
       ...(km.firstLast ? [km.firstLast] : []),
       ...(km.jumpMany ? [km.jumpMany] : []),
       `Zoom into a block (treat it as the new root of the view): ${sharedKeys.zoomIn}. Zoom back out: ${sharedKeys.zoomOut}.`,
-      `Open a block in a new side panel (without leaving where you are): ${sharedKeys.openInPanel}. Close current panel: ${sharedKeys.closePanel}.`,
       `Back / forward through your navigation history: ${sharedKeys.back}.`,
+    ]),
+
+    sect('Side panels', [
+      'Panels sit side by side. Each panel has its own focused block, its own zoom level, and its own edit state — opening something in a new panel means you keep what you were looking at.',
+      `Open the focused block in a new side panel: ${sharedKeys.openInPanel}. Close the current panel: ${sharedKeys.closePanel}.`,
+      `Move between panels: ${km.panelHop}.`,
+      'Wiki-link / block-ref clicks pick a destination based on modifiers — plain click replaces the current panel, `Shift+Alt+Click` opens the link in a brand new side panel, `Shift+Click` puts it in a vertical sidebar stack, `Alt+Click` opens it in the main panel. (Plain `Cmd+Click` / `Ctrl+Click` falls through to a browser new-tab as usual.)',
+      `In quick-find (${sharedKeys.quickFind}): \`Shift+Enter\` (or \`Cmd+Enter\` / \`Ctrl+Enter\`) opens the selected page in a new panel instead of replacing the current view.`,
+      `Quick capture into a side panel: ${sharedKeys.appendToday} appends a new block to today's daily note in a side panel without taking you away from where you are.`,
     ]),
 
     sect('Multi-select', [
@@ -148,6 +166,21 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       `Find or create any page: ${sharedKeys.quickFind}. Type to filter; pressing Enter on a missing name creates it.`,
       `Command palette: ${sharedKeys.commandPalette}. **Every** action in the app is searchable here with its key shown — use this when you forget a shortcut, or to find actions that have no default binding.`,
       `Find and replace across the workspace: ${sharedKeys.findReplace}.`,
+      {
+        content: 'Block refs and embeds — wiki links point at a *page* (resolved by name). A block ref `((block-id))` points at one specific block anywhere in your workspace; an embed `!((block-id))` renders the target inline instead of as a link.',
+        children: [
+          {
+            id: refDemoTargetId,
+            content: '👋 I am the demo target. Focus me and press `Alt+Y` to copy a ref to me, or `Shift+Y` to copy an embed — then paste in a new bullet to see the result.',
+          },
+          {
+            content: `Demo ref → ((${refDemoTargetId})) — clicking this navigates to the demo target above.`,
+          },
+          {
+            content: `Demo embed → !((${refDemoTargetId})) — the target above is rendered inline below this prose.`,
+          },
+        ],
+      },
     ]),
 
     sect('Properties & types', [
@@ -160,12 +193,11 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
     sect('Daily notes', [
       `Open today's daily note: ${sharedKeys.today}. This is also the default landing page on a fresh open.`,
       `Step through daily notes: ${sharedKeys.prevNextDay} (previous / next).`,
-      `Quick capture: ${sharedKeys.appendToday} appends a fresh block to today's daily note in a side panel, without taking you away from where you are.`,
     ]),
 
     sect('Undo, redo, copy, paste', [
       `Undo: ${km.undo}. Redo: ${km.redo}.`,
-      `Copy a *reference* to a block (a clickable \`((block-id))\` link pointing at it): ${sharedKeys.copyRef}. Copy an *embed* (renders the block inline elsewhere via \`!((block-id))\`): ${sharedKeys.copyEmbed}.`,
+      `Copy a block ref: ${sharedKeys.copyRef}. Copy a block embed: ${sharedKeys.copyEmbed}. (See "Pages & links" above for what those are.)`,
       `Paste blocks: ${km.paste}.`,
     ]),
 
@@ -177,6 +209,39 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
     sect('Extensions', [
       "**Everything** in this app — the renderer, the vim plugin, daily notes — is an extension. You can author your own; the host loads them out of `types = ['extension']` blocks.",
       'See [[extensions]] for explanatory bullets, a set of working example extensions, and a renderer demo to enable and play with.',
+    ]),
+
+    sect('Agent runtime — drive this workspace from your terminal', [
+      'The app exposes a runtime bridge for coding agents and scripts. The browser tab runs a local relay; a CLI in your terminal submits commands that execute **inside the live app runtime** — same `Repo`, same workspace, same PowerSync SQLite, same resolved facets.',
+      'Pairing (one-time per browser profile + app origin):',
+      {
+        content: '`yarn agent connect` — prints an app URL, opens the token dialog when you load it, then waits for you to paste the token back into the terminal. The secret persists in `~/.config/knowledge-medium/agent-bridge.json`.',
+      },
+      'Common operations once paired:',
+      {
+        content: 'Status & health',
+        children: [
+          { content: '`yarn agent ping` — health-check the bridge.' },
+          { content: '`yarn agent status` — detailed `/health` info (uses the persisted secret).' },
+        ],
+      },
+      {
+        content: 'Querying the workspace',
+        children: [
+          { content: '`yarn agent sql all "SELECT id, content FROM blocks LIMIT 5"` — runs against the local SQLite mirror.' },
+          { content: "`yarn agent eval 'return repo.activeWorkspaceId'` — runs arbitrary JS in the app runtime; the return value is serialized back." },
+        ],
+      },
+      {
+        content: 'Mutating the workspace',
+        children: [
+          { content: '`yarn agent create-block \'{"parentId":"<id>","content":"Created by agent"}\'` — typed helper for the common case.' },
+          { content: "`yarn agent eval 'await createBlock({parentId: ..., content: ...})'` — same operation via the eval surface; useful for batching or conditional logic." },
+        ],
+      },
+      'Runtime bindings available inside `eval`: `repo`, `db`, `runtime`, `safeMode`, `sql`, `block`, `getBlock`, `getSubtree`, `createBlock`, `updateBlock`, `installExtension`, `actions`, `renderers`, `refreshAppRuntime`, `React`, `ReactDOM`, `window`, `document`. Use these to script edits, drive extensions, dump subtrees, or wire an agent into your workflow.',
+      'Defaults & security: the bridge binds to `http://127.0.0.1:8787` (loopback only); only configured app origins can talk to it. Override the pairing target with `AGENT_RUNTIME_APP_URL`, browser endpoint with `VITE_AGENT_RUNTIME_URL`, CLI endpoint with `AGENT_RUNTIME_URL`. Allow extra origins via `AGENT_RUNTIME_ALLOWED_ORIGINS` (comma-separated, no paths).',
+      'See the **Agent Runtime Access** section of `README.md` for full setup, plus `yarn agent pair-url` if you want a bridge-only pairing URL.',
     ]),
   ]
 }

@@ -128,7 +128,7 @@ const seedChildren = async (
   const keys = keysBetween(null, null, nodes.length)
   for (let i = 0; i < nodes.length; i++) {
     const node = nodes[i]
-    const id = uuidv4()
+    const id = node.id ?? uuidv4()
     await tx.create({
       id,
       workspaceId,
