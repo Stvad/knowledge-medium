@@ -23,6 +23,7 @@ import {
 } from '@/data/api'
 import type { Block } from './block'
 import {
+  activePanelIdProp,
   selectionStateProp,
   type BlockSelectionState,
   focusedBlockIdProp,
@@ -190,3 +191,28 @@ export const useInEditMode = (blockId: string): boolean =>
       doc?.properties[focusedBlockIdProp.name] === blockId &&
       Boolean(doc?.properties[isEditingProp.name]),
   })
+
+/**
+ * Whether `panelBlock` is the currently-active panel in its layout
+ * session. Per-panel boolean (same selector pattern as `useInFocus`):
+ * when activePanelId hops between panels, only the two whose membership
+ * flips re-render — the rest bail via `useSyncExternalStore`'s Object.is.
+ *
+ * When the panel is rendered OUTSIDE a layout session (no
+ * `layoutSessionBlockId` in context — e.g. a standalone panel preview),
+ * the hook subscribes to the panel block itself and the selector
+ * returns false trivially: `activePanelIdProp` is never written on a
+ * panel block, so `doc?.properties[name] === panelBlock.id` is
+ * `undefined === panelBlock.id` → false.
+ */
+export const useIsActivePanel = (panelBlock: Block): boolean => {
+  const context = useBlockContext()
+  const repo = useRepo()
+  const layoutSessionBlockId = typeof context.layoutSessionBlockId === 'string'
+    ? context.layoutSessionBlockId
+    : null
+  const subscriptionTarget = layoutSessionBlockId ? repo.block(layoutSessionBlockId) : panelBlock
+  return useHandle(subscriptionTarget, {
+    selector: doc => doc?.properties[activePanelIdProp.name] === panelBlock.id,
+  })
+}
