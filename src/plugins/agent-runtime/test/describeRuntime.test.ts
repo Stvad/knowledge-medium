@@ -192,6 +192,68 @@ describe('describeRuntime', () => {
     expect(JSON.stringify(summary)).not.toContain('valueSummary')
   })
 
+  it('surfaces extension-authoring guidance for dialogs, prefs blocks, deterministic ids, and disabled-by-default', async () => {
+    const runtime = await resolveFacetRuntime([])
+
+    const description = await describeRuntime({
+      repo: fakeRepo,
+      runtime,
+      safeMode: false,
+      actions: [],
+      renderers: {},
+    }, {
+      guides: ['external-sync-plugin'],
+      storage: true,
+    })
+
+    const syncGuide = description.authoring.guides.find(
+      guide => guide.id === 'external-sync-plugin',
+    )
+    expect(syncGuide).toBeDefined()
+
+    // Disabled-by-default rescue — the highest-friction paper cut from
+    // the previous bridge surface. If this assertion fails, the agent
+    // is about to spend cycles debugging "Action not found" again.
+    expect(syncGuide?.afterInstall?.join(' ')).toMatch(/disabled by default/i)
+
+    // The Dialog pattern must be reachable as code, not just prose,
+    // because the only other in-DB example is matrix-chat-client which
+    // uses window.prompt — the path of least resistance leads to the
+    // wrong pattern without a code snippet to anchor on.
+    const exampleCode = syncGuide?.examples?.map(example => example.code).join('\n') ?? ''
+    expect(exampleCode).toContain('appMountsFacet')
+    expect(exampleCode).toContain('DialogContent')
+    expect(exampleCode).not.toContain('window.prompt')
+
+    // Storage guide must bless localStorage for credentials and call
+    // out deterministic uuids for plugin-owned singletons.
+    expect(description.authoring.storage.credentials.rule).toMatch(/localStorage/)
+    expect(description.authoring.storage.credentials.example?.code).toMatch(/localStorage/)
+    const patternIds = description.authoring.storage.patterns.map(pattern => pattern.id)
+    expect(patternIds).toContain('plugin-root-singleton')
+    expect(patternIds).toContain('user-prefs-config')
+
+    const rootSingleton = description.authoring.storage.patterns.find(
+      pattern => pattern.id === 'plugin-root-singleton',
+    )
+    expect(rootSingleton?.example?.code).toContain('uuidv5')
+
+    const userPrefs = description.authoring.storage.patterns.find(
+      pattern => pattern.id === 'user-prefs-config',
+    )
+    expect(userPrefs?.example?.code).toContain('getPluginPrefsBlock')
+    expect(userPrefs?.example?.code).toContain('defineBlockType')
+  })
+
+  it('exposes uuidv5 on the public extension API surface', async () => {
+    const surface = await getApiSurface()
+    // Without this, the agent has to import `uuid` directly — but
+    // blob-URL extensions don't have `uuid` in the page importmap, so
+    // the import fails at runtime. Re-exporting from api.ts is the
+    // path that actually works.
+    expect(surface.exports).toContain('uuidv5')
+  })
+
   it('produces a payload with activeWorkspaceId, currentUser, safeMode, actions, renderers, facets, apiSurface, authoring', async () => {
     const facet = defineFacet({id: 'desc.full'})
     const runtime = await resolveFacetRuntime([

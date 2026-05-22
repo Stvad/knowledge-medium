@@ -23,11 +23,17 @@ export interface AuthoringComponentSummary {
   source: AuthoringCatalogSource
 }
 
+export interface AuthoringExample {
+  label: string
+  code: string
+}
+
 export interface AuthoringStoragePattern {
   id: string
   when: string
   use: string
   modules: string[]
+  example?: AuthoringExample
 }
 
 export interface AuthoringStorageGuide {
@@ -36,6 +42,7 @@ export interface AuthoringStorageGuide {
   credentials: {
     rule: string
     currentAffordance: string
+    example?: AuthoringExample
   }
 }
 
@@ -48,6 +55,14 @@ export interface AuthoringGuide {
   preferredModules: string[]
   relatedFacets: string[]
   commands: string[]
+  /** Worked code snippets that demonstrate the canonical pattern.
+   *  Read these before falling back to copying from another extension —
+   *  they are kept in sync with the public API surface. */
+  examples?: AuthoringExample[]
+  /** Notes the agent should act on *after* `install-extension`
+   *  returns. Currently used to call out the disabled-by-default
+   *  behaviour for user-installed extensions. */
+  afterInstall?: string[]
 }
 
 export interface AuthoringCatalog {
@@ -91,33 +106,180 @@ const storageGuide: AuthoringStorageGuide = {
   principles: [
     'Store plugin configuration and sync state in system blocks whenever possible.',
     'Use typed properties with ChangeScope.UserPrefs for per-user preferences and ChangeScope.BlockDefault for workspace/content data.',
-    'Use deterministic aliases, types, or external-id properties so sync plugins can upsert instead of duplicating imported data.',
-    'Credentials are the exception: keep secrets out of ordinary block content and avoid printing them through bridge results.',
+    'Use deterministic ids (uuid v5 with a per-plugin namespace) for plugin-owned singleton blocks so upserts are idempotent across reinstalls.',
+    'Use deterministic external-id properties on imported records so sync plugins can upsert instead of duplicating data.',
+    'Keep credentials in `window.localStorage`, scoped under a `knowledge-medium:<plugin>:...` key. Never echo token values through bridge output.',
   ],
   patterns: [
     {
       id: 'user-prefs-config',
       when: 'Per-user plugin settings, defaults, and lightweight sync checkpoints.',
-      use: 'Define a TypeContribution for the plugin and its UserPrefs-scoped properties, register it via typesFacet, then read/write through getPluginPrefsBlock (or the matching hooks). Each plugin gets its own sub-block under user-prefs, so unrelated plugins\' settings are isolated from each other.',
+      use: 'Define a TypeContribution for the plugin via `defineBlockType({id, label, properties})` and register it through `typesFacet`. Then read/write the per-plugin sub-block via `getPluginPrefsBlock(repo, workspaceId, user, type)`. Each plugin gets its own row under user-prefs, so unrelated plugins\' settings can\'t clobber each other.',
       modules: ['@/extensions/api.js'],
+      example: {
+        label: 'Define a prefs type and read/write a setting',
+        code: [
+          "import {",
+          "  ChangeScope, codecs, defineBlockType, defineProperty,",
+          "  getPluginPrefsBlock, typesFacet, propertySchemasFacet,",
+          "} from '@/extensions/api.js'",
+          "",
+          "const lastSyncProp = defineProperty('readwise:lastSyncedAt', {",
+          "  codec: codecs.optionalString,",
+          "  defaultValue: null,",
+          "  changeScope: ChangeScope.UserPrefs,",
+          "})",
+          "",
+          "const readwisePrefsType = defineBlockType({",
+          "  id: 'readwise-prefs',",
+          "  label: 'Readwise',",
+          "  properties: [lastSyncProp],",
+          "})",
+          "",
+          "// In an action handler:",
+          "const prefs = await getPluginPrefsBlock(repo, repo.activeWorkspaceId, repo.user, readwisePrefsType)",
+          "const last = prefs.peekProperty(lastSyncProp)",
+          "await prefs.set(lastSyncProp, new Date().toISOString())",
+          "",
+          "// Top-level facet contributions:",
+          "export default [",
+          "  typesFacet.of(readwisePrefsType, {source: 'readwise'}),",
+          "  propertySchemasFacet.of(lastSyncProp, {source: 'readwise'}),",
+          "  // ... actions, mounts, etc.",
+          "]",
+        ].join('\n'),
+      },
+    },
+    {
+      id: 'plugin-root-singleton',
+      when: 'The plugin needs a stable workspace-scoped root block — e.g. a "Readwise Library" page that all imported books/highlights live under.',
+      use: 'Hardcode a UUID v4 once as your plugin\'s namespace constant, then derive every plugin-owned singleton id with `uuidv5(`${workspaceId}:${key}`, NAMESPACE)`. Same input always produces the same id, so re-running the install (or running on a fresh device) lands on the same block and your upserts stay idempotent.',
+      modules: ['@/extensions/api.js'],
+      example: {
+        label: 'Deterministic id for a plugin root block',
+        code: [
+          "import { uuidv5 } from '@/extensions/api.js'",
+          "",
+          "// Generate ONE namespace UUID for your plugin and never change it.",
+          "// (Run `crypto.randomUUID()` in any browser console.)",
+          "const READWISE_NS = '0d4f1c2e-7e9a-4f4d-a4f1-2c0a3a6e7f01'",
+          "",
+          "const libraryRootId = (workspaceId) =>",
+          "  uuidv5(`${workspaceId}:library-root`, READWISE_NS)",
+          "",
+          "// In a sync handler:",
+          "const rootId = libraryRootId(repo.activeWorkspaceId)",
+          "const existing = await repo.load(rootId)",
+          "if (!existing) {",
+          "  await repo.tx(async tx => {",
+          "    await tx.create({",
+          "      id: rootId,                              // pin the id",
+          "      workspaceId: repo.activeWorkspaceId,",
+          "      parentId: null,",
+          "      content: 'Readwise Library',",
+          "      properties: { alias: ['Readwise Library'], types: ['page'] },",
+          "    })",
+          "  }, { scope: ChangeScope.BlockDefault, description: 'create readwise root' })",
+          "}",
+        ].join('\n'),
+      },
     },
     {
       id: 'workspace-config-block',
       when: 'Workspace-visible plugin configuration or shared sync state.',
-      use: 'Create or find a deterministic config block, usually by alias/type, then store config as properties and child blocks.',
+      use: 'Use a deterministic id (see `plugin-root-singleton`) for a config block, then store config as properties and child blocks. Prefer this over user-prefs when the config should sync across all of the user\'s devices and be visible to other workspace members.',
       modules: ['@/extensions/api.js'],
     },
     {
       id: 'imported-record-blocks',
       when: 'External records such as Readwise books/highlights that should be queryable and editable as blocks.',
-      use: 'Define source-id properties and upsert blocks by source id. Keep imported records idempotent across repeated syncs.',
+      use: 'Define source-id properties (`readwise:user_book_id`, `readwise:highlight_id`, …) and either upsert by id-lookup or derive the block id from the external id with `uuidv5`. Either way, the second sync of the same record must update the existing block, not create a duplicate.',
       modules: ['@/extensions/api.js'],
     },
   ],
   credentials: {
-    rule: 'Credential values may be stored outside ordinary blocks until a generic credential store exists; non-secret metadata and checkpoints should still be block-backed.',
-    currentAffordance: 'Use a setup dialog to explain where to get the token, then store only non-secret settings/checkpoints in blocks. Do not expose token values in bridge output.',
+    rule: 'Store credentials in `window.localStorage` under a `knowledge-medium:<plugin>:token:v1`-style key. Block-backed storage isn\'t appropriate for secrets because PowerSync ships block content to the server.',
+    currentAffordance: 'Render a setup Dialog that links to the provider\'s token page, validate the token against the provider\'s auth endpoint before saving, then write it to localStorage. Never include token values in action return payloads or bridge eval output.',
+    example: {
+      label: 'localStorage credential read/write',
+      code: [
+        "const TOKEN_KEY = 'knowledge-medium:readwise:token:v1'",
+        "",
+        "const loadToken = () => window.localStorage.getItem(TOKEN_KEY) || null",
+        "const saveToken = (t) => window.localStorage.setItem(TOKEN_KEY, t)",
+        "const clearToken = () => window.localStorage.removeItem(TOKEN_KEY)",
+        "",
+        "// Validate before saving so a typo doesn't get silently stored:",
+        "const ok = await fetch('https://readwise.io/api/v2/auth/', {",
+        "  headers: { Authorization: `Token ${candidate}` },",
+        "}).then(r => r.status === 204)",
+        "if (ok) saveToken(candidate)",
+      ].join('\n'),
+    },
   },
+}
+
+const settingsDialogExample: AuthoringExample = {
+  label: 'Setup dialog mounted via appMountsFacet, opened by an action',
+  code: [
+    "import {",
+    "  actionsFacet, appMountsFacet, ActionContextTypes,",
+    "} from '@/extensions/api.js'",
+    "import {",
+    "  Dialog, DialogContent, DialogDescription, DialogFooter,",
+    "  DialogHeader, DialogTitle,",
+    "} from '@/components/ui/dialog.js'",
+    "import { Button } from '@/components/ui/button.js'",
+    "import { Input } from '@/components/ui/input.js'",
+    "import { Label } from '@/components/ui/label.js'",
+    "import { useEffect, useState } from 'react'",
+    "",
+    "const OPEN_EVENT = 'readwise:configure:open'",
+    "",
+    "const ReadwiseSetupDialog = () => {",
+    "  const [open, setOpen] = useState(false)",
+    "  const [token, setToken] = useState('')",
+    "  useEffect(() => {",
+    "    const onOpen = () => setOpen(true)",
+    "    window.addEventListener(OPEN_EVENT, onOpen)",
+    "    return () => window.removeEventListener(OPEN_EVENT, onOpen)",
+    "  }, [])",
+    "  const save = async () => {",
+    "    // validate against Readwise auth endpoint, save to localStorage, close.",
+    "    setOpen(false)",
+    "  }",
+    "  return (",
+    "    <Dialog open={open} onOpenChange={setOpen}>",
+    "      <DialogContent>",
+    "        <DialogHeader>",
+    "          <DialogTitle>Connect Readwise</DialogTitle>",
+    "          <DialogDescription>",
+    "            Get a token from readwise.io/access_token and paste it here.",
+    "          </DialogDescription>",
+    "        </DialogHeader>",
+    "        <Label htmlFor='token'>Access token</Label>",
+    "        <Input id='token' value={token} onChange={e => setToken(e.target.value)} />",
+    "        <DialogFooter>",
+    "          <Button onClick={save}>Save</Button>",
+    "        </DialogFooter>",
+    "      </DialogContent>",
+    "    </Dialog>",
+    "  )",
+    "}",
+    "",
+    "export default [",
+    "  appMountsFacet.of(",
+    "    { id: 'readwise.setup-dialog', component: ReadwiseSetupDialog },",
+    "    { source: 'readwise' },",
+    "  ),",
+    "  actionsFacet.of({",
+    "    id: 'user.readwise.configure',",
+    "    description: 'Configure Readwise',",
+    "    context: ActionContextTypes.GLOBAL,",
+    "    handler: () => window.dispatchEvent(new CustomEvent(OPEN_EVENT)),",
+    "  }, { source: 'readwise' }),",
+    "]",
+  ].join('\n'),
 }
 
 const guides: AuthoringGuide[] = [
@@ -127,16 +289,16 @@ const guides: AuthoringGuide[] = [
     when: ['imports external API data', 'needs setup/config', 'needs manual sync'],
     principles: [
       'Use block-backed config and sync checkpoints.',
-      'Use a setup dialog instead of prompt/alert.',
-      'Keep credentials out of ordinary block content.',
-      'Upsert imported content by stable external ids.',
+      'Use a Dialog mounted through appMountsFacet for setup — never window.prompt/alert/confirm.',
+      'Store credentials in window.localStorage; everything else (settings, checkpoints, imported data) lives in blocks.',
+      'Use stable external ids on imported records, or derive their block ids deterministically with uuidv5, so re-syncs upsert instead of duplicating.',
     ],
     steps: [
-      'Define typed properties for external ids, source metadata, and sync checkpoints.',
-      'Add a setup dialog mounted through appMountsFacet when required configuration is missing.',
-      'Add a manual sync action through actionsFacet.',
-      'Store non-secret settings and checkpoints on a user prefs or workspace config block.',
-      'Upsert imported records as blocks and update existing blocks when the external id is already present.',
+      'Define typed properties for external ids and source metadata via `defineProperty` + `propertySchemasFacet`. Persist sync checkpoints on a `getPluginPrefsBlock` sub-block, not localStorage.',
+      'Render a Dialog component, mount it via `appMountsFacet`, open it on a `window` CustomEvent. The configure action dispatches that event. Validate credentials against the provider\'s auth endpoint before saving.',
+      'Add a manual sync action through `actionsFacet`. The handler reads the checkpoint from the prefs block, fetches incremental updates, and runs a single `repo.tx`.',
+      'Anchor imported content under a plugin-owned root block whose id is `uuidv5(`${workspaceId}:<key>`, NAMESPACE)` — see the `plugin-root-singleton` storage pattern.',
+      'Upsert child records the same way: derive the block id from the external id, or look up by an external-id property. Never create a second block for the same external record.',
     ],
     preferredModules: [
       '@/extensions/api.js',
@@ -145,12 +307,19 @@ const guides: AuthoringGuide[] = [
       '@/components/ui/button.js',
       '@/components/ui/label.js',
     ],
-    relatedFacets: ['core.actions', 'core.app-mounts', 'data.propertySchemas'],
+    relatedFacets: ['core.actions', 'core.app-mounts', 'data.propertySchemas', 'data.types'],
     commands: [
       'yarn agent describe-runtime --guide external-sync-plugin',
       'yarn agent describe-runtime --components dialog,input,button,label',
       'yarn agent describe-runtime --storage',
-      'yarn agent install-extension --reload --verify <file> <label>',
+      'yarn agent install-extension --reload <file> <label>',
+    ],
+    afterInstall: [
+      'User-installed extensions are disabled by default (`userExtensionToggle` sets `defaultEnabled: false`). After install, the agent must ask the user to enable the extension in Extensions settings before any action it contributes shows up in `yarn agent run-action`.',
+      'Do not retry `install-extension` if the action is "not found" — the install succeeded; the toggle is just off.',
+    ],
+    examples: [
+      settingsDialogExample,
     ],
   },
   {
@@ -158,15 +327,16 @@ const guides: AuthoringGuide[] = [
     title: 'Settings Dialog',
     when: ['needs user setup', 'needs explanatory text', 'needs form controls'],
     principles: [
-      'Render setup UI through appMountsFacet or an existing app mount.',
-      'Use system dialog and form components.',
-      'Persist saved values through block-backed config properties.',
+      'Render setup UI through appMountsFacet — Dialog component owns its own open/close state.',
+      'Open the dialog by dispatching a `window` CustomEvent from the action handler, and listen for it inside the Dialog with `useEffect`.',
+      'Use system dialog and form components (`Dialog`, `Input`, `Button`, `Label`) — they already match the app theme.',
+      'Validate credentials against the provider\'s auth endpoint before persisting.',
     ],
     steps: [
-      'Contribute an app mount that owns open/close state.',
-      'Render DialogContent with a clear title, description, fields, and action buttons.',
-      'Save values to a user prefs or workspace config block.',
-      'Trigger the dialog from an action or when required config is missing.',
+      'Build the dialog component with `useState` for open/close and a `useEffect` that subscribes to a `window.addEventListener` for your open-event.',
+      'Mount it once via `appMountsFacet.of({id, component}, {source})`.',
+      'Add a configure action whose handler dispatches the same event. The action shows up in the command palette and the agent CLI.',
+      'Save non-secret values via `getPluginPrefsBlock`; save credentials to `localStorage`.',
     ],
     preferredModules: [
       '@/extensions/api.js',
@@ -180,6 +350,9 @@ const guides: AuthoringGuide[] = [
       'yarn agent describe-runtime --components dialog,input,button,label',
       'yarn agent describe-runtime --modules components/ui',
     ],
+    examples: [
+      settingsDialogExample,
+    ],
   },
   {
     id: 'block-backed-config',
@@ -189,7 +362,8 @@ const guides: AuthoringGuide[] = [
     steps: [
       'Choose UserPrefs for per-user settings and BlockDefault for shared workspace/content data.',
       'Define properties with explicit codecs.',
-      'Store config on a deterministic block or user prefs block.',
+      'For per-plugin sub-blocks under user-prefs, define a `TypeContribution` via `defineBlockType` and read/write via `getPluginPrefsBlock(repo, workspaceId, user, type)`.',
+      'For plugin-owned singleton blocks (e.g. import roots), derive the id deterministically via `uuidv5(`${workspaceId}:<key>`, NS)` so re-installs land on the same block.',
       'Store large or user-visible imported data as child/content blocks.',
     ],
     preferredModules: ['@/extensions/api.js'],
@@ -197,6 +371,10 @@ const guides: AuthoringGuide[] = [
     commands: [
       'yarn agent describe-runtime --storage',
       'yarn agent describe-runtime --facets data.propertySchemas',
+    ],
+    examples: [
+      storageGuide.patterns.find(p => p.id === 'user-prefs-config')!.example!,
+      storageGuide.patterns.find(p => p.id === 'plugin-root-singleton')!.example!,
     ],
   },
 ]
