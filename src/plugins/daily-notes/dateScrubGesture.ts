@@ -1,7 +1,7 @@
 /**
  * Date scrub gestures:
  *   - mobile: two-finger horizontal drag
- *   - desktop: Ctrl+Alt + horizontal wheel / trackpad / Magic Mouse scroll
+ *   - desktop: Ctrl+Alt + vertical wheel / trackpad scroll
  *   - desktop: hold Ctrl+Alt, then use arrows / h-k-j-l to scrub by
  *     day or week
  *
@@ -15,7 +15,7 @@
  *     `ScrubHandler` on mount and unregisters on unmount. The overlay
  *     owns the runtime + adapter resolution + tooltip rendering.
  *   - This module owns the gesture tracking: per-block touch state,
- *     desktop wheel candidates, thresholds, scrub-active flag.
+ *     desktop modifier scrub state, thresholds, scrub-active flag.
  *   - When midpoint horizontal travel crosses the activation
  *     threshold (and dominates vertical travel — so a two-finger
  *     vertical scroll doesn't trip it, and a pinch-zoom where the
@@ -27,7 +27,7 @@
  *     Alt, which is the clearest "let go" signal for a modifier-gated
  *     stream.
  */
-import type { TouchEvent, WheelEvent } from 'react'
+import type { TouchEvent } from 'react'
 import hotkeys from 'hotkeys-js'
 import {
   isInteractiveContentEvent,
@@ -52,10 +52,9 @@ const isMobileViewport = (): boolean =>
  *  pinch keeps the midpoint roughly stationary; a vertical scroll
  *  moves it vertically; only a deliberate horizontal pan trips this. */
 const HORIZONTAL_LOCK_PX = 10
-/** Pixels of horizontal drag per ISO day. Picked so that ±2 weeks fits
+/** Pixels of scrub motion per ISO day. Picked so that ±2 weeks fits
  *  inside half a thumb-arc on a phone (~200px = 14 days). */
 const PIXELS_PER_DAY = 14
-const WHEEL_CANDIDATE_IDLE_MS = 180
 const WHEEL_LINE_PX = 16
 /** Vertical midpoint travel above this — once scrub is active —
  *  snaps the gesture into "cancel" intent. Released past this point
@@ -122,21 +121,6 @@ interface MultiTouch {
   scrubbing: boolean
 }
 
-interface WheelCandidate {
-  blockId: string
-  block: Block
-  startX: number
-  startY: number
-  dx: number
-  dy: number
-  clearTimer: number | null
-}
-
-interface WheelScrub {
-  blockId: string
-  dx: number
-}
-
 export interface KeyboardScrubTarget {
   block: Block
   adapter?: BlockDateAdapter
@@ -147,7 +131,7 @@ type KeyboardScrubTargetProvider = () => KeyboardScrubTarget | null
 interface KeyboardScrub {
   blockId: string
   keyDeltaDays: number
-  wheelDx: number
+  wheelPx: number
 }
 
 const KEYBOARD_SCRUB_HOTKEYS = ['ctrl+alt+h', 'ctrl+alt+k', 'ctrl+alt+j', 'ctrl+alt+l'] as const
@@ -163,10 +147,7 @@ const KEYBOARD_SCRUB_HOTKEY_DELTAS = new Map<string, number>([
  *  to a `MultiTouch` tracker. */
 const singleByBlockId = new Map<string, SingleFinger>()
 const multiByBlockId = new Map<string, MultiTouch>()
-let wheelCandidate: WheelCandidate | null = null
-let wheelScrub: WheelScrub | null = null
 let keyboardScrub: KeyboardScrub | null = null
-let wheelScrubListenersInstalled = false
 
 const isBlockEditing = (blockId: string, uiStateBlock: Block): boolean =>
   uiStateBlock.peekProperty(focusedBlockIdProp) === blockId &&
@@ -193,8 +174,8 @@ const findTouchById = (
   return null
 }
 
-const computeDeltaDays = (dx: number): number => {
-  const raw = Math.round(dx / PIXELS_PER_DAY)
+const computeDeltaDays = (offsetPx: number): number => {
+  const raw = Math.round(offsetPx / PIXELS_PER_DAY)
   if (raw > MAX_OFFSET_DAYS) return MAX_OFFSET_DAYS
   if (raw < MIN_OFFSET_DAYS) return MIN_OFFSET_DAYS
   return raw
@@ -203,22 +184,7 @@ const computeDeltaDays = (dx: number): number => {
 const clearAllForBlock = (blockId: string): void => {
   singleByBlockId.delete(blockId)
   multiByBlockId.delete(blockId)
-  if (wheelCandidate?.blockId === blockId) clearWheelCandidate()
-  if (wheelScrub?.blockId === blockId) finishWheelScrub(false)
   if (keyboardScrub?.blockId === blockId) finishKeyboardScrub(false)
-}
-
-const clearWheelCandidate = (): void => {
-  if (wheelCandidate?.clearTimer) window.clearTimeout(wheelCandidate.clearTimer)
-  wheelCandidate = null
-}
-
-const finishWheelScrub = (commit: boolean): void => {
-  const current = wheelScrub
-  if (!current) return
-  wheelScrub = null
-  removeWheelScrubListeners()
-  activeHandler?.end(commit)
 }
 
 const finishKeyboardScrub = (commit: boolean): void => {
@@ -237,36 +203,8 @@ const isControlReleaseEvent = (event: Pick<KeyboardEvent, 'code' | 'key'>): bool
 const isCtrlAltReleaseEvent = (event: Pick<KeyboardEvent, 'code' | 'key'>): boolean =>
   isAltReleaseEvent(event) || isControlReleaseEvent(event)
 
-const handleWheelScrubKeyUp = (event: KeyboardEvent): void => {
-  if (isCtrlAltReleaseEvent(event)) finishWheelScrub(true)
-}
-
-const handleWheelScrubKeyDown = (event: KeyboardEvent): void => {
-  if (event.key === 'Escape') finishWheelScrub(false)
-}
-
-const handleWheelScrubBlur = (): void => {
-  finishWheelScrub(false)
-}
-
-function installWheelScrubListeners(): void {
-  if (wheelScrubListenersInstalled || typeof window === 'undefined') return
-  window.addEventListener('keyup', handleWheelScrubKeyUp, true)
-  window.addEventListener('keydown', handleWheelScrubKeyDown, true)
-  window.addEventListener('blur', handleWheelScrubBlur)
-  wheelScrubListenersInstalled = true
-}
-
-function removeWheelScrubListeners(): void {
-  if (!wheelScrubListenersInstalled || typeof window === 'undefined') return
-  window.removeEventListener('keyup', handleWheelScrubKeyUp, true)
-  window.removeEventListener('keydown', handleWheelScrubKeyDown, true)
-  window.removeEventListener('blur', handleWheelScrubBlur)
-  wheelScrubListenersInstalled = false
-}
-
 const normalizeWheelDelta = (
-  event: Pick<WheelEvent, 'deltaMode' | 'deltaX' | 'deltaY'>,
+  event: Pick<globalThis.WheelEvent, 'deltaMode' | 'deltaX' | 'deltaY'>,
 ): {dx: number; dy: number} => {
   const multiplier = event.deltaMode === 1
     ? WHEEL_LINE_PX
@@ -279,12 +217,11 @@ const normalizeWheelDelta = (
   }
 }
 
-const scheduleWheelCandidateClear = (): void => {
-  if (!wheelCandidate) return
-  if (wheelCandidate.clearTimer) window.clearTimeout(wheelCandidate.clearTimer)
-  wheelCandidate.clearTimer = window.setTimeout(() => {
-    clearWheelCandidate()
-  }, WHEEL_CANDIDATE_IDLE_MS)
+const scrubPixelsForWheelDelta = (
+  event: Pick<globalThis.WheelEvent, 'deltaMode' | 'deltaX' | 'deltaY'>,
+): number => {
+  const {dy} = normalizeWheelDelta(event)
+  return -dy
 }
 
 const escapeCssIdent = (value: string): string => {
@@ -319,6 +256,8 @@ const keyboardScrubAnchorPoint = (blockId: string): {x: number; y: number} => {
 }
 
 const keyboardDeltaDaysForKey = (event: KeyboardEvent): number | null => {
+  if (event.key === '¬') return 7
+
   switch (event.key) {
     case 'ArrowUp':
       return 1
@@ -345,7 +284,7 @@ const keyboardDeltaDaysForKey = (event: KeyboardEvent): number | null => {
 }
 
 const keyboardScrubTotalDays = (scrub: KeyboardScrub): number =>
-  clampDeltaDays(scrub.keyDeltaDays + computeDeltaDays(scrub.wheelDx))
+  clampDeltaDays(scrub.keyDeltaDays + computeDeltaDays(scrub.wheelPx))
 
 const clampDeltaDays = (deltaDays: number): number => {
   if (deltaDays > MAX_OFFSET_DAYS) return MAX_OFFSET_DAYS
@@ -370,7 +309,7 @@ const startKeyboardScrub = (target: KeyboardScrubTarget): KeyboardScrub | null =
   const next = {
     blockId: target.block.id,
     keyDeltaDays: 0,
-    wheelDx: 0,
+    wheelPx: 0,
   }
   keyboardScrub = next
   return next
@@ -393,13 +332,13 @@ const updateKeyboardScrubByDays = (
 
 const updateKeyboardScrubByWheel = (
   scrub: KeyboardScrub,
-  event: WheelEvent | globalThis.WheelEvent,
+  event: globalThis.WheelEvent,
 ): void => {
-  const {dx} = normalizeWheelDelta(event)
-  if (dx === 0) return
+  const deltaPx = scrubPixelsForWheelDelta(event)
+  if (deltaPx === 0) return
   event.preventDefault()
   event.stopPropagation()
-  scrub.wheelDx += dx
+  scrub.wheelPx += deltaPx
   activeHandler?.update(keyboardScrubTotalDays(scrub), false)
 }
 
@@ -644,85 +583,6 @@ export const dateScrubContentSurface: BlockContentSurfaceContribution = context 
       const wasScrubbing = multi.scrubbing
       multiByBlockId.delete(block.id)
       if (wasScrubbing) activeHandler?.end(false)
-    },
-  }
-}
-
-export const dateWheelScrubContentSurface: BlockContentSurfaceContribution = context => {
-  const {block, uiStateBlock} = context
-
-  return {
-    onWheel: (event: WheelEvent) => {
-      if (isMobileViewport()) return
-      if (!event.ctrlKey || !event.altKey) {
-        if (wheelScrub) finishWheelScrub(true)
-        return
-      }
-      // Buttons, editors, and other controls own their wheel behavior.
-      // Links and video follow the mobile gesture exemption: the date
-      // gesture can still apply to rendered content inside the block.
-      if (!isOnInteractiveSurface(event) && isInteractiveContentEvent(event)) {
-        clearAllForBlock(block.id)
-        return
-      }
-      if (isBlockEditing(block.id, uiStateBlock)) return
-
-      const {dx, dy} = normalizeWheelDelta(event)
-      if (dx === 0 && dy === 0) return
-
-      if (wheelScrub && wheelScrub.blockId !== block.id) {
-        finishWheelScrub(true)
-      }
-
-      if (!wheelScrub) {
-        if (!wheelCandidate || wheelCandidate.blockId !== block.id) {
-          clearWheelCandidate()
-          wheelCandidate = {
-            blockId: block.id,
-            block,
-            startX: event.clientX,
-            startY: event.clientY,
-            dx: 0,
-            dy: 0,
-            clearTimer: null,
-          }
-        }
-
-        wheelCandidate.dx += dx
-        wheelCandidate.dy += dy
-        scheduleWheelCandidateClear()
-
-        if (Math.abs(wheelCandidate.dx) <= HORIZONTAL_LOCK_PX) return
-        if (Math.abs(wheelCandidate.dx) <= Math.abs(wheelCandidate.dy)) {
-          clearWheelCandidate()
-          return
-        }
-        if (!activeHandler) {
-          clearWheelCandidate()
-          return
-        }
-
-        const candidate = wheelCandidate
-        const accepted = activeHandler.start({
-          block: candidate.block,
-          blockId: candidate.blockId,
-          startX: candidate.startX,
-          startY: candidate.startY,
-        })
-        clearWheelCandidate()
-        if (!accepted) return
-
-        wheelScrub = {
-          blockId: candidate.blockId,
-          dx: candidate.dx,
-        }
-        installWheelScrubListeners()
-      } else {
-        wheelScrub.dx += dx
-      }
-
-      event.preventDefault()
-      activeHandler?.update(computeDeltaDays(wheelScrub.dx), false)
     },
   }
 }

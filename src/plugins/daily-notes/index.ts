@@ -71,10 +71,7 @@ import { dailyDateWikilinkDecorator } from './wikilinkDateDecorator.ts'
 import { ReschedulePicker } from './ReschedulePicker.tsx'
 import { DateScrubOverlay } from './DateScrubOverlay.tsx'
 import { DateKeyboardScrubController } from './DateKeyboardScrubController.tsx'
-import {
-  dateScrubContentSurface,
-  dateWheelScrubContentSurface,
-} from './dateScrubGesture.ts'
+import { dateScrubContentSurface } from './dateScrubGesture.ts'
 import {
   rescheduleBlockDateAction,
   rescheduleQuickActionItem,
@@ -195,7 +192,6 @@ export const dailyNotesPlugin = ({repo}: {repo: Repo}): AppExtension =>
     blockDateAdapterFacet.of(referenceDateAdapter, {source: 'daily-notes'}),
     wikilinkDisplayDecoratorFacet.of(dailyDateWikilinkDecorator, {source: 'daily-notes'}),
     blockContentSurfacePropsFacet.of(dateScrubContentSurface, {source: 'daily-notes'}),
-    blockContentSurfacePropsFacet.of(dateWheelScrubContentSurface, {source: 'daily-notes'}),
     actionsFacet.of(openDailyNotePickerAction({repo}), {source: 'daily-notes'}),
     headerItemsFacet.of(dailyNotePickerHeaderItem, {
       source: 'daily-notes',
