@@ -47,9 +47,10 @@ Commands:
   yarn agent subtree <rootId> [--include-root]
   yarn agent create-block <json>
   yarn agent update-block <json>
-  yarn agent install-extension [--verify] <file> [label]
+  yarn agent install-extension [--verify] [--description <text>] <file> [label]
                                   (reload is automatic; --verify reports the
-                                  facets/actions the extension contributes)
+                                  facets/actions the extension contributes;
+                                  label defaults to the filename without ext)
   yarn agent enable-extension <id|label>
   yarn agent disable-extension <id|label>
   yarn agent run-action <id> [depsJson]
@@ -181,9 +182,11 @@ const formatCliOutput = (verb, args, value) => {
 const parseInstallExtensionArgs = args => {
   let reload = false
   let verify = false
+  let description
   const rest = []
 
-  for (const arg of args) {
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]
     if (arg === '--reload') {
       reload = true
       continue
@@ -192,12 +195,21 @@ const parseInstallExtensionArgs = args => {
       verify = true
       continue
     }
+    if (arg === '--description') {
+      description = args[i + 1]
+      i += 1
+      continue
+    }
+    if (arg.startsWith('--description=')) {
+      description = arg.slice('--description='.length)
+      continue
+    }
     rest.push(arg)
   }
 
   const [file, ...labelParts] = rest
   if (!file) throw new Error('install-extension requires <file>')
-  return {file, label: labelParts.join(' ').trim(), reload, verify}
+  return {file, label: labelParts.join(' ').trim(), reload, verify, description}
 }
 
 // Accept "<id>" (UUID) or "<label>" — extensions installed via the
@@ -639,6 +651,21 @@ const connectInteractively = async ({force = false} = {}) => {
   await connectWithToken(token, {saveBeforeVerify: false})
 }
 
+// Errors the server returns when the client has temporarily lost its
+// token registration (typical after a `yarn agent reload` or after
+// `install-extension` triggers refreshAppRuntime). Retrying on these
+// for ~10–15s smooths over the reconnect gap without papering over
+// real auth failures (scope mismatch, missing token, etc.).
+const isTransientTokenError = (error) => {
+  const message = String(error?.message ?? '')
+  return message.includes('Unknown or expired token')
+    || message.includes('Missing or invalid command status credentials')
+}
+
+const authedRetryTotalMs = 15_000
+const authedRetryStartDelayMs = 200
+const authedRetryMaxDelayMs = 1_000
+
 const authedRequest = async (url, options = {}) => {
   const token = await resolveToken()
   if (!token) {
@@ -647,13 +674,27 @@ const authedRequest = async (url, options = {}) => {
     )
   }
 
-  return requestJson(url, {
+  const send = () => requestJson(url, {
     ...options,
     headers: {
       ...(options.headers ?? {}),
       authorization: `Bearer ${token}`,
     },
   })
+
+  const start = Date.now()
+  let delay = authedRetryStartDelayMs
+  while (true) {
+    try {
+      return await send()
+    } catch (error) {
+      if (!isTransientTokenError(error) || Date.now() - start >= authedRetryTotalMs) {
+        throw error
+      }
+      await sleep(delay)
+      delay = Math.min(Math.round(delay * 1.5), authedRetryMaxDelayMs)
+    }
+  }
 }
 
 const submitCommand = async command => {
@@ -756,7 +797,7 @@ const commandFromArgs = async args => {
       }
 
     case 'install-extension': {
-      const {file, label, reload, verify} = parseInstallExtensionArgs(rest)
+      const {file, label, reload, verify, description} = parseInstallExtensionArgs(rest)
       const source = await fs.readFile(file, 'utf8')
       const basename = path.basename(file).replace(/\.[^.]+$/, '')
       return {
@@ -765,6 +806,7 @@ const commandFromArgs = async args => {
         label: label || basename,
         ...(reload ? {reload: true} : {}),
         ...(verify ? {verify: true} : {}),
+        ...(description !== undefined ? {description} : {}),
       }
     }
 

@@ -36,6 +36,9 @@ export interface UpdateBlockInput {
 export interface InstallExtensionInput {
   source: string
   label?: string
+  /** Optional human-readable description shown in Extensions settings.
+   *  Written to `extension:description` on the block. */
+  description?: string
   parentId?: string
   id?: string
   reload?: boolean

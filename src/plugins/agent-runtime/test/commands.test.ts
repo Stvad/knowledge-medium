@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { BlockCache } from '@/data/blockCache'
 import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
-import { aliasesProp, extensionNameProp, typesProp } from '@/data/properties'
+import { aliasesProp, extensionDescriptionProp, extensionNameProp, typesProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions'
@@ -54,6 +54,7 @@ describe('agent runtime commands', () => {
       type: 'install-extension',
       source: 'export default []',
       label: 'Example extension',
+      description: 'A worked example for the agent bridge',
       reload: false,
     }, env.context) as InstallExtensionResult
 
@@ -67,8 +68,25 @@ describe('agent runtime commands', () => {
 
     const installed = await env.repo.load(result.id)
     expect(installed?.properties[extensionNameProp.name]).toEqual('Example extension')
+    expect(installed?.properties[extensionDescriptionProp.name]).toEqual(
+      'A worked example for the agent bridge',
+    )
     expect(installed?.properties[aliasesProp.name]).toEqual(['Example extension'])
     expect(installed?.properties[typesProp.name]).toEqual([EXTENSION_TYPE, PAGE_TYPE])
+  })
+
+  it('omits extension:description when not provided', async () => {
+    const result = await executeCommand({
+      commandId: 'install-no-desc',
+      type: 'install-extension',
+      source: 'export default []',
+      label: 'No description',
+      reload: false,
+    }, env.context) as InstallExtensionResult
+
+    const installed = await env.repo.load(result.id)
+    expect(installed?.properties[extensionNameProp.name]).toEqual('No description')
+    expect(installed?.properties[extensionDescriptionProp.name]).toBeUndefined()
   })
 
   it('verify reports actions reached via FacetContribution.enables', async () => {

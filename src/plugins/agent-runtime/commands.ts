@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom'
 import type { Repo } from '@/data/repo'
 import type { Block } from '@/data/block'
 import { ChangeScope, type BlockData, type BlockReference } from '@/data/api'
-import { aliasesProp, extensionNameProp } from '@/data/properties.ts'
+import { aliasesProp, extensionDescriptionProp, extensionNameProp } from '@/data/properties.ts'
 import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { keyAtEnd } from '@/data/orderKey.ts'
 import {
@@ -314,6 +314,7 @@ const extensionAliasValues = (data: BlockData | null): string[] => {
 const extensionBlockProperties = (
   existing: BlockProperties | undefined,
   label: string | null,
+  description: string | null,
 ): BlockProperties => {
   const aliases = new Set<string>(Array.isArray(existing?.[aliasesProp.name])
     ? (existing?.[aliasesProp.name] as unknown[]).filter(isString)
@@ -323,6 +324,11 @@ const extensionBlockProperties = (
   return {
     ...(existing ?? {}),
     ...(label ? {[extensionNameProp.name]: extensionNameProp.codec.encode(label)} : {}),
+    // `description ?? ''` keeps an explicit clear (`--description ""`)
+    // distinguishable from "leave existing description alone" (null).
+    ...(description !== null
+      ? {[extensionDescriptionProp.name]: extensionDescriptionProp.codec.encode(description ?? '')}
+      : {}),
     ...(aliases.size > 0 ? {[aliasesProp.name]: aliasesProp.codec.encode([...aliases])} : {}),
   }
 }
@@ -340,6 +346,10 @@ const installRuntimeExtension = async (
   const source = input.source.trimEnd()
   if (!source) throw new Error('install-extension requires non-empty source')
 
+  // description=null means "leave existing description untouched on update,
+  // skip writing it on first install". An explicit empty string clears it.
+  const description = input.description === undefined ? null : input.description
+
   const label = input.label?.trim() || null
   const workspaceId = resolveWorkspaceId(repo)
   const existingExtensions = await repo.query.findExtensionBlocks({workspaceId}).load() as BlockData[]
@@ -354,7 +364,7 @@ const installRuntimeExtension = async (
     await repo.tx(async tx => {
       const current = await tx.get(existing.id)
       if (!current) throw new Error(`Extension block ${existing.id} disappeared before update`)
-      const properties = extensionBlockProperties(current.properties, label)
+      const properties = extensionBlockProperties(current.properties, label, description)
       await tx.update(existing.id, {
         content: source,
         properties,
@@ -411,7 +421,7 @@ const installRuntimeExtension = async (
     }
 
     const siblings = await tx.childrenOf(parentId, workspaceId)
-    const properties = extensionBlockProperties(undefined, label)
+    const properties = extensionBlockProperties(undefined, label, description)
     installedId = await tx.create({
       id: installedId || undefined,
       workspaceId,
@@ -739,6 +749,9 @@ export const executeCommand = async (
         label: command.label === undefined
           ? undefined
           : requireString(command.label, 'label'),
+        description: command.description === undefined
+          ? undefined
+          : requireString(command.description, 'description'),
         parentId: command.parentId === undefined
           ? undefined
           : requireString(command.parentId, 'parentId'),
