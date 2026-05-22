@@ -26,7 +26,11 @@
  * Recovery: when the previously-focused instance is no longer mounted,
  *   `locateInstance` falls back through three tiers — exact key match,
  *   any instance of the same block in that panel, then a positional
- *   index hint clamped into the current list.
+ *   hint that resolves to "the block just above where the user was".
+ *   The positional tier only fires when the stored hint actually
+ *   describes the focused block we're recovering for — a stale hint
+ *   for some unrelated previous focus is ignored, so panels the user
+ *   has never sat in won't get a misfired recovery jump.
  */
 
 const INSTANCE_SELECTOR = '[data-block-instance]'
@@ -36,13 +40,20 @@ const COLUMN_SELECTOR = '[data-layout-column-id]'
 const NON_NAVIGABLE_SURFACES = new Set(['breadcrumb'])
 
 /**
- * Session-only per-panel positional hint. Updated whenever spatial
- * navigation settles on an instance; consulted as the last-resort
- * recovery tier when neither the focused-key nor focused-block lookups
- * succeed. Module-level, never persisted: the DOM order that gave the
- * index meaning is gone after a reload, so persisting would mislead.
+ * Session-only per-panel positional hint. Tracks `{blockId, index}` so
+ * we can both find "block just above where the user was" AND verify
+ * the hint is actually about the block we're recovering for — without
+ * that match check a stale hint from earlier in the session could
+ * snap focus into a panel the user has never visited. Module-level,
+ * never persisted: the DOM order that gave the index meaning is gone
+ * after a reload, so persisting would mislead.
  */
-const lastIndexByPanel = new Map<string, number>()
+interface PanelPositionHint {
+  blockId: string
+  index: number
+}
+
+const lastPositionByPanel = new Map<string, PanelPositionHint>()
 
 const isNavigable = (el: HTMLElement): boolean => {
   const surface = el.dataset.blockSurface
@@ -84,9 +95,11 @@ const clamp = (n: number, lo: number, hi: number): number =>
   Math.max(lo, Math.min(hi, n))
 
 /**
- * Record the focused instance's positional index inside its panel.
- * Called whenever spatial navigation lands on an instance; the index
- * is later consumed by `locateInstance`'s third-tier recovery.
+ * Record the focused instance's `{blockId, index}` inside its panel.
+ * Called whenever spatial navigation (or the proactive focus-recovery
+ * watcher) confirms that the focused block has a live DOM instance.
+ * The hint is consumed by `locateInstance`'s third-tier recovery when
+ * that block later disappears.
  */
 export const rememberInstancePosition = (
   panelId: string,
@@ -96,8 +109,21 @@ export const rememberInstancePosition = (
   if (!panel) return
   const instances = panelInstances(panel)
   const idx = instances.indexOf(instanceEl)
-  if (idx >= 0) lastIndexByPanel.set(panelId, idx)
+  if (idx < 0) return
+  const blockId = instanceEl.dataset.blockId
+  if (!blockId) return
+  lastPositionByPanel.set(panelId, {blockId, index: idx})
 }
+
+/**
+ * Read-only access to the stored positional hint. Proactive focus
+ * recovery uses this to gate writes on a positive prior sighting —
+ * `locateInstance`'s tier-4 fallback (first instance) is fine for
+ * keystroke-time recovery but would forcibly steal focus on an
+ * initial panel mount before async data finishes loading.
+ */
+export const peekPositionHint = (panelId: string): {blockId: string; index: number} | undefined =>
+  lastPositionByPanel.get(panelId)
 
 /**
  * Resolve which instance inside `panelId` should hold focus, given the
@@ -105,7 +131,16 @@ export const rememberInstancePosition = (
  *
  *   1. exact match on `focusedVisualTargetKey` (`data-block-instance`)
  *   2. any visible instance of `focusedBlockId` inside the panel
- *   3. positional index hint (module-level Map), clamped
+ *   3. "block just above where the user was" — the stored index minus
+ *      one, clamped into the current list. Only fires when the stored
+ *      hint is actually about `focusedBlockId`; a stale hint for some
+ *      unrelated previously-focused block is ignored. The `-1` makes
+ *      both user-visible cases land on the natural recovery target:
+ *      a backlink edited out → the preceding sibling; the parent of
+ *      the focused block collapsed → the parent itself (which, in
+ *      DOM order, is the block immediately above the disappeared
+ *      child).
+ *   4. first instance in the panel (last-resort default).
  */
 export const locateInstance = (
   panelId: string,
@@ -130,9 +165,9 @@ export const locateInstance = (
     if (byBlock) return byBlock
   }
 
-  const stored = lastIndexByPanel.get(panelId)
-  if (stored != null) {
-    return instances[clamp(stored, 0, instances.length - 1)] ?? null
+  const stored = lastPositionByPanel.get(panelId)
+  if (stored && (!hints.focusedBlockId || stored.blockId === hints.focusedBlockId)) {
+    return instances[clamp(stored.index - 1, 0, instances.length - 1)] ?? null
   }
 
   return instances[0] ?? null
@@ -222,5 +257,5 @@ export const horizontalNeighborPanel = (
 
 /** Test-only: drop the positional-index hints. */
 export const __resetSpatialNavigationForTesting = (): void => {
-  lastIndexByPanel.clear()
+  lastPositionByPanel.clear()
 }

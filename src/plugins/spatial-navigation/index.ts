@@ -1,11 +1,21 @@
 import type { AppExtension } from '@/extensions/facet.ts'
 import { blockShellDecoratorsFacet } from '@/extensions/blockInteraction.ts'
+import {
+  panelMountsFacet,
+  type PanelMountContribution,
+} from '@/extensions/core.ts'
 import { systemToggle } from '@/extensions/togglable.ts'
 import {
   spatialNavigationActionDecoratorsExtension,
   spatialNavigationActionsExtension,
 } from './actions.ts'
+import { PanelFocusRecovery } from './PanelFocusRecovery.tsx'
 import { spatialNavigationShellDecorator } from './shell.ts'
+
+const panelFocusRecoveryMount: PanelMountContribution = {
+  id: 'spatial-navigation.panel-focus-recovery',
+  component: PanelFocusRecovery,
+}
 
 export const spatialNavigationPlugin: AppExtension = systemToggle({
   id: 'system:spatial-navigation',
@@ -15,6 +25,10 @@ export const spatialNavigationPlugin: AppExtension = systemToggle({
   blockShellDecoratorsFacet.of(spatialNavigationShellDecorator, {source: 'spatial-navigation'}),
   spatialNavigationActionDecoratorsExtension,
   spatialNavigationActionsExtension,
+  // Per-panel watchdog: when the focused block disappears (backlink
+  // edited out, parent collapsed) we focus "block just above" instead
+  // of leaving the panel with a dead focusedBlockId pointer.
+  panelMountsFacet.of(panelFocusRecoveryMount, {source: 'spatial-navigation'}),
 ])
 
 export {

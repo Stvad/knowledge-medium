@@ -258,7 +258,7 @@ describe('locateInstance recovery', () => {
     expect(result?.dataset.blockInstance).toBe('p1:A-new')
   })
 
-  it('tier 3: positional fallback when the focused block is gone', () => {
+  it("tier 3: recovers to 'block just above' when the focused block disappeared", () => {
     buildLayout([
       {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
         {blockId: 'X', instance: 'p1:X'},
@@ -266,33 +266,42 @@ describe('locateInstance recovery', () => {
         {blockId: 'Z', instance: 'p1:Z'},
       ]}},
     ])
-    // Pretend the user was on the second item before everything re-rendered.
+    // User was sitting on Y — we tracked its position.
     rememberInstancePosition('p1', findInstance('p1:Y'))
-    // Now the focused block 'A' is no longer anywhere; the key is gone too.
-    const result = locateInstance('p1', {focusedBlockId: 'A', focusedVisualTargetKey: 'gone'})
-    expect(result?.dataset.blockInstance).toBe('p1:Y')
+    // Y is edited out of the panel (e.g. a backlink that no longer
+    // matches); X and Z remain.
+    findInstance('p1:Y').remove()
+    // focusedBlockId still points to Y. Recovery target: the block
+    // immediately above Y was X, so we land on X.
+    const result = locateInstance('p1', {focusedBlockId: 'Y'})
+    expect(result?.dataset.blockInstance).toBe('p1:X')
   })
 
-  it('tier 3: clamps the positional hint into the current list size', () => {
+  it('tier 3: clamps "block just above" to 0 when the disappeared block was first', () => {
+    buildLayout([
+      {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
+        {blockId: 'A', instance: 'p1:A'},
+        {blockId: 'B', instance: 'p1:B'},
+      ]}},
+    ])
+    rememberInstancePosition('p1', findInstance('p1:A'))
+    findInstance('p1:A').remove()
+    // A was at idx 0; -1 clamps to 0 in the remaining single-item list.
+    expect(locateInstance('p1', {focusedBlockId: 'A'})?.dataset.blockInstance).toBe('p1:B')
+  })
+
+  it('tier 3: ignores a stale hint that points to a different block', () => {
     buildLayout([
       {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
         {blockId: 'X', instance: 'p1:X'},
+        {blockId: 'Y', instance: 'p1:Y'},
+        {blockId: 'Z', instance: 'p1:Z'},
       ]}},
     ])
-    // Pretend we previously remembered position 7 in a much longer list.
-    rememberInstancePosition('p1', findInstance('p1:X'))
-    // Use a higher index manually via the API (simulate stale hint).
-    // Re-position, then add a fake higher remembered index by walking
-    // through the public API — easier: just leave the existing
-    // remember which is 0 and assert it works; then mutate the DOM to
-    // shrink. For now: confirm clamp returns the only item.
-    document.body.innerHTML = ''
-    buildLayout([
-      {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
-        {blockId: 'X', instance: 'p1:X'},
-      ]}},
-    ])
-    const result = locateInstance('p1', {focusedBlockId: 'gone', focusedVisualTargetKey: 'gone'})
+    // Hint records Y, but we're recovering for an unrelated 'A' that
+    // never sat in this panel. Falls through to tier 4 (first instance).
+    rememberInstancePosition('p1', findInstance('p1:Y'))
+    const result = locateInstance('p1', {focusedBlockId: 'A', focusedVisualTargetKey: 'gone'})
     expect(result?.dataset.blockInstance).toBe('p1:X')
   })
 
