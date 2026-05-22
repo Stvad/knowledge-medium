@@ -162,22 +162,28 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
     ]),
 
     sect('Pages & links', [
-      '[[Tutorial]] — text wrapped in double square brackets becomes a wiki link to (or creates) a page with that name. Try clicking the link to the left.',
+      'Wiki links — text wrapped in double square brackets becomes a clickable link to (or creates) a page with that name. Try the link on the next bullet: [[extensions]] takes you to the extensions page (one of the other seeded pages in this workspace).',
       `Find or create any page: ${sharedKeys.quickFind}. Type to filter; pressing Enter on a missing name creates it.`,
       `Command palette: ${sharedKeys.commandPalette}. **Every** action in the app is searchable here with its key shown — use this when you forget a shortcut, or to find actions that have no default binding.`,
       `Find and replace across the workspace: ${sharedKeys.findReplace}.`,
       {
-        content: 'Block refs and embeds — wiki links point at a *page* (resolved by name). A block ref `((block-id))` points at one specific block anywhere in your workspace; an embed `!((block-id))` renders the target inline instead of as a link.',
+        content: 'Block refs and embeds — wiki links point at a *page* (resolved by name). A block ref `((block-id))` points at one specific block anywhere in your workspace; an embed `!((block-id))` renders the target block inline instead of as a link.',
         children: [
           {
             id: refDemoTargetId,
             content: '👋 I am the demo target. Focus me and press `Alt+Y` to copy a ref to me, or `Shift+Y` to copy an embed — then paste in a new bullet to see the result.',
+            children: [
+              { content: "I'm a child of the demo target. Embeds bring children along — so the bare-embed bullet further down will render me too." },
+            ],
           },
           {
-            content: `Demo ref → ((${refDemoTargetId})) — clicking this navigates to the demo target above.`,
+            content: `Demo ref → ((${refDemoTargetId})) — clicking this link navigates to the demo target above.`,
           },
           {
-            content: `Demo embed → !((${refDemoTargetId})) — the target above is rendered inline below this prose.`,
+            content: 'The bullet below this one is a bare embed (`!((<id>))` on its own line, nothing else). It renders the demo target inline — and notice the child of the demo target comes along too:',
+          },
+          {
+            content: `!((${refDemoTargetId}))`,
           },
         ],
       },
