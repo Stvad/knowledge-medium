@@ -119,6 +119,13 @@ export interface RuntimeDescriptionFilters {
   modules?: string[]
   components?: string[]
   storage?: boolean
+  /** When true, return the authoring sections (guides, storage,
+   *  apiSurface) without the bulky runtime introspection sections
+   *  (actions, facets, renderers, modules, components). The CLI sets
+   *  this implicitly when `--guide` is passed alone, so an agent
+   *  fetching extension-authoring guidance doesn't get 350KB of
+   *  unrelated runtime detail in the response. */
+  brief?: boolean
 }
 
 export interface RuntimePing {
@@ -306,11 +313,14 @@ export const describeRuntime = async (
 ): Promise<RuntimeDescription> => {
   const apiSurface = await getApiSurface()
 
-  return {
-    activeWorkspaceId: context.repo.activeWorkspaceId,
-    currentUser: context.repo.user,
-    safeMode: context.safeMode,
-    actions: context.actions
+  // `brief` callers want authoring-only output. Empty the bulky
+  // runtime-introspection arrays — actions/facets/renderers are
+  // ~150KB combined and irrelevant if you're reading a guide.
+  const briefMode = filters.brief === true
+
+  const actions = briefMode
+    ? []
+    : context.actions
       .filter(action => matchesAnyFilter(filters.actions, action.id, action.description, action.context))
       .map(action => {
         const schema = dependencySchemaForContext(action.context)
@@ -324,15 +334,28 @@ export const describeRuntime = async (
           cliDependencyKeys: schema.cliInputKeys,
           ...(schema.notes ? {cliDependencyNotes: schema.notes} : {}),
         }
-      }),
-    renderers: Object.keys(context.renderers),
-    facets: describeFacets(context.runtime)
-      .filter(facet => matchesAnyFilter(filters.facets, facet.id)),
+      })
+
+  return {
+    activeWorkspaceId: context.repo.activeWorkspaceId,
+    currentUser: context.repo.user,
+    safeMode: context.safeMode,
+    actions,
+    renderers: briefMode ? [] : Object.keys(context.renderers),
+    facets: briefMode
+      ? []
+      : describeFacets(context.runtime)
+        .filter(facet => matchesAnyFilter(filters.facets, facet.id)),
     apiSurface,
     authoring: describeAuthoringCatalog(apiSurface, {
       guides: filters.guides,
       modules: filters.modules,
       components: filters.components,
+      // In brief mode, suppress the module/component glob dumps —
+      // they're 150KB of internal paths the agent doesn't need while
+      // reading a guide. The guide's `preferredModules` field already
+      // names what matters.
+      omitDiscoverableModules: briefMode,
     }, context.document),
   }
 }

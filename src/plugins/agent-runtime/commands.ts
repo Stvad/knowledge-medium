@@ -681,6 +681,7 @@ export const executeCommand = async (
         modules: optionalStringArray(command.modules),
         components: optionalStringArray(command.components),
         storage: command.storage === true,
+        brief: command.brief === true,
       })
 
     case 'sql': {

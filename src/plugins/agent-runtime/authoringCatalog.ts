@@ -76,6 +76,11 @@ export interface AuthoringCatalogFilters {
   guides?: string[]
   modules?: string[]
   components?: string[]
+  /** When true, omit modules and components entirely. The
+   *  guide-only / `--brief` path uses this to keep the response
+   *  small — module/component glob dumps are 150KB of paths the
+   *  agent doesn't need while reading a guide. */
+  omitDiscoverableModules?: boolean
 }
 
 interface ApiSurfaceLike {
@@ -442,10 +447,12 @@ const guides: AuthoringGuide[] = [
     ],
     relatedFacets: ['core.actions', 'core.app-mounts', 'core.app-effects', 'data.propertySchemas', 'data.types'],
     commands: [
-      'yarn agent describe-runtime --guide external-sync-plugin',
+      'yarn agent describe-runtime --guide external-sync-plugin --storage',
       'yarn agent describe-runtime --components dialog,input,button,label',
-      'yarn agent describe-runtime --storage',
-      'yarn agent install-extension [--verify] <file> <label>',
+      // Convention: extension source files live under `agent-extensions/`
+      // at the repo root. The matrix-chat-client + canvas-layout
+      // extensions are there as references.
+      'yarn agent install-extension --verify [--description "<text>"] agent-extensions/<plugin>.js <label>',
       'yarn agent enable-extension <label>',
     ],
     afterInstall: [
@@ -771,16 +778,20 @@ export const describeAuthoringCatalog = (
   filters: AuthoringCatalogFilters = {},
   document?: Document,
 ): AuthoringCatalog => {
-  const modules = mergeModules([
-    ...generatedModules(apiSurface),
-    ...documentModules(document),
-  ]).filter(module =>
-    matchesTerms(filters.modules, module.importPath, module.category, module.description, module.exports),
-  )
+  const modules = filters.omitDiscoverableModules
+    ? []
+    : mergeModules([
+      ...generatedModules(apiSurface),
+      ...documentModules(document),
+    ]).filter(module =>
+      matchesTerms(filters.modules, module.importPath, module.category, module.description, module.exports),
+    )
 
-  const components = generatedComponents().filter(component =>
-    matchesTerms(filters.components, component.name, component.importPath, component.category, component.description, component.exports),
-  )
+  const components = filters.omitDiscoverableModules
+    ? []
+    : generatedComponents().filter(component =>
+      matchesTerms(filters.components, component.name, component.importPath, component.category, component.description, component.exports),
+    )
 
   return {
     guides: guides.filter(guide =>

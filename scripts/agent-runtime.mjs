@@ -41,10 +41,15 @@ Commands:
   yarn agent runtime-summary      show compact agent-oriented runtime context
   yarn agent describe-runtime [--actions <text>] [--facets <text>] [--guide <id>]
                                [--modules <text>] [--components <text>] [--storage]
+                               [--full]
                                   show full or targeted runtime diagnostics.
                                   This is the canonical "what's registered"
                                   view — prefer it over reaching into
                                   facetRuntime / Repo internals through eval.
+                                  When --guide is passed alone, response
+                                  defaults to brief (just guides + storage +
+                                  apiSurface, ~16KB). Pass --full to also
+                                  include actions/facets/modules/components.
   yarn agent sql <all|get|optional|execute> <sql> [paramsJson]
   yarn agent get-block <id>
   yarn agent subtree <rootId> [--include-root]
@@ -90,6 +95,10 @@ const parseDescribeRuntimeArgs = args => {
     components: [],
     storage: false,
   }
+  // Implicit brief mode: when the agent says "show me the guide" we
+  // default to authoring-only output. They can pass `--full` to get
+  // actions / facets / discoverable-modules back.
+  let fullRequested = false
 
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i]
@@ -148,8 +157,25 @@ const parseDescribeRuntimeArgs = args => {
       filters.storage = true
       continue
     }
+    if (arg === '--full') {
+      fullRequested = true
+      continue
+    }
     throw new Error(`Unknown describe-runtime option: ${arg}`)
   }
+
+  // Brief by default whenever --guide was the agent's intent and they
+  // didn't opt into other heavy sections. If they passed any of
+  // actions/facets/modules/components filters explicitly, they
+  // wanted those — don't override.
+  const heavyFilterPresent
+    = filters.actions.length > 0
+      || filters.facets.length > 0
+      || filters.modules.length > 0
+      || filters.components.length > 0
+  const briefImplied
+    = filters.guides.length > 0 && !heavyFilterPresent && !fullRequested
+  if (briefImplied) filters.brief = true
 
   return {
     ...(filters.actions.length > 0 ? {actions: filters.actions} : {}),
@@ -158,6 +184,7 @@ const parseDescribeRuntimeArgs = args => {
     ...(filters.modules.length > 0 ? {modules: filters.modules} : {}),
     ...(filters.components.length > 0 ? {components: filters.components} : {}),
     ...(filters.storage ? {storage: true} : {}),
+    ...(filters.brief ? {brief: true} : {}),
   }
 }
 

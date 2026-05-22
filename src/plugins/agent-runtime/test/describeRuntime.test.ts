@@ -264,6 +264,39 @@ describe('describeRuntime', () => {
     expect(surface.exports).not.toContain('uuidv5')
   })
 
+  it('brief mode drops actions/facets/renderers/modules/components from the response', async () => {
+    const facet = defineFacet({id: 'brief.facet'})
+    const runtime = await resolveFacetRuntime([
+      facet.of({id: 'an-action', description: 'x', context: 'global', handler: () => {}}),
+    ])
+
+    const description = await describeRuntime({
+      repo: fakeRepo,
+      runtime,
+      safeMode: false,
+      actions: [makeAction('an-action', false)],
+      renderers: {default: () => null, custom: () => null},
+    }, {
+      guides: ['external-sync-plugin'],
+      brief: true,
+    })
+
+    // Bulk sections empty in brief mode...
+    expect(description.actions).toEqual([])
+    expect(description.facets).toEqual([])
+    expect(description.renderers).toEqual([])
+    expect(description.authoring.modules).toEqual([])
+    expect(description.authoring.components).toEqual([])
+
+    // ...but the authoring content the agent actually wants is still there.
+    expect(description.authoring.guides.map(g => g.id)).toContain('external-sync-plugin')
+    expect(description.authoring.storage.patterns.length).toBeGreaterThan(0)
+    expect(description.apiSurface.exports.length).toBeGreaterThan(0)
+
+    // Whole brief-mode response should be small — the whole point.
+    expect(JSON.stringify(description).length).toBeLessThan(40_000)
+  })
+
   it('exposes the authoring primitives plugins reach for first', async () => {
     const surface = await getApiSurface()
     // Without these, agents either pull from internal modules
