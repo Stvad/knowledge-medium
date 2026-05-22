@@ -1,94 +1,147 @@
 import { v4 as uuidv4 } from 'uuid'
 import { ChangeScope } from '@/data/api'
+import type { Tx } from '@/data/api'
 import type { Repo } from './data/repo'
 import { aliasesProp } from '@/data/properties'
-import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
+import { PAGE_TYPE } from '@/data/blockTypes'
+import { keysBetween } from '@/data/orderKey'
 import {
-  exampleExtensions,
-  TUTORIAL_README,
-} from '@/extensions/exampleExtensions.ts'
+  EXTENSIONS_PAGE_TITLE,
+  extensionsPageOutline,
+  tutorialOutline,
+  TUTORIAL_DEFAULT_TITLE,
+  TUTORIAL_VIM_TITLE,
+  type TutorialNode,
+} from '@/tutorial/outline'
 
-/** Property name + encoded value for the hello-renderer example
- *  extension's gating prop (`user:hello = true`). The schema itself
- *  is registered by the example extension at load time; the seed
- *  just writes the encoded boolean. Kept inline so initData stays
- *  decoupled from the example extension's TS source. */
-const HELLO_PROP_NAME = 'user:hello'
-
-/** Creates a parent-less Tutorial page carrying intro text + a sample
- *  renderer-bound block + the example-extensions subtree. Used by the
- *  personal-workspace bootstrap; reachable from the landing daily
- *  note via a `[[Tutorial]]` bullet that App.tsx prepends on first
- *  run. Returns the tutorial page id so callers can navigate to it
- *  if they want a tutorial-first landing.
+/**
+ * Seeds the starter Tutorial subtree on a freshly-created personal
+ * workspace. Three parent-less pages are written in one tx:
  *
- *  All inserts run in one `repo.tx` so the whole tutorial subtree
- *  appears atomically. Order keys are simple incrementing letters
- *  (`a0`, `a1`, ...) — fine for seed data, no need for fractional
- *  indexing here. */
-export const seedTutorial = async (repo: Repo, workspaceId: string): Promise<string> => {
-  const tutorialRootId = uuidv4()
-  const introId = uuidv4()
-  const sampleId = uuidv4()
-  const extensionsParentId = uuidv4()
-  const extensionIds = exampleExtensions.map(() => uuidv4())
+ *   - `Tutorial` (vim variant; the default landing target)
+ *   - `Tutorial (no vim)` (variant for users with vim mode disabled)
+ *   - `extensions` (shared page that holds the explanatory bullets and
+ *     the seven example-extension source blocks; both Tutorial variants
+ *     link to it via `[[extensions]]` so the examples aren't duplicated)
+ *
+ * The two Tutorial variants share one outline builder so their
+ * structure stays in sync between variants. Reachable from the landing
+ * daily note via a `[[Tutorial]]` bullet that `App.tsx` prepends on
+ * first run; the no-vim variant is reachable from a cross-link bullet
+ * at the top of the vim Tutorial.
+ *
+ * All inserts run in a single `repo.tx` so the whole subtree appears
+ * atomically AND the cross-page wiki links resolve correctly — every
+ * alias row exists before `parseReferences` (the post-commit processor)
+ * runs against the bullets that reference the other pages. Returns the
+ * id of the vim Tutorial so callers can use it as a tutorial-first
+ * landing target.
+ */
+export const seedTutorial = async (
+  repo: Repo,
+  workspaceId: string,
+): Promise<string> => {
+  const vimTutorialId = uuidv4()
+  const defaultTutorialId = uuidv4()
+  const extensionsPageId = uuidv4()
   const typeSnapshot = repo.snapshotTypeRegistries()
 
-  await repo.tx(async tx => {
-    // Tutorial root.
-    await tx.create({
-      id: tutorialRootId,
-      workspaceId,
-      parentId: null,
-      orderKey: 'a0',
-      content: 'Tutorial',
-    })
-    await repo.addTypeInTx(tx, tutorialRootId, PAGE_TYPE, {[aliasesProp.name]: ['Tutorial']}, typeSnapshot)
+  // Three parent-less pages; their root order keys don't really matter
+  // (parent=null means no canonical sibling list) but `tx.create`
+  // requires one.
+  const [vimKey, defaultKey, extensionsKey] = keysBetween(null, null, 3)
 
-    // First child of root: intro README.
-    await tx.create({
-      id: introId,
-      workspaceId,
-      parentId: tutorialRootId,
-      orderKey: 'a0',
-      content: TUTORIAL_README,
-    })
-
-    // Second child: sample block routed to the hello-renderer
-    // example extension's content variant via the `user:hello`
-    // gating property.
-    await tx.create({
-      id: sampleId,
-      workspaceId,
-      parentId: tutorialRootId,
-      orderKey: 'a1',
-      content: 'A block that uses the hello-renderer extension',
-      properties: {[HELLO_PROP_NAME]: true},
-    })
-
-    // Third child: extensions parent.
-    await tx.create({
-      id: extensionsParentId,
-      workspaceId,
-      parentId: tutorialRootId,
-      orderKey: 'a2',
-      content: 'extensions',
-    })
-    await repo.addTypeInTx(tx, extensionsParentId, PAGE_TYPE, {[aliasesProp.name]: ['extensions']}, typeSnapshot)
-
-    // Each example extension block as a child of `extensionsParentId`.
-    for (let i = 0; i < exampleExtensions.length; i++) {
-      const example = exampleExtensions[i]
-      await tx.create({
-        id: extensionIds[i],
+  await repo.tx(
+    async tx => {
+      await seedPage(repo, tx, typeSnapshot, {
+        id: vimTutorialId,
         workspaceId,
-        parentId: extensionsParentId,
-        orderKey: `a${i}`,
-        content: example.source,
+        orderKey: vimKey,
+        title: TUTORIAL_VIM_TITLE,
+        aliases: [TUTORIAL_VIM_TITLE],
+        children: tutorialOutline('vim'),
       })
-      await repo.addTypeInTx(tx, extensionIds[i], EXTENSION_TYPE, {}, typeSnapshot)
-    }
-  }, {scope: ChangeScope.BlockDefault, description: 'seed tutorial'})
+      await seedPage(repo, tx, typeSnapshot, {
+        id: defaultTutorialId,
+        workspaceId,
+        orderKey: defaultKey,
+        title: TUTORIAL_DEFAULT_TITLE,
+        aliases: [TUTORIAL_DEFAULT_TITLE],
+        children: tutorialOutline('default'),
+      })
+      await seedPage(repo, tx, typeSnapshot, {
+        id: extensionsPageId,
+        workspaceId,
+        orderKey: extensionsKey,
+        title: EXTENSIONS_PAGE_TITLE,
+        aliases: [EXTENSIONS_PAGE_TITLE],
+        children: extensionsPageOutline(),
+      })
+    },
+    { scope: ChangeScope.BlockDefault, description: 'seed tutorial' },
+  )
 
-  return tutorialRootId
+  return vimTutorialId
+}
+
+interface SeedPageArgs {
+  id: string
+  workspaceId: string
+  orderKey: string
+  title: string
+  aliases: string[]
+  children: ReadonlyArray<TutorialNode>
+}
+
+const seedPage = async (
+  repo: Repo,
+  tx: Tx,
+  typeSnapshot: ReturnType<Repo['snapshotTypeRegistries']>,
+  args: SeedPageArgs,
+): Promise<void> => {
+  await tx.create({
+    id: args.id,
+    workspaceId: args.workspaceId,
+    parentId: null,
+    orderKey: args.orderKey,
+    content: args.title,
+  })
+  await repo.addTypeInTx(
+    tx,
+    args.id,
+    PAGE_TYPE,
+    { [aliasesProp.name]: args.aliases },
+    typeSnapshot,
+  )
+  await seedChildren(repo, tx, typeSnapshot, args.workspaceId, args.id, args.children)
+}
+
+const seedChildren = async (
+  repo: Repo,
+  tx: Tx,
+  typeSnapshot: ReturnType<Repo['snapshotTypeRegistries']>,
+  workspaceId: string,
+  parentId: string,
+  nodes: ReadonlyArray<TutorialNode>,
+): Promise<void> => {
+  if (nodes.length === 0) return
+  const keys = keysBetween(null, null, nodes.length)
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i]
+    const id = uuidv4()
+    await tx.create({
+      id,
+      workspaceId,
+      parentId,
+      orderKey: keys[i],
+      content: node.content,
+      properties: node.properties,
+    })
+    if (node.type) {
+      await repo.addTypeInTx(tx, id, node.type, node.typeProperties ?? {}, typeSnapshot)
+    }
+    if (node.children && node.children.length > 0) {
+      await seedChildren(repo, tx, typeSnapshot, workspaceId, id, node.children)
+    }
+  }
 }

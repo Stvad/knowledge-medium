@@ -1,32 +1,30 @@
 // @vitest-environment node
 /**
  * Tests for `seedTutorial` — the personal-workspace bootstrap helper
- * that lays down the Tutorial subtree (root + intro README + sample
- * renderer block + extensions parent + one block per example
- * extension). All inserts run inside one `repo.tx`, so the whole
- * subtree appears atomically.
+ * that lays down the Tutorial subtree. Two parent-less Tutorial pages
+ * are written from a shared outline builder (`tutorialOutline`):
+ *   - `Tutorial` (vim variant; the default landing target)
+ *   - `Tutorial (no vim)` (variant for users with vim mode disabled)
  *
- * Coverage:
- *   - Creates a parent-less Tutorial page with the canonical alias
- *   - Returns the tutorial root id
- *   - Lays down the intro + sample renderer children with the right
- *     properties
- *   - Lays down the extensions parent + one extension-typed child per example
- *   - All inserts share a single tx (one command_events row)
- *
- * Replaces deleted `src/test/initData.test.ts` (legacy `Repo`/`Block`
- * surface). The new test runs through the real commit pipeline via
- * `createTestDb`.
+ * Each page carries its canonical alias, the outline sections (Welcome,
+ * basics, navigation, …), and an `extensions/` sub-page whose children
+ * are one block per example extension. All inserts run in a single
+ * `repo.tx` so both pages land atomically.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { aliasesProp } from '@/data/properties'
-import { EXTENSION_TYPE } from '@/data/blockTypes'
+import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '../data/repo'
 import { seedTutorial } from '@/initData'
-import { exampleExtensions, TUTORIAL_README } from '@/extensions/exampleExtensions'
+import { exampleExtensions } from '@/extensions/exampleExtensions'
+import {
+  EXTENSIONS_PAGE_TITLE,
+  TUTORIAL_DEFAULT_TITLE,
+  TUTORIAL_VIM_TITLE,
+} from '@/tutorial/outline'
 
 const WS = 'ws-1'
 
@@ -43,92 +41,113 @@ const setup = async (): Promise<Harness> => {
   const repo = new Repo({
     db: h.db,
     cache,
-    user: {id: 'user-1'},
+    user: { id: 'user-1' },
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
-    // Don't run parseReferences — TUTORIAL_README may contain
-    // wikilinks which would create alias targets we'd then have to
+    // Don't run parseReferences — the seeded outlines contain wiki
+    // links (`[[Tutorial]]`, `[[Tutorial (no vim)]]`) which would
+    // otherwise create alias-target side effects we'd then have to
     // count around. Tests focus on what seedTutorial writes.
     registerKernelProcessors: false,
   })
-  return {h, repo}
+  return { h, repo }
 }
 
 let env: Harness
 beforeEach(async () => { env = await setup() })
 afterEach(async () => { await env.h.cleanup() })
 
+const listAllBlockIds = async (h: TestDb): Promise<string[]> => {
+  const rows = await h.db.getAll<{ id: string }>('SELECT id FROM blocks WHERE deleted = 0')
+  return rows.map(r => r.id)
+}
+
+const findPageByAlias = async (h: TestDb, repo: Repo, alias: string): Promise<string | null> => {
+  for (const id of await listAllBlockIds(h)) {
+    await repo.load(id)
+    const aliases = repo.block(id).peekProperty(aliasesProp)
+    if (Array.isArray(aliases) && aliases.includes(alias)) return id
+  }
+  return null
+}
+
 describe('seedTutorial', () => {
-  it('creates a parent-less Tutorial page with the canonical alias', async () => {
-    const tutorialId = await seedTutorial(env.repo, WS)
-    await env.repo.load(tutorialId)
-    const tutorial = env.repo.block(tutorialId)
-    const data = tutorial.peek()
-
-    expect(data?.parentId).toBeNull()
-    expect(data?.workspaceId).toBe(WS)
-    expect(data?.content).toBe('Tutorial')
-    expect(tutorial.peekProperty(aliasesProp)).toEqual(['Tutorial'])
-  })
-
-  it('returns the tutorial root id from the helper', async () => {
+  it('returns the vim Tutorial root id (the default landing target)', async () => {
     const tutorialId = await seedTutorial(env.repo, WS)
     expect(typeof tutorialId).toBe('string')
     expect(tutorialId).toMatch(/^[0-9a-f-]{36}$/)
+
+    await env.repo.load(tutorialId)
+    const tutorial = env.repo.block(tutorialId)
+    const data = tutorial.peek()
+    expect(data?.parentId).toBeNull()
+    expect(data?.workspaceId).toBe(WS)
+    expect(data?.content).toBe(TUTORIAL_VIM_TITLE)
+    expect(tutorial.peekProperty(aliasesProp)).toEqual([TUTORIAL_VIM_TITLE])
+    expect(tutorial.hasType(PAGE_TYPE)).toBe(true)
   })
 
-  it('lays down the intro README + sample renderer block as children', async () => {
+  it('also creates a parent-less Tutorial (no vim) page with the canonical alias', async () => {
+    await seedTutorial(env.repo, WS)
+    const defaultId = await findPageByAlias(env.h, env.repo, TUTORIAL_DEFAULT_TITLE)
+    expect(defaultId).not.toBeNull()
+    const page = env.repo.block(defaultId!)
+    const data = page.peek()
+    expect(data?.parentId).toBeNull()
+    expect(data?.content).toBe(TUTORIAL_DEFAULT_TITLE)
+    expect(page.peekProperty(aliasesProp)).toEqual([TUTORIAL_DEFAULT_TITLE])
+    expect(page.hasType(PAGE_TYPE)).toBe(true)
+  })
+
+  it('seeds the outline as a tree of children under each Tutorial page', async () => {
     const tutorialId = await seedTutorial(env.repo, WS)
-    await env.repo.load(tutorialId, {descendants: true})
+    await env.repo.load(tutorialId, { descendants: true })
 
     const tutorial = env.repo.block(tutorialId)
     const childIds = await tutorial.childIds.load()
-    // Three direct children: intro, sample, extensions parent
-    expect(childIds.length).toBe(3)
-
-    const intro = env.repo.block(childIds[0])
-    expect(intro.peek()?.content).toBe(TUTORIAL_README)
-
-    const sample = env.repo.block(childIds[1])
-    expect(sample.peek()?.content).toBe('A block that uses the hello-renderer extension')
-    // Sample block opts into the hello-renderer content variant via
-    // its gating prop. The example extension registers the schema;
-    // the seed writes the raw encoded boolean.
-    expect(sample.peek()?.properties['user:hello']).toBe(true)
+    // The outline has many top-level sections (Welcome, basics,
+    // navigation, …, extensions). Asserting the exact count would make
+    // this brittle against future copy-edits; just sanity-check it's
+    // multi-section.
+    expect(childIds.length).toBeGreaterThan(5)
   })
 
-  it('creates an extensions parent labeled "extensions" with the canonical alias', async () => {
-    const tutorialId = await seedTutorial(env.repo, WS)
-    await env.repo.load(tutorialId, {descendants: true})
+  it('seeds a shared parent-less `extensions` page with the example extension blocks underneath', async () => {
+    await seedTutorial(env.repo, WS)
 
-    const childIds = await env.repo.block(tutorialId).childIds.load()
-    const extensionsParent = env.repo.block(childIds[2])
-    expect(extensionsParent.peek()?.content).toBe('extensions')
-    expect(extensionsParent.peekProperty(aliasesProp)).toEqual(['extensions'])
-  })
+    const extensionsId = await findPageByAlias(env.h, env.repo, EXTENSIONS_PAGE_TITLE)
+    expect(extensionsId).not.toBeNull()
+    await env.repo.load(extensionsId!, { descendants: true })
+    const extensionsPage = env.repo.block(extensionsId!)
+    expect(extensionsPage.peek()?.parentId).toBeNull()
+    expect(extensionsPage.hasType(PAGE_TYPE)).toBe(true)
 
-  it('seeds one block per example extension, all tagged as extension', async () => {
-    const tutorialId = await seedTutorial(env.repo, WS)
-    await env.repo.load(tutorialId, {descendants: true})
-
-    const tutorialChildIds = await env.repo.block(tutorialId).childIds.load()
-    const extensionsParent = env.repo.block(tutorialChildIds[2])
-    const extBlockIds = await extensionsParent.childIds.load()
-    const extBlocks = extBlockIds.map(id => env.repo.block(id))
-
-    expect(extBlocks).toHaveLength(exampleExtensions.length)
-    for (const block of extBlocks) {
-      expect(block.hasType(EXTENSION_TYPE)).toBe(true)
-    }
+    const extChildIds = await extensionsPage.childIds.load()
+    const extensionTyped = extChildIds
+      .map(id => env.repo.block(id))
+      .filter(b => b.hasType(EXTENSION_TYPE))
+    expect(extensionTyped).toHaveLength(exampleExtensions.length)
     // Source content matches example extensions in declaration order.
-    expect(extBlocks.map(b => b.peek()?.content)).toEqual(
+    expect(extensionTyped.map(b => b.peek()?.content)).toEqual(
       exampleExtensions.map(e => e.source),
     )
   })
 
+  it('seeds a hello-renderer demo block carrying the user:hello gating property', async () => {
+    const tutorialId = await seedTutorial(env.repo, WS)
+    await env.repo.load(tutorialId, { descendants: true })
+
+    const allIds = await listAllBlockIds(env.h)
+    for (const id of allIds) await env.repo.load(id)
+    const helloDemo = allIds
+      .map(id => env.repo.block(id))
+      .find(b => b.peek()?.properties['user:hello'] === true)
+    expect(helloDemo).toBeDefined()
+  })
+
   it('all inserts share a single tx — exactly one command_events row', async () => {
     await seedTutorial(env.repo, WS)
-    const rows = await env.h.db.getAll<{count: number}>(
+    const rows = await env.h.db.getAll<{ count: number }>(
       'SELECT COUNT(*) AS count FROM command_events',
     )
     expect(rows[0]?.count).toBe(1)

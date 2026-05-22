@@ -420,28 +420,6 @@ export const exampleExtensions: readonly ExampleExtensionDefinition[] = [
   },
 ]
 
-export const TUTORIAL_README = `Welcome — this is a malleable thought medium.
-
-Below are example **extension blocks** (\`types: ['extension']\`) that show the kinds of things you can build:
-
-- **hello-renderer** — registers a content-renderer variant gated by \`user:hello = true\` (shows the variant-facet pattern).
-- **fold-all-action** — an action with a default keyboard shortcut.
-- **emoji-react** — a multi-facet plugin (decorating content renderer + click handler + action).
-- **kudos-facet** — defines a brand-new facet and decorates the content with a banner.
-- **split-layout** — replaces the block layout for blocks tagged \`user:layout = split\`, placing content and children side by side.
-- **layout-renderer-override** — overrides the app-wide \`layout\` renderer id and wraps the normal panel layout with a custom frame. Inserting it changes every panel until you disable it in Extensions settings.
-- **default-renderer-placeholder** — overrides the fallback \`default\` renderer id so ordinary empty blocks show a muted read-mode placeholder. Inserting it changes every default-rendered block until you disable it in Extensions settings.
-
-To author your own:
-1. Create a block with property \`types = ['extension']\`.
-2. Set its content to a TS/JSX module whose \`default\` export is an \`AppExtension\` — a FacetContribution, an array, or a function returning one.
-3. Import what you need from \`@/extensions/api.js\` (\`Object.keys(km)\` to discover; or check the agent bridge's describeRuntime).
-4. Open **Extensions** from the command palette, tick the extension row, then run "Reload extensions" after editing.
-
-To re-insert these examples beside any block, run **Insert example extensions** from the command palette.
-
-User extensions start disabled. To turn one on or off without deleting it, open **Extensions** from the command palette and toggle its row. The override is per-device and persists across reloads.`
-
 /**
  * Append the example-extension blocks under `parentBlock`. Used by the
  * `insert_example_extensions` command to re-seed examples in any
