@@ -4,6 +4,7 @@ import { NestedBlockContextProvider, useBlockContext } from '@/context/block.tsx
 import { Button } from '@/components/ui/button.tsx'
 import { ChevronLeft, ChevronRight, X } from 'lucide-react'
 import {
+  activePanelIdProp,
   focusedBlockIdProp,
   scrollTopProp,
   topLevelBlockIdProp,
@@ -13,7 +14,7 @@ import { useRepo } from '@/context/repo'
 import { useActionContext } from '@/shortcuts/useActionContext'
 import { ActionContextTypes } from '@/shortcuts/types'
 import { useCallback, useEffect, useMemo, useRef } from 'react'
-import { usePropertyValue } from '@/hooks/block.ts'
+import { useHandle, usePropertyValue } from '@/hooks/block.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import { panelMountsFacet } from '@/extensions/core.ts'
 import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.tsx'
@@ -61,6 +62,22 @@ export function PanelRenderer({block}: BlockRendererProps) {
   const wideScrollSurface = Boolean(blockContext.wideScrollSurface) && !stackedPanel
 
   const repo = useRepo()
+
+  // Active-panel indicator. Selector returns a per-panel boolean so
+  // only the two panels whose membership flips re-render when
+  // `activePanelId` changes — same pattern as `useInFocus`'s selector
+  // (see globalState.ts). Subscribing to the raw activePanelId value
+  // via `usePropertyValue` would re-render every panel on each hop
+  // (and trigger a downstream cascade observed as a layout jump).
+  const layoutSessionBlockId = typeof blockContext.layoutSessionBlockId === 'string'
+    ? blockContext.layoutSessionBlockId
+    : undefined
+  const layoutSessionBlock = layoutSessionBlockId ? repo.block(layoutSessionBlockId) : block
+  const isActivePanel = useHandle(layoutSessionBlock, {
+    selector: doc =>
+      Boolean(layoutSessionBlockId)
+      && doc?.properties[activePanelIdProp.name] === block.id,
+  })
 
   const {canBack, canForward} = usePanelHistory(block.id)
   const runtime = useAppRuntime()
@@ -183,9 +200,10 @@ export function PanelRenderer({block}: BlockRendererProps) {
   return (
     <div
       data-panel-id={block.id}
+      data-panel-active={isActivePanel ? 'true' : undefined}
       className={`panel min-w-0 max-w-full flex flex-col relative ${
         stackedPanel ? 'overflow-visible' : 'h-full flex-grow overflow-hidden'
-      }`}>
+      } ${isActivePanel ? 'panel-active' : ''}`}>
       <PanelMultiSelectActionContext/>
       {wideScrollSurface ? (
         <div className="pointer-events-none absolute inset-x-0 top-1 z-10">
