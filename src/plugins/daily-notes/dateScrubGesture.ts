@@ -1,8 +1,8 @@
 /**
  * Date scrub gestures:
  *   - mobile: two-finger horizontal drag
- *   - desktop: Ctrl+Alt + vertical wheel / trackpad scroll
- *   - desktop: hold Ctrl+Alt, then use arrows / h-k-j-l to scrub by
+ *   - desktop: Ctrl+Shift + vertical wheel / trackpad scroll
+ *   - desktop: hold Ctrl+Shift, then use arrows / h-k-j-l to scrub by
  *     day or week
  *
  * Long-press is intentionally NOT used: that gesture belongs to
@@ -24,11 +24,10 @@
  *     candidate so the same gesture doesn't also open the swipe menu.
  *   - Either tracked finger lifting ends the mobile scrub. Desktop
  *     wheel and keyboard scrub commit when the user releases Ctrl or
- *     Alt, which is the clearest "let go" signal for a modifier-gated
+ *     Shift, which is the clearest "let go" signal for a modifier-gated
  *     stream.
  */
 import type { TouchEvent } from 'react'
-import hotkeys from 'hotkeys-js'
 import {
   isInteractiveContentEvent,
   type BlockContentSurfaceContribution,
@@ -134,12 +133,11 @@ interface KeyboardScrub {
   wheelPx: number
 }
 
-const KEYBOARD_SCRUB_HOTKEYS = ['ctrl+alt+h', 'ctrl+alt+k', 'ctrl+alt+j', 'ctrl+alt+l'] as const
-const KEYBOARD_SCRUB_HOTKEY_DELTAS = new Map<string, number>([
-  ['ctrl+alt+h', 1],
-  ['ctrl+alt+k', -1],
-  ['ctrl+alt+j', -7],
-  ['ctrl+alt+l', 7],
+const KEYBOARD_SCRUB_KEY_DELTAS = new Map<string, number>([
+  ['h', 1],
+  ['k', -1],
+  ['j', -7],
+  ['l', 7],
 ])
 
 /** First finger landed on a block but the second hasn't arrived yet —
@@ -194,14 +192,14 @@ const finishKeyboardScrub = (commit: boolean): void => {
   activeHandler?.end(commit)
 }
 
-const isAltReleaseEvent = (event: Pick<KeyboardEvent, 'code' | 'key'>): boolean =>
-  event.key === 'Alt' || event.code === 'AltLeft' || event.code === 'AltRight'
+const isShiftReleaseEvent = (event: Pick<KeyboardEvent, 'code' | 'key'>): boolean =>
+  event.key === 'Shift' || event.code === 'ShiftLeft' || event.code === 'ShiftRight'
 
 const isControlReleaseEvent = (event: Pick<KeyboardEvent, 'code' | 'key'>): boolean =>
   event.key === 'Control' || event.code === 'ControlLeft' || event.code === 'ControlRight'
 
-const isCtrlAltReleaseEvent = (event: Pick<KeyboardEvent, 'code' | 'key'>): boolean =>
-  isAltReleaseEvent(event) || isControlReleaseEvent(event)
+const isCtrlShiftReleaseEvent = (event: Pick<KeyboardEvent, 'code' | 'key'>): boolean =>
+  isShiftReleaseEvent(event) || isControlReleaseEvent(event)
 
 const normalizeWheelDelta = (
   event: Pick<globalThis.WheelEvent, 'deltaMode' | 'deltaX' | 'deltaY'>,
@@ -256,10 +254,6 @@ const keyboardScrubAnchorPoint = (blockId: string): {x: number; y: number} => {
 }
 
 const keyboardDeltaDaysForKey = (event: KeyboardEvent): number | null => {
-  if (event.key === '¬') return 7
-  // Ctrl+L can surface as form-feed / Clear instead of the printable "l".
-  if (event.key === '\f' || event.key === 'Clear') return 7
-
   switch (event.key) {
     case 'ArrowUp':
       return 1
@@ -271,18 +265,7 @@ const keyboardDeltaDaysForKey = (event: KeyboardEvent): number | null => {
       return -7
   }
 
-  switch (event.key.toLowerCase()) {
-    case 'h':
-      return 1
-    case 'k':
-      return -1
-    case 'l':
-      return 7
-    case 'j':
-      return -7
-    default:
-      return null
-  }
+  return KEYBOARD_SCRUB_KEY_DELTAS.get(event.key.toLowerCase()) ?? null
 }
 
 const keyboardScrubTotalDays = (scrub: KeyboardScrub): number =>
@@ -364,10 +347,10 @@ export const installDateKeyboardScrubListeners = (
       return
     }
 
-    if (!event.ctrlKey || !event.altKey) return
+    if (!event.ctrlKey || !event.shiftKey) return
 
     const delta = keyboardDeltaDaysForKey(event)
-    const modifierActivation = isCtrlAltReleaseEvent(event)
+    const modifierActivation = isCtrlShiftReleaseEvent(event)
     if (delta === null && !modifierActivation) return
 
     const target = getTarget()
@@ -379,23 +362,8 @@ export const installDateKeyboardScrubListeners = (
     updateKeyboardScrubByDays(current, delta, event)
   }
 
-  const handleHotkeyDelta = (event: KeyboardEvent, hotkeysEvent: {shortcut?: string}): boolean => {
-    const shortcut = hotkeysEvent.shortcut?.toLowerCase()
-    const delta = shortcut ? KEYBOARD_SCRUB_HOTKEY_DELTAS.get(shortcut) : undefined
-    if (delta === undefined) return true
-
-    const current = keyboardScrub ?? (() => {
-      const target = getTarget()
-      return target ? startKeyboardScrub(target) : null
-    })()
-    if (!current) return true
-
-    updateKeyboardScrubByDays(current, delta, event)
-    return false
-  }
-
   const handleKeyUp = (event: KeyboardEvent): void => {
-    if (!keyboardScrub || !isCtrlAltReleaseEvent(event)) return
+    if (!keyboardScrub || !isCtrlShiftReleaseEvent(event)) return
     consumeKeyboardScrubEvent(event)
     finishKeyboardScrub(true)
   }
@@ -405,7 +373,7 @@ export const installDateKeyboardScrubListeners = (
   }
 
   const handleWheel = (event: globalThis.WheelEvent): void => {
-    if (!event.ctrlKey || !event.altKey) return
+    if (!event.ctrlKey || !event.shiftKey) return
     const current = keyboardScrub ?? (() => {
       const target = getTarget()
       return target ? startKeyboardScrub(target) : null
@@ -418,10 +386,8 @@ export const installDateKeyboardScrubListeners = (
   window.addEventListener('keyup', handleKeyUp, true)
   window.addEventListener('blur', handleBlur)
   window.addEventListener('wheel', handleWheel, {capture: true, passive: false})
-  for (const key of KEYBOARD_SCRUB_HOTKEYS) hotkeys(key, handleHotkeyDelta)
 
   return () => {
-    for (const key of KEYBOARD_SCRUB_HOTKEYS) hotkeys.unbind(key, handleHotkeyDelta)
     window.removeEventListener('keydown', handleKeyDown, true)
     window.removeEventListener('keyup', handleKeyUp, true)
     window.removeEventListener('blur', handleBlur)

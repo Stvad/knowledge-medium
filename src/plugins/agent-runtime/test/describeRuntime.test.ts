@@ -223,7 +223,16 @@ describe('describeRuntime', () => {
     const exampleCode = syncGuide?.examples?.map(example => example.code).join('\n') ?? ''
     expect(exampleCode).toContain('appMountsFacet')
     expect(exampleCode).toContain('DialogContent')
+    // Toast surface + useRepo + openDialog must show up in the worked
+    // examples — these are the gotchas a fresh agent would otherwise
+    // reach for window.alert / window globals to work around.
+    expect(exampleCode).toContain('useRepo')
+    expect(exampleCode).toContain('showSuccess')
+    expect(exampleCode).toContain('showError')
+    expect(exampleCode).toContain('openDialog')
     expect(exampleCode).not.toContain('window.prompt')
+    expect(exampleCode).not.toContain('window.alert')
+    expect(exampleCode).not.toContain('window.confirm')
 
     // Storage guide must bless localStorage for credentials and call
     // out deterministic uuids for plugin-owned singletons.
@@ -253,6 +262,27 @@ describe('describeRuntime', () => {
     // and isn't re-exported, so plugins don't grow ad-hoc lib deps.
     expect(surface.exports).toContain('pluginBlockId')
     expect(surface.exports).not.toContain('uuidv5')
+  })
+
+  it('exposes the authoring primitives plugins reach for first', async () => {
+    const surface = await getApiSurface()
+    // Without these, agents either pull from internal modules
+    // (@/utils/toast, @/utils/dialogs, @/data/orderKey, @/context/repo)
+    // or fall back to window.alert / window globals / ad-hoc ordering.
+    // The api.ts barrel is the discovery surface, so these have to
+    // appear there for the agent to find them without grepping.
+    for (const name of [
+      'useRepo',
+      'openDialog',
+      'showError',
+      'showInfo',
+      'showSuccess',
+      'showProgress',
+      'keyAtEnd',
+      'keysBetween',
+    ]) {
+      expect(surface.exports).toContain(name)
+    }
   })
 
   it('produces a payload with activeWorkspaceId, currentUser, safeMode, actions, renderers, facets, apiSurface, authoring', async () => {
@@ -346,7 +376,10 @@ describe('describeRuntime', () => {
     expect(description.facets.map(facet => facet.id)).toEqual(['data.propertySchemas'])
     expect(description.authoring.guides.map(guide => guide.id)).toEqual(['external-sync-plugin'])
     expect(description.authoring.modules.every(module =>
-      [module.importPath, module.category, module.description].join(' ').toLowerCase().includes('dialog'),
+      [module.importPath, module.category, module.description, ...(module.exports ?? [])]
+        .join(' ')
+        .toLowerCase()
+        .includes('dialog'),
     )).toBe(true)
     expect(description.authoring.components.map(component => component.name)).toContain('Input')
     expect(description.authoring.components.every(component =>

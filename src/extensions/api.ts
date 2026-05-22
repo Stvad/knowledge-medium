@@ -169,3 +169,44 @@ export type {
 } from '@/types.ts'
 
 export { pluginBlockId } from '@/extensions/pluginIds.ts'
+
+// React hook for accessing the live Repo from inside an
+// `appMountsFacet` component. Action handlers receive `repo` through
+// `uiStateBlock.repo`; components rendered inside the app tree should
+// use this hook instead so they participate in the same Repo
+// instance + context the rest of the app uses.
+export { useRepo } from '@/context/repo.tsx'
+
+// Imperative dialog primitive. Renders `Component` and returns a
+// promise that resolves with the user's choice (or `null` on
+// cancel). The dialog component receives `resolve(value)` /
+// `cancel()` as props. Use this from action handlers when an
+// `appMountsFacet`-mounted persistent dialog is overkill.
+export { openDialog } from '@/utils/dialogs.ts'
+export type { DialogComponent, DialogContextProps } from '@/utils/dialogs.ts'
+
+// User-feedback primitives. Prefer these over `window.alert` /
+// `window.confirm` — they match the app's theme, queue cleanly, and
+// `showProgress` is genuinely the right shape for long-running syncs
+// (returns a `{update, done, fail}` handle for incremental updates +
+// terminal resolution).
+export {
+  showError,
+  showInfo,
+  showSuccess,
+  showProgress,
+  showCustom,
+  dismissToast,
+} from '@/utils/toast.ts'
+export type { ProgressToast, ToastAction, ToastOptions } from '@/utils/toast.ts'
+
+// Fractional-index order keys for inserting blocks at deterministic
+// positions among siblings. `keyAtEnd(lastChild.orderKey)` for "append
+// to children"; `keysBetween(prev, next, count)` for "insert N items
+// between these two existing siblings".
+export {
+  keyAtEnd,
+  keyAtStart,
+  keyBetween,
+  keysBetween,
+} from '@/data/orderKey.ts'
