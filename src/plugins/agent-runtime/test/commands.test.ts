@@ -48,7 +48,7 @@ beforeEach(async () => { env = await setup() })
 afterEach(async () => { await env.h.cleanup() })
 
 describe('agent runtime commands', () => {
-  it('installs labelled extensions under an alias-addressable page', async () => {
+  it('installs labelled extensions under a per-label container page', async () => {
     const result = await executeCommand({
       commandId: 'install-1',
       type: 'install-extension',
@@ -58,13 +58,13 @@ describe('agent runtime commands', () => {
       reload: false,
     }, env.context) as InstallExtensionResult
 
-    const parent = await env.repo.query.aliasLookup({
+    const root = await env.repo.query.aliasLookup({
       workspaceId: WS,
       alias: AGENT_EXTENSIONS_PARENT_ALIAS,
     }).load()
-    expect(parent?.content).toBe(AGENT_EXTENSIONS_PARENT_ALIAS)
-    expect(parent?.properties[aliasesProp.name]).toEqual([AGENT_EXTENSIONS_PARENT_ALIAS])
-    expect(parent?.properties[typesProp.name]).toEqual([PAGE_TYPE])
+    expect(root?.content).toBe(AGENT_EXTENSIONS_PARENT_ALIAS)
+    expect(root?.properties[aliasesProp.name]).toEqual([AGENT_EXTENSIONS_PARENT_ALIAS])
+    expect(root?.properties[typesProp.name]).toEqual([PAGE_TYPE])
 
     const installed = await env.repo.load(result.id)
     expect(installed?.properties[extensionNameProp.name]).toEqual('Example extension')
@@ -73,6 +73,57 @@ describe('agent runtime commands', () => {
     )
     expect(installed?.properties[aliasesProp.name]).toEqual(['Example extension'])
     expect(installed?.properties[typesProp.name]).toEqual([EXTENSION_TYPE, PAGE_TYPE])
+
+    // The extension block is nested under a label-named container,
+    // which is itself a child of the agent-extensions root. So the
+    // shape is: root → container("Example extension") → extension.
+    const container = installed?.parentId ? await env.repo.load(installed.parentId) : null
+    expect(container?.content).toBe('Example extension')
+    expect(container?.parentId).toBe(root?.id)
+    expect(container?.properties[typesProp.name]).toEqual([PAGE_TYPE])
+    // Container has no alias of its own — the alias projection still
+    // lives on the extension block so enable-extension lookups work.
+    expect(container?.properties[aliasesProp.name]).toBeUndefined()
+  })
+
+  it('reuses an existing label container instead of creating a duplicate', async () => {
+    // First install creates the container.
+    await executeCommand({
+      commandId: 'install-nest-1',
+      type: 'install-extension',
+      source: 'export default []',
+      label: 'Shared container',
+      reload: false,
+    }, env.context) as InstallExtensionResult
+
+    // Second install with the same label updates the existing extension
+    // (re-install path) — but if we forced a NEW install with a different
+    // id, it should still land under the same container. We can simulate
+    // this by inspecting that the root has only one container child
+    // after a label-stable update.
+    const second = await executeCommand({
+      commandId: 'install-nest-2',
+      type: 'install-extension',
+      source: 'export default [/* v2 */]',
+      label: 'Shared container',
+      reload: false,
+    }, env.context) as InstallExtensionResult
+
+    const root = await env.repo.query.aliasLookup({
+      workspaceId: WS,
+      alias: AGENT_EXTENSIONS_PARENT_ALIAS,
+    }).load()
+    expect(root).toBeTruthy()
+
+    const rootChildren = await env.repo.query
+      .children({id: root!.id})
+      .load() as Array<{id: string, content: string, deleted: boolean}>
+    const liveChildren = rootChildren.filter(child => !child.deleted)
+    const containers = liveChildren.filter(child => child.content === 'Shared container')
+    expect(containers).toHaveLength(1)
+
+    const installed = await env.repo.load(second.id)
+    expect(installed?.parentId).toBe(containers[0]!.id)
   })
 
   it('omits extension:description when not provided', async () => {

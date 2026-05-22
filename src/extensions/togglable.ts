@@ -138,18 +138,30 @@ function blockOnlyName(block: BlockData): string {
   const extensionName = blockStringProperty(block, extensionNameProp)
   if (extensionName) return extensionName
 
-  const encoded = block.properties[aliasesProp.name]
-  if (encoded !== undefined) {
-    try {
-      const aliases = aliasesProp.codec.decode(encoded)
-      const firstAlias = aliases.find(alias => alias.trim().length > 0)
-      if (firstAlias) return firstAlias
-    } catch {
-      // Malformed alias data — fall through to the block-id fallback.
-    }
-  }
+  const firstAlias = extensionAliasValues(block).find(alias => alias.trim().length > 0)
+  if (firstAlias) return firstAlias
+
   // Settings UI renders this string as a link to the block.
   return `Extension ${block.id.slice(0, 8)}`
+}
+
+/** Every label that identifies this extension block: the explicit
+ *  `extension:name` plus any aliases. The agent bridge uses this to
+ *  resolve `enable-extension <label>` / `uninstall-extension <label>`
+ *  to a block; the settings UI uses `blockOnlyName` (above) for
+ *  display. Same input, different projection. */
+export function extensionAliasValues(block: BlockData): string[] {
+  const aliases = (() => {
+    const encoded = block.properties[aliasesProp.name]
+    if (encoded === undefined) return [] as string[]
+    try {
+      return aliasesProp.codec.decode(encoded)
+    } catch {
+      return [] as string[]
+    }
+  })()
+  const extensionName = blockStringProperty(block, extensionNameProp)
+  return extensionName ? [...aliases, extensionName] : aliases
 }
 
 export function userExtensionToggle(

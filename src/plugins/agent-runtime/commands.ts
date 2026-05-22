@@ -17,6 +17,7 @@ import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
 import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions.ts'
 import { resolveAppRuntime } from '@/extensions/resolveAppRuntime.ts'
 import { applyToggle, userExtensionToggle } from '@/extensions/togglable.ts'
+import { findExtensionBlock } from '@/extensions/extensionLookup.ts'
 import { getPluginPrefsBlock } from '@/data/stateBlocks.ts'
 import {
   extensionsOverridesProp,
@@ -300,19 +301,6 @@ const aliasValuesFromProperties = (properties: BlockProperties | undefined): str
   return Array.isArray(value) && value.every(isString) ? value : []
 }
 
-const extensionNameFromProperties = (properties: BlockProperties | undefined): string | null => {
-  const value = properties?.[extensionNameProp.name]
-  return isString(value) && value.trim().length > 0 ? value : null
-}
-
-const extensionAliasValues = (data: BlockData | null): string[] => {
-  const extensionName = extensionNameFromProperties(data?.properties)
-  return [
-    ...aliasValuesFromProperties(data?.properties),
-    ...(extensionName ? [extensionName] : []),
-  ]
-}
-
 const extensionBlockProperties = (
   existing: BlockProperties | undefined,
   label: string | null,
@@ -354,12 +342,18 @@ const installRuntimeExtension = async (
 
   const label = input.label?.trim() || null
   const workspaceId = resolveWorkspaceId(repo)
-  const existingExtensions = await repo.query.findExtensionBlocks({workspaceId}).load() as BlockData[]
-  const existing = input.id
-    ? existingExtensions.find(block => block.id === input.id) ?? null
-    : label
-      ? existingExtensions.find(block => extensionAliasValues(block).includes(label)) ?? null
-      : null
+  // Use the direct-SQL lookup rather than the cached
+  // `repo.query.findExtensionBlocks`: a fresh install + immediate
+  // re-install in the same tick (common in tests + scripted agent
+  // flows) needs to see the just-written row before query-cache
+  // invalidation has fired. Same reason set-extension-enabled and
+  // uninstall use this path.
+  const existing = (input.id || label)
+    ? (await findExtensionBlock(repo, workspaceId, {
+        id: input.id,
+        label: label ?? undefined,
+      }))?.block ?? null
+    : null
 
   if (existing) {
     const typeSnapshot = repo.snapshotTypeRegistries()
@@ -404,10 +398,10 @@ const installRuntimeExtension = async (
   let installedId = input.id?.trim() || ''
   const typeSnapshot = repo.snapshotTypeRegistries()
   await repo.tx(async tx => {
-    let parentId = parentIdFromInput ?? defaultParent?.id ?? null
-    if (!parentId) {
+    let rootId = parentIdFromInput ?? defaultParent?.id ?? null
+    if (!rootId) {
       const rootSiblings = await tx.childrenOf(null, workspaceId)
-      parentId = await tx.create({
+      rootId = await tx.create({
         workspaceId,
         parentId: null,
         orderKey: keyAtEnd(rootSiblings.at(-1)?.orderKey ?? null),
@@ -415,11 +409,38 @@ const installRuntimeExtension = async (
       })
       await repo.addTypeInTx(
         tx,
-        parentId,
+        rootId,
         PAGE_TYPE,
         {[aliasesProp.name]: [agentExtensionsParentAlias]},
         typeSnapshot,
       )
+    }
+
+    // When a label is supplied (the common case), nest the extension
+    // block under a labelled container child of the agent-extensions
+    // root. This leaves room for the user to keep notes / configuration
+    // pages / etc. as siblings of the extension code block, instead of
+    // every install being a flat sibling of every other install. The
+    // container has no alias of its own (the extension block still owns
+    // the `extension:name`/alias projection used by enable-extension
+    // lookups), so there's no alias collision between the two.
+    let parentId = rootId
+    if (label && !parentIdFromInput) {
+      const rootChildren = await tx.childrenOf(rootId, workspaceId)
+      const existingContainer = rootChildren.find(
+        child => child.content === label && !child.deleted,
+      )
+      if (existingContainer) {
+        parentId = existingContainer.id
+      } else {
+        parentId = await tx.create({
+          workspaceId,
+          parentId: rootId,
+          orderKey: keyAtEnd(rootChildren.at(-1)?.orderKey ?? null),
+          content: label,
+        })
+        await repo.addTypeInTx(tx, parentId, PAGE_TYPE, {}, typeSnapshot)
+      }
     }
 
     const siblings = await tx.childrenOf(parentId, workspaceId)
@@ -453,52 +474,18 @@ const installRuntimeExtension = async (
   }
 }
 
-// Direct SQL — repo.query.findExtensionBlocks goes through the cached
-// query layer, which doesn't reliably observe a freshly installed
-// block when the kernel invalidation processors aren't active (e.g.
-// in unit-test repos). enable/disable/uninstall are explicit user
-// actions; a one-shot SQL read is the correct primitive.
-const lookupExtensionBlock = async (
-  repo: Repo,
-  workspaceId: string,
-  idHint: string | undefined,
-  labelHint: string | undefined,
-): Promise<{block: BlockData, label: string | null} | null> => {
-  const rows = await repo.db.getAll<{id: string, properties_json: string}>(
-    `SELECT b.id, b.properties_json
-       FROM blocks b
-       JOIN block_types bt ON bt.block_id = b.id AND bt.workspace_id = b.workspace_id
-      WHERE b.workspace_id = ? AND b.deleted = 0 AND bt.type = ?`,
-    [workspaceId, EXTENSION_TYPE],
-  )
-  const candidates = rows.map(row => {
-    const properties = (() => {
-      try { return JSON.parse(row.properties_json) as BlockProperties } catch { return {} }
-    })()
-    return {id: row.id, workspaceId, properties} as BlockData
-  })
-  const match = idHint
-    ? candidates.find(block => block.id === idHint) ?? null
-    : candidates.find(block => extensionAliasValues(block).includes(labelHint!)) ?? null
-  if (!match) return null
-  const label = extensionAliasValues(match).find(value => value !== match.id) ?? null
-  return {block: match, label}
-}
-
 const setExtensionEnabled = async (
   repo: Repo,
   input: SetExtensionEnabledInput,
 ): Promise<SetExtensionEnabledResult> => {
   const workspaceId = resolveWorkspaceId(repo)
-  const idHint = input.id?.trim()
-  const labelHint = input.label?.trim()
-  if (!idHint && !labelHint) {
+  if (!input.id?.trim() && !input.label?.trim()) {
     throw new Error('set-extension-enabled requires `id` or `label`')
   }
 
-  const found = await lookupExtensionBlock(repo, workspaceId, idHint, labelHint)
+  const found = await findExtensionBlock(repo, workspaceId, input)
   if (!found) {
-    throw new Error(`No installed extension matches "${idHint ?? labelHint}"`)
+    throw new Error(`No installed extension matches "${input.id ?? input.label}"`)
   }
 
   const prefsBlock = await getPluginPrefsBlock(repo, workspaceId, repo.user, extensionsPrefsType)
@@ -524,15 +511,13 @@ const uninstallRuntimeExtension = async (
   input: UninstallExtensionInput,
 ): Promise<UninstallExtensionResult> => {
   const workspaceId = resolveWorkspaceId(repo)
-  const idHint = input.id?.trim()
-  const labelHint = input.label?.trim()
-  if (!idHint && !labelHint) {
+  if (!input.id?.trim() && !input.label?.trim()) {
     throw new Error('uninstall-extension requires `id` or `label`')
   }
 
-  const found = await lookupExtensionBlock(repo, workspaceId, idHint, labelHint)
+  const found = await findExtensionBlock(repo, workspaceId, input)
   if (!found) {
-    throw new Error(`No installed extension matches "${idHint ?? labelHint}"`)
+    throw new Error(`No installed extension matches "${input.id ?? input.label}"`)
   }
 
   // Soft-delete via tx so the change flows through powersync and
