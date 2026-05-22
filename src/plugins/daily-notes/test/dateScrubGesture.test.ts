@@ -173,6 +173,30 @@ describe('date scrub keyboard gesture', () => {
     expect(handler.update).toHaveBeenLastCalledWith(7, false)
   })
 
+  it('maps ctrl-alt-l when the browser reports the ctrl-l control key value', () => {
+    window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Alt',
+      ctrlKey: true,
+      altKey: true,
+    }))
+
+    window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: '\f',
+      ctrlKey: true,
+      altKey: true,
+      cancelable: true,
+    }))
+    expect(handler.update).toHaveBeenLastCalledWith(7, false)
+
+    window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Clear',
+      ctrlKey: true,
+      altKey: true,
+      cancelable: true,
+    }))
+    expect(handler.update).toHaveBeenLastCalledWith(14, false)
+  })
+
   it('maps left/right and j/l to one-week increments', () => {
     window.dispatchEvent(new KeyboardEvent('keydown', {
       key: 'Control',

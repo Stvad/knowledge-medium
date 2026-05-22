@@ -257,6 +257,8 @@ const keyboardScrubAnchorPoint = (blockId: string): {x: number; y: number} => {
 
 const keyboardDeltaDaysForKey = (event: KeyboardEvent): number | null => {
   if (event.key === '¬') return 7
+  // Ctrl+L can surface as form-feed / Clear instead of the printable "l".
+  if (event.key === '\f' || event.key === 'Clear') return 7
 
   switch (event.key) {
     case 'ArrowUp':
