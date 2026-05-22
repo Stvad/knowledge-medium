@@ -375,7 +375,7 @@ const upsertBook = async ({ tx, workspaceId, libraryRootId, book, now, log }) =>
   return { created: isFirstSync ? 1 : 0, updated: isFirstSync ? 0 : 1, highlights: count }
 }
 
-const runSync = async ({ repo, full, log }) => {
+const runSync = async ({ repo, full, since, log }) => {
   const token = loadToken()
   if (!token) {
     throw new Error('Readwise token not configured. Run "Configure Readwise" first.')
@@ -383,7 +383,7 @@ const runSync = async ({ repo, full, log }) => {
   const workspaceId = repo.activeWorkspaceId
   if (!workspaceId) throw new Error('Readwise sync requires an active workspace.')
 
-  const updatedAfter = full ? null : loadCheckpoint()
+  const updatedAfter = full ? null : since ?? loadCheckpoint()
   log(updatedAfter
     ? `Fetching highlights updated after ${updatedAfter}...`
     : 'Fetching all highlights (initial sync)...')
@@ -488,6 +488,41 @@ export default [
       if (!window.confirm('Run a full Readwise sync? This pulls all books and highlights.')) return
       try {
         await runSync({ repo: uiStateBlock.repo, full: true, log })
+      } catch (error) {
+        log(`Error: ${error?.message ?? error}`)
+        throw error
+      }
+    },
+  }, { source: SOURCE }),
+
+  actionsFacet.of({
+    id: 'user.readwise.sync-since',
+    description: 'Sync Readwise highlights since a chosen date',
+    context: ActionContextTypes.GLOBAL,
+    handler: async ({ uiStateBlock }) => {
+      const log = makeLogger('readwise')
+      const defaultValue = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+        .toISOString()
+        .slice(0, 10)
+      const entered = window.prompt(
+        'Sync Readwise highlights updated after... (YYYY-MM-DD)',
+        defaultValue,
+      )
+      if (entered === null) return
+      const trimmed = entered.trim()
+      if (!trimmed) return
+      const parsed = new Date(`${trimmed}T00:00:00Z`)
+      if (Number.isNaN(parsed.getTime())) {
+        window.alert(`Could not parse "${trimmed}" as a date. Use YYYY-MM-DD.`)
+        return
+      }
+      try {
+        await runSync({
+          repo: uiStateBlock.repo,
+          full: false,
+          since: parsed.toISOString(),
+          log,
+        })
       } catch (error) {
         log(`Error: ${error?.message ?? error}`)
         throw error
