@@ -2,9 +2,10 @@
  * BlockDateAdapter implementation for blocks whose "date" is an inline
  * wikilink in their content (`due [[2026-05-15]]` or
  * `meeting [[April 28th, 2026]]`). Mirrors the visibility/write logic
- * of `dateShift.ts` but exposes get/set in absolute-ISO form for the
- * calendar sheet and the long-press scrub gesture.
+ * of the old date-shift actions but exposes get/set in absolute-ISO
+ * form for the calendar sheet and scrub gestures.
  */
+import type { EditorView } from '@codemirror/view'
 import type { Block } from '@/data/block'
 import {
   parseOutermostReferences,
@@ -15,7 +16,7 @@ import { parseLiteralDailyPageTitle } from '@/utils/relativeDate.ts'
 import { formatRoamDate } from '@/utils/dailyPage.ts'
 import type { BlockDateAdapter } from './blockDateAdapter.ts'
 
-interface DateReferenceMatch {
+export interface DateReferenceMatch {
   ref: ParsedReference
   iso: string
   style: 'iso' | 'long'
@@ -38,12 +39,12 @@ const dateReferenceMatches = (content: string): DateReferenceMatch[] =>
     }]
   })
 
-const singleDateReferenceMatch = (content: string): DateReferenceMatch | null => {
+export const singleDateReferenceMatch = (content: string): DateReferenceMatch | null => {
   const matches = dateReferenceMatches(content)
   return matches.length === 1 ? matches[0] : null
 }
 
-const replaceSingleDateReferenceContent = (
+export const replaceSingleDateReferenceContent = (
   content: string,
   iso: string,
 ): string | null => {
@@ -57,8 +58,10 @@ const replaceSingleDateReferenceContent = (
     content.slice(match.ref.endIndex)
 }
 
+const REFERENCE_DATE_ADAPTER_ID = 'daily-notes.reference'
+
 export const referenceDateAdapter: BlockDateAdapter = {
-  id: 'daily-notes.reference',
+  id: REFERENCE_DATE_ADAPTER_ID,
   canHandle: (block: Block) => {
     const data = block.peek()
     if (!data) return false
@@ -79,3 +82,26 @@ export const referenceDateAdapter: BlockDateAdapter = {
     return true
   },
 }
+
+export const createEditorReferenceDateAdapter = (editorView: EditorView): BlockDateAdapter => ({
+  id: `${REFERENCE_DATE_ADAPTER_ID}.editor`,
+  canHandle: () => singleDateReferenceMatch(editorView.state.doc.toString()) !== null,
+  getCurrentIso: async () =>
+    singleDateReferenceMatch(editorView.state.doc.toString())?.iso ?? null,
+  setIso: async (block: Block, iso: string) => {
+    if (block.repo.isReadOnly) return false
+    const sourceContent = editorView.state.doc.toString()
+    const nextContent = replaceSingleDateReferenceContent(sourceContent, iso)
+    if (nextContent === null || nextContent === sourceContent) return false
+
+    editorView.dispatch({
+      changes: {
+        from: 0,
+        to: editorView.state.doc.length,
+        insert: nextContent,
+      },
+    })
+    await block.setContent(nextContent)
+    return true
+  },
+})

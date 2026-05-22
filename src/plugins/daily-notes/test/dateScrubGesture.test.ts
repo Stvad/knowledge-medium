@@ -10,6 +10,7 @@ import {
 import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
 import {
   dateWheelScrubContentSurface,
+  installDateKeyboardScrubListeners,
   registerScrubHandler,
   type ScrubHandler,
 } from '../dateScrubGesture.ts'
@@ -62,16 +63,19 @@ const wheelEvent = ({
   deltaX,
   deltaY = 0,
   altKey = true,
+  ctrlKey = true,
   target = document.createElement('div'),
   currentTarget = target,
 }: {
   deltaX: number
   deltaY?: number
   altKey?: boolean
+  ctrlKey?: boolean
   target?: EventTarget
   currentTarget?: EventTarget
 }): WheelEvent<HTMLDivElement> => ({
   altKey,
+  ctrlKey,
   clientX: 120,
   clientY: 80,
   currentTarget,
@@ -105,7 +109,7 @@ describe('date scrub wheel gesture', () => {
     document.body.innerHTML = ''
   })
 
-  it('starts, updates, and commits an option-horizontal wheel scrub on Alt release', () => {
+  it('starts, updates, and commits a ctrl-alt horizontal wheel scrub on modifier release', () => {
     const props = handlers(makeContext('dated-block'))
 
     const belowLock = wheelEvent({deltaX: 6})
@@ -127,7 +131,7 @@ describe('date scrub wheel gesture', () => {
     vi.advanceTimersByTime(260)
     expect(handler.end).not.toHaveBeenCalled()
 
-    window.dispatchEvent(new KeyboardEvent('keyup', {key: 'Alt'}))
+    window.dispatchEvent(new KeyboardEvent('keyup', {key: 'Control'}))
     expect(handler.end).toHaveBeenCalledWith(true)
   })
 
@@ -153,14 +157,20 @@ describe('date scrub wheel gesture', () => {
     expect(handler.end).toHaveBeenCalledWith(false)
   })
 
-  it('ignores horizontal wheel events without the Option key', () => {
+  it('ignores horizontal wheel events without the ctrl-alt chord', () => {
     const props = handlers(makeContext('dated-block'))
-    const event = wheelEvent({deltaX: 40, altKey: false})
+    const event = wheelEvent({deltaX: 40, ctrlKey: false})
 
     props.onWheel?.(event)
 
     expect(handler.start).not.toHaveBeenCalled()
     expect(event.preventDefault).not.toHaveBeenCalled()
+
+    const altOnly = wheelEvent({deltaX: 40, altKey: true, ctrlKey: false})
+    props.onWheel?.(altOnly)
+
+    expect(handler.start).not.toHaveBeenCalled()
+    expect(altOnly.preventDefault).not.toHaveBeenCalled()
   })
 
   it('ignores predominantly vertical wheel events', () => {
@@ -193,5 +203,162 @@ describe('date scrub wheel gesture', () => {
 
     expect(handler.start).not.toHaveBeenCalled()
     expect(event.preventDefault).not.toHaveBeenCalled()
+  })
+})
+
+describe('date scrub keyboard gesture', () => {
+  let unregisterHandler: (() => void) | null = null
+  let unregisterKeyboard: (() => void) | null = null
+  let handler: ScrubHandler
+
+  beforeEach(() => {
+    setMobileViewport(false)
+    handler = {
+      start: vi.fn(() => true),
+      update: vi.fn(),
+      end: vi.fn(),
+    }
+    unregisterHandler = registerScrubHandler(handler)
+    unregisterKeyboard = installDateKeyboardScrubListeners(() => ({
+      block: {id: 'dated-block'} as Block,
+    }))
+  })
+
+  afterEach(() => {
+    unregisterKeyboard?.()
+    unregisterKeyboard = null
+    unregisterHandler?.()
+    unregisterHandler = null
+    document.body.innerHTML = ''
+  })
+
+  it('starts when ctrl and alt are both held and commits on modifier release', () => {
+    window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Control',
+      ctrlKey: true,
+    }))
+    expect(handler.start).not.toHaveBeenCalled()
+
+    window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Alt',
+      ctrlKey: true,
+      altKey: true,
+    }))
+
+    expect(handler.start).toHaveBeenCalledWith(expect.objectContaining({
+      blockId: 'dated-block',
+    }))
+    expect(handler.update).not.toHaveBeenCalled()
+
+    window.dispatchEvent(new KeyboardEvent('keyup', {
+      key: 'Alt',
+      ctrlKey: true,
+    }))
+
+    expect(handler.end).toHaveBeenCalledWith(true)
+  })
+
+  it('maps up/down and h/k to one-day increments', () => {
+    window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Alt',
+      ctrlKey: true,
+      altKey: true,
+    }))
+
+    window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'ArrowUp',
+      ctrlKey: true,
+      altKey: true,
+    }))
+    expect(handler.update).toHaveBeenLastCalledWith(1, false)
+
+    window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'h',
+      ctrlKey: true,
+      altKey: true,
+    }))
+    expect(handler.update).toHaveBeenLastCalledWith(2, false)
+
+    window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'ArrowDown',
+      ctrlKey: true,
+      altKey: true,
+    }))
+    expect(handler.update).toHaveBeenLastCalledWith(1, false)
+
+    window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'k',
+      ctrlKey: true,
+      altKey: true,
+    }))
+    expect(handler.update).toHaveBeenLastCalledWith(0, false)
+  })
+
+  it('maps left/right and j/l to one-week increments', () => {
+    window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Control',
+      ctrlKey: true,
+      altKey: true,
+    }))
+
+    window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'ArrowRight',
+      ctrlKey: true,
+      altKey: true,
+    }))
+    expect(handler.update).toHaveBeenLastCalledWith(7, false)
+
+    window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'l',
+      ctrlKey: true,
+      altKey: true,
+    }))
+    expect(handler.update).toHaveBeenLastCalledWith(14, false)
+
+    window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'ArrowLeft',
+      ctrlKey: true,
+      altKey: true,
+    }))
+    expect(handler.update).toHaveBeenLastCalledWith(7, false)
+
+    window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'j',
+      ctrlKey: true,
+      altKey: true,
+    }))
+    expect(handler.update).toHaveBeenLastCalledWith(0, false)
+  })
+
+  it('cancels an active keyboard scrub on Escape', () => {
+    window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Alt',
+      ctrlKey: true,
+      altKey: true,
+    }))
+
+    window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))
+
+    expect(handler.end).toHaveBeenCalledWith(false)
+  })
+
+  it('prevents default handling for scrub movement keys', () => {
+    window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Alt',
+      ctrlKey: true,
+      altKey: true,
+    }))
+
+    const event = new KeyboardEvent('keydown', {
+      key: 'ArrowUp',
+      ctrlKey: true,
+      altKey: true,
+      cancelable: true,
+    })
+    const preventDefault = vi.spyOn(event, 'preventDefault')
+
+    window.dispatchEvent(event)
+
+    expect(preventDefault).toHaveBeenCalled()
   })
 })

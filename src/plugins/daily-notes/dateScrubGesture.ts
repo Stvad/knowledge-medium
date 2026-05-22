@@ -1,7 +1,9 @@
 /**
  * Date scrub gestures:
  *   - mobile: two-finger horizontal drag
- *   - desktop: Option + horizontal wheel / trackpad / Magic Mouse scroll
+ *   - desktop: Ctrl+Alt + horizontal wheel / trackpad / Magic Mouse scroll
+ *   - desktop: hold Ctrl+Alt, then use arrows / h-k-j-l to scrub by
+ *     day or week
  *
  * Long-press is intentionally NOT used: that gesture belongs to
  * selection / bullet drag (Workflowy convention). The two-finger mobile
@@ -21,8 +23,9 @@
  *     start. If it accepts, we cancel the swipe-quick-actions
  *     candidate so the same gesture doesn't also open the swipe menu.
  *   - Either tracked finger lifting ends the mobile scrub. Desktop
- *     wheel scrub commits when the user releases Option/Alt, which is
- *     the clearest "let go" signal for a modifier-gated wheel stream.
+ *     wheel and keyboard scrub commit when the user releases Ctrl or
+ *     Alt, which is the clearest "let go" signal for a modifier-gated
+ *     stream.
  */
 import type { TouchEvent, WheelEvent } from 'react'
 import {
@@ -35,6 +38,7 @@ import {
 } from '@/data/properties.ts'
 import type { Block } from '@/data/block'
 import { cancelSwipeCandidate } from '@/plugins/swipe-quick-actions'
+import type { BlockDateAdapter } from './blockDateAdapter.ts'
 
 const MOBILE_BREAKPOINT_QUERY = '(max-width: 767px)'
 const isMobileViewport = (): boolean =>
@@ -65,6 +69,9 @@ const MIN_OFFSET_DAYS = -90
 export interface ScrubStartArgs {
   block: Block
   blockId: string
+  /** Optional adapter override for input surfaces with fresher state
+   *  than `block.peek()` (notably a live CodeMirror editor). */
+  adapter?: BlockDateAdapter
   /** Midpoint between the two locked fingers at activation time.
    *  The overlay anchors its pill near this point. */
   startX: number
@@ -129,6 +136,18 @@ interface WheelScrub {
   dx: number
 }
 
+export interface KeyboardScrubTarget {
+  block: Block
+  adapter?: BlockDateAdapter
+}
+
+type KeyboardScrubTargetProvider = () => KeyboardScrubTarget | null
+
+interface KeyboardScrub {
+  blockId: string
+  deltaDays: number
+}
+
 /** First finger landed on a block but the second hasn't arrived yet —
  *  remember it so the eventual second-finger touchstart can promote
  *  to a `MultiTouch` tracker. */
@@ -136,6 +155,7 @@ const singleByBlockId = new Map<string, SingleFinger>()
 const multiByBlockId = new Map<string, MultiTouch>()
 let wheelCandidate: WheelCandidate | null = null
 let wheelScrub: WheelScrub | null = null
+let keyboardScrub: KeyboardScrub | null = null
 let wheelScrubListenersInstalled = false
 
 const isBlockEditing = (blockId: string, uiStateBlock: Block): boolean =>
@@ -175,6 +195,7 @@ const clearAllForBlock = (blockId: string): void => {
   multiByBlockId.delete(blockId)
   if (wheelCandidate?.blockId === blockId) clearWheelCandidate()
   if (wheelScrub?.blockId === blockId) finishWheelScrub(false)
+  if (keyboardScrub?.blockId === blockId) finishKeyboardScrub(false)
 }
 
 const clearWheelCandidate = (): void => {
@@ -190,11 +211,24 @@ const finishWheelScrub = (commit: boolean): void => {
   activeHandler?.end(commit)
 }
 
+const finishKeyboardScrub = (commit: boolean): void => {
+  const current = keyboardScrub
+  if (!current) return
+  keyboardScrub = null
+  activeHandler?.end(commit)
+}
+
 const isAltReleaseEvent = (event: Pick<KeyboardEvent, 'code' | 'key'>): boolean =>
   event.key === 'Alt' || event.code === 'AltLeft' || event.code === 'AltRight'
 
+const isControlReleaseEvent = (event: Pick<KeyboardEvent, 'code' | 'key'>): boolean =>
+  event.key === 'Control' || event.code === 'ControlLeft' || event.code === 'ControlRight'
+
+const isCtrlAltReleaseEvent = (event: Pick<KeyboardEvent, 'code' | 'key'>): boolean =>
+  isAltReleaseEvent(event) || isControlReleaseEvent(event)
+
 const handleWheelScrubKeyUp = (event: KeyboardEvent): void => {
-  if (isAltReleaseEvent(event)) finishWheelScrub(true)
+  if (isCtrlAltReleaseEvent(event)) finishWheelScrub(true)
 }
 
 const handleWheelScrubKeyDown = (event: KeyboardEvent): void => {
@@ -241,6 +275,157 @@ const scheduleWheelCandidateClear = (): void => {
   wheelCandidate.clearTimer = window.setTimeout(() => {
     clearWheelCandidate()
   }, WHEEL_CANDIDATE_IDLE_MS)
+}
+
+const escapeCssIdent = (value: string): string => {
+  if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
+    return CSS.escape(value)
+  }
+  return value.replace(/[^a-zA-Z0-9_-]/g, '\\$&')
+}
+
+const keyboardScrubAnchorPoint = (blockId: string): {x: number; y: number} => {
+  const fallback = {
+    x: typeof window === 'undefined' ? 0 : window.innerWidth / 2,
+    y: typeof window === 'undefined' ? 0 : window.innerHeight / 2,
+  }
+  if (typeof document === 'undefined') return fallback
+
+  const selector = `[data-block-id="${escapeCssIdent(blockId)}"]`
+  const activeElement = document.activeElement
+  const activeBlock = activeElement instanceof Element
+    ? activeElement.closest<HTMLElement>(selector)
+    : null
+  const blockElement = activeBlock ?? document.querySelector<HTMLElement>(selector)
+  const anchor = blockElement?.querySelector<HTMLElement>('.block-content') ?? blockElement
+  if (!anchor) return fallback
+
+  const rect = anchor.getBoundingClientRect()
+  if (rect.width === 0 && rect.height === 0) return fallback
+  return {
+    x: rect.left + rect.width / 2,
+    y: rect.top + rect.height / 2,
+  }
+}
+
+const keyboardDeltaDaysForKey = (event: KeyboardEvent): number | null => {
+  switch (event.key) {
+    case 'ArrowUp':
+      return 1
+    case 'ArrowDown':
+      return -1
+    case 'ArrowRight':
+      return 7
+    case 'ArrowLeft':
+      return -7
+  }
+
+  switch (event.key.toLowerCase()) {
+    case 'h':
+      return 1
+    case 'k':
+      return -1
+    case 'l':
+      return 7
+    case 'j':
+      return -7
+    default:
+      return null
+  }
+}
+
+const clampDeltaDays = (deltaDays: number): number => {
+  if (deltaDays > MAX_OFFSET_DAYS) return MAX_OFFSET_DAYS
+  if (deltaDays < MIN_OFFSET_DAYS) return MIN_OFFSET_DAYS
+  return deltaDays
+}
+
+const startKeyboardScrub = (target: KeyboardScrubTarget): KeyboardScrub | null => {
+  if (keyboardScrub) return keyboardScrub
+  if (!activeHandler) return null
+
+  const point = keyboardScrubAnchorPoint(target.block.id)
+  const accepted = activeHandler.start({
+    block: target.block,
+    blockId: target.block.id,
+    adapter: target.adapter,
+    startX: point.x,
+    startY: point.y,
+  })
+  if (!accepted) return null
+
+  const next = {
+    blockId: target.block.id,
+    deltaDays: 0,
+  }
+  keyboardScrub = next
+  return next
+}
+
+const consumeKeyboardScrubEvent = (event: KeyboardEvent): void => {
+  event.preventDefault()
+  event.stopPropagation()
+}
+
+export const installDateKeyboardScrubListeners = (
+  getTarget: KeyboardScrubTargetProvider,
+): (() => void) => {
+  if (typeof window === 'undefined') return () => undefined
+
+  const handleKeyDown = (event: KeyboardEvent): void => {
+    if (keyboardScrub) {
+      if (event.key === 'Escape') {
+        consumeKeyboardScrubEvent(event)
+        finishKeyboardScrub(false)
+        return
+      }
+
+      const delta = keyboardDeltaDaysForKey(event)
+      if (delta === null) return
+
+      consumeKeyboardScrubEvent(event)
+      keyboardScrub.deltaDays = clampDeltaDays(keyboardScrub.deltaDays + delta)
+      activeHandler?.update(keyboardScrub.deltaDays, false)
+      return
+    }
+
+    if (!event.ctrlKey || !event.altKey) return
+
+    const delta = keyboardDeltaDaysForKey(event)
+    const modifierActivation = isCtrlAltReleaseEvent(event)
+    if (delta === null && !modifierActivation) return
+
+    const target = getTarget()
+    if (!target) return
+    const current = startKeyboardScrub(target)
+    if (!current) return
+
+    if (delta === null) return
+    consumeKeyboardScrubEvent(event)
+    current.deltaDays = clampDeltaDays(current.deltaDays + delta)
+    activeHandler?.update(current.deltaDays, false)
+  }
+
+  const handleKeyUp = (event: KeyboardEvent): void => {
+    if (!keyboardScrub || !isCtrlAltReleaseEvent(event)) return
+    consumeKeyboardScrubEvent(event)
+    finishKeyboardScrub(true)
+  }
+
+  const handleBlur = (): void => {
+    finishKeyboardScrub(false)
+  }
+
+  window.addEventListener('keydown', handleKeyDown, true)
+  window.addEventListener('keyup', handleKeyUp, true)
+  window.addEventListener('blur', handleBlur)
+
+  return () => {
+    window.removeEventListener('keydown', handleKeyDown, true)
+    window.removeEventListener('keyup', handleKeyUp, true)
+    window.removeEventListener('blur', handleBlur)
+    finishKeyboardScrub(false)
+  }
 }
 
 export const dateScrubContentSurface: BlockContentSurfaceContribution = context => {
@@ -408,7 +593,7 @@ export const dateWheelScrubContentSurface: BlockContentSurfaceContribution = con
   return {
     onWheel: (event: WheelEvent) => {
       if (isMobileViewport()) return
-      if (!event.altKey) {
+      if (!event.ctrlKey || !event.altKey) {
         if (wheelScrub) finishWheelScrub(true)
         return
       }

@@ -1,8 +1,8 @@
 /**
  * BlockDateAdapter that targets `srsNextReviewDateProp` on SRS blocks.
- * Mirrors the read+write of `dateShiftDecorator.ts` but in absolute-ISO
- * form so the calendar sheet and the long-press scrub gesture can drive
- * SRS rescheduling without going through the per-day shift action.
+ * Exposes SRS scheduling in absolute-ISO form so the calendar sheet and
+ * scrub gestures can drive SRS rescheduling through the same adapter
+ * contract as inline date references.
  */
 import type { Block } from '@/data/block'
 import { ChangeScope } from '@/data/api'

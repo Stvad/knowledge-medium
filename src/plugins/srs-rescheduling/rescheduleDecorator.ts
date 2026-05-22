@@ -4,8 +4,6 @@
  * `canRun` would say "nope, no shiftable date here"). The handler is
  * shared — it only opens the picker, and the picker resolves the right
  * adapter at commit time via `blockDateAdapterFacet`.
- *
- * Mirrors the pattern in `dateShiftDecorator.ts`.
  */
 import {
   RESCHEDULE_BLOCK_DATE_ACTION_ID,

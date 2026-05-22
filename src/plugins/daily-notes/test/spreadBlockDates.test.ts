@@ -145,8 +145,7 @@ describe('spreadBlockDates', () => {
     // Block has BOTH the SRS type and an inline date reference. The
     // SRS adapter is registered with negative precedence so it
     // should reschedule the SRS row, leaving the inline reference
-    // untouched (matches the dual-dispatch precedence in
-    // `dateShiftDecorator.ts`).
+    // untouched.
     const originalDaily = await getOrCreateDailyNote(repo, WS, '2026-05-01')
     await repo.tx(tx => tx.create({
       id: 'dual',

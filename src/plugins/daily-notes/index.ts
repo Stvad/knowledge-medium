@@ -59,7 +59,6 @@ import { parseAppHash } from '@/utils/routing.ts'
 import { CalendarDays } from 'lucide-react'
 import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
 import { dailyNotesActions, resolveCurrentDailyNoteIso } from './actions.ts'
-import { dateReferenceShiftActions } from './dateShift.ts'
 import { dailyNotesDataExtension } from './dataExtension.ts'
 import { DailyNotePicker } from './DailyNotePicker.tsx'
 import { DailyNotePickerHeaderItem } from './HeaderItem.tsx'
@@ -71,6 +70,7 @@ import { wikilinkDisplayDecoratorFacet } from '@/plugins/references/markdown/wik
 import { dailyDateWikilinkDecorator } from './wikilinkDateDecorator.ts'
 import { ReschedulePicker } from './ReschedulePicker.tsx'
 import { DateScrubOverlay } from './DateScrubOverlay.tsx'
+import { DateKeyboardScrubController } from './DateKeyboardScrubController.tsx'
 import {
   dateScrubContentSurface,
   dateWheelScrubContentSurface,
@@ -115,6 +115,11 @@ export const reschedulePickerMount: AppMountContribution = {
 export const dateScrubOverlayMount: AppMountContribution = {
   id: 'daily-notes.date-scrub-overlay',
   component: DateScrubOverlay,
+}
+
+export const dateKeyboardScrubControllerMount: AppMountContribution = {
+  id: 'daily-notes.date-keyboard-scrub',
+  component: DateKeyboardScrubController,
 }
 
 export const dailyNotePickerHeaderItem: HeaderItemContribution = {
@@ -175,10 +180,8 @@ export const dailyNotesPlugin = ({repo}: {repo: Repo}): AppExtension =>
     appMountsFacet.of(dailyNotePickerMount, {source: 'daily-notes'}),
     appMountsFacet.of(reschedulePickerMount, {source: 'daily-notes'}),
     appMountsFacet.of(dateScrubOverlayMount, {source: 'daily-notes'}),
+    appMountsFacet.of(dateKeyboardScrubControllerMount, {source: 'daily-notes'}),
     dailyNotesActions({repo}).map(action =>
-      actionsFacet.of(action, {source: 'daily-notes'}),
-    ),
-    dateReferenceShiftActions.map(action =>
       actionsFacet.of(action, {source: 'daily-notes'}),
     ),
     actionsFacet.of(rescheduleBlockDateAction, {source: 'daily-notes'}),
@@ -203,16 +206,6 @@ export const dailyNotesPlugin = ({repo}: {repo: Repo}): AppExtension =>
 
 export { DAILY_NOTE_TYPE, dailyNoteDateProp, dailyNoteType } from './schema.ts'
 export { dailyNotesDataExtension } from './dataExtension.ts'
-export {
-  DATE_SHIFT_BACKWARD_DAY_ACTION_ID,
-  DATE_SHIFT_BACKWARD_WEEK_ACTION_ID,
-  DATE_SHIFT_FORWARD_DAY_ACTION_ID,
-  DATE_SHIFT_FORWARD_WEEK_ACTION_ID,
-  dateReferenceShiftActions,
-  shiftSingleDateReferenceContent,
-  shiftSingleDateReferenceForBlock,
-  canShiftSingleDateReference,
-} from './dateShift.ts'
 export {
   DAILY_NOTE_NS,
   JOURNAL_NS,

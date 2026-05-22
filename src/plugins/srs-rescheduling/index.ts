@@ -44,7 +44,6 @@ import {
   getSrsClipboard,
   setSrsClipboard,
 } from './srsClipboard.ts'
-import { srsDateShiftDecorators } from './dateShiftDecorator.ts'
 import { srsBlockDateAdapter } from './srsBlockDateAdapter.ts'
 import { srsRescheduleDecorator } from './rescheduleDecorator.ts'
 import { srsSwipeRightDecorator, srsTodoCycleDecorators } from './swipeRightDecorator.ts'
@@ -375,9 +374,6 @@ export const srsReschedulingPlugin: AppExtension = systemToggle({
   srsReschedulingActions.map(action =>
     actionsFacet.of(action, {source: 'srs-rescheduling'}),
   ),
-  srsDateShiftDecorators.map(decorator =>
-    actionDecoratorsFacet.of(decorator, {source: 'srs-rescheduling'}),
-  ),
   actionDecoratorsFacet.of(srsRescheduleDecorator, {source: 'srs-rescheduling'}),
   actionDecoratorsFacet.of(srsSwipeRightDecorator, {source: 'srs-rescheduling'}),
   srsTodoCycleDecorators.map(decorator =>
@@ -386,8 +382,7 @@ export const srsReschedulingPlugin: AppExtension = systemToggle({
   // Negative precedence: SRS adapter sorts before the generic reference
   // adapter so a block that is BOTH an SRS card AND has an inline date
   // reference reschedules its `srsNextReviewDateProp` rather than
-  // rewriting its content (matches the dual-dispatch precedence in
-  // `dateShiftDecorator.ts`).
+  // rewriting its content.
   blockDateAdapterFacet.of(srsBlockDateAdapter, {
     source: 'srs-rescheduling',
     precedence: -1,

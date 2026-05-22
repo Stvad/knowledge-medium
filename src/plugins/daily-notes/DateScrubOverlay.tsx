@@ -100,7 +100,7 @@ export const DateScrubOverlay = () => {
   useEffect(() => {
     return registerScrubHandler({
       start: (args: ScrubStartArgs) => {
-        const adapter = pickBlockDateAdapter(runtime, args.block)
+        const adapter = args.adapter ?? pickBlockDateAdapter(runtime, args.block)
         if (!adapter) return false
         const fallback = todayIso()
         const session = ++nextScrubSession

@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { Repo } from '@/data/repo'
@@ -13,7 +13,28 @@ import {
   hasAnyBlockDateAdapter,
   type BlockDateAdapter,
 } from '../blockDateAdapter.ts'
-import { referenceDateAdapter } from '../referenceDateAdapter.ts'
+import {
+  createEditorReferenceDateAdapter,
+  referenceDateAdapter,
+} from '../referenceDateAdapter.ts'
+
+const fakeEditorView = (content: string) => {
+  let text = content
+  return {
+    dispatch: vi.fn((spec: {changes?: {from: number; to: number; insert: string}}) => {
+      if (!spec.changes) return
+      text = text.slice(0, spec.changes.from) + spec.changes.insert + text.slice(spec.changes.to)
+    }),
+    state: {
+      get doc() {
+        return {
+          length: text.length,
+          toString: () => text,
+        }
+      },
+    },
+  }
+}
 
 const stubAdapter = (id: string, predicate: (content: string) => boolean): BlockDateAdapter => ({
   id,
@@ -192,6 +213,34 @@ describe('referenceDateAdapter', () => {
 
       expect(await referenceDateAdapter.setIso(long, '2026-06-01')).toBe(true)
       expect(long.peek()?.content).toBe('meet [[June 1st, 2026]]')
+    } finally {
+      await h.cleanup()
+    }
+  })
+
+  it('can target the live CodeMirror document before persisted content catches up', async () => {
+    const h = await createTestDb()
+    try {
+      const repo = new Repo({
+        db: h.db, cache: new BlockCache(), user: {id: 'user-1'},
+        registerKernelProcessors: false,
+      })
+      await repo.tx(tx => tx.create({
+        id: 'edited', workspaceId: 'ws', parentId: null, orderKey: 'a',
+        content: 'stale [[2026-05-01]]',
+      }), {scope: ChangeScope.BlockDefault})
+
+      const block = repo.block('edited')
+      await block.load()
+      const editorView = fakeEditorView('live [[2026-05-01]]')
+      const adapter = createEditorReferenceDateAdapter(editorView as never)
+
+      expect(adapter.canHandle(block)).toBe(true)
+      expect(await adapter.getCurrentIso(block)).toBe('2026-05-01')
+      expect(await adapter.setIso(block, '2026-05-08')).toBe(true)
+
+      expect(editorView.state.doc.toString()).toBe('live [[2026-05-08]]')
+      expect(block.peek()?.content).toBe('live [[2026-05-08]]')
     } finally {
       await h.cleanup()
     }

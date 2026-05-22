@@ -2,8 +2,7 @@
  * "Reschedule" quick-action — opens the calendar+strip sheet over the
  * swiped block. The base action's `canRun` gates on the regular
  * date-reference adapter; the SRS plugin contributes a decorator that
- * extends the gate to SRS blocks (same dual-dispatch pattern as
- * `dateReferenceShiftActions`). The picker itself looks up the right
+ * extends the gate to SRS blocks. The picker itself looks up the right
  * adapter via `blockDateAdapterFacet` at commit time, so the handler
  * doesn't need to know which kind of block it's acting on.
  */
