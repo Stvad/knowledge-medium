@@ -1,9 +1,10 @@
-import {defineConfig, ViteDevServer} from 'vite'
+import {defineConfig} from 'vite'
 import path from "path"
 import react, {reactCompilerPreset} from '@vitejs/plugin-react'
 import babel from '@rolldown/plugin-babel'
 import externalize from "vite-plugin-externalize-dependencies";
 import wasm from "vite-plugin-wasm"
+import {unifySrcJsUrlsPlugin} from './vite-plugins/unifySrcJsUrls'
 // import noBundlePlugin from 'vite-plugin-no-bundle';
 
 // https://vite.dev/config/
@@ -40,102 +41,9 @@ export default defineConfig(({command}) => {
                     })
                 },
             },
-            isDev && {
-                /**
-                 * Make every `/src/**` module — whether imported by
-                 * the kernel (static, Vite-transformed) or by a
-                 * dynamic-extension blob (resolves via document
-                 * importmap) — hit the *same* URL in the browser's
-                 * module map. Otherwise they cache as separate entries,
-                 * every module-scoped singleton (React `createContext`,
-                 * stores, etc.) gets duplicated, and consumers of the
-                 * "wrong" copy fail with errors like "useRepo must be
-                 * used within a RepoContext". Prod doesn't have this
-                 * problem because Rollup outputs `.js` for everything;
-                 * dev needs help converging.
-                 *
-                 * Vite's default behavior: even when kernel source says
-                 * `import x from '@/foo.js'`, Vite's resolver finds the
-                 * real file (`foo.tsx`) and rewrites the import URL in
-                 * served code to `/src/foo.tsx`. Extensions request
-                 * `/src/foo.js` via the importmap. Two URLs → two
-                 * module-map entries → broken.
-                 *
-                 * Two pieces together force convergence on `.js` URLs:
-                 *
-                 *   1. `transform` (post) rewrites Vite's emitted import
-                 *      URLs from `.tsx` / `.ts` / `.jsx` back to `.js`
-                 *      so kernel modules fetch `/src/foo.js`.
-                 *   2. The `configureServer` middleware strips `.js`
-                 *      from `req.url` so Vite's file resolver still
-                 *      finds the actual `.tsx`/`.ts` source and serves
-                 *      its transformed contents (the rewrite is purely
-                 *      server-side; the browser still sees the `.js`
-                 *      URL on the response, which is what we want for
-                 *      module-map keying).
-                 *
-                 * Net effect: every `/src/**` import — kernel or
-                 * extension — fetches `.js`, gets the right content,
-                 * shares one module-map entry. Matches prod.
-                 *
-                 * Only matches `/src/`-prefixed URLs (not Vite-internal
-                 * `/@id/...`, `/node_modules/...?v=...`, virtual
-                 * modules) and only handles non-query suffixes
-                 * (`.tsx` / `.ts` / `.jsx`) so HMR's `?t=...`,
-                 * `?import`, `?v=...` markers pass through.
-                 */
-                name: 'unify-src-js-urls',
-                configureServer(server: ViteDevServer) {
-                    server.middlewares.use((req, res, next) => {
-                        if (!req.url || !req.url.startsWith('/src/')) return next();
-
-                        // Server-side rewrite so Vite's resolver finds the
-                        // real TS source on disk and serves its transformed
-                        // contents. Browser still sees the `.js` URL it
-                        // requested, which is what we want for module-map
-                        // keying.
-                        if (req.url.endsWith('.js')) {
-                            req.url = req.url.slice(0, -3);
-                        }
-
-                        // Wrap `res.end` to rewrite Vite's emitted import
-                        // URLs from `.tsx` / `.ts` / `.jsx` back to `.js`
-                        // before the body leaves the server. Vite uses a
-                        // single end() call for module responses (no chunked
-                        // streaming for dev-server transformed modules), so
-                        // one-shot interception suffices. Match only
-                        // `/src/`-prefixed URLs to avoid touching
-                        // Vite-internal paths (`/@id/...`,
-                        // `/node_modules/...?v=...`, virtual modules).
-                        const origEnd = res.end.bind(res);
-                        res.end = function (chunk?: unknown, ...rest: unknown[]) {
-                            if (
-                                typeof chunk === 'string'
-                                || chunk instanceof Buffer
-                                || chunk instanceof Uint8Array
-                            ) {
-                                const body = chunk instanceof Buffer || chunk instanceof Uint8Array
-                                    ? Buffer.from(chunk).toString('utf-8')
-                                    : chunk
-                                const rewritten = body.replace(
-                                    /(["'])(\/src\/[^"'?#]+)\.(?:tsx|ts|jsx)(["'?#])/g,
-                                    '$1$2.js$3',
-                                )
-                                if (rewritten !== body) {
-                                    const buf = Buffer.from(rewritten)
-                                    if (!res.headersSent) {
-                                        res.setHeader('Content-Length', buf.length)
-                                    }
-                                    return (origEnd as (b: Buffer, ...rest: unknown[]) => unknown)(buf, ...rest)
-                                }
-                            }
-                            return (origEnd as (...args: unknown[]) => unknown)(chunk, ...rest)
-                        } as typeof res.end
-
-                        next();
-                    });
-                },
-            },
+            // See vite-plugins/unifySrcJsUrls.ts for the full rationale.
+            // Tests in vite-plugins/test/unifySrcJsUrls.test.ts.
+            isDev && unifySrcJsUrlsPlugin(),
         ].filter(Boolean),
         resolve: {
             alias: {
