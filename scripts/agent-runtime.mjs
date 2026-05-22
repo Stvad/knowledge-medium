@@ -61,6 +61,7 @@ Commands:
                                   label defaults to the filename without ext)
   yarn agent enable-extension <id|label>
   yarn agent disable-extension <id|label>
+  yarn agent uninstall-extension <id|label>
   yarn agent run-action <id> [depsJson]
   yarn agent eval [--raw] <code>  run JS in the app; use "return ..." to print a value
   yarn agent eval --file <path>
@@ -845,6 +846,9 @@ const commandFromArgs = async args => {
 
     case 'disable-extension':
       return {type: 'disable-extension', ...parseExtensionHandle('disable-extension', rest)}
+
+    case 'uninstall-extension':
+      return {type: 'uninstall-extension', ...parseExtensionHandle('uninstall-extension', rest)}
 
     case 'run-action': {
       const [id, depsJson] = rest

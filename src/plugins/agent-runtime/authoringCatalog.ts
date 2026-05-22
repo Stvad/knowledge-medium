@@ -454,6 +454,7 @@ const guides: AuthoringGuide[] = [
       // extensions are there as references.
       'yarn agent install-extension --verify [--description "<text>"] agent-extensions/<plugin>.js <label>',
       'yarn agent enable-extension <label>',
+      'yarn agent uninstall-extension <label>',
     ],
     afterInstall: [
       'User-installed extensions are disabled by default (`userExtensionToggle` sets `defaultEnabled: false`). After install, run `yarn agent enable-extension <label>` (or `<id>`) to flip the override before its actions show up in `yarn agent run-action`.',

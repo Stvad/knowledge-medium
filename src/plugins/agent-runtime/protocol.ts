@@ -101,6 +101,21 @@ export interface SetExtensionEnabledResult {
   changed: boolean
 }
 
+export interface UninstallExtensionInput {
+  /** Extension block id. Either `id` or `label` is required. */
+  id?: string
+  /** Extension alias (the label passed at install time). */
+  label?: string
+}
+
+export interface UninstallExtensionResult {
+  id: string
+  label: string | null
+  /** True when the block was newly soft-deleted by this call. False when
+   *  the extension wasn't found or was already deleted. */
+  removed: boolean
+}
+
 export interface AgentRuntimeContext {
   repo: Repo
   db: Repo['db']
@@ -114,6 +129,7 @@ export interface AgentRuntimeContext {
   updateBlock: (input: UpdateBlockInput) => Promise<BlockData | null>
   installExtension: (input: InstallExtensionInput) => Promise<InstallExtensionResult>
   setExtensionEnabled: (input: SetExtensionEnabledInput) => Promise<SetExtensionEnabledResult>
+  uninstallExtension: (input: UninstallExtensionInput) => Promise<UninstallExtensionResult>
   actions: readonly ActionConfig[]
   renderers: ReturnType<typeof blockRenderersFacet.empty>
   refreshAppRuntime: typeof refreshAppRuntime

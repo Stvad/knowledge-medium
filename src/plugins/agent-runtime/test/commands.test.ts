@@ -188,6 +188,44 @@ describe('agent runtime commands', () => {
     }, env.context)).rejects.toThrow(/nonexistent-plugin/)
   })
 
+  it('uninstall-extension soft-deletes the block', async () => {
+    const installed = await executeCommand({
+      commandId: 'install-uninstall',
+      type: 'install-extension',
+      source: 'export default []',
+      label: 'Uninstall target',
+      reload: false,
+    }, env.context) as InstallExtensionResult
+
+    const before = await env.repo.load(installed.id)
+    expect(before?.deleted).toBe(false)
+
+    const result = await executeCommand({
+      commandId: 'uninstall-1',
+      type: 'uninstall-extension',
+      label: 'Uninstall target',
+    }, env.context) as {id: string, label: string | null, removed: boolean}
+    expect(result.id).toBe(installed.id)
+    expect(result.label).toBe('Uninstall target')
+    expect(result.removed).toBe(true)
+
+    // Soft-delete: the row still exists with deleted=1, so a second lookup
+    // by label finds nothing live.
+    await expect(executeCommand({
+      commandId: 'uninstall-again',
+      type: 'uninstall-extension',
+      label: 'Uninstall target',
+    }, env.context)).rejects.toThrow(/Uninstall target/)
+  })
+
+  it('uninstall-extension errors when no extension matches', async () => {
+    await expect(executeCommand({
+      commandId: 'uninstall-missing',
+      type: 'uninstall-extension',
+      label: 'nonexistent-plugin',
+    }, env.context)).rejects.toThrow(/nonexistent-plugin/)
+  })
+
   it('verify lists per-extension contribution ids (renderers, appMounts)', async () => {
     const renderer = () => null
     const Component = () => null

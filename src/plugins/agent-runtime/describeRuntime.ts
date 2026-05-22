@@ -76,6 +76,11 @@ export interface FacetSummary {
   id: string
   contributionCount: number
   contributions: FacetContributionSummary[]
+  /** Source of the facet's `validate` predicate, if it has one. Tells
+   *  agent authors what shape a contribution must have — e.g. that
+   *  `headerItemsFacet` requires `region: 'start'|'end'` and a
+   *  `component: function`. Truncated to keep output readable. */
+  validate?: string
 }
 
 export interface ApiSurfaceSummary {
@@ -204,6 +209,32 @@ const runtimeCommandHints = {
   ],
 }
 
+const MAX_SUMMARY_LENGTH = 320
+
+const renderSummaryValue = (value: unknown, depth: number): unknown => {
+  if (value === null || value === undefined) return value
+  const t = typeof value
+  if (t === 'function') {
+    const fn = value as {name?: string}
+    return `[Function ${fn.name || 'anonymous'}]`
+  }
+  if (t !== 'object') return value
+  if (depth <= 0) {
+    return Array.isArray(value)
+      ? `[Array(${value.length})]`
+      : `{${Object.keys(value as object).slice(0, 6).join(', ')}}`
+  }
+  if (Array.isArray(value)) {
+    return value.slice(0, 8).map(item => renderSummaryValue(item, depth - 1))
+  }
+  const out: Record<string, unknown> = {}
+  for (const [key, inner] of Object.entries(value as Record<string, unknown>)) {
+    if (inner === undefined) continue
+    out[key] = renderSummaryValue(inner, depth - 1)
+  }
+  return out
+}
+
 const summarizeContributionValue = (value: unknown): string => {
   if (value === null) return 'null'
   if (value === undefined) return 'undefined'
@@ -214,25 +245,35 @@ const summarizeContributionValue = (value: unknown): string => {
   }
   if (t !== 'object') return String(value)
 
-  const obj = value as Record<string, unknown>
-  // Common shapes that appear as facet contribution values:
-  //   { id, description, context, ... }   (actions)
-  //   { id, renderer }                    (renderers)
-  //   anything else: drop a few interesting keys
-  const interestingKeys = ['id', 'description', 'context', 'name', 'type']
-  const summary: Record<string, unknown> = {}
-  for (const key of interestingKeys) {
-    if (obj[key] !== undefined) summary[key] = obj[key]
-  }
-  if (Object.keys(summary).length > 0) return JSON.stringify(summary)
-  // Last resort: enumerate top-level keys.
-  return `{${Object.keys(obj).slice(0, 6).join(', ')}}`
+  // Render the whole shape so agent authors can see all the keys a
+  // contribution carries (region, component, parent, kind, …). Functions
+  // are stringified as `[Function name]` so React components stay
+  // readable without dumping their source. Cap the total length so a
+  // pathological value can't bloat describe-runtime output.
+  const rendered = renderSummaryValue(value, 3)
+  const json = JSON.stringify(rendered)
+  if (json.length <= MAX_SUMMARY_LENGTH) return json
+  return `${json.slice(0, MAX_SUMMARY_LENGTH - 1)}…`
+}
+
+const summarizeValidate = (
+  validate: ((value: unknown) => boolean) | undefined,
+): string | undefined => {
+  if (!validate) return undefined
+  const source = validate.toString().replace(/\s+/g, ' ').trim()
+  return source.length <= MAX_SUMMARY_LENGTH
+    ? source
+    : `${source.slice(0, MAX_SUMMARY_LENGTH - 1)}…`
 }
 
 export const describeFacets = (runtime: FacetRuntime): FacetSummary[] => {
   const facetIds = runtime.facetIds().sort()
   return facetIds.map(id => {
     const contributions = runtime.contributionsById(id)
+    // The facet object lives on every contribution; pick the first to
+    // sniff `validate`. All contributions to the same facet share the
+    // same Facet instance.
+    const validate = summarizeValidate(contributions[0]?.facet.validate)
     return {
       id,
       contributionCount: contributions.length,
@@ -241,6 +282,7 @@ export const describeFacets = (runtime: FacetRuntime): FacetSummary[] => {
         precedence: c.precedence,
         valueSummary: summarizeContributionValue(c.value),
       })),
+      ...(validate ? {validate} : {}),
     }
   })
 }

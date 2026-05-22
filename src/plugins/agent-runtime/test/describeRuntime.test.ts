@@ -85,6 +85,50 @@ describe('describeFacets', () => {
     expect(summary.contributions.map((c) => c.valueSummary))
       .toEqual(['42', 'hello', 'true'])
   })
+
+  it('includes shape-defining keys like region and component in the summary', async () => {
+    // Mirrors headerItemsFacet: the validator rejects contributions that
+    // lack `region`/`component`, so the describe-runtime output has to
+    // expose those keys — otherwise agents see only `{id}` and can't tell
+    // what shape to author.
+    const facet = defineFacet({id: 'desc.headerlike'})
+    const Component = function NamedComponent() { return null }
+    const runtime = await resolveFacetRuntime([
+      facet.of({id: 'h1', region: 'end', component: Component}),
+    ])
+
+    const [summary] = describeFacets(runtime)
+    const json = summary.contributions[0]!.valueSummary
+    expect(json).toContain('"id":"h1"')
+    expect(json).toContain('"region":"end"')
+    expect(json).toContain('[Function NamedComponent]')
+  })
+
+  it('surfaces the facet validator source as a hint about required shape', async () => {
+    const facet = defineFacet<{id: string, region: 'start' | 'end'}, unknown>({
+      id: 'desc.validated',
+      validate: (value): value is {id: string, region: 'start' | 'end'} =>
+        typeof value === 'object'
+        && value !== null
+        && typeof (value as Record<string, unknown>).id === 'string'
+        && ((value as Record<string, unknown>).region === 'start'
+          || (value as Record<string, unknown>).region === 'end'),
+    })
+    const runtime = await resolveFacetRuntime([facet.of({id: 'x', region: 'start'})])
+
+    const [summary] = describeFacets(runtime)
+    expect(summary.validate).toBeDefined()
+    expect(summary.validate).toContain('region')
+    expect(summary.validate).toContain('start')
+  })
+
+  it('omits validate when the facet has no validator', async () => {
+    const facet = defineFacet({id: 'desc.unvalidated'})
+    const runtime = await resolveFacetRuntime([facet.of('ok')])
+
+    const [summary] = describeFacets(runtime)
+    expect(summary.validate).toBeUndefined()
+  })
 })
 
 describe('getApiSurface', () => {

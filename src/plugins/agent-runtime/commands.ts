@@ -40,6 +40,8 @@ import type {
   SetExtensionEnabledInput,
   SetExtensionEnabledResult,
   SqlMode,
+  UninstallExtensionInput,
+  UninstallExtensionResult,
   UpdateBlockInput,
 } from './protocol.ts'
 import type { BlockProperties } from '@/types.ts'
@@ -451,22 +453,17 @@ const installRuntimeExtension = async (
   }
 }
 
-const setExtensionEnabled = async (
+// Direct SQL — repo.query.findExtensionBlocks goes through the cached
+// query layer, which doesn't reliably observe a freshly installed
+// block when the kernel invalidation processors aren't active (e.g.
+// in unit-test repos). enable/disable/uninstall are explicit user
+// actions; a one-shot SQL read is the correct primitive.
+const lookupExtensionBlock = async (
   repo: Repo,
-  input: SetExtensionEnabledInput,
-): Promise<SetExtensionEnabledResult> => {
-  const workspaceId = resolveWorkspaceId(repo)
-  const idHint = input.id?.trim()
-  const labelHint = input.label?.trim()
-  if (!idHint && !labelHint) {
-    throw new Error('set-extension-enabled requires `id` or `label`')
-  }
-
-  // Direct SQL — repo.query.findExtensionBlocks goes through the
-  // cached query layer, which doesn't reliably observe a freshly
-  // installed block when the kernel invalidation processors aren't
-  // active (e.g. in unit-test repos). We're authoring an explicit
-  // user action; a one-shot SQL read is the correct primitive.
+  workspaceId: string,
+  idHint: string | undefined,
+  labelHint: string | undefined,
+): Promise<{block: BlockData, label: string | null} | null> => {
   const rows = await repo.db.getAll<{id: string, properties_json: string}>(
     `SELECT b.id, b.properties_json
        FROM blocks b
@@ -478,23 +475,31 @@ const setExtensionEnabled = async (
     const properties = (() => {
       try { return JSON.parse(row.properties_json) as BlockProperties } catch { return {} }
     })()
-    return {id: row.id, properties}
+    return {id: row.id, workspaceId, properties} as BlockData
   })
   const match = idHint
     ? candidates.find(block => block.id === idHint) ?? null
-    : candidates.find(block => extensionAliasValues(block as BlockData).includes(labelHint!)) ?? null
-  if (!match) {
-    const hint = idHint ?? labelHint
-    throw new Error(`No installed extension matches "${hint}"`)
+    : candidates.find(block => extensionAliasValues(block).includes(labelHint!)) ?? null
+  if (!match) return null
+  const label = extensionAliasValues(match).find(value => value !== match.id) ?? null
+  return {block: match, label}
+}
+
+const setExtensionEnabled = async (
+  repo: Repo,
+  input: SetExtensionEnabledInput,
+): Promise<SetExtensionEnabledResult> => {
+  const workspaceId = resolveWorkspaceId(repo)
+  const idHint = input.id?.trim()
+  const labelHint = input.label?.trim()
+  if (!idHint && !labelHint) {
+    throw new Error('set-extension-enabled requires `id` or `label`')
   }
 
-  const matchAsBlock: BlockData = {
-    ...(match as Partial<BlockData>),
-    id: match.id,
-    workspaceId,
-    properties: match.properties,
-  } as BlockData
-  const label = extensionAliasValues(matchAsBlock).find(value => value !== match.id) ?? null
+  const found = await lookupExtensionBlock(repo, workspaceId, idHint, labelHint)
+  if (!found) {
+    throw new Error(`No installed extension matches "${idHint ?? labelHint}"`)
+  }
 
   const prefsBlock = await getPluginPrefsBlock(repo, workspaceId, repo.user, extensionsPrefsType)
   const current = prefsBlock.peekProperty(extensionsOverridesProp) ?? new Map<string, boolean>()
@@ -502,7 +507,7 @@ const setExtensionEnabled = async (
   // applyToggle convention is "absent = disabled, present-true = enabled".
   // We reuse the same map normalization the settings UI uses so the
   // override surface stays consistent between the two entry points.
-  const handle = userExtensionToggle(matchAsBlock)
+  const handle = userExtensionToggle(found.block)
   const next = applyToggle(current, handle, input.enabled)
   const changed = next.size !== current.size
     || [...next.entries()].some(([id, value]) => current.get(id) !== value)
@@ -511,7 +516,38 @@ const setExtensionEnabled = async (
     await prefsBlock.set(extensionsOverridesProp, next)
   }
 
-  return {id: match.id, label, enabled: input.enabled, changed}
+  return {id: found.block.id, label: found.label, enabled: input.enabled, changed}
+}
+
+const uninstallRuntimeExtension = async (
+  repo: Repo,
+  input: UninstallExtensionInput,
+): Promise<UninstallExtensionResult> => {
+  const workspaceId = resolveWorkspaceId(repo)
+  const idHint = input.id?.trim()
+  const labelHint = input.label?.trim()
+  if (!idHint && !labelHint) {
+    throw new Error('uninstall-extension requires `id` or `label`')
+  }
+
+  const found = await lookupExtensionBlock(repo, workspaceId, idHint, labelHint)
+  if (!found) {
+    throw new Error(`No installed extension matches "${idHint ?? labelHint}"`)
+  }
+
+  // Soft-delete via tx so the change flows through powersync and
+  // refreshAppRuntime pulls a clean extension list on next reload.
+  // We mirror the install path's scope/description naming for
+  // grep-ability in the change log.
+  await repo.tx(async tx => {
+    await tx.delete(found.block.id)
+  }, {
+    scope: ChangeScope.BlockDefault,
+    description: `agent runtime uninstall extension ${found.label ?? found.block.id}`,
+  })
+
+  refreshAppRuntime()
+  return {id: found.block.id, label: found.label, removed: true}
 }
 
 const isActionDependenciesInput = (value: unknown): value is Record<string, unknown> =>
@@ -614,6 +650,7 @@ const {
   updateBlock,
   installExtension,
   setExtensionEnabled,
+  uninstallExtension,
   actions,
   renderers,
   refreshAppRuntime,
@@ -650,6 +687,7 @@ export const createAgentRuntimeContext = ({
     updateBlock: input => updateRuntimeBlock(repo, input),
     installExtension: input => installRuntimeExtension(repo, input, context),
     setExtensionEnabled: input => setExtensionEnabled(repo, input),
+    uninstallExtension: input => uninstallRuntimeExtension(repo, input),
     actions: readRuntimeActions(runtime),
     renderers: runtime.read(blockRenderersFacet),
     refreshAppRuntime,
@@ -778,6 +816,12 @@ export const executeCommand = async (
           : command.type === 'enable-extension'
             ? true
             : Boolean(command.enabled),
+      })
+
+    case 'uninstall-extension':
+      return context.uninstallExtension({
+        id: command.id === undefined ? undefined : requireString(command.id, 'id'),
+        label: command.label === undefined ? undefined : requireString(command.label, 'label'),
       })
 
     case 'run-action':
