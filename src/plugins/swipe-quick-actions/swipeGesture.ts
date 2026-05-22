@@ -2,8 +2,8 @@ import type { TouchEvent } from 'react'
 import {
   isInteractiveContentEvent,
   type BlockContentSurfaceContribution,
-} from '@/extensions/blockInteraction.ts'
-import { focusedBlockIdProp, isEditingProp } from '@/data/properties.ts'
+} from '@/extensions/blockInteraction.js'
+import { focusedBlockIdProp, isEditingProp } from '@/data/properties.js'
 import type { Block } from '@/data/block'
 import {
   dispatchSwipeQuickActionMenuEvent,

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
-import { useRepo } from '@/context/repo.tsx'
-import { useNavigateFromGlobalCommand } from '@/utils/navigation.ts'
+import { useRepo } from '@/context/repo.js'
+import { useNavigateFromGlobalCommand } from '@/utils/navigation.js'
 import {
   type DailyNotePickerAnchorRect,
   type OpenDailyNotePickerEventDetail,

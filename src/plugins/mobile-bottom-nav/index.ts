@@ -1,6 +1,6 @@
-import { appMountsFacet, type AppMountContribution } from '@/extensions/core.ts'
-import type { AppExtension } from '@/extensions/facet.ts'
-import { systemToggle } from '@/extensions/togglable.ts'
+import { appMountsFacet, type AppMountContribution } from '@/extensions/core.js'
+import type { AppExtension } from '@/extensions/facet.js'
+import { systemToggle } from '@/extensions/togglable.js'
 import { MobileBottomNav } from './MobileBottomNav.tsx'
 import { mobileBottomNavItemsFacet } from './facet.ts'
 import {

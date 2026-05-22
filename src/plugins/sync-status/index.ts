@@ -1,6 +1,6 @@
-import { headerItemsFacet, type HeaderItemContribution } from '@/extensions/core.ts'
-import type { AppExtension } from '@/extensions/facet.ts'
-import { systemToggle } from '@/extensions/togglable.ts'
+import { headerItemsFacet, type HeaderItemContribution } from '@/extensions/core.js'
+import type { AppExtension } from '@/extensions/facet.js'
+import { systemToggle } from '@/extensions/togglable.js'
 import { SyncStatusHeaderItem } from './SyncStatusHeaderItem.tsx'
 
 export const syncStatusHeaderItem: HeaderItemContribution = {

@@ -8,17 +8,17 @@ import {
 } from '@/data/api'
 import { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
-import { NestedBlockContextProvider, useBlockContext } from '@/context/block.tsx'
-import { getBlockTypes } from '@/data/properties.ts'
-import { useWorkspaceId } from '@/hooks/block.ts'
-import { BlockEmbed } from '@/components/references/BlockEmbed.tsx'
-import { BlockRefAncestorsProvider } from '@/components/references/cycleGuard.tsx'
+import { NestedBlockContextProvider, useBlockContext } from '@/context/block.js'
+import { getBlockTypes } from '@/data/properties.js'
+import { useWorkspaceId } from '@/hooks/block.js'
+import { BlockEmbed } from '@/components/references/BlockEmbed.js'
+import { BlockRefAncestorsProvider } from '@/components/references/cycleGuard.js'
 import {
   labelForBlockData,
   searchLinkTargetIdCandidates,
   type LinkTargetIdCandidate,
-} from '@/utils/linkTargetAutocomplete.ts'
-import { FloatingListbox } from '@/components/ui/floating-listbox.tsx'
+} from '@/utils/linkTargetAutocomplete.js'
+import { FloatingListbox } from '@/components/ui/floating-listbox.js'
 
 const SEARCH_LIMIT = 12
 const EMPTY_REFS: readonly string[] = Object.freeze([])

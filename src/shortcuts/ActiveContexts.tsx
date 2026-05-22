@@ -8,12 +8,12 @@ import {
   useRef,
   useState,
 } from 'react'
-import { actionContextsFacet } from '@/extensions/core.ts'
-import { useAppRuntime } from '@/extensions/runtimeContext.ts'
+import { actionContextsFacet } from '@/extensions/core.js'
+import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import {
   ActionContextType,
   BaseShortcutDependencies,
-} from '@/shortcuts/types.ts'
+} from '@/shortcuts/types.js'
 
 export type ActiveContextsMap = ReadonlyMap<ActionContextType, BaseShortcutDependencies>
 

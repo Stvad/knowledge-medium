@@ -1,5 +1,5 @@
 import { BlockComponent } from '@/components/BlockComponent'
-import { NestedBlockContextProvider } from '@/context/block.tsx'
+import { NestedBlockContextProvider } from '@/context/block.js'
 import { useRepo } from '@/context/repo'
 import { useBlockExists } from '@/hooks/block'
 import { BlockRefAncestorsProvider } from './cycleGuard'

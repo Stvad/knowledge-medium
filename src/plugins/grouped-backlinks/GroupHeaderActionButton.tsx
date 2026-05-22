@@ -1,15 +1,15 @@
 import { useMemo, type MouseEvent } from 'react'
 import type { Block } from '@/data/block'
-import { Button } from '@/components/ui/button.tsx'
-import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { useUIStateBlock } from '@/data/globalState.ts'
-import { getEffectiveActions } from '@/shortcuts/effectiveActions.ts'
+import { Button } from '@/components/ui/button.js'
+import { useAppRuntime } from '@/extensions/runtimeContext.js'
+import { useUIStateBlock } from '@/data/globalState.js'
+import { getEffectiveActions } from '@/shortcuts/effectiveActions.js'
 import {
   ActionContextTypes,
   type ActionConfig,
   type ActionIcon,
   type MultiSelectModeDependencies,
-} from '@/shortcuts/types.ts'
+} from '@/shortcuts/types.js'
 
 interface GroupHeaderActionButtonProps {
   actionId: string

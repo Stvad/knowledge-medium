@@ -1,7 +1,7 @@
 import { useCallback } from 'react'
-import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { useActiveContextsState } from '@/shortcuts/ActiveContexts.tsx'
-import { ActionTrigger } from '@/shortcuts/types.ts'
+import { useAppRuntime } from '@/extensions/runtimeContext.js'
+import { useActiveContextsState } from '@/shortcuts/ActiveContexts.js'
+import { ActionTrigger } from '@/shortcuts/types.js'
 import { getActiveActionById, getEffectiveActions } from './effectiveActions.ts'
 
 export type RunActionByIdFn = (

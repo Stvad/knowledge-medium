@@ -1,4 +1,4 @@
-import { getPluginPrefsBlock } from '@/data/stateBlocks.ts'
+import { getPluginPrefsBlock } from '@/data/stateBlocks.js'
 import {
   ChangeScope,
   codecs,
@@ -6,8 +6,8 @@ import {
   defineProperty,
 } from '@/data/api'
 import type { Repo } from '@/data/repo'
-import type { AppEffect } from '@/extensions/core.ts'
-import { scheduleIdle } from '@/utils/scheduleIdle.ts'
+import type { AppEffect } from '@/extensions/core.js'
+import { scheduleIdle } from '@/utils/scheduleIdle.js'
 
 export const previousLoadTimeProp = defineProperty<number | undefined>('previousLoadTime', {
   codec: codecs.optionalNumber,

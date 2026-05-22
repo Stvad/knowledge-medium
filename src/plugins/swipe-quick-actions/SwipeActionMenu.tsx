@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useState, useRef, useMemo, type MouseEvent, type TouchEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { MoreHorizontal } from 'lucide-react'
-import { useIsMobile } from '@/utils/react.tsx'
+import { useIsMobile } from '@/utils/react.js'
 import { useUIStateBlock } from '@/data/globalState'
-import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { usePropertyValue } from '@/hooks/block.ts'
-import { getEffectiveActions } from '@/shortcuts/effectiveActions.ts'
-import type { ActionConfig, ActionIcon } from '@/shortcuts/types.ts'
-import { topLevelBlockIdProp } from '@/data/properties.ts'
+import { useAppRuntime } from '@/extensions/runtimeContext.js'
+import { usePropertyValue } from '@/hooks/block.js'
+import { getEffectiveActions } from '@/shortcuts/effectiveActions.js'
+import type { ActionConfig, ActionIcon } from '@/shortcuts/types.js'
+import { topLevelBlockIdProp } from '@/data/properties.js'
 import {
   quickActionItemsFacet,
   type QuickActionItem,

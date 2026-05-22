@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { BlockData } from '@/data/api'
-import { PAGE_TYPE } from '@/data/blockTypes.ts'
-import { typesProp } from '@/data/properties.ts'
+import { PAGE_TYPE } from '@/data/blockTypes.js'
+import { typesProp } from '@/data/properties.js'
 import { pickMergeContentStrategy } from './strategy.ts'
 
 const makeBlock = (overrides: Partial<BlockData> = {}): BlockData => ({

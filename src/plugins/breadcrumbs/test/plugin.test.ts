@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { blockHeaderFacet } from '@/extensions/blockInteraction.ts'
-import { blockRenderersFacet } from '@/extensions/core.ts'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
-import type { BlockResolveContext } from '@/extensions/blockInteraction.ts'
+import { blockHeaderFacet } from '@/extensions/blockInteraction.js'
+import { blockRenderersFacet } from '@/extensions/core.js'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import type { BlockResolveContext } from '@/extensions/blockInteraction.js'
 import {
   breadcrumbRendererContribution,
   breadcrumbsPlugin,

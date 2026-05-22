@@ -1,5 +1,5 @@
 import VideoTimeStamp from './VideoTimeStamp.tsx'
-import type { MarkdownExtension } from '@/markdown/extensions.ts'
+import type { MarkdownExtension } from '@/markdown/extensions.js'
 import { remarkTimestamps } from './remark-timestamps.ts'
 import type { Components } from 'react-markdown'
 

@@ -1,29 +1,29 @@
-import { BlockComponent } from '@/components/BlockComponent.tsx'
-import { BlockRendererProps } from '@/types.ts'
-import { NestedBlockContextProvider, useBlockContext } from '@/context/block.tsx'
-import { Button } from '@/components/ui/button.tsx'
+import { BlockComponent } from '@/components/BlockComponent.js'
+import { BlockRendererProps } from '@/types.js'
+import { NestedBlockContextProvider, useBlockContext } from '@/context/block.js'
+import { Button } from '@/components/ui/button.js'
 import { ChevronLeft, ChevronRight, X } from 'lucide-react'
 import {
   focusedBlockIdProp,
   scrollTopProp,
   topLevelBlockIdProp,
-} from '@/data/properties.ts'
+} from '@/data/properties.js'
 import { useIsActivePanel, useSelectionState } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
 import { useActionContext } from '@/shortcuts/useActionContext'
 import { ActionContextTypes } from '@/shortcuts/types'
 import { useCallback, useEffect, useMemo, useRef } from 'react'
-import { usePropertyValue } from '@/hooks/block.ts'
-import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { panelMountsFacet } from '@/extensions/core.ts'
-import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.tsx'
+import { usePropertyValue } from '@/hooks/block.js'
+import { useAppRuntime } from '@/extensions/runtimeContext.js'
+import { panelMountsFacet } from '@/extensions/core.js'
+import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.js'
 import {
   goBackInPanel,
   goForwardInPanel,
   panelHistory,
   usePanelHistory,
-} from '@/utils/panelHistory.ts'
-import { deletePanelRow } from '@/utils/panelLayoutProjection.ts'
+} from '@/utils/panelHistory.js'
+import { deletePanelRow } from '@/utils/panelLayoutProjection.js'
 
 const SCROLL_WRITE_DELAY_MS = 200
 const PANEL_ACTION_BUTTON_CLASS =

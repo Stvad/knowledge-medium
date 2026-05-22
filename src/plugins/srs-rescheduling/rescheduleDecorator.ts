@@ -7,12 +7,12 @@
  */
 import {
   RESCHEDULE_BLOCK_DATE_ACTION_ID,
-} from '@/plugins/daily-notes/rescheduleAction.ts'
+} from '@/plugins/daily-notes/rescheduleAction.js'
 import type {
   ActionConfig,
   ActionDecorator,
   BlockShortcutDependencies,
-} from '@/shortcuts/types.ts'
+} from '@/shortcuts/types.js'
 import { srsBlockDateAdapter } from './srsBlockDateAdapter.ts'
 
 export const srsRescheduleDecorator: ActionDecorator = {

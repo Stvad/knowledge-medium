@@ -1,13 +1,13 @@
 import { BlockComponent } from './components/BlockComponent'
-import { BlockContextProvider } from '@/context/block.tsx'
+import { BlockContextProvider } from '@/context/block.js'
 import { use, useEffect, useState } from 'react'
 import type { Block } from './data/block'
-import { useRepo } from '@/context/repo.tsx'
+import { useRepo } from '@/context/repo.js'
 import { useSearchParam } from 'react-use'
 import type { Repo } from './data/repo'
-import { hasRemoteSyncConfig } from '@/services/powersync.ts'
-import { useIsLocalOnly } from '@/components/Login.tsx'
-import { AppRuntimeProvider } from '@/extensions/AppRuntimeProvider.tsx'
+import { hasRemoteSyncConfig } from '@/services/powersync.js'
+import { useIsLocalOnly } from '@/components/Login.js'
+import { AppRuntimeProvider } from '@/extensions/AppRuntimeProvider.js'
 import {
   canAccessRemoteWorkspace,
   ensureLocalPersonalWorkspace,
@@ -16,26 +16,26 @@ import {
   getLocalWorkspace,
   listLocalWorkspaces,
   primeLocalWorkspaceAndMember,
-} from '@/data/workspaces.ts'
-import { buildLayout, layoutWorkspaceChanged, parseLayout } from '@/utils/routing.ts'
-import { recallRememberedWorkspace, rememberWorkspace } from '@/utils/lastWorkspace.ts'
-import { seedTutorial } from '@/initData.ts'
-import { getOrCreatePropertiesPage } from '@/data/propertiesPage.ts'
-import { getOrCreateTypesPage } from '@/data/typesPage.ts'
-import { useMyWorkspaceRoles } from '@/hooks/useWorkspaces.ts'
-import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks.ts'
-import { workspaceLandingFacet } from '@/extensions/core.ts'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
-import { staticAppExtensions } from '@/extensions/staticAppExtensions.ts'
-import { getLayoutSessionId } from '@/utils/layoutSessionId.ts'
+} from '@/data/workspaces.js'
+import { buildLayout, layoutWorkspaceChanged, parseLayout } from '@/utils/routing.js'
+import { recallRememberedWorkspace, rememberWorkspace } from '@/utils/lastWorkspace.js'
+import { seedTutorial } from '@/initData.js'
+import { getOrCreatePropertiesPage } from '@/data/propertiesPage.js'
+import { getOrCreateTypesPage } from '@/data/typesPage.js'
+import { useMyWorkspaceRoles } from '@/hooks/useWorkspaces.js'
+import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks.js'
+import { workspaceLandingFacet } from '@/extensions/core.js'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { staticAppExtensions } from '@/extensions/staticAppExtensions.js'
+import { getLayoutSessionId } from '@/utils/layoutSessionId.js'
 import {
   PanelLayoutProjection,
   applyCurrentLayoutUrl,
   createPanelRowInTx,
-} from '@/utils/panelLayoutProjection.ts'
-import { keyAtEnd } from '@/data/orderKey.ts'
+} from '@/utils/panelLayoutProjection.js'
+import { keyAtEnd } from '@/data/orderKey.js'
 import { ChangeScope } from '@/data/api'
-import { hasSafeModeSearchParam } from '@/utils/safeMode.ts'
+import { hasSafeModeSearchParam } from '@/utils/safeMode.js'
 
 // Resolved-workspace bundle. `freshlyCreated` is true only when this run
 // inserted a brand-new personal workspace via ensure_personal_workspace;

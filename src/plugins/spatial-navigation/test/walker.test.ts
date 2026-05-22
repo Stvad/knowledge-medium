@@ -12,7 +12,7 @@ import {
   rememberInstancePosition,
   stackSiblingPanel,
   verticalNeighbor,
-} from '@/plugins/spatial-navigation/walker.ts'
+} from '@/plugins/spatial-navigation/walker.js'
 
 interface InstanceSpec {
   blockId: string

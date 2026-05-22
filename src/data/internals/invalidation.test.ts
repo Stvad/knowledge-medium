@@ -25,14 +25,14 @@ import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '../repo'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
-import { kernelDataExtension } from '@/data/kernelDataExtension.ts'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import {
   LoaderHandle,
   snapshotsToChangeNotification,
   type ChangeSnapshot,
 } from './handleStore'
-import type { InvalidationRule } from '@/data/invalidation.ts'
+import type { InvalidationRule } from '@/data/invalidation.js'
 
 interface Harness { h: TestDb; cache: BlockCache; repo: Repo }
 

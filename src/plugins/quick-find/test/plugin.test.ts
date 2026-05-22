@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import { propertySchemasFacet } from '@/data/facets.ts'
-import { actionsFacet, appMountsFacet, headerItemsFacet } from '@/extensions/core.ts'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
+import { propertySchemasFacet } from '@/data/facets.js'
+import { actionsFacet, appMountsFacet, headerItemsFacet } from '@/extensions/core.js'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
 import {
   quickFindAction,
   quickFindHeaderItem,

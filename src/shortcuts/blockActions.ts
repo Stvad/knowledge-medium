@@ -1,8 +1,8 @@
 import { ChevronsDownUp, ClipboardCopy, Copy, Link2, SlidersHorizontal, Trash2 } from 'lucide-react'
 import { Block } from '../data/block'
 import { Repo } from '../data/repo'
-import { resetBlockSelection } from '@/data/stateBlocks.ts'
-import { copyBlockToClipboard } from '@/utils/copy.ts'
+import { resetBlockSelection } from '@/data/stateBlocks.js'
+import { copyBlockToClipboard } from '@/utils/copy.js'
 import {
   editorSelection,
   focusedBlockIdProp,
@@ -14,7 +14,7 @@ import {
   showPropertiesProp,
   topLevelBlockIdProp,
   type EditorSelectionState,
-} from '@/data/properties.ts'
+} from '@/data/properties.js'
 import {
   ActionConfig,
   ActionContextType,
@@ -22,7 +22,7 @@ import {
   ActionTrigger,
   BlockShortcutDependencies,
   ShortcutBinding,
-} from '@/shortcuts/types.ts'
+} from '@/shortcuts/types.js'
 import {
   blockAfterSubtreeRemoval,
   extendSelection,

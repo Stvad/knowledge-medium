@@ -1,12 +1,12 @@
 import { Block } from '../data/block'
 import { useRenderer } from '../hooks/useRendererRegistry.tsx'
-import { useBlockContext } from '@/context/block.tsx'
-import { useRepo } from '@/context/repo.tsx'
+import { useBlockContext } from '@/context/block.js'
+import { useRepo } from '@/context/repo.js'
 import { Suspense } from 'react'
-import { SuspenseFallback } from '@/components/util/suspense.tsx'
-import { FallbackComponent } from '@/components/util/error.tsx'
+import { SuspenseFallback } from '@/components/util/suspense.js'
+import { FallbackComponent } from '@/components/util/error.js'
 import { ErrorBoundary } from 'react-error-boundary'
-import { useChildIds } from '@/hooks/block.ts'
+import { useChildIds } from '@/hooks/block.js'
 import { LazyBlockComponent } from './LazyBlockComponent.tsx'
 
 interface BlockComponentProps {

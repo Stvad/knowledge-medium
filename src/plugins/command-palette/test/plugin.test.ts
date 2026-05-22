@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { actionContextsFacet, actionsFacet, appMountsFacet, headerItemsFacet } from '@/extensions/core.ts'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
+import { actionContextsFacet, actionsFacet, appMountsFacet, headerItemsFacet } from '@/extensions/core.js'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
 import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
-import { ActionContextTypes } from '@/shortcuts/types.ts'
+import { ActionContextTypes } from '@/shortcuts/types.js'
 import {
   COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,
   commandPaletteAction,

@@ -6,9 +6,9 @@
  */
 import type { Block } from '@/data/block'
 import { ChangeScope } from '@/data/api'
-import { aliasesProp, getBlockTypes } from '@/data/properties.ts'
+import { aliasesProp, getBlockTypes } from '@/data/properties.js'
 import { getOrCreateDailyNote, isValidDateAlias } from '@/plugins/daily-notes'
-import type { BlockDateAdapter } from '@/plugins/daily-notes/blockDateAdapter.ts'
+import type { BlockDateAdapter } from '@/plugins/daily-notes/blockDateAdapter.js'
 import { SRS_SM25_TYPE, srsNextReviewDateProp } from './schema.ts'
 
 const decodeNextReviewDateId = (properties: Record<string, unknown>): string | null => {

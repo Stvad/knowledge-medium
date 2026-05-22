@@ -1,9 +1,9 @@
 import type { Block } from '@/data/block'
-import { useHandle } from '@/hooks/block.ts'
+import { useHandle } from '@/hooks/block.js'
 import {
   hasBacklinksFilter,
   type BacklinksFilter,
-} from '@/plugins/backlinks/query.ts'
+} from '@/plugins/backlinks/query.js'
 import type { GroupedBacklinksConfig } from './config.ts'
 import {
   GROUPED_BACKLINKS_FOR_BLOCK_QUERY,

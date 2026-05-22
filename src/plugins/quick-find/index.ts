@@ -4,12 +4,12 @@ import {
   headerItemsFacet,
   type HeaderItemContribution,
   type AppMountContribution,
-} from '@/extensions/core.ts'
-import { propertySchemasFacet } from '@/data/facets.ts'
-import { pluginUIStateExtension } from '@/data/pluginStateExtensions.ts'
-import type { AppExtension } from '@/extensions/facet.ts'
-import { systemToggle } from '@/extensions/togglable.ts'
-import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.ts'
+} from '@/extensions/core.js'
+import { propertySchemasFacet } from '@/data/facets.js'
+import { pluginUIStateExtension } from '@/data/pluginStateExtensions.js'
+import type { AppExtension } from '@/extensions/facet.js'
+import { systemToggle } from '@/extensions/togglable.js'
+import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { Search } from 'lucide-react'
 import { QuickFindHeaderItem } from './HeaderItem.tsx'
 import { QuickFind } from './QuickFind.tsx'

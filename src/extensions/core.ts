@@ -1,5 +1,5 @@
-import { defineFacet } from '@/extensions/facet.ts'
-import type { FacetRuntime } from '@/extensions/facet.ts'
+import { defineFacet } from '@/extensions/facet.js'
+import type { FacetRuntime } from '@/extensions/facet.js'
 import type { Repo } from '../data/repo'
 import type { Block } from '../data/block'
 import {
@@ -8,8 +8,8 @@ import {
   ActionContextType,
   type ActionDecorator,
   type ActionOverride,
-} from '@/shortcuts/types.ts'
-import { BlockRenderer, RendererRegistry } from '@/types.ts'
+} from '@/shortcuts/types.js'
+import { BlockRenderer, RendererRegistry } from '@/types.js'
 import type { ComponentType } from 'react'
 
 export interface AppEffectContext {

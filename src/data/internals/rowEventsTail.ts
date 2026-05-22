@@ -40,7 +40,7 @@ import {
   createPluginInvalidationEmitter,
   type InvalidationRule,
   type MutablePluginInvalidationMap,
-} from '@/data/invalidation.ts'
+} from '@/data/invalidation.js'
 
 /** Shape of a single `row_events` row we care about. */
 interface RowEventRow {

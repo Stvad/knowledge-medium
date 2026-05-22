@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { actionsFacet, appMountsFacet, headerItemsFacet } from '@/extensions/core.ts'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
+import { actionsFacet, appMountsFacet, headerItemsFacet } from '@/extensions/core.js'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
 import {
   leftSidebarCoreSection,
   leftSidebarHeaderItem,

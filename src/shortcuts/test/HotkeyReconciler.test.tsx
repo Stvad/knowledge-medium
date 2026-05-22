@@ -1,20 +1,20 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import { act, render, cleanup } from '@testing-library/react'
 import hotkeys from 'hotkeys-js'
-import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler.tsx'
+import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler.js'
 import {
   ActiveContextsProvider,
   useActiveContextsDispatch,
-} from '@/shortcuts/ActiveContexts.tsx'
-import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.ts'
-import { actionContextsFacet, actionDecoratorsFacet, actionsFacet } from '@/extensions/core.ts'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
+} from '@/shortcuts/ActiveContexts.js'
+import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.js'
+import { actionContextsFacet, actionDecoratorsFacet, actionsFacet } from '@/extensions/core.js'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
 import {
   ActionConfig,
   ActionContextConfig,
   ActionContextType,
   BaseShortcutDependencies,
-} from '@/shortcuts/types.ts'
+} from '@/shortcuts/types.js'
 import { useEffect, type ReactNode } from 'react'
 
 const TEST_CONTEXT = 'test-mode' as ActionContextType

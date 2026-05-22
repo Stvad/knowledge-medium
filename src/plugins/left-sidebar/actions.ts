@@ -2,7 +2,7 @@ import { Menu } from 'lucide-react'
 import {
   ActionConfig,
   ActionContextTypes,
-} from '@/shortcuts/types.ts'
+} from '@/shortcuts/types.js'
 import { openLeftSidebar } from './events.ts'
 
 export const OPEN_LEFT_SIDEBAR_ACTION_ID = 'open_left_sidebar'

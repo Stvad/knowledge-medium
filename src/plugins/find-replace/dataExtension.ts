@@ -5,12 +5,12 @@ import {
   defineQuery,
   type Schema,
 } from '@/data/api'
-import { mutatorsFacet, queriesFacet } from '@/data/facets.ts'
-import type { AppExtension } from '@/extensions/facet.ts'
+import { mutatorsFacet, queriesFacet } from '@/data/facets.js'
+import type { AppExtension } from '@/extensions/facet.js'
 import {
   KERNEL_CONTENT_CHANNEL,
   kernelContentKey,
-} from '@/data/internals/kernelInvalidation.ts'
+} from '@/data/internals/kernelInvalidation.js'
 import {
   DEFAULT_FIND_REPLACE_OPTIONS,
   buildContentSearchMatch,

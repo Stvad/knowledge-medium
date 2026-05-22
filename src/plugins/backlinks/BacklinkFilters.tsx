@@ -8,11 +8,11 @@ import {
   useState,
 } from 'react'
 import { FilterX, Plus, Settings2, X } from 'lucide-react'
-import { useRepo } from '@/context/repo.tsx'
-import { useHandle } from '@/hooks/block.ts'
-import { usePropertySchemas } from '@/hooks/propertySchemas.ts'
-import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { refTargetFilterDefaultsFacet } from '@/data/facets.ts'
+import { useRepo } from '@/context/repo.js'
+import { useHandle } from '@/hooks/block.js'
+import { usePropertySchemas } from '@/hooks/propertySchemas.js'
+import { useAppRuntime } from '@/extensions/runtimeContext.js'
+import { refTargetFilterDefaultsFacet } from '@/data/facets.js'
 import { type BlockPredicate } from '@/data/api'
 import {
   propertyFilterOperatorArity,
@@ -21,15 +21,15 @@ import {
   type PropertyFilterInputKind,
   type PropertyFilterOperatorId,
 } from './propertyFilter.ts'
-import { Button } from '@/components/ui/button.tsx'
-import { Input } from '@/components/ui/input.tsx'
-import { FloatingListbox } from '@/components/ui/floating-listbox.tsx'
-import { cn } from '@/lib/utils.ts'
+import { Button } from '@/components/ui/button.js'
+import { Input } from '@/components/ui/input.js'
+import { FloatingListbox } from '@/components/ui/floating-listbox.js'
+import { cn } from '@/lib/utils.js'
 import {
   labelForBlockData,
   searchLinkTargetIdCandidates,
   type LinkTargetIdCandidate,
-} from '@/utils/linkTargetAutocomplete.ts'
+} from '@/utils/linkTargetAutocomplete.js'
 import {
   normalizeBacklinksFilter,
   type BacklinksFilter,

@@ -1,6 +1,6 @@
 import {createElement} from 'react'
 import {definePropertyEditorOverride, type PropertyEditorProps} from '@/data/api'
-import type {Overrides} from '@/extensions/togglable.ts'
+import type {Overrides} from '@/extensions/togglable.js'
 import {extensionsOverridesProp} from './config.ts'
 import {ExtensionsOverridesEditor} from './ExtensionsOverridesEditor.tsx'
 

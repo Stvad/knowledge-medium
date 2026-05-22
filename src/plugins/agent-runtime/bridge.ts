@@ -1,4 +1,4 @@
-import type { AppEffectCleanup } from '@/extensions/core.ts'
+import type { AppEffectCleanup } from '@/extensions/core.js'
 import { agentTokenStore, agentTokensChangedEvent } from './tokens.ts'
 import { createAgentRuntimeContext, executeCommand } from './commands.ts'
 import { serializeError, serializeValue } from './serialization.ts'

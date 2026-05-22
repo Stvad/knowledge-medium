@@ -1,12 +1,11 @@
-// Pull every kernel primitive through `@/extensions/api.js`. Importing
-// deeper paths (`@/context/repo.js`, `@/utils/toast.js`, …) works under
-// the prod build but the dev server's dynamic-import loader sometimes
-// resolves those as a fresh module instance, producing a *second* copy
-// of React contexts / singletons (most visibly: `useRepo must be used
-// within a RepoContext` because the extension's `useRepo` reads a
-// different `RepoContext` object than the one `<RepoProvider>` wrote
-// to). The barrel is loaded eagerly by the kernel, so going through
-// it keeps every extension on the same instance the app uses.
+// Extensions can import any kernel module via `@/...` — both the
+// `@/extensions/api.js` barrel and deep paths (`@/context/repo.js`,
+// `@/utils/toast.js`, …) produce the same module identity as the
+// host app, because the kernel now imports modules with the same `.js`
+// suffix extensions use. The mix below is deliberate: bulk-imported
+// primitives go through the barrel for readability, and `useRepo` uses
+// a deep import as a regression test that deep imports still resolve
+// to the same `RepoContext` the kernel's `<RepoProvider>` wrote to.
 import {
   ActionContextTypes,
   ChangeScope,
@@ -26,11 +25,6 @@ import {
   showProgress,
   dismissToast,
 } from '@/extensions/api.js'
-// Deep-imported to regression-test the canonicalizer in
-// compileExtensionModule.ts. `@/context/repo.js` is rewritten to the
-// kernel-canonical `@/context/repo.tsx` before babel + blob, so the
-// browser's module map dedupes and `useRepo` reads the same RepoContext
-// the kernel's `<RepoProvider>` wrote to.
 import {useRepo} from '@/context/repo.js'
 import {
   Dialog,

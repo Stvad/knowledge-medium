@@ -8,11 +8,11 @@ import {
   Redo2,
   KeyboardOff,
 } from 'lucide-react'
-import { useIsMobile } from '@/utils/react.tsx'
-import { useRunAction } from '@/shortcuts/runAction.ts'
-import { useActiveContextsState } from '@/shortcuts/ActiveContexts.tsx'
-import { ActionContextTypes, type CodeMirrorEditModeDependencies } from '@/shortcuts/types.ts'
-import { acquireBlurExitSuppression } from '@/components/BlockEditor.tsx'
+import { useIsMobile } from '@/utils/react.js'
+import { useRunAction } from '@/shortcuts/runAction.js'
+import { useActiveContextsState } from '@/shortcuts/ActiveContexts.js'
+import { ActionContextTypes, type CodeMirrorEditModeDependencies } from '@/shortcuts/types.js'
+import { acquireBlurExitSuppression } from '@/components/BlockEditor.js'
 import {
   INSERT_BLOCK_REF_TRIGGER_ACTION_ID,
   INSERT_PAGE_REF_TRIGGER_ACTION_ID,

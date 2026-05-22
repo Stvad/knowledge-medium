@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import Markdown from 'react-markdown'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Block } from '@/data/block'
-import { gfmMarkdownExtension, isExternalHref } from '@/markdown/defaultMarkdownExtension.ts'
+import { gfmMarkdownExtension, isExternalHref } from '@/markdown/defaultMarkdownExtension.js'
 
 const markdownConfig = gfmMarkdownExtension({
   block: {} as Block,

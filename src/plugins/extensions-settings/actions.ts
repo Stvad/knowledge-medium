@@ -12,10 +12,10 @@
  * Scoped UiState so the choice is per-device and doesn't sync.
  */
 
-import {getPluginPrefsBlock} from '@/data/stateBlocks.ts'
-import {showPropertiesProp} from '@/data/properties.ts'
-import {navigate} from '@/utils/navigation.ts'
-import {ActionContextTypes, type ActionConfig} from '@/shortcuts/types.ts'
+import {getPluginPrefsBlock} from '@/data/stateBlocks.js'
+import {showPropertiesProp} from '@/data/properties.js'
+import {navigate} from '@/utils/navigation.js'
+import {ActionContextTypes, type ActionConfig} from '@/shortcuts/types.js'
 import {extensionsPrefsType} from './config.ts'
 
 export const openExtensionsSettingsAction: ActionConfig<

@@ -9,7 +9,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import type { DialogContextProps } from '@/utils/dialogs.ts'
+import type { DialogContextProps } from '@/utils/dialogs.js'
 
 export interface SpreadDatesDialogProps {
   defaultDays?: number

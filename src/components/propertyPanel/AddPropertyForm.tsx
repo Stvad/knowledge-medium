@@ -12,7 +12,7 @@ import {
   consumePendingPropertyCreateRequest,
   focusPropertyRowByNameWhenReady,
   subscribePropertyCreateRequests,
-} from '@/utils/propertyNavigation.ts'
+} from '@/utils/propertyNavigation.js'
 import type { AnyPropertySchema } from '@/data/api'
 import { PROPERTY_ROW_GRID_STYLE } from './layout'
 import {

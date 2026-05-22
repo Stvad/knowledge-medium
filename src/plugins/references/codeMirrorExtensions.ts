@@ -1,13 +1,13 @@
 import { autocompletion } from '@codemirror/autocomplete'
 import { EditorView, keymap } from '@codemirror/view'
 import { EditorSelection, Prec } from '@codemirror/state'
-import type { CodeMirrorExtensionContribution } from '@/extensions/editor.ts'
-import { formatRoamDate } from '@/utils/dailyPage.ts'
-import { relativeDateCandidates } from '@/utils/relativeDate.ts'
-import { backlinkCompletionSource } from '@/utils/backlinkAutocomplete.ts'
-import { blockrefCompletionSource } from '@/utils/blockrefAutocomplete.ts'
-import { completionKeymapWithEscapeFallthrough } from '@/utils/codemirrorCompletion.ts'
-import { searchAliasLabels } from '@/utils/linkTargetAutocomplete.ts'
+import type { CodeMirrorExtensionContribution } from '@/extensions/editor.js'
+import { formatRoamDate } from '@/utils/dailyPage.js'
+import { relativeDateCandidates } from '@/utils/relativeDate.js'
+import { backlinkCompletionSource } from '@/utils/backlinkAutocomplete.js'
+import { blockrefCompletionSource } from '@/utils/blockrefAutocomplete.js'
+import { completionKeymapWithEscapeFallthrough } from '@/utils/codemirrorCompletion.js'
+import { searchAliasLabels } from '@/utils/linkTargetAutocomplete.js'
 
 const referenceAutocompleteTheme = EditorView.theme({
   '.cm-tooltip.cm-tooltip-autocomplete.tm-reference-autocomplete': {

@@ -1,11 +1,11 @@
 import { BlockRendererProps } from '../types'
-import { rendererProp } from '@/data/properties.ts'
-import { usePropertyValue, useData } from '@/hooks/block.ts'
-import { blockRenderersFacet } from '@/extensions/core.ts'
-import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
-import { useAppRuntime } from '@/extensions/runtimeContext.ts'
+import { rendererProp } from '@/data/properties.js'
+import { usePropertyValue, useData } from '@/hooks/block.js'
+import { blockRenderersFacet } from '@/extensions/core.js'
+import { refreshAppRuntime } from '@/extensions/runtimeEvents.js'
+import { useAppRuntime } from '@/extensions/runtimeContext.js'
 
-export { defaultRegistry } from '@/extensions/defaultRenderers.tsx'
+export { defaultRegistry } from '@/extensions/defaultRenderers.js'
 
 export const refreshRendererRegistry = async () => {
   refreshAppRuntime()

@@ -1,7 +1,7 @@
 import { ChangeScope } from '@/data/api'
 import { Block } from '../data/block'
 import type { Repo } from '../data/repo'
-import type { ParsedBlock } from '@/utils/markdownParser.ts'
+import type { ParsedBlock } from '@/utils/markdownParser.js'
 
 /** Import a parsed block tree into the repo as one atomic
  *  transaction. The input shape is the lightweight `ParsedBlock`

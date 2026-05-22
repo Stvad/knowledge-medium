@@ -37,6 +37,7 @@ supabase/.branches
 .claude/worktrees/
 .claude/settings.local.json
 .claude/cache/
+.claude/scheduled_tasks.lock
 
 # MCP server caches
 .playwright-mcp/

@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import { describe, expect, it } from 'vitest'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
 import {
   resolveWikilinkDisplay,
   wikilinkDisplayDecoratorFacet,

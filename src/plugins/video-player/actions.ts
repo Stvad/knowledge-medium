@@ -1,15 +1,15 @@
 import { EditorSelection } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { Block } from '../../data/block'
-import { focusBlock } from '@/data/properties.ts'
-import type { ShortcutActivationContribution } from '@/extensions/blockInteraction.ts'
-import { actionContextsFacet, actionsFacet } from '@/extensions/core.ts'
-import type { AppExtension } from '@/extensions/facet.ts'
+import { focusBlock } from '@/data/properties.js'
+import type { ShortcutActivationContribution } from '@/extensions/blockInteraction.js'
+import { actionContextsFacet, actionsFacet } from '@/extensions/core.js'
+import type { AppExtension } from '@/extensions/facet.js'
 import type {
   ActionConfig,
   ActionContextConfig,
   BaseShortcutDependencies,
-} from '@/shortcuts/types.ts'
+} from '@/shortcuts/types.js'
 import { requestCurrentTime } from './events.ts'
 import { enterVideoNotesView } from './notes.ts'
 import { videoPlayerViewProp } from './view.ts'

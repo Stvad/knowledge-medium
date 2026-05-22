@@ -8,30 +8,30 @@ import {
   CommandItem,
 } from '@/components/ui/command'
 import { Kbd } from '@/components/ui/kbd'
-import { useUser } from '@/components/Login.tsx'
-import { useRepo } from '@/context/repo.tsx'
+import { useUser } from '@/components/Login.js'
+import { useRepo } from '@/context/repo.js'
 import { ChangeScope } from '@/data/api'
 import type { Block } from '@/data/block'
-import { activePanelIdProp, aliasesProp } from '@/data/properties.ts'
-import { usePropertyValue } from '@/hooks/block.ts'
-import { PAGE_TYPE } from '@/data/blockTypes.ts'
+import { activePanelIdProp, aliasesProp } from '@/data/properties.js'
+import { usePropertyValue } from '@/hooks/block.js'
+import { PAGE_TYPE } from '@/data/blockTypes.js'
 import { v4 as uuidv4 } from 'uuid'
-import { useNavigate, useNavigateFromGlobalCommand } from '@/utils/navigation.ts'
-import { parseRelativeDate, relativeDateCandidates } from '@/utils/relativeDate.ts'
+import { useNavigate, useNavigateFromGlobalCommand } from '@/utils/navigation.js'
+import { parseRelativeDate, relativeDateCandidates } from '@/utils/relativeDate.js'
 import { getOrCreateDailyNote } from '@/plugins/daily-notes'
-import { formatRoamDate } from '@/utils/dailyPage.ts'
-import { getLayoutSessionId } from '@/utils/layoutSessionId.ts'
+import { formatRoamDate } from '@/utils/dailyPage.js'
+import { getLayoutSessionId } from '@/utils/layoutSessionId.js'
 import {
   searchLinkTargetsProgressively,
   type LinkTargetAliasMatch,
   type LinkTargetBlockMatch,
-} from '@/utils/linkTargetAutocomplete.ts'
+} from '@/utils/linkTargetAutocomplete.js'
 import {
   getLayoutSessionBlock,
   getPluginUIStateBlock,
   getUIStateBlock,
   requireWorkspaceId,
-} from '@/data/stateBlocks.ts'
+} from '@/data/stateBlocks.js'
 import { toggleQuickFindEvent } from './events.ts'
 import { pushRecentBlockId, quickFindUIStateType, recentBlockIdsProp } from './recents.ts'
 import {

@@ -1,4 +1,4 @@
-import type { AppEffect } from '@/extensions/core.ts'
+import type { AppEffect } from '@/extensions/core.js'
 import { ensureRoamImportWindowHook } from './runtime.ts'
 
 /** Installs `window.__omniliner.roamImport` once per Repo so the agent

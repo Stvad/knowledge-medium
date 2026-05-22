@@ -2,8 +2,8 @@ import {
   invalidationRulesFacet,
   localSchemaFacet,
   postCommitProcessorsFacet,
-} from '@/data/facets.ts'
-import type { AppExtension } from '@/extensions/facet.ts'
+} from '@/data/facets.js'
+import type { AppExtension } from '@/extensions/facet.js'
 import { referencesPostCommitProcessors } from './referencesProcessor.ts'
 import { renamePostCommitProcessors } from './renameProcessor.ts'
 import { referencesLocalSchema } from './localSchema.ts'

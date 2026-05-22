@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { AgentTokenStore } from '../tokens.ts'
-import { ClientLocalSettings } from '@/utils/ClientLocalSettings.ts'
+import { ClientLocalSettings } from '@/utils/ClientLocalSettings.js'
 
 // Production code only uses get/set/remove via ClientLocalSettings;
 // the Storage interface's `key()` and `length` aren't exercised, so

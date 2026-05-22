@@ -18,7 +18,7 @@ vi.mock('@/context/repo.tsx', () => ({
 }))
 
 vi.mock('@/utils/navigation.ts', async importOriginal => {
-  const actual = await importOriginal<typeof import('@/utils/navigation.ts')>()
+  const actual = await importOriginal<typeof import('@/utils/navigation.js')>()
   return {
     ...actual,
     useNavigate: () => mocks.navigate,

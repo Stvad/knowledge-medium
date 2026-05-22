@@ -11,15 +11,15 @@
  * fallback is "no overrides" so extensions keep working while
  * the surfaced error can be repaired through the settings UI.
  */
-import type {AppEffect} from '@/extensions/core.ts'
-import {getPluginPrefsBlock} from '@/data/stateBlocks.ts'
+import type {AppEffect} from '@/extensions/core.js'
+import {getPluginPrefsBlock} from '@/data/stateBlocks.js'
 import type {PropertySchema} from '@/data/api'
 import {
   readOverridesCache,
   writeOverridesCache,
-} from '@/extensions/overridesCache.ts'
-import {refreshAppRuntime} from '@/extensions/runtimeEvents.ts'
-import type {Overrides} from '@/extensions/togglable.ts'
+} from '@/extensions/overridesCache.js'
+import {refreshAppRuntime} from '@/extensions/runtimeEvents.js'
+import type {Overrides} from '@/extensions/togglable.js'
 import {
   extensionsOverridesProp,
   extensionsPrefsType,

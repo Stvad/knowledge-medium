@@ -15,7 +15,7 @@ import {
 import {
   __resetVisualNavigationForTesting,
   useVisualNavigationTarget,
-} from '@/plugins/visual-navigation/navigation.ts'
+} from '@/plugins/visual-navigation/navigation.js'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1'}

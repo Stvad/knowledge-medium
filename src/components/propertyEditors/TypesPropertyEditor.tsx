@@ -1,10 +1,10 @@
 import { useId, useMemo, useState, type KeyboardEvent } from 'react'
 import { Plus, X } from 'lucide-react'
 import { type PropertyEditorProps } from '@/data/api'
-import { typesFacet } from '@/data/facets.ts'
+import { typesFacet } from '@/data/facets.js'
 import { Block } from '@/data/block'
-import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { FloatingListbox } from '@/components/ui/floating-listbox.tsx'
+import { useAppRuntime } from '@/extensions/runtimeContext.js'
+import { FloatingListbox } from '@/components/ui/floating-listbox.js'
 
 interface TypeOption {
   id: string

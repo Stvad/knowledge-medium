@@ -4,11 +4,11 @@ import { createRoot } from 'react-dom/client'
 import { ErrorBoundary } from 'react-error-boundary'
 import './index.css'
 import App from './App.tsx'
-import { RepoProvider } from '@/context/repo.tsx'
-import { Login } from '@/components/Login.tsx'
-import { SuspenseFallback } from '@/components/util/suspense.tsx'
-import { BootstrapErrorFallback } from '@/components/util/error.tsx'
-import { registerServiceWorker } from '@/registerServiceWorker.ts'
+import { RepoProvider } from '@/context/repo.js'
+import { Login } from '@/components/Login.js'
+import { SuspenseFallback } from '@/components/util/suspense.js'
+import { BootstrapErrorFallback } from '@/components/util/error.js'
+import { registerServiceWorker } from '@/registerServiceWorker.js'
 
 // Todo remember why I need this something about version mismatch/having implied react in custom blocks
 window.React = React

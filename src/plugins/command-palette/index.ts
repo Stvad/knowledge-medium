@@ -5,12 +5,12 @@ import {
   headerItemsFacet,
   type HeaderItemContribution,
   type AppMountContribution,
-} from '@/extensions/core.ts'
-import type { AppExtension } from '@/extensions/facet.ts'
-import { systemToggle } from '@/extensions/togglable.ts'
-import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.ts'
+} from '@/extensions/core.js'
+import type { AppExtension } from '@/extensions/facet.js'
+import { systemToggle } from '@/extensions/togglable.js'
+import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { Command } from 'lucide-react'
-import { focusBlock } from '@/data/properties.ts'
+import { focusBlock } from '@/data/properties.js'
 import {
   quickActionItemsFacet,
   type QuickActionItem,

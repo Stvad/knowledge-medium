@@ -1,7 +1,7 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { X } from 'lucide-react'
 import { useState, type ImgHTMLAttributes, type MouseEvent } from 'react'
-import { cn } from '@/lib/utils.ts'
+import { cn } from '@/lib/utils.js'
 
 export type MarkdownImageProps = ImgHTMLAttributes<HTMLImageElement> & {
   node?: unknown

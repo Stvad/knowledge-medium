@@ -10,15 +10,15 @@ import { Plus, X } from 'lucide-react'
 import {
   type PropertyEditorProps,
 } from '@/data/api'
-import { useRepo } from '@/context/repo.tsx'
-import { Button } from '@/components/ui/button.tsx'
-import { Input } from '@/components/ui/input.tsx'
-import { FloatingListbox } from '@/components/ui/floating-listbox.tsx'
-import { cn } from '@/lib/utils.ts'
+import { useRepo } from '@/context/repo.js'
+import { Button } from '@/components/ui/button.js'
+import { Input } from '@/components/ui/input.js'
+import { FloatingListbox } from '@/components/ui/floating-listbox.js'
+import { cn } from '@/lib/utils.js'
 import {
   searchLinkTargetValueCandidates,
   type LinkTargetValueCandidate,
-} from '@/utils/linkTargetAutocomplete.ts'
+} from '@/utils/linkTargetAutocomplete.js'
 import {
   normalizeGroupedBacklinksConfig,
   type GroupedBacklinksConfig,

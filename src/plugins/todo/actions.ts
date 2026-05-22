@@ -1,14 +1,14 @@
-import { actionsFacet } from '@/extensions/core.ts'
-import type { AppExtension } from '@/extensions/facet.ts'
+import { actionsFacet } from '@/extensions/core.js'
+import type { AppExtension } from '@/extensions/facet.js'
 import type { Block } from '@/data/block'
 import { ChangeScope } from '@/data/api'
-import { getBlockTypes } from '@/data/properties.ts'
+import { getBlockTypes } from '@/data/properties.js'
 import {
   ActionContextTypes,
   type ActionConfig,
   type BlockShortcutDependencies,
-} from '@/shortcuts/types.ts'
-import { SWIPE_RIGHT_BLOCK_ACTION_ID } from '@/plugins/swipe-quick-actions/actions.ts'
+} from '@/shortcuts/types.js'
+import { SWIPE_RIGHT_BLOCK_ACTION_ID } from '@/plugins/swipe-quick-actions/actions.js'
 import { statusProp, TODO_TYPE } from './schema.ts'
 
 type TodoActionContext =

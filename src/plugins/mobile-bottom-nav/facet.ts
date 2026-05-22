@@ -1,5 +1,5 @@
-import { defineFacet } from '@/extensions/facet.ts'
-import type { ActionContextType } from '@/shortcuts/types.ts'
+import { defineFacet } from '@/extensions/facet.js'
+import type { ActionContextType } from '@/shortcuts/types.js'
 
 export interface MobileBottomNavItemContribution {
   id: string

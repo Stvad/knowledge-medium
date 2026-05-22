@@ -7,8 +7,8 @@ import {
   toggleMarkdownInlineCode,
   toggleMarkdownItalic,
   toggleMarkdownStrikethrough,
-} from '@/utils/codemirror.ts'
-import { completionKeymapWithEscapeFallthrough } from '@/utils/codemirrorCompletion.ts'
+} from '@/utils/codemirror.js'
+import { completionKeymapWithEscapeFallthrough } from '@/utils/codemirrorCompletion.js'
 
 const runCommand = (
   command: StateCommand,

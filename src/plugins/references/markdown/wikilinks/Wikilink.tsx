@@ -1,7 +1,7 @@
 import { ReactNode } from 'react'
 import { buildAppHash } from '@/utils/routing'
 import { useBlockLinkClick } from '@/utils/navigation'
-import { useAppRuntime } from '@/extensions/runtimeContext.ts'
+import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import {
   isWikilinkDisplayParts,
   resolveWikilinkDisplay,

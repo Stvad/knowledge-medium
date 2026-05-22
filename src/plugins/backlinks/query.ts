@@ -4,11 +4,11 @@ import {
   type BlockPredicate,
   type Schema,
 } from '@/data/api'
-import { resolveTypedBlockIds } from '@/data/internals/kernelQueries.ts'
+import { resolveTypedBlockIds } from '@/data/internals/kernelQueries.js'
 import {
   TYPED_BLOCKS_STRUCTURE_CHANNEL,
   typedBlocksStructureKey,
-} from '@/data/internals/kernelInvalidation.ts'
+} from '@/data/internals/kernelInvalidation.js'
 
 export const BACKLINKS_FOR_BLOCK_QUERY = 'backlinks.forBlock'
 

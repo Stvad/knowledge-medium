@@ -244,7 +244,7 @@ describe('dynamicExtensionsExtension — provenance', () => {
       })
       // resolveAppRuntime (not resolveFacetRuntime) is what production
       // uses — it's the one that recurses into `enables`.
-      const {resolveAppRuntime} = await import('@/extensions/resolveAppRuntime.ts')
+      const {resolveAppRuntime} = await import('@/extensions/resolveAppRuntime.js')
       const runtime = await resolveAppRuntime([ext], {overrides: enableBlocks(blocks)})
 
       const sources = runtime.contributions(labelsFacet).map(c => c.source)

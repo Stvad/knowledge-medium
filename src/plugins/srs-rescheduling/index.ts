@@ -1,23 +1,23 @@
 import { Check, ClipboardPaste, ClockArrowDown, Gauge, RotateCcw, Scissors, Sparkles } from 'lucide-react'
-import { actionDecoratorsFacet, actionsFacet } from '@/extensions/core.ts'
-import type { AppExtension } from '@/extensions/facet.ts'
-import { systemToggle } from '@/extensions/togglable.ts'
+import { actionDecoratorsFacet, actionsFacet } from '@/extensions/core.js'
+import type { AppExtension } from '@/extensions/facet.js'
+import { systemToggle } from '@/extensions/togglable.js'
 import type { Block } from '@/data/block'
-import type { BlockContentSurfaceContribution } from '@/extensions/blockInteraction.ts'
-import { blockContentSurfacePropsFacet } from '@/extensions/blockInteraction.ts'
+import type { BlockContentSurfaceContribution } from '@/extensions/blockInteraction.js'
+import { blockContentSurfacePropsFacet } from '@/extensions/blockInteraction.js'
 import { ChangeScope, type PropertySchema } from '@/data/api'
 import { getOrCreateDailyNote } from '@/plugins/daily-notes'
-import { getBlockTypes } from '@/data/properties.ts'
+import { getBlockTypes } from '@/data/properties.js'
 import { formatIsoDate } from '@/utils/dailyPage'
 import { createElement } from 'react'
-import { showCustom } from '@/utils/toast.ts'
+import { showCustom } from '@/utils/toast.js'
 import { RescheduleToast } from './RescheduleToast.tsx'
 import {
   ActionConfig,
   ActionContextTypes,
   ActionIcon,
   BlockShortcutDependencies,
-} from '@/shortcuts/types.ts'
+} from '@/shortcuts/types.js'
 import {
   DEFAULT_FACTOR,
   DEFAULT_INTERVAL,

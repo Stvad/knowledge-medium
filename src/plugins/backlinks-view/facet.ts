@@ -1,7 +1,7 @@
-import type { BlockResolveContext } from '@/extensions/blockInteraction.ts'
-import { defineVariantFacet, type Variant } from '@/extensions/variantFacet.ts'
+import type { BlockResolveContext } from '@/extensions/blockInteraction.js'
+import { defineVariantFacet, type Variant } from '@/extensions/variantFacet.js'
 import type { ComponentType, ReactNode } from 'react'
-import type { BlockRendererProps } from '@/types.ts'
+import type { BlockRendererProps } from '@/types.js'
 
 export interface BacklinksViewRendererProps extends BlockRendererProps {
   controls?: ReactNode

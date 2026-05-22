@@ -25,13 +25,13 @@
  *     read without compiling executable code.
  */
 
-import type {AppExtension} from '@/extensions/facet.ts'
+import type {AppExtension} from '@/extensions/facet.js'
 import type {BlockData} from '@/data/api'
-import {aliasesProp} from '@/data/internals/coreProperties.ts'
+import {aliasesProp} from '@/data/internals/coreProperties.js'
 import {
   extensionDescriptionProp,
   extensionNameProp,
-} from '@/data/properties.ts'
+} from '@/data/properties.js'
 
 // ──────────────────────────────────────────────────────────────────────
 // Handle + boundary marker

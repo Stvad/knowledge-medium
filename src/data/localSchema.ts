@@ -1,5 +1,5 @@
-import type { AppExtension } from '@/extensions/facet.ts'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
+import type { AppExtension } from '@/extensions/facet.js'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
 import {
   localSchemaFacet,
   type LocalSchemaContribution,

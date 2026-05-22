@@ -1,12 +1,12 @@
 import {
   blockLayoutFacet,
   shortcutSurfaceActivationsFacet,
-} from '@/extensions/blockInteraction.ts'
-import { blockRenderersFacet } from '@/extensions/core.ts'
-import { propertySchemasFacet } from '@/data/facets.ts'
-import { AppExtension } from '@/extensions/facet.ts'
-import { systemToggle } from '@/extensions/togglable.ts'
-import { markdownExtensionsFacet } from '@/markdown/extensions.ts'
+} from '@/extensions/blockInteraction.js'
+import { blockRenderersFacet } from '@/extensions/core.js'
+import { propertySchemasFacet } from '@/data/facets.js'
+import { AppExtension } from '@/extensions/facet.js'
+import { systemToggle } from '@/extensions/togglable.js'
+import { markdownExtensionsFacet } from '@/markdown/extensions.js'
 import {
   videoPlayerActionsExtension,
   videoPlayerShortcutActivation,

@@ -4,10 +4,10 @@ import {
   appMountsFacet,
   type AppEffect,
   type AppMountContribution,
-} from '@/extensions/core.ts'
-import type { AppExtension } from '@/extensions/facet.ts'
-import { systemToggle } from '@/extensions/togglable.ts'
-import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.ts'
+} from '@/extensions/core.js'
+import type { AppExtension } from '@/extensions/facet.js'
+import { systemToggle } from '@/extensions/togglable.js'
+import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { AgentTokensDialogMount, openAgentTokensDialogEvent } from './AgentTokensDialog.tsx'
 import { agentRuntimeBridgeRestartEvent, startAgentRuntimeBridge } from './bridge.ts'
 

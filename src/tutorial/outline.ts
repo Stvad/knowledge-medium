@@ -16,7 +16,7 @@ import {
   extensionNameProp,
 } from '@/data/properties'
 import { EXTENSION_TYPE } from '@/data/blockTypes'
-import { exampleExtensions } from '@/extensions/exampleExtensions.ts'
+import { exampleExtensions } from '@/extensions/exampleExtensions.js'
 
 export type TutorialNode = {
   /** Pre-allocated block id. When omitted the seeder generates a UUID.

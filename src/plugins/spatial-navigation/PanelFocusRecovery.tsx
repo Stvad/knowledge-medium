@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
-import { usePropertyValue } from '@/hooks/block.ts'
+import { usePropertyValue } from '@/hooks/block.js'
 import { focusBlock, focusedBlockIdProp } from '@/data/properties'
 import type { Block } from '@/data/block'
 import {

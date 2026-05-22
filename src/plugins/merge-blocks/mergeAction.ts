@@ -15,7 +15,7 @@ import {
   ActionConfig,
   ActionContextTypes,
   type BlockShortcutDependencies,
-} from '@/shortcuts/types.ts'
+} from '@/shortcuts/types.js'
 import { openMergePicker } from './events.ts'
 
 export const MERGE_INTO_ACTION_ID = 'merge_blocks.merge_into'

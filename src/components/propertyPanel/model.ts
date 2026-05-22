@@ -6,7 +6,7 @@ import {
   type PropertyEditor,
   type TypeContribution,
 } from '@/data/api'
-import { getBlockTypes, typesProp } from '@/data/properties.ts'
+import { getBlockTypes, typesProp } from '@/data/properties.js'
 import {
   buildPropertyPanelSections,
   type PropertyPanelRow,

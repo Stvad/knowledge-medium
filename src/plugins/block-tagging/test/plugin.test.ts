@@ -2,11 +2,11 @@
 
 import { describe, expect, it } from 'vitest'
 import { Tag } from 'lucide-react'
-import { actionsFacet } from '@/extensions/core.ts'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
-import { propertySchemasFacet, propertyEditorOverridesFacet } from '@/data/facets.ts'
-import { groupedBacklinksGroupHeaderActionsFacet } from '@/plugins/grouped-backlinks/facet.ts'
-import { ActionContextTypes } from '@/shortcuts/types.ts'
+import { actionsFacet } from '@/extensions/core.js'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { propertySchemasFacet, propertyEditorOverridesFacet } from '@/data/facets.js'
+import { groupedBacklinksGroupHeaderActionsFacet } from '@/plugins/grouped-backlinks/facet.js'
+import { ActionContextTypes } from '@/shortcuts/types.js'
 import {
   ADD_TAG_ACTION_ID,
   ADD_TAG_BLOCKS_ACTION_ID,

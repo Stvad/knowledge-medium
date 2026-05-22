@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { panelMountsFacet } from '@/extensions/core.ts'
-import { blockContentSurfacePropsFacet } from '@/extensions/blockInteraction.ts'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
+import { panelMountsFacet } from '@/extensions/core.js'
+import { blockContentSurfacePropsFacet } from '@/extensions/blockInteraction.js'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
 import {
   SwipeActionMenu,
   quickActionItemsFacet,

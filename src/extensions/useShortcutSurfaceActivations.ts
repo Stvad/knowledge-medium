@@ -1,24 +1,24 @@
 import { useMemo } from 'react'
-import { shortcutSurfaceActivationsFacet } from '@/extensions/blockInteraction.ts'
+import { shortcutSurfaceActivationsFacet } from '@/extensions/blockInteraction.js'
 import type {
   BlockInteractionContext,
   ShortcutSurface,
   ShortcutSurfaceContext,
-} from '@/extensions/blockInteraction.ts'
-import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { useActionContextActivations } from '@/shortcuts/useActionContext.ts'
+} from '@/extensions/blockInteraction.js'
+import { useAppRuntime } from '@/extensions/runtimeContext.js'
+import { useActionContextActivations } from '@/shortcuts/useActionContext.js'
 import { Block } from '../data/block'
-import { useRepo } from '@/context/repo.tsx'
-import { useBlockContext } from '@/context/block.tsx'
+import { useRepo } from '@/context/repo.js'
+import { useBlockContext } from '@/context/block.js'
 import {
   useInEditMode,
   useInFocus,
   useIsSelected,
   useUIStateBlock,
   useUIStateProperty,
-} from '@/data/globalState.ts'
-import { activePanelIdProp, topLevelBlockIdProp, typesProp } from '@/data/properties.ts'
-import { usePropertyValue } from '@/hooks/block.ts'
+} from '@/data/globalState.js'
+import { activePanelIdProp, topLevelBlockIdProp, typesProp } from '@/data/properties.js'
+import { usePropertyValue } from '@/hooks/block.js'
 
 type ShortcutSurfaceOptions =
   Partial<Omit<ShortcutSurfaceContext, keyof BlockInteractionContext | 'surface'>> &

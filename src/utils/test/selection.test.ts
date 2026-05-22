@@ -3,7 +3,7 @@ import { BlockCache } from '@/data/blockCache'
 import { ChangeScope, type User } from '@/data/api'
 import { Repo } from '@/data/repo'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
-import { blockAfterSubtreeRemoval } from '@/utils/selection.ts'
+import { blockAfterSubtreeRemoval } from '@/utils/selection.js'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1'}

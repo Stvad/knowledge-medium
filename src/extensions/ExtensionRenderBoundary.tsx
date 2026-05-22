@@ -1,6 +1,6 @@
 import { Suspense, type ReactNode } from 'react'
 import { ErrorBoundary } from 'react-error-boundary'
-import { FallbackComponent } from '@/components/util/error.tsx'
+import { FallbackComponent } from '@/components/util/error.js'
 
 export function ExtensionRenderBoundary({
   children,

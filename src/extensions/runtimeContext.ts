@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react'
-import { FacetRuntime } from '@/extensions/facet.ts'
+import { FacetRuntime } from '@/extensions/facet.js'
 
 const AppRuntimeContext = createContext<FacetRuntime | undefined>(undefined)
 

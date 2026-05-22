@@ -13,14 +13,14 @@
  * Weekday is locale-pinned to en-US to match the rest of the daily-page
  * alias (also en-US). Display-time use only — never written to storage.
  */
-import { parseLiteralDailyPageTitle } from '@/utils/relativeDate.ts'
+import { parseLiteralDailyPageTitle } from '@/utils/relativeDate.js'
 import { CalendarDays } from 'lucide-react'
 import { createElement, type MouseEvent } from 'react'
 import type {
   WikilinkDisplayContext,
   WikilinkDisplayDecorator,
   WikilinkDisplayParts,
-} from '@/plugins/references/markdown/wikilinks/wikilinkDecorator.ts'
+} from '@/plugins/references/markdown/wikilinks/wikilinkDecorator.js'
 import { hasAnyBlockDateAdapter } from './blockDateAdapter.ts'
 import {
   openReschedulePicker,

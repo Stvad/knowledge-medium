@@ -7,12 +7,12 @@
  * `enables` recursion gated on parent acceptance.
  */
 import {describe, expect, it, vi} from 'vitest'
-import {defineFacet} from '@/extensions/facet.ts'
-import {systemToggle, type Overrides} from '@/extensions/togglable.ts'
+import {defineFacet} from '@/extensions/facet.js'
+import {systemToggle, type Overrides} from '@/extensions/togglable.js'
 import {
   resolveAppRuntime,
   resolveAppRuntimeSync,
-} from '@/extensions/resolveAppRuntime.ts'
+} from '@/extensions/resolveAppRuntime.js'
 
 const empty: Overrides = new Map()
 

@@ -4,7 +4,7 @@ import {
   collectPluginInvalidationsFromSnapshots,
   type ChangeSnapshot,
   type InvalidationRowEvent,
-} from '@/data/invalidation.ts'
+} from '@/data/invalidation.js'
 import {
   REFERENCES_TARGET_INVALIDATION_CHANNEL,
   referencesInvalidationRule,

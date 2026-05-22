@@ -1,12 +1,12 @@
 import {
   panelMountsFacet,
   type PanelMountContribution,
-} from '@/extensions/core.ts'
+} from '@/extensions/core.js'
 import {
   blockContentSurfacePropsFacet,
-} from '@/extensions/blockInteraction.ts'
-import type { AppExtension } from '@/extensions/facet.ts'
-import { systemToggle } from '@/extensions/togglable.ts'
+} from '@/extensions/blockInteraction.js'
+import type { AppExtension } from '@/extensions/facet.js'
+import { systemToggle } from '@/extensions/togglable.js'
 import { SwipeActionMenu } from './SwipeActionMenu.tsx'
 import {
   DEFAULT_QUICK_ACTION_ITEMS,

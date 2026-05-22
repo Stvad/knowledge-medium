@@ -1,14 +1,14 @@
 import type { Repo } from '@/data/repo'
-import { kernelDataExtension } from '@/data/kernelDataExtension.ts'
-import { defaultRenderersExtension } from '@/extensions/defaultRenderers.tsx'
-import { toastAppMountExtension } from '@/extensions/toastAppMount.tsx'
-import { defaultEditorInteractionExtension } from '@/extensions/defaultEditorInteractions.ts'
+import { kernelDataExtension } from '@/data/kernelDataExtension.js'
+import { defaultRenderersExtension } from '@/extensions/defaultRenderers.js'
+import { toastAppMountExtension } from '@/extensions/toastAppMount.js'
+import { defaultEditorInteractionExtension } from '@/extensions/defaultEditorInteractions.js'
 import {
   defaultActionContextsExtension,
   defaultActionsExtension,
-} from '@/shortcuts/defaultShortcuts.ts'
-import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi.ts'
-import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets.ts'
+} from '@/shortcuts/defaultShortcuts.js'
+import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi.js'
+import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets.js'
 import { accountHeaderPlugin } from '@/plugins/account-header'
 import { commandPalettePlugin } from '@/plugins/command-palette'
 import { dailyNotesPlugin } from '@/plugins/daily-notes'
@@ -41,7 +41,7 @@ import { todoPlugin } from '@/plugins/todo'
 import { syncStatusPlugin } from '@/plugins/sync-status'
 import { extensionsSettingsPlugin } from '@/plugins/extensions-settings'
 import { extractTypePlugin } from '@/plugins/extract-type'
-import type { AppExtension } from '@/extensions/facet.ts'
+import type { AppExtension } from '@/extensions/facet.js'
 
 export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   // kernelDataExtension contributes KERNEL_MUTATORS and core data

@@ -1,6 +1,7 @@
 const BLOCK_HOOK_SOURCES = new Set([
   '@/hooks/block',
   '@/hooks/block.ts',
+  '@/hooks/block.js',
 ])
 
 const normalizePath = (value) => value.replaceAll('\\', '/')
@@ -17,18 +18,22 @@ const isTestFile = (filename) =>
 const isBlockHookSource = (value) => {
   if (typeof value !== 'string') return false
   const source = normalizePath(value)
-  return BLOCK_HOOK_SOURCES.has(source) || /(^|\/)hooks\/block(\.ts)?$/.test(source)
+  return BLOCK_HOOK_SOURCES.has(source) || /(^|\/)hooks\/block(\.[jt]s)?$/.test(source)
 }
 
 const isPropertiesSource = (value, filename) => {
   if (typeof value !== 'string') return false
   const source = normalizePath(value)
+  // `@/data/properties.js` is the canonical form after the kernel-wide
+  // `.js`-suffix unification; accept the historical `.ts` and bare
+  // forms too so this rule keeps holding if a stray import slips back.
   return source === '@/data/properties'
     || source === '@/data/properties.ts'
-    || /(^|\/)data\/properties(\.ts)?$/.test(source)
+    || source === '@/data/properties.js'
+    || /(^|\/)data\/properties(\.[jt]s)?$/.test(source)
     || (
       /(^|\/)src\/data\//.test(filename)
-      && (source === './properties' || source === './properties.ts')
+      && (source === './properties' || source === './properties.ts' || source === './properties.js')
     )
 }
 

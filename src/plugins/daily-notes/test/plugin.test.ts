@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { actionsFacet, appMountsFacet, headerItemsFacet } from '@/extensions/core.ts'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
-import { typesFacet } from '@/data/facets.ts'
-import { groupedBacklinksGroupHeaderActionsFacet } from '@/plugins/grouped-backlinks/facet.ts'
-import { ActionContextTypes } from '@/shortcuts/types.ts'
+import { actionsFacet, appMountsFacet, headerItemsFacet } from '@/extensions/core.js'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { typesFacet } from '@/data/facets.js'
+import { groupedBacklinksGroupHeaderActionsFacet } from '@/plugins/grouped-backlinks/facet.js'
+import { ActionContextTypes } from '@/shortcuts/types.js'
 import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
 import {
   DAILY_NOTE_TYPE,

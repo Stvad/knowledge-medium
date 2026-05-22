@@ -42,8 +42,8 @@
  * mounts, alongside the kernel + other data-only plugins.
  */
 import type { Repo } from '@/data/repo'
-import type { AppExtension } from '@/extensions/facet.ts'
-import { systemToggle } from '@/extensions/togglable.ts'
+import type { AppExtension } from '@/extensions/facet.js'
+import { systemToggle } from '@/extensions/togglable.js'
 import {
   actionsFacet,
   appMountsFacet,
@@ -51,11 +51,11 @@ import {
   workspaceLandingFacet,
   type AppMountContribution,
   type HeaderItemContribution,
-} from '@/extensions/core.ts'
-import { dialogAppMountExtension } from '@/extensions/dialogAppMount.tsx'
-import { blockContentSurfacePropsFacet } from '@/extensions/blockInteraction.ts'
-import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.ts'
-import { parseAppHash } from '@/utils/routing.ts'
+} from '@/extensions/core.js'
+import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
+import { blockContentSurfacePropsFacet } from '@/extensions/blockInteraction.js'
+import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
+import { parseAppHash } from '@/utils/routing.js'
 import { CalendarDays } from 'lucide-react'
 import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
 import { dailyNotesActions, resolveCurrentDailyNoteIso } from './actions.ts'
@@ -66,7 +66,7 @@ import { openDailyNotePicker } from './events.ts'
 import { todayDailyNoteLanding } from './landing.ts'
 import { blockDateAdapterFacet } from './blockDateAdapter.ts'
 import { referenceDateAdapter } from './referenceDateAdapter.ts'
-import { wikilinkDisplayDecoratorFacet } from '@/plugins/references/markdown/wikilinks/wikilinkDecorator.ts'
+import { wikilinkDisplayDecoratorFacet } from '@/plugins/references/markdown/wikilinks/wikilinkDecorator.js'
 import { dailyDateWikilinkDecorator } from './wikilinkDateDecorator.ts'
 import { ReschedulePicker } from './ReschedulePicker.tsx'
 import { DateScrubOverlay } from './DateScrubOverlay.tsx'
@@ -81,7 +81,7 @@ import {
   spreadBlockDatesAction,
   spreadBlockDatesGroupHeaderEntry,
 } from './spreadDatesAction.ts'
-import { groupedBacklinksGroupHeaderActionsFacet } from '@/plugins/grouped-backlinks/facet.ts'
+import { groupedBacklinksGroupHeaderActionsFacet } from '@/plugins/grouped-backlinks/facet.js'
 export {
   APPEND_TODAY_DAILY_BLOCK_ACTION_ID,
   OPEN_NEXT_DAILY_NOTE_ACTION_ID,

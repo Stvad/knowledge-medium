@@ -17,7 +17,7 @@ import {
   ActionContextTypes,
   type ActionConfig,
   type BlockShortcutDependencies,
-} from '@/shortcuts/types.ts'
+} from '@/shortcuts/types.js'
 import { BLOCK_TYPE_TYPE } from '@/data/blockTypes'
 import { getBlockTypes } from '@/data/properties'
 import {

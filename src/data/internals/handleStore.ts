@@ -32,7 +32,7 @@ import {
   type ChangeSnapshot,
   type InvalidationRule,
   type PluginInvalidationMap,
-} from '@/data/invalidation.ts'
+} from '@/data/invalidation.js'
 
 /** Dependency kinds (spec §9.2). A handle whose `Dependency` matches an
  *  incoming `ChangeNotification` is invalidated and re-resolved. The
@@ -767,7 +767,7 @@ export const handleKey = (name: string, args?: unknown): string =>
 /** Per-id snapshot pair shape. Mirrors `SnapshotEntry` from
  *  `txSnapshots.ts` without importing it (handleStore stays free of
  *  internals dependencies). */
-export type { ChangeSnapshot } from '@/data/invalidation.ts'
+export type { ChangeSnapshot } from '@/data/invalidation.js'
 
 /** Compute a `ChangeNotification` from a tx's per-id snapshots map.
  *  Used by the TxEngine fast path (§9.3): post-commit, the engine

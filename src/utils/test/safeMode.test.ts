@@ -4,7 +4,7 @@ import {
   hasSafeModeSearchParam,
   reloadInSafeMode,
   searchHasSafeModeFlag,
-} from '@/utils/safeMode.ts'
+} from '@/utils/safeMode.js'
 
 describe('safe mode URL helpers', () => {
   it('treats useSearchParam null as absent and empty string as present', () => {

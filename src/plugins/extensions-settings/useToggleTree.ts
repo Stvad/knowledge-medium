@@ -13,15 +13,15 @@
  */
 
 import {useEffect, useMemo, useState} from 'react'
-import {useRepo} from '@/context/repo.tsx'
-import {dynamicExtensionsExtension} from '@/extensions/dynamicExtensions.ts'
+import {useRepo} from '@/context/repo.js'
+import {dynamicExtensionsExtension} from '@/extensions/dynamicExtensions.js'
 import {
   discoverToggleTree,
   type ToggleNode,
-} from '@/extensions/discoverToggleTree.ts'
-import {useAppRuntime} from '@/extensions/runtimeContext.ts'
-import {staticAppExtensions} from '@/extensions/staticAppExtensions.ts'
-import {useOverrides} from '@/extensions/useOverrides.ts'
+} from '@/extensions/discoverToggleTree.js'
+import {useAppRuntime} from '@/extensions/runtimeContext.js'
+import {staticAppExtensions} from '@/extensions/staticAppExtensions.js'
+import {useOverrides} from '@/extensions/useOverrides.js'
 
 export interface UseToggleTreeResult {
   tree: readonly ToggleNode[]

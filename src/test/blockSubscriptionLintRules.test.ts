@@ -64,7 +64,7 @@ describe('block subscription ESLint rules', () => {
         {
           filename: '/repo/src/components/BlockProperties.tsx',
           code: `
-            import { typesProp as rawTypesProp } from '@/data/properties.ts'
+            import { typesProp as rawTypesProp } from '@/data/properties.js'
             next[rawTypesProp.name] = rawTypesProp.codec.encode(['page'])
           `,
           errors: [{messageId: 'directWrite'}],
@@ -154,7 +154,7 @@ describe('block subscription ESLint rules', () => {
           filename: '/repo/src/hooks/useRendererRegistry.tsx',
           options: [{allowUseDataIn: ['src/hooks/useRendererRegistry.tsx']}],
           code: `
-            import { useData } from '@/hooks/block.ts'
+            import { useData } from '@/hooks/block.js'
             useData(block)
           `,
         },

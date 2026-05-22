@@ -1,13 +1,13 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
-import { codeMirrorExtensionsFacet } from '@/extensions/editor.ts'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
-import { markdownExtensionsFacet } from '@/markdown/extensions.ts'
+import { codeMirrorExtensionsFacet } from '@/extensions/editor.js'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { markdownExtensionsFacet } from '@/markdown/extensions.js'
 import {
   invalidationRulesFacet,
   localSchemaFacet,
   postCommitProcessorsFacet,
-} from '@/data/facets.ts'
+} from '@/data/facets.js'
 import { referencesDataExtension } from '../dataExtension.ts'
 import { referencesPlugin } from '../index.ts'
 import { referencesInvalidationRule } from '../invalidation.ts'

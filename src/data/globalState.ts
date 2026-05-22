@@ -13,9 +13,9 @@
  */
 
 import { use, useCallback } from 'react'
-import { useBlockContext } from '@/context/block.tsx'
-import { useUser } from '@/components/Login.tsx'
-import { useRepo } from '@/context/repo.tsx'
+import { useBlockContext } from '@/context/block.js'
+import { useUser } from '@/components/Login.js'
+import { useRepo } from '@/context/repo.js'
 import {
   ChangeScope,
   type PropertySchema,
@@ -39,8 +39,8 @@ import {
   getUserBlock,
   requireSchemaScope,
   requireWorkspaceId,
-} from '@/data/stateBlocks.ts'
-export { USER_PREFS_PATH_PART } from '@/data/userPrefs.ts'
+} from '@/data/stateBlocks.js'
+export { USER_PREFS_PATH_PART } from '@/data/userPrefs.js'
 
 export function useUIStateBlock(): Block {
   const context = useBlockContext()

@@ -7,9 +7,9 @@ import {
   handleBlockSelectionClick,
   isInteractiveContentEvent,
   isSelectionClick,
-} from '@/extensions/blockInteraction.ts'
-import { useInEditMode } from '@/data/globalState.ts'
-import type { BlockRenderer } from '@/types.ts'
+} from '@/extensions/blockInteraction.js'
+import { useInEditMode } from '@/data/globalState.js'
+import type { BlockRenderer } from '@/types.js'
 
 // Dispatch between primary (display) and secondary (editor) renderer at
 // render time rather than resolve time. Reading `inEditMode` here keeps

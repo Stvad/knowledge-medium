@@ -20,7 +20,7 @@ import { describe, it, expect, beforeAll, afterEach } from 'vitest'
 import { EditorState, EditorSelection } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { basicSetup } from '@uiw/codemirror-extensions-basic-setup'
-import { createMinimalMarkdownConfig } from '@/utils/codemirror.ts'
+import { createMinimalMarkdownConfig } from '@/utils/codemirror.js'
 import { referencesCodeMirrorExtensions } from '../codeMirrorExtensions.ts'
 
 const basicOpts = {

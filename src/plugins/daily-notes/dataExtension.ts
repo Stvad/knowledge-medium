@@ -1,5 +1,5 @@
 import { localSchemaFacet, refTargetFilterDefaultsFacet, typesFacet } from '@/data/facets'
-import type { AppExtension } from '@/extensions/facet.ts'
+import type { AppExtension } from '@/extensions/facet.js'
 import { dailyNotesLocalSchema } from './localSchema.ts'
 import { DAILY_NOTE_TYPE, dailyNoteDateProp, dailyNoteType } from './schema.ts'
 

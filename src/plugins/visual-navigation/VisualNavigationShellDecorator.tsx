@@ -6,7 +6,7 @@ import type {
 import type {
   BlockShellDecoratorProps,
   BlockShellState,
-} from '@/extensions/blockInteraction.ts'
+} from '@/extensions/blockInteraction.js'
 import {
   useVisualNavigationTarget,
   visualNavigationSurfaceFromContext,

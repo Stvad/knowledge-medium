@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { actionsFacet, appEffectsFacet, appMountsFacet } from '@/extensions/core.ts'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
+import { actionsFacet, appEffectsFacet, appMountsFacet } from '@/extensions/core.js'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
 import { agentRuntimePlugin } from '../index.ts'
 
 describe('agentRuntimePlugin', () => {

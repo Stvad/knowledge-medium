@@ -1,9 +1,9 @@
 import { LogOut } from 'lucide-react'
-import { useSignOut, useUser } from '@/components/Login.tsx'
-import { useRepo } from '@/context/repo.tsx'
-import { useUserBlock } from '@/data/globalState.ts'
-import { buildAppHash } from '@/utils/routing.ts'
-import { useBlockLinkClick } from '@/utils/navigation.ts'
+import { useSignOut, useUser } from '@/components/Login.js'
+import { useRepo } from '@/context/repo.js'
+import { useUserBlock } from '@/data/globalState.js'
+import { buildAppHash } from '@/utils/routing.js'
+import { useBlockLinkClick } from '@/utils/navigation.js'
 
 export function AccountHeaderItem() {
   const user = useUser()

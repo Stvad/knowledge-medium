@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Block } from '../../data/block'
 import { useInFocus, usePluginPrefsProperty } from '@/data/globalState'
-import { useUpdateMetadata } from '@/hooks/block.ts'
+import { useUpdateMetadata } from '@/hooks/block.js'
 import { previousLoadTimeProp, updateIndicatorPrefsType } from './loadTimes.ts'
 
 export const UpdateIndicator = ({block}: { block: Block }) => {

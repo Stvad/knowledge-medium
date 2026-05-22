@@ -17,15 +17,15 @@ import {
   useState,
 } from 'react'
 import { Input } from '@/components/ui/input'
-import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { propertyEditorOverridesFacet, valuePresetsFacet } from '@/data/facets.ts'
-import { usePropertySchemas } from '@/hooks/propertySchemas.ts'
+import { useAppRuntime } from '@/extensions/runtimeContext.js'
+import { propertyEditorOverridesFacet, valuePresetsFacet } from '@/data/facets.js'
+import { usePropertySchemas } from '@/hooks/propertySchemas.js'
 import type {
   AnyPropertyEditorOverride,
   AnyPropertySchema,
   AnyValuePreset,
 } from '@/data/api'
-import { FloatingListbox } from '@/components/ui/floating-listbox.tsx'
+import { FloatingListbox } from '@/components/ui/floating-listbox.js'
 import { PropertyShapeGlyph, PropertyShapeButton } from './shapeUi'
 import { propertyShapeLabel } from './shapes'
 

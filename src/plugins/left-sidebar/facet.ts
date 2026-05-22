@@ -1,5 +1,5 @@
 import type { ComponentType } from 'react'
-import { defineFacet } from '@/extensions/facet.ts'
+import { defineFacet } from '@/extensions/facet.js'
 
 export interface LeftSidebarSectionProps {
   closeSidebar: () => void

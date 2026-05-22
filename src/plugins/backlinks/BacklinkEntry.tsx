@@ -1,14 +1,14 @@
 import { useCallback, useMemo, useState, type MouseEvent } from 'react'
 import { Block } from '@/data/block'
-import { BlockLoadingPlaceholder } from '@/components/BlockLoadingPlaceholder.tsx'
-import { BlockComponent } from '@/components/BlockComponent.tsx'
-import { BreadcrumbList } from '@/plugins/breadcrumbs/BreadcrumbList.tsx'
-import { NestedBlockContextProvider, useBlockContext } from '@/context/block.tsx'
-import { LazyViewportMount } from '@/components/util/LazyViewportMount.tsx'
-import type { LazyViewportPlaceholderProps } from '@/components/util/LazyViewportMount.tsx'
-import { useParents } from '@/hooks/block.ts'
-import { useRepo } from '@/context/repo.tsx'
-import { handleBlockLinkClick, useNavigate } from '@/utils/navigation.ts'
+import { BlockLoadingPlaceholder } from '@/components/BlockLoadingPlaceholder.js'
+import { BlockComponent } from '@/components/BlockComponent.js'
+import { BreadcrumbList } from '@/plugins/breadcrumbs/BreadcrumbList.js'
+import { NestedBlockContextProvider, useBlockContext } from '@/context/block.js'
+import { LazyViewportMount } from '@/components/util/LazyViewportMount.js'
+import type { LazyViewportPlaceholderProps } from '@/components/util/LazyViewportMount.js'
+import { useParents } from '@/hooks/block.js'
+import { useRepo } from '@/context/repo.js'
+import { handleBlockLinkClick, useNavigate } from '@/utils/navigation.js'
 import {
   backlinkEntryShortcutContextOverrides,
   findNextCollapsedBreadcrumb,

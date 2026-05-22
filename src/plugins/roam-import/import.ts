@@ -58,7 +58,7 @@ import {
   type PreparedPage,
   type RoamImportPlan,
 } from './plan'
-import { projectPropertyReferences } from '@/plugins/references/referenceProjection.ts'
+import { projectPropertyReferences } from '@/plugins/references/referenceProjection.js'
 import type { RoamExport } from './types'
 import { writeImportLog } from './report'
 import { collectTypeCandidates, type RoamTypeCandidate } from './typeCandidates'

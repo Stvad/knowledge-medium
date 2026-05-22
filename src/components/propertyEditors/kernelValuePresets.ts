@@ -19,9 +19,9 @@ import {
   type PropertyEditor,
   type RefCodecOptions,
 } from '@/data/api'
-import { valuePresetsFacet } from '@/data/facets.ts'
-import type { AppExtension } from '@/extensions/facet.ts'
-import { systemToggle } from '@/extensions/togglable.ts'
+import { valuePresetsFacet } from '@/data/facets.js'
+import type { AppExtension } from '@/extensions/facet.js'
+import { systemToggle } from '@/extensions/togglable.js'
 import {
   BooleanPropertyEditor,
   DatePropertyEditor,

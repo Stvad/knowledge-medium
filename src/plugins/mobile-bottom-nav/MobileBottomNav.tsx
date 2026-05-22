@@ -1,8 +1,8 @@
-import { useIsMobile } from '@/utils/react.tsx'
-import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { useActiveContextsState, type ActiveContextsMap } from '@/shortcuts/ActiveContexts.tsx'
-import { actionRuntimeKey, getEffectiveActions } from '@/shortcuts/effectiveActions.ts'
-import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.ts'
+import { useIsMobile } from '@/utils/react.js'
+import { useAppRuntime } from '@/extensions/runtimeContext.js'
+import { useActiveContextsState, type ActiveContextsMap } from '@/shortcuts/ActiveContexts.js'
+import { actionRuntimeKey, getEffectiveActions } from '@/shortcuts/effectiveActions.js'
+import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { mobileBottomNavItemsFacet } from './facet.ts'
 import { MobileBottomNavButton } from './Button.tsx'
 

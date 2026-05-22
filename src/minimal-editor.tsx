@@ -1,8 +1,8 @@
 import { createRoot } from 'react-dom/client'
 import { StrictMode } from 'react'
-import { RepoProvider, useRepo } from '@/context/repo.tsx'
-import { Login } from '@/components/Login.tsx'
-import { useBlockExists, useContent } from '@/hooks/block.ts'
+import { RepoProvider, useRepo } from '@/context/repo.js'
+import { Login } from '@/components/Login.js'
+import { useBlockExists, useContent } from '@/hooks/block.js'
 
 const docUrl = document.location.hash.substring(1) || null
 

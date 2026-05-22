@@ -2,11 +2,11 @@ import {
   blockShellDecoratorsFacet,
   ShortcutActivationContribution,
   shortcutSurfaceActivationsFacet,
-} from '@/extensions/blockInteraction.ts'
-import { AppExtension } from '@/extensions/facet.ts'
-import { ActionContextTypes } from '@/shortcuts/types.ts'
-import { blockFocusShellDecorator } from '@/extensions/blockFocusShellDecorator.ts'
-import { systemToggle } from '@/extensions/togglable.ts'
+} from '@/extensions/blockInteraction.js'
+import { AppExtension } from '@/extensions/facet.js'
+import { ActionContextTypes } from '@/shortcuts/types.js'
+import { blockFocusShellDecorator } from '@/extensions/BlockFocusShellDecorator.js'
+import { systemToggle } from '@/extensions/togglable.js'
 
 export const codeMirrorEditModeActivation: ShortcutActivationContribution = context => {
   if (context.surface !== 'codemirror' || !context.editorView) return null

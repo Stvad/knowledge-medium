@@ -1,5 +1,5 @@
-import type { MarkdownExtension } from '@/markdown/extensions.ts'
-import { MarkdownImage } from '@/markdown/MarkdownImage.tsx'
+import type { MarkdownExtension } from '@/markdown/extensions.js'
+import { MarkdownImage } from '@/markdown/MarkdownImage.js'
 import { createElement } from 'react'
 import type { Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'

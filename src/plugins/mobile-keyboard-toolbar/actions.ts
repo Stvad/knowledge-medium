@@ -3,8 +3,8 @@ import {
   ActionContextTypes,
   type ActionConfig,
   type CodeMirrorEditModeDependencies,
-} from '@/shortcuts/types.ts'
-import { wrapRangeWithPair } from '@/utils/codemirror.ts'
+} from '@/shortcuts/types.js'
+import { wrapRangeWithPair } from '@/utils/codemirror.js'
 
 export const INSERT_PAGE_REF_TRIGGER_ACTION_ID = 'edit.cm.insert_page_ref_trigger'
 export const INSERT_BLOCK_REF_TRIGGER_ACTION_ID = 'edit.cm.insert_block_ref_trigger'

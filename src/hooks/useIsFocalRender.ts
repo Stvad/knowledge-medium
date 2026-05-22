@@ -1,8 +1,8 @@
-import type { Block } from '@/data/block.ts'
-import { useBlockContext } from '@/context/block.tsx'
-import { useUIStateProperty } from '@/data/globalState.ts'
-import { topLevelBlockIdProp } from '@/data/properties.ts'
-import type { BlockResolveContext } from '@/extensions/blockInteraction.ts'
+import type { Block } from '@/data/block.js'
+import { useBlockContext } from '@/context/block.js'
+import { useUIStateProperty } from '@/data/globalState.js'
+import { topLevelBlockIdProp } from '@/data/properties.js'
+import type { BlockResolveContext } from '@/extensions/blockInteraction.js'
 
 /**
  * "Is this block being rendered as the document body of its panel?" —

@@ -1,9 +1,9 @@
 import {
   blockClickHandlersFacet,
   blockContentRendererFacet,
-} from '@/extensions/blockInteraction.ts'
-import { AppExtension } from '@/extensions/facet.ts'
-import { systemToggle } from '@/extensions/togglable.ts'
+} from '@/extensions/blockInteraction.js'
+import { AppExtension } from '@/extensions/facet.js'
+import { systemToggle } from '@/extensions/togglable.js'
 import {
   blockEditingContentRenderer,
   plainOutlinerBlockClickBehavior,

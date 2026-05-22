@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isEditorElement, shouldExitEditModeAfterBlur } from '@/utils/dom.ts'
+import { isEditorElement, shouldExitEditModeAfterBlur } from '@/utils/dom.js'
 
 describe('dom editor focus helpers', () => {
   it('treats textareas as editor elements', () => {

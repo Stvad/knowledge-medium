@@ -1,9 +1,9 @@
-import { BlockRendererProps } from '@/types.ts'
+import { BlockRendererProps } from '@/types.js'
 import Markdown from 'react-markdown'
-import { useBlockContext } from '@/context/block.tsx'
-import { useHandle } from '@/hooks/block.ts'
-import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { markdownExtensionsFacet } from '@/markdown/extensions.ts'
+import { useBlockContext } from '@/context/block.js'
+import { useHandle } from '@/hooks/block.js'
+import { useAppRuntime } from '@/extensions/runtimeContext.js'
+import { markdownExtensionsFacet } from '@/markdown/extensions.js'
 
 const DEFAULT_CONTAINER_CLASS = 'min-h-[1.7em] whitespace-pre-wrap overflow-x-hidden max-w-full'
 

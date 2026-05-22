@@ -19,8 +19,8 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { useRepo } from '@/context/repo.tsx'
+import { useAppRuntime } from '@/extensions/runtimeContext.js'
+import { useRepo } from '@/context/repo.js'
 import { addDaysIso, todayIso } from './dailyNotes.ts'
 import {
   pickBlockDateAdapter,

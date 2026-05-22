@@ -2,10 +2,10 @@ import type { Repo } from '@/data/repo'
 import {
   ActionConfig,
   ActionContextTypes,
-} from '@/shortcuts/types.ts'
-import { parseAppHash } from '@/utils/routing.ts'
+} from '@/shortcuts/types.js'
+import { parseAppHash } from '@/utils/routing.js'
 import { importRoam } from './import.ts'
-import { showProgress } from '@/utils/toast.ts'
+import { showProgress } from '@/utils/toast.js'
 import type { RoamExport } from './types.ts'
 
 export const importRoamAction = ({repo}: {repo: Repo}): ActionConfig => ({

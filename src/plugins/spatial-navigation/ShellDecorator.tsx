@@ -3,7 +3,7 @@ import type { Ref, FocusEvent, PointerEvent } from 'react'
 import type {
   BlockShellDecoratorProps,
   BlockShellState,
-} from '@/extensions/blockInteraction.ts'
+} from '@/extensions/blockInteraction.js'
 import { surfaceFromContext } from './surface.ts'
 
 const applyRef = (ref: Ref<HTMLDivElement> | undefined, el: HTMLDivElement | null): void => {

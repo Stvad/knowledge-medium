@@ -28,9 +28,9 @@ import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import { computeAliasSeatId } from '@/data/targets'
 import { dailyNoteBlockId, dailyNotesDataExtension } from '@/plugins/daily-notes'
-import { propertySchemasFacet } from '@/data/facets.ts'
-import { resolveFacetRuntimeSync, type AppExtension } from '@/extensions/facet.ts'
-import { kernelDataExtension } from '@/data/kernelDataExtension.ts'
+import { propertySchemasFacet } from '@/data/facets.js'
+import { resolveFacetRuntimeSync, type AppExtension } from '@/extensions/facet.js'
+import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { referencesDataExtension } from '../dataExtension.ts'
 import {
   CLEANUP_ORPHAN_ALIASES_PROCESSOR,

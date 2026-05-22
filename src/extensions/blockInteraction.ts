@@ -16,22 +16,22 @@ import {
   focusBlock,
   selectionStateProp,
   requestEditorFocus,
-} from '@/data/properties.ts'
+} from '@/data/properties.js'
 import {
   getSelectionStateSnapshot,
   resetBlockSelection,
-} from '@/data/stateBlocks.ts'
+} from '@/data/stateBlocks.js'
 import { Repo } from '../data/repo'
-import { combineLastContributionResult, defineFacet, isFunction } from '@/extensions/facet.ts'
+import { combineLastContributionResult, defineFacet, isFunction } from '@/extensions/facet.js'
 import {
   defineVariantFacet,
   type Variant,
   type VariantContribution,
   type VariantResolver,
-} from '@/extensions/variantFacet.ts'
-import type { ActionContextActivation } from '@/shortcuts/types.ts'
-import type { BlockContextType, BlockRenderer } from '@/types.ts'
-import { extendSelection, validateSelectionHierarchy } from '@/utils/selection.ts'
+} from '@/extensions/variantFacet.js'
+import type { ActionContextActivation } from '@/shortcuts/types.js'
+import type { BlockContextType, BlockRenderer } from '@/types.js'
+import { extendSelection, validateSelectionHierarchy } from '@/utils/selection.js'
 
 export interface BlockContentRendererSlot {
   id: string

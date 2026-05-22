@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 import type { Block } from '../../data/block'
 import {
   resolveMarkdownRenderConfig,
-} from '@/markdown/extensions.ts'
-import { isFunction } from '@/extensions/facet.ts'
+} from '@/markdown/extensions.js'
+import { isFunction } from '@/extensions/facet.js'
 import type { Components } from 'react-markdown'
 import type { Plugin } from 'unified'
 

@@ -6,8 +6,8 @@ import type { PropertySchema } from '@/data/api'
 import {
   blockContentSurfacePropsFacet,
   type BlockInteractionContext,
-} from '@/extensions/blockInteraction.ts'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
+} from '@/extensions/blockInteraction.js'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
 import { swipeQuickActionsContentSurface } from '../swipeGesture.ts'
 import {
   SWIPE_QUICK_ACTION_CLOSE_EVENT,

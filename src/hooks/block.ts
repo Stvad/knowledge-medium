@@ -35,7 +35,7 @@ import {
 } from 'react'
 import type { BlockData, Handle, PropertySchema, TypedBlockQuery } from '@/data/api'
 import { Block } from '../data/block'
-import { useRepo } from '@/context/repo.tsx'
+import { useRepo } from '@/context/repo.js'
 
 const EMPTY_BLOCK_DATA_ARRAY: readonly BlockData[] = Object.freeze([])
 

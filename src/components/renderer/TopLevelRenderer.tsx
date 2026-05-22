@@ -1,9 +1,9 @@
-import { Header } from '@/components/Header.tsx'
-import { BlockComponent } from '@/components/BlockComponent.tsx'
-import { BlockRendererProps } from '@/types.ts'
-import { NestedBlockContextProvider } from '@/context/block.tsx'
-import { useActionContext } from '@/shortcuts/useActionContext.ts'
-import { ActionContextTypes } from '@/shortcuts/types.ts'
+import { Header } from '@/components/Header.js'
+import { BlockComponent } from '@/components/BlockComponent.js'
+import { BlockRendererProps } from '@/types.js'
+import { NestedBlockContextProvider } from '@/context/block.js'
+import { useActionContext } from '@/shortcuts/useActionContext.js'
+import { ActionContextTypes } from '@/shortcuts/types.js'
 
 /**
  * This is like this to avoid re-rending on context changing bc of new object creation

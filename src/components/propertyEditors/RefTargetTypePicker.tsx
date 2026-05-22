@@ -5,8 +5,8 @@
 
 import { useCallback, useMemo, useState, type KeyboardEvent } from 'react'
 import { Plus, X } from 'lucide-react'
-import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { typesFacet } from '@/data/facets.ts'
+import { useAppRuntime } from '@/extensions/runtimeContext.js'
+import { typesFacet } from '@/data/facets.js'
 import type { RefCodecOptions, ValuePresetConfigEditorProps } from '@/data/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'

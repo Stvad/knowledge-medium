@@ -8,21 +8,21 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { Eye, EyeOff } from 'lucide-react'
 import { Block } from '../data/block'
 import { useBlockContext } from '@/context/block'
-import { useChildIds, useHandle } from '@/hooks/block.ts'
-import { useUIStateBlock } from '@/data/globalState.ts'
-import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { usePropertySchemas } from '@/hooks/propertySchemas.ts'
+import { useChildIds, useHandle } from '@/hooks/block.js'
+import { useUIStateBlock } from '@/data/globalState.js'
+import { useAppRuntime } from '@/extensions/runtimeContext.js'
+import { usePropertySchemas } from '@/hooks/propertySchemas.js'
 import { propertyEditorOverridesFacet, typesFacet, valuePresetsFacet } from '../data/facets.ts'
 import {
   editorSelection,
   requestEditorFocus,
   focusBlock,
   topLevelBlockIdProp,
-} from '@/data/properties.ts'
+} from '@/data/properties.js'
 import { Button } from './ui/button'
-import { nextVisibleBlock } from '@/utils/selection.ts'
-import { focusAdjacentPropertyRow } from '@/utils/propertyNavigation.ts'
-import { useNavigate } from '@/utils/navigation.ts'
+import { nextVisibleBlock } from '@/utils/selection.js'
+import { focusAdjacentPropertyRow } from '@/utils/propertyNavigation.js'
+import { useNavigate } from '@/utils/navigation.js'
 import { AddPropertyForm } from './propertyPanel/AddPropertyForm'
 import {
   addProperty,

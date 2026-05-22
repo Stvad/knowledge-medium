@@ -8,8 +8,8 @@
  * refresh, so toggle changes wouldn't take effect.
  */
 
-import type {AppExtension} from '@/extensions/facet.ts'
-import {systemToggle} from '@/extensions/togglable.ts'
+import type {AppExtension} from '@/extensions/facet.js'
+import {systemToggle} from '@/extensions/togglable.js'
 import {extensionsDataExtension} from './dataExtension.ts'
 
 export const extensionsSettingsPlugin: AppExtension = systemToggle({

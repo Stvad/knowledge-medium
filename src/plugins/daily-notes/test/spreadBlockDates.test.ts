@@ -6,14 +6,14 @@ import { BlockCache } from '@/data/blockCache'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { Repo } from '@/data/repo'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
-import { resolveFacetRuntimeSync, type FacetRuntime } from '@/extensions/facet.ts'
+import { resolveFacetRuntimeSync, type FacetRuntime } from '@/extensions/facet.js'
 import {
   SRS_SM25_TYPE,
   srsNextReviewDateProp,
   srsReschedulingDataExtension,
 } from '@/plugins/srs-rescheduling'
-import { srsBlockDateAdapter } from '@/plugins/srs-rescheduling/srsBlockDateAdapter.ts'
-import { typesProp } from '@/data/properties.ts'
+import { srsBlockDateAdapter } from '@/plugins/srs-rescheduling/srsBlockDateAdapter.js'
+import { typesProp } from '@/data/properties.js'
 import {
   blockDateAdapterFacet,
   dailyNoteBlockId,

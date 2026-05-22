@@ -16,9 +16,9 @@
  * this plugin.
  */
 import type { Repo } from '@/data/repo'
-import type { AppExtension } from '@/extensions/facet.ts'
-import { actionsFacet, appEffectsFacet } from '@/extensions/core.ts'
-import { systemToggle } from '@/extensions/togglable.ts'
+import type { AppExtension } from '@/extensions/facet.js'
+import { actionsFacet, appEffectsFacet } from '@/extensions/core.js'
+import { systemToggle } from '@/extensions/togglable.js'
 import { importRoamAction } from './action.ts'
 import { roamImportWindowHookEffect } from './effect.ts'
 

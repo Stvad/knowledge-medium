@@ -7,9 +7,9 @@ import {
   CommandGroup,
   CommandItem,
 } from '@/components/ui/command'
-import { useActionContext } from '@/shortcuts/useActionContext.ts'
-import { useRunAction } from '@/shortcuts/runAction.ts'
-import type { ActionConfig, ShortcutBinding, ActionContextType } from '@/shortcuts/types.ts'
+import { useActionContext } from '@/shortcuts/useActionContext.js'
+import { useRunAction } from '@/shortcuts/runAction.js'
+import type { ActionConfig, ShortcutBinding, ActionContextType } from '@/shortcuts/types.js'
 import { Kbd } from '@/components/ui/kbd'
 import { groupBy } from 'lodash'
 import { toggleCommandPaletteEvent } from './events.ts'

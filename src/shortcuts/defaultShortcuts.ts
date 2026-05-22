@@ -17,8 +17,8 @@ import {
   nextVisibleBlock,
   previousVisibleBlock,
   getRootBlock,
-} from '@/utils/selection.ts'
-import { importState } from '@/utils/state.ts'
+} from '@/utils/selection.js'
+import { importState } from '@/utils/state.js'
 import {
   activePanelIdProp,
   focusBlock,
@@ -26,8 +26,8 @@ import {
   topLevelBlockIdProp,
   editorSelection,
   setIsEditing,
-} from '@/data/properties.ts'
-import { insertExampleExtensionsUnder } from '@/extensions/exampleExtensions.ts'
+} from '@/data/properties.js'
+import { insertExampleExtensionsUnder } from '@/extensions/exampleExtensions.js'
 import { selectionStateProp } from '@/data/properties'
 import { applyToAllBlocksInSelection, makeMultiSelect } from './utils'
 import {
@@ -45,30 +45,30 @@ import {
   getCaretRect,
   cursorIsAtEnd,
   cursorIsAtStart,
-} from '@/utils/codemirror.ts'
-import { copySelectedBlocksToClipboard } from '@/utils/copy.ts'
-import { pasteFromClipboard } from '@/utils/paste.ts'
-import { actionContextsFacet, actionsFacet } from '@/extensions/core.ts'
-import { AppExtension } from '@/extensions/facet.ts'
-import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
-import { systemToggle } from '@/extensions/togglable.ts'
-import { getLayoutSessionBlock, getUserPrefsBlock } from '@/data/stateBlocks.ts'
-import { getLayoutSessionId } from '@/utils/layoutSessionId.ts'
+} from '@/utils/codemirror.js'
+import { copySelectedBlocksToClipboard } from '@/utils/copy.js'
+import { pasteFromClipboard } from '@/utils/paste.js'
+import { actionContextsFacet, actionsFacet } from '@/extensions/core.js'
+import { AppExtension } from '@/extensions/facet.js'
+import { refreshAppRuntime } from '@/extensions/runtimeEvents.js'
+import { systemToggle } from '@/extensions/togglable.js'
+import { getLayoutSessionBlock, getUserPrefsBlock } from '@/data/stateBlocks.js'
+import { getLayoutSessionId } from '@/utils/layoutSessionId.js'
 import {
   navigate,
   navigateFromGlobalCommand,
-} from '@/utils/navigation.ts'
-import { navigateInPanel } from '@/utils/panelHistory.ts'
+} from '@/utils/navigation.js'
+import { navigateInPanel } from '@/utils/panelHistory.js'
 import {
   deletePanelRow,
   panelBlockId,
   panelRowsInLayoutOrder,
-} from '@/utils/panelLayoutProjection.ts'
-import { ensureMetricsConsoleHook } from '@/data/metricsConsoleHook.ts'
-import { showProgress } from '@/utils/toast.ts'
-import { downloadBlob, exportRawSqliteDb, importRawSqliteDb } from '@/utils/exportSqliteDb.ts'
-import { focusPropertyRow } from '@/utils/propertyNavigation.ts'
-import { reloadInSafeMode } from '@/utils/safeMode.ts'
+} from '@/utils/panelLayoutProjection.js'
+import { ensureMetricsConsoleHook } from '@/data/metricsConsoleHook.js'
+import { showProgress } from '@/utils/toast.js'
+import { downloadBlob, exportRawSqliteDb, importRawSqliteDb } from '@/utils/exportSqliteDb.js'
+import { focusPropertyRow } from '@/utils/propertyNavigation.js'
+import { reloadInSafeMode } from '@/utils/safeMode.js'
 
 const splitCodeMirrorBlockAtCursor = async (
   block: Block,

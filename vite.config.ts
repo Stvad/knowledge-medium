@@ -1,6 +1,5 @@
 import {defineConfig, ViteDevServer} from 'vite'
 import path from "path"
-import fs from "node:fs"
 import react, {reactCompilerPreset} from '@vitejs/plugin-react'
 import babel from '@rolldown/plugin-babel'
 import externalize from "vite-plugin-externalize-dependencies";
@@ -43,66 +42,96 @@ export default defineConfig(({command}) => {
             },
             isDev && {
                 /**
-                 * Make `import '@/foo.js'` work in dev, matching prod where
-                 * everything is served as `.js`. The earlier implementation
-                 * rewrote `req.url` server-side (`req.url = req.url.slice(0, -3)`)
-                 * which served the right *content* but didn't change the URL
-                 * the browser saw — so `import '@/foo.js'` and `import '@/foo.tsx'`
-                 * resolved to two distinct module-map entries with identical
-                 * content but separate identity. Every module-scoped singleton
-                 * (most visibly React `createContext` calls — `useRepo` reading
-                 * a fresh `RepoContext` that `<RepoProvider>` never wrote to)
-                 * gets duplicated.
+                 * Make every `/src/**` module — whether imported by
+                 * the kernel (static, Vite-transformed) or by a
+                 * dynamic-extension blob (resolves via document
+                 * importmap) — hit the *same* URL in the browser's
+                 * module map. Otherwise they cache as separate entries,
+                 * every module-scoped singleton (React `createContext`,
+                 * stores, etc.) gets duplicated, and consumers of the
+                 * "wrong" copy fail with errors like "useRepo must be
+                 * used within a RepoContext". Prod doesn't have this
+                 * problem because Rollup outputs `.js` for everything;
+                 * dev needs help converging.
                  *
-                 * Instead, issue a real HTTP 302 redirect to the on-disk
-                 * canonical URL (`.tsx`, `.ts`, `.jsx`, or no-ext, matching
-                 * what the kernel imports). The extension compiler
-                 * (`canonicalizeExtensionImports` in compileExtensionModule.ts)
-                 * uses this redirect to learn the canonical specifier and
-                 * rewrite extension source *before* `import()` runs, so the
-                 * browser's module map dedupes against the kernel's entry.
+                 * Vite's default behavior: even when kernel source says
+                 * `import x from '@/foo.js'`, Vite's resolver finds the
+                 * real file (`foo.tsx`) and rewrites the import URL in
+                 * served code to `/src/foo.tsx`. Extensions request
+                 * `/src/foo.js` via the importmap. Two URLs → two
+                 * module-map entries → broken.
                  *
-                 * The redirect alone doesn't give module identity on its own
-                 * — Chrome/Vite-client both key the module map by *request*
-                 * URL, not response URL — so the compiler-side rewrite is
-                 * the load-bearing piece. The redirect's purpose is purely
-                 * to publish a server-authoritative "what's canonical"
-                 * signal.
+                 * Two pieces together force convergence on `.js` URLs:
+                 *
+                 *   1. `transform` (post) rewrites Vite's emitted import
+                 *      URLs from `.tsx` / `.ts` / `.jsx` back to `.js`
+                 *      so kernel modules fetch `/src/foo.js`.
+                 *   2. The `configureServer` middleware strips `.js`
+                 *      from `req.url` so Vite's file resolver still
+                 *      finds the actual `.tsx`/`.ts` source and serves
+                 *      its transformed contents (the rewrite is purely
+                 *      server-side; the browser still sees the `.js`
+                 *      URL on the response, which is what we want for
+                 *      module-map keying).
+                 *
+                 * Net effect: every `/src/**` import — kernel or
+                 * extension — fetches `.js`, gets the right content,
+                 * shares one module-map entry. Matches prod.
+                 *
+                 * Only matches `/src/`-prefixed URLs (not Vite-internal
+                 * `/@id/...`, `/node_modules/...?v=...`, virtual
+                 * modules) and only handles non-query suffixes
+                 * (`.tsx` / `.ts` / `.jsx`) so HMR's `?t=...`,
+                 * `?import`, `?v=...` markers pass through.
                  */
-                name: 'canonicalize-js-extension',
+                name: 'unify-src-js-urls',
                 configureServer(server: ViteDevServer) {
-                    const srcRoot = path.resolve(__dirname, 'src');
-                    // Order matters: probe in the order the kernel actually
-                    // uses these suffixes, so a stray `.ts` next to a `.tsx`
-                    // doesn't win the canonicalization.
-                    const candidateExts = ['.tsx', '.ts', '.jsx', ''];
-
                     server.middlewares.use((req, res, next) => {
                         if (!req.url || !req.url.startsWith('/src/')) return next();
 
-                        // Split off query/hash so the redirect preserves
-                        // Vite's `?v=...` / `?import` HMR markers.
-                        const queryIdx = req.url.search(/[?#]/);
-                        const pathOnly = queryIdx >= 0 ? req.url.slice(0, queryIdx) : req.url;
-                        const suffix = queryIdx >= 0 ? req.url.slice(queryIdx) : '';
-                        if (!pathOnly.endsWith('.js')) return next();
-
-                        const stripped = pathOnly.slice(0, -'.js'.length);
-                        const relPath = stripped.slice('/src/'.length);
-
-                        // If a real `.js` file exists on disk (genuine plain
-                        // JS source), let Vite serve it normally — no rewrite.
-                        const realJsPath = path.resolve(srcRoot, `${relPath}.js`);
-                        if (fs.existsSync(realJsPath)) return next();
-
-                        for (const ext of candidateExts) {
-                            const probe = path.resolve(srcRoot, `${relPath}${ext}`);
-                            if (!fs.existsSync(probe)) continue;
-                            const canonical = `${stripped}${ext}${suffix}`;
-                            res.writeHead(302, {Location: canonical});
-                            res.end();
-                            return;
+                        // Server-side rewrite so Vite's resolver finds the
+                        // real TS source on disk and serves its transformed
+                        // contents. Browser still sees the `.js` URL it
+                        // requested, which is what we want for module-map
+                        // keying.
+                        if (req.url.endsWith('.js')) {
+                            req.url = req.url.slice(0, -3);
                         }
+
+                        // Wrap `res.end` to rewrite Vite's emitted import
+                        // URLs from `.tsx` / `.ts` / `.jsx` back to `.js`
+                        // before the body leaves the server. Vite uses a
+                        // single end() call for module responses (no chunked
+                        // streaming for dev-server transformed modules), so
+                        // one-shot interception suffices. Match only
+                        // `/src/`-prefixed URLs to avoid touching
+                        // Vite-internal paths (`/@id/...`,
+                        // `/node_modules/...?v=...`, virtual modules).
+                        const origEnd = res.end.bind(res);
+                        res.end = function (chunk?: unknown, ...rest: unknown[]) {
+                            if (
+                                typeof chunk === 'string'
+                                || chunk instanceof Buffer
+                                || chunk instanceof Uint8Array
+                            ) {
+                                const body = chunk instanceof Buffer || chunk instanceof Uint8Array
+                                    ? Buffer.from(chunk).toString('utf-8')
+                                    : chunk
+                                const rewritten = body.replace(
+                                    /(["'])(\/src\/[^"'?#]+)\.(?:tsx|ts|jsx)(["'?#])/g,
+                                    '$1$2.js$3',
+                                )
+                                if (rewritten !== body) {
+                                    const buf = Buffer.from(rewritten)
+                                    if (!res.headersSent) {
+                                        res.setHeader('Content-Length', buf.length)
+                                    }
+                                    return (origEnd as (b: Buffer, ...rest: unknown[]) => unknown)(buf, ...rest)
+                                }
+                            }
+                            return (origEnd as (...args: unknown[]) => unknown)(chunk, ...rest)
+                        } as typeof res.end
+
                         next();
                     });
                 },

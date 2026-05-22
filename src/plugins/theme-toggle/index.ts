@@ -1,7 +1,7 @@
-import { actionsFacet } from '@/extensions/core.ts'
-import type { AppExtension } from '@/extensions/facet.ts'
-import { systemToggle } from '@/extensions/togglable.ts'
-import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.ts'
+import { actionsFacet } from '@/extensions/core.js'
+import type { AppExtension } from '@/extensions/facet.js'
+import { systemToggle } from '@/extensions/togglable.js'
+import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { toggleTheme } from './theme.ts'
 
 export { ThemeToggle } from './ThemeToggle.tsx'

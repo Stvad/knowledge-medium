@@ -1,9 +1,9 @@
 import { ReactNode } from 'react'
 import type { Components } from 'react-markdown'
-import type { MarkdownExtension } from '@/markdown/extensions.ts'
+import type { MarkdownExtension } from '@/markdown/extensions.js'
 import { remarkBlockrefs } from './remark-blockrefs.ts'
-import { BlockRef } from '@/components/references/BlockRef.tsx'
-import { BlockEmbed } from '@/components/references/BlockEmbed.tsx'
+import { BlockRef } from '@/components/references/BlockRef.js'
+import { BlockEmbed } from '@/components/references/BlockEmbed.js'
 
 interface BlockrefNode {
   properties?: {

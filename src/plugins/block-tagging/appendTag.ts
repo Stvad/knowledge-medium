@@ -1,6 +1,6 @@
 import type { Block } from '@/data/block'
 import { ChangeScope } from '@/data/api'
-import { parseReferences, renderWikilink } from '@/plugins/references/referenceParser.ts'
+import { parseReferences, renderWikilink } from '@/plugins/references/referenceParser.js'
 import { isValidTagName } from './config.ts'
 
 export interface AppendTagResult {

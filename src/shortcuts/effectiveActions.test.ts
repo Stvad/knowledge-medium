@@ -3,14 +3,14 @@ import {
   actionDecoratorsFacet,
   actionOverridesFacet,
   actionsFacet,
-} from '@/extensions/core.ts'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
-import { getEffectiveActions } from '@/shortcuts/effectiveActions.ts'
+} from '@/extensions/core.js'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { getEffectiveActions } from '@/shortcuts/effectiveActions.js'
 import {
   ActionConfig,
   ActionContextTypes,
   type BlockShortcutDependencies,
-} from '@/shortcuts/types.ts'
+} from '@/shortcuts/types.js'
 
 const baseAction = (overrides: Partial<ActionConfig> = {}): ActionConfig => ({
   id: 'test.action',

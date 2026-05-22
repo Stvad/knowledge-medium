@@ -6,7 +6,7 @@
 import { Extension, EditorSelection } from '@codemirror/state'
 import { autocompletion, CompletionContext, CompletionResult } from '@codemirror/autocomplete'
 import { keymap } from '@codemirror/view'
-import { completionKeymapWithEscapeFallthrough } from '@/utils/codemirrorCompletion.ts'
+import { completionKeymapWithEscapeFallthrough } from '@/utils/codemirrorCompletion.js'
 
 export interface BacklinkCompletionCandidate {
   label: string

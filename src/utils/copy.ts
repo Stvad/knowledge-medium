@@ -1,7 +1,7 @@
 import { Block } from '../data/block'
 import { ClipboardData } from '../types'
 import type { Repo } from '../data/repo'
-import { selectionStateProp } from '@/data/properties.ts'
+import { selectionStateProp } from '@/data/properties.js'
 
 const createIndentedContent = (content: string, depth: number): string => {
   const indentBy = '  '

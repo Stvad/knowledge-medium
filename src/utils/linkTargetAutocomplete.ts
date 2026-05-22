@@ -1,6 +1,6 @@
 import type { BlockData } from '@/data/api'
 import type { Repo } from '@/data/repo'
-import { aliasesProp } from '@/data/properties.ts'
+import { aliasesProp } from '@/data/properties.js'
 
 export interface LinkTargetAliasMatch {
   alias: string

@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import type { BlockData } from '@/data/api'
-import { aliasesProp } from '@/data/properties.ts'
+import { aliasesProp } from '@/data/properties.js'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'

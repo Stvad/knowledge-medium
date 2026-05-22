@@ -2,12 +2,12 @@ import { describe, expect, it, vi } from 'vitest'
 import type { MouseEvent } from 'react'
 import type { Block } from '../../../data/block'
 import type { Repo } from '../../../data/repo'
-import type { BlockRenderer } from '@/types.ts'
+import type { BlockRenderer } from '@/types.js'
 import {
   blockContentRendererFacet,
   BlockInteractionContext,
-} from '@/extensions/blockInteraction.ts'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
+} from '@/extensions/blockInteraction.js'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
 import {
   blockEditingContentRenderer,
   plainOutlinerBlockClickBehavior,

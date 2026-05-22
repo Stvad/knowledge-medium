@@ -27,7 +27,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/checkbox'
-import { useRepo } from '@/context/repo.tsx'
+import { useRepo } from '@/context/repo.js'
 import { isRefCodec, isRefListCodec, type BlockData } from '@/data/api'
 import {
   blockTypeLabelProp,
@@ -38,12 +38,12 @@ import {
   retagBlocks,
   type PropertyShapeFilter,
 } from '@/data/typeExtraction'
-import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults.tsx'
-import { ReferenceSearch } from '@/components/propertyEditors/RefPropertyEditor.tsx'
+import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults.js'
+import { ReferenceSearch } from '@/components/propertyEditors/RefPropertyEditor.js'
 import type { Block } from '@/data/block'
 import type { AnyPropertySchema } from '@/data/api'
-import { useHandle } from '@/hooks/block.ts'
-import { labelForBlockData } from '@/utils/linkTargetAutocomplete.ts'
+import { useHandle } from '@/hooks/block.js'
+import { labelForBlockData } from '@/utils/linkTargetAutocomplete.js'
 import { X } from 'lucide-react'
 import {
   openFindTypeInstancesDialogEvent,

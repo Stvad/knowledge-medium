@@ -1,5 +1,5 @@
 import { ChangeScope } from '@/data/api'
-import { getBlockTypes } from '@/data/properties.ts'
+import { getBlockTypes } from '@/data/properties.js'
 import type { Repo } from '@/data/repo'
 import {
   SRS_SM25_TYPE,

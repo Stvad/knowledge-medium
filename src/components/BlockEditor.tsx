@@ -5,16 +5,16 @@ import {
   focusedBlockIdProp,
   editorFocusRequestProp,
   type EditorSelectionState,
-} from '@/data/properties.ts'
+} from '@/data/properties.js'
 import { useRef, useEffect, useCallback, useMemo, useState, type Ref } from 'react'
 import { useIsEditing, useUIStateBlock } from '@/data/globalState'
 import { debounce } from 'lodash'
-import { placeCursorAtX, placeCursorAtCoords } from '@/utils/codemirror.ts'
-import { useContentRevision, usePropertyValue } from '@/hooks/block.ts'
-import { shouldExitEditModeAfterBlur } from '@/utils/dom.ts'
+import { placeCursorAtX, placeCursorAtCoords } from '@/utils/codemirror.js'
+import { useContentRevision, usePropertyValue } from '@/hooks/block.js'
+import { shouldExitEditModeAfterBlur } from '@/utils/dom.js'
 import { EditorView } from '@codemirror/view'
 import { EditorSelection } from '@codemirror/state'
-import { useShortcutSurfaceActivations } from '@/extensions/useShortcutSurfaceActivations.ts'
+import { useShortcutSurfaceActivations } from '@/extensions/useShortcutSurfaceActivations.js'
 
 interface BlockEditorProps extends Omit<ReactCodeMirrorProps, 'value' | 'onChange' | 'onUpdate' | 'onBlur' | 'ref'> {
   block: Block

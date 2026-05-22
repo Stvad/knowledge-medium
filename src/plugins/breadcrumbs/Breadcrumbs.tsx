@@ -1,9 +1,9 @@
 import { useCallback } from 'react'
 import { Block } from '@/data/block'
-import { useParents } from '@/hooks/block.ts'
-import { useRepo } from '@/context/repo.tsx'
-import { useBlockContext } from '@/context/block.tsx'
-import { useNavigate } from '@/utils/navigation.ts'
+import { useParents } from '@/hooks/block.js'
+import { useRepo } from '@/context/repo.js'
+import { useBlockContext } from '@/context/block.js'
+import { useNavigate } from '@/utils/navigation.js'
 import { BreadcrumbList } from './BreadcrumbList.tsx'
 
 const OVERRIDES = {isNestedSurface: true, isBreadcrumb: true}

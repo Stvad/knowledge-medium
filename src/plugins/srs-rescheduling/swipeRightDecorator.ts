@@ -1,17 +1,17 @@
 import type { Block } from '@/data/block'
-import { getBlockTypes } from '@/data/properties.ts'
-import { SWIPE_RIGHT_BLOCK_ACTION_ID } from '@/plugins/swipe-quick-actions/actions.ts'
+import { getBlockTypes } from '@/data/properties.js'
+import { SWIPE_RIGHT_BLOCK_ACTION_ID } from '@/plugins/swipe-quick-actions/actions.js'
 import {
   EDIT_MODE_TODO_CYCLE_ACTION_ID,
   TODO_CYCLE_ACTION_ID,
-} from '@/plugins/todo/actions.ts'
+} from '@/plugins/todo/actions.js'
 import type {
   ActionConfig,
   ActionContextType,
   ActionDecorator,
   BlockShortcutDependencies,
-} from '@/shortcuts/types.ts'
-import { ActionContextTypes } from '@/shortcuts/types.ts'
+} from '@/shortcuts/types.js'
+import { ActionContextTypes } from '@/shortcuts/types.js'
 import { SRS_SM25_TYPE, srsArchivedProp } from './schema.ts'
 
 export const archiveSrsBlock = async (block: Block): Promise<boolean> => {

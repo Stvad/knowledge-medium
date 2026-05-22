@@ -1,14 +1,14 @@
 import { useMemo } from 'react'
-import { actionContextsFacet } from '@/extensions/core.ts'
-import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { useActiveContextsState } from '@/shortcuts/ActiveContexts.tsx'
-import { actionRuntimeKey, getEffectiveActions } from '@/shortcuts/effectiveActions.ts'
+import { actionContextsFacet } from '@/extensions/core.js'
+import { useAppRuntime } from '@/extensions/runtimeContext.js'
+import { useActiveContextsState } from '@/shortcuts/ActiveContexts.js'
+import { actionRuntimeKey, getEffectiveActions } from '@/shortcuts/effectiveActions.js'
 import type {
   ActionConfig,
   ActionContextType,
   ActiveContextInfo,
   ShortcutBinding,
-} from '@/shortcuts/types.ts'
+} from '@/shortcuts/types.js'
 import {
   COMMAND_PALETTE_ACTION_ID,
   COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,

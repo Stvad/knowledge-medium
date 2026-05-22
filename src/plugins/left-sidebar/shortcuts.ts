@@ -1,9 +1,9 @@
 import { memoize } from 'lodash'
 import { v5 as uuidv5 } from 'uuid'
-import type { Block } from '@/data/block.ts'
+import type { Block } from '@/data/block.js'
 import { ChangeScope } from '@/data/api'
-import { createOrRestoreTargetBlock } from '@/data/targets.ts'
-import { keyAtEnd } from '@/data/orderKey.ts'
+import { createOrRestoreTargetBlock } from '@/data/targets.js'
+import { keyAtEnd } from '@/data/orderKey.js'
 import { getOrCreateJournalBlock } from '@/plugins/daily-notes'
 
 const SHORTCUTS_BLOCK_CONTENT = 'Shortcuts'

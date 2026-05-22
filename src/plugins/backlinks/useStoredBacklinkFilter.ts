@@ -1,8 +1,8 @@
 import { useCallback, useMemo } from 'react'
 import { ChangeScope } from '@/data/api'
 import type { Block } from '@/data/block'
-import { usePluginPrefsBlock } from '@/data/globalState.ts'
-import { useHandle, usePropertyValue } from '@/hooks/block.ts'
+import { usePluginPrefsBlock } from '@/data/globalState.js'
+import { useHandle, usePropertyValue } from '@/hooks/block.js'
 import {
   mergeBacklinksFilters,
   hasBacklinksFilter,

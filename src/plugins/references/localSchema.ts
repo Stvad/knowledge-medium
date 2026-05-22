@@ -1,4 +1,4 @@
-import type { LocalSchemaContribution, LocalSchemaDb } from '@/data/facets.ts'
+import type { LocalSchemaContribution, LocalSchemaDb } from '@/data/facets.js'
 
 export const CREATE_BLOCKS_WORKSPACE_REFERENCES_INDEX_SQL = `
   CREATE INDEX IF NOT EXISTS idx_blocks_workspace_with_references

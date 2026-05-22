@@ -4,11 +4,11 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { Fragment, createElement } from 'react'
 import type { Block } from '@/data/block'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
 import {
   isWikilinkDisplayParts,
   type WikilinkDisplayContext,
-} from '@/plugins/references/markdown/wikilinks/wikilinkDecorator.ts'
+} from '@/plugins/references/markdown/wikilinks/wikilinkDecorator.js'
 import {
   blockDateAdapterFacet,
   type BlockDateAdapter,

@@ -40,7 +40,7 @@ vi.mock('@/context/repo.tsx', () => ({
 }))
 
 vi.mock('@/data/globalState.ts', async () => {
-  const actual = await vi.importActual<typeof import('@/data/globalState.ts')>('@/data/globalState.ts')
+  const actual = await vi.importActual<typeof import('@/data/globalState.js')>('@/data/globalState.ts')
   const properties = await vi.importActual<typeof import('@/data/properties')>('@/data/properties')
 
   const uiStateBlock = () => {

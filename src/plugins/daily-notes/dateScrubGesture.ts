@@ -31,11 +31,11 @@ import type { TouchEvent } from 'react'
 import {
   isInteractiveContentEvent,
   type BlockContentSurfaceContribution,
-} from '@/extensions/blockInteraction.ts'
+} from '@/extensions/blockInteraction.js'
 import {
   focusedBlockIdProp,
   isEditingProp,
-} from '@/data/properties.ts'
+} from '@/data/properties.js'
 import type { Block } from '@/data/block'
 import { cancelSwipeCandidate } from '@/plugins/swipe-quick-actions'
 import type { BlockDateAdapter } from './blockDateAdapter.ts'

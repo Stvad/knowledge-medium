@@ -4,8 +4,8 @@ import {
   defineProperty,
   type BlockData,
 } from '@/data/api'
-import { hasBlockType } from '@/data/properties.ts'
-import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.ts'
+import { hasBlockType } from '@/data/properties.js'
+import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.js'
 import {
   EMPTY_BACKLINKS_FILTER,
   backlinksFilterCodec,

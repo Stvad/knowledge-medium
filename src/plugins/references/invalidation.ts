@@ -2,7 +2,7 @@ import type {
   ChangeSnapshot,
   InvalidationRule,
   PluginInvalidationEmit,
-} from '@/data/invalidation.ts'
+} from '@/data/invalidation.js'
 
 export const REFERENCES_TARGET_INVALIDATION_CHANNEL = 'references.target'
 

@@ -11,15 +11,15 @@
 import {render, screen} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {describe, expect, it, vi} from 'vitest'
-import type {ToggleNode} from '@/extensions/discoverToggleTree.ts'
-import {makeBlockData} from '@/data/test/factories.ts'
-import {extensionNameProp} from '@/data/properties.ts'
+import type {ToggleNode} from '@/extensions/discoverToggleTree.js'
+import {makeBlockData} from '@/data/test/factories.js'
+import {extensionNameProp} from '@/data/properties.js'
 import {
   systemToggle,
   userExtensionToggle,
   type Overrides,
-} from '@/extensions/togglable.ts'
-import {ExtensionsSettings} from '@/plugins/extensions-settings/ExtensionsSettings.tsx'
+} from '@/extensions/togglable.js'
+import {ExtensionsSettings} from '@/plugins/extensions-settings/ExtensionsSettings.js'
 
 const node = (
   id: string,

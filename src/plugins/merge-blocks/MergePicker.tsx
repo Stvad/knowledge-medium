@@ -21,15 +21,15 @@ import {
   CommandGroup,
   CommandItem,
 } from '@/components/ui/command'
-import { useRepo } from '@/context/repo.tsx'
-import { PAGE_TYPE } from '@/data/blockTypes.ts'
-import { hasBlockType } from '@/data/properties.ts'
-import { useNavigate } from '@/utils/navigation.ts'
+import { useRepo } from '@/context/repo.js'
+import { PAGE_TYPE } from '@/data/blockTypes.js'
+import { hasBlockType } from '@/data/properties.js'
+import { useNavigate } from '@/utils/navigation.js'
 import {
   searchLinkTargets,
   type LinkTargetAliasMatch,
   type LinkTargetBlockMatch,
-} from '@/utils/linkTargetAutocomplete.ts'
+} from '@/utils/linkTargetAutocomplete.js'
 import { openMergePickerEvent, type OpenMergePickerEventDetail } from './events.ts'
 import { pickMergeContentStrategy } from './strategy.ts'
 

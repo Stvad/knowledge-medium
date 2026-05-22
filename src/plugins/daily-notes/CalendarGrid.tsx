@@ -12,7 +12,7 @@
  */
 import { useMemo } from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
-import { cn } from '@/lib/utils.ts'
+import { cn } from '@/lib/utils.js'
 import { todayIso } from './dailyNotes.ts'
 import {
   CALENDAR_WEEKDAY_LABELS,

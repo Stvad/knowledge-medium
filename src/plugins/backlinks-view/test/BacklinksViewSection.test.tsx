@@ -2,10 +2,10 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { defineVariant } from '@/extensions/variantFacet.ts'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
-import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.ts'
-import type { BlockResolveContext } from '@/extensions/blockInteraction.ts'
+import { defineVariant } from '@/extensions/variantFacet.js'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.js'
+import type { BlockResolveContext } from '@/extensions/blockInteraction.js'
 import { backlinksViewFacet, type BacklinksViewRendererProps } from '../facet.ts'
 import { BacklinksViewSection } from '../BacklinksViewSection.tsx'
 

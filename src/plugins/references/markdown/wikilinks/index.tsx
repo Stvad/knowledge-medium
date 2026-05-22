@@ -1,9 +1,9 @@
 import { ReactNode } from 'react'
 import type { Components } from 'react-markdown'
-import type { MarkdownExtension } from '@/markdown/extensions.ts'
+import type { MarkdownExtension } from '@/markdown/extensions.js'
 import { remarkWikilinks } from './remark-wikilinks.ts'
 import { Wikilink } from './Wikilink.tsx'
-import { BlockEmbed } from '@/components/references/BlockEmbed.tsx'
+import { BlockEmbed } from '@/components/references/BlockEmbed.js'
 
 interface WikilinkNode {
   properties?: {

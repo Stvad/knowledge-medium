@@ -31,13 +31,13 @@ import {
   type AppExtension,
   type FacetContribution,
   type FacetResolveContext,
-} from '@/extensions/facet.ts'
+} from '@/extensions/facet.js'
 import {
   getBoundary,
   isEnabled,
   type Overrides,
   type Togglable,
-} from '@/extensions/togglable.ts'
+} from '@/extensions/togglable.js'
 
 export interface ResolveAppRuntimeOptions {
   overrides: Overrides

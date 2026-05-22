@@ -6,26 +6,26 @@ import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import type { Dependency } from '@/data/internals/handleStore'
 import { aliasesProp, typesProp } from '@/data/properties'
-import { resolveFacetRuntimeSync, type AppExtension } from '@/extensions/facet.ts'
-import { kernelDataExtension } from '@/data/kernelDataExtension.ts'
+import { resolveFacetRuntimeSync, type AppExtension } from '@/extensions/facet.js'
+import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import {
   invalidationRulesFacet,
   propertyEditorOverridesFacet,
   propertySchemasFacet,
   queriesFacet,
   valuePresetsFacet,
-} from '@/data/facets.ts'
-import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults.tsx'
-import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.ts'
+} from '@/data/facets.js'
+import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults.js'
+import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.js'
 import { backlinksPlugin } from '../index.ts'
 import { backlinksDataExtension } from '../dataExtension.ts'
-import { referencesInvalidationRule } from '@/plugins/references/invalidation.ts'
+import { referencesInvalidationRule } from '@/plugins/references/invalidation.js'
 import {
   TYPED_BLOCKS_REFERENCE_CHANNEL,
   TYPED_BLOCKS_STRUCTURE_CHANNEL,
   typedBlocksReferenceKey,
   typedBlocksStructureKey,
-} from '@/data/internals/kernelInvalidation.ts'
+} from '@/data/internals/kernelInvalidation.js'
 import {
   BACKLINKS_FOR_BLOCK_QUERY,
   backlinksForBlockQuery,

@@ -16,8 +16,8 @@
  */
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { navigate } from '@/utils/navigation.ts'
-import { dismissToast, showError } from '@/utils/toast.ts'
+import { navigate } from '@/utils/navigation.js'
+import { dismissToast, showError } from '@/utils/toast.js'
 import type { Repo } from '@/data/repo'
 
 export interface AliasCollisionToastProps {

@@ -7,22 +7,22 @@ import { BlockCache } from '@/data/blockCache'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { Repo } from '@/data/repo'
 import { createTestDb } from '@/data/test/createTestDb'
-import { actionsFacet } from '@/extensions/core.ts'
-import { blockContentSurfacePropsFacet } from '@/extensions/blockInteraction.ts'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
-import { propertySchemasFacet, typesFacet } from '@/data/facets.ts'
+import { actionsFacet } from '@/extensions/core.js'
+import { blockContentSurfacePropsFacet } from '@/extensions/blockInteraction.js'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { propertySchemasFacet, typesFacet } from '@/data/facets.js'
 import { SWIPE_RIGHT_BLOCK_ACTION_ID } from '@/plugins/swipe-quick-actions'
-import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.ts'
-import { getEffectiveActions } from '@/shortcuts/effectiveActions.ts'
+import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.js'
+import { getEffectiveActions } from '@/shortcuts/effectiveActions.js'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
 import {
   EDIT_MODE_TODO_CYCLE_ACTION_ID,
   TODO_CYCLE_ACTION_ID,
   todoActionsExtension,
-} from '@/plugins/todo/actions.ts'
-import { todoDataExtension } from '@/plugins/todo/dataExtension.ts'
-import { statusProp, TODO_TYPE } from '@/plugins/todo/schema.ts'
+} from '@/plugins/todo/actions.js'
+import { todoDataExtension } from '@/plugins/todo/dataExtension.js'
+import { statusProp, TODO_TYPE } from '@/plugins/todo/schema.js'
 import {
   SRS_SM25_TYPE,
   srsArchivedProp,

@@ -1,6 +1,6 @@
 import { useCallback, useSyncExternalStore } from 'react'
 import { type AnyPropertySchema } from '@/data/api'
-import { useRepo } from '@/context/repo.tsx'
+import { useRepo } from '@/context/repo.js'
 
 /** Reactive view onto `repo.propertySchemas`. Fires on full
  *  `setFacetRuntime` rebuilds AND on per-facet runtime contribution

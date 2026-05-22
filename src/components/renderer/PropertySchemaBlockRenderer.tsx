@@ -7,19 +7,19 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import { ChevronDown } from 'lucide-react'
-import { useHandle } from '@/hooks/block.ts'
-import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { valuePresetsFacet } from '@/data/facets.ts'
+import { useHandle } from '@/hooks/block.js'
+import { useAppRuntime } from '@/extensions/runtimeContext.js'
+import { valuePresetsFacet } from '@/data/facets.js'
 import {
   presetConfigProp,
   presetIdProp,
   propertyNameProp,
-} from '@/data/properties.ts'
+} from '@/data/properties.js'
 import { ChangeScope, type AnyValuePreset } from '@/data/api'
-import { Input } from '@/components/ui/input.tsx'
-import { Button } from '@/components/ui/button.tsx'
-import type { BlockRenderer, BlockRendererProps } from '@/types.ts'
-import { PropertyShapeGlyph } from '@/components/propertyPanel/shapeUi.tsx'
+import { Input } from '@/components/ui/input.js'
+import { Button } from '@/components/ui/button.js'
+import type { BlockRenderer, BlockRendererProps } from '@/types.js'
+import { PropertyShapeGlyph } from '@/components/propertyPanel/shapeUi.js'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
 
 const renderConfigEditor = (

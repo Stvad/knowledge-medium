@@ -12,7 +12,7 @@ import { BlockContextProvider } from '@/context/block'
 import { resolveFacetRuntimeSync, type FacetRuntime } from '@/extensions/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { PanelRenderer } from './PanelRenderer'
-import { BlockComponent } from '@/components/BlockComponent.tsx'
+import { BlockComponent } from '@/components/BlockComponent.js'
 import { useActionContext } from '@/shortcuts/useActionContext'
 import { ActionContextTypes } from '@/shortcuts/types'
 

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { actionsFacet } from '@/extensions/core.ts'
-import { readRuntimeActions } from '@/extensions/runtimeActions.ts'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
-import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.ts'
+import { actionsFacet } from '@/extensions/core.js'
+import { readRuntimeActions } from '@/extensions/runtimeActions.js'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.js'
 import type { Repo } from '@/data/repo'
 import { getVimNormalModeActions } from '@/plugins/vim-normal-mode/actions'
 

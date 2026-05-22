@@ -49,8 +49,8 @@ import {
 import {
   applyLocalSchemaContributions,
   resolveLocalSchemaContributions,
-} from '@/data/localSchema.ts'
-import { staticDataExtensions } from '@/extensions/staticDataExtensions.ts'
+} from '@/data/localSchema.js'
+import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
 
 export interface TestDb {
   /** The real PowerSync database — same type as production. */

@@ -1,7 +1,7 @@
 import { EditorSelection, EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { describe, expect, it } from 'vitest'
-import type { ActionConfig, ActionContextTypes as ContextTypes, CodeMirrorEditModeDependencies } from '@/shortcuts/types.ts'
+import type { ActionConfig, ActionContextTypes as ContextTypes, CodeMirrorEditModeDependencies } from '@/shortcuts/types.js'
 import {
   INSERT_BLOCK_REF_TRIGGER_ACTION_ID,
   INSERT_PAGE_REF_TRIGGER_ACTION_ID,

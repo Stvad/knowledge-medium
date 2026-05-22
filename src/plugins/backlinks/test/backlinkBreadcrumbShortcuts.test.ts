@@ -2,7 +2,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import type { Block } from '@/data/block'
-import { isCollapsedProp } from '@/data/properties.ts'
+import { isCollapsedProp } from '@/data/properties.js'
 import {
   BACKLINK_ENTRY_ACTION_CONTEXT,
   BACKLINK_ENTRY_SHORTCUT_CONTROLLER_KEY,

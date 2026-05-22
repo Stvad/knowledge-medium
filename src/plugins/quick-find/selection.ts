@@ -1,7 +1,7 @@
 import type {
   LinkTargetAliasMatch,
   LinkTargetBlockMatch,
-} from '@/utils/linkTargetAutocomplete.ts'
+} from '@/utils/linkTargetAutocomplete.js'
 
 export const quickFindAliasValue = (match: LinkTargetAliasMatch) =>
   `page:${match.blockId}:${match.alias}`

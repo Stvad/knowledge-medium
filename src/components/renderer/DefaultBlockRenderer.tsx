@@ -1,4 +1,4 @@
-import { BlockRendererProps, BlockRenderer } from '@/types.ts'
+import { BlockRendererProps, BlockRenderer } from '@/types.js'
 import { BlockProperties } from '../BlockProperties.tsx'
 import { BlockChildren } from '../BlockComponent.tsx'
 import { Button } from '../ui/button.tsx'
@@ -10,9 +10,9 @@ import {
   isCollapsedProp,
   topLevelBlockIdProp,
   typesProp,
-} from '@/data/properties.ts'
-import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.tsx'
-import { CodeMirrorContentRenderer } from '@/components/renderer/CodeMirrorContentRenderer.tsx'
+} from '@/data/properties.js'
+import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.js'
+import { CodeMirrorContentRenderer } from '@/components/renderer/CodeMirrorContentRenderer.js'
 import { useRef, ClipboardEvent, useMemo } from 'react'
 import { Block } from '../../data/block'
 import {
@@ -22,12 +22,12 @@ import {
   useInEditMode,
 } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
-import { buildAppHash } from '@/utils/routing.ts'
-import { navigate, useBlockLinkClick } from '@/utils/navigation.ts'
-import { pasteMultilineText } from '@/utils/paste.ts'
-import { useIsMobile } from '@/utils/react.tsx'
+import { buildAppHash } from '@/utils/routing.js'
+import { navigate, useBlockLinkClick } from '@/utils/navigation.js'
+import { pasteMultilineText } from '@/utils/paste.js'
+import { useIsMobile } from '@/utils/react.js'
 import { ErrorBoundary } from 'react-error-boundary'
-import { FallbackComponent } from '@/components/util/error.tsx'
+import { FallbackComponent } from '@/components/util/error.js'
 import {
   ContextMenu,
   ContextMenuTrigger,
@@ -35,12 +35,12 @@ import {
   ContextMenuSeparator,
   ContextMenuItem,
   ContextMenuContent,
-} from '@/components/ui/context-menu.tsx'
-import { useBlockContext } from '@/context/block.tsx'
-import { useHasChildren, usePropertyValue } from '@/hooks/block.ts'
-import { useIsFocalRender } from '@/hooks/useIsFocalRender.ts'
-import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.tsx'
+} from '@/components/ui/context-menu.js'
+import { useBlockContext } from '@/context/block.js'
+import { useHasChildren, usePropertyValue } from '@/hooks/block.js'
+import { useIsFocalRender } from '@/hooks/useIsFocalRender.js'
+import { useAppRuntime } from '@/extensions/runtimeContext.js'
+import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.js'
 import {
   blockChildrenFooterFacet,
   blockClickHandlersFacet,
@@ -57,9 +57,9 @@ import {
   type BlockShellDecorator,
   type BlockShellState,
   type BlockShellProps,
-} from '@/extensions/blockInteraction.ts'
-import { useShortcutSurfaceActivations } from '@/extensions/useShortcutSurfaceActivations.ts'
-import { focusedBlockIdProp } from '@/data/properties.ts'
+} from '@/extensions/blockInteraction.js'
+import { useShortcutSurfaceActivations } from '@/extensions/useShortcutSurfaceActivations.js'
+import { focusedBlockIdProp } from '@/data/properties.js'
 
 interface DefaultBlockRendererProps extends BlockRendererProps {
   ContentRenderer?: BlockRenderer;

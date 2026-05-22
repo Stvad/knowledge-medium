@@ -1,7 +1,7 @@
-import { blockHeaderFacet } from '@/extensions/blockInteraction.ts'
-import { blockRenderersFacet, type RendererContribution } from '@/extensions/core.ts'
-import type { AppExtension } from '@/extensions/facet.ts'
-import { systemToggle } from '@/extensions/togglable.ts'
+import { blockHeaderFacet } from '@/extensions/blockInteraction.js'
+import { blockRenderersFacet, type RendererContribution } from '@/extensions/core.js'
+import type { AppExtension } from '@/extensions/facet.js'
+import { systemToggle } from '@/extensions/togglable.js'
 import { Breadcrumbs } from './Breadcrumbs.tsx'
 import { BreadcrumbRenderer } from './BreadcrumbRenderer.tsx'
 

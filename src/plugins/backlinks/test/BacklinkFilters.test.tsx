@@ -8,11 +8,11 @@ import {
   defineProperty,
   type AnyPropertySchema,
 } from '@/data/api'
-import { refTargetFilterDefaultsFacet, type RefTargetFilterDefault } from '@/data/facets.ts'
+import { refTargetFilterDefaultsFacet, type RefTargetFilterDefault } from '@/data/facets.js'
 import {
   DAILY_NOTE_TYPE,
   dailyNoteDateProp,
-} from '@/plugins/daily-notes/schema.ts'
+} from '@/plugins/daily-notes/schema.js'
 import { BacklinkFilters } from '../BacklinkFilters.tsx'
 
 const schemaStore = vi.hoisted(() => ({

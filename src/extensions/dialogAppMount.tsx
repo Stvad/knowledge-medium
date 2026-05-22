@@ -18,7 +18,7 @@ import type { AppExtension } from './facet.ts'
 import {
   getDialogQueue,
   subscribeDialogs,
-} from '@/utils/dialogs.ts'
+} from '@/utils/dialogs.js'
 
 export const DialogHost = () => {
   const queue = useSyncExternalStore(

@@ -2,9 +2,9 @@ import {
   parseOutermostReferences,
   parseReferences,
   type ParsedReference,
-} from '@/plugins/references/referenceParser.ts'
-import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.ts'
-import { parseLiteralDailyPageTitle } from '@/utils/relativeDate.ts'
+} from '@/plugins/references/referenceParser.js'
+import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.js'
+import { parseLiteralDailyPageTitle } from '@/utils/relativeDate.js'
 
 const NS_PREFIX = 'roam'
 export const ROAM_PAGE_ALIAS_PROP = `${NS_PREFIX}:page_alias`

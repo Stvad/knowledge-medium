@@ -1,8 +1,8 @@
 import { render } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import { headerItemsFacet } from '@/extensions/core.ts'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
-import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.ts'
+import { headerItemsFacet } from '@/extensions/core.js'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.js'
 import { Header } from './Header.tsx'
 
 const StartItem = () => <button type="button" className="hidden md:inline-flex">Start</button>

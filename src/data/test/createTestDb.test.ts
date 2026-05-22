@@ -7,8 +7,8 @@ import {
   BLOCK_TYPES_BACKFILL_MARKER_KEY,
   CLIENT_SCHEMA_TRIGGER_NAMES,
 } from '@/data/internals/clientSchema'
-import { resolveLocalSchemaContributions } from '@/data/localSchema.ts'
-import { staticDataExtensions } from '@/extensions/staticDataExtensions.ts'
+import { resolveLocalSchemaContributions } from '@/data/localSchema.js'
+import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
 
 const localSchemaTriggerNames = resolveLocalSchemaContributions(staticDataExtensions)
   .flatMap(contribution => [...(contribution.triggerNames ?? [])])

@@ -4,26 +4,26 @@ import {
   isCollapsedProp,
   topLevelBlockIdProp,
   selectionStateProp,
-} from '@/data/properties.ts'
+} from '@/data/properties.js'
 import {
   getLastVisibleDescendant,
   nextVisibleBlock,
   previousVisibleBlock,
-} from '@/utils/selection.ts'
-import { actionsFacet } from '@/extensions/core.ts'
-import { AppExtension } from '@/extensions/facet.ts'
-import { pasteFromClipboard } from '@/utils/paste.ts'
+} from '@/utils/selection.js'
+import { actionsFacet } from '@/extensions/core.js'
+import { AppExtension } from '@/extensions/facet.js'
+import { pasteFromClipboard } from '@/utils/paste.js'
 import {
   bindBlockActionContext,
   createSharedBlockActions,
   enterEditMode,
-} from '@/shortcuts/blockActions.ts'
-import type { BlockAction } from '@/shortcuts/blockActions.ts'
+} from '@/shortcuts/blockActions.js'
+import type { BlockAction } from '@/shortcuts/blockActions.js'
 import {
   ActionConfig,
   ActionContextTypes,
   BlockShortcutDependencies,
-} from '@/shortcuts/types.ts'
+} from '@/shortcuts/types.js'
 
 const JUMP_BLOCK_COUNT = 8
 

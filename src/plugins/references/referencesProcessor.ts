@@ -63,8 +63,8 @@ import { aliasSeatReaderFromDb, ensureAliasTarget, resolveAliasSeatId } from '@/
 import {
   dailyNoteBlockId,
   ensureDailyNoteTarget,
-} from '@/plugins/daily-notes/dailyNotes.ts'
-import { parseLiteralDailyPageTitle } from '@/utils/relativeDate.ts'
+} from '@/plugins/daily-notes/dailyNotes.js'
+import { parseLiteralDailyPageTitle } from '@/utils/relativeDate.js'
 
 export const PARSE_REFERENCES_PROCESSOR = 'references.parseReferences'
 export const CLEANUP_ORPHAN_ALIASES_PROCESSOR = 'references.cleanupOrphanAliases'

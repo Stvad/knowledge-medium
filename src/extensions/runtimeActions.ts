@@ -1,6 +1,6 @@
-import { FacetRuntime } from '@/extensions/facet.ts'
-import { getEffectiveActions } from '@/shortcuts/effectiveActions.ts'
-import { ActionConfig } from '@/shortcuts/types.ts'
+import { FacetRuntime } from '@/extensions/facet.js'
+import { getEffectiveActions } from '@/shortcuts/effectiveActions.js'
+import { ActionConfig } from '@/shortcuts/types.js'
 
 export const readRuntimeActions = (
   runtime: FacetRuntime,

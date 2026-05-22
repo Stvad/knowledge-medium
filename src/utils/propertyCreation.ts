@@ -1,7 +1,7 @@
-import type { Block } from '@/data/block.ts'
-import type { Repo } from '@/data/repo.ts'
-import { showPropertiesProp } from '@/data/properties.ts'
-import { requestPropertyCreate } from '@/utils/propertyNavigation.ts'
+import type { Block } from '@/data/block.js'
+import type { Repo } from '@/data/repo.js'
+import { showPropertiesProp } from '@/data/properties.js'
+import { requestPropertyCreate } from '@/utils/propertyNavigation.js'
 
 export const convertEmptyChildBlockToProperty = async (
   block: Block,

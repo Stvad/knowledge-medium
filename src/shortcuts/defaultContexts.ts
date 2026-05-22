@@ -6,7 +6,7 @@ import {
   CodeMirrorEditModeDependencies,
   MultiSelectModeDependencies,
   PropertyEditingDependencies,
-} from '@/shortcuts/types.ts'
+} from '@/shortcuts/types.js'
 import { Block } from '../data/block'
 import { EditorView } from '@codemirror/view'
 

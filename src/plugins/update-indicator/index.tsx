@@ -1,12 +1,12 @@
 import {
   blockContentDecoratorsFacet,
   type BlockContentDecoratorContribution,
-} from '@/extensions/blockInteraction.ts'
-import { appEffectsFacet } from '@/extensions/core.ts'
-import { AppExtension } from '@/extensions/facet.ts'
-import { systemToggle } from '@/extensions/togglable.ts'
-import { propertySchemasFacet } from '@/data/facets.ts'
-import { pluginPrefsExtension } from '@/data/pluginStateExtensions.ts'
+} from '@/extensions/blockInteraction.js'
+import { appEffectsFacet } from '@/extensions/core.js'
+import { AppExtension } from '@/extensions/facet.js'
+import { systemToggle } from '@/extensions/togglable.js'
+import { propertySchemasFacet } from '@/data/facets.js'
+import { pluginPrefsExtension } from '@/data/pluginStateExtensions.js'
 import { UpdateIndicator } from './UpdateIndicator.tsx'
 import {
   currentLoadTimeProp,

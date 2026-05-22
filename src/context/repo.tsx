@@ -5,11 +5,11 @@ import { Repo } from '../data/repo'
 import { BlockCache } from '@/data/blockCache'
 import { useIsLocalOnly, useUser } from '@/components/Login'
 import { ensurePowerSyncReady, getPowerSyncDb } from '@/data/repoProvider'
-import { User } from '@/types.ts'
+import { User } from '@/types.js'
 import { memoize } from 'lodash'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
-import { staticDataExtensions } from '@/extensions/staticDataExtensions.ts'
-import { surfaceProcessorRejectionFor } from '@/utils/processorRejectionToast.ts'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
+import { surfaceProcessorRejectionFor } from '@/utils/processorRejectionToast.js'
 
 // Memoize on (userId, useRemoteSync) so toggling local-only doesn't reuse a
 // previously-connected repo. In practice the toggle is followed by a reload

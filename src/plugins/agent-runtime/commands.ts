@@ -3,26 +3,26 @@ import ReactDOM from 'react-dom'
 import type { Repo } from '@/data/repo'
 import type { Block } from '@/data/block'
 import { ChangeScope, type BlockData, type BlockReference } from '@/data/api'
-import { aliasesProp, extensionDescriptionProp, extensionNameProp } from '@/data/properties.ts'
+import { aliasesProp, extensionDescriptionProp, extensionNameProp } from '@/data/properties.js'
 import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
-import { keyAtEnd } from '@/data/orderKey.ts'
+import { keyAtEnd } from '@/data/orderKey.js'
 import {
   actionsFacet,
   appEffectsFacet,
   appMountsFacet,
   blockRenderersFacet,
-} from '@/extensions/core.ts'
-import { readRuntimeActions } from '@/extensions/runtimeActions.ts'
-import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
-import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions.ts'
-import { resolveAppRuntime } from '@/extensions/resolveAppRuntime.ts'
-import { applyToggle, userExtensionToggle } from '@/extensions/togglable.ts'
-import { findExtensionBlock } from '@/extensions/extensionLookup.ts'
-import { getPluginPrefsBlock } from '@/data/stateBlocks.ts'
+} from '@/extensions/core.js'
+import { readRuntimeActions } from '@/extensions/runtimeActions.js'
+import { refreshAppRuntime } from '@/extensions/runtimeEvents.js'
+import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions.js'
+import { resolveAppRuntime } from '@/extensions/resolveAppRuntime.js'
+import { applyToggle, userExtensionToggle } from '@/extensions/togglable.js'
+import { findExtensionBlock } from '@/extensions/extensionLookup.js'
+import { getPluginPrefsBlock } from '@/data/stateBlocks.js'
 import {
   extensionsOverridesProp,
   extensionsPrefsType,
-} from '@/plugins/extensions-settings/config.ts'
+} from '@/plugins/extensions-settings/config.js'
 import {
   describeFacets,
   describeRuntime,
@@ -45,7 +45,7 @@ import type {
   UninstallExtensionResult,
   UpdateBlockInput,
 } from './protocol.ts'
-import type { BlockProperties } from '@/types.ts'
+import type { BlockProperties } from '@/types.js'
 
 const agentExtensionsParentAlias = 'Agent-installed extensions'
 

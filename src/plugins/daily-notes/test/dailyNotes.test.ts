@@ -17,10 +17,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { aliasesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
-import { dailyNoteDateProp } from '@/plugins/daily-notes/schema.ts'
+import { dailyNoteDateProp } from '@/plugins/daily-notes/schema.js'
 import {
   backfillDailyNoteDatePropertyIfNeeded,
-} from '@/plugins/daily-notes/localSchema.ts'
+} from '@/plugins/daily-notes/localSchema.js'
 import { BlockCache } from '@/data/blockCache'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'

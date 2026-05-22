@@ -29,8 +29,8 @@ import {
   selectionStateProp,
   type BlockSelectionState,
 } from '@/data/properties'
-import { USER_PREFS_PATH_PART } from '@/data/userPrefs.ts'
-import { PAGE_TYPE } from '@/data/blockTypes.ts'
+import { USER_PREFS_PATH_PART } from '@/data/userPrefs.js'
+import { PAGE_TYPE } from '@/data/blockTypes.js'
 
 // ──── Deterministic-id namespaces ────
 

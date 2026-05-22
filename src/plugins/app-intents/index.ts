@@ -16,11 +16,11 @@
  *     errors are caught by `AppRuntimeProvider`'s effect loop and
  *     logged.
  */
-import { appEffectsFacet, type AppEffect } from '@/extensions/core.ts'
-import type { AppExtension } from '@/extensions/facet.ts'
-import { systemToggle } from '@/extensions/togglable.ts'
-import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks.ts'
-import { getLayoutSessionId } from '@/utils/layoutSessionId.ts'
+import { appEffectsFacet, type AppEffect } from '@/extensions/core.js'
+import type { AppExtension } from '@/extensions/facet.js'
+import { systemToggle } from '@/extensions/togglable.js'
+import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks.js'
+import { getLayoutSessionId } from '@/utils/layoutSessionId.js'
 import { consumeAppIntent } from './appIntents.ts'
 
 export {

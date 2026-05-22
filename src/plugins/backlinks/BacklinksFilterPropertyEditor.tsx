@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { type PropertyEditorProps } from '@/data/api'
-import { useRepo } from '@/context/repo.tsx'
+import { useRepo } from '@/context/repo.js'
 import {
   normalizeBacklinksFilter,
   type BacklinksFilter,

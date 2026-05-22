@@ -30,7 +30,7 @@
  */
 
 import { PowerSyncDatabase, Schema, WASQLiteOpenFactory, WASQLiteVFS } from '@powersync/web'
-import { createPowerSyncConnector, hasRemoteSyncConfig } from '@/services/powersync.ts'
+import { createPowerSyncConnector, hasRemoteSyncConfig } from '@/services/powersync.js'
 import {
   BLOCKS_RAW_TABLE,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
@@ -52,8 +52,8 @@ import {
 import {
   applyLocalSchemaContributions,
   resolveLocalSchemaContributions,
-} from '@/data/localSchema.ts'
-import { staticDataExtensions } from '@/extensions/staticDataExtensions.ts'
+} from '@/data/localSchema.js'
+import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
 
 const appSchema = new Schema({})
 appSchema.withRawTables({

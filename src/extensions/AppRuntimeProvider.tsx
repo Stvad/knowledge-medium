@@ -1,26 +1,26 @@
 import { ReactNode, useEffect, useMemo, useState } from 'react'
-import { useRepo } from '@/context/repo.tsx'
-import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions.ts'
+import { useRepo } from '@/context/repo.js'
+import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions.js'
 import {
   AppExtension,
   FacetResolveContext,
   FacetRuntime,
-} from '@/extensions/facet.ts'
+} from '@/extensions/facet.js'
 import {
   resolveAppRuntime,
   resolveAppRuntimeSync,
-} from '@/extensions/resolveAppRuntime.ts'
-import {useOverrides} from '@/extensions/useOverrides.ts'
-import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.ts'
-import { appEffectsFacet, appMountsFacet, type AppEffectCleanup } from '@/extensions/core.ts'
-import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts.tsx'
-import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler.tsx'
-import { staticAppExtensions } from '@/extensions/staticAppExtensions.ts'
+} from '@/extensions/resolveAppRuntime.js'
+import {useOverrides} from '@/extensions/useOverrides.js'
+import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.js'
+import { appEffectsFacet, appMountsFacet, type AppEffectCleanup } from '@/extensions/core.js'
+import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts.js'
+import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler.js'
+import { staticAppExtensions } from '@/extensions/staticAppExtensions.js'
 import {
   ExtensionLoadErrorsProvider,
   ExtensionLoadErrorStore,
-} from '@/extensions/extensionLoadErrors.tsx'
-import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.tsx'
+} from '@/extensions/extensionLoadErrors.js'
+import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.js'
 
 export function AppRuntimeProvider({
   children,

@@ -26,7 +26,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
-import { useRepo } from '@/context/repo.tsx'
+import { useRepo } from '@/context/repo.js'
 import type { BlockData } from '@/data/api'
 import { createTypeBlock } from '@/data/typeExtraction'
 import {

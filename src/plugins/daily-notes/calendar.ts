@@ -10,7 +10,7 @@
  * (the whole codebase still hard-codes 'en-US' in a few date
  * formatters).
  */
-import { formatIsoDate } from '@/utils/dailyPage.ts'
+import { formatIsoDate } from '@/utils/dailyPage.js'
 
 export interface CalendarCell {
   date: Date | null

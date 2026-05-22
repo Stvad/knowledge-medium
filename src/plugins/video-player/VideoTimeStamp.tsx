@@ -1,4 +1,4 @@
-import { hmsToSeconds } from '@/utils/time.ts'
+import { hmsToSeconds } from '@/utils/time.js'
 import { seekTo } from './events.ts'
 import { SyntheticEvent } from 'react'
 

@@ -1,6 +1,6 @@
-import { propertySchemasFacet, queriesFacet } from '@/data/facets.ts'
-import { pluginPrefsExtension } from '@/data/pluginStateExtensions.ts'
-import type { AppExtension } from '@/extensions/facet.ts'
+import { propertySchemasFacet, queriesFacet } from '@/data/facets.js'
+import { pluginPrefsExtension } from '@/data/pluginStateExtensions.js'
+import type { AppExtension } from '@/extensions/facet.js'
 import {
   groupedBacklinksDefaultsProp,
   groupedBacklinksOverridesProp,

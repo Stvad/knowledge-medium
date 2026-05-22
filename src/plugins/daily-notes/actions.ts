@@ -24,26 +24,26 @@
 import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
 import { ChangeScope } from '@/data/api'
-import { getLayoutSessionBlock } from '@/data/stateBlocks.ts'
+import { getLayoutSessionBlock } from '@/data/stateBlocks.js'
 import {
   activePanelIdProp,
   aliasesProp,
   editorSelection,
   isEditingProp,
-} from '@/data/properties.ts'
-import type { EditorSelectionState } from '@/data/properties.ts'
+} from '@/data/properties.js'
+import type { EditorSelectionState } from '@/data/properties.js'
 import {
   ActionConfig,
   ActionContextTypes,
-} from '@/shortcuts/types.ts'
+} from '@/shortcuts/types.js'
 import { CalendarDays, CalendarPlus } from 'lucide-react'
-import { getLayoutSessionId } from '@/utils/layoutSessionId.ts'
-import { parseAppHash } from '@/utils/routing.ts'
+import { getLayoutSessionId } from '@/utils/layoutSessionId.js'
+import { parseAppHash } from '@/utils/routing.js'
 import {
   navigateFromGlobalCommand,
   resolveGlobalCommandTopLevelBlockId,
-} from '@/utils/navigation.ts'
-import { insertSidebarStackedPanel } from '@/utils/panelLayoutProjection.ts'
+} from '@/utils/navigation.js'
+import { insertSidebarStackedPanel } from '@/utils/panelLayoutProjection.js'
 import { addDaysIso, getOrCreateDailyNote, todayIso } from './dailyNotes.ts'
 
 export const OPEN_TODAY_ACTION_ID = 'open_today'

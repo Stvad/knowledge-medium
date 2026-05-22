@@ -4,18 +4,18 @@ import { ChangeScope, type BlockReference } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
-import { resolveFacetRuntimeSync, type AppExtension } from '@/extensions/facet.ts'
-import { kernelDataExtension } from '@/data/kernelDataExtension.ts'
+import { resolveFacetRuntimeSync, type AppExtension } from '@/extensions/facet.js'
+import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import {
   invalidationRulesFacet,
   propertyEditorOverridesFacet,
   propertySchemasFacet,
   queriesFacet,
   valuePresetsFacet,
-} from '@/data/facets.ts'
-import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults.tsx'
-import { backlinksForBlockQuery } from '@/plugins/backlinks/query.ts'
-import { referencesInvalidationRule } from '@/plugins/references/invalidation.ts'
+} from '@/data/facets.js'
+import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults.js'
+import { backlinksForBlockQuery } from '@/plugins/backlinks/query.js'
+import { referencesInvalidationRule } from '@/plugins/references/invalidation.js'
 import {
   GROUPED_BACKLINKS_FOR_BLOCK_QUERY,
 } from '../query.ts'

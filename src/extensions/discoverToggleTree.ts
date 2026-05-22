@@ -20,8 +20,8 @@ import type {
   AppExtension,
   FacetContribution,
   FacetResolveContext,
-} from '@/extensions/facet.ts'
-import {getBoundary, type Togglable} from '@/extensions/togglable.ts'
+} from '@/extensions/facet.js'
+import {getBoundary, type Togglable} from '@/extensions/togglable.js'
 
 export interface ToggleNode {
   handle: Togglable

@@ -4,7 +4,7 @@ import { ChangeScope, codecs, defineBlockType, defineProperty } from '@/data/api
 // Importing the barrel would force daily-notes/index.ts to evaluate
 // before React boots, dragging `@/extensions/blockInteraction` and
 // closing a load-time cycle through globalState → repoProvider.
-import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.ts'
+import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.js'
 
 export const SRS_SM25_TYPE = 'srs-sm2.5'
 

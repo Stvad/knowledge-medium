@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { propertySchemasFacet, typesFacet } from '@/data/facets.ts'
+import { propertySchemasFacet, typesFacet } from '@/data/facets.js'
 import {
   blockContentDecoratorsFacet,
   type BlockResolveContext,
-} from '@/extensions/blockInteraction.ts'
-import { actionsFacet } from '@/extensions/core.ts'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
+} from '@/extensions/blockInteraction.js'
+import { actionsFacet } from '@/extensions/core.js'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
 import { SWIPE_RIGHT_BLOCK_ACTION_ID } from '@/plugins/swipe-quick-actions'
-import { ActionContextTypes } from '@/shortcuts/types.ts'
-import type { BlockRenderer } from '@/types.ts'
+import { ActionContextTypes } from '@/shortcuts/types.js'
+import type { BlockRenderer } from '@/types.js'
 import {
   roamTodoStateProp,
   statusProp,

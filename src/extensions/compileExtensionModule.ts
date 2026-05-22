@@ -72,82 +72,6 @@ async function hashContent(content: string): Promise<string> {
   return hexEncoder(new Uint8Array(digest))
 }
 
-// Map from "@/foo.js" → "@/foo.tsx" / ".ts" / ".jsx" / "" (whichever
-// file actually exists on disk). The kernel imports modules by their
-// literal disk extension (`@/context/repo.tsx`, not `@/context/repo.js`);
-// if extensions use the conventional `.js` suffix, the browser's module
-// loader keys those as a *separate* entry from the kernel's `.tsx`
-// entry — producing duplicate copies of every module-scoped singleton
-// (most visibly React `createContext` calls: `useRepo` reads a fresh
-// RepoContext, which `<RepoProvider>` never wrote to, → "useRepo must
-// be used within a RepoContext"). The dev server's
-// `canonicalize-js-extension` plugin (vite.config.ts) 302s `.js` to the
-// canonical URL on the wire, but neither Chrome's module map nor
-// Vite's client-side HMR registry dedupes across redirects: both key
-// by the *requested* URL. So we have to rewrite specifiers in the
-// extension source *before* `import()` is called, so the requested URL
-// matches the kernel's.
-const canonicalImportCache = new Map<string, string>()
-
-const probeCanonicalPath = async (atPath: string): Promise<string | null> => {
-  // atPath looks like "@/context/repo.js". The dev server serves the
-  // file under multiple URLs but follows a redirect from `.js` to the
-  // literal-extension URL. Resolving with `fetch` + `redirect: 'follow'`
-  // surfaces the final URL the kernel actually loads.
-  if (!atPath.startsWith('@/') || !atPath.endsWith('.js')) return null
-  const cached = canonicalImportCache.get(atPath)
-  if (cached !== undefined) return cached || null
-
-  const resourcePath = atPath.replace(/^@\//, '/src/')
-  try {
-    const response = await fetch(resourcePath, {method: 'HEAD', redirect: 'follow'})
-    if (!response.ok) {
-      canonicalImportCache.set(atPath, '')
-      return null
-    }
-    const finalUrl = new URL(response.url)
-    if (!finalUrl.pathname.startsWith('/src/')) {
-      canonicalImportCache.set(atPath, '')
-      return null
-    }
-    const canonical = `@${finalUrl.pathname.slice('/src'.length)}`
-    canonicalImportCache.set(atPath, canonical)
-    return canonical
-  } catch {
-    canonicalImportCache.set(atPath, '')
-    return null
-  }
-}
-
-const IMPORT_SPECIFIER_RE = /(['"])(@\/[^'"]+\.js)\1/g
-
-export function __resetCanonicalImportCacheForTest(): void {
-  canonicalImportCache.clear()
-}
-
-export async function canonicalizeExtensionImports(source: string): Promise<string> {
-  // Collect unique `@/foo.js` specifiers, probe each once.
-  const specifiers = new Set<string>()
-  for (const match of source.matchAll(IMPORT_SPECIFIER_RE)) {
-    specifiers.add(match[2]!)
-  }
-  if (specifiers.size === 0) return source
-
-  const replacements = new Map<string, string>()
-  await Promise.all([...specifiers].map(async specifier => {
-    const canonical = await probeCanonicalPath(specifier)
-    if (canonical && canonical !== specifier) {
-      replacements.set(specifier, canonical)
-    }
-  }))
-  if (replacements.size === 0) return source
-
-  return source.replace(IMPORT_SPECIFIER_RE, (full, quote, specifier) => {
-    const canonical = replacements.get(specifier)
-    return canonical ? `${quote}${canonical}${quote}` : full
-  })
-}
-
 async function defaultCompileViaBabelBlob(content: string): Promise<ExtensionModule> {
   const transpiled = Babel.transform(content, {
     filename: 'extension-block.tsx',
@@ -155,9 +79,7 @@ async function defaultCompileViaBabelBlob(content: string): Promise<ExtensionMod
   }).code
   if (!transpiled) throw new Error('Transpiled extension code is empty')
 
-  const canonicalized = await canonicalizeExtensionImports(transpiled)
-
-  const blob = new Blob([canonicalized], {type: 'text/javascript'})
+  const blob = new Blob([transpiled], {type: 'text/javascript'})
   const blobUrl = URL.createObjectURL(blob)
   try {
     const module = (await import(/* @vite-ignore */ blobUrl)) as ExtensionModule

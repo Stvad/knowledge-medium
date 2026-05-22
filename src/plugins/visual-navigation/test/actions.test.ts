@@ -19,13 +19,13 @@ import {
 import {
   getVisualNavigationActionDecorators,
   getVisualNavigationActions,
-} from '@/plugins/visual-navigation/actions.ts'
+} from '@/plugins/visual-navigation/actions.js'
 import {
   __resetVisualNavigationForTesting,
   getActiveVisualNavigationTarget,
   registerVisualNavigationTarget,
   setActiveVisualNavigationTarget,
-} from '@/plugins/visual-navigation/navigation.ts'
+} from '@/plugins/visual-navigation/navigation.js'
 import { getEffectiveActions } from '@/shortcuts/effectiveActions'
 import {
   ActionContextTypes,

@@ -1,16 +1,16 @@
-import { BlockComponent } from '@/components/BlockComponent.tsx'
-import { BlockRendererProps } from '@/types.ts'
-import { NestedBlockContextProvider } from '@/context/block.tsx'
-import { useIsMobile } from '@/utils/react.tsx'
-import { useHandle, usePropertyValue } from '@/hooks/block.ts'
+import { BlockComponent } from '@/components/BlockComponent.js'
+import { BlockRendererProps } from '@/types.js'
+import { NestedBlockContextProvider } from '@/context/block.js'
+import { useIsMobile } from '@/utils/react.js'
+import { useHandle, usePropertyValue } from '@/hooks/block.js'
 import { useCallback, useEffect, useMemo } from 'react'
 import type { BlockData } from '@/data/api'
-import type { Block } from '@/data/block.ts'
-import { activePanelIdProp } from '@/data/properties.ts'
+import type { Block } from '@/data/block.js'
+import { activePanelIdProp } from '@/data/properties.js'
 import {
   isPanelStackRow,
   panelRowsInLayoutOrder,
-} from '@/utils/panelLayoutProjection.ts'
+} from '@/utils/panelLayoutProjection.js'
 
 type RenderSlot =
   | {kind: 'panel'; id: string}

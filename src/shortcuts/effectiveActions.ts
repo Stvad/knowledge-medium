@@ -2,14 +2,14 @@ import {
   actionDecoratorsFacet,
   actionOverridesFacet,
   actionsFacet,
-} from '@/extensions/core.ts'
-import type { FacetRuntime } from '@/extensions/facet.ts'
+} from '@/extensions/core.js'
+import type { FacetRuntime } from '@/extensions/facet.js'
 import type {
   ActionConfig,
   ActionContextType,
   ActionDecorator,
   ActionOverride,
-} from '@/shortcuts/types.ts'
+} from '@/shortcuts/types.js'
 import type { ActiveContextsMap } from './ActiveContexts.tsx'
 
 export const actionRuntimeKey = (

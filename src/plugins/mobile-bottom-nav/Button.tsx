@@ -1,4 +1,4 @@
-import type { ActionIcon } from '@/shortcuts/types.ts'
+import type { ActionIcon } from '@/shortcuts/types.js'
 
 export type MobileBottomNavIcon = ActionIcon
 

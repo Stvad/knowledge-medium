@@ -8,7 +8,7 @@
  *  browser's same-origin model + the bridge listening on
  *  127.0.0.1. Anyone who can read this localStorage already has the
  *  user's session and can do anything from the running app. */
-import { ClientLocalSettings, clientLocalSettings } from '@/utils/ClientLocalSettings.ts'
+import { ClientLocalSettings, clientLocalSettings } from '@/utils/ClientLocalSettings.js'
 
 export interface AgentToken {
   /** Random secret. Treat as a credential. */

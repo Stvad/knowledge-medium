@@ -7,13 +7,13 @@ import {
   HardDrive,
   RefreshCw,
 } from 'lucide-react'
-import { useIsLocalOnly } from '@/components/Login.tsx'
+import { useIsLocalOnly } from '@/components/Login.js'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu.tsx'
-import { cn } from '@/lib/utils.ts'
+} from '@/components/ui/dropdown-menu.js'
+import { cn } from '@/lib/utils.js'
 import {
   getSyncIndicatorView,
   type SyncIndicatorIcon,

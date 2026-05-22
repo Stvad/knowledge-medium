@@ -12,9 +12,9 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { useRepo } from '@/context/repo.tsx'
-import { showError, showSuccess } from '@/utils/toast.ts'
-import { cn } from '@/lib/utils.ts'
+import { useRepo } from '@/context/repo.js'
+import { showError, showSuccess } from '@/utils/toast.js'
+import { cn } from '@/lib/utils.js'
 import {
   DEFAULT_FIND_REPLACE_MAX_BLOCKS,
   FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,

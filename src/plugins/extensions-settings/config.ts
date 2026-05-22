@@ -17,8 +17,8 @@ import {
 import {
   decodeOverrides as decodeOverridesFromJson,
   encodeOverrides,
-} from '@/extensions/overridesCache.ts'
-import type {Overrides} from '@/extensions/togglable.ts'
+} from '@/extensions/overridesCache.js'
+import type {Overrides} from '@/extensions/togglable.js'
 
 const expectedShape = 'object<string, boolean>'
 

@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react'
-import { useActiveContextsDispatch } from '@/shortcuts/ActiveContexts.tsx'
+import { useActiveContextsDispatch } from '@/shortcuts/ActiveContexts.js'
 import {
   ActionContextType,
   ActionContextActivation,
@@ -9,7 +9,7 @@ import {
   BlockShortcutDependencies,
   CodeMirrorEditModeDependencies,
 } from './types'
-import { useUIStateBlock } from '@/data/globalState.ts'
+import { useUIStateBlock } from '@/data/globalState.js'
 
 /**
  * Hook to activate any number of shortcut contexts described by facet contributions.

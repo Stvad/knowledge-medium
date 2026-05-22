@@ -9,9 +9,9 @@
  */
 import {act, renderHook} from '@testing-library/react'
 import {afterEach, beforeEach, describe, expect, it} from 'vitest'
-import {useOverrides} from '@/extensions/useOverrides.ts'
-import {writeOverridesCache} from '@/extensions/overridesCache.ts'
-import {refreshAppRuntime} from '@/extensions/runtimeEvents.ts'
+import {useOverrides} from '@/extensions/useOverrides.js'
+import {writeOverridesCache} from '@/extensions/overridesCache.js'
+import {refreshAppRuntime} from '@/extensions/runtimeEvents.js'
 
 const WS = 'ws-test'
 

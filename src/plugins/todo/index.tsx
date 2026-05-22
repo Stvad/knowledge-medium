@@ -1,16 +1,16 @@
 /* eslint-disable react-refresh/only-export-components */
 import type { ComponentType } from 'react'
 import type { Block } from '@/data/block'
-import { typesProp } from '@/data/properties.ts'
+import { typesProp } from '@/data/properties.js'
 import {
   blockContentDecoratorsFacet,
   type BlockContentDecorator,
   type BlockContentDecoratorContribution,
-} from '@/extensions/blockInteraction.ts'
-import type { AppExtension } from '@/extensions/facet.ts'
-import { systemToggle } from '@/extensions/togglable.ts'
-import { usePropertyValue } from '@/hooks/block.ts'
-import type { BlockRenderer, BlockRendererProps } from '@/types.ts'
+} from '@/extensions/blockInteraction.js'
+import type { AppExtension } from '@/extensions/facet.js'
+import { systemToggle } from '@/extensions/togglable.js'
+import { usePropertyValue } from '@/hooks/block.js'
+import type { BlockRenderer, BlockRendererProps } from '@/types.js'
 import { todoActionsExtension } from './actions.ts'
 import { todoDataExtension } from './dataExtension.ts'
 import { statusProp, TODO_TYPE, type TodoStatus } from './schema.ts'

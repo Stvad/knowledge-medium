@@ -20,9 +20,9 @@ import {
 import { isRefCodec, isRefListCodec, type BlockData } from '@/data/api'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
-import { useRepo } from '@/context/repo.tsx'
-import { useHandle } from '@/hooks/block.ts'
-import { labelForBlockData } from '@/utils/linkTargetAutocomplete.ts'
+import { useRepo } from '@/context/repo.js'
+import { useHandle } from '@/hooks/block.js'
+import { labelForBlockData } from '@/utils/linkTargetAutocomplete.js'
 
 export interface PropertyShapeChoice {
   /** Property name as it appears on the prototype's properties_json. */

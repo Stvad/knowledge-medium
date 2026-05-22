@@ -8,12 +8,12 @@
  *     `defaultEnabled ?? true` convention
  */
 import {describe, expect, it} from 'vitest'
-import {aliasesProp} from '@/data/internals/coreProperties.ts'
-import {makeBlockData} from '@/data/test/factories.ts'
+import {aliasesProp} from '@/data/internals/coreProperties.js'
+import {makeBlockData} from '@/data/test/factories.js'
 import {
   extensionDescriptionProp,
   extensionNameProp,
-} from '@/data/properties.ts'
+} from '@/data/properties.js'
 import {
   applyToggle,
   getBoundary,
@@ -23,7 +23,7 @@ import {
   userExtensionToggle,
   type Overrides,
   type Togglable,
-} from '@/extensions/togglable.ts'
+} from '@/extensions/togglable.js'
 
 const emptyOverrides: Overrides = new Map()
 

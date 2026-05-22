@@ -1,5 +1,5 @@
-import { FacetRuntime } from '@/extensions/facet.ts'
-import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.ts'
+import { FacetRuntime } from '@/extensions/facet.js'
+import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.js'
 import { Repo } from '@/data/repo'
 import {
   describeAuthoringCatalog,
@@ -335,7 +335,7 @@ const summarizeFacetCounts = (runtime: FacetRuntime) => {
 let cachedApiSurface: ApiSurfaceSummary | null = null
 export const getApiSurface = async (): Promise<ApiSurfaceSummary> => {
   if (!cachedApiSurface) {
-    const api = await import('@/extensions/api.ts')
+    const api = await import('@/extensions/api.js')
     cachedApiSurface = {
       module: '@/extensions/api',
       exports: Object.keys(api).sort(),

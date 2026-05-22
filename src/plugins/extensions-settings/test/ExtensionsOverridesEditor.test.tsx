@@ -15,9 +15,9 @@ import userEvent from '@testing-library/user-event'
 import {describe, expect, it, vi} from 'vitest'
 import type {Block} from '@/data/block'
 import type {PropertyEditorProps} from '@/data/api'
-import {systemToggle, type Overrides} from '@/extensions/togglable.ts'
-import type {ToggleNode} from '@/extensions/discoverToggleTree.ts'
-import {ExtensionsOverridesEditor} from '@/plugins/extensions-settings/ExtensionsOverridesEditor.tsx'
+import {systemToggle, type Overrides} from '@/extensions/togglable.js'
+import type {ToggleNode} from '@/extensions/discoverToggleTree.js'
+import {ExtensionsOverridesEditor} from '@/plugins/extensions-settings/ExtensionsOverridesEditor.js'
 
 // Stub useToggleTree at the module boundary so we can drive the
 // editor without standing up a real Repo.

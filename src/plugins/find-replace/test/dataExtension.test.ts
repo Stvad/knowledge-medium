@@ -2,10 +2,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, type BlockData } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { kernelDataExtension } from '@/data/kernelDataExtension.ts'
+import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { Repo } from '@/data/repo'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
 import {
   FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
   FIND_REPLACE_SEARCH_CONTENT_QUERY,

@@ -1,20 +1,20 @@
 import { Suspense, useEffect, type ReactNode } from 'react'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { actionContextsFacet, actionsFacet } from '@/extensions/core.ts'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
-import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.ts'
+import { actionContextsFacet, actionsFacet } from '@/extensions/core.js'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.js'
 import {
   ActiveContextsProvider,
   useActiveContextsDispatch,
-} from '@/shortcuts/ActiveContexts.tsx'
-import { CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID } from '@/shortcuts/defaultShortcuts.ts'
+} from '@/shortcuts/ActiveContexts.js'
+import { CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID } from '@/shortcuts/defaultShortcuts.js'
 import {
   type ActionContextConfig,
   ActionContextTypes,
   type ActionConfig,
   type BaseShortcutDependencies,
-} from '@/shortcuts/types.ts'
+} from '@/shortcuts/types.js'
 import { Plus } from 'lucide-react'
 import { LeftSidebar, LeftSidebarShortcutsSection } from '../LeftSidebar.tsx'
 import { openLeftSidebarEvent } from '../events.ts'

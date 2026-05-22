@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Block } from '../../data/block'
 import type { Repo } from '../../data/repo'
-import type { BlockRenderer } from '@/types.ts'
+import type { BlockRenderer } from '@/types.js'
 import {
   blockClickHandlersFacet,
   BlockClickContribution,
@@ -11,10 +11,10 @@ import {
   BlockResolveContext,
   ShortcutActivationContribution,
   shortcutSurfaceActivationsFacet,
-} from '@/extensions/blockInteraction.ts'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
-import { codeMirrorEditModeActivation } from '@/extensions/defaultEditorInteractions.ts'
-import { ActionContextTypes } from '@/shortcuts/types.ts'
+} from '@/extensions/blockInteraction.js'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { codeMirrorEditModeActivation } from '@/extensions/defaultEditorInteractions.js'
+import { ActionContextTypes } from '@/shortcuts/types.js'
 
 const context = {
   block: {id: 'block-1'} as Block,

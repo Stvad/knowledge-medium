@@ -1,9 +1,9 @@
 import { Tag } from 'lucide-react'
 import type { Block } from '@/data/block'
-import { defineBlocksAction } from '@/shortcuts/utils.ts'
-import { showError, showSuccess } from '@/utils/toast.ts'
-import { openDialog } from '@/utils/dialogs.ts'
-import type { GroupedBacklinksGroupHeaderAction } from '@/plugins/grouped-backlinks/facet.ts'
+import { defineBlocksAction } from '@/shortcuts/utils.js'
+import { showError, showSuccess } from '@/utils/toast.js'
+import { openDialog } from '@/utils/dialogs.js'
+import type { GroupedBacklinksGroupHeaderAction } from '@/plugins/grouped-backlinks/facet.js'
 import { AddTagDialog } from './AddTagDialog.tsx'
 import { appendTagToBlocks } from './appendTag.ts'
 

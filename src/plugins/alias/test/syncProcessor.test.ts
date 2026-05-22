@@ -20,9 +20,9 @@ import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import { aliasesProp } from '@/data/internals/coreProperties'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
-import { kernelDataExtension } from '@/data/kernelDataExtension.ts'
-import { referencesDataExtension } from '@/plugins/references/dataExtension.ts'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { kernelDataExtension } from '@/data/kernelDataExtension.js'
+import { referencesDataExtension } from '@/plugins/references/dataExtension.js'
 import { aliasDataExtension } from '../dataExtension.ts'
 
 interface Harness {

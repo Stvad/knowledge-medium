@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { EditorView } from '@codemirror/view'
 import type { Block } from '../../../data/block'
 import type { Repo } from '../../../data/repo'
-import type { BlockInteractionContext, ShortcutSurfaceContext } from '@/extensions/blockInteraction.ts'
+import type { BlockInteractionContext, ShortcutSurfaceContext } from '@/extensions/blockInteraction.js'
 import {
   formatVideoTimestamp,
   VIDEO_PLAYER_CONTEXT,

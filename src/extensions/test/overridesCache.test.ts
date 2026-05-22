@@ -4,14 +4,14 @@
  * convention can't collide across workspaces.
  */
 import {beforeEach, describe, expect, it} from 'vitest'
-import {ClientLocalSettings} from '@/utils/ClientLocalSettings.ts'
+import {ClientLocalSettings} from '@/utils/ClientLocalSettings.js'
 import {
   decodeOverrides,
   encodeOverrides,
   readOverridesCache,
   writeOverridesCache,
-} from '@/extensions/overridesCache.ts'
-import type {Overrides} from '@/extensions/togglable.ts'
+} from '@/extensions/overridesCache.js'
+import type {Overrides} from '@/extensions/togglable.js'
 
 class MemoryStorage implements Storage {
   private store = new Map<string, string>()

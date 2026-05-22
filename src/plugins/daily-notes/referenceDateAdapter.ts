@@ -11,9 +11,9 @@ import {
   parseOutermostReferences,
   type ParsedReference,
   renderWikilink,
-} from '@/plugins/references/referenceParser.ts'
-import { parseLiteralDailyPageTitle } from '@/utils/relativeDate.ts'
-import { formatRoamDate } from '@/utils/dailyPage.ts'
+} from '@/plugins/references/referenceParser.js'
+import { parseLiteralDailyPageTitle } from '@/utils/relativeDate.js'
+import { formatRoamDate } from '@/utils/dailyPage.js'
 import type { BlockDateAdapter } from './blockDateAdapter.ts'
 
 export interface DateReferenceMatch {

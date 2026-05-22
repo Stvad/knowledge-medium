@@ -1,7 +1,7 @@
 import {
   definePropertyEditorOverride,
 } from '@/data/api'
-import { propertyEditorOverridesFacet } from '@/data/facets.ts'
+import { propertyEditorOverridesFacet } from '@/data/facets.js'
 import {
   createdAtProp,
   editorFocusRequestProp,
@@ -17,9 +17,9 @@ import {
   sourceBlockIdProp,
   topLevelBlockIdProp,
   typesProp,
-} from '@/data/properties.ts'
-import type { AppExtension } from '@/extensions/facet.ts'
-import { systemToggle } from '@/extensions/togglable.ts'
+} from '@/data/properties.js'
+import type { AppExtension } from '@/extensions/facet.js'
+import { systemToggle } from '@/extensions/togglable.js'
 import { TypesPropertyEditor } from './TypesPropertyEditor'
 
 export const typesPropertyUi = definePropertyEditorOverride<readonly string[]>({

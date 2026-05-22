@@ -1,20 +1,20 @@
 import { Block } from '@/data/block'
-import { isCollapsedProp } from '@/data/properties.ts'
+import { isCollapsedProp } from '@/data/properties.js'
 import {
   actionsFacet,
   actionContextsFacet,
-} from '@/extensions/core.ts'
-import type { AppExtension } from '@/extensions/facet.ts'
+} from '@/extensions/core.js'
+import type { AppExtension } from '@/extensions/facet.js'
 import {
   shortcutSurfaceActivationsFacet,
   type ShortcutActivationContribution,
-} from '@/extensions/blockInteraction.ts'
+} from '@/extensions/blockInteraction.js'
 import type {
   ActionConfig,
   ActionContextConfig,
   BaseShortcutDependencies,
-} from '@/shortcuts/types.ts'
-import type { BlockContextType } from '@/types.ts'
+} from '@/shortcuts/types.js'
+import type { BlockContextType } from '@/types.js'
 
 export const BACKLINK_ENTRY_ACTION_CONTEXT = 'backlinks.entry'
 export const BACKLINK_ENTRY_SHORTCUT_CONTROLLER_KEY = 'backlinks.entryShortcutController'

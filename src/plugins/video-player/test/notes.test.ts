@@ -5,7 +5,7 @@ import {
   editorSelection,
   focusedBlockIdProp,
   isEditingProp,
-} from '@/data/properties.ts'
+} from '@/data/properties.js'
 import { enterVideoNotesView } from '../notes.ts'
 import { videoPlayerViewProp } from '../view.ts'
 

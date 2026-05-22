@@ -11,11 +11,11 @@
  */
 
 import type { TypeContribution } from '@/data/api'
-import { typesFacet } from '@/data/facets.ts'
-import { appEffectsFacet, type AppEffect } from '@/extensions/core.ts'
-import type { AppExtension } from '@/extensions/facet.ts'
-import { getPluginPrefsBlock, getPluginUIStateBlock } from '@/data/stateBlocks.ts'
-import { scheduleIdle } from '@/utils/scheduleIdle.ts'
+import { typesFacet } from '@/data/facets.js'
+import { appEffectsFacet, type AppEffect } from '@/extensions/core.js'
+import type { AppExtension } from '@/extensions/facet.js'
+import { getPluginPrefsBlock, getPluginUIStateBlock } from '@/data/stateBlocks.js'
+import { scheduleIdle } from '@/utils/scheduleIdle.js'
 
 const pluginPrefsBootstrapEffect = (type: TypeContribution): AppEffect => ({
   id: `plugin-prefs.${type.id}.bootstrap`,

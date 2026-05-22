@@ -1,4 +1,4 @@
-import type { LocalSchemaContribution, LocalSchemaDb } from '@/data/facets.ts'
+import type { LocalSchemaContribution, LocalSchemaDb } from '@/data/facets.js'
 import { dailyNoteDateProp, DAILY_NOTE_TYPE } from './schema.ts'
 
 /** Device-local maintenance for `dailyNoteDateProp`: every cold-start

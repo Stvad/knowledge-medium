@@ -1,10 +1,10 @@
-import type { AppExtension } from '@/extensions/facet.ts'
-import { blockShellDecoratorsFacet } from '@/extensions/blockInteraction.ts'
+import type { AppExtension } from '@/extensions/facet.js'
+import { blockShellDecoratorsFacet } from '@/extensions/blockInteraction.js'
 import {
   panelMountsFacet,
   type PanelMountContribution,
-} from '@/extensions/core.ts'
-import { systemToggle } from '@/extensions/togglable.ts'
+} from '@/extensions/core.js'
+import { systemToggle } from '@/extensions/togglable.js'
 import {
   spatialNavigationActionDecoratorsExtension,
   spatialNavigationActionsExtension,

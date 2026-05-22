@@ -1,5 +1,5 @@
-import { defineFacet } from '@/extensions/facet.ts'
-import type { ActionIcon } from '@/shortcuts/types.ts'
+import { defineFacet } from '@/extensions/facet.js'
+import type { ActionIcon } from '@/shortcuts/types.js'
 
 /** A group-header action entry. Each contribution renders one button
  *  in the grouped-backlinks group header that, when clicked, invokes

@@ -1,5 +1,5 @@
 import { createContext, useContext, useMemo, useState, ReactNode } from 'react'
-import { BlockContextType } from '@/types.ts'
+import { BlockContextType } from '@/types.js'
 
 export const BlockContext = createContext<BlockContextType>({})
 

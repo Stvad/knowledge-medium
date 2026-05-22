@@ -1,5 +1,5 @@
-import { BulletDot } from '@/components/renderer/DefaultBlockRenderer.tsx'
-import { useIsMobile } from '@/utils/react.tsx'
+import { BulletDot } from '@/components/renderer/DefaultBlockRenderer.js'
+import { useIsMobile } from '@/utils/react.js'
 
 interface BlockLoadingPlaceholderProps {
   reservedHeight: number

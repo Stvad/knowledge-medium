@@ -1,20 +1,20 @@
 import ReactPlayer from 'react-player'
-import { BlockRendererProps, BlockRenderer } from '@/types.ts'
+import { BlockRendererProps, BlockRenderer } from '@/types.js'
 import {
   DefaultBlockLayout,
   DefaultBlockRenderer,
-} from '@/components/renderer/DefaultBlockRenderer.tsx'
+} from '@/components/renderer/DefaultBlockRenderer.js'
 import { useEffect, useRef, useState } from 'react'
 import type { CSSProperties, KeyboardEvent, PointerEvent } from 'react'
-import { NestedBlockContextProvider } from '@/context/block.tsx'
-import { useContent, usePropertyValue } from '@/hooks/block.ts'
-import { useUIStateBlock } from '@/data/globalState.ts'
-import { Button } from '@/components/ui/button.tsx'
+import { NestedBlockContextProvider } from '@/context/block.js'
+import { useContent, usePropertyValue } from '@/hooks/block.js'
+import { useUIStateBlock } from '@/data/globalState.js'
+import { Button } from '@/components/ui/button.js'
 import { PanelRightClose, PanelRightOpen } from 'lucide-react'
 import type {
   BlockLayout,
   BlockLayoutContribution,
-} from '@/extensions/blockInteraction.ts'
+} from '@/extensions/blockInteraction.js'
 import {
   currentTimeRequestEventName,
   CurrentTimeRequestEventDetail,

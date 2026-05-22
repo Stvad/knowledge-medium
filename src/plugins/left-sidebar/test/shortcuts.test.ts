@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, type User } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { getUserBlock } from '@/data/stateBlocks.ts'
+import { getUserBlock } from '@/data/stateBlocks.js'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import { journalBlockId } from '@/plugins/daily-notes'

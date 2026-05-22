@@ -47,7 +47,7 @@
  * fire the same channels.
  */
 
-import type { ChangeSnapshot, InvalidationRule } from '@/data/invalidation.ts'
+import type { ChangeSnapshot, InvalidationRule } from '@/data/invalidation.js'
 
 export const TYPED_BLOCKS_LIVE_CHANNEL = 'typedBlocks.live'
 export const TYPED_BLOCKS_TYPE_CHANNEL = 'typedBlocks.type'

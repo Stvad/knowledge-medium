@@ -1,11 +1,11 @@
 import {
   compileExtensionModule,
   type CompileCache,
-} from '@/extensions/compileExtensionModule.ts'
+} from '@/extensions/compileExtensionModule.js'
 import {
   AppExtension,
   FacetContribution,
-} from '@/extensions/facet.ts'
+} from '@/extensions/facet.js'
 import {
   attachBoundary,
   getBoundary,
@@ -13,9 +13,9 @@ import {
   userExtensionShellToggle,
   userExtensionToggle,
   type Overrides,
-} from '@/extensions/togglable.ts'
+} from '@/extensions/togglable.js'
 import { Repo } from '../data/repo'
-import { BlockData } from '@/types.ts'
+import { BlockData } from '@/types.js'
 
 export interface ExtensionLoadErrorReporter {
   (blockId: string, error: Error): void

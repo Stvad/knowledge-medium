@@ -1,11 +1,11 @@
 import { useMemo, type MouseEvent } from 'react'
-import type { BlockRenderer, BlockRendererProps } from '@/types.ts'
+import type { BlockRenderer, BlockRendererProps } from '@/types.js'
 import type {
   BlockChildrenFooterContribution,
   BlockResolveContext,
-} from '@/extensions/blockInteraction.ts'
-import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { usePluginPrefsProperty } from '@/data/globalState.ts'
+} from '@/extensions/blockInteraction.js'
+import { useAppRuntime } from '@/extensions/runtimeContext.js'
+import { usePluginPrefsProperty } from '@/data/globalState.js'
 import { backlinksViewFacet } from './facet.ts'
 import { backlinksViewPrefsType, backlinksViewProp } from './prop.ts'
 

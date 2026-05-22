@@ -11,8 +11,8 @@ import {
   ActionConfig,
   ActionContextTypes,
   type BlockShortcutDependencies,
-} from '@/shortcuts/types.ts'
-import type { QuickActionItem } from '@/plugins/swipe-quick-actions/actions.ts'
+} from '@/shortcuts/types.js'
+import type { QuickActionItem } from '@/plugins/swipe-quick-actions/actions.js'
 import { referenceDateAdapter } from './referenceDateAdapter.ts'
 import { openReschedulePicker } from './rescheduleEvents.ts'
 

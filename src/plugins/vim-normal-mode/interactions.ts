@@ -6,9 +6,9 @@ import {
   handleBlockSelectionClick,
   isInteractiveContentEvent,
   ShortcutActivationContribution,
-} from '@/extensions/blockInteraction.ts'
-import { ActionContextTypes } from '@/shortcuts/types.ts'
-import { focusedBlockIdProp, isEditingProp } from '@/data/properties.ts'
+} from '@/extensions/blockInteraction.js'
+import { ActionContextTypes } from '@/shortcuts/types.js'
+import { focusedBlockIdProp, isEditingProp } from '@/data/properties.js'
 import { Block } from '../../data/block'
 
 export const vimBlockClickBehavior: BlockClickContribution = context =>

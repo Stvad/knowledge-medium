@@ -4,14 +4,14 @@ import {
   buildQualifiedBlockColumnsSql,
   type BlockRow,
 } from '@/data/blockSchema'
-import { labelForBlockData } from '@/utils/linkTargetAutocomplete.ts'
+import { labelForBlockData } from '@/utils/linkTargetAutocomplete.js'
 import {
   hasBacklinksFilter,
   normalizeBacklinksFilter,
   type BacklinksFilter,
-} from '@/plugins/backlinks/query.ts'
-import { resolveTypedBlockIds } from '@/data/internals/kernelQueries.ts'
-import { manyAncestorsSql } from '@/data/internals/treeQueries.ts'
+} from '@/plugins/backlinks/query.js'
+import { resolveTypedBlockIds } from '@/data/internals/kernelQueries.js'
+import { manyAncestorsSql } from '@/data/internals/treeQueries.js'
 import {
   TYPED_BLOCKS_LABEL_CHANNEL,
   TYPED_BLOCKS_REFS_OF_CHANNEL,
@@ -19,7 +19,7 @@ import {
   typedBlocksLabelKey,
   typedBlocksRefsOfKey,
   typedBlocksStructureKey,
-} from '@/data/internals/kernelInvalidation.ts'
+} from '@/data/internals/kernelInvalidation.js'
 import {
   buildGroupedBacklinks,
   type GroupedBacklinkCandidate,

@@ -11,8 +11,8 @@ import {CodecError} from '@/data/api'
 import {
   overridesCodec,
   extensionsPrefsType,
-} from '@/plugins/extensions-settings/config.ts'
-import type {Overrides} from '@/extensions/togglable.ts'
+} from '@/plugins/extensions-settings/config.js'
+import type {Overrides} from '@/extensions/togglable.js'
 
 describe('overridesCodec', () => {
   it('uses the Extensions overrides codec id', () => {

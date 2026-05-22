@@ -6,9 +6,9 @@ import {
   blockContentSurfacePropsFacet,
   BlockInteractionContext,
   shortcutSurfaceActivationsFacet,
-} from '@/extensions/blockInteraction.ts'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
-import { ActionContextTypes } from '@/shortcuts/types.ts'
+} from '@/extensions/blockInteraction.js'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { ActionContextTypes } from '@/shortcuts/types.js'
 import {
   vimBlockClickBehavior,
   vimContentSurfaceBehavior,

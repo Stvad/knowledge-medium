@@ -4,7 +4,7 @@ import {
   focusedBlockIdProp,
   isEditingProp,
   requestEditorFocus,
-} from '@/data/properties.ts'
+} from '@/data/properties.js'
 import { videoPlayerViewProp } from './view.ts'
 
 const focusNewVideoNote = async (noteId: string, uiStateBlock: Block): Promise<void> => {

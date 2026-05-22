@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import { propertySchemasFacet } from '@/data/facets.ts'
-import { appEffectsFacet } from '@/extensions/core.ts'
-import { blockContentDecoratorsFacet } from '@/extensions/blockInteraction.ts'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
+import { propertySchemasFacet } from '@/data/facets.js'
+import { appEffectsFacet } from '@/extensions/core.js'
+import { blockContentDecoratorsFacet } from '@/extensions/blockInteraction.js'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
 import {
   currentLoadTimeProp,
   previousLoadTimeProp,

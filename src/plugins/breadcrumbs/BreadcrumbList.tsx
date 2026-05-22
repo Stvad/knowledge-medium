@@ -1,10 +1,10 @@
 import { MouseEvent } from 'react'
 import { Block } from '@/data/block'
-import { BlockContextType } from '@/types.ts'
-import { BlockComponent } from '@/components/BlockComponent.tsx'
-import { NestedBlockContextProvider } from '@/context/block.tsx'
-import { buildAppHash } from '@/utils/routing.ts'
-import { cn } from '@/lib/utils.ts'
+import { BlockContextType } from '@/types.js'
+import { BlockComponent } from '@/components/BlockComponent.js'
+import { NestedBlockContextProvider } from '@/context/block.js'
+import { buildAppHash } from '@/utils/routing.js'
+import { cn } from '@/lib/utils.js'
 
 interface BreadcrumbListProps {
   parents: readonly Block[]

@@ -1,10 +1,11 @@
 import { useEffect, useLayoutEffect, useMemo } from 'react'
-import { useInEditMode, useInFocus, useIsActivePanel, useUIStateBlock } from '@/data/globalState.ts'
-import { isElementProperlyVisible } from '@/utils/dom.ts'
+import { useInEditMode, useInFocus, useIsActivePanel, useUIStateBlock } from '@/data/globalState.js'
+import { isElementProperlyVisible } from '@/utils/dom.js'
 import type {
+  BlockShellDecoratorContribution,
   BlockShellDecoratorProps,
   BlockShellState,
-} from '@/extensions/blockInteraction.ts'
+} from '@/extensions/blockInteraction.js'
 
 const FOCUSED_BLOCK_CLASS = '[&>.block-body>div:first-child]:bg-muted/95'
 
@@ -76,3 +77,6 @@ export function BlockFocusShellDecorator({
 
   return <>{children(nextState)}</>
 }
+
+export const blockFocusShellDecorator: BlockShellDecoratorContribution = () =>
+  BlockFocusShellDecorator

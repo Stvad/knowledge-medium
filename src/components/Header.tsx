@@ -1,6 +1,6 @@
-import { headerItemsFacet, type HeaderItemContribution } from '@/extensions/core.ts'
-import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.tsx'
+import { headerItemsFacet, type HeaderItemContribution } from '@/extensions/core.js'
+import { useAppRuntime } from '@/extensions/runtimeContext.js'
+import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.js'
 
 const HeaderRegion = ({
   items,

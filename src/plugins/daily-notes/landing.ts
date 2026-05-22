@@ -16,7 +16,7 @@
  * "open last panel" plugin) without duplicating the navigation
  * plumbing.
  */
-import type { WorkspaceLandingResolver } from '@/extensions/core.ts'
+import type { WorkspaceLandingResolver } from '@/extensions/core.js'
 import { getOrCreateDailyNote, todayIso } from './dailyNotes.ts'
 
 export const todayDailyNoteLanding: WorkspaceLandingResolver = async ({

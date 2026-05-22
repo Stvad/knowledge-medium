@@ -6,11 +6,11 @@ import { BlockCache } from '@/data/blockCache'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { Repo } from '@/data/repo'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
-import { actionsFacet } from '@/extensions/core.ts'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
-import { typesProp } from '@/data/properties.ts'
-import { getEffectiveActions } from '@/shortcuts/effectiveActions.ts'
-import { ActionContextTypes, type ActionConfig, type BlockShortcutDependencies } from '@/shortcuts/types.ts'
+import { actionsFacet } from '@/extensions/core.js'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { typesProp } from '@/data/properties.js'
+import { getEffectiveActions } from '@/shortcuts/effectiveActions.js'
+import { ActionContextTypes, type ActionConfig, type BlockShortcutDependencies } from '@/shortcuts/types.js'
 import {
   RESCHEDULE_BLOCK_DATE_ACTION_ID,
   dailyNotesDataExtension,

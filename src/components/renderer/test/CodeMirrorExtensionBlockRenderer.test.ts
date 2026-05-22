@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Block } from '../../../data/block'
-import type { BlockData, BlockRendererProps } from '@/types.ts'
+import type { BlockData, BlockRendererProps } from '@/types.js'
 import { EXTENSION_TYPE } from '@/data/blockTypes'
 import { typesProp } from '@/data/properties'
 

@@ -1,5 +1,5 @@
-import { propertySchemasFacet, typesFacet } from '@/data/facets.ts'
-import type { AppExtension } from '@/extensions/facet.ts'
+import { propertySchemasFacet, typesFacet } from '@/data/facets.js'
+import type { AppExtension } from '@/extensions/facet.js'
 import { roamTodoStateProp, todoType } from './schema.ts'
 
 export const todoDataExtension: AppExtension = [

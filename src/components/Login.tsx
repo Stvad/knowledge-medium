@@ -2,9 +2,9 @@ import { createContext, useContext, useEffect, useState, ReactNode, FormEvent } 
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { useLocalStorage } from 'react-use'
-import { User } from '@/types.ts'
-import { hasSupabaseAuthConfig, sessionUserToAppUser, supabase } from '@/services/supabase.ts'
-import { hasRemoteSyncConfig } from '@/services/powersync.ts'
+import { User } from '@/types.js'
+import { hasSupabaseAuthConfig, sessionUserToAppUser, supabase } from '@/services/supabase.js'
+import { hasRemoteSyncConfig } from '@/services/powersync.js'
 import { Session } from '@supabase/supabase-js'
 
 interface UserContextType {

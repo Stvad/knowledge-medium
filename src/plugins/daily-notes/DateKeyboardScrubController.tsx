@@ -1,15 +1,15 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
-import type { FacetRuntime } from '@/extensions/facet.ts'
+import type { FacetRuntime } from '@/extensions/facet.js'
 import {
   type ActiveContextsMap,
   useActiveContextsState,
-} from '@/shortcuts/ActiveContexts.tsx'
-import { ActionContextTypes } from '@/shortcuts/types.ts'
+} from '@/shortcuts/ActiveContexts.js'
+import { ActionContextTypes } from '@/shortcuts/types.js'
 import type {
   BlockShortcutDependencies,
   CodeMirrorEditModeDependencies,
-} from '@/shortcuts/types.ts'
-import { useAppRuntime } from '@/extensions/runtimeContext.ts'
+} from '@/shortcuts/types.js'
+import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { pickBlockDateAdapter } from './blockDateAdapter.ts'
 import {
   createEditorReferenceDateAdapter,

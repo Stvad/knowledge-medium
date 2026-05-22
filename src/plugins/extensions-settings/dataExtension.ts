@@ -18,10 +18,10 @@
  *     palette; the handler just navigates to the prefs block in a
  *     new panel.
  */
-import {actionsFacet, appEffectsFacet} from '@/extensions/core.ts'
-import type {AppExtension} from '@/extensions/facet.ts'
-import {propertyEditorOverridesFacet, propertySchemasFacet} from '@/data/facets.ts'
-import {pluginPrefsExtension} from '@/data/pluginStateExtensions.ts'
+import {actionsFacet, appEffectsFacet} from '@/extensions/core.js'
+import type {AppExtension} from '@/extensions/facet.js'
+import {propertyEditorOverridesFacet, propertySchemasFacet} from '@/data/facets.js'
+import {pluginPrefsExtension} from '@/data/pluginStateExtensions.js'
 import {openExtensionsSettingsAction} from './actions.ts'
 import {
   extensionsOverridesProp,

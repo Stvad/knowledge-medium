@@ -1,9 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import hotkeys from 'hotkeys-js'
-import { actionContextsFacet } from '@/extensions/core.ts'
-import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { useActiveContextsState, ActiveContextsMap } from '@/shortcuts/ActiveContexts.tsx'
-import { setRunActionDispatcher } from '@/shortcuts/runAction.ts'
+import { actionContextsFacet } from '@/extensions/core.js'
+import { useAppRuntime } from '@/extensions/runtimeContext.js'
+import { useActiveContextsState, ActiveContextsMap } from '@/shortcuts/ActiveContexts.js'
+import { setRunActionDispatcher } from '@/shortcuts/runAction.js'
 import {
   actionRuntimeKey,
   getActiveActionById,
@@ -16,8 +16,8 @@ import {
   ActionTrigger,
   EventOptions,
   ShortcutBinding,
-} from '@/shortcuts/types.ts'
-import { hasEditableTarget, isSingleKeyPress } from '@/shortcuts/utils.ts'
+} from '@/shortcuts/types.js'
+import { hasEditableTarget, isSingleKeyPress } from '@/shortcuts/utils.js'
 
 type HotkeyHandler = (event: KeyboardEvent) => boolean | void
 

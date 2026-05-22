@@ -1,7 +1,7 @@
 import type { MouseEvent } from 'react'
 import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react'
-import { useRepo } from '@/context/repo.tsx'
-import { useRunAction } from '@/shortcuts/runAction.ts'
+import { useRepo } from '@/context/repo.js'
+import { useRunAction } from '@/shortcuts/runAction.js'
 import { openDailyNotePicker } from './events.ts'
 import {
   OPEN_NEXT_DAILY_NOTE_ACTION_ID,

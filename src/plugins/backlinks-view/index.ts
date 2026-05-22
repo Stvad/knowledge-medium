@@ -1,7 +1,7 @@
-import { blockChildrenFooterFacet } from '@/extensions/blockInteraction.ts'
-import { pluginPrefsExtension } from '@/data/pluginStateExtensions.ts'
-import type { AppExtension } from '@/extensions/facet.ts'
-import { systemToggle } from '@/extensions/togglable.ts'
+import { blockChildrenFooterFacet } from '@/extensions/blockInteraction.js'
+import { pluginPrefsExtension } from '@/data/pluginStateExtensions.js'
+import type { AppExtension } from '@/extensions/facet.js'
+import { systemToggle } from '@/extensions/togglable.js'
 import { backlinksViewFooterContribution } from './BacklinksViewSection.tsx'
 import { backlinksViewPrefsType } from './prop.ts'
 

@@ -7,25 +7,25 @@
 
 import { useCallback, useMemo, useState, type ChangeEvent } from 'react'
 import { X } from 'lucide-react'
-import { useHandle } from '@/hooks/block.ts'
-import { useAppRuntime } from '@/extensions/runtimeContext.ts'
+import { useHandle } from '@/hooks/block.js'
+import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { ChangeScope, type AnyPropertySchema } from '@/data/api'
 import {
   blockTypeDescriptionProp,
   blockTypeLabelProp,
   blockTypePropertiesProp,
-} from '@/data/properties.ts'
-import { propertyEditorOverridesFacet, valuePresetsFacet } from '@/data/facets.ts'
-import { Input } from '@/components/ui/input.tsx'
-import { Button } from '@/components/ui/button.tsx'
-import { PropertyShapeGlyph } from '@/components/propertyPanel/shapeUi.tsx'
-import { propertyShapeLabel } from '@/components/propertyPanel/shapes.ts'
+} from '@/data/properties.js'
+import { propertyEditorOverridesFacet, valuePresetsFacet } from '@/data/facets.js'
+import { Input } from '@/components/ui/input.js'
+import { Button } from '@/components/ui/button.js'
+import { PropertyShapeGlyph } from '@/components/propertyPanel/shapeUi.js'
+import { propertyShapeLabel } from '@/components/propertyPanel/shapes.js'
 import {
   PropertyPicker,
   type AddPropertyArgs,
   type ConfigureNewSchemaArgs,
-} from '@/components/propertyPanel/PropertyPicker.tsx'
-import type { BlockRenderer, BlockRendererProps } from '@/types.ts'
+} from '@/components/propertyPanel/PropertyPicker.js'
+import type { BlockRenderer, BlockRendererProps } from '@/types.js'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
 
 const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererProps) => {

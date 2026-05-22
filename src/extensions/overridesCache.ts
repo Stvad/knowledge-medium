@@ -17,8 +17,8 @@
  * require migrating anyone's cached state.
  */
 
-import {clientLocalSettings, type ClientLocalSettings} from '@/utils/ClientLocalSettings.ts'
-import type {Overrides} from '@/extensions/togglable.ts'
+import {clientLocalSettings, type ClientLocalSettings} from '@/utils/ClientLocalSettings.js'
+import type {Overrides} from '@/extensions/togglable.js'
 
 const CACHE_KEY_PREFIX = 'extensions.overrides'
 

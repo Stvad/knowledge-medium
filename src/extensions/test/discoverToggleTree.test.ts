@@ -16,12 +16,12 @@
  *     resolver); async awaits + recurses
  */
 import {describe, expect, it, vi} from 'vitest'
-import {defineFacet, type AppExtension} from '@/extensions/facet.ts'
-import {systemToggle, type Togglable} from '@/extensions/togglable.ts'
+import {defineFacet, type AppExtension} from '@/extensions/facet.js'
+import {systemToggle, type Togglable} from '@/extensions/togglable.js'
 import {
   discoverToggleTree,
   discoverToggleTreeSync,
-} from '@/extensions/discoverToggleTree.ts'
+} from '@/extensions/discoverToggleTree.js'
 
 const labels = defineFacet<string, string>({
   id: 'discover.labels',

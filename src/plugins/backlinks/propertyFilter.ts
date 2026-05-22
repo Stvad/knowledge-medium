@@ -17,7 +17,7 @@ import {
   type AnyPropertySchema,
   type BlockPredicate,
 } from '@/data/api'
-import type { RefTargetFilterDefault } from '@/data/facets.ts'
+import type { RefTargetFilterDefault } from '@/data/facets.js'
 
 export type PropertyFilterOperatorId =
   | 'eq' | 'lt' | 'lte' | 'gt' | 'gte' | 'between'

@@ -11,9 +11,9 @@ import {
   TYPES_PAGE_TYPE,
 } from '@/data/blockTypes'
 import { blockTypeLabelProp } from '@/data/properties'
-import { Button } from '@/components/ui/button.tsx'
-import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.tsx'
-import type { BlockRenderer, BlockRendererProps } from '@/types.ts'
+import { Button } from '@/components/ui/button.js'
+import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.js'
+import type { BlockRenderer, BlockRendererProps } from '@/types.js'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
 
 const TypesPageContentRenderer: BlockRenderer = (props: BlockRendererProps) => {

@@ -1,5 +1,5 @@
 import type { Block } from '@/data/block'
-import { useHandle } from '@/hooks/block.ts'
+import { useHandle } from '@/hooks/block.js'
 import {
   BACKLINKS_FOR_BLOCK_QUERY,
   hasBacklinksFilter,

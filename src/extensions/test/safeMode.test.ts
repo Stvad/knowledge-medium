@@ -17,15 +17,15 @@ import {
   actionsFacet,
   appMountsFacet,
   headerItemsFacet,
-} from '@/extensions/core.ts'
-import {defineFacet} from '@/extensions/facet.ts'
-import {resolveAppRuntimeSync, resolveAppRuntime} from '@/extensions/resolveAppRuntime.ts'
-import {staticAppExtensions} from '@/extensions/staticAppExtensions.ts'
-import {systemToggle, type Overrides} from '@/extensions/togglable.ts'
+} from '@/extensions/core.js'
+import {defineFacet} from '@/extensions/facet.js'
+import {resolveAppRuntimeSync, resolveAppRuntime} from '@/extensions/resolveAppRuntime.js'
+import {staticAppExtensions} from '@/extensions/staticAppExtensions.js'
+import {systemToggle, type Overrides} from '@/extensions/togglable.js'
 import {COMMAND_PALETTE_ACTION_ID} from '@/plugins/command-palette'
-import {RELOAD_IN_SAFE_MODE_ACTION_ID} from '@/shortcuts/defaultShortcuts.ts'
-import {ActionContextTypes} from '@/shortcuts/types.ts'
-import type {Repo} from '@/data/repo.ts'
+import {RELOAD_IN_SAFE_MODE_ACTION_ID} from '@/shortcuts/defaultShortcuts.js'
+import {ActionContextTypes} from '@/shortcuts/types.js'
+import type {Repo} from '@/data/repo.js'
 
 const empty: Overrides = new Map()
 

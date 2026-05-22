@@ -5,8 +5,8 @@ import {
   UpdateType,
   type CrudTransaction,
 } from '@powersync/common'
-import { BLOCK_STORAGE_COLUMNS, type BlockRow } from '@/data/blockSchema.ts'
-import { supabase, hasSupabaseAuthConfig } from '@/services/supabase.ts'
+import { BLOCK_STORAGE_COLUMNS, type BlockRow } from '@/data/blockSchema.js'
+import { supabase, hasSupabaseAuthConfig } from '@/services/supabase.js'
 
 const powerSyncUrl = import.meta.env.VITE_POWERSYNC_URL?.trim()
 

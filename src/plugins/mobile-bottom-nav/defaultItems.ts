@@ -8,7 +8,7 @@ import {
   OPEN_LEFT_SIDEBAR_ACTION_ID,
 } from '@/plugins/left-sidebar'
 import { QUICK_FIND_ACTION_ID } from '@/plugins/quick-find'
-import { CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID } from '@/shortcuts/defaultShortcuts.ts'
+import { CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID } from '@/shortcuts/defaultShortcuts.js'
 
 export const openSidebarBottomNavItem: MobileBottomNavItemContribution = {
   id: 'mobile-bottom-nav.open-sidebar',

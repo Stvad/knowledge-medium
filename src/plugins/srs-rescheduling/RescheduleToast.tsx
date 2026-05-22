@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import { ChangeScope } from '@/data/api'
 import { Button } from '@/components/ui/button'
-import { dismissToast, showError } from '@/utils/toast.ts'
+import { dismissToast, showError } from '@/utils/toast.js'
 import type { Repo } from '@/data/repo'
 
 export interface RescheduleToastProps {

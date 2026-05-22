@@ -25,10 +25,10 @@ export {
   type FacetResolveContext,
   type FacetRuntime,
   type OptionalContributionResult,
-} from '@/extensions/facet.ts'
+} from '@/extensions/facet.js'
 
 // --- Runtime toggle types (full surface lives in @/extensions/togglable.ts) ---
-export type { Togglable } from '@/extensions/togglable.ts'
+export type { Togglable } from '@/extensions/togglable.js'
 export {
   defineVariantFacet,
   defineVariant,
@@ -36,7 +36,7 @@ export {
   type VariantContribution,
   type VariantResolver,
   type VariantSelection,
-} from '@/extensions/variantFacet.ts'
+} from '@/extensions/variantFacet.js'
 
 // --- Blessed core facets ---
 export {
@@ -58,7 +58,7 @@ export {
   type HeaderItemRegion,
   type PanelMountContribution,
   type RendererContribution,
-} from '@/extensions/core.ts'
+} from '@/extensions/core.js'
 
 // DefaultBlockRenderer (the default block chrome — bullet, children,
 // properties, edit affordances) is intentionally NOT re-exported here:
@@ -101,10 +101,10 @@ export {
   type BlockShellProps,
   type ShortcutActivationContribution,
   type ShortcutSurfaceContext,
-} from '@/extensions/blockInteraction.ts'
+} from '@/extensions/blockInteraction.js'
 
 // --- Markdown rendering pipeline ---
-export { markdownExtensionsFacet } from '@/markdown/extensions.ts'
+export { markdownExtensionsFacet } from '@/markdown/extensions.js'
 
 // --- Action / shortcut helpers ---
 export {
@@ -117,18 +117,18 @@ export {
   type ActionOverride,
   type ShortcutBinding,
   type KeyCombination,
-} from '@/shortcuts/types.ts'
+} from '@/shortcuts/types.js'
 export {
   actionRuntimeKey,
   getActiveActionById,
   getEffectiveActions,
-} from '@/shortcuts/effectiveActions.ts'
+} from '@/shortcuts/effectiveActions.js'
 export {
   bindBlockActionContext,
   createSharedBlockActions,
   extendSelectionDown,
   extendSelectionUp,
-} from '@/shortcuts/blockActions.ts'
+} from '@/shortcuts/blockActions.js'
 
 // --- Block / data primitives ---
 export { Block } from '../data/block'
@@ -139,7 +139,7 @@ export {
   getPluginUIStateBlock,
   getUserBlock,
   getUserPrefsBlock,
-} from '@/data/stateBlocks.ts'
+} from '@/data/stateBlocks.js'
 // PropertySchema authoring — extensions define their own typed
 // properties via `defineProperty` from the data-layer api.
 export { defineBlockType, defineProperty, definePropertyEditorOverride, codecs, ChangeScope } from '@/data/api'
@@ -151,7 +151,7 @@ export type {
   PropertySchema,
   TypeContribution,
 } from '@/data/api'
-export { propertyEditorOverridesFacet, propertySchemasFacet, typesFacet } from '@/data/facets.ts'
+export { propertyEditorOverridesFacet, propertySchemasFacet, typesFacet } from '@/data/facets.js'
 export {
   // System UI-state props extensions might want to read/write
   isCollapsedProp,
@@ -161,29 +161,29 @@ export {
   // Atomic focus + edit transition (single primitive — `setFocusedBlockId`
   // and `setIsEditing` were removed in favor of this).
   focusBlock,
-} from '@/data/properties.ts'
+} from '@/data/properties.js'
 export type {
   BlockRenderer,
   BlockRendererProps,
   BlockContextType,
-} from '@/types.ts'
+} from '@/types.js'
 
-export { pluginBlockId } from '@/extensions/pluginIds.ts'
+export { pluginBlockId } from '@/extensions/pluginIds.js'
 
 // React hook for accessing the live Repo from inside an
 // `appMountsFacet` component. Action handlers receive `repo` through
 // `uiStateBlock.repo`; components rendered inside the app tree should
 // use this hook instead so they participate in the same Repo
 // instance + context the rest of the app uses.
-export { useRepo } from '@/context/repo.tsx'
+export { useRepo } from '@/context/repo.js'
 
 // Imperative dialog primitive. Renders `Component` and returns a
 // promise that resolves with the user's choice (or `null` on
 // cancel). The dialog component receives `resolve(value)` /
 // `cancel()` as props. Use this from action handlers when an
 // `appMountsFacet`-mounted persistent dialog is overkill.
-export { openDialog } from '@/utils/dialogs.ts'
-export type { DialogComponent, DialogContextProps } from '@/utils/dialogs.ts'
+export { openDialog } from '@/utils/dialogs.js'
+export type { DialogComponent, DialogContextProps } from '@/utils/dialogs.js'
 
 // User-feedback primitives. Prefer these over `window.alert` /
 // `window.confirm` — they match the app's theme, queue cleanly, and
@@ -197,8 +197,8 @@ export {
   showProgress,
   showCustom,
   dismissToast,
-} from '@/utils/toast.ts'
-export type { ProgressToast, ToastAction, ToastOptions } from '@/utils/toast.ts'
+} from '@/utils/toast.js'
+export type { ProgressToast, ToastAction, ToastOptions } from '@/utils/toast.js'
 
 // Fractional-index order keys for inserting blocks at deterministic
 // positions among siblings. `keyAtEnd(lastChild.orderKey)` for "append
@@ -209,4 +209,4 @@ export {
   keyAtStart,
   keyBetween,
   keysBetween,
-} from '@/data/orderKey.ts'
+} from '@/data/orderKey.js'

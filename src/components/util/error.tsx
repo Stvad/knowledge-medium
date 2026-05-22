@@ -1,5 +1,5 @@
 import { Button } from '@/components/ui/button'
-import { useSignOut } from '@/components/Login.tsx'
+import { useSignOut } from '@/components/Login.js'
 import type { FallbackProps } from 'react-error-boundary'
 
 const errorMessage = (error: unknown): string =>

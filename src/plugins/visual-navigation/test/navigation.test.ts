@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   pickVisualNavigationTarget,
   type VisualNavigationCandidate,
-} from '@/plugins/visual-navigation/navigation.ts'
+} from '@/plugins/visual-navigation/navigation.js'
 
 const target = (
   id: string,

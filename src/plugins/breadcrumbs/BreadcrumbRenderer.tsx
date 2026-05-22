@@ -1,5 +1,5 @@
-import { BlockRendererProps } from '@/types.ts'
-import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.tsx'
+import { BlockRendererProps } from '@/types.js'
+import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.js'
 import { getBreadcrumbContentPreview } from './breadcrumbPreview.ts'
 
 export const BreadcrumbRenderer = (props: BlockRendererProps) => (

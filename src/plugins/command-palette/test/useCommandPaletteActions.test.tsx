@@ -2,15 +2,15 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { renderHook } from '@testing-library/react'
-import { actionsFacet, actionContextsFacet } from '@/extensions/core.ts'
-import { resolveFacetRuntimeSync, type FacetRuntime } from '@/extensions/facet.ts'
-import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.ts'
-import { defaultActionContextConfigs } from '@/shortcuts/defaultContexts.ts'
+import { actionsFacet, actionContextsFacet } from '@/extensions/core.js'
+import { resolveFacetRuntimeSync, type FacetRuntime } from '@/extensions/facet.js'
+import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.js'
+import { defaultActionContextConfigs } from '@/shortcuts/defaultContexts.js'
 import {
   type ActionConfig,
   ActionContextTypes,
   type BaseShortcutDependencies,
-} from '@/shortcuts/types.ts'
+} from '@/shortcuts/types.js'
 import { useCommandPaletteActions } from '../useCommandPaletteActions.ts'
 import {
   commandPaletteAction,

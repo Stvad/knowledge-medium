@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { appEffectsFacet } from '@/extensions/core.ts'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
+import { appEffectsFacet } from '@/extensions/core.js'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
 import { appIntentsBootstrapEffect, appIntentsPlugin } from '../index.ts'
 
 describe('appIntentsPlugin', () => {

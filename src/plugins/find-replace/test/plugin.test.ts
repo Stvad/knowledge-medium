@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { actionsFacet, appMountsFacet, headerItemsFacet } from '@/extensions/core.ts'
-import { mutatorsFacet, queriesFacet } from '@/data/facets.ts'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
+import { actionsFacet, appMountsFacet, headerItemsFacet } from '@/extensions/core.js'
+import { mutatorsFacet, queriesFacet } from '@/data/facets.js'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
 import {
   FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
   FIND_REPLACE_SEARCH_CONTENT_QUERY,

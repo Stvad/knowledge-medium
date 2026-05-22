@@ -2,7 +2,7 @@ import { Block } from '@/data/block'
 import type {
   ActionContextConfig,
   BaseShortcutDependencies,
-} from '@/shortcuts/types.ts'
+} from '@/shortcuts/types.js'
 
 export const COMMAND_PALETTE_CONTEXT = 'command-palette'
 export const COMMAND_PALETTE_ACTION_ID = 'command_palette'

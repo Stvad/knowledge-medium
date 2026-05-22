@@ -8,8 +8,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { usePluginPrefsProperty } from '@/data/globalState.ts'
-import type { DialogContextProps } from '@/utils/dialogs.ts'
+import { usePluginPrefsProperty } from '@/data/globalState.js'
+import type { DialogContextProps } from '@/utils/dialogs.js'
 import {
   blockTaggingPrefsType,
   blockTagsConfigProp,

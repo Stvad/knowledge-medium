@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { appMountsFacet } from '@/extensions/core.ts'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
+import { appMountsFacet } from '@/extensions/core.js'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
 import {
   appendTodayDailyBlockBottomNavItem,
   commandPaletteBottomNavItem,

@@ -2,7 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import type { BacklinksViewRendererProps } from '@/plugins/backlinks-view/facet.ts'
+import type { BacklinksViewRendererProps } from '@/plugins/backlinks-view/facet.js'
 import type { GroupedBacklinksResult } from '../query.ts'
 import { GroupedLinkedReferences } from '../GroupedLinkedReferences.tsx'
 

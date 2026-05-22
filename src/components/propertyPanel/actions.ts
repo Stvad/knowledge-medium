@@ -4,7 +4,7 @@ import {
   type AnyPropertySchema,
 } from '@/data/api'
 import type { Block } from '@/data/block'
-import { typesProp } from '@/data/properties.ts'
+import { typesProp } from '@/data/properties.js'
 import { isPropertyPanelHiddenProperty } from './visibility'
 import type { AddPropertyArgs } from './AddPropertyForm'
 
