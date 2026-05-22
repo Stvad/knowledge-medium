@@ -11,7 +11,6 @@
     "compile": "tsc -b",
     "build": "yarn run compile && vite build --mode development && node scripts/inject-sw-build-id.mjs",
     "lint": "eslint .",
-    "deploy": "netlify deploy --prod -s knowledge-medium-explorations.netlify.app -d dist",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
