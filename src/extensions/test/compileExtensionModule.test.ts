@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  __resetCanonicalImportCacheForTest,
   __setCompileImplForTest,
+  canonicalizeExtensionImports,
   compileExtensionModule,
   createCompileCache,
   evictBlockFromCache,
@@ -173,6 +175,104 @@ describe('compileExtensionModule — eviction', () => {
     } finally {
       restore()
     }
+  })
+})
+
+describe('canonicalizeExtensionImports — module-identity fix', () => {
+  // Background: the kernel imports modules by their literal disk
+  // extension (`@/context/repo.tsx`). If an extension uses the
+  // conventional `.js` suffix, the browser's module map keys it as a
+  // *separate* entry, producing a second copy of every module-scoped
+  // singleton — most visibly React `createContext` calls. This rewriter
+  // probes the dev server and rewrites `@/foo.js` to whatever extension
+  // actually exists, so the extension's effective imports match the
+  // kernel's.
+
+  beforeEach(() => {
+    __resetCanonicalImportCacheForTest()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('rewrites @/foo.js to the kernel-canonical disk extension', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      url: 'http://localhost:5173/src/context/repo.tsx',
+    } as Response)))
+
+    const source = `import {useRepo} from '@/context/repo.js'`
+    const rewritten = await canonicalizeExtensionImports(source)
+    expect(rewritten).toBe(`import {useRepo} from '@/context/repo.tsx'`)
+  })
+
+  it('leaves non-@/ specifiers alone', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new Error('fetch should not be called for npm specifiers')
+    }))
+
+    const source = `
+      import React from 'react'
+      import {foo} from 'some-pkg/sub.js'
+    `
+    const rewritten = await canonicalizeExtensionImports(source)
+    expect(rewritten).toBe(source)
+  })
+
+  it('caches probes — second compile with the same specifier reuses', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      url: 'http://localhost:5173/src/context/repo.tsx',
+    } as Response))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await canonicalizeExtensionImports(`import x from '@/context/repo.js'`)
+    await canonicalizeExtensionImports(`import y from '@/context/repo.js'`)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves the import alone when the probe fails (no canonical found)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ok: false} as Response)))
+
+    const source = `import x from '@/missing/file.js'`
+    const rewritten = await canonicalizeExtensionImports(source)
+    expect(rewritten).toBe(source)
+  })
+
+  it('leaves the import alone when the server returns 200 without redirect', async () => {
+    // A `.js` URL that maps to a real `.js` on disk (or a server that
+    // doesn't bother redirecting) returns its own URL — there's no
+    // canonical to rewrite to.
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      url: 'http://localhost:5173/src/utils/genuine.js',
+    } as Response)))
+
+    const source = `import x from '@/utils/genuine.js'`
+    const rewritten = await canonicalizeExtensionImports(source)
+    expect(rewritten).toBe(source)
+  })
+
+  it('handles multiple distinct @/ imports in one extension', async () => {
+    const probes: Record<string, string> = {
+      '/src/context/repo.js': 'http://localhost:5173/src/context/repo.tsx',
+      '/src/data/orderKey.js': 'http://localhost:5173/src/data/orderKey.ts',
+    }
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const u = url.startsWith('/') ? url : new URL(url).pathname
+      const finalUrl = probes[u]
+      if (!finalUrl) return {ok: false} as Response
+      return {ok: true, url: finalUrl} as Response
+    }))
+
+    const source = [
+      `import {useRepo} from '@/context/repo.js'`,
+      `import {keyAtEnd} from '@/data/orderKey.js'`,
+    ].join('\n')
+    const rewritten = await canonicalizeExtensionImports(source)
+    expect(rewritten).toContain(`'@/context/repo.tsx'`)
+    expect(rewritten).toContain(`'@/data/orderKey.ts'`)
   })
 })
 

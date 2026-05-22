@@ -20,13 +20,18 @@ import {
   codecs,
   keyAtEnd,
   keysBetween,
-  useRepo,
   showSuccess,
   showError,
   showInfo,
   showProgress,
   dismissToast,
 } from '@/extensions/api.js'
+// Deep-imported to regression-test the canonicalizer in
+// compileExtensionModule.ts. `@/context/repo.js` is rewritten to the
+// kernel-canonical `@/context/repo.tsx` before babel + blob, so the
+// browser's module map dedupes and `useRepo` reads the same RepoContext
+// the kernel's `<RepoProvider>` wrote to.
+import {useRepo} from '@/context/repo.js'
 import {
   Dialog,
   DialogContent,

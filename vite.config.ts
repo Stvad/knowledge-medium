@@ -1,5 +1,6 @@
 import {defineConfig, ViteDevServer} from 'vite'
 import path from "path"
+import fs from "node:fs"
 import react, {reactCompilerPreset} from '@vitejs/plugin-react'
 import babel from '@rolldown/plugin-babel'
 import externalize from "vite-plugin-externalize-dependencies";
@@ -42,20 +43,65 @@ export default defineConfig(({command}) => {
             },
             isDev && {
                 /**
-                 * One of the things I want to do is to import @local/module from dynamic in-browser context
-                 * In production those are served with .js url, but in dev they are served bare or with original
-                 * ts/tsx extension
+                 * Make `import '@/foo.js'` work in dev, matching prod where
+                 * everything is served as `.js`. The earlier implementation
+                 * rewrote `req.url` server-side (`req.url = req.url.slice(0, -3)`)
+                 * which served the right *content* but didn't change the URL
+                 * the browser saw — so `import '@/foo.js'` and `import '@/foo.tsx'`
+                 * resolved to two distinct module-map entries with identical
+                 * content but separate identity. Every module-scoped singleton
+                 * (most visibly React `createContext` calls — `useRepo` reading
+                 * a fresh `RepoContext` that `<RepoProvider>` never wrote to)
+                 * gets duplicated.
                  *
-                 * I want to have a unified experience tho, so making the dev server rewrite the .js urls to bare here
-                 * So I can do import @local/module.js in both dev and prod
+                 * Instead, issue a real HTTP 302 redirect to the on-disk
+                 * canonical URL (`.tsx`, `.ts`, `.jsx`, or no-ext, matching
+                 * what the kernel imports). The extension compiler
+                 * (`canonicalizeExtensionImports` in compileExtensionModule.ts)
+                 * uses this redirect to learn the canonical specifier and
+                 * rewrite extension source *before* `import()` runs, so the
+                 * browser's module map dedupes against the kernel's entry.
+                 *
+                 * The redirect alone doesn't give module identity on its own
+                 * — Chrome/Vite-client both key the module map by *request*
+                 * URL, not response URL — so the compiler-side rewrite is
+                 * the load-bearing piece. The redirect's purpose is purely
+                 * to publish a server-authoritative "what's canonical"
+                 * signal.
                  */
-                name: 'redirect-js-extension',
+                name: 'canonicalize-js-extension',
                 configureServer(server: ViteDevServer) {
-                    server.middlewares.use((req, _, next) => {
-                        // Check if the request is for a .js file under /src/
-                        if (req.url && req.url.startsWith('/src/') && req.url.endsWith('.js')) {
-                            // Rewrite URL by removing the trailing ".js"
-                            req.url = req.url.slice(0, -3);
+                    const srcRoot = path.resolve(__dirname, 'src');
+                    // Order matters: probe in the order the kernel actually
+                    // uses these suffixes, so a stray `.ts` next to a `.tsx`
+                    // doesn't win the canonicalization.
+                    const candidateExts = ['.tsx', '.ts', '.jsx', ''];
+
+                    server.middlewares.use((req, res, next) => {
+                        if (!req.url || !req.url.startsWith('/src/')) return next();
+
+                        // Split off query/hash so the redirect preserves
+                        // Vite's `?v=...` / `?import` HMR markers.
+                        const queryIdx = req.url.search(/[?#]/);
+                        const pathOnly = queryIdx >= 0 ? req.url.slice(0, queryIdx) : req.url;
+                        const suffix = queryIdx >= 0 ? req.url.slice(queryIdx) : '';
+                        if (!pathOnly.endsWith('.js')) return next();
+
+                        const stripped = pathOnly.slice(0, -'.js'.length);
+                        const relPath = stripped.slice('/src/'.length);
+
+                        // If a real `.js` file exists on disk (genuine plain
+                        // JS source), let Vite serve it normally — no rewrite.
+                        const realJsPath = path.resolve(srcRoot, `${relPath}.js`);
+                        if (fs.existsSync(realJsPath)) return next();
+
+                        for (const ext of candidateExts) {
+                            const probe = path.resolve(srcRoot, `${relPath}${ext}`);
+                            if (!fs.existsSync(probe)) continue;
+                            const canonical = `${stripped}${ext}${suffix}`;
+                            res.writeHead(302, {Location: canonical});
+                            res.end();
+                            return;
                         }
                         next();
                     });
