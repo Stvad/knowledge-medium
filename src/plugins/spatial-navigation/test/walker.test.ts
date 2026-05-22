@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   __resetSpatialNavigationForTesting,
+  findRecoveryAnchor,
   firstInstanceIn,
   horizontalNeighborPanel,
   lastInstanceIn,
@@ -258,7 +259,7 @@ describe('locateInstance recovery', () => {
     expect(result?.dataset.blockInstance).toBe('p1:A-new')
   })
 
-  it("tier 3: recovers to 'block just above' when the focused block disappeared", () => {
+  it("tier 3: positional clamp picks 'block previously below' after a delete", () => {
     buildLayout([
       {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
         {blockId: 'X', instance: 'p1:X'},
@@ -266,28 +267,14 @@ describe('locateInstance recovery', () => {
         {blockId: 'Z', instance: 'p1:Z'},
       ]}},
     ])
-    // User was sitting on Y — we tracked its position.
+    // User was sitting on Y at idx 1.
     rememberInstancePosition('p1', findInstance('p1:Y'))
-    // Y is edited out of the panel (e.g. a backlink that no longer
-    // matches); X and Z remain.
+    // Y disappears; the remaining list shifts up.
     findInstance('p1:Y').remove()
-    // focusedBlockId still points to Y. Recovery target: the block
-    // immediately above Y was X, so we land on X.
+    // clamp(1, 0, 1) lands on the block that's now at idx 1 — Z, which
+    // was previously immediately below Y.
     const result = locateInstance('p1', {focusedBlockId: 'Y'})
-    expect(result?.dataset.blockInstance).toBe('p1:X')
-  })
-
-  it('tier 3: clamps "block just above" to 0 when the disappeared block was first', () => {
-    buildLayout([
-      {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
-        {blockId: 'A', instance: 'p1:A'},
-        {blockId: 'B', instance: 'p1:B'},
-      ]}},
-    ])
-    rememberInstancePosition('p1', findInstance('p1:A'))
-    findInstance('p1:A').remove()
-    // A was at idx 0; -1 clamps to 0 in the remaining single-item list.
-    expect(locateInstance('p1', {focusedBlockId: 'A'})?.dataset.blockInstance).toBe('p1:B')
+    expect(result?.dataset.blockInstance).toBe('p1:Z')
   })
 
   it('tier 3: ignores a stale hint that points to a different block', () => {
@@ -328,6 +315,129 @@ describe('locateInstance recovery', () => {
       {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [{blockId: 'A', instance: 'p1:A'}]}},
     ])
     expect(locateInstance('not-mounted', {})).toBeNull()
+  })
+})
+
+describe('findRecoveryAnchor (proactive disappear-handler)', () => {
+  it('baseline: walks to the block that was previously below', () => {
+    buildLayout([
+      {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
+        {blockId: 'X', instance: 'p1:X'},
+        {blockId: 'Y', instance: 'p1:Y'},
+        {blockId: 'Z', instance: 'p1:Z'},
+      ]}},
+    ])
+    rememberInstancePosition('p1', findInstance('p1:Y'))
+    findInstance('p1:Y').remove()
+    expect(findRecoveryAnchor('p1', 'Y')?.dataset.blockId).toBe('Z')
+  })
+
+  it('falls to "previously above" when the focused block was last in the list', () => {
+    buildLayout([
+      {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
+        {blockId: 'A', instance: 'p1:A'},
+        {blockId: 'B', instance: 'p1:B'},
+      ]}},
+    ])
+    rememberInstancePosition('p1', findInstance('p1:B'))
+    findInstance('p1:B').remove()
+    // B was last — no next sibling — so the recovery target is A.
+    expect(findRecoveryAnchor('p1', 'B')?.dataset.blockId).toBe('A')
+  })
+
+  it('walks the ancestor chain when both siblings disappear (collapse case)', () => {
+    // Build a nested DOM manually — the panel hosts a parent block,
+    // and the parent contains three children (c1, X, c3). When the
+    // parent collapses, all three children unmount together; neither
+    // sibling survives but the parent itself does.
+    const panel = document.createElement('div')
+    panel.setAttribute('data-panel-id', 'p1')
+
+    const parent = document.createElement('div')
+    parent.setAttribute('data-block-id', 'parent')
+    parent.setAttribute('data-block-instance', 'p1:parent')
+    parent.setAttribute('data-block-surface', 'outline')
+    panel.appendChild(parent)
+
+    for (const blockId of ['c1', 'X', 'c3']) {
+      const child = document.createElement('div')
+      child.setAttribute('data-block-id', blockId)
+      child.setAttribute('data-block-instance', `p1:${blockId}`)
+      child.setAttribute('data-block-surface', 'outline')
+      parent.appendChild(child)
+    }
+
+    document.body.appendChild(panel)
+
+    rememberInstancePosition('p1', findInstance('p1:X'))
+
+    // Collapse: parent stays, every child unmounts.
+    for (const c of ['c1', 'X', 'c3']) findInstance(`p1:${c}`).remove()
+
+    expect(findRecoveryAnchor('p1', 'X')?.dataset.blockId).toBe('parent')
+  })
+
+  it('returns null when there is no hint about the focused block', () => {
+    buildLayout([
+      {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
+        {blockId: 'A', instance: 'p1:A'},
+        {blockId: 'B', instance: 'p1:B'},
+      ]}},
+    ])
+    // No prior rememberInstancePosition — proactive recovery should
+    // stay quiet rather than steal focus to whatever rendered first.
+    expect(findRecoveryAnchor('p1', 'A')).toBeNull()
+  })
+
+  it('returns null when the hint is for a different block', () => {
+    buildLayout([
+      {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
+        {blockId: 'A', instance: 'p1:A'},
+        {blockId: 'B', instance: 'p1:B'},
+      ]}},
+    ])
+    rememberInstancePosition('p1', findInstance('p1:A'))
+    expect(findRecoveryAnchor('p1', 'never-mounted')).toBeNull()
+  })
+
+  it('returns null when the panel has no instances left', () => {
+    buildLayout([
+      {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
+        {blockId: 'A', instance: 'p1:A'},
+      ]}},
+    ])
+    rememberInstancePosition('p1', findInstance('p1:A'))
+    findInstance('p1:A').remove()
+    // Panel is empty after removal — nothing reasonable to recover to.
+    expect(findRecoveryAnchor('p1', 'A')).toBeNull()
+  })
+
+  it('falls back to positional clamp when neighbors and ancestors are all gone', () => {
+    // Edge case: build a scenario where prev/next/ancestor are all
+    // missing but a positional fallback can still land somewhere.
+    // We achieve this by remembering position with one DOM, then
+    // swapping the panel to a completely different set of blocks.
+    buildLayout([
+      {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
+        {blockId: 'before', instance: 'p1:before'},
+        {blockId: 'X', instance: 'p1:X'},
+        {blockId: 'after', instance: 'p1:after'},
+      ]}},
+    ])
+    rememberInstancePosition('p1', findInstance('p1:X'))
+
+    // Replace the panel's contents — none of the original neighbors
+    // survive, but the panel itself still has instances.
+    document.body.innerHTML = ''
+    buildLayout([
+      {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
+        {blockId: 'fresh-a', instance: 'p1:fresh-a'},
+        {blockId: 'fresh-b', instance: 'p1:fresh-b'},
+      ]}},
+    ])
+
+    // X was at idx 1; clamp(1, 0, 1) = 1 = fresh-b.
+    expect(findRecoveryAnchor('p1', 'X')?.dataset.blockId).toBe('fresh-b')
   })
 })
 

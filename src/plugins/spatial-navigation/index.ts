@@ -40,6 +40,7 @@ export {
 
 export {
   __resetSpatialNavigationForTesting,
+  findRecoveryAnchor,
   horizontalNeighborPanel,
   locateInstance,
   panelById,

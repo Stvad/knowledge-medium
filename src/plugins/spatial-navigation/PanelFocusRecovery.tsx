@@ -3,10 +3,9 @@ import { usePropertyValue } from '@/hooks/block.ts'
 import { focusBlock, focusedBlockIdProp } from '@/data/properties'
 import type { Block } from '@/data/block'
 import {
-  locateInstance,
+  findRecoveryAnchor,
   panelById,
   panelInstances,
-  peekPositionHint,
   rememberInstancePosition,
 } from './walker.ts'
 
@@ -21,15 +20,17 @@ import {
  *   2. The user collapses the parent of the focused block. The child
  *      unmounts; same problem.
  *
- * Recovery target: "block just above where the user was". For the
- * backlinks case that's the preceding sibling; for the collapse case
- * that's the parent itself (which sits immediately above its now-gone
- * child in DOM order). `walker.locateInstance` returns this via its
- * tier-3 positional hint — provided we've previously called
- * `rememberInstancePosition` for the focused block, which is exactly
- * what this component does on every render where the focused block
- * IS mounted. The blockId-match guard inside `locateInstance` prevents
- * misfires for panels the user has never visited.
+ * Recovery target priority (see `walker.findRecoveryAnchor` for the
+ * implementation): the block that was previously below the focused
+ * one (baseline — the natural shift-up behavior of a list), else
+ * "previously above" when it was the last entry, else the closest
+ * surviving ancestor (handles collapse: when a parent unmounts a
+ * whole subtree, neither sibling survives but the parent itself
+ * does, so we land on it). The neighbor map is populated by this
+ * component itself on every render where the focused block IS
+ * mounted, via `rememberInstancePosition`. The blockId-match guard
+ * inside `findRecoveryAnchor` prevents misfires for panels the user
+ * has never visited.
  *
  * Mounted via `panelMountsFacet`, so one instance lives inside each
  * `<PanelRenderer/>`, scoped to that panel's UI-state block.
@@ -94,17 +95,11 @@ const runRecoveryCheck = (block: Block, focusedBlockId: string | undefined): voi
     return
   }
 
-  // Block is gone. Only recover if we've previously confirmed that
-  // focusedBlockId sat in this panel; otherwise `focusedBlockId`
-  // probably points to a block whose data hasn't loaded yet (initial
-  // panel mount, route change with hydration pending) and stealing
-  // focus to whatever happens to be rendered would lose the user's
-  // intended target. `locateInstance`'s tier-4 fallback (first
-  // instance) is correct for keystroke-time recovery but wrong here.
-  const hint = peekPositionHint(block.id)
-  if (!hint || hint.blockId !== focusedBlockId) return
-
-  const recoveryEl = locateInstance(block.id, {focusedBlockId})
+  // Block is gone. `findRecoveryAnchor` returns null when there's no
+  // stored hint matching `focusedBlockId` — quietly leaving the panel
+  // alone is the right move during initial mounts where the focused
+  // block's data hasn't loaded yet.
+  const recoveryEl = findRecoveryAnchor(block.id, focusedBlockId)
   const recoveryBlockId = recoveryEl?.dataset.blockId
   if (!recoveryBlockId || recoveryBlockId === focusedBlockId) return
 

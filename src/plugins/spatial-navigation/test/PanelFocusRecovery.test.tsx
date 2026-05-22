@@ -78,7 +78,7 @@ afterEach(async () => {
 })
 
 describe('PanelFocusRecovery', () => {
-  it("recovers to 'block just above' when the focused block disappears from the panel DOM", async () => {
+  it("recovers to 'block previously below' when the focused block disappears", async () => {
     const panel = buildPanelDom(PANEL_ID, [
       {blockId: 'first', instance: 'i-first'},
       {blockId: 'middle', instance: 'i-middle'},
@@ -91,20 +91,17 @@ describe('PanelFocusRecovery', () => {
     // Sanity: focus is already on 'middle' and the instance is present.
     expect(panelBlock.peekProperty(focusedBlockIdProp)).toBe('middle')
 
-    // Simulate the disappearance — the backlink rule no longer matches,
-    // or the parent of `middle` got collapsed.
+    // Simulate a backlink edited out so the entry no longer matches.
     panel.querySelector('[data-block-id="middle"]')!.remove()
 
-    // The watchdog should write `first` (the block immediately above
-    // where `middle` was) as the new focused block.
+    // Watchdog walks the sibling map — `last` was previously below
+    // `middle`, so focus lands there.
     await waitFor(() => {
-      expect(panelBlock.peekProperty(focusedBlockIdProp)).toBe('first')
+      expect(panelBlock.peekProperty(focusedBlockIdProp)).toBe('last')
     })
   })
 
-  it('lands on the next-down block when the disappeared block was first in the panel', async () => {
-    // Re-point focus to `first` before mounting the watchdog so its
-    // initial position-remember tracks `first` at index 0.
+  it("falls to 'previously above' when the disappeared block was first in the panel", async () => {
     await env.repo.block(PANEL_ID).set(focusedBlockIdProp, 'first')
 
     const panel = buildPanelDom(PANEL_ID, [
@@ -116,13 +113,52 @@ describe('PanelFocusRecovery', () => {
     const panelBlock = env.repo.block(PANEL_ID)
     render(<PanelFocusRecovery block={panelBlock}/>)
 
-    // Yank the focused block out of the DOM.
+    // `first` has no "previously above", so the recovery falls through
+    // to the next-sibling tier — landing on `middle`.
     panel.querySelector('[data-block-id="first"]')!.remove()
 
-    // `first` was at idx 0; clamp(-1, 0, ...) = 0; remaining list
-    // starts with `middle`, so we land there.
     await waitFor(() => {
       expect(panelBlock.peekProperty(focusedBlockIdProp)).toBe('middle')
+    })
+  })
+
+  it("focuses the parent on collapse (every child of the focused's parent unmounts together)", async () => {
+    // Build nested DOM: panel > parent > [c1, focused, c3]. Collapsing
+    // `parent` unmounts every child at once; neither sibling survives
+    // but `parent` itself does, so it's the natural recovery target.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'parent', workspaceId: WS, parentId: null, orderKey: 'c0', content: 'parent'})
+      await tx.create({id: 'c1', workspaceId: WS, parentId: 'parent', orderKey: 'd0', content: 'c1'})
+      await tx.create({id: 'c3', workspaceId: WS, parentId: 'parent', orderKey: 'd2', content: 'c3'})
+    }, {scope: ChangeScope.UiState})
+    await env.repo.block(PANEL_ID).set(focusedBlockIdProp, 'middle')
+
+    const panel = document.createElement('div')
+    panel.setAttribute('data-panel-id', PANEL_ID)
+    const parent = document.createElement('div')
+    parent.setAttribute('data-block-id', 'parent')
+    parent.setAttribute('data-block-instance', 'i-parent')
+    parent.setAttribute('data-block-surface', 'outline')
+    panel.appendChild(parent)
+    for (const blockId of ['c1', 'middle', 'c3']) {
+      const child = document.createElement('div')
+      child.setAttribute('data-block-id', blockId)
+      child.setAttribute('data-block-instance', `i-${blockId}`)
+      child.setAttribute('data-block-surface', 'outline')
+      parent.appendChild(child)
+    }
+    document.body.appendChild(panel)
+
+    const panelBlock = env.repo.block(PANEL_ID)
+    render(<PanelFocusRecovery block={panelBlock}/>)
+
+    // Collapse the parent: every child unmounts but parent stays.
+    for (const blockId of ['c1', 'middle', 'c3']) {
+      panel.querySelector(`[data-block-id="${blockId}"]`)!.remove()
+    }
+
+    await waitFor(() => {
+      expect(panelBlock.peekProperty(focusedBlockIdProp)).toBe('parent')
     })
   })
 
