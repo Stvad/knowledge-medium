@@ -122,15 +122,22 @@ describe('seedTutorial', () => {
     expect(extensionsPage.peek()?.parentId).toBeNull()
     expect(extensionsPage.hasType(PAGE_TYPE)).toBe(true)
 
-    const extChildIds = await extensionsPage.childIds.load()
-    const extensionTyped = extChildIds
-      .map(id => env.repo.block(id))
+    // Each example lives under its own title bullet, so the EXTENSION_TYPE
+    // source blocks are grandchildren of the extensions page rather than
+    // direct children. Walk the subtree and filter by type.
+    const subtree = await env.repo.query.subtree({ id: extensionsId! }).load()
+    const extensionTyped = subtree
+      .filter(row => row.id !== extensionsId)
+      .map(row => env.repo.block(row.id))
       .filter(b => b.hasType(EXTENSION_TYPE))
     expect(extensionTyped).toHaveLength(exampleExtensions.length)
-    // Source content matches example extensions in declaration order.
-    expect(extensionTyped.map(b => b.peek()?.content)).toEqual(
-      exampleExtensions.map(e => e.source),
-    )
+
+    // Every example source from the registered list appears under the
+    // page, irrespective of order in the subtree walk.
+    const contents = new Set(extensionTyped.map(b => b.peek()?.content))
+    for (const ex of exampleExtensions) {
+      expect(contents.has(ex.source)).toBe(true)
+    }
   })
 
   it('seeds a hello-renderer demo block carrying the user:hello gating property', async () => {

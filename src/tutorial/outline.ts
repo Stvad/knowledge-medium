@@ -39,7 +39,7 @@ export const EXTENSIONS_PAGE_TITLE = 'extensions'
 // live in `sharedKeys` below and are reused across variants.
 const vimKeys = {
   fold: 'press `z`',
-  edit: 'press `i` (or `a` to enter at the end of the line)',
+  edit: 'press `i` (or `a` to enter at end of line, or double-click the block)',
   exitEdit: 'press `Esc`',
   newBelow: 'press `o` (or `Shift+O` to create above)',
   enterCreates: '— or, while editing any block, press `Enter` to split / create a new one',
@@ -57,7 +57,7 @@ const vimKeys = {
 
 const defaultKeys: typeof vimKeys = {
   fold: 'click the `▸` / `▾` chevron that appears next to my bullet on hover (it stays visible on touch devices)',
-  edit: 'click anywhere in my text',
+  edit: 'single-click anywhere in my text (double-click also works)',
   exitEdit: 'press `Esc`',
   newBelow: 'press `Enter` at the end of a bullet to create a new one below (`Shift+Enter` inserts a line break inside)',
   enterCreates: '',
@@ -109,9 +109,11 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       'This is a malleable thought medium. Every line below is a **block** you can fold, link, drag around, and extend — including this tutorial itself.',
       'Bullets are blocks. Bullets nest. Everything else builds on that.',
       "Don't just read — try the keys/clicks on each bullet as you go. Edit anything; this tutorial is just blocks in your workspace.",
+      'Want a coding agent to drive this workspace from your terminal? `yarn agent connect` pairs the CLI, then `yarn agent eval`, `yarn agent sql`, `yarn agent create-block`, and friends operate inside the live app runtime (with access to `repo`, `db`, `runtime`, the resolved facets, and arbitrary JS). See the **Agent Runtime Access** section of README.md for setup and the full binding list.',
     ]),
 
     sect('Try the basics', [
+      'These bullets are here for fiddling with — read each one, try the key/click, then edit the bullet to make this tutorial yours.',
       'Press `Tab` to indent me under the bullet above (`Shift+Tab` to outdent). Try it now.',
       `New block: ${km.newBelow}${km.enterCreates ? ' ' + km.enterCreates : ''}.`,
       {
@@ -142,7 +144,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
     ]),
 
     sect('Pages & links', [
-      '`[[Tutorial]]` is a wiki link — anything in `[[double brackets]]` navigates to (or creates) a page with that name. Try clicking one.',
+      '[[Tutorial]] — text wrapped in double square brackets becomes a wiki link to (or creates) a page with that name. Try clicking the link to the left.',
       `Find or create any page: ${sharedKeys.quickFind}. Type to filter; pressing Enter on a missing name creates it.`,
       `Command palette: ${sharedKeys.commandPalette}. **Every** action in the app is searchable here with its key shown — use this when you forget a shortcut, or to find actions that have no default binding.`,
       `Find and replace across the workspace: ${sharedKeys.findReplace}.`,
@@ -163,7 +165,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
 
     sect('Undo, redo, copy, paste', [
       `Undo: ${km.undo}. Redo: ${km.redo}.`,
-      `Copy a *reference* to a block (a clickable \`[[…]]\` link pointing at it): ${sharedKeys.copyRef}. Copy an *embed* (the block rendered inline elsewhere): ${sharedKeys.copyEmbed}.`,
+      `Copy a *reference* to a block (a clickable \`((block-id))\` link pointing at it): ${sharedKeys.copyRef}. Copy an *embed* (renders the block inline elsewhere via \`!((block-id))\`): ${sharedKeys.copyEmbed}.`,
       `Paste blocks: ${km.paste}.`,
     ]),
 
@@ -197,6 +199,12 @@ const cap = (s: string) => (s.length === 0 ? s : s[0].toUpperCase() + s.slice(1)
  * to it via `[[extensions]]` — a single source of truth instead of
  * duplicating the seven example sources under each Tutorial. The page
  * itself is seeded by `seedTutorial`.
+ *
+ * Each example is wrapped in a title bullet whose children are:
+ *   1. a "how to use it" description (what to do after enabling), and
+ *   2. the source block (typed `extension`, carries name/description
+ *      properties) — and optionally a try-it block tagged with the
+ *      gating property so a user can see the effect live.
  */
 export const extensionsPageOutline = (): TutorialNode[] => [
   { content: '**Anything** in this app is an extension — the default block renderer, the vim plugin, daily notes, find-and-replace. The host loads core ones at startup; the rest are blocks like the ones below.' },
@@ -205,16 +213,68 @@ export const extensionsPageOutline = (): TutorialNode[] => [
   { content: 'User extensions start **disabled**. The Extensions settings tree lets you toggle each row; the override is per-device and persists across reloads.' },
   { content: "After editing an extension's source, run **Reload extensions** from the command palette to pick up your changes." },
   { content: 'Re-insert these examples under any focused block via the **Insert example extensions** command in the palette.' },
-  ...exampleExtensions.map(ex => ({
-    content: ex.source,
+  ...exampleExtensions.map(ex => exampleSection(ex.id)),
+]
+
+/**
+ * Wraps a single example extension in a title bullet. Children are:
+ * (1) a `how to use` bullet, (2) the source block, and (optionally)
+ * (3) a try-it demo block tagged with the relevant gating property.
+ */
+const exampleSection = (id: string): TutorialNode => {
+  const example = exampleExtensions.find(e => e.id === id)
+  if (!example) throw new Error(`exampleSection: unknown example "${id}"`)
+
+  const sourceBlock: TutorialNode = {
+    content: example.source,
     type: EXTENSION_TYPE,
     typeProperties: {
-      [extensionNameProp.name]: ex.name,
-      [extensionDescriptionProp.name]: ex.description,
+      [extensionNameProp.name]: example.name,
+      [extensionDescriptionProp.name]: example.description,
     },
-  } as TutorialNode)),
-  {
-    content: 'A block that uses the hello-renderer extension — enable `hello-renderer` above to see this render with the custom variant.',
+  }
+
+  const children: TutorialNode[] = [
+    { content: `**How to use:** ${HOW_TO_USE[id]}` },
+    sourceBlock,
+  ]
+  const demo = TRY_IT_BLOCK[id]
+  if (demo) children.push(demo)
+
+  return { content: example.name, children }
+}
+
+// Keyed by `ExampleExtensionDefinition.id` — short usage notes shown
+// above each example's source so a reader knows what to enable and
+// what property/key actually drives the demo.
+const HOW_TO_USE: Record<string, string> = {
+  'hello-renderer': 'Enable in Extensions settings, then add the property `user:hello = true` to any block — its content area will render with the custom hello variant.',
+  'fold-all-action': 'Enable, then press `Cmd+Shift+F` (or `Ctrl+Shift+F` on Linux/Windows) anywhere in the panel — every visible descendant of the current view\'s root folds or unfolds together.',
+  'emoji-react': "Enable, then either Alt+click any block or focus a block and press `Cmd+Shift+R` (`Ctrl+Shift+R`) — cycles a 🔥 / 👍 / 🎉 / ❤️ reaction below the block's content.",
+  'kudos-facet': "Enable, then set a block's `renderer` property to `kudos-banner` — the block renders with the Kudos banner appended. Other extensions can contribute to the `user.kudos` facet to extend it.",
+  'split-layout': "Enable, then add the property `user:layout = split` to any block — its content and children will render side by side instead of stacked.",
+  'layout-renderer-override': 'Enable to wrap **every** panel with a custom debug-style frame. Disable the row in Extensions settings to revert. (No per-block property — applies workspace-wide.)',
+  'default-renderer-placeholder': 'Enable to swap the fallback block renderer so empty blocks show a muted "empty block" placeholder in read mode. Disable to revert. (Applies workspace-wide.)',
+}
+
+// Optional try-it demo block per example. Only examples gated by a
+// property carry a demo; renderer-override examples apply globally so
+// no per-block toggle exists.
+const TRY_IT_BLOCK: Record<string, TutorialNode | undefined> = {
+  'hello-renderer': {
+    content: 'Try it: enable `hello-renderer` above, then this block renders with the custom variant (it carries `user:hello = true`).',
     properties: { 'user:hello': true },
   },
-]
+  'fold-all-action': undefined,
+  'emoji-react': undefined,
+  'kudos-facet': undefined,
+  'split-layout': {
+    content: 'Try it: enable `split-layout` above, then this block renders content and children side by side (it carries `user:layout = split`). The bullet below me will appear to my right.',
+    properties: { 'user:layout': 'split' },
+    children: [
+      { content: 'I sit beside the content in split mode.' },
+    ],
+  },
+  'layout-renderer-override': undefined,
+  'default-renderer-placeholder': undefined,
+}
