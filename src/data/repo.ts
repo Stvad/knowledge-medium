@@ -493,7 +493,17 @@ export class Repo {
    *  user-data schemas (et al.) survive the dynamic-extension reload.
    *  Without this, the user-data bucket would live only on whichever
    *  FacetRuntime was current at `setRuntimeContributions` time and
-   *  evaporate on the next `setFacetRuntime`. */
+   *  evaporate on the next `setFacetRuntime`.
+   *
+   *  NOTE for agent-side introspection: this is a *replay cache*, NOT
+   *  a general "what's registered" map. It only holds dynamic
+   *  contributions added via `setRuntimeContributions` (user-data
+   *  schemas, etc.), so it looks sparse compared to the full
+   *  registry. The full registry lives on the FacetRuntime
+   *  (`facetRuntime.facetIds()` / `contributionsById(id)`), and the
+   *  agent-facing surface is `yarn agent describe-runtime`. Inner
+   *  keys here are arbitrary source-id strings chosen by the caller
+   *  of `setRuntimeContributions`. */
   private readonly runtimeContributionBuckets = new Map<string, Map<string, readonly unknown[]>>()
   /** Per-facet refs needed to replay buckets onto a fresh runtime —
    *  setRuntimeContributions takes a `Facet` reference (not a string

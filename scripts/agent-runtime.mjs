@@ -41,7 +41,10 @@ Commands:
   yarn agent runtime-summary      show compact agent-oriented runtime context
   yarn agent describe-runtime [--actions <text>] [--facets <text>] [--guide <id>]
                                [--modules <text>] [--components <text>] [--storage]
-                                  show full or targeted runtime diagnostics
+                                  show full or targeted runtime diagnostics.
+                                  This is the canonical "what's registered"
+                                  view — prefer it over reaching into
+                                  facetRuntime / Repo internals through eval.
   yarn agent sql <all|get|optional|execute> <sql> [paramsJson]
   yarn agent get-block <id>
   yarn agent subtree <rootId> [--include-root]

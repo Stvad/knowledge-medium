@@ -104,6 +104,13 @@ export type RuntimeSourceId = string
 type FacetChangeListener = () => void
 
 export class FacetRuntime {
+  // Both maps are keyed by `facet.id` (a string), NOT by the Facet
+  // object — so `.get(actionsFacet)` from outside this class will
+  // return undefined; use `.get(actionsFacet.id)` if you must reach
+  // in. Better: agent-side introspection of "what's registered" should
+  // go through `describe-runtime` / `contributionsById` / `read`,
+  // which already index by id and don't depend on object identity
+  // across module instances.
   private readonly staticContributionsByFacet = new Map<string, FacetContribution<unknown>[]>()
   private readonly runtimeContributionsByFacet = new Map<
     string,

@@ -401,7 +401,7 @@ export const describeRuntimeSummary = async (
         command: 'yarn agent status',
       },
       {
-        need: 'Targeted in-app inspection using the runtime context',
+        need: 'Targeted in-app inspection using the runtime context — but NOT for "what is registered". For actions/facets/renderers/contributions, prefer `describe-runtime`; reaching into `facetRuntime.staticContributionsByFacet` or `repo.runtimeContributionBuckets` from eval is reading internal caches with different shapes and will mislead you.',
         command: 'yarn agent eval <code>  # use `return ...` to print a value',
       },
       {
