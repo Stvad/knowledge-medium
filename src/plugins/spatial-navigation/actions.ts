@@ -60,10 +60,22 @@ const currentInstance = (
  * (highlight class via `useInFocus`, scroll via its own effect)
  * off the same prop. Adding our own DOM mutations would just race.
  *
- * Returns true when navigation moved; false signals "no in-panel
- * neighbor" so the underlying vim handler can attempt its
- * data-model walk (in practice the walker covers every visible
- * target so this fallback is defensive).
+ * Return contract (intentionally different from "did we move?"):
+ *   - `false` → "no anchor; please fall through to the underlying
+ *     vim handler". Only the `!current` early return takes this
+ *     path — the spatial walker had no DOM anchor to start from
+ *     so vim's data-model walk is a legitimate fallback.
+ *   - `true` → "spatial nav handled this keystroke". Includes the
+ *     no-neighbor / panel-boundary case. We must NOT fall through
+ *     to vim's `nextVisibleBlock` for a panel-boundary block on a
+ *     non-outline surface (backlinks, embeds): vim's walker climbs
+ *     the data-model parent chain of the source block, which for a
+ *     backlink entry lives in some other page entirely. Following
+ *     that chain returns a block from elsewhere in the workspace,
+ *     and writing it as the panel's `focusedBlockId` leaves
+ *     `useInFocus(<anyone in this panel>)` returning false →
+ *     normal-mode deactivates → all shortcuts go dead until the
+ *     user clicks back into a block.
  */
 const moveVertical = async (
   deps: BlockShortcutDependencies,
@@ -74,12 +86,12 @@ const moveVertical = async (
   const current = currentInstance(deps)
   if (!current) return false
   const next = verticalNeighbor(current, direction)
-  if (!next) return false
+  if (!next) return true // boundary — handled, no move
   const destPanel = next.closest<HTMLElement>('[data-panel-id]')
-  if (!destPanel) return false
+  if (!destPanel) return true
   const destPanelId = destPanel.dataset.panelId
   const destBlockId = next.dataset.blockId
-  if (!destPanelId || !destBlockId) return false
+  if (!destPanelId || !destBlockId) return true
 
   if (destPanelId === uiStateBlock.id) {
     // Same-panel step — identical to vim's `focusBlock` write.
