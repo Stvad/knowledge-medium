@@ -23,7 +23,12 @@ import {
   BlockShortcutDependencies,
   ShortcutBinding,
 } from '@/shortcuts/types.ts'
-import { extendSelection, nextVisibleBlock, previousVisibleBlock } from '@/utils/selection'
+import {
+  blockAfterSubtreeRemoval,
+  extendSelection,
+  nextVisibleBlock,
+  previousVisibleBlock,
+} from '@/utils/selection'
 
 export interface BlockAction {
   id: string
@@ -223,9 +228,17 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
       if (!topLevelBlockId) return
 
-      const prevVisible = await previousVisibleBlock(block, topLevelBlockId)
+      // Same-depth next sibling is the natural shift-up target. When
+      // `block` has descendants those vanish too, so we can't use
+      // `nextVisibleBlock` (which would descend into the doomed
+      // subtree). `blockAfterSubtreeRemoval` walks the data tree
+      // skipping `block`'s subtree entirely: next sibling → prev
+      // sibling → parent. This mirrors what the proactive
+      // `PanelFocusRecovery` does on the DOM side, so manual deletes
+      // and surprise disappearances both land on the same target.
+      const next = await blockAfterSubtreeRemoval(block, topLevelBlockId)
       await block.delete()
-      if (prevVisible) void focusBlock(uiStateBlock, prevVisible.id)
+      if (next) void focusBlock(uiStateBlock, next.id)
     },
     defaultBinding: {
       keys: 'delete',

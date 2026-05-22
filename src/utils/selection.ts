@@ -87,6 +87,46 @@ export const previousVisibleBlock = async (
   return parent
 }
 
+/** Picks the block that should hold focus after `current` and its
+ *  entire subtree are removed. Uses the data tree (not the DOM):
+ *
+ *    1. Next data-sibling — the natural "shift-up" target. When a row
+ *       is removed from a list, the row that visually replaces its
+ *       position is the next sibling at the same depth.
+ *    2. Previous data-sibling — engaged when `current` was the last
+ *       sibling at its level.
+ *    3. Parent — engaged when `current` is the sole child. After
+ *       removal the parent is now empty, and it's the natural place
+ *       to land.
+ *
+ *  Returns null when `current` is the panel's `topLevelBlockId` (no
+ *  meaningful target, the panel is about to be empty), or when the
+ *  block is detached from the tree.
+ *
+ *  Mirrors `walker.findRecoveryAnchor`'s sibling-then-ancestor order
+ *  on the data side so the post-delete jump matches the proactive
+ *  recovery's choice for the disappear-from-DOM case. */
+export const blockAfterSubtreeRemoval = async (
+  current: Block,
+  topLevelBlockId: string,
+): Promise<Block | null> => {
+  if (current.id === topLevelBlockId) return null
+  const repo = current.repo
+  await current.load()
+  const data = current.peek()
+  if (!data || data.parentId === null) return null
+
+  const parent = repo.block(data.parentId)
+  await parent.load()
+  const siblingIds = await parent.childIds.load()
+  const idx = siblingIds.indexOf(current.id)
+  if (idx === -1) return parent
+
+  if (idx + 1 < siblingIds.length) return repo.block(siblingIds[idx + 1])
+  if (idx - 1 >= 0) return repo.block(siblingIds[idx - 1])
+  return parent
+}
+
 /** Last visible descendant of `block` (deepest, last child of last
  *  child, etc.). Used by keyboard navigation that needs to land on
  *  the bottom of an expanded subtree. Returns the input block if it
