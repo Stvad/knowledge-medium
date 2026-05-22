@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo } from 'react'
-import { useInEditMode, useInFocus } from '@/data/globalState.ts'
+import { useInEditMode, useInFocus, useIsActivePanel, useUIStateBlock } from '@/data/globalState.ts'
 import { isElementProperlyVisible } from '@/utils/dom.ts'
 import type {
   BlockShellDecoratorProps,
@@ -28,7 +28,19 @@ export function BlockFocusShellDecorator({
   const {block} = resolveContext
   const blockInFocus = useInFocus(block.id)
   const inEditMode = useInEditMode(block.id)
-  const active = blockInFocus && isSurfaceActive(state)
+  // Gate the highlight on "this surface owns keystrokes": when the
+  // user crosses panels (j/l in spatial-nav, or a click), only the
+  // focused block in the *active* panel shows the bg-muted/95
+  // class. The inactive panel still has its `focusedBlockId` set —
+  // which we need so the highlight reappears when the user comes
+  // back via h/k/j/l — but suppressing the visual until then makes
+  // "where am I right now" unambiguous, and reading the per-panel
+  // marker on return ("here's where you left off") becomes the
+  // visual orientation cue. Non-panel surfaces (no layoutSession in
+  // context) trivially return true from useIsActivePanel.
+  const panelBlock = useUIStateBlock()
+  const panelActive = useIsActivePanel(panelBlock)
+  const active = blockInFocus && isSurfaceActive(state) && panelActive
 
   useLayoutEffect(() => {
     if (!active || inEditMode) return

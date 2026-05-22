@@ -198,12 +198,11 @@ export const useInEditMode = (blockId: string): boolean =>
  * when activePanelId hops between panels, only the two whose membership
  * flips re-render — the rest bail via `useSyncExternalStore`'s Object.is.
  *
- * When the panel is rendered OUTSIDE a layout session (no
- * `layoutSessionBlockId` in context — e.g. a standalone panel preview),
- * the hook subscribes to the panel block itself and the selector
- * returns false trivially: `activePanelIdProp` is never written on a
- * panel block, so `doc?.properties[name] === panelBlock.id` is
- * `undefined === panelBlock.id` → false.
+ * When the panel renders OUTSIDE a layout session (no
+ * `layoutSessionBlockId` in context — e.g. a standalone embedded or
+ * preview surface) the concept of "active panel" doesn't apply, so we
+ * return `true`. Consumers that gate UI on "this surface owns
+ * keystrokes" treat non-layout surfaces as trivially active.
  */
 export const useIsActivePanel = (panelBlock: Block): boolean => {
   const context = useBlockContext()
@@ -213,6 +212,8 @@ export const useIsActivePanel = (panelBlock: Block): boolean => {
     : null
   const subscriptionTarget = layoutSessionBlockId ? repo.block(layoutSessionBlockId) : panelBlock
   return useHandle(subscriptionTarget, {
-    selector: doc => doc?.properties[activePanelIdProp.name] === panelBlock.id,
+    selector: doc =>
+      layoutSessionBlockId === null
+      || doc?.properties[activePanelIdProp.name] === panelBlock.id,
   })
 }

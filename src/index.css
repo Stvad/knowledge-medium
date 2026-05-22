@@ -228,24 +228,15 @@
 @layer components {
   /* Active-panel indicator. Marks which panel currently owns
      keystrokes (driven by `activePanelIdProp` on the layout
-     session). Two cues stacked:
-       - inactive panels fade slightly (the :has() guard means a
-         single-panel layout — or the brief moment before the
-         layout session writes its fallback activePanelId — keeps
-         everything full strength)
-       - the active panel gets a soft elevation shadow tinted
-         with `--primary`, so it visibly lifts off the page even
-         when its neighbours aren't fully faded */
+     session) by fading the inactive panels. The :has() guard
+     means a single-panel layout — or the brief moment before
+     the layout session writes its fallback activePanelId —
+     keeps everything full strength. */
   .layout:has(.panel.panel-active) .panel:not(.panel-active) {
     opacity: 0.78;
   }
-  .panel.panel-active {
-    box-shadow:
-      0 1px 2px hsl(var(--primary) / 0.10),
-      0 4px 16px hsl(var(--primary) / 0.10);
-  }
   .panel {
-    transition: opacity 150ms ease, box-shadow 150ms ease;
+    transition: opacity 150ms ease;
   }
 
   .block {
