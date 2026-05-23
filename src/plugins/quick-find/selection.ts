@@ -13,6 +13,51 @@ export const quickFindCreateValue = (query: string) => `create:${query}`
 
 export const quickFindDateValue = (iso: string) => `date:${iso}`
 
+export type QuickFindOpenTarget = 'jump' | 'stack'
+
+interface QuickFindModifierState {
+  shiftKey?: boolean
+  metaKey?: boolean
+  ctrlKey?: boolean
+}
+
+interface QuickFindClickModifierState {
+  shiftKey?: boolean
+}
+
+export const quickFindOpenTargetFromModifiers = ({
+  shiftKey,
+  metaKey,
+  ctrlKey,
+}: QuickFindModifierState): QuickFindOpenTarget =>
+  shiftKey || metaKey || ctrlKey ? 'stack' : 'jump'
+
+export const quickFindOpenTargetFromClickModifiers = ({
+  shiftKey,
+}: QuickFindClickModifierState): QuickFindOpenTarget =>
+  shiftKey ? 'stack' : 'jump'
+
+export type QuickFindSelectionAction =
+  | {kind: 'create-page'; alias: string; target: QuickFindOpenTarget}
+  | {kind: 'open-date'; iso: string; target: QuickFindOpenTarget}
+  | {kind: 'open-block'; blockId: string; target: QuickFindOpenTarget}
+
+export const quickFindSelectionAction = (
+  selectedValue: string,
+  target: QuickFindOpenTarget,
+): QuickFindSelectionAction | null => {
+  const colonIdx = selectedValue.indexOf(':')
+  if (colonIdx === -1) return null
+  const kind = selectedValue.slice(0, colonIdx)
+  const payload = selectedValue.slice(colonIdx + 1)
+
+  if (kind === 'create') return {kind: 'create-page', alias: payload, target}
+  if (kind === 'date') return {kind: 'open-date', iso: payload, target}
+
+  const blockId = payload.split(':')[0]
+  return blockId ? {kind: 'open-block', blockId, target} : null
+}
+
 interface SelectionArgs {
   query: string
   aliases: LinkTargetAliasMatch[]

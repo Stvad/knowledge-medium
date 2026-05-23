@@ -1,4 +1,13 @@
-import { Suspense, use, useState, useEffect, useMemo, KeyboardEvent } from 'react'
+import {
+  Suspense,
+  use,
+  useState,
+  useEffect,
+  useMemo,
+  useRef,
+  type KeyboardEvent,
+  type MouseEvent,
+} from 'react'
 import {
   CommandDialog,
   CommandInput,
@@ -40,6 +49,10 @@ import {
   quickFindBlockValue,
   quickFindCreateValue,
   quickFindDateValue,
+  quickFindOpenTargetFromClickModifiers,
+  quickFindOpenTargetFromModifiers,
+  quickFindSelectionAction,
+  type QuickFindOpenTarget,
 } from './selection.ts'
 
 const SEARCH_LIMIT = 25
@@ -138,6 +151,7 @@ function QuickFindDialog({
     aliases: [],
     blocks: [],
   })
+  const pendingClickTarget = useRef<QuickFindOpenTarget | null>(null)
   const trimmedQuery = query.trim()
   // chrono-node parser is recreated each call; cheap, but memoize to keep
   // the resolved date stable across re-renders for the same input.
@@ -232,20 +246,18 @@ function QuickFindDialog({
     }
   }, [open, recentIds, repo])
 
-  const jumpToBlock = (blockId: string) => {
+  const openResolvedBlock = (blockId: string, target: QuickFindOpenTarget) => {
     if (!repo.activeWorkspaceId) return
     pushRecentBlockId(quickFindUIStateBlock, blockId)
-    navigateFromGlobalCommand({blockId})
+    if (target === 'stack') {
+      navigate({blockId, target: 'sidebar-stack', sourcePanelId: activePanelId})
+    } else {
+      navigateFromGlobalCommand({blockId})
+    }
     onOpenChange(false)
   }
 
-  const openInStackedPanel = (blockId: string) => {
-    pushRecentBlockId(quickFindUIStateBlock, blockId)
-    navigate({blockId, target: 'sidebar-stack', sourcePanelId: activePanelId})
-    onOpenChange(false)
-  }
-
-  const createPage = async (alias: string) => {
+  const createPage = async (alias: string, target: QuickFindOpenTarget) => {
     const workspaceId = repo.activeWorkspaceId
     if (!workspaceId) return
     const trimmed = alias.trim()
@@ -253,7 +265,7 @@ function QuickFindDialog({
 
     const existing = await repo.query.aliasLookup({workspaceId, alias: trimmed}).load()
     if (existing) {
-      jumpToBlock(existing.id)
+      openResolvedBlock(existing.id, target)
       return
     }
 
@@ -269,42 +281,48 @@ function QuickFindDialog({
       })
       await repo.addTypeInTx(tx, newId, PAGE_TYPE, {[aliasesProp.name]: [trimmed]}, typeSnapshot)
     }, {scope: ChangeScope.BlockDefault, description: 'create page from QuickFind'})
-    jumpToBlock(newId)
+    openResolvedBlock(newId, target)
   }
 
-  const openDailyNote = async (iso: string) => {
+  const openDailyNote = async (iso: string, target: QuickFindOpenTarget) => {
     const workspaceId = repo.activeWorkspaceId
     if (!workspaceId) return
     const note = await getOrCreateDailyNote(repo, workspaceId, iso)
-    jumpToBlock(note.id)
+    openResolvedBlock(note.id, target)
   }
 
-  const handleSelect = (selectedValue: string, openInPanel: boolean) => {
-    const colonIdx = selectedValue.indexOf(':')
-    if (colonIdx === -1) return
-    const kind = selectedValue.slice(0, colonIdx)
-    const payload = selectedValue.slice(colonIdx + 1)
+  const handleSelect = (selectedValue: string, target: QuickFindOpenTarget) => {
+    const action = quickFindSelectionAction(selectedValue, target)
+    if (!action) return
 
-    if (kind === 'create') {
-      void createPage(payload)
+    if (action.kind === 'create-page') {
+      void createPage(action.alias, action.target)
       return
     }
-    if (kind === 'date') {
-      void openDailyNote(payload)
+    if (action.kind === 'open-date') {
+      void openDailyNote(action.iso, action.target)
       return
     }
-    const blockId = payload.split(':')[0]
-    if (!blockId) return
-    if (openInPanel) openInStackedPanel(blockId)
-    else jumpToBlock(blockId)
+    openResolvedBlock(action.blockId, action.target)
   }
 
-  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === 'Enter' && (event.shiftKey || event.metaKey || event.ctrlKey)) {
-      event.preventDefault()
-      event.stopPropagation()
-      if (value) handleSelect(value, true)
-    }
+  const handleKeyDown = (event: KeyboardEvent) => {
+    if (event.key !== 'Enter') return
+    const target = quickFindOpenTargetFromModifiers(event)
+    if (target !== 'stack') return
+    event.preventDefault()
+    event.stopPropagation()
+    if (value) handleSelect(value, target)
+  }
+
+  const handleItemClickCapture = (event: MouseEvent) => {
+    pendingClickTarget.current = quickFindOpenTargetFromClickModifiers(event)
+  }
+
+  const handleItemSelect = (selectedValue: string) => {
+    const target = pendingClickTarget.current ?? 'jump'
+    pendingClickTarget.current = null
+    handleSelect(selectedValue, target)
   }
 
   const exactAliasMatch = aliases.some(
@@ -327,6 +345,7 @@ function QuickFindDialog({
         shouldFilter: false,
         value,
         onValueChange: setValue,
+        onKeyDown: handleKeyDown,
       }}
     >
       <CommandInput
@@ -336,7 +355,6 @@ function QuickFindDialog({
           setQuery(nextQuery)
           setValue('')
         }}
-        onKeyDown={handleKeyDown}
       />
       <CommandList>
         <CommandEmpty>
@@ -349,7 +367,8 @@ function QuickFindDialog({
               <CommandItem
                 key={`recent:${item.blockId}`}
                 value={`recent:${item.blockId}`}
-                onSelect={selectedValue => handleSelect(selectedValue, false)}
+                onClickCapture={handleItemClickCapture}
+                onSelect={handleItemSelect}
                 className="flex justify-between items-center"
               >
                 <span className="truncate">{truncate(item.label)}</span>
@@ -368,7 +387,8 @@ function QuickFindDialog({
                 <CommandItem
                   key={`date:${candidate.iso}:${candidate.phrase}`}
                   value={dateValues[index]}
-                  onSelect={selectedValue => handleSelect(selectedValue, false)}
+                  onClickCapture={handleItemClickCapture}
+                  onSelect={handleItemSelect}
                   className="flex justify-between items-center gap-2"
                 >
                   <span className="truncate">{formatRoamDate(candidate.date)}</span>
@@ -385,7 +405,8 @@ function QuickFindDialog({
               <CommandItem
                 key={`page:${match.blockId}:${match.alias}`}
                 value={quickFindAliasValue(match)}
-                onSelect={selectedValue => handleSelect(selectedValue, false)}
+                onClickCapture={handleItemClickCapture}
+                onSelect={handleItemSelect}
                 className="flex justify-between items-center gap-2"
               >
                 <span className="truncate">{match.alias}</span>
@@ -405,7 +426,8 @@ function QuickFindDialog({
               <CommandItem
                 key={`block:${match.blockId}`}
                 value={quickFindBlockValue(match)}
-                onSelect={selectedValue => handleSelect(selectedValue, false)}
+                onClickCapture={handleItemClickCapture}
+                onSelect={handleItemSelect}
               >
                 <span className="truncate">{truncate(match.content)}</span>
               </CommandItem>
@@ -418,7 +440,8 @@ function QuickFindDialog({
             <CommandItem
               key={`create:${trimmedQuery}`}
               value={quickFindCreateValue(trimmedQuery)}
-              onSelect={selectedValue => handleSelect(selectedValue, false)}
+              onClickCapture={handleItemClickCapture}
+              onSelect={handleItemSelect}
             >
               <span>Create page “{trimmedQuery}”</span>
             </CommandItem>
