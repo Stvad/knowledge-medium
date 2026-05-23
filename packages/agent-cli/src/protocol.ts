@@ -37,11 +37,229 @@ export type TokenAudience = z.infer<typeof tokenAudienceSchema>
  * Wire envelope for every command body POSTed to /runtime/commands.
  * Only the `type` discriminator is mandatory; the rest of the keys
  * are command-specific and pass through to the kernel handler.
+ *
+ * This is the *bridge-side* schema — intentionally loose so the bridge
+ * forwards anything with a string `type` to the kernel. The strict,
+ * per-verb shapes live in `knownCommandSchema` below and are what CLI
+ * construction sites + the kernel dispatch switch type-check against.
  */
 export const commandPayloadSchema = z.looseObject({
   type: z.string(),
 })
 export type CommandPayload = z.infer<typeof commandPayloadSchema>
+
+// ---------- Known command discriminated union ----------
+//
+// Each branch below pins the body shape for a specific kernel handler.
+// The bridge keeps using `commandPayloadSchema` for wire-level
+// validation (so an extension can `kmagent raw '{"type":...}'` an
+// unknown command and have it forwarded to the kernel for a clearer
+// error). The strict per-verb schemas are for:
+//   - The CLI: `runCommand(cmd: KnownCommand)` checks construction
+//     sites against the right shape at compile time.
+//   - The kernel: `executeCommand(cmd: KnownAgentCommand)` narrows
+//     inside the switch so each case sees only the fields it should.
+//
+// `commandId` is appended by the bridge when forwarding, so it's
+// optional on every variant — CLI callers don't set it; the kernel
+// always sees it.
+
+const commandIdField = {commandId: z.string().optional()}
+
+// All variant schemas use `looseObject` so the kernel's existing
+// field-access fallbacks (e.g. `command.id ?? command.actionId`,
+// `command.blockId` for get-block, `command.properties` on
+// create/update-block) keep working when the dispatch switch
+// narrows. Declared fields are still type-checked; extras flow
+// through as `unknown` via the inferred index signature.
+
+export const pingCommandSchema = z.looseObject({
+  type: z.literal('ping'),
+  ...commandIdField,
+})
+
+export const runtimeSummaryCommandSchema = z.looseObject({
+  type: z.literal('runtime-summary'),
+  ...commandIdField,
+})
+
+export const describeRuntimeCommandSchema = z.looseObject({
+  type: z.literal('describe-runtime'),
+  actions: z.array(z.string()).optional(),
+  facets: z.array(z.string()).optional(),
+  guides: z.array(z.string()).optional(),
+  // Kernel also accepts a singular `guide` (string or array) for
+  // back-compat; the CLI always sends `guides` after cac parsing.
+  guide: z.union([z.string(), z.array(z.string())]).optional(),
+  modules: z.array(z.string()).optional(),
+  components: z.array(z.string()).optional(),
+  storage: z.boolean().optional(),
+  brief: z.boolean().optional(),
+  ...commandIdField,
+})
+
+export const sqlModeSchema = z.enum(['all', 'get', 'optional', 'execute'])
+export type SqlMode = z.infer<typeof sqlModeSchema>
+
+export const sqlCommandSchema = z.looseObject({
+  type: z.literal('sql'),
+  sql: z.string(),
+  mode: sqlModeSchema.optional(),
+  params: z.array(z.unknown()).optional(),
+  ...commandIdField,
+})
+
+export const getBlockCommandSchema = z.looseObject({
+  type: z.literal('get-block'),
+  // Either id or blockId — the kernel handler accepts both. Keeping
+  // both optional + a refine at the union level would break
+  // discriminatedUnion, so we leave the constraint to runtime.
+  id: z.string().optional(),
+  blockId: z.string().optional(),
+  ...commandIdField,
+})
+
+export const getSubtreeCommandSchema = z.looseObject({
+  type: z.literal('get-subtree'),
+  rootId: z.string(),
+  includeRoot: z.boolean().optional(),
+  ...commandIdField,
+})
+
+export const createBlockCommandSchema = z.looseObject({
+  type: z.literal('create-block'),
+  parentId: z.string().optional(),
+  // position, content, properties forwarded verbatim (looseObject).
+  ...commandIdField,
+})
+
+export const updateBlockCommandSchema = z.looseObject({
+  type: z.literal('update-block'),
+  id: z.string().optional(),
+  blockId: z.string().optional(),
+  content: z.string().optional(),
+  replaceProperties: z.boolean().optional(),
+  // properties forwarded verbatim (looseObject).
+  ...commandIdField,
+})
+
+export const installExtensionCommandSchema = z.looseObject({
+  type: z.literal('install-extension'),
+  source: z.string(),
+  label: z.string().optional(),
+  description: z.string().optional(),
+  parentId: z.string().optional(),
+  id: z.string().optional(),
+  reload: z.boolean().optional(),
+  verify: z.boolean().optional(),
+  ...commandIdField,
+})
+
+export const enableExtensionCommandSchema = z.looseObject({
+  type: z.literal('enable-extension'),
+  id: z.string().optional(),
+  label: z.string().optional(),
+  ...commandIdField,
+})
+
+export const disableExtensionCommandSchema = z.looseObject({
+  type: z.literal('disable-extension'),
+  id: z.string().optional(),
+  label: z.string().optional(),
+  ...commandIdField,
+})
+
+/** Legacy alias for enable/disable-extension — accepts an explicit
+ *  `enabled: boolean` field. Not surfaced in the CLI but kept in the
+ *  kernel-handled union so older callers (or arbitrary `kmagent raw`
+ *  bodies) keep working. */
+export const setExtensionEnabledCommandSchema = z.looseObject({
+  type: z.literal('set-extension-enabled'),
+  id: z.string().optional(),
+  label: z.string().optional(),
+  enabled: z.boolean(),
+  ...commandIdField,
+})
+
+export const uninstallExtensionCommandSchema = z.looseObject({
+  type: z.literal('uninstall-extension'),
+  id: z.string().optional(),
+  label: z.string().optional(),
+  ...commandIdField,
+})
+
+export const runActionCommandSchema = z.looseObject({
+  type: z.literal('run-action'),
+  id: z.string(),
+  dependencies: z.record(z.string(), z.unknown()).optional(),
+  ...commandIdField,
+})
+
+/** Legacy alias — the kernel handles `'action'` the same way as
+ *  `'run-action'`. Kept in the union so the kernel switch can match
+ *  it after narrowing. */
+export const actionCommandSchema = z.looseObject({
+  type: z.literal('action'),
+  id: z.string(),
+  dependencies: z.record(z.string(), z.unknown()).optional(),
+  ...commandIdField,
+})
+
+export const evalCommandSchema = z.looseObject({
+  type: z.literal('eval'),
+  code: z.string(),
+  ...commandIdField,
+})
+
+/** Canonical commands the CLI emits. The 1:1 mapping to kmagent
+ *  verbs makes this the right type for CLI construction sites. */
+export const knownCommandSchema = z.discriminatedUnion('type', [
+  pingCommandSchema,
+  runtimeSummaryCommandSchema,
+  describeRuntimeCommandSchema,
+  sqlCommandSchema,
+  getBlockCommandSchema,
+  getSubtreeCommandSchema,
+  createBlockCommandSchema,
+  updateBlockCommandSchema,
+  installExtensionCommandSchema,
+  enableExtensionCommandSchema,
+  disableExtensionCommandSchema,
+  uninstallExtensionCommandSchema,
+  runActionCommandSchema,
+  evalCommandSchema,
+])
+
+/** Strict shape for any known wire command. CLI authors construct
+ *  these; the kernel narrows on `.type` in its dispatch switch. */
+export type KnownCommand = z.infer<typeof knownCommandSchema>
+
+/** The literal string union of every known wire command type. */
+export type KnownCommandType = KnownCommand['type']
+
+/** Full set of commands the kernel handles — canonical + legacy
+ *  aliases (`set-extension-enabled`, `action`). Used by the bridge
+ *  to validate incoming commands and by the kernel's executeCommand
+ *  switch for exhaustive narrowing. */
+export const knownAgentCommandSchema = z.discriminatedUnion('type', [
+  pingCommandSchema,
+  runtimeSummaryCommandSchema,
+  describeRuntimeCommandSchema,
+  sqlCommandSchema,
+  getBlockCommandSchema,
+  getSubtreeCommandSchema,
+  createBlockCommandSchema,
+  updateBlockCommandSchema,
+  installExtensionCommandSchema,
+  enableExtensionCommandSchema,
+  disableExtensionCommandSchema,
+  setExtensionEnabledCommandSchema,
+  uninstallExtensionCommandSchema,
+  runActionCommandSchema,
+  actionCommandSchema,
+  evalCommandSchema,
+])
+export type KnownAgentCommand = z.infer<typeof knownAgentCommandSchema>
 
 export const commandStatusSchema = z.enum(['pending', 'delivered', 'completed', 'failed'])
 export type CommandStatus = z.infer<typeof commandStatusSchema>

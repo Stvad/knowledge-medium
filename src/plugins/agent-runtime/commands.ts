@@ -30,9 +30,9 @@ import {
   describeRuntimeSummary,
   pingRuntime,
 } from './describeRuntime.ts'
+import type {KnownAgentCommand} from '@knowledge-medium/agent-cli/protocol'
 import type {
   AgentRuntimeBridgeOptions,
-  AgentRuntimeCommand,
   AgentRuntimeContext,
   BlockPosition,
   CreateBlockInput,
@@ -96,7 +96,7 @@ const getPosition = (value: unknown): BlockPosition | undefined => {
   return value
 }
 
-const getBlockDataInput = (command: AgentRuntimeCommand): Partial<BlockData> => {
+const getBlockDataInput = (command: KnownAgentCommand): Partial<BlockData> => {
   const data = isRecord(command.data)
     ? structuredClone(command.data) as Partial<BlockData>
     : {}
@@ -550,7 +550,7 @@ const runtimeBlock = (
 ) => isString(id) && id ? repo.block(id) : null
 
 const runRuntimeAction = async (
-  command: AgentRuntimeCommand,
+  command: KnownAgentCommand,
   context: AgentRuntimeContext,
 ) => {
   const actionId = requireString(command.id ?? command.actionId, 'actionId')
@@ -690,7 +690,7 @@ export const createAgentRuntimeContext = ({
 }
 
 export const executeCommand = async (
-  command: AgentRuntimeCommand,
+  command: KnownAgentCommand,
   context: AgentRuntimeContext,
 ) => {
   switch (command.type) {
@@ -820,7 +820,12 @@ export const executeCommand = async (
     case 'eval':
       return executeArbitraryCode(requireString(command.code, 'code'), context)
 
-    default:
-      throw new Error(`Unknown agent runtime command: ${command.type}`)
+    default: {
+      // Exhaustive — the union covers everything; TS narrows `command`
+      // to `never` here. Keep the error path defensively in case the
+      // bridge's safeParse pre-validation is ever relaxed.
+      const unreachable = command as {type: string}
+      throw new Error(`Unknown agent runtime command: ${unreachable.type}`)
+    }
   }
 }

@@ -16,9 +16,10 @@ import {
 } from './config.js'
 import {
   type Audience,
-  type CommandPayload,
   type CommandResult,
   type CommandStatusResponse,
+  type KnownCommand,
+  sqlModeSchema,
   type WhoamiInfo,
 } from './protocol.js'
 import { renderKernelDts } from './kernelDts.js'
@@ -596,7 +597,7 @@ const authedRequest = async <T = unknown>(
   }
 }
 
-const submitCommand = async (command: CommandPayload): Promise<string> => {
+const submitCommand = async (command: KnownCommand): Promise<string> => {
   const response = await authedRequest<{id: string}>(`${bridgeUrl}/runtime/commands`, {
     method: 'POST',
     body: JSON.stringify(command),
@@ -627,7 +628,7 @@ const waitForCommand = async (
   throw new Error(`Timed out waiting for runtime command ${id}`)
 }
 
-const runCommand = async (command: CommandPayload): Promise<unknown> => {
+const runCommand = async (command: KnownCommand): Promise<unknown> => {
   const id = await submitCommand(command)
   const result = await waitForCommand(id)
 
@@ -642,7 +643,7 @@ const runCommand = async (command: CommandPayload): Promise<unknown> => {
 /** Helper: connect to the bridge, run a wire-protocol command, and
  *  pretty-print the result. Used by the "thin" bridge-fronting commands
  *  (sql, get-block, runtime-summary, install-extension, …). */
-const runAndPrint = async (command: CommandPayload): Promise<void> => {
+const runAndPrint = async (command: KnownCommand): Promise<void> => {
   await ensureBridgeRunning()
   const value = await runCommand(command)
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
@@ -811,12 +812,18 @@ cli
 cli
   .command('sql <mode> <sql> [paramsJson]', 'Run SQL (mode: all|get|optional|execute)')
   .action(async (mode: string, sql: string, paramsJson: string | undefined) => {
-    await runAndPrint({
-      type: 'sql',
-      mode,
-      sql,
-      params: paramsJson ? parseJson(paramsJson, 'paramsJson') : [],
-    })
+    // Parse mode + params through the schemas so an invalid `--mode`
+    // or non-array params fails fast with a clear error instead of
+    // round-tripping to the bridge for a less specific rejection.
+    const parsedMode = sqlModeSchema.safeParse(mode)
+    if (!parsedMode.success) {
+      throw new Error(`sql mode must be one of: all|get|optional|execute (got "${mode}")`)
+    }
+    const params = paramsJson ? parseJson(paramsJson, 'paramsJson') : []
+    if (!Array.isArray(params)) {
+      throw new Error('paramsJson must be a JSON array')
+    }
+    await runAndPrint({type: 'sql', mode: parsedMode.data, sql, params})
   })
 
 cli
@@ -892,10 +899,14 @@ cli
 cli
   .command('run-action <id> [depsJson]', 'Run a registered action by id')
   .action(async (id: string, depsJson: string | undefined) => {
+    const dependencies = depsJson ? parseJson(depsJson, 'depsJson') : {}
+    if (typeof dependencies !== 'object' || dependencies === null || Array.isArray(dependencies)) {
+      throw new Error('depsJson must be a JSON object')
+    }
     await runAndPrint({
       type: 'run-action',
       id,
-      dependencies: depsJson ? parseJson(depsJson, 'depsJson') : {},
+      dependencies: dependencies as Record<string, unknown>,
     })
   })
 
@@ -918,7 +929,12 @@ cli
 cli
   .command('raw <json>', 'Send a raw JSON command envelope to the bridge')
   .action(async (json: string) => {
-    const command = parseJson(json, 'raw json') as CommandPayload
+    // `raw` is the typed-discrimination escape hatch — the user
+    // explicitly wants to send whatever they wrote, including future
+    // command types the CLI doesn't know about yet. The cast lets
+    // them through; the bridge / kernel still rejects malformed
+    // bodies.
+    const command = parseJson(json, 'raw json') as KnownCommand
     await runAndPrint(command)
   })
 

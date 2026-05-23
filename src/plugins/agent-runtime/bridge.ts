@@ -2,7 +2,8 @@ import type { AppEffectCleanup } from '@/extensions/core.js'
 import { agentTokenStore, agentTokensChangedEvent } from './tokens.ts'
 import { createAgentRuntimeContext, executeCommand } from './commands.ts'
 import { serializeError, serializeValue } from './serialization.ts'
-import type { AgentRuntimeBridgeOptions, AgentRuntimeCommand } from './protocol.ts'
+import type { AgentRuntimeBridgeOptions } from './protocol.ts'
+import { knownAgentCommandSchema } from '@knowledge-medium/agent-cli/protocol'
 
 const defaultBridgeUrl = 'http://127.0.0.1:8787'
 const bridgeUrlStorageKey = 'agent-runtime:bridge-url'
@@ -239,20 +240,41 @@ export const startAgentRuntimeBridge = (
           throw new Error(`Agent runtime bridge poll failed: ${response.status}`)
         }
 
-        const command = await response.json() as AgentRuntimeCommand | null
+        const rawCommand = await response.json() as unknown
         retryMs = retryBaseMs
         attempts = 0
 
-        if (!command) continue
+        if (!rawCommand) continue
 
+        // Validate at the bridge boundary so an unknown command type
+        // gets a clean, structured error before the kernel switch ever
+        // runs. The schema also gives `executeCommand` a strict
+        // discriminated-union argument — its switch then narrows on
+        // each case.
+        const parsed = knownAgentCommandSchema.safeParse(rawCommand)
+        const commandIdForResult = (rawCommand as {commandId?: string})?.commandId
+
+        if (!parsed.success) {
+          if (commandIdForResult) {
+            await reportResult(commandIdForResult, {
+              ok: false,
+              error: serializeError(
+                new Error(`Invalid command body: ${parsed.error.issues.map(i => i.message).join('; ')}`),
+              ),
+            })
+          }
+          continue
+        }
+
+        const command = parsed.data
         try {
           const value = await executeCommand(command, createAgentRuntimeContext(options))
-          await reportResult(command.commandId, {
+          await reportResult(command.commandId!, {
             ok: true,
             value: serializeValue(value),
           })
         } catch (error) {
-          await reportResult(command.commandId, {
+          await reportResult(command.commandId!, {
             ok: false,
             error: serializeError(error),
           })

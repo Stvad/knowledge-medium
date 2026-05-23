@@ -48,6 +48,16 @@ export default defineConfig(({command}) => {
         resolve: {
             alias: {
                 '@': path.resolve(__dirname, './src'),
+                // Resolve the kernel's import of the wire-protocol schemas
+                // to the agent-cli source. The schemas live in the
+                // publishable package; the kernel uses them at runtime
+                // (bridge.ts validates incoming JSON with
+                // knownAgentCommandSchema.safeParse) and at type time
+                // (commands.ts narrows on the discriminated union).
+                '@knowledge-medium/agent-cli/protocol': path.resolve(
+                    __dirname,
+                    './packages/agent-cli/src/protocol.ts',
+                ),
             },
         },
         optimizeDeps: {
