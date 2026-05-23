@@ -172,3 +172,18 @@ export default tseslint.config({
   },
 })
 ```
+
+## License
+
+This repository is licensed under the [Elastic License 2.0](./LICENSE). In
+short: you can use, copy, modify, and self-host the software freely; you may
+**not** offer it to third parties as a hosted or managed service that
+replicates a substantial part of its functionality.
+
+The `packages/agent-cli` sub-package is licensed separately under the
+[MIT License](./packages/agent-cli/LICENSE) so it can be used as an open
+integration surface by third-party tooling.
+
+See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for contribution terms, including
+the license grant that preserves the project's ability to relicense future
+versions.

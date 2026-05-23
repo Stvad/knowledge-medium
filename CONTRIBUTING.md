@@ -2,6 +2,14 @@
 
 Thanks for your interest in contributing.
 
+## License
+
+This repository is licensed under the [Elastic License 2.0](./LICENSE) — you
+can use, modify, and self-host the software, but you may not offer it as a
+hosted/managed service to third parties. The `packages/agent-cli` sub-package
+is licensed under the [MIT License](./packages/agent-cli/LICENSE) as an
+intentional open integration surface.
+
 ## How to contribute
 
 1. Open an issue describing the change before doing significant work, so we can align on direction.
