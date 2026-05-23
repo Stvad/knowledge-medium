@@ -176,7 +176,9 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     description: 'Zoom into focused block',
     icon: ZoomIn,
     handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
-      await navigateInPanel(uiStateBlock, block.id)
+      await withMoveTransition(async () => {
+        await navigateInPanel(uiStateBlock, block.id)
+      })
     },
     defaultBinding: {
       keys: ['cmd+.', 'ctrl+.'],
@@ -194,7 +196,9 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       const parent = repo.block(topLevelBlockId).parent
       if (!parent) return
 
-      await navigateInPanel(uiStateBlock, parent.id)
+      await withMoveTransition(async () => {
+        await navigateInPanel(uiStateBlock, parent.id)
+      })
     },
     defaultBinding: {
       keys: 'ctrl+,',
@@ -835,9 +839,11 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         if (!selectedBlocks.length) return
 
         await copySelectedBlocksToClipboard(uiStateBlock, repo)
-        for (const block of selectedBlocks.toReversed()) {
-          await block.delete()
-        }
+        await withMoveTransition(async () => {
+          for (const block of selectedBlocks.toReversed()) {
+            await block.delete()
+          }
+        })
         await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
       },
       defaultBinding: {
@@ -856,7 +862,10 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const target = selectedBlocks.at(-1)
         if (!target) return
 
-        const pasted = await pasteFromClipboard(target, repo, {position: 'after'})
+        let pasted: Block[] = []
+        await withMoveTransition(async () => {
+          pasted = await pasteFromClipboard(target, repo, {position: 'after'})
+        })
         if (pasted[0]) {
           await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
           void focusBlock(uiStateBlock, pasted[0].id)
@@ -875,7 +884,10 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const target = selectedBlocks[0]
         if (!target) return
 
-        const pasted = await pasteFromClipboard(target, repo, {position: 'before'})
+        let pasted: Block[] = []
+        await withMoveTransition(async () => {
+          pasted = await pasteFromClipboard(target, repo, {position: 'before'})
+        })
         if (pasted[0]) {
           await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
           void focusBlock(uiStateBlock, pasted[0].id)

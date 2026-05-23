@@ -194,7 +194,9 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     handler: async (deps: BlockShortcutDependencies) => {
       const {block, uiStateBlock} = deps
       if (!block) return
-      await reorderBlock(repo, block, -1)
+      await withMoveTransition(async () => {
+        await reorderBlock(repo, block, -1)
+      })
       requestEditorFocusIfEditing(uiStateBlock)
     },
     defaultBinding: {
@@ -211,7 +213,9 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     handler: async (deps: BlockShortcutDependencies) => {
       const {block, uiStateBlock} = deps
       if (!block) return
-      await reorderBlock(repo, block, 1)
+      await withMoveTransition(async () => {
+        await reorderBlock(repo, block, 1)
+      })
       requestEditorFocusIfEditing(uiStateBlock)
     },
     defaultBinding: {
@@ -242,7 +246,9 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       // `PanelFocusRecovery` does on the DOM side, so manual deletes
       // and surprise disappearances both land on the same target.
       const next = await blockAfterSubtreeRemoval(block, topLevelBlockId)
-      await block.delete()
+      await withMoveTransition(async () => {
+        await block.delete()
+      })
       if (next) void focusBlock(uiStateBlock, next.id)
     },
     defaultBinding: {
