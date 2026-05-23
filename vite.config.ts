@@ -7,6 +7,23 @@ import wasm from "vite-plugin-wasm"
 import {unifySrcJsUrlsPlugin} from './vite-plugins/unifySrcJsUrls'
 // import noBundlePlugin from 'vite-plugin-no-bundle';
 
+type RollupLogLike = {
+    code?: string
+    id?: string
+    loc?: {
+        file?: string
+    }
+    message: string
+}
+
+const isDashjsCommonjsVariableWarning = (log: RollupLogLike) => {
+    if (log.code !== 'COMMONJS_VARIABLE_IN_ESM') return false
+
+    return [log.id, log.loc?.file, log.message].some(value =>
+        value?.includes('node_modules/dashjs/dist/modern/esm/dash.all.min.js'),
+    )
+}
+
 // https://vite.dev/config/
 export default defineConfig(({command}) => {
     const isDev = command === 'serve';
@@ -73,6 +90,10 @@ export default defineConfig(({command}) => {
         },
         build: {
             rollupOptions: {
+                onLog(level, log, defaultHandler) {
+                    if (isDashjsCommonjsVariableWarning(log)) return
+                    defaultHandler(level, log)
+                },
                 //     // Mark react and react-dom as external to rely on the import map
                 external: [
                     'react',
