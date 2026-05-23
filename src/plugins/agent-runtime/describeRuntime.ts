@@ -499,6 +499,10 @@ export const describeRuntimeSummary = async (
         command: 'yarn agent describe-runtime --modules dialog --components dialog,input,button',
       },
       {
+        need: 'Install compiled declarations for extension authoring, or inspect one module declaration',
+        command: 'yarn agent types agent-extensions/kernel-types  # or: yarn agent types --module "@/extensions/api.js"',
+      },
+      {
         need: 'Bridge clients and pending command queue',
         command: 'yarn agent status',
       },

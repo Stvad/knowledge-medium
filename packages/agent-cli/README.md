@@ -56,7 +56,7 @@ The CLI exposes both *local* commands (pairing, profile management) and *bridge*
 | `kmagent eval [--raw] [--file <path>] <code>` | Run JS in the app (use `return …` to print a value). |
 | `kmagent reload` | Hard-reload the app tab and wait for it to reconnect. |
 | `kmagent navigate <hash>` | Set `window.location.hash`. |
-| `kmagent types [outDir]` | Write compiled declarations for Knowledge Medium `@/` modules (see *Type-vending* below). |
+| `kmagent types [outDir]` | Write compiled declarations for Knowledge Medium `@/` modules; `--module <spec>` prints one declaration. |
 | `kmagent raw <json>` | Send an arbitrary JSON command envelope to the bridge. |
 
 Run `kmagent <command> --help` for per-command details or `kmagent --help` for the full menu.
@@ -84,6 +84,8 @@ When you're authoring an extension that imports from Knowledge Medium modules (`
 kmagent types agent-extensions/kernel-types
 ```
 
+This directory form is the setup path for editors and typecheckers. It copies the published CLI's `dist/kernel-types` snapshot, so it reflects the app source at the time that CLI package was built.
+
 The command prints the `compilerOptions.paths` mapping to add to your extension-authoring `tsconfig.json`, usually:
 
 ```json
@@ -98,7 +100,7 @@ The command prints the `compilerOptions.paths` mapping to add to your extension-
 
 Re-run with `--force` after updating the app or CLI.
 
-For quick inspection, print one compiled declaration to stdout:
+For quick inspection, print one compiled module declaration to stdout:
 
 ```bash
 kmagent types --module '@/extensions/api.js'

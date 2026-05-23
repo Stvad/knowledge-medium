@@ -247,6 +247,7 @@ describe('describeRuntime', () => {
     expect(patternIds).toContain('imported-record-blocks')
 
     expect(summary.more.map(hint => hint.command)).toContain('yarn agent status')
+    expect(summary.more.some(hint => hint.command.includes('yarn agent types agent-extensions/kernel-types'))).toBe(true)
     expect(JSON.stringify(summary)).not.toContain('valueSummary')
   })
 
@@ -268,6 +269,8 @@ describe('describeRuntime', () => {
       guide => guide.id === 'external-sync-plugin',
     )
     expect(syncGuide).toBeDefined()
+    expect(syncGuide?.commands).toContain('yarn agent types agent-extensions/kernel-types')
+    expect(syncGuide?.commands).toContain('yarn agent types --module "@/extensions/api.js"')
 
     // Disabled-by-default rescue — the highest-friction paper cut from
     // the previous bridge surface. If this assertion fails, the agent

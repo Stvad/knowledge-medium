@@ -591,6 +591,8 @@ const guides: AuthoringGuide[] = [
     commands: [
       'yarn agent describe-runtime --components dialog,input,button,label',
       'yarn agent describe-runtime --modules components/ui',
+      'yarn agent types agent-extensions/kernel-types',
+      'yarn agent types --module "@/components/ui/dialog.js"',
     ],
     examples: [
       settingsDialogExample,
@@ -614,6 +616,8 @@ const guides: AuthoringGuide[] = [
     commands: [
       'yarn agent describe-runtime --storage',
       'yarn agent describe-runtime --facets data.propertySchemas',
+      'yarn agent types agent-extensions/kernel-types',
+      'yarn agent types --module "@/extensions/api.js"',
     ],
     examples: [
       storageGuide.patterns.find(p => p.id === 'user-prefs-config')!.example!,
