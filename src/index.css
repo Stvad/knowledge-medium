@@ -247,6 +247,19 @@
     word-break: normal;
   }
 
+  /* Soft background fade for selection (multi-select) and keyboard
+     focus. Without this, `bg-accent/80` (toggled on `.tm-block` by
+     `useIsSelected`) and `bg-muted/95` (toggled on the focused block's
+     content row by `BlockFocusShellDecorator`) snap on/off the moment
+     the user moves selection or focus — visually noisy on rapid j/k
+     stepping. The same selectors that receive those classes are the
+     only ones that animate, so unrelated background changes elsewhere
+     in the block aren't affected. */
+  .tm-block,
+  .tm-block > .block-body > div:first-child {
+    transition: background-color 150ms ease;
+  }
+
   .block-body {
     @apply flex-1;
     min-width: 0; /* Prevents flex items from overflowing */
