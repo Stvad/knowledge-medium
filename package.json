@@ -11,7 +11,7 @@
   ],
   "scripts": {
     "dev": "vite",
-    "compile": "tsc -b",
+    "compile": "tsc -b && chmod +x packages/agent-cli/dist/cli.js packages/agent-cli/dist/server.js",
     "build": "yarn run compile && vite build --mode development && node scripts/inject-sw-build-id.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
@@ -22,8 +22,8 @@
     "check:sync-config": "vite-node scripts/gen-sync-config.ts -- --check",
     "check:no-service-role": "bash scripts/check-no-service-role.sh",
     "check": "yarn run compile && yarn run lint && yarn run test && yarn run check:sync-config && yarn run check:no-service-role",
-    "agent:server": "node packages/agent-cli/src/server.mjs",
-    "agent": "node packages/agent-cli/src/cli.mjs",
+    "agent:server": "node packages/agent-cli/dist/server.js",
+    "agent": "node packages/agent-cli/dist/cli.js",
     "bench": "vite-node scripts/bench/index.ts"
   },
   "dependencies": {

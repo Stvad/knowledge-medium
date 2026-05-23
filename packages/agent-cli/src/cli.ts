@@ -11,10 +11,10 @@ import {
   isLocalBridgeUrl,
   pairingUrl,
   tokenStorePath as resolveTokenStorePath,
-} from './config.mjs'
+} from './config.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-const serverScript = path.join(here, 'server.mjs')
+const serverScript = path.join(here, 'server.js')
 const bridgeUrl = resolveBridgeUrl()
 const pollIntervalMs = 100
 const defaultTimeoutMs = 30_000
@@ -74,12 +74,76 @@ Profile selection:
   AGENT_RUNTIME_PROFILE=<name>    default selected profile for this command
 `
 
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+// Narrow a thrown `unknown` to NodeJS fs/HTTP errors so we can check
+// `.code === 'ENOENT'` etc without sprinkling `as any` everywhere.
+const isErrnoException = (error: unknown): error is NodeJS.ErrnoException =>
+  error instanceof Error && typeof (error as NodeJS.ErrnoException).code === 'string'
 
-const canAutoStartBridge = () =>
+const errorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error)
+
+interface TokenRecord {
+  token: string
+  savedAt?: number
+}
+
+interface TokenStore {
+  profiles: Record<string, TokenRecord>
+}
+
+// Whoami / status / command response shapes — the bridge & kernel
+// shape these JSON-side; once we have zod schemas we'll generate
+// the types from them. For now, hand-written.
+
+interface Audience {
+  userId: string | null
+  workspaceId: string | null
+}
+
+interface WhoamiInfo {
+  clientId: string
+  audience: Audience
+  scope: 'read-write' | 'read-only'
+  connected: boolean
+  clientLastSeen: number | null
+}
+
+interface CommandRecord {
+  status: 'pending' | 'delivered' | 'completed' | 'failed'
+  result: {ok: boolean, value?: unknown, error?: {message?: string}} | null
+  clientId: string | null
+}
+
+/** Subset of fetch's `RequestInit` we use. Typed narrowly so the
+ *  helpers below stay free of `any`s. */
+interface RequestOptions {
+  method?: string
+  body?: string
+  headers?: Record<string, string>
+}
+
+/** Per-client record returned by GET /health?detail=1 — typed loose
+ *  (only the fields we read for the `ping` summary). */
+interface BridgeStatusClient {
+  id?: string
+  lastSeen?: number
+  tokenCount?: number
+  audience?: Audience | null
+  metadata?: {activeWorkspaceId?: unknown, currentUser?: unknown}
+}
+
+interface BridgeStatusResponse {
+  ok?: boolean
+  clients?: BridgeStatusClient[]
+}
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise(resolve => setTimeout(resolve, ms))
+
+const canAutoStartBridge = (): boolean =>
   !process.env.AGENT_RUNTIME_URL && isLocalBridgeUrl(bridgeUrl)
 
-const parseJson = (value, label) => {
+const parseJson = (value: string, label: string): unknown => {
   try {
     return JSON.parse(value)
   } catch {
@@ -87,8 +151,16 @@ const parseJson = (value, label) => {
   }
 }
 
-const parseDescribeRuntimeArgs = args => {
-  const filters = {
+const parseDescribeRuntimeArgs = (args: string[]) => {
+  const filters: {
+    actions: string[]
+    facets: string[]
+    guides: string[]
+    modules: string[]
+    components: string[]
+    storage: boolean
+    brief?: boolean
+  } = {
     actions: [],
     facets: [],
     guides: [],
@@ -103,7 +175,7 @@ const parseDescribeRuntimeArgs = args => {
 
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i]
-    const readValue = flag => {
+    const readValue = (flag: string): string => {
       const value = args[i + 1]
       if (!value) throw new Error(`${flag} requires a value`)
       i += 1
@@ -189,14 +261,14 @@ const parseDescribeRuntimeArgs = args => {
   }
 }
 
-const evalReturnedUndefined = value =>
+const evalReturnedUndefined = (value: unknown): boolean =>
   value !== null
   && typeof value === 'object'
   && !Array.isArray(value)
-  && value.type === 'undefined'
-  && Object.keys(value).length === 1
+  && (value as {type?: unknown}).type === 'undefined'
+  && Object.keys(value as object).length === 1
 
-const formatCliOutput = (verb, args, value) => {
+const formatCliOutput = (verb: string, args: string[], value: unknown): string => {
   if (verb !== 'eval') return JSON.stringify(value, null, 2)
   if (args.includes('--raw')) return JSON.stringify(value, null, 2)
   // Eval handlers commonly run for side effects and don't `return` —
@@ -210,11 +282,11 @@ const formatCliOutput = (verb, args, value) => {
   return JSON.stringify(value, null, 2)
 }
 
-const parseInstallExtensionArgs = args => {
+const parseInstallExtensionArgs = (args: string[]) => {
   let reload = false
   let verify = false
   let description
-  const rest = []
+  const rest: string[] = []
 
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i]
@@ -246,7 +318,7 @@ const parseInstallExtensionArgs = args => {
 // Accept "<id>" (UUID) or "<label>" — extensions installed via the
 // bridge are tagged with their label as an alias, so a single positional
 // arg can resolve to either.
-const parseExtensionHandle = (verb, args) => {
+const parseExtensionHandle = (verb: string, args: string[]) => {
   const [handle] = args
   if (!handle) throw new Error(`${verb} requires <id|label>`)
   const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(handle)
@@ -264,8 +336,8 @@ const normalizeProfileName = (value = '') => {
 
 selectedProfileName = normalizeProfileName(process.env.AGENT_RUNTIME_PROFILE ?? '')
 
-const parseCliArgs = args => {
-  const rest = []
+const parseCliArgs = (args: string[]) => {
+  const rest: string[] = []
   let profileName = selectedProfileName
 
   for (let i = 0; i < args.length; i += 1) {
@@ -294,23 +366,26 @@ const parseCliArgs = args => {
   return {args: rest, profileName}
 }
 
-const normalizeTokenRecord = value => {
-  if (!value || typeof value !== 'object' || typeof value.token !== 'string') return null
+const normalizeTokenRecord = (value: unknown): TokenRecord | null => {
+  if (!value || typeof value !== 'object') return null
+  const candidate = value as {token?: unknown, savedAt?: unknown}
+  if (typeof candidate.token !== 'string') return null
   return {
-    token: value.token,
-    savedAt: typeof value.savedAt === 'number' ? value.savedAt : undefined,
+    token: candidate.token,
+    savedAt: typeof candidate.savedAt === 'number' ? candidate.savedAt : undefined,
   }
 }
 
-const normalizeTokenStore = value => {
-  const profiles = {}
+const normalizeTokenStore = (value: unknown): TokenStore => {
+  const profiles: Record<string, TokenRecord> = {}
 
   if (value && typeof value === 'object') {
     const legacy = normalizeTokenRecord(value)
     if (legacy) profiles[defaultProfileName] = legacy
 
-    if (value.profiles && typeof value.profiles === 'object') {
-      for (const [name, record] of Object.entries(value.profiles)) {
+    const candidate = value as {profiles?: unknown}
+    if (candidate.profiles && typeof candidate.profiles === 'object') {
+      for (const [name, record] of Object.entries(candidate.profiles as Record<string, unknown>)) {
         const profileName = normalizeProfileName(name)
         const normalized = normalizeTokenRecord(record)
         if (normalized) profiles[profileName] = normalized
@@ -321,17 +396,17 @@ const normalizeTokenStore = value => {
   return {profiles}
 }
 
-const loadTokenStore = async () => {
+const loadTokenStore = async (): Promise<TokenStore> => {
   try {
     const raw = await fs.readFile(tokenStorePath, 'utf8')
     return normalizeTokenStore(JSON.parse(raw))
   } catch (error) {
-    if (error.code === 'ENOENT') return {profiles: {}}
+    if (isErrnoException(error) && error.code === 'ENOENT') return {profiles: {}}
     throw error
   }
 }
 
-const writeTokenStore = async store => {
+const writeTokenStore = async (store: TokenStore): Promise<void> => {
   const profiles = Object.fromEntries(
     Object.entries(store.profiles).sort(([a], [b]) => a.localeCompare(b)),
   )
@@ -343,12 +418,12 @@ const writeTokenStore = async store => {
   )
 }
 
-const loadStoredToken = async (profileName = selectedProfileName) => {
+const loadStoredToken = async (profileName = selectedProfileName): Promise<string | null> => {
   const store = await loadTokenStore()
   return store.profiles[profileName]?.token ?? null
 }
 
-const writeStoredToken = async (token, profileName = selectedProfileName) => {
+const writeStoredToken = async (token: string, profileName = selectedProfileName): Promise<void> => {
   const store = await loadTokenStore()
   store.profiles[profileName] = {token, savedAt: Date.now()}
   await writeTokenStore(store)
@@ -367,7 +442,7 @@ const removeStoredToken = async (profileName = selectedProfileName) => {
     await fs.unlink(tokenStorePath)
     return true
   } catch (error) {
-    if (error.code !== 'ENOENT') throw error
+    if (!isErrnoException(error) || error.code !== 'ENOENT') throw error
     return false
   }
 }
@@ -389,7 +464,10 @@ const resolveToken = async () => {
   return loadStoredToken()
 }
 
-const requestJson = async (url, options = {}) => {
+const requestJson = async <T = unknown>(
+  url: string,
+  options: RequestOptions = {},
+): Promise<T> => {
   const response = await fetch(url, {
     ...options,
     headers: {
@@ -405,7 +483,7 @@ const requestJson = async (url, options = {}) => {
     throw new Error(body?.error ?? `Request failed with status ${response.status}`)
   }
 
-  return body
+  return body as T
 }
 
 const promptForToken = async () => {
@@ -429,7 +507,7 @@ const fetchBridgeHealth = async () => {
 
 const waitForBridgeReady = async () => {
   const startedAt = Date.now()
-  let lastError = null
+  let lastError: unknown = null
 
   while (Date.now() - startedAt < bridgeStartTimeoutMs) {
     try {
@@ -489,26 +567,28 @@ const bridgeSecretForStatus = async () => {
   return resolveBridgeSecret()
 }
 
-const readBridgeStatus = async () => {
+const readBridgeStatus = async (): Promise<BridgeStatusResponse> => {
   const bridgeSecret = await bridgeSecretForStatus()
-  return requestJson(`${bridgeUrl}/health${bridgeSecret ? '?detail=1' : ''}`, {
+  return requestJson<BridgeStatusResponse>(`${bridgeUrl}/health${bridgeSecret ? '?detail=1' : ''}`, {
     headers: bridgeSecret ? {'x-agent-runtime-secret': bridgeSecret} : {},
   })
 }
 
-const compactUser = user => {
+const compactUser = (user: unknown): Record<string, unknown> | null => {
   if (!user || typeof user !== 'object') return null
-  const compact = {}
-  if (typeof user.id === 'string') compact.id = user.id
-  if (typeof user.name === 'string') compact.name = user.name
+  const candidate = user as {id?: unknown, name?: unknown}
+  const compact: Record<string, unknown> = {}
+  if (typeof candidate.id === 'string') compact.id = candidate.id
+  if (typeof candidate.name === 'string') compact.name = candidate.name
   return Object.keys(compact).length > 0 ? compact : null
 }
 
-const compactBridgeClient = client => {
-  const metadata = client?.metadata && typeof client.metadata === 'object'
-    ? client.metadata
-    : {}
-  const compact = {
+const compactBridgeClient = (client: BridgeStatusClient): Record<string, unknown> => {
+  const metadata: {activeWorkspaceId?: unknown, currentUser?: unknown} =
+    client?.metadata && typeof client.metadata === 'object'
+      ? client.metadata
+      : {}
+  const compact: Record<string, unknown> = {
     id: client.id,
     lastSeen: client.lastSeen,
     tokenCount: client.tokenCount,
@@ -524,9 +604,9 @@ const compactBridgeClient = client => {
 
 const printPing = async () => {
   await ensureBridgeRunning()
-  const runtime = await runCommand({type: 'ping'})
+  const runtime = await runCommand({type: 'ping'}) as {ok?: unknown} | null
   const status = await readBridgeStatus()
-  const bridge = {ok: Boolean(status?.ok)}
+  const bridge: Record<string, unknown> = {ok: Boolean(status?.ok)}
 
   if (Array.isArray(status?.clients)) {
     bridge.clients = status.clients.map(compactBridgeClient)
@@ -540,8 +620,8 @@ const printPing = async () => {
   }, null, 2)}\n`)
 }
 
-const whoamiWithToken = token =>
-  requestJson(`${bridgeUrl}/runtime/whoami`, {
+const whoamiWithToken = (token: string): Promise<WhoamiInfo> =>
+  requestJson<WhoamiInfo>(`${bridgeUrl}/runtime/whoami`, {
     headers: {authorization: `Bearer ${token}`},
   })
 
@@ -576,7 +656,7 @@ const reloadAppAndWait = async ({timeoutMs = 30_000} = {}) => {
   throw new Error(`App did not reconnect within ${Math.round(timeoutMs / 1000)}s`)
 }
 
-const navigateAppHash = async hash => {
+const navigateAppHash = async (hash: string): Promise<unknown> => {
   if (typeof hash !== 'string') {
     throw new Error('navigate requires a hash string')
   }
@@ -588,9 +668,9 @@ const navigateAppHash = async hash => {
   })
 }
 
-const waitForTokenAudience = async token => {
+const waitForTokenAudience = async (token: string): Promise<WhoamiInfo> => {
   const startedAt = Date.now()
-  let lastError = null
+  let lastError: unknown = null
 
   while (Date.now() - startedAt < 10_000) {
     try {
@@ -604,7 +684,7 @@ const waitForTokenAudience = async token => {
   throw lastError ?? new Error('Timed out waiting for token registration')
 }
 
-const printConnectSuccess = info => {
+const printConnectSuccess = (info: WhoamiInfo): void => {
   const audience = info.audience ?? {}
   process.stdout.write(
     `Connected. Token saved at ${tokenStorePath} (profile: ${selectedProfileName})\n` +
@@ -614,7 +694,10 @@ const printConnectSuccess = info => {
   )
 }
 
-const connectWithToken = async (token, options = {}) => {
+const connectWithToken = async (
+  token: string,
+  options: {saveBeforeVerify?: boolean} = {},
+): Promise<void> => {
   const saveBeforeVerify = options.saveBeforeVerify ?? true
   if (saveBeforeVerify) await writeStoredToken(token)
 
@@ -629,7 +712,7 @@ const connectWithToken = async (token, options = {}) => {
   } catch (error) {
     if (!saveBeforeVerify) throw error
     process.stdout.write(
-      `Token saved at ${tokenStorePath} (profile: ${selectedProfileName}), but bridge contact failed: ${error.message}\n` +
+      `Token saved at ${tokenStorePath} (profile: ${selectedProfileName}), but bridge contact failed: ${errorMessage(error)}\n` +
       `Make sure the app tab is open. Run \`yarn agent whoami\` to verify.\n`,
     )
   }
@@ -687,8 +770,8 @@ const connectInteractively = async ({force = false} = {}) => {
 // `install-extension` triggers refreshAppRuntime). Retrying on these
 // for ~10–15s smooths over the reconnect gap without papering over
 // real auth failures (scope mismatch, missing token, etc.).
-const isTransientTokenError = (error) => {
-  const message = String(error?.message ?? '')
+const isTransientTokenError = (error: unknown): boolean => {
+  const message = errorMessage(error)
   return message.includes('Unknown or expired token')
     || message.includes('Missing or invalid command status credentials')
 }
@@ -697,7 +780,10 @@ const authedRetryTotalMs = 15_000
 const authedRetryStartDelayMs = 200
 const authedRetryMaxDelayMs = 1_000
 
-const authedRequest = async (url, options = {}) => {
+const authedRequest = async <T = unknown>(
+  url: string,
+  options: RequestOptions = {},
+): Promise<T> => {
   const token = await resolveToken()
   if (!token) {
     throw new Error(
@@ -705,7 +791,7 @@ const authedRequest = async (url, options = {}) => {
     )
   }
 
-  const send = () => requestJson(url, {
+  const send = (): Promise<T> => requestJson<T>(url, {
     ...options,
     headers: {
       ...(options.headers ?? {}),
@@ -728,8 +814,13 @@ const authedRequest = async (url, options = {}) => {
   }
 }
 
-const submitCommand = async command => {
-  const response = await authedRequest(`${bridgeUrl}/runtime/commands`, {
+// Command bodies are agent-supplied and forwarded verbatim to the
+// kernel. We type the envelope just enough to require a `type`
+// discriminator; the rest is opaque until we add zod schemas.
+type CommandBody = {type: string} & Record<string, unknown>
+
+const submitCommand = async (command: CommandBody): Promise<string> => {
+  const response = await authedRequest<{id: string}>(`${bridgeUrl}/runtime/commands`, {
     method: 'POST',
     body: JSON.stringify(command),
   })
@@ -737,11 +828,14 @@ const submitCommand = async command => {
   return response.id
 }
 
-const waitForCommand = async (id, timeoutMs = defaultTimeoutMs) => {
+const waitForCommand = async (
+  id: string,
+  timeoutMs = defaultTimeoutMs,
+): Promise<CommandRecord['result']> => {
   const start = Date.now()
 
   while (Date.now() - start < timeoutMs) {
-    const command = await authedRequest(`${bridgeUrl}/runtime/commands/${id}`)
+    const command = await authedRequest<CommandRecord>(`${bridgeUrl}/runtime/commands/${id}`)
     if (command.status === 'completed') {
       return command.result
     }
@@ -756,7 +850,7 @@ const waitForCommand = async (id, timeoutMs = defaultTimeoutMs) => {
   throw new Error(`Timed out waiting for runtime command ${id}`)
 }
 
-const runCommand = async command => {
+const runCommand = async (command: CommandBody): Promise<unknown> => {
   const id = await submitCommand(command)
   const result = await waitForCommand(id)
 
@@ -768,7 +862,7 @@ const runCommand = async command => {
   return result.value
 }
 
-const commandFromArgs = async args => {
+const commandFromArgs = async (args: string[]): Promise<CommandBody> => {
   const [name, ...rest] = args
 
   switch (name) {
@@ -818,13 +912,13 @@ const commandFromArgs = async args => {
     case 'create-block':
       return {
         type: 'create-block',
-        ...parseJson(rest.join(' '), 'create-block json'),
+        ...(parseJson(rest.join(' '), 'create-block json') as Record<string, unknown>),
       }
 
     case 'update-block':
       return {
         type: 'update-block',
-        ...parseJson(rest.join(' '), 'update-block json'),
+        ...(parseJson(rest.join(' '), 'update-block json') as Record<string, unknown>),
       }
 
     case 'install-extension': {
@@ -877,7 +971,7 @@ const commandFromArgs = async args => {
     }
 
     case 'raw':
-      return parseJson(rest.join(' '), 'raw json')
+      return parseJson(rest.join(' '), 'raw json') as CommandBody
 
     default:
       throw new Error(`Unknown command: ${name ?? ''}`)

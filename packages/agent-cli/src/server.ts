@@ -7,7 +7,7 @@ import {
   bridgeServerUrl,
   bridgeSecret as resolveBridgeSecret,
   pairingUrl,
-} from './config.mjs'
+} from './config.js'
 
 const port = bridgePort()
 const host = bridgeHost()
@@ -43,27 +43,106 @@ const allowedOrigins = new Set([...defaultAllowedOrigins, ...configuredAllowedOr
 const loopbackOriginPattern = /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i
 
 class HttpError extends Error {
-  constructor(status, message) {
+  status: number
+  constructor(status: number, message: string) {
     super(message)
     this.status = status
   }
 }
 
-// clientId -> {id, metadata, lastSeen, tokens: Set<token>, audience: {userId, workspaceId, label}|null}
-const clients = new Map()
-// commandId -> command
-const commands = new Map()
+// Internal shapes for the wire protocol. They're hand-written here
+// because every command type currently maps to a kernel handler on the
+// browser side; the eventual zod-schema introduction will be a 1:1
+// replacement that also generates runtime validators.
+
+type ClientId = string
+type Token = string
+type CommandId = string
+
+interface Audience {
+  userId: string | null
+  workspaceId: string | null
+}
+
+interface TokenAudience extends Audience {
+  label: string | null
+}
+
+type TokenScope = 'read-write' | 'read-only'
+
+interface ClientRecord {
+  id: ClientId
+  metadata: Record<string, unknown>
+  audience: Audience | null
+  lastSeen: number
+  tokens: Set<Token>
+}
+
+interface TokenRecord {
+  clientId: ClientId
+  audience: TokenAudience
+  scope: TokenScope
+}
+
+/** Minimum we need to recognize / route a command — extra fields pass
+ *  through to the browser handler verbatim. */
+interface CommandPayload {
+  type: string
+  [key: string]: unknown
+}
+
+type CommandStatus = 'pending' | 'delivered' | 'completed' | 'failed'
+
+interface CommandRecord {
+  id: CommandId
+  targetClientId: ClientId
+  payload: CommandPayload & {commandId: CommandId}
+  status: CommandStatus
+  createdAt: number
+  deliveredAt: number | null
+  completedAt: number | null
+  clientId: ClientId | null
+  submitterTokenHash: string
+  result: unknown
+}
+
+interface Waiter {
+  response: http.ServerResponse
+  timeout: NodeJS.Timeout
+}
+
+interface RegisterTokenSpec {
+  token?: unknown
+  userId?: unknown
+  workspaceId?: unknown
+  label?: unknown
+  scope?: unknown
+}
+
+interface RegisterClientMetadata {
+  tokens?: unknown
+  audience?: {
+    userId?: unknown
+    workspaceId?: unknown
+  }
+  [key: string]: unknown
+}
+
+// clientId -> client record
+const clients = new Map<ClientId, ClientRecord>()
+// commandId -> command record
+const commands = new Map<CommandId, CommandRecord>()
 // clientId -> [commandId, ...] — per-client FIFO of pending commands
-const pendingByClient = new Map()
-// clientId -> Set<{response, timeout}>
-const waitersByClient = new Map()
-// token -> {clientId, audience, scope}
-const tokens = new Map()
-const responseRequests = new WeakMap()
+const pendingByClient = new Map<ClientId, CommandId[]>()
+// clientId -> Set<Waiter>
+const waitersByClient = new Map<ClientId, Set<Waiter>>()
+// token -> token record
+const tokens = new Map<Token, TokenRecord>()
+const responseRequests = new WeakMap<http.ServerResponse, http.IncomingMessage>()
 
 const now = () => Date.now()
 
-const normalizeOrigin = origin => {
+const normalizeOrigin = (origin: string): string => {
   try {
     return new URL(origin).origin
   } catch {
@@ -71,16 +150,16 @@ const normalizeOrigin = origin => {
   }
 }
 
-const isAllowedOrigin = origin => {
+const isAllowedOrigin = (origin: string | string[] | undefined): boolean => {
   if (!origin || typeof origin !== 'string') return true
   if (origin === 'null') return false
   const normalized = normalizeOrigin(origin)
   return loopbackOriginPattern.test(normalized) || allowedOrigins.has(normalized)
 }
 
-const jsonHeadersFor = response => {
+const jsonHeadersFor = (response: http.ServerResponse): Record<string, string> => {
   const request = responseRequests.get(response)
-  const headers = {'content-type': 'application/json'}
+  const headers: Record<string, string> = {'content-type': 'application/json'}
   const origin = request?.headers.origin
 
   if (typeof origin === 'string' && isAllowedOrigin(origin)) {
@@ -94,23 +173,23 @@ const jsonHeadersFor = response => {
   return headers
 }
 
-const sendJson = (response, status, body) => {
+const sendJson = (response: http.ServerResponse, status: number, body: unknown): void => {
   response.writeHead(status, jsonHeadersFor(response))
   response.end(JSON.stringify(body))
 }
 
-const sendEmpty = (response, status = 204) => {
+const sendEmpty = (response: http.ServerResponse, status = 204): void => {
   response.writeHead(status, jsonHeadersFor(response))
   response.end()
 }
 
-const readBody = request =>
+const readBody = (request: http.IncomingMessage): Promise<unknown> =>
   new Promise((resolve, reject) => {
-    const chunks = []
+    const chunks: Buffer[] = []
     let totalBytes = 0
     let tooLarge = false
 
-    request.on('data', chunk => {
+    request.on('data', (chunk: Buffer) => {
       totalBytes += chunk.length
       if (totalBytes > maxBodyBytes) {
         tooLarge = true
@@ -140,45 +219,45 @@ const readBody = request =>
     request.on('error', reject)
   })
 
-const extractBearer = request => {
+const extractBearer = (request: http.IncomingMessage): Token | null => {
   const header = request.headers.authorization
   if (!header || typeof header !== 'string') return null
   const match = header.match(/^Bearer\s+(.+)$/i)
-  return match ? match[1].trim() : null
+  return match ? match[1]!.trim() : null
 }
 
-const hashToken = token => createHash('sha256').update(token).digest('hex')
+const hashToken = (token: Token): string => createHash('sha256').update(token).digest('hex')
 
-const safeEqual = (a, b) => {
+const safeEqual = (a: unknown, b: unknown): boolean => {
   if (typeof a !== 'string' || typeof b !== 'string') return false
   const aBuffer = Buffer.from(a)
   const bBuffer = Buffer.from(b)
   return aBuffer.length === bBuffer.length && timingSafeEqual(aBuffer, bBuffer)
 }
 
-const hasBridgeSecret = request => {
+const hasBridgeSecret = (request: http.IncomingMessage): boolean => {
   const header = request.headers[bridgeSecretHeader]
   return typeof header === 'string' && safeEqual(header, bridgeSecret)
 }
 
-const requireBridgeSecret = (request, response) => {
+const requireBridgeSecret = (request: http.IncomingMessage, response: http.ServerResponse): boolean => {
   if (hasBridgeSecret(request)) return true
   sendJson(response, 401, {error: 'Missing or invalid bridge secret'})
   return false
 }
 
-const tokenScope = value =>
+const tokenScope = (value: unknown): TokenScope =>
   value === 'read-only' ? 'read-only' : 'read-write'
 
-const deleteTokenForClient = (token, clientId) => {
+const deleteTokenForClient = (token: Token, clientId: ClientId): void => {
   const entry = tokens.get(token)
   if (entry?.clientId === clientId) tokens.delete(token)
 }
 
-const isReadOnlySql = sql =>
+const isReadOnlySql = (sql: unknown): boolean =>
   typeof sql === 'string' && /^(select|explain)\b/i.test(sql.trimStart())
 
-const isReadOnlyCommand = command => {
+const isReadOnlyCommand = (command: CommandPayload): boolean => {
   switch (command.type) {
     case 'ping':
     case 'runtime-summary':
@@ -193,7 +272,7 @@ const isReadOnlyCommand = command => {
   }
 }
 
-const dropClient = clientId => {
+const dropClient = (clientId: ClientId): void => {
   const client = clients.get(clientId)
   if (client) {
     for (const token of client.tokens) deleteTokenForClient(token, clientId)
@@ -242,11 +321,11 @@ const cleanup = () => {
   }
 }
 
-const takePendingForClient = clientId => {
+const takePendingForClient = (clientId: ClientId): CommandRecord | null => {
   const queue = pendingByClient.get(clientId)
   if (!queue) return null
   while (queue.length) {
-    const id = queue.shift()
+    const id = queue.shift()!
     const command = commands.get(id)
     if (command?.status === 'pending') return command
   }
@@ -254,7 +333,7 @@ const takePendingForClient = clientId => {
   return null
 }
 
-const tryDeliverToClient = clientId => {
+const tryDeliverToClient = (clientId: ClientId): void => {
   const waiters = waitersByClient.get(clientId)
   if (!waiters || waiters.size === 0) return
   for (const waiter of Array.from(waiters)) {
@@ -270,10 +349,12 @@ const tryDeliverToClient = clientId => {
   }
 }
 
-const registerClient = (clientId, metadata = {}) => {
+const registerClient = (clientId: ClientId, metadata: RegisterClientMetadata = {}): void => {
   const existing = clients.get(clientId)
-  const tokenList = Array.isArray(metadata.tokens) ? metadata.tokens : []
-  const audience = metadata.audience && typeof metadata.audience === 'object'
+  const tokenList: RegisterTokenSpec[] = Array.isArray(metadata.tokens)
+    ? metadata.tokens as RegisterTokenSpec[]
+    : []
+  const audience: Audience | null = metadata.audience && typeof metadata.audience === 'object'
     ? {
         userId: typeof metadata.audience.userId === 'string' ? metadata.audience.userId : null,
         workspaceId: typeof metadata.audience.workspaceId === 'string' ? metadata.audience.workspaceId : null,
@@ -289,7 +370,7 @@ const registerClient = (clientId, metadata = {}) => {
     }
   }
 
-  const tokenSet = new Set()
+  const tokenSet = new Set<Token>()
   for (const entry of tokenList) {
     if (!entry || typeof entry.token !== 'string' || !entry.token) continue
     tokenSet.add(entry.token)
@@ -306,25 +387,30 @@ const registerClient = (clientId, metadata = {}) => {
 
   // Strip token list from stored metadata so /health doesn't echo
   // secrets back to anyone who can reach the local server.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { tokens: _omit, ...publicMetadata } = metadata
 
   clients.set(clientId, {
     id: clientId,
-    metadata: publicMetadata,
+    metadata: publicMetadata as Record<string, unknown>,
     audience,
     lastSeen: now(),
     tokens: tokenSet,
   })
 }
 
-const enqueueCommand = (clientId, payload, submitterTokenHash) => {
+const enqueueCommand = (
+  clientId: ClientId,
+  payload: CommandPayload,
+  submitterTokenHash: string,
+): CommandRecord => {
   const id = randomUUID()
   const commandPayload = {
     ...payload,
     commandId: id,
   }
 
-  const command = {
+  const command: CommandRecord = {
     id,
     targetClientId: clientId,
     payload: commandPayload,
@@ -348,7 +434,11 @@ const enqueueCommand = (clientId, payload, submitterTokenHash) => {
   return command
 }
 
-const waitForNextCommand = (request, requestUrl, response) => {
+const waitForNextCommand = (
+  request: http.IncomingMessage,
+  requestUrl: URL,
+  response: http.ServerResponse,
+): void => {
   const clientId = requestUrl.searchParams.get('clientId') || 'anonymous-client'
   const timeoutMs = Math.min(
     Number(requestUrl.searchParams.get('timeoutMs') ?? 25_000),
@@ -369,7 +459,7 @@ const waitForNextCommand = (request, requestUrl, response) => {
     return
   }
 
-  const waiter = {
+  const waiter: Waiter = {
     response,
     timeout: setTimeout(() => {
       const set = waitersByClient.get(clientId)
@@ -398,7 +488,11 @@ const waitForNextCommand = (request, requestUrl, response) => {
   set.add(waiter)
 }
 
-const setCommandResult = async (id, request, response) => {
+const setCommandResult = async (
+  id: CommandId,
+  request: http.IncomingMessage,
+  response: http.ServerResponse,
+): Promise<void> => {
   const command = commands.get(id)
   if (!command) {
     sendJson(response, 404, {error: `Unknown command: ${id}`})
@@ -437,7 +531,10 @@ const getStatus = () => ({
   })),
 })
 
-const handleRequest = async (request, response) => {
+const handleRequest = async (
+  request: http.IncomingMessage,
+  response: http.ServerResponse,
+): Promise<void> => {
   responseRequests.set(response, request)
 
   if (!isAllowedOrigin(request.headers.origin)) {
@@ -510,16 +607,17 @@ const handleRequest = async (request, response) => {
       }
 
       const body = await readBody(request)
-      if (!body || typeof body !== 'object' || typeof body.type !== 'string') {
+      if (!body || typeof body !== 'object' || typeof (body as {type?: unknown}).type !== 'string') {
         sendJson(response, 400, {error: 'Command body must include a string type'})
         return
       }
-      if (entry.scope === 'read-only' && !isReadOnlyCommand(body)) {
-        sendJson(response, 403, {error: `Token scope read-only does not allow command type: ${body.type}`})
+      const payload = body as CommandPayload
+      if (entry.scope === 'read-only' && !isReadOnlyCommand(payload)) {
+        sendJson(response, 403, {error: `Token scope read-only does not allow command type: ${payload.type}`})
         return
       }
 
-      const command = enqueueCommand(entry.clientId, body, hashToken(token))
+      const command = enqueueCommand(entry.clientId, payload, hashToken(token))
       sendJson(response, 202, {id: command.id, audience: entry.audience})
       return
     }
@@ -527,7 +625,7 @@ const handleRequest = async (request, response) => {
     const clientMatch = requestUrl.pathname.match(/^\/runtime\/clients\/([^/]+)$/)
     if (request.method === 'POST' && clientMatch) {
       if (!requireBridgeSecret(request, response)) return
-      registerClient(clientMatch[1], await readBody(request) ?? {})
+      registerClient(clientMatch[1]!, (await readBody(request) as RegisterClientMetadata | null) ?? {})
       sendJson(response, 200, {ok: true})
       return
     }

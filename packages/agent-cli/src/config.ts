@@ -26,33 +26,48 @@ export const bridgeLogPath = () =>
   process.env.AGENT_RUNTIME_LOG_FILE
   ?? path.join(agentRuntimeConfigDir(), 'agent-bridge.log')
 
-const normalizeBridgeConfig = value => {
+interface BridgeConfig {
+  bridgeSecret?: string
+  createdAt?: number
+}
+
+interface ResolvedBridgeConfig {
+  bridgeSecret: string
+  createdAt: number
+}
+
+const isErrnoException = (error: unknown): error is NodeJS.ErrnoException =>
+  error instanceof Error && typeof (error as NodeJS.ErrnoException).code === 'string'
+
+const normalizeBridgeConfig = (value: unknown): BridgeConfig => {
   if (!value || typeof value !== 'object') return {}
+  const candidate = value as {bridgeSecret?: unknown, createdAt?: unknown}
 
   return {
-    bridgeSecret: typeof value.bridgeSecret === 'string'
-      ? value.bridgeSecret.trim()
+    bridgeSecret: typeof candidate.bridgeSecret === 'string'
+      ? candidate.bridgeSecret.trim()
       : '',
-    createdAt: typeof value.createdAt === 'number' ? value.createdAt : undefined,
+    createdAt: typeof candidate.createdAt === 'number' ? candidate.createdAt : undefined,
   }
 }
 
-export const loadBridgeConfig = async () => {
+export const loadBridgeConfig = async (): Promise<BridgeConfig> => {
   try {
     const raw = await fs.readFile(bridgeConfigPath(), 'utf8')
     return normalizeBridgeConfig(JSON.parse(raw))
   } catch (error) {
-    if (error.code === 'ENOENT') return {}
+    if (isErrnoException(error) && error.code === 'ENOENT') return {}
     throw error
   }
 }
 
-export const loadOrCreateBridgeConfig = async () => {
+export const loadOrCreateBridgeConfig = async (): Promise<ResolvedBridgeConfig> => {
   const existing = await loadBridgeConfig()
-  if (existing.bridgeSecret) return existing
+  if (existing.bridgeSecret) {
+    return {bridgeSecret: existing.bridgeSecret, createdAt: existing.createdAt ?? Date.now()}
+  }
 
-  const next = {
-    ...existing,
+  const next: ResolvedBridgeConfig = {
     bridgeSecret: randomBytes(32).toString('hex'),
     createdAt: existing.createdAt ?? Date.now(),
   }
@@ -86,7 +101,7 @@ export const bridgeUrl = () =>
     || bridgeServerUrl()
   ).replace(/\/+$/, '')
 
-export const bridgeSecret = async () =>
+export const bridgeSecret = async (): Promise<string> =>
   process.env.AGENT_RUNTIME_BRIDGE_SECRET?.trim()
   || (await loadOrCreateBridgeConfig()).bridgeSecret
 
@@ -95,7 +110,7 @@ export const appUrl = () =>
 
 export const pairingUrl = async (
   runtimeBridgeUrl = bridgeUrl(),
-  options = {},
+  options: {openTokensDialog?: boolean} = {},
 ) => {
   const url = new URL(appUrl())
   const rawHash = url.hash.startsWith('#') ? url.hash.slice(1) : url.hash
@@ -109,7 +124,7 @@ export const pairingUrl = async (
   return url.toString()
 }
 
-export const isLocalBridgeUrl = value => {
+export const isLocalBridgeUrl = (value: string): boolean => {
   try {
     const url = new URL(value)
     return (

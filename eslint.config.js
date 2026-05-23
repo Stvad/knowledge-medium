@@ -13,7 +13,7 @@ export default tseslint.config(
   // files (typechecked via docs/tsconfig.json) — they intentionally have
   // unused stub params and let-vs-const looseness so the prose stays
   // readable; ESLint shouldn't gate on them.
-  { ignores: ['dist', '.claude/**', '.playwright-mcp/**', 'tmp/**', 'docs/**'] },
+  { ignores: ['dist', '**/dist/**', '.claude/**', '.playwright-mcp/**', 'tmp/**', 'docs/**'] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],

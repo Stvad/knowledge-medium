@@ -8,16 +8,24 @@
     "node": ">=24.0.0"
   },
   "bin": {
-    "kmagent": "./src/cli.mjs",
-    "kmagent-server": "./src/server.mjs"
+    "kmagent": "./dist/cli.js",
+    "kmagent-server": "./dist/server.js"
   },
-  "main": "./src/cli.mjs",
+  "main": "./dist/cli.js",
   "exports": {
-    ".": "./src/cli.mjs",
-    "./server": "./src/server.mjs",
-    "./config": "./src/config.mjs"
+    ".": "./dist/cli.js",
+    "./server": "./dist/server.js",
+    "./config": "./dist/config.js"
   },
   "files": [
-    "src"
-  ]
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b && chmod +x ./dist/cli.js ./dist/server.js",
+    "build:clean": "tsc -b --clean"
+  },
+  "devDependencies": {
+    "@types/node": "*",
+    "typescript": "*"
+  }
 }
