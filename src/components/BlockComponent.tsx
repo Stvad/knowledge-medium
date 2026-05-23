@@ -3,7 +3,7 @@ import { useRenderer } from '../hooks/useRendererRegistry.tsx'
 import { useBlockContext } from '@/context/block.js'
 import { useRepo } from '@/context/repo.js'
 import { Suspense } from 'react'
-import { SuspenseFallback } from '@/components/util/suspense.js'
+import { BlockLoadingPlaceholder } from '@/components/BlockLoadingPlaceholder.js'
 import { FallbackComponent } from '@/components/util/error.js'
 import { ErrorBoundary } from 'react-error-boundary'
 import { useChildIds } from '@/hooks/block.js'
@@ -20,7 +20,10 @@ export function BlockComponent({blockId}: BlockComponentProps) {
   const Renderer = useRenderer({block, context})
 
   return <ErrorBoundary FallbackComponent={FallbackComponent}>
-    <Suspense fallback={<SuspenseFallback/>}>
+    {/* Block-shaped placeholder keeps the layout frame stable whenever
+        anything in the renderer chain suspends, matching the shape
+        `LazyViewportMount` shows for not-yet-mounted blocks. */}
+    <Suspense fallback={<BlockLoadingPlaceholder/>}>
       {/* Renderer is selected from the runtime registry, not constructed
           here — its identity is stable across renders for a given key.
           The static-components rule can't see through the lookup. */}

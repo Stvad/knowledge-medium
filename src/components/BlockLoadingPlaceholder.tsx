@@ -2,15 +2,26 @@ import { BulletDot } from '@/components/renderer/DefaultBlockRenderer.js'
 import { useIsMobile } from '@/utils/react.js'
 
 interface BlockLoadingPlaceholderProps {
-  reservedHeight: number
+  /** Caller-supplied size — `LazyViewportMount` passes the last
+   *  measured height so reserved space matches the real block. Omitted
+   *  by callers that have no measurement (e.g. `BlockComponent`'s
+   *  Suspense fallback), in which case we fall back to a single-line
+   *  estimate so the placeholder still occupies a reasonable frame. */
+  reservedHeight?: number
 }
+
+/** Single-line bullet estimate — used when no measured height is
+ *  available. Matches `LazyBlockComponent`'s ESTIMATED_HEIGHT_PX
+ *  intentionally; both express "we don't yet know, but blocks are
+ *  usually one line." */
+const DEFAULT_RESERVED_HEIGHT_PX = 32
 
 /**
  * Mirrors the default block flex shape so lazy content slots into the
  * same visual frame instead of materializing from an empty gap.
  */
 export function BlockLoadingPlaceholder({
-  reservedHeight,
+  reservedHeight = DEFAULT_RESERVED_HEIGHT_PX,
 }: BlockLoadingPlaceholderProps) {
   const isMobile = useIsMobile()
 
