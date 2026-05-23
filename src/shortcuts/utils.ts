@@ -9,6 +9,7 @@ import {
   MultiSelectModeDependencies,
   ShortcutDependenciesMap, ActionTrigger,
 } from './types'
+import { withMoveTransition } from '@/utils/viewTransition'
 
 export const hasEditableTarget = (event: KeyboardEvent) => {
   const target = event.target as HTMLElement
@@ -101,7 +102,12 @@ export const applyToAllBlocksInSelection = <T extends ActionContextType>(
   actionConfig: ActionConfig<T>,
   {applyInReverseOrder}: {applyInReverseOrder?: boolean} = { applyInReverseOrder: false},
 ): ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE> => {
-  // Default behavior: apply the original action to each selected block
+  // Default behavior: apply the original action to each selected block.
+  // Wrap the whole batch in one view transition so users see a single
+  // crossfade from "all selected" to "all applied" instead of N
+  // separate transitions (each one would cancel the previous,
+  // dropping all but the last block's animation). The per-action
+  // wraps inside the inner handlers are reentrancy-suppressed.
   const multiSelectHandler = async (multiSelectDeps: MultiSelectModeDependencies, trigger: ActionTrigger) => {
     const {selectedBlocks, uiStateBlock} = multiSelectDeps
     const blocks = applyInReverseOrder ? selectedBlocks.toReversed() : selectedBlocks
@@ -111,16 +117,18 @@ export const applyToAllBlocksInSelection = <T extends ActionContextType>(
     // collapses the bulk action into one entry; today each per-block
     // action commits its own tx and is its own undo step.
 
-    // Process blocks sequentially, awaiting each one before proceeding
-    for (const block of blocks) {
-      // Convert dependencies to match the original action's context
-      const originalDeps = {
-        block,
-        uiStateBlock,
-      } as ShortcutDependenciesMap[T]
+    await withMoveTransition(async () => {
+      // Process blocks sequentially, awaiting each one before proceeding
+      for (const block of blocks) {
+        // Convert dependencies to match the original action's context
+        const originalDeps = {
+          block,
+          uiStateBlock,
+        } as ShortcutDependenciesMap[T]
 
-      await actionConfig.handler(originalDeps, trigger)
-    }
+        await actionConfig.handler(originalDeps, trigger)
+      }
+    })
   }
 
   return makeMultiSelect({

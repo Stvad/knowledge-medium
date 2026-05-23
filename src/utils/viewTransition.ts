@@ -34,6 +34,14 @@ const drainTasks = async (): Promise<void> => {
   for (let i = 0; i < 4; i++) await Promise.resolve()
 }
 
+/** Reentrancy guard. Multi-select operations call wrapped actions per
+ *  block; without this, each nested `withMoveTransition` would skip
+ *  the outer transition (spec: starting a transition while one is
+ *  active cancels the active one), so only the last block's animation
+ *  would play. With the guard, only the outermost call creates a real
+ *  transition — nested calls just run their callback inline. */
+let inTransition = false
+
 export const withMoveTransition = async (
   run: () => Promise<void>,
 ): Promise<void> => {
@@ -48,11 +56,20 @@ export const withMoveTransition = async (
     await run()
     return
   }
-  const transition = document.startViewTransition(async () => {
+  if (inTransition) {
     await run()
-    await drainTasks()
-  })
-  // We only need the DOM update to be done before returning to the
-  // caller; the crossfade animation can play out asynchronously.
-  await transition.updateCallbackDone
+    return
+  }
+  inTransition = true
+  try {
+    const transition = document.startViewTransition(async () => {
+      await run()
+      await drainTasks()
+    })
+    // We only need the DOM update to be done before returning to the
+    // caller; the crossfade animation can play out asynchronously.
+    await transition.updateCallbackDone
+  } finally {
+    inTransition = false
+  }
 }

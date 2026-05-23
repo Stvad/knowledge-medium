@@ -281,7 +281,9 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       if (!block) return
 
       const isCollapsed = block.peekProperty(isCollapsedProp) ?? false
-      await block.set(isCollapsedProp, !isCollapsed)
+      await withMoveTransition(async () => {
+        await block.set(isCollapsedProp, !isCollapsed)
+      })
     },
     defaultBinding: {
       keys: 'z',

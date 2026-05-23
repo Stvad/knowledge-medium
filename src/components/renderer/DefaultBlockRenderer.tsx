@@ -25,6 +25,7 @@ import { useRepo } from '@/context/repo'
 import { buildAppHash } from '@/utils/routing.js'
 import { navigate, useBlockLinkClick } from '@/utils/navigation.js'
 import { pasteMultilineText } from '@/utils/paste.js'
+import { withMoveTransition } from '@/utils/viewTransition.js'
 import { useIsMobile } from '@/utils/react.js'
 import { ErrorBoundary } from 'react-error-boundary'
 import { FallbackComponent } from '@/components/util/error.js'
@@ -203,7 +204,11 @@ const ExpandButton = ({block}: { block: Block }) => {
   // propagation on `pointerdown` blocks that path the moment the touch
   // is registered, before the synthetic click bubbles. The redundant
   // `onClick.stopPropagation` covers the desktop mouse path.
-  const toggle = () => setIsCollapsed(!isCollapsed)
+  const toggle = () => {
+    void withMoveTransition(async () => {
+      await setIsCollapsed(!isCollapsed)
+    })
+  }
 
   return (
     <Button
