@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import {readFileSync} from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
@@ -23,6 +24,18 @@ import {
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const serverScript = path.join(here, 'server.js')
+
+// Read our own version from package.json at startup so `--version`
+// stays in sync without a build-time codegen step. `here` is dist/, so
+// the package.json is one level up.
+const pkgVersion = (() => {
+  try {
+    const pkg = JSON.parse(readFileSync(path.join(here, '..', 'package.json'), 'utf8')) as {version?: string}
+    return pkg.version ?? '0.0.0'
+  } catch {
+    return '0.0.0'
+  }
+})()
 const bridgeUrl = resolveBridgeUrl()
 const pollIntervalMs = 100
 const defaultTimeoutMs = 30_000
@@ -908,6 +921,7 @@ cli
     await runAndPrint(command)
   })
 
+cli.version(pkgVersion)
 cli.help()
 
 const main = async () => {
@@ -920,9 +934,9 @@ const main = async () => {
     selectedProfileName = normalizeProfileName(String(profileOption))
   }
 
-  // When --help / -h is set, cac has already printed the appropriate
-  // (command-specific or global) help during parse — we just bail.
-  if (cli.options.help) return
+  // When --help / -h or --version / -v is set, cac has already
+  // printed the appropriate output during parse — we just bail.
+  if (cli.options.help || cli.options.version) return
 
   // No command matched (bare `kmagent` or an unknown verb): show the
   // global help instead of erroring, matching the old behaviour where

@@ -1,7 +1,25 @@
 {
   "name": "@knowledge-medium/agent-cli",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "CLI + local HTTP bridge for driving the Knowledge Medium app from an agent (Claude/etc.). Pairs once with a browser tab, then forwards JSON commands over loopback.",
+  "keywords": [
+    "cli",
+    "agent",
+    "claude",
+    "knowledge-medium",
+    "automation"
+  ],
+  "license": "MIT",
+  "author": "Vlad Sitalo",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/stvad/knowledge-medium.git",
+    "directory": "packages/agent-cli"
+  },
+  "homepage": "https://github.com/stvad/knowledge-medium/tree/master/packages/agent-cli#readme",
+  "bugs": {
+    "url": "https://github.com/stvad/knowledge-medium/issues"
+  },
   "private": true,
   "type": "module",
   "engines": {
@@ -15,21 +33,24 @@
   "exports": {
     ".": "./dist/cli.js",
     "./server": "./dist/server.js",
-    "./config": "./dist/config.js"
+    "./config": "./dist/config.js",
+    "./protocol": "./dist/protocol.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md"
   ],
   "scripts": {
     "build": "tsc -b && chmod +x ./dist/cli.js ./dist/server.js",
-    "build:clean": "tsc -b --clean"
+    "build:clean": "tsc -b --clean",
+    "prepublishOnly": "yarn run build:clean && yarn run build"
   },
   "devDependencies": {
-    "@types/node": "*",
-    "typescript": "*"
+    "@types/node": "^25.0.0",
+    "typescript": "^6.0.0"
   },
   "dependencies": {
     "cac": "^7.0.0",
-    "zod": "^4.4.3"
+    "zod": "^4.0.0"
   }
 }
