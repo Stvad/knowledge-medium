@@ -9,6 +9,7 @@ import type { LazyViewportPlaceholderProps } from '@/components/util/LazyViewpor
 import { useParents } from '@/hooks/block.js'
 import { useRepo } from '@/context/repo.js'
 import { handleBlockLinkClick, useNavigate } from '@/utils/navigation.js'
+import { withMoveTransition } from '@/utils/viewTransition.js'
 import {
   backlinkEntryShortcutContextOverrides,
   findNextCollapsedBreadcrumb,
@@ -145,11 +146,19 @@ const BacklinkItem = ({
   const shownBlock = useMemo(() => repo.block(shownBlockId), [repo, shownBlockId])
   const isInitial = shownBlockId === block.id
 
+  // Wrap in withMoveTransition so unfurling the breadcrumb chain gets
+  // the same crossfade as panel breadcrumb navigation. The state change
+  // is local React (`setShownBlockId`), not a DB write — `navigateInPanel`'s
+  // internal wrap doesn't help here, so the wrap lives at the call site.
   const handleSelect = useCallback((parent: Block) => {
-    setShownBlockId(parent.id)
+    void withMoveTransition(async () => {
+      setShownBlockId(parent.id)
+    })
   }, [])
   const handleShowBlock = useCallback((blockId: string) => {
-    setShownBlockId(blockId)
+    void withMoveTransition(async () => {
+      setShownBlockId(blockId)
+    })
   }, [])
 
   return (
