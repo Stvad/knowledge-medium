@@ -5,6 +5,7 @@ import type { ReactNode } from 'react'
  *  caller's stable cache key. It lets remounted placeholders reserve the
  *  last known size for the same item, reducing layout shuffle. */
 const measuredHeights = new Map<string, number>()
+const mountedCacheKeys = new Set<string>()
 
 export interface LazyViewportPlaceholderProps {
   reservedHeight: number
@@ -34,9 +35,13 @@ export function LazyViewportMount({
   renderPlaceholder,
 }: LazyViewportMountProps) {
   const [mounted, setMounted] = useState(
-    () => typeof IntersectionObserver === 'undefined',
+    () => typeof IntersectionObserver === 'undefined' || mountedCacheKeys.has(cacheKey),
   )
   const containerRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (mounted) mountedCacheKeys.add(cacheKey)
+  }, [mounted, cacheKey])
 
   useEffect(() => {
     if (mounted) return
