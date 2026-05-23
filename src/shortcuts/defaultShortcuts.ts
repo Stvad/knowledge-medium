@@ -536,11 +536,11 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // outdent returns false if the block is at the view boundary
         // (parent === topLevelBlockId) or already at workspace root —
         // fall back to creating a sibling below.
+        // Unwrapped (see indent/outdent in blockActions): the
+        // root-level crossfade ghosts the shifting siblings, which
+        // reads as blur. The unwrapped shift is cleaner.
         else if (editorView.state.doc.length === 0) {
-          let moved = false
-          await withMoveTransition(async () => {
-            moved = await repo.mutate.outdent({id: block.id, topLevelBlockId})
-          })
+          const moved = await repo.mutate.outdent({id: block.id, topLevelBlockId})
           if (!moved) await createSiblingBelow()
         }
         // Cursor at end, no children or they are collapsed

@@ -151,13 +151,22 @@ export const extendSelectionUp = async (uiStateBlock: Block, repo: Repo) => {
 }
 
 export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockActions => {
+  // In-place structural shifts (indent/outdent/move/swap) deliberately
+  // run WITHOUT `withMoveTransition`. The root-level crossfade ghosts
+  // the shifting content at both old and new positions over the 250ms
+  // transition window — text overlaps itself mid-flight, reading as
+  // blur rather than movement. The atomic DOM update gives a clean
+  // instant shift, which reads correctly as "the block moved" without
+  // overlap. The data-layer `NotifyBatch` fix is what killed the
+  // original flicker; the view-transition wrap was added as polish
+  // and turned out to be net-negative for these specific operations.
+  // A future scoped-VT / per-element setup that doesn't lift everything
+  // into the document-root overlay could re-enable a slide here.
   const indentBlock: BlockAction = {
     id: 'indent_block',
     description: 'Indent block',
     handler: async (deps: BlockShortcutDependencies) => {
-      await withMoveTransition(async () => {
-        await repo.mutate.indent({id: deps.block.id})
-      })
+      await repo.mutate.indent({id: deps.block.id})
       requestEditorFocusIfEditing(deps.uiStateBlock)
     },
     defaultBinding: {
@@ -175,9 +184,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
       if (!topLevelBlockId) return
 
-      await withMoveTransition(async () => {
-        await repo.mutate.outdent({id: block.id, topLevelBlockId})
-      })
+      await repo.mutate.outdent({id: block.id, topLevelBlockId})
       requestEditorFocusIfEditing(uiStateBlock)
     },
     defaultBinding: {
@@ -187,16 +194,6 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       },
     },
   }
-
-  // move-up/down deliberately runs without `withMoveTransition`. A swap
-  // between two adjacent blocks is a small local change; wrapping it
-  // would trigger the root-level crossfade, which ghosts both blocks'
-  // text at both positions over the 250ms transition (each block fading
-  // in at the new spot while still fading out at the old). The unwrapped
-  // direct DOM update gives a clean instant swap, which reads as "the
-  // blocks swapped" — the user's own action — without overlap. A future
-  // scoped-VT / per-element setup that doesn't lift everything into the
-  // document-root overlay could re-enable a slide here.
   const moveBlockUp: BlockAction = {
     id: 'move_block_up',
     description: 'Move block up',
