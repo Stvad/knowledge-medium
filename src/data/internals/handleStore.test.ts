@@ -1117,6 +1117,7 @@ describe('HandleStore metrics counters', () => {
       notifiesSkippedByDiff: 0,
       notifiesFired: 0,
       loaderInvalidationsDeferred: 0,
+      depsDeduplicatedAtRegistration: 0,
     })
   })
 
@@ -1236,5 +1237,133 @@ describe('HandleStore metrics counters', () => {
     expect(after.loaderRuns).toBe(0)
     // Prior snapshot is unaffected by reset.
     expect(before.loaderRuns).toBeGreaterThan(0)
+  })
+})
+
+describe('Dep dedup at registration', () => {
+  it('drops repeated ctx.depend(...) of the same row dep within one resolve', async () => {
+    const store = makeStore()
+    const h = store.getOrCreate('q', () =>
+      new LoaderHandle<string>({
+        store, key: 'q',
+        loader: async (ctx) => {
+          // Same dep declared three times — mirrors manyAncestors walking
+          // up to a shared workspace-root id from multiple source ids.
+          ctx.depend({ kind: 'row', id: 'r1' })
+          ctx.depend({ kind: 'row', id: 'r1' })
+          ctx.depend({ kind: 'row', id: 'r1' })
+          return 'v'
+        },
+      }),
+    )
+    await h.load()
+    expect(h.__depsForTest()).toEqual([{ kind: 'row', id: 'r1' }])
+    expect(store.metrics.depsDeduplicatedAtRegistration).toBe(2)
+  })
+
+  it('matches() over a deduped set still fires once on the matching invalidate', async () => {
+    const store = makeStore()
+    let calls = 0
+    const h = store.getOrCreate('q', () =>
+      new LoaderHandle<number>({
+        store, key: 'q',
+        loader: async (ctx) => {
+          calls++
+          for (let i = 0; i < 5; i++) ctx.depend({ kind: 'row', id: 'r1' })
+          return calls
+        },
+      }),
+    )
+    h.subscribe(() => {})
+    await vi.waitFor(() => expect(h.status()).toBe('ready'))
+    expect(calls).toBe(1)
+    store.invalidate({ rowIds: ['r1'] })
+    await vi.waitFor(() => expect(calls).toBe(2))
+    // No double-fire from the duplicated deps.
+    expect(calls).toBe(2)
+  })
+
+  it('dedup is per (kind, identifying field) — different kinds with same id are not collapsed', async () => {
+    const store = makeStore()
+    const h = store.getOrCreate('q', () =>
+      new LoaderHandle<string>({
+        store, key: 'q',
+        loader: async (ctx) => {
+          ctx.depend({ kind: 'row', id: 'x' })
+          ctx.depend({ kind: 'parent-edge', parentId: 'x' })
+          ctx.depend({ kind: 'workspace', workspaceId: 'x' })
+          ctx.depend({ kind: 'table', table: 'x' })
+          return 'v'
+        },
+      }),
+    )
+    await h.load()
+    expect(h.__depsForTest()).toHaveLength(4)
+    expect(store.metrics.depsDeduplicatedAtRegistration).toBe(0)
+  })
+
+  it('plugin dedup uses (channel, key) pair — same key on different channels both kept', async () => {
+    const store = makeStore()
+    const h = store.getOrCreate('q', () =>
+      new LoaderHandle<string>({
+        store, key: 'q',
+        loader: async (ctx) => {
+          ctx.depend({ kind: 'plugin', channel: 'ch.a', key: 'k1' })
+          ctx.depend({ kind: 'plugin', channel: 'ch.a', key: 'k1' }) // dup
+          ctx.depend({ kind: 'plugin', channel: 'ch.b', key: 'k1' }) // distinct channel
+          ctx.depend({ kind: 'plugin', channel: 'ch.a', key: 'k2' }) // distinct key
+          return 'v'
+        },
+      }),
+    )
+    await h.load()
+    expect(h.__depsForTest()).toHaveLength(3)
+    expect(store.metrics.depsDeduplicatedAtRegistration).toBe(1)
+  })
+
+  it('re-resolve does not double-publish to live this.deps when the loader re-declares a prior dep', async () => {
+    const store = makeStore()
+    let block: () => void = () => {}
+    let calls = 0
+    const h = store.getOrCreate('q', () =>
+      new LoaderHandle<number>({
+        store, key: 'q',
+        loader: async (ctx) => {
+          calls++
+          ctx.depend({ kind: 'row', id: 'r1' })
+          if (calls === 2) await new Promise<void>((r) => { block = r })
+          return calls
+        },
+      }),
+    )
+    h.subscribe(() => {})
+    await vi.waitFor(() => expect(h.status()).toBe('ready'))
+    // First load done. Trigger a re-resolve that pauses mid-load; while
+    // paused, this.deps should contain just the one row dep (priorDeps
+    // had it, loader re-declared it — must not double).
+    store.invalidate({ rowIds: ['r1'] })
+    await vi.waitFor(() => expect(calls).toBe(2))
+    expect(h.__depsForTest()).toEqual([{ kind: 'row', id: 'r1' }])
+    block()
+    await vi.waitFor(() => expect(h.status()).toBe('ready'))
+    expect(h.__depsForTest()).toEqual([{ kind: 'row', id: 'r1' }])
+  })
+
+  it('reset() zeros depsDeduplicatedAtRegistration', async () => {
+    const store = makeStore()
+    const h = store.getOrCreate('q', () =>
+      new LoaderHandle<string>({
+        store, key: 'q',
+        loader: async (ctx) => {
+          ctx.depend({ kind: 'row', id: 'r1' })
+          ctx.depend({ kind: 'row', id: 'r1' })
+          return 'v'
+        },
+      }),
+    )
+    await h.load()
+    expect(store.metrics.depsDeduplicatedAtRegistration).toBe(1)
+    store.metrics.reset()
+    expect(store.metrics.depsDeduplicatedAtRegistration).toBe(0)
   })
 })

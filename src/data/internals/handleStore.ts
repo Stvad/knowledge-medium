@@ -233,6 +233,15 @@ export class HandleStoreMetrics {
    *  where slow `.load()`-only queries (e.g. alias autocomplete) used
    *  to thrash on every block write. */
   loaderInvalidationsDeferred = 0
+  /** ctx.depend(...) calls that registered a dep the loader had already
+   *  declared in this same run — the duplicate is dropped instead of
+   *  re-pushed. Drives down the matches() walk cost for handles that
+   *  walk a graph and accidentally re-depend on shared nodes (e.g.
+   *  many-ancestors converging on a common root). A non-zero value here
+   *  is a hint that a resolver is over-registering — usually harmless,
+   *  but the counter exists so we can see how much work the dedup is
+   *  actually saving. */
+  depsDeduplicatedAtRegistration = 0
 
   reset(): void {
     this.invalidations = 0
@@ -245,6 +254,7 @@ export class HandleStoreMetrics {
     this.notifiesSkippedByDiff = 0
     this.notifiesFired = 0
     this.loaderInvalidationsDeferred = 0
+    this.depsDeduplicatedAtRegistration = 0
   }
 
   /** Frozen plain-object snapshot. Safe to keep as a baseline for
@@ -261,6 +271,7 @@ export class HandleStoreMetrics {
       notifiesSkippedByDiff: this.notifiesSkippedByDiff,
       notifiesFired: this.notifiesFired,
       loaderInvalidationsDeferred: this.loaderInvalidationsDeferred,
+      depsDeduplicatedAtRegistration: this.depsDeduplicatedAtRegistration,
     })
   }
 }
@@ -501,9 +512,28 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     const priorDeps = this.deps
     this.deps = priorDeps.slice()
     const collected: Dependency[] = []
+    // Dedup ctx.depend(...) calls against the keys already collected
+    // this run. A resolver that walks a DAG (e.g. manyAncestors
+    // converging on a shared workspace-root id from many sources) can
+    // call ctx.depend with the same dep dozens of times; without dedup
+    // each duplicate inflates the matches() walk cost on future
+    // invalidations. `priorKeys` lets the live this.deps publish skip
+    // entries priorDeps already contains, so this.deps stays a deduped
+    // union of prior + new collected during the load window.
+    const collectedKeys = new Set<string>()
+    const priorKeys = new Set<string>()
+    for (const d of priorDeps) priorKeys.add(depKey(d))
     const onDep = (dep: Dependency) => {
+      const k = depKey(dep)
+      if (collectedKeys.has(k)) {
+        this.store.metrics.depsDeduplicatedAtRegistration++
+        return
+      }
+      collectedKeys.add(k)
       collected.push(dep)
-      this.deps.push(dep) // live-publish so mid-load matches() sees it
+      // Live-publish so mid-load matches() sees the new dep — but only
+      // if priorDeps didn't already carry it.
+      if (!priorKeys.has(k)) this.deps.push(dep)
     }
     const ctx: ResolveContext = {
       depend(dep: Dependency) { onDep(dep) },
@@ -787,6 +817,22 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
 
   /** Test-only: snapshot of declared dependencies. */
   __depsForTest(): readonly Dependency[] { return this.deps }
+}
+
+/** Canonical key for a `Dependency` used by the registration-time dedup
+ *  in `LoaderHandle.runLoader`. Two deps that produce the same key are
+ *  invalidation-equivalent: they match exactly the same set of
+ *  `ChangeNotification`s. SEP is `\x00` to avoid collisions between
+ *  fields (a channel literally named `"row"` won't collide with a row
+ *  dep's id). */
+const depKey = (dep: Dependency): string => {
+  switch (dep.kind) {
+    case 'row': return `row\x00${dep.id}`
+    case 'parent-edge': return `pe\x00${dep.parentId}`
+    case 'workspace': return `ws\x00${dep.workspaceId}`
+    case 'table': return `tbl\x00${dep.table}`
+    case 'plugin': return `p\x00${dep.channel}\x00${dep.key}`
+  }
 }
 
 const matchesDep = (dep: Dependency, change: ChangeNotification): boolean => {
