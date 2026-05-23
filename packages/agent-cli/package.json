@@ -27,5 +27,8 @@
   "devDependencies": {
     "@types/node": "*",
     "typescript": "*"
+  },
+  "dependencies": {
+    "cac": "^7.0.0"
   }
 }

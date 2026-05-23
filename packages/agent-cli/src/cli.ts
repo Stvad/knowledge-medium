@@ -4,6 +4,7 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline/promises'
 import { fileURLToPath } from 'node:url'
+import { cac } from 'cac'
 import {
   bridgeLogPath,
   bridgeSecret as resolveBridgeSecret,
@@ -22,57 +23,6 @@ const bridgeStartTimeoutMs = 5_000
 const tokenStorePath = resolveTokenStorePath()
 const defaultProfileName = 'default'
 let selectedProfileName = defaultProfileName
-
-const usage = () => `
-Usage:
-  yarn agent [--profile <name>] <command>
-
-Commands:
-  yarn agent connect [--force]    open app pairing flow and persist pasted token
-                                  (no-op when an active connection already exists; --force re-pairs)
-  yarn agent connect <token>      persist token directly (or use AGENT_RUNTIME_TOKEN env)
-  yarn agent disconnect           remove the selected profile token
-  yarn agent remove-profile <name>  remove a saved CLI token profile
-  yarn agent profiles             list saved CLI token profiles
-  yarn agent pair-url             print the current app pairing URL
-  yarn agent whoami               show audience the persisted token resolves to
-  yarn agent ping
-  yarn agent status
-  yarn agent runtime-summary      show compact agent-oriented runtime context
-  yarn agent describe-runtime [--actions <text>] [--facets <text>] [--guide <id>]
-                               [--modules <text>] [--components <text>] [--storage]
-                               [--full]
-                                  show full or targeted runtime diagnostics.
-                                  This is the canonical "what's registered"
-                                  view — prefer it over reaching into
-                                  facetRuntime / Repo internals through eval.
-                                  When --guide is passed alone, response
-                                  defaults to brief (just guides + storage +
-                                  apiSurface, ~16KB). Pass --full to also
-                                  include actions/facets/modules/components.
-  yarn agent sql <all|get|optional|execute> <sql> [paramsJson]
-  yarn agent get-block <id>
-  yarn agent subtree <rootId> [--include-root]
-  yarn agent create-block <json>
-  yarn agent update-block <json>
-  yarn agent install-extension [--verify] [--description <text>] <file> [label]
-                                  (reload is automatic; --verify reports the
-                                  facets/actions the extension contributes;
-                                  label defaults to the filename without ext)
-  yarn agent enable-extension <id|label>
-  yarn agent disable-extension <id|label>
-  yarn agent uninstall-extension <id|label>
-  yarn agent run-action <id> [depsJson]
-  yarn agent eval [--raw] <code>  run JS in the app; use "return ..." to print a value
-  yarn agent eval --file <path>
-  yarn agent reload               hard-reload the app tab and wait for it to come back
-  yarn agent navigate <hash>      set window.location.hash (with or without leading #)
-  yarn agent raw <json>
-
-Profile selection:
-  --profile <name>                select a saved CLI token profile
-  AGENT_RUNTIME_PROFILE=<name>    default selected profile for this command
-`
 
 // Narrow a thrown `unknown` to NodeJS fs/HTTP errors so we can check
 // `.code === 'ENOENT'` etc without sprinkling `as any` everywhere.
@@ -151,114 +101,14 @@ const parseJson = (value: string, label: string): unknown => {
   }
 }
 
-const parseDescribeRuntimeArgs = (args: string[]) => {
-  const filters: {
-    actions: string[]
-    facets: string[]
-    guides: string[]
-    modules: string[]
-    components: string[]
-    storage: boolean
-    brief?: boolean
-  } = {
-    actions: [],
-    facets: [],
-    guides: [],
-    modules: [],
-    components: [],
-    storage: false,
-  }
-  // Implicit brief mode: when the agent says "show me the guide" we
-  // default to authoring-only output. They can pass `--full` to get
-  // actions / facets / discoverable-modules back.
-  let fullRequested = false
-
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i]
-    const readValue = (flag: string): string => {
-      const value = args[i + 1]
-      if (!value) throw new Error(`${flag} requires a value`)
-      i += 1
-      return value
-    }
-
-    if (arg === '--actions') {
-      filters.actions.push(readValue(arg))
-      continue
-    }
-    if (arg.startsWith('--actions=')) {
-      filters.actions.push(arg.slice('--actions='.length))
-      continue
-    }
-    if (arg === '--facets') {
-      filters.facets.push(readValue(arg))
-      continue
-    }
-    if (arg.startsWith('--facets=')) {
-      filters.facets.push(arg.slice('--facets='.length))
-      continue
-    }
-    if (arg === '--guide' || arg === '--guides') {
-      filters.guides.push(readValue(arg))
-      continue
-    }
-    if (arg.startsWith('--guide=')) {
-      filters.guides.push(arg.slice('--guide='.length))
-      continue
-    }
-    if (arg.startsWith('--guides=')) {
-      filters.guides.push(arg.slice('--guides='.length))
-      continue
-    }
-    if (arg === '--modules') {
-      filters.modules.push(readValue(arg))
-      continue
-    }
-    if (arg.startsWith('--modules=')) {
-      filters.modules.push(arg.slice('--modules='.length))
-      continue
-    }
-    if (arg === '--components') {
-      filters.components.push(readValue(arg))
-      continue
-    }
-    if (arg.startsWith('--components=')) {
-      filters.components.push(arg.slice('--components='.length))
-      continue
-    }
-    if (arg === '--storage') {
-      filters.storage = true
-      continue
-    }
-    if (arg === '--full') {
-      fullRequested = true
-      continue
-    }
-    throw new Error(`Unknown describe-runtime option: ${arg}`)
-  }
-
-  // Brief by default whenever --guide was the agent's intent and they
-  // didn't opt into other heavy sections. If they passed any of
-  // actions/facets/modules/components filters explicitly, they
-  // wanted those — don't override.
-  const heavyFilterPresent
-    = filters.actions.length > 0
-      || filters.facets.length > 0
-      || filters.modules.length > 0
-      || filters.components.length > 0
-  const briefImplied
-    = filters.guides.length > 0 && !heavyFilterPresent && !fullRequested
-  if (briefImplied) filters.brief = true
-
-  return {
-    ...(filters.actions.length > 0 ? {actions: filters.actions} : {}),
-    ...(filters.facets.length > 0 ? {facets: filters.facets} : {}),
-    ...(filters.guides.length > 0 ? {guides: filters.guides} : {}),
-    ...(filters.modules.length > 0 ? {modules: filters.modules} : {}),
-    ...(filters.components.length > 0 ? {components: filters.components} : {}),
-    ...(filters.storage ? {storage: true} : {}),
-    ...(filters.brief ? {brief: true} : {}),
-  }
+// cac coerces a repeated `--actions foo --actions bar` to `['foo', 'bar']`,
+// but a single occurrence gives a bare string. Normalize to an array
+// so the wire payload is shaped consistently regardless of how the
+// user phrased it.
+const toStringArray = (value: unknown): string[] => {
+  if (Array.isArray(value)) return value.map(String)
+  if (typeof value === 'string') return [value]
+  return []
 }
 
 const evalReturnedUndefined = (value: unknown): boolean =>
@@ -268,59 +118,23 @@ const evalReturnedUndefined = (value: unknown): boolean =>
   && (value as {type?: unknown}).type === 'undefined'
   && Object.keys(value as object).length === 1
 
-const formatCliOutput = (verb: string, args: string[], value: unknown): string => {
-  if (verb !== 'eval') return JSON.stringify(value, null, 2)
-  if (args.includes('--raw')) return JSON.stringify(value, null, 2)
-  // Eval handlers commonly run for side effects and don't `return` —
-  // surface that as a single legible token instead of `{type:
-  // 'undefined'}`, which is easy to mistake for an error. Same idea
-  // for the explicit string "undefined" some callers return from
-  // `repo.db.execute(...)` etc.
+// Eval handlers commonly run for side effects and don't `return` —
+// surface that as a single legible token instead of `{type:
+// 'undefined'}`, which is easy to mistake for an error. Same idea
+// for the explicit string "undefined" some callers return from
+// `repo.db.execute(...)` etc.
+const formatEvalOutput = (value: unknown, raw: boolean): string => {
+  if (raw) return JSON.stringify(value, null, 2)
   if (value === undefined || value === null || evalReturnedUndefined(value)) {
     return '<ok: eval completed, no return value (use `return ...` to print one; pass --raw for the wire format)>'
   }
   return JSON.stringify(value, null, 2)
 }
 
-const parseInstallExtensionArgs = (args: string[]) => {
-  let reload = false
-  let verify = false
-  let description
-  const rest: string[] = []
-
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i]
-    if (arg === '--reload') {
-      reload = true
-      continue
-    }
-    if (arg === '--verify') {
-      verify = true
-      continue
-    }
-    if (arg === '--description') {
-      description = args[i + 1]
-      i += 1
-      continue
-    }
-    if (arg.startsWith('--description=')) {
-      description = arg.slice('--description='.length)
-      continue
-    }
-    rest.push(arg)
-  }
-
-  const [file, ...labelParts] = rest
-  if (!file) throw new Error('install-extension requires <file>')
-  return {file, label: labelParts.join(' ').trim(), reload, verify, description}
-}
-
 // Accept "<id>" (UUID) or "<label>" — extensions installed via the
 // bridge are tagged with their label as an alias, so a single positional
 // arg can resolve to either.
-const parseExtensionHandle = (verb: string, args: string[]) => {
-  const [handle] = args
-  if (!handle) throw new Error(`${verb} requires <id|label>`)
+const extensionHandle = (handle: string): {id: string} | {label: string} => {
   const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(handle)
   return isUuid ? {id: handle} : {label: handle}
 }
@@ -335,36 +149,6 @@ const normalizeProfileName = (value = '') => {
 }
 
 selectedProfileName = normalizeProfileName(process.env.AGENT_RUNTIME_PROFILE ?? '')
-
-const parseCliArgs = (args: string[]) => {
-  const rest: string[] = []
-  let profileName = selectedProfileName
-
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i]
-    if (arg === '--') {
-      rest.push(...args.slice(i + 1))
-      break
-    }
-
-    if (arg === '--profile' || arg === '-p') {
-      const value = args[i + 1]
-      if (!value) throw new Error(`${arg} requires a profile name`)
-      profileName = normalizeProfileName(value)
-      i += 1
-      continue
-    }
-
-    if (arg.startsWith('--profile=')) {
-      profileName = normalizeProfileName(arg.slice('--profile='.length))
-      continue
-    }
-
-    rest.push(arg)
-  }
-
-  return {args: rest, profileName}
-}
 
 const normalizeTokenRecord = (value: unknown): TokenRecord | null => {
   if (!value || typeof value !== 'object') return null
@@ -862,233 +646,317 @@ const runCommand = async (command: CommandBody): Promise<unknown> => {
   return result.value
 }
 
-const commandFromArgs = async (args: string[]): Promise<CommandBody> => {
-  const [name, ...rest] = args
-
-  switch (name) {
-    case 'ping':
-      return {type: 'ping'}
-
-    case 'runtime-summary':
-      return {type: name}
-
-    case 'describe-runtime':
-      return {
-        type: name,
-        ...parseDescribeRuntimeArgs(rest),
-      }
-
-    case 'sql': {
-      const [mode, sql, paramsJson] = rest
-      if (!mode || !sql) {
-        throw new Error('sql requires <mode> and <sql>')
-      }
-
-      return {
-        type: 'sql',
-        mode,
-        sql,
-        params: paramsJson ? parseJson(paramsJson, 'paramsJson') : [],
-      }
-    }
-
-    case 'get-block': {
-      const [id] = rest
-      if (!id) throw new Error('get-block requires <id>')
-      return {type: 'get-block', id}
-    }
-
-    case 'subtree': {
-      const includeRoot = rest.includes('--include-root')
-      const rootId = rest.find(arg => arg !== '--include-root')
-      if (!rootId) throw new Error('subtree requires <rootId>')
-      return {
-        type: 'get-subtree',
-        rootId,
-        includeRoot,
-      }
-    }
-
-    case 'create-block':
-      return {
-        type: 'create-block',
-        ...(parseJson(rest.join(' '), 'create-block json') as Record<string, unknown>),
-      }
-
-    case 'update-block':
-      return {
-        type: 'update-block',
-        ...(parseJson(rest.join(' '), 'update-block json') as Record<string, unknown>),
-      }
-
-    case 'install-extension': {
-      const {file, label, reload, verify, description} = parseInstallExtensionArgs(rest)
-      const source = await fs.readFile(file, 'utf8')
-      const basename = path.basename(file).replace(/\.[^.]+$/, '')
-      return {
-        type: 'install-extension',
-        source,
-        label: label || basename,
-        ...(reload ? {reload: true} : {}),
-        ...(verify ? {verify: true} : {}),
-        ...(description !== undefined ? {description} : {}),
-      }
-    }
-
-    case 'enable-extension':
-      return {type: 'enable-extension', ...parseExtensionHandle('enable-extension', rest)}
-
-    case 'disable-extension':
-      return {type: 'disable-extension', ...parseExtensionHandle('disable-extension', rest)}
-
-    case 'uninstall-extension':
-      return {type: 'uninstall-extension', ...parseExtensionHandle('uninstall-extension', rest)}
-
-    case 'run-action': {
-      const [id, depsJson] = rest
-      if (!id) throw new Error('run-action requires <id>')
-      return {
-        type: 'run-action',
-        id,
-        dependencies: depsJson ? parseJson(depsJson, 'depsJson') : {},
-      }
-    }
-
-    case 'eval': {
-      const evalArgs = rest.filter(a => a !== '--raw')
-      if (evalArgs[0] === '--file') {
-        if (!evalArgs[1]) throw new Error('eval --file requires <path>')
-        return {
-          type: 'eval',
-          code: await fs.readFile(evalArgs[1], 'utf8'),
-        }
-      }
-
-      return {
-        type: 'eval',
-        code: evalArgs.join(' '),
-      }
-    }
-
-    case 'raw':
-      return parseJson(rest.join(' '), 'raw json') as CommandBody
-
-    default:
-      throw new Error(`Unknown command: ${name ?? ''}`)
-  }
+/** Helper: connect to the bridge, run a wire-protocol command, and
+ *  pretty-print the result. Used by the "thin" bridge-fronting commands
+ *  (sql, get-block, runtime-summary, install-extension, …). */
+const runAndPrint = async (command: CommandBody): Promise<void> => {
+  await ensureBridgeRunning()
+  const value = await runCommand(command)
+  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
 }
 
-const main = async () => {
-  const parsed = parseCliArgs(process.argv.slice(2))
-  const args = parsed.args
-  selectedProfileName = parsed.profileName
+const cli = cac('kmagent')
 
-  if (!args.length || args.includes('--help') || args.includes('-h')) {
-    process.stdout.write(usage())
-    return
-  }
+// Global option. The catch-all `--profile <name>` selects which CLI
+// token profile to use; defaults to AGENT_RUNTIME_PROFILE then to
+// "default". We apply it from `cli.options.profile` after parse rather
+// than inside each action so the value is consistently set before
+// `ensureBridgeRunning`/token lookup runs.
+cli.option('--profile, -p <name>', 'Saved CLI token profile to use')
 
-  const verb = args[0]
+// ----- Local / bridge-management commands ---------------------------
 
-  if (verb === 'connect') {
-    const forceIdx = args.indexOf('--force')
-    const force = forceIdx > 0
-    const positional = args.slice(1).filter(a => a !== '--force')
-    const token = positional[0]?.trim() || process.env.AGENT_RUNTIME_TOKEN?.trim()
-    if (token) {
-      await connectWithToken(token)
+cli
+  .command('connect [token]', 'Pair the agent CLI with the app (or save a token directly)')
+  .option('--force', 'Re-pair even if an active connection already exists')
+  .action(async (token: string | undefined, options: {force?: boolean}) => {
+    const resolved = token?.trim() || process.env.AGENT_RUNTIME_TOKEN?.trim()
+    if (resolved) {
+      await connectWithToken(resolved)
     } else {
-      await connectInteractively({force})
+      await connectInteractively({force: Boolean(options.force)})
     }
-    return
-  }
+  })
 
-  if (verb === 'disconnect') {
+cli
+  .command('disconnect', 'Remove the selected profile token')
+  .action(async () => {
     const removed = await removeStoredToken()
     process.stdout.write(
       removed
         ? `Removed profile "${selectedProfileName}" from ${tokenStorePath}\n`
         : `No token profile "${selectedProfileName}" exists in ${tokenStorePath}\n`,
     )
-    return
-  }
+  })
 
-  if (verb === 'remove-profile' || verb === 'disconnect-profile') {
-    const profileName = normalizeProfileName(args[1] ?? '')
-    if (!args[1]) {
-      throw new Error(`${verb} requires a profile name`)
-    }
+cli
+  .command('remove-profile <name>', 'Remove a saved CLI token profile')
+  .alias('disconnect-profile')
+  .action(async (name: string) => {
+    const profileName = normalizeProfileName(name)
     const removed = await removeStoredToken(profileName)
     process.stdout.write(
       removed
         ? `Removed profile "${profileName}" from ${tokenStorePath}\n`
         : `No token profile "${profileName}" exists in ${tokenStorePath}\n`,
     )
-    return
-  }
+  })
 
-  if (verb === 'profiles') {
+cli
+  .command('profiles', 'List saved CLI token profiles')
+  .action(async () => {
     const profiles = await listStoredProfiles()
     process.stdout.write(`${JSON.stringify({
       tokenStorePath,
       selectedProfile: selectedProfileName,
       profiles,
     }, null, 2)}\n`)
-    return
-  }
+  })
 
-  if (verb === 'pair-url') {
+cli
+  .command('pair-url', 'Print the current app pairing URL')
+  .action(async () => {
     await ensureBridgeRunning()
     process.stdout.write(`${await pairingUrl()}\n`)
-    return
-  }
+  })
 
-  if (verb === 'whoami') {
+cli
+  .command('whoami', 'Show the audience the persisted token resolves to')
+  .action(async () => {
     await ensureBridgeRunning()
     const token = await resolveToken()
     if (!token) {
-      throw new Error(`No agent token configured for profile "${selectedProfileName}". Run \`yarn agent --profile ${selectedProfileName} connect\` first.`)
+      throw new Error(
+        `No agent token configured for profile "${selectedProfileName}". `
+        + `Run \`yarn agent --profile ${selectedProfileName} connect\` first.`,
+      )
     }
     const info = await whoamiWithToken(token)
     process.stdout.write(`${JSON.stringify(info, null, 2)}\n`)
-    return
-  }
+  })
 
-  if (verb === 'ping') {
+cli
+  .command('ping', 'Ping the bridge + runtime; print a status summary')
+  .action(async () => {
     await printPing()
-    return
-  }
+  })
 
-  if (verb === 'status') {
+cli
+  .command('status', 'Show bridge status (clients, commands)')
+  .action(async () => {
     await ensureBridgeRunning()
     const status = await readBridgeStatus()
     process.stdout.write(`${JSON.stringify(status, null, 2)}\n`)
-    return
-  }
+  })
 
-  if (verb === 'reload') {
+cli
+  .command('reload', 'Hard-reload the app tab and wait for it to reconnect')
+  .action(async () => {
     await ensureBridgeRunning()
     const info = await reloadAppAndWait()
     process.stdout.write(`${JSON.stringify({ok: true, reconnected: info}, null, 2)}\n`)
-    return
-  }
+  })
 
-  if (verb === 'navigate') {
-    const hash = args[1]
-    if (hash === undefined) throw new Error('navigate requires a hash')
+cli
+  .command('navigate <hash>', 'Set window.location.hash (with or without leading #)')
+  .action(async (hash: string) => {
     await ensureBridgeRunning()
     await navigateAppHash(hash)
-    process.stdout.write(`${JSON.stringify({ok: true, hash: hash.startsWith('#') ? hash : `#${hash}`}, null, 2)}\n`)
+    process.stdout.write(`${JSON.stringify({
+      ok: true,
+      hash: hash.startsWith('#') ? hash : `#${hash}`,
+    }, null, 2)}\n`)
+  })
+
+// ----- Bridge-fronting commands -------------------------------------
+
+cli
+  .command('runtime-summary', 'Compact agent-oriented runtime context')
+  .action(async () => {
+    await runAndPrint({type: 'runtime-summary'})
+  })
+
+cli
+  .command('describe-runtime', 'Show full or targeted runtime diagnostics. Canonical "what is registered" view — prefer over reaching into facetRuntime/Repo internals via eval. When --guide is passed alone, defaults to brief output; pass --full to include actions/facets/modules/components too.')
+  .option('--actions <text>', 'Filter actions (repeatable)')
+  .option('--facets <text>', 'Filter facets (repeatable)')
+  .option('--guide, --guides <id>', 'Show specific guide(s) (repeatable)')
+  .option('--modules <text>', 'Filter modules (repeatable)')
+  .option('--components <text>', 'Filter components (repeatable)')
+  .option('--storage', 'Include storage diagnostics')
+  .option('--full', 'Force full output even when --guide is set')
+  .action(async (options: Record<string, unknown>) => {
+    const actions = toStringArray(options.actions)
+    const facets = toStringArray(options.facets)
+    const guides = toStringArray(options.guide)
+    const modules = toStringArray(options.modules)
+    const components = toStringArray(options.components)
+    const storage = Boolean(options.storage)
+    const fullRequested = Boolean(options.full)
+
+    // Brief by default whenever --guide was the agent's intent and they
+    // didn't opt into other heavy sections.
+    const heavyFilterPresent
+      = actions.length > 0
+        || facets.length > 0
+        || modules.length > 0
+        || components.length > 0
+    const briefImplied = guides.length > 0 && !heavyFilterPresent && !fullRequested
+
+    await runAndPrint({
+      type: 'describe-runtime',
+      ...(actions.length > 0 ? {actions} : {}),
+      ...(facets.length > 0 ? {facets} : {}),
+      ...(guides.length > 0 ? {guides} : {}),
+      ...(modules.length > 0 ? {modules} : {}),
+      ...(components.length > 0 ? {components} : {}),
+      ...(storage ? {storage: true} : {}),
+      ...(briefImplied ? {brief: true} : {}),
+    })
+  })
+
+cli
+  .command('sql <mode> <sql> [paramsJson]', 'Run SQL (mode: all|get|optional|execute)')
+  .action(async (mode: string, sql: string, paramsJson: string | undefined) => {
+    await runAndPrint({
+      type: 'sql',
+      mode,
+      sql,
+      params: paramsJson ? parseJson(paramsJson, 'paramsJson') : [],
+    })
+  })
+
+cli
+  .command('get-block <id>', 'Fetch a block by id')
+  .action(async (id: string) => {
+    await runAndPrint({type: 'get-block', id})
+  })
+
+cli
+  .command('subtree <rootId>', 'Fetch the subtree rooted at <rootId>')
+  .option('--include-root', 'Include the root block itself in the response')
+  .action(async (rootId: string, options: {includeRoot?: boolean}) => {
+    await runAndPrint({
+      type: 'get-subtree',
+      rootId,
+      includeRoot: Boolean(options.includeRoot),
+    })
+  })
+
+cli
+  .command('create-block <json>', 'Create a block (body shape per <json>)')
+  .action(async (json: string) => {
+    const parsed = parseJson(json, 'create-block json') as Record<string, unknown>
+    await runAndPrint({type: 'create-block', ...parsed})
+  })
+
+cli
+  .command('update-block <json>', 'Update a block (body shape per <json>)')
+  .action(async (json: string) => {
+    const parsed = parseJson(json, 'update-block json') as Record<string, unknown>
+    await runAndPrint({type: 'update-block', ...parsed})
+  })
+
+cli
+  .command('install-extension <file> [...label]', 'Install a JS extension. Reload is automatic; --verify reports the contributed facets/actions; label defaults to the filename without ext.')
+  .option('--verify', 'Verify the extension shape and report what it contributes')
+  .option('--description <text>', 'Human-readable description')
+  .action(async (
+    file: string,
+    label: string[],
+    options: {verify?: boolean, description?: string},
+  ) => {
+    const source = await fs.readFile(file, 'utf8')
+    const basename = path.basename(file).replace(/\.[^.]+$/, '')
+    const labelText = label.join(' ').trim()
+    await runAndPrint({
+      type: 'install-extension',
+      source,
+      label: labelText || basename,
+      ...(options.verify ? {verify: true} : {}),
+      ...(options.description !== undefined ? {description: options.description} : {}),
+    })
+  })
+
+cli
+  .command('enable-extension <handle>', 'Enable an installed extension by id or label')
+  .action(async (handle: string) => {
+    await runAndPrint({type: 'enable-extension', ...extensionHandle(handle)})
+  })
+
+cli
+  .command('disable-extension <handle>', 'Disable an installed extension by id or label')
+  .action(async (handle: string) => {
+    await runAndPrint({type: 'disable-extension', ...extensionHandle(handle)})
+  })
+
+cli
+  .command('uninstall-extension <handle>', 'Uninstall an extension by id or label')
+  .action(async (handle: string) => {
+    await runAndPrint({type: 'uninstall-extension', ...extensionHandle(handle)})
+  })
+
+cli
+  .command('run-action <id> [depsJson]', 'Run a registered action by id')
+  .action(async (id: string, depsJson: string | undefined) => {
+    await runAndPrint({
+      type: 'run-action',
+      id,
+      dependencies: depsJson ? parseJson(depsJson, 'depsJson') : {},
+    })
+  })
+
+cli
+  .command('eval [...code]', 'Run JS in the app. Use "return …" to print a value.')
+  .option('--raw', 'Print the wire-format response instead of friendly output')
+  .option('--file <path>', 'Read the code from a file instead of <code>')
+  .action(async (
+    code: string[],
+    options: {raw?: boolean, file?: string},
+  ) => {
+    const codeText = options.file
+      ? await fs.readFile(options.file, 'utf8')
+      : code.join(' ')
+    await ensureBridgeRunning()
+    const value = await runCommand({type: 'eval', code: codeText})
+    process.stdout.write(`${formatEvalOutput(value, Boolean(options.raw))}\n`)
+  })
+
+cli
+  .command('raw <json>', 'Send a raw JSON command envelope to the bridge')
+  .action(async (json: string) => {
+    const command = parseJson(json, 'raw json') as CommandBody
+    await runAndPrint(command)
+  })
+
+cli.help()
+
+const main = async () => {
+  // Two-phase parse so we can resolve `--profile` (a global option)
+  // before any matched action reads `selectedProfileName` for token
+  // lookup or error messages.
+  cli.parse(process.argv, {run: false})
+  const profileOption = cli.options.profile
+  if (profileOption !== undefined) {
+    selectedProfileName = normalizeProfileName(String(profileOption))
+  }
+
+  // When --help / -h is set, cac has already printed the appropriate
+  // (command-specific or global) help during parse — we just bail.
+  if (cli.options.help) return
+
+  // No command matched (bare `kmagent` or an unknown verb): show the
+  // global help instead of erroring, matching the old behaviour where
+  // the hand-written usage was printed.
+  if (!cli.matchedCommand) {
+    cli.outputHelp()
     return
   }
 
-  await ensureBridgeRunning()
-  const command = await commandFromArgs(args)
-  const value = await runCommand(command)
-  process.stdout.write(`${formatCliOutput(verb, args, value)}\n`)
+  await cli.runMatchedCommand()
 }
 
-main().catch(error => {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
+main().catch((error: unknown) => {
+  process.stderr.write(`${errorMessage(error)}\n`)
   process.exitCode = 1
 })
