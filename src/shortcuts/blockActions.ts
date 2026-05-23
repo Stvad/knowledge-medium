@@ -188,15 +188,22 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     },
   }
 
+  // move-up/down deliberately runs without `withMoveTransition`. A swap
+  // between two adjacent blocks is a small local change; wrapping it
+  // would trigger the root-level crossfade, which ghosts both blocks'
+  // text at both positions over the 250ms transition (each block fading
+  // in at the new spot while still fading out at the old). The unwrapped
+  // direct DOM update gives a clean instant swap, which reads as "the
+  // blocks swapped" — the user's own action — without overlap. A future
+  // scoped-VT / per-element setup that doesn't lift everything into the
+  // document-root overlay could re-enable a slide here.
   const moveBlockUp: BlockAction = {
     id: 'move_block_up',
     description: 'Move block up',
     handler: async (deps: BlockShortcutDependencies) => {
       const {block, uiStateBlock} = deps
       if (!block) return
-      await withMoveTransition(async () => {
-        await reorderBlock(repo, block, -1)
-      })
+      await reorderBlock(repo, block, -1)
       requestEditorFocusIfEditing(uiStateBlock)
     },
     defaultBinding: {
@@ -213,9 +220,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     handler: async (deps: BlockShortcutDependencies) => {
       const {block, uiStateBlock} = deps
       if (!block) return
-      await withMoveTransition(async () => {
-        await reorderBlock(repo, block, 1)
-      })
+      await reorderBlock(repo, block, 1)
       requestEditorFocusIfEditing(uiStateBlock)
     },
     defaultBinding: {
