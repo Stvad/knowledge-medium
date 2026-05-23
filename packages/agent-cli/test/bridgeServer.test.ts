@@ -1,8 +1,6 @@
-/** End-to-end test of the bridge HTTP server. We spawn the script as
- *  a child process on a random port and exercise it over the wire —
- *  the server is an .mjs file with no exports, so this is the only
- *  honest way to test the routing behaviour we care about (token
- *  auth, per-client queues, client-gone failure mode). */
+/** End-to-end test of the bridge HTTP server. We spawn the built script
+ *  as a child process on a random port and exercise it over the wire:
+ *  token auth, per-client queues, and client-gone failure modes. */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { spawn, ChildProcess } from 'node:child_process'
 import path from 'node:path'
@@ -10,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import net from 'node:net'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-const serverScript = path.resolve(here, '../../../../packages/agent-cli/dist/server.js')
+const serverScript = path.resolve(here, '../dist/server.js')
 
 const pickPort = (): Promise<number> => new Promise((resolve, reject) => {
   const probe = net.createServer()

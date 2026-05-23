@@ -2,10 +2,11 @@ import { afterEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
+const here = path.dirname(fileURLToPath(import.meta.url))
 const configModuleUrl = pathToFileURL(
-  path.join(process.cwd(), 'packages/agent-cli/dist/config.js'),
+  path.resolve(here, '../dist/config.js'),
 ).href
 
 interface ConfigModule {
