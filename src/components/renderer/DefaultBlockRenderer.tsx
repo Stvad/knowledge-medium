@@ -252,24 +252,20 @@ export const DefaultBlockLayout: BlockLayout = ({
   const isTopLevel = useIsFocalRender(block)
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
   const {className: shellClassName, ...collapsibleProps} = shellProps
-  const {panelId, isNestedSurface} = useBlockContext()
 
-  // `view-transition-name` makes the browser match an element across
-  // old/new snapshots inside a `document.startViewTransition` call: a
-  // block that moves (indent, reorder, …) slides between its old and
-  // new positions instead of fading out at one spot and fading in at
-  // the other. Naming requirements:
-  //  - must be a valid CSS ident → prefix `b-` so the leading hex
-  //    digit of a UUID can't make it invalid
-  //  - must be unique per snapshot → scope by panel so the same block
-  //    rendered in a sidebar stack and main panel doesn't collide;
-  //    skip nested surfaces entirely (backlinks, embeds, breadcrumbs
-  //    shouldn't try to "transition into" the main hierarchy slot).
-  //  - duplicate names abort the whole transition, so when in doubt,
-  //    leave it `undefined`.
-  const viewTransitionName = panelId && !isNestedSurface
-    ? `b-${panelId}-${block.id}`
-    : undefined
+  // No per-block `view-transition-name`. Tried it (commit b1bfa4ef,
+  // reverted): the slide-between-positions effect was barely
+  // perceptible vs. the root-level crossfade we already get from
+  // `withMoveTransition`, and it introduced two real issues —
+  //  - per-block snapshots are lifted into the document-root overlay,
+  //    so a block scrolled under the (in-flow) app header briefly
+  //    paints over it during the transition;
+  //  - the default group animation crossfades old/new image pairs in
+  //    parallel with the position morph, so move-up/down shows two
+  //    overlapping copies of the same text mid-flight.
+  // Both are inherent to per-element VTN matching in an unscoped
+  // overlay; a future scoped-view-transitions or per-panel-rooted
+  // setup could revisit. For now, the root-level crossfade is enough.
 
   return (
     <div>
@@ -279,7 +275,6 @@ export const DefaultBlockLayout: BlockLayout = ({
         {...collapsibleProps}
         open={!isCollapsed || isTopLevel}
         className={`tm-block group/block relative flex items-start gap-1 outline-none focus:outline-none focus-visible:outline-none ${isTopLevel ? 'top-level-block' : ''} ${isSelected ? 'bg-accent/80' : ''} ${shellClassName ?? ''}`}
-        style={viewTransitionName ? {viewTransitionName} : undefined}
       >
         <Controls/>
 
