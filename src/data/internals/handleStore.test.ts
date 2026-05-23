@@ -517,6 +517,107 @@ describe('Dependencies + invalidate()', () => {
   })
 })
 
+describe('Batched notify across multiple matching handles', () => {
+  it('holds all matching handles\' notifies until the slowest loader settles', async () => {
+    // The flicker symptom this fixes: on a structural move (indent /
+    // outdent), the old parent's childIds handle and the new parent's
+    // childIds handle both match the same ChangeNotification. Without
+    // the batch, the loader that resolves first notifies immediately —
+    // its parent re-renders and the moved block briefly disappears (old
+    // parent dropped it; new parent hasn't reloaded yet). With the
+    // batch, both notifies fire in the same microtask, after the
+    // slowest loader has settled.
+    const store = makeStore()
+
+    let fastValue = ['x']
+    const fast = store.getOrCreate('fast', () =>
+      new LoaderHandle<string[]>({
+        store, key: 'fast',
+        loader: async (ctx) => {
+          ctx.depend({ kind: 'parent-edge', parentId: 'p' })
+          return fastValue
+        },
+      }),
+    )
+
+    let resolveSlow!: (v: string[]) => void
+    let slowPromise = Promise.resolve<string[]>(['initial'])
+    const slow = store.getOrCreate('slow', () =>
+      new LoaderHandle<string[]>({
+        store, key: 'slow',
+        loader: async (ctx) => {
+          ctx.depend({ kind: 'parent-edge', parentId: 'p' })
+          return slowPromise
+        },
+      }),
+    )
+
+    const order: string[] = []
+    fast.subscribe(v => order.push(`fast:${v.join(',')}`))
+    slow.subscribe(v => order.push(`slow:${v.join(',')}`))
+
+    await vi.waitFor(() => expect(order).toHaveLength(2))
+    order.length = 0
+
+    // Stage the next slow value behind a manual gate, then invalidate.
+    slowPromise = new Promise<string[]>(r => { resolveSlow = r })
+    fastValue = ['x', 'y']
+    store.invalidate({ parentIds: ['p'] })
+
+    // Fast loader's underlying promise (Promise.resolve in the loader
+    // body — fastValue array is returned synchronously) settles in a
+    // microtask. Without the batch, fast would notify here.
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(order).toEqual([])
+
+    // Releasing the slow loader closes the barrier; both notifies flush.
+    resolveSlow(['s', 'lo', 'w'])
+    await vi.waitFor(() => expect(order).toHaveLength(2))
+    expect(order).toContain('fast:x,y')
+    expect(order).toContain('slow:s,lo,w')
+  })
+
+  it('does not hang the barrier when a matched handle short-circuits (no listeners → stale)', async () => {
+    // A matched handle with zero listeners marks itself stale and
+    // skips the loader run. It must still release its batch slot or
+    // the sibling handle's notify never flushes.
+    const store = makeStore(60_000)
+
+    let subValue = 'sub-1'
+    const subscribedFired: string[] = []
+    const subscribed = store.getOrCreate('subscribed', () =>
+      new LoaderHandle<string>({
+        store, key: 'subscribed',
+        loader: async (ctx) => {
+          ctx.depend({ kind: 'parent-edge', parentId: 'p' })
+          return subValue
+        },
+      }),
+    )
+    subscribed.subscribe(v => subscribedFired.push(v))
+    await vi.waitFor(() => expect(subscribedFired).toEqual(['sub-1']))
+
+    // Second handle: declares the same dep, never gets a subscriber.
+    // Touch it once so it's registered and has deps.
+    const unsubscribed = store.getOrCreate('unsub', () =>
+      new LoaderHandle<string>({
+        store, key: 'unsub',
+        loader: async (ctx) => {
+          ctx.depend({ kind: 'parent-edge', parentId: 'p' })
+          return 'unsub-value'
+        },
+      }),
+    )
+    await unsubscribed.load()
+
+    subValue = 'sub-2'
+    store.invalidate({ parentIds: ['p'] })
+    await vi.waitFor(() => expect(subscribedFired).toEqual(['sub-1', 'sub-2']))
+  })
+})
+
 describe('Mid-load invalidations are not dropped (reviewer P2)', () => {
   it('upfront-declared deps match a mid-load invalidate', async () => {
     // The loader declares its dep BEFORE awaiting — invalidate during

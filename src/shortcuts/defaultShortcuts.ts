@@ -19,6 +19,7 @@ import {
   getRootBlock,
 } from '@/utils/selection.js'
 import { importState } from '@/utils/state.js'
+import { withMoveTransition } from '@/utils/viewTransition.js'
 import {
   activePanelIdProp,
   focusBlock,
@@ -535,7 +536,10 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // (parent === topLevelBlockId) or already at workspace root —
         // fall back to creating a sibling below.
         else if (editorView.state.doc.length === 0) {
-          const moved = await repo.mutate.outdent({id: block.id, topLevelBlockId})
+          let moved = false
+          await withMoveTransition(async () => {
+            moved = await repo.mutate.outdent({id: block.id, topLevelBlockId})
+          })
           if (!moved) await createSiblingBelow()
         }
         // Cursor at end, no children or they are collapsed

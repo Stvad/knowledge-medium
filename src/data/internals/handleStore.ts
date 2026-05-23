@@ -84,8 +84,12 @@ interface RegisteredHandle {
   /** Walks deps; returns true if this handle should be invalidated. */
   matches: (change: ChangeNotification) => boolean
   /** Called by the store when an invalidation hits. The handle re-runs
-   *  its loader and notifies subscribers if the value changed. */
-  invalidate: () => void
+   *  its loader and notifies subscribers if the value changed. When a
+   *  `NotifyBatch` is passed, the handle MUST call `batch.finish(...)`
+   *  exactly once for this invocation (either with a notify thunk to
+   *  flush when all batch members are done, or with `null` to release
+   *  its slot without contributing a notify). */
+  invalidate: (batch?: NotifyBatch) => void
   /** Called when GC fires — handle clears its state, the store removes
    *  the entry from the registry. */
   dispose: () => void
@@ -101,6 +105,75 @@ interface RegisteredHandle {
    *  re-checked against the freshly-collected deps once the loader
    *  settles. No-op when the handle isn't currently loading. */
   observeDuringLoad: (change: ChangeNotification) => void
+}
+
+/** Coordinates notify-fan-out across multiple handles invalidated by the
+ *  same `ChangeNotification`. Without this, each handle's loader settles
+ *  on its own task and fires its notify independently; if loaders settle
+ *  in different macrotasks (the common case for SQL-backed loaders), the
+ *  browser can paint between them. The visible symptom on indent/move:
+ *  the moved block disappears from its old parent's list, layout collapses,
+ *  then it reappears under the new parent on the next paint.
+ *
+ *  Semantics:
+ *    - Each handle invalidated as part of one `store.invalidate(...)`
+ *      call registers itself with the batch via `register()` and MUST
+ *      call `finish(notifyOrNull)` exactly once for that registration —
+ *      with a notify thunk if it wants to fire after the barrier, or
+ *      `null` to release its slot (errors, deferred-no-listeners,
+ *      mid-load coalescing, structural-diff no-ops).
+ *    - The barrier closes once `close()` has been called AND all
+ *      registered slots have finished. At that point every queued notify
+ *      runs synchronously in registration order, landing in one
+ *      microtask so React 18 auto-batching captures them in one commit.
+ *    - Slots that finish synchronously during the invalidate walk are
+ *      drained the same way; if all matched handles short-circuit, the
+ *      barrier flushes immediately on `close()`.
+ *    - Mid-load handles forward `null` and don't re-register their
+ *      post-settle reload into this batch; that reload's notify lands
+ *      in its own microtask. The dominant indent/move case is ready
+ *      handles, so the batch covers the symptom; mid-load is a
+ *      best-effort fallback.
+ */
+class NotifyBatch {
+  private remaining = 0
+  private closed = false
+  private flushed = false
+  private readonly queue: Array<() => void> = []
+
+  /** Reserve a slot — must be paired with exactly one `finish(...)`. */
+  register(): void {
+    if (this.flushed) {
+      throw new Error('NotifyBatch.register after flush')
+    }
+    this.remaining++
+  }
+
+  /** Release a slot, optionally contributing a notify to flush when the
+   *  barrier closes. Pass `null` for "no notify from this slot." */
+  finish(notify: (() => void) | null): void {
+    if (notify) this.queue.push(notify)
+    this.remaining--
+    this.maybeFlush()
+  }
+
+  /** Signal that no more `register()` calls will arrive. If the slot
+   *  count is already zero this flushes immediately. */
+  close(): void {
+    this.closed = true
+    this.maybeFlush()
+  }
+
+  private maybeFlush(): void {
+    if (!this.closed || this.remaining > 0 || this.flushed) return
+    this.flushed = true
+    const ns = this.queue.splice(0)
+    for (const n of ns) {
+      try { n() } catch (err) {
+        console.error('NotifyBatch flush error:', err)
+      }
+    }
+  }
 }
 
 /** Mutable counter object for handle-related metrics (perf-baseline
@@ -258,14 +331,33 @@ export class HandleStore {
     // for late-declared deps to catch the change).
     this.metrics.invalidations++
     const snapshot = Array.from(this.handles.values())
+    // First pass — observeDuringLoad for every handle, and collect the
+    // matched set. We need the matched count before deciding whether to
+    // open a batch (a single-handle invalidation has nothing to
+    // coordinate and skips the barrier machinery).
+    const matched: RegisteredHandle[] = []
     for (const h of snapshot) {
       this.metrics.handlesWalked++
       h.observeDuringLoad(change)
       if (h.matches(change)) {
         this.metrics.handlesMatched++
-        h.invalidate()
+        matched.push(h)
       }
     }
+    if (matched.length <= 1) {
+      for (const h of matched) h.invalidate()
+      return
+    }
+    // ≥2 matched handles — coordinate their notifies so they all land in
+    // one microtask once the slowest loader settles. Without this, the
+    // moved-block flicker during indent/move: each parent's childIds
+    // handle settles on its own SQL response, paints between them.
+    const batch = new NotifyBatch()
+    for (const h of matched) {
+      batch.register()
+      h.invalidate(batch)
+    }
+    batch.close()
   }
 
   /** Test/debug: how many handles are currently registered. */
@@ -389,7 +481,7 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
    *      this resolve didn't re-declare).
    *    - On load failure we restore the prior deps so the next attempt
    *      still has a sensible matching baseline. */
-  private runLoader(): Promise<T> {
+  private runLoader(batch?: NotifyBatch): Promise<T> {
     // Reset pending-reinvalidate at run start. Anything that arrives
     // during this run sets the flag; we re-run after settle. Same for
     // the queue of changes recorded against post-load deps.
@@ -448,13 +540,21 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
         // Structural-diff: skip listener walk if value didn't change
         // (spec §9.4). On the first successful load there's no prior
         // value to compare against — always notify.
-        if (!hadPrior || priorValue === undefined || !this.equality(priorValue, value)) {
-          this.notify(value)
+        const willNotify =
+          !hadPrior || priorValue === undefined || !this.equality(priorValue, value)
+        if (willNotify) {
+          // When this load was kicked off by a batched invalidate,
+          // queue the notify so it lands in the same microtask as the
+          // other batch members' notifies (one React commit). Without
+          // a batch, fire immediately as before.
+          if (batch) batch.finish(() => this.notify(value))
+          else this.notify(value)
         } else {
           // Equality match against prior value: notify suppressed.
           // Counts even when the listener set is empty — the dedup
           // decision happened, we measure the decision, not the walk.
           this.store.metrics.notifiesSkippedByDiff++
+          batch?.finish(null)
         }
         this.release() // drop the inflight ref
         // If invalidations arrived during this load, the data we just
@@ -483,6 +583,12 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
         return value
       },
       (err) => {
+        // Release the batch slot unconditionally — including the
+        // disposed-mid-load case (where the success path throws into
+        // here). The barrier must not hang on a vanished participant.
+        // Failed loads contribute no notify; the prior notify, if any,
+        // already fired on the last successful settle.
+        batch?.finish(null)
         if (!this.disposed) {
           // Roll back to the priorDeps — collected was incomplete.
           // The queued changes are discarded along with the partial
@@ -576,8 +682,11 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     if (this.inflight) this.changesDuringLoad.push(change)
   }
 
-  invalidate(): void {
-    if (this.disposed) return
+  invalidate(batch?: NotifyBatch): void {
+    if (this.disposed) {
+      batch?.finish(null)
+      return
+    }
     this.store.metrics.loaderInvalidations++
     // Force a re-resolve. Readers calling `peek()` see the stale value
     // until the new load completes — status stays 'ready' so the UI
@@ -591,8 +700,14 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
       // the current promise resolves. Multiple invalidations during
       // one load coalesce into a single rerun (the next loader picks
       // up the latest state in one go).
+      //
+      // Batch semantics: mid-load handles release their slot without
+      // contributing a notify. The post-settle reload's notify lands
+      // in its own microtask, outside this batch — acceptable because
+      // the common indent/move case is ready handles, not mid-load.
       this.store.metrics.midLoadInvalidations++
       this.pendingReinvalidate = true
+      batch?.finish(null)
       return
     }
     // No subscribers waiting on push notifications? Don't burn a slow
@@ -603,9 +718,10 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     if (this.listeners.size === 0) {
       this.stale = true
       this.store.metrics.loaderInvalidationsDeferred++
+      batch?.finish(null)
       return
     }
-    void this.runLoader().catch(() => {/* error on handle */})
+    void this.runLoader(batch).catch(() => {/* error on handle */})
   }
 
   retain(): void {

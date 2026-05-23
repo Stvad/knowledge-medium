@@ -3,6 +3,7 @@ import { Block } from '../data/block'
 import { Repo } from '../data/repo'
 import { resetBlockSelection } from '@/data/stateBlocks.js'
 import { copyBlockToClipboard } from '@/utils/copy.js'
+import { withMoveTransition } from '@/utils/viewTransition.js'
 import {
   editorSelection,
   focusedBlockIdProp,
@@ -154,7 +155,9 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     id: 'indent_block',
     description: 'Indent block',
     handler: async (deps: BlockShortcutDependencies) => {
-      await repo.mutate.indent({id: deps.block.id})
+      await withMoveTransition(async () => {
+        await repo.mutate.indent({id: deps.block.id})
+      })
       requestEditorFocusIfEditing(deps.uiStateBlock)
     },
     defaultBinding: {
@@ -172,7 +175,9 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
       if (!topLevelBlockId) return
 
-      await repo.mutate.outdent({id: block.id, topLevelBlockId})
+      await withMoveTransition(async () => {
+        await repo.mutate.outdent({id: block.id, topLevelBlockId})
+      })
       requestEditorFocusIfEditing(uiStateBlock)
     },
     defaultBinding: {
