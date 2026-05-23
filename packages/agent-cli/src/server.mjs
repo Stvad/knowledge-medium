@@ -7,7 +7,7 @@ import {
   bridgeServerUrl,
   bridgeSecret as resolveBridgeSecret,
   pairingUrl,
-} from './agent-runtime-config.mjs'
+} from './config.mjs'
 
 const port = bridgePort()
 const host = bridgeHost()

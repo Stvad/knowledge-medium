@@ -6,6 +6,9 @@
   "engines": {
     "node": ">=24.0.0"
   },
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "dev": "vite",
     "compile": "tsc -b",
@@ -19,8 +22,8 @@
     "check:sync-config": "vite-node scripts/gen-sync-config.ts -- --check",
     "check:no-service-role": "bash scripts/check-no-service-role.sh",
     "check": "yarn run compile && yarn run lint && yarn run test && yarn run check:sync-config && yarn run check:no-service-role",
-    "agent:server": "node scripts/agent-runtime-server.mjs",
-    "agent": "node scripts/agent-runtime.mjs",
+    "agent:server": "node packages/agent-cli/src/server.mjs",
+    "agent": "node packages/agent-cli/src/cli.mjs",
     "bench": "vite-node scripts/bench/index.ts"
   },
   "dependencies": {

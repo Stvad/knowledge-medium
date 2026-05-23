@@ -8,7 +8,7 @@ import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
 const here = path.dirname(fileURLToPath(import.meta.url))
-const cliScript = path.resolve(here, '../../../../scripts/agent-runtime.mjs')
+const cliScript = path.resolve(here, '../../../../packages/agent-cli/src/cli.mjs')
 
 let tempDir: string
 let tokenFile: string

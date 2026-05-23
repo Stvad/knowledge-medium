@@ -5,7 +5,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const configModuleUrl = pathToFileURL(
-  path.join(process.cwd(), 'scripts/agent-runtime-config.mjs'),
+  path.join(process.cwd(), 'packages/agent-cli/src/config.mjs'),
 ).href
 
 interface ConfigModule {

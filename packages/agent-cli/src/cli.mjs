@@ -11,10 +11,10 @@ import {
   isLocalBridgeUrl,
   pairingUrl,
   tokenStorePath as resolveTokenStorePath,
-} from './agent-runtime-config.mjs'
+} from './config.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-const serverScript = path.join(here, 'agent-runtime-server.mjs')
+const serverScript = path.join(here, 'server.mjs')
 const bridgeUrl = resolveBridgeUrl()
 const pollIntervalMs = 100
 const defaultTimeoutMs = 30_000

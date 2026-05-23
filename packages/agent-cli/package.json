@@ -1,0 +1,23 @@
+{
+  "name": "@knowledge-medium/agent-cli",
+  "version": "0.0.0",
+  "description": "CLI + local HTTP bridge for driving the Knowledge Medium app from an agent (Claude/etc.). Pairs once with a browser tab, then forwards JSON commands over loopback.",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "bin": {
+    "kmagent": "./src/cli.mjs",
+    "kmagent-server": "./src/server.mjs"
+  },
+  "main": "./src/cli.mjs",
+  "exports": {
+    ".": "./src/cli.mjs",
+    "./server": "./src/server.mjs",
+    "./config": "./src/config.mjs"
+  },
+  "files": [
+    "src"
+  ]
+}
