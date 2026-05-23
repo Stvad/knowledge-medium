@@ -28,6 +28,7 @@ import {
   topLevelBlockIdProp,
 } from '@/data/properties'
 import { CallbackSet } from '@/utils/callbackSet'
+import { withMoveTransition } from '@/utils/viewTransition'
 
 /** Per-(panel, block-visit) ephemeral state captured at navigation time
  *  and replayed on back/forward. New fields can be added freely; consumers
@@ -220,11 +221,17 @@ export const navigateInPanel = async (
       state: panelHistory.snapshot(panelBlock.id),
     })
   }
-  await panelBlock.repo.tx(async tx => {
-    await tx.setProperty(panelBlock.id, topLevelBlockIdProp, blockId)
-    await tx.setProperty(panelBlock.id, focusedBlockIdProp, blockId)
-    await tx.setProperty(panelBlock.id, scrollTopProp, 0)
-  }, {scope: ChangeScope.UiState, description: 'navigate in panel'})
+  // Panel content fully swaps here — the highest-impact transition in
+  // the app. Centralised so every navigation path (zoom shortcuts,
+  // wikilink clicks, breadcrumb, programmatic) gets the same crossfade
+  // without each call site re-wrapping.
+  await withMoveTransition(async () => {
+    await panelBlock.repo.tx(async tx => {
+      await tx.setProperty(panelBlock.id, topLevelBlockIdProp, blockId)
+      await tx.setProperty(panelBlock.id, focusedBlockIdProp, blockId)
+      await tx.setProperty(panelBlock.id, scrollTopProp, 0)
+    }, {scope: ChangeScope.UiState, description: 'navigate in panel'})
+  })
 }
 
 /** Step the panel one entry back. Captures the current visit's state
@@ -243,11 +250,13 @@ export const goBackInPanel = async (panelBlock: Block): Promise<boolean> => {
   // first render of the new top-level already has the right cursor.
   // Scroll restore needs the new content to render first; that's the
   // renderer's responsibility via consumeRestore() in a post-render effect.
-  await panelBlock.repo.tx(async tx => {
-    await tx.setProperty(panelBlock.id, topLevelBlockIdProp, dest.blockId)
-    await tx.setProperty(panelBlock.id, focusedBlockIdProp, dest.state?.focusedBlockId ?? dest.blockId)
-    await tx.setProperty(panelBlock.id, scrollTopProp, dest.state?.scrollTop ?? 0)
-  }, {scope: ChangeScope.UiState, description: 'panel history back'})
+  await withMoveTransition(async () => {
+    await panelBlock.repo.tx(async tx => {
+      await tx.setProperty(panelBlock.id, topLevelBlockIdProp, dest.blockId)
+      await tx.setProperty(panelBlock.id, focusedBlockIdProp, dest.state?.focusedBlockId ?? dest.blockId)
+      await tx.setProperty(panelBlock.id, scrollTopProp, dest.state?.scrollTop ?? 0)
+    }, {scope: ChangeScope.UiState, description: 'panel history back'})
+  })
   return true
 }
 
@@ -260,11 +269,13 @@ export const goForwardInPanel = async (panelBlock: Block): Promise<boolean> => {
   })
   if (!dest) return false
   panelHistory.enqueueRestore(panelBlock.id, dest.state)
-  await panelBlock.repo.tx(async tx => {
-    await tx.setProperty(panelBlock.id, topLevelBlockIdProp, dest.blockId)
-    await tx.setProperty(panelBlock.id, focusedBlockIdProp, dest.state?.focusedBlockId ?? dest.blockId)
-    await tx.setProperty(panelBlock.id, scrollTopProp, dest.state?.scrollTop ?? 0)
-  }, {scope: ChangeScope.UiState, description: 'panel history forward'})
+  await withMoveTransition(async () => {
+    await panelBlock.repo.tx(async tx => {
+      await tx.setProperty(panelBlock.id, topLevelBlockIdProp, dest.blockId)
+      await tx.setProperty(panelBlock.id, focusedBlockIdProp, dest.state?.focusedBlockId ?? dest.blockId)
+      await tx.setProperty(panelBlock.id, scrollTopProp, dest.state?.scrollTop ?? 0)
+    }, {scope: ChangeScope.UiState, description: 'panel history forward'})
+  })
   return true
 }
 

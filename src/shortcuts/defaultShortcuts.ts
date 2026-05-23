@@ -176,9 +176,8 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     description: 'Zoom into focused block',
     icon: ZoomIn,
     handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
-      await withMoveTransition(async () => {
-        await navigateInPanel(uiStateBlock, block.id)
-      })
+      // navigateInPanel wraps in withMoveTransition internally.
+      await navigateInPanel(uiStateBlock, block.id)
     },
     defaultBinding: {
       keys: ['cmd+.', 'ctrl+.'],
@@ -196,9 +195,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       const parent = repo.block(topLevelBlockId).parent
       if (!parent) return
 
-      await withMoveTransition(async () => {
-        await navigateInPanel(uiStateBlock, parent.id)
-      })
+      await navigateInPanel(uiStateBlock, parent.id)
     },
     defaultBinding: {
       keys: 'ctrl+,',
