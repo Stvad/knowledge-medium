@@ -1,152 +1,175 @@
--- Trigger behavior tests for `blocks_history`. Run against a local DB
--- with the migration applied:
+-- Trigger behavior tests for `blocks_history`. Run with:
 --
---   psql "$LOCAL_SUPABASE_DB_URL" -v ON_ERROR_STOP=1 \
---     -f supabase/tests/blocks_history_trigger.test.sql
+--   yarn check:db
 --
--- Wraps everything in BEGIN/ROLLBACK so it leaves no residue. ASSERTs
--- abort the transaction on the first failure with a clear message; a
--- "blocks_history trigger tests passed" NOTICE prints only on full
--- success.
---
--- Not auto-run by `yarn check`. Postgres-level migration logic isn't
--- exercised by the JS test suite, so this lives as a manual gate to run
--- alongside `supabase db reset` after touching the trigger.
+-- This file is pgTAP so `supabase test db` reports named TAP failures.
+-- It also wraps itself in BEGIN/ROLLBACK, so manual psql runs leave no
+-- residue.
 
 BEGIN;
 
-DO $$
-DECLARE
-  v_workspace_id text := 'test-ws-' || gen_random_uuid()::text;
-  v_user_id      text := gen_random_uuid()::text;
-  v_other_user   text := gen_random_uuid()::text;
-  v_block_id     text := 'test-block-' || gen_random_uuid()::text;
-  -- All client timestamps held one minute in the past so the
+CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
+SET LOCAL search_path TO public, extensions;
+
+SELECT plan(35);
+
+CREATE TEMP TABLE blocks_history_test_ctx AS
+SELECT
+  'test-ws-' || extensions.gen_random_uuid()::text AS workspace_id,
+  extensions.gen_random_uuid()::text AS user_id,
+  extensions.gen_random_uuid()::text AS other_user_id,
+  'test-block-' || extensions.gen_random_uuid()::text AS block_id,
+  -- All client timestamps stay one minute in the past so the
   -- `blocks_clamp_updated_at` BEFORE trigger never clamps them. Within the
-  -- test we use v_then + small offsets; all comfortably below server now.
-  v_then         bigint := (extract(epoch from now()) * 1000)::bigint - 60000;
-  v_now          bigint := (extract(epoch from now()) * 1000)::bigint;
-  v_count        int;
-  v_row          public.blocks_history;
-BEGIN
-  -- Seed: workspace + owner membership so the FK on blocks.workspace_id holds.
-  INSERT INTO public.workspaces (id, name, owner_user_id, create_time, update_time)
-    VALUES (v_workspace_id, 'test', v_user_id, v_now, v_now);
-  INSERT INTO public.workspace_members (id, workspace_id, user_id, role, create_time)
-    VALUES (gen_random_uuid()::text, v_workspace_id, v_user_id, 'owner', v_now);
+  -- test we use then_ms + small offsets; all comfortably below server now.
+  (extract(epoch from now()) * 1000)::bigint - 60000 AS then_ms,
+  (extract(epoch from now()) * 1000)::bigint AS now_ms,
+  NULL::int AS history_count_before_noop;
 
-  -------------------------------------------------------------------------
-  -- INSERT
-  -------------------------------------------------------------------------
-  INSERT INTO public.blocks (
-    id, workspace_id, parent_id, order_key, content,
-    created_at, updated_at, created_by, updated_by
-  ) VALUES (
-    v_block_id, v_workspace_id, NULL, 'a0', 'hello',
-    v_then, v_then, v_user_id, v_user_id
-  );
+CREATE TEMP VIEW latest_blocks_history AS
+SELECT h.*
+FROM public.blocks_history h
+JOIN blocks_history_test_ctx c ON c.block_id = h.block_id
+ORDER BY h.event_id DESC
+LIMIT 1;
 
-  SELECT count(*) INTO v_count
-    FROM public.blocks_history WHERE block_id = v_block_id;
-  ASSERT v_count = 1,
-    format('INSERT: expected 1 history row, got %s', v_count);
+-- Seed: workspace + owner membership so the FK on blocks.workspace_id holds.
+INSERT INTO public.workspaces (id, name, owner_user_id, create_time, update_time)
+SELECT workspace_id, 'test', user_id, now_ms, now_ms
+FROM blocks_history_test_ctx;
 
-  SELECT * INTO v_row FROM public.blocks_history
-    WHERE block_id = v_block_id ORDER BY event_id DESC LIMIT 1;
-  ASSERT v_row.op = 'I',                 format('INSERT: op=%L', v_row.op);
-  ASSERT v_row.semantic_op = 'create',   format('INSERT: semantic_op=%L', v_row.semantic_op);
-  ASSERT v_row.before_diff IS NULL,      'INSERT: before_diff should be NULL';
-  ASSERT v_row.after_diff IS NOT NULL,   'INSERT: after_diff should be non-NULL';
-  ASSERT v_row.after_diff ? 'id',        'INSERT: after_diff should contain full row';
-  ASSERT v_row.after_diff ? 'content',   'INSERT: after_diff should contain content';
-  ASSERT v_row.changed_columns IS NULL,  'INSERT: changed_columns should be NULL';
-  ASSERT v_row.actor = v_user_id,        format('INSERT: actor=%L', v_row.actor);
+INSERT INTO public.workspace_members (id, workspace_id, user_id, role, create_time)
+SELECT extensions.gen_random_uuid()::text, workspace_id, user_id, 'owner', now_ms
+FROM blocks_history_test_ctx;
 
-  -------------------------------------------------------------------------
-  -- UPDATE (non-deleted column)
-  -------------------------------------------------------------------------
-  UPDATE public.blocks
-     SET content = 'world', updated_at = v_then + 1, updated_by = v_other_user
-   WHERE id = v_block_id;
+-------------------------------------------------------------------------
+-- INSERT
+-------------------------------------------------------------------------
+INSERT INTO public.blocks (
+  id, workspace_id, parent_id, order_key, content,
+  created_at, updated_at, created_by, updated_by
+)
+SELECT
+  block_id, workspace_id, NULL, 'a0', 'hello',
+  then_ms, then_ms, user_id, user_id
+FROM blocks_history_test_ctx;
 
-  SELECT count(*) INTO v_count
-    FROM public.blocks_history WHERE block_id = v_block_id;
-  ASSERT v_count = 2,
-    format('UPDATE: expected 2 history rows total, got %s', v_count);
+SELECT is(
+  (SELECT count(*)::int FROM public.blocks_history h JOIN blocks_history_test_ctx c ON c.block_id = h.block_id),
+  1,
+  'INSERT records one history row'
+);
 
-  SELECT * INTO v_row FROM public.blocks_history
-    WHERE block_id = v_block_id ORDER BY event_id DESC LIMIT 1;
-  ASSERT v_row.op = 'U',                              format('UPDATE: op=%L', v_row.op);
-  ASSERT v_row.semantic_op = 'update',                format('UPDATE: semantic_op=%L', v_row.semantic_op);
-  ASSERT v_row.changed_columns @> ARRAY['content'],   'UPDATE: changed_columns missing content';
-  ASSERT v_row.changed_columns @> ARRAY['updated_at'],'UPDATE: changed_columns missing updated_at';
-  ASSERT v_row.changed_columns @> ARRAY['updated_by'],'UPDATE: changed_columns missing updated_by';
-  ASSERT NOT (v_row.changed_columns @> ARRAY['deleted']),
-    'UPDATE: deleted should not be in changed_columns';
-  ASSERT v_row.before_diff ->> 'content' = 'hello',   format('UPDATE: before_diff.content=%L', v_row.before_diff ->> 'content');
-  ASSERT v_row.after_diff  ->> 'content' = 'world',   format('UPDATE: after_diff.content=%L',  v_row.after_diff  ->> 'content');
-  ASSERT NOT (v_row.before_diff ? 'id'),
-    'UPDATE: before_diff should not carry unchanged columns (id)';
-  ASSERT v_row.actor = v_other_user,                  format('UPDATE: actor=%L', v_row.actor);
+SELECT is((SELECT op FROM latest_blocks_history), 'I'::text, 'INSERT records op=I');
+SELECT is((SELECT semantic_op FROM latest_blocks_history), 'create'::text, 'INSERT records semantic_op=create');
+SELECT is((SELECT before_diff FROM latest_blocks_history), NULL::jsonb, 'INSERT has no before_diff');
+SELECT ok((SELECT after_diff IS NOT NULL FROM latest_blocks_history), 'INSERT has an after_diff');
+SELECT ok((SELECT after_diff ? 'id' FROM latest_blocks_history), 'INSERT after_diff contains the full row id');
+SELECT ok((SELECT after_diff ? 'content' FROM latest_blocks_history), 'INSERT after_diff contains content');
+SELECT is((SELECT changed_columns FROM latest_blocks_history), NULL::text[], 'INSERT has no changed_columns list');
+SELECT is(
+  (SELECT actor FROM latest_blocks_history),
+  (SELECT user_id FROM blocks_history_test_ctx),
+  'INSERT actor is created_by'
+);
 
-  -------------------------------------------------------------------------
-  -- UPDATE — soft_delete (deleted false -> true)
-  -------------------------------------------------------------------------
-  UPDATE public.blocks
-     SET deleted = TRUE, updated_at = v_then + 2
-   WHERE id = v_block_id;
+-------------------------------------------------------------------------
+-- UPDATE (non-deleted column)
+-------------------------------------------------------------------------
+UPDATE public.blocks b
+SET
+  content = 'world',
+  updated_at = c.then_ms + 1,
+  updated_by = c.other_user_id
+FROM blocks_history_test_ctx c
+WHERE b.id = c.block_id;
 
-  SELECT * INTO v_row FROM public.blocks_history
-    WHERE block_id = v_block_id ORDER BY event_id DESC LIMIT 1;
-  ASSERT v_row.op = 'U',                            format('soft_delete: op=%L', v_row.op);
-  ASSERT v_row.semantic_op = 'soft_delete',         format('soft_delete: semantic_op=%L', v_row.semantic_op);
-  ASSERT v_row.changed_columns @> ARRAY['deleted'], 'soft_delete: changed_columns missing deleted';
-  ASSERT (v_row.before_diff ->> 'deleted')::boolean IS FALSE,
-    'soft_delete: before_diff.deleted should be false';
-  ASSERT (v_row.after_diff  ->> 'deleted')::boolean IS TRUE,
-    'soft_delete: after_diff.deleted should be true';
+SELECT is(
+  (SELECT count(*)::int FROM public.blocks_history h JOIN blocks_history_test_ctx c ON c.block_id = h.block_id),
+  2,
+  'UPDATE records one additional history row'
+);
 
-  -------------------------------------------------------------------------
-  -- UPDATE — undelete (deleted true -> false)
-  -------------------------------------------------------------------------
-  UPDATE public.blocks
-     SET deleted = FALSE, updated_at = v_then + 3
-   WHERE id = v_block_id;
+SELECT is((SELECT op FROM latest_blocks_history), 'U'::text, 'UPDATE records op=U');
+SELECT is((SELECT semantic_op FROM latest_blocks_history), 'update'::text, 'UPDATE records semantic_op=update');
+SELECT ok((SELECT changed_columns @> ARRAY['content']::text[] FROM latest_blocks_history), 'UPDATE changed_columns includes content');
+SELECT ok((SELECT changed_columns @> ARRAY['updated_at']::text[] FROM latest_blocks_history), 'UPDATE changed_columns includes updated_at');
+SELECT ok((SELECT changed_columns @> ARRAY['updated_by']::text[] FROM latest_blocks_history), 'UPDATE changed_columns includes updated_by');
+SELECT ok((SELECT NOT (changed_columns @> ARRAY['deleted']::text[]) FROM latest_blocks_history), 'UPDATE changed_columns excludes deleted');
+SELECT is((SELECT before_diff ->> 'content' FROM latest_blocks_history), 'hello'::text, 'UPDATE before_diff records old content');
+SELECT is((SELECT after_diff ->> 'content' FROM latest_blocks_history), 'world'::text, 'UPDATE after_diff records new content');
+SELECT ok((SELECT NOT (before_diff ? 'id') FROM latest_blocks_history), 'UPDATE before_diff excludes unchanged id');
+SELECT is(
+  (SELECT actor FROM latest_blocks_history),
+  (SELECT other_user_id FROM blocks_history_test_ctx),
+  'UPDATE actor is updated_by'
+);
 
-  SELECT * INTO v_row FROM public.blocks_history
-    WHERE block_id = v_block_id ORDER BY event_id DESC LIMIT 1;
-  ASSERT v_row.semantic_op = 'undelete',
-    format('undelete: semantic_op=%L', v_row.semantic_op);
-  ASSERT (v_row.before_diff ->> 'deleted')::boolean IS TRUE,
-    'undelete: before_diff.deleted should be true';
-  ASSERT (v_row.after_diff  ->> 'deleted')::boolean IS FALSE,
-    'undelete: after_diff.deleted should be false';
+-------------------------------------------------------------------------
+-- UPDATE - soft_delete (deleted false -> true)
+-------------------------------------------------------------------------
+UPDATE public.blocks b
+SET
+  deleted = TRUE,
+  updated_at = c.then_ms + 2
+FROM blocks_history_test_ctx c
+WHERE b.id = c.block_id;
 
-  -------------------------------------------------------------------------
-  -- UPDATE — no-op (identical values) should record NOTHING
-  -------------------------------------------------------------------------
-  SELECT count(*) INTO v_count FROM public.blocks_history WHERE block_id = v_block_id;
-  UPDATE public.blocks
-     SET content = content
-   WHERE id = v_block_id;
-  ASSERT (SELECT count(*) FROM public.blocks_history WHERE block_id = v_block_id) = v_count,
-    'no-op UPDATE should not produce a history row';
+SELECT is((SELECT op FROM latest_blocks_history), 'U'::text, 'soft_delete records op=U');
+SELECT is((SELECT semantic_op FROM latest_blocks_history), 'soft_delete'::text, 'soft_delete records semantic_op=soft_delete');
+SELECT ok((SELECT changed_columns @> ARRAY['deleted']::text[] FROM latest_blocks_history), 'soft_delete changed_columns includes deleted');
+SELECT is((SELECT (before_diff ->> 'deleted')::boolean FROM latest_blocks_history), FALSE, 'soft_delete before_diff.deleted is false');
+SELECT is((SELECT (after_diff ->> 'deleted')::boolean FROM latest_blocks_history), TRUE, 'soft_delete after_diff.deleted is true');
 
-  -------------------------------------------------------------------------
-  -- DELETE
-  -------------------------------------------------------------------------
-  DELETE FROM public.blocks WHERE id = v_block_id;
+-------------------------------------------------------------------------
+-- UPDATE - undelete (deleted true -> false)
+-------------------------------------------------------------------------
+UPDATE public.blocks b
+SET
+  deleted = FALSE,
+  updated_at = c.then_ms + 3
+FROM blocks_history_test_ctx c
+WHERE b.id = c.block_id;
 
-  SELECT * INTO v_row FROM public.blocks_history
-    WHERE block_id = v_block_id ORDER BY event_id DESC LIMIT 1;
-  ASSERT v_row.op = 'D',                  format('DELETE: op=%L', v_row.op);
-  ASSERT v_row.semantic_op = 'delete',    format('DELETE: semantic_op=%L', v_row.semantic_op);
-  ASSERT v_row.before_diff IS NOT NULL,   'DELETE: before_diff should be the full prior row';
-  ASSERT v_row.before_diff ? 'content',   'DELETE: before_diff should contain content';
-  ASSERT v_row.after_diff IS NULL,        'DELETE: after_diff should be NULL';
-  ASSERT v_row.changed_columns IS NULL,   'DELETE: changed_columns should be NULL';
+SELECT is((SELECT semantic_op FROM latest_blocks_history), 'undelete'::text, 'undelete records semantic_op=undelete');
+SELECT is((SELECT (before_diff ->> 'deleted')::boolean FROM latest_blocks_history), TRUE, 'undelete before_diff.deleted is true');
+SELECT is((SELECT (after_diff ->> 'deleted')::boolean FROM latest_blocks_history), FALSE, 'undelete after_diff.deleted is false');
 
-  RAISE NOTICE 'blocks_history trigger tests passed';
-END $$;
+-------------------------------------------------------------------------
+-- UPDATE - no-op (identical values) should record NOTHING
+-------------------------------------------------------------------------
+UPDATE blocks_history_test_ctx c
+SET history_count_before_noop = (
+  SELECT count(*)::int
+  FROM public.blocks_history h
+  WHERE h.block_id = c.block_id
+);
+
+UPDATE public.blocks b
+SET content = b.content
+FROM blocks_history_test_ctx c
+WHERE b.id = c.block_id;
+
+SELECT is(
+  (SELECT count(*)::int FROM public.blocks_history h JOIN blocks_history_test_ctx c ON c.block_id = h.block_id),
+  (SELECT history_count_before_noop FROM blocks_history_test_ctx),
+  'no-op UPDATE does not produce a history row'
+);
+
+-------------------------------------------------------------------------
+-- DELETE
+-------------------------------------------------------------------------
+DELETE FROM public.blocks b
+USING blocks_history_test_ctx c
+WHERE b.id = c.block_id;
+
+SELECT is((SELECT op FROM latest_blocks_history), 'D'::text, 'DELETE records op=D');
+SELECT is((SELECT semantic_op FROM latest_blocks_history), 'delete'::text, 'DELETE records semantic_op=delete');
+SELECT ok((SELECT before_diff IS NOT NULL FROM latest_blocks_history), 'DELETE before_diff is the full prior row');
+SELECT ok((SELECT before_diff ? 'content' FROM latest_blocks_history), 'DELETE before_diff contains content');
+SELECT is((SELECT after_diff FROM latest_blocks_history), NULL::jsonb, 'DELETE has no after_diff');
+SELECT is((SELECT changed_columns FROM latest_blocks_history), NULL::text[], 'DELETE has no changed_columns list');
+
+SELECT * FROM finish();
 
 ROLLBACK;

@@ -58,6 +58,38 @@ npx powersync@latest deploy
 yarn dev
 ```
 
+### Local Database Migration Tests
+
+Run the SQL migration test suite with:
+
+```bash
+yarn check:db
+```
+
+This starts a local Supabase Postgres test container, applies
+`supabase/migrations/*.sql` as `supabase_admin`, runs every pgTAP test in
+`supabase/tests`, and then removes the test database container so the next run
+starts clean. It is not part of `yarn check`; the pre-commit gate stays JS-only
+and does not require a container runtime.
+
+For Apple Container, install `container` and `socktainer`. `yarn check:db`
+uses the shared runtime helper and starts the Apple container system plus a
+managed Socktainer process when `DOCKER_HOST` is unset:
+
+```bash
+yarn check:db
+```
+
+The runtime helper is also available directly:
+
+```bash
+yarn db:runtime:apple
+```
+
+That starts Apple Container/Socktainer and prints the Docker host it prepared.
+If `DOCKER_HOST` is already set, `yarn check:db` respects it. To force the
+default Docker runtime, set `CHECK_DB_CONTAINER_RUNTIME=docker`.
+
 ### Notes
 
 - The fastest dev path is to use the Supabase direct connection URI as-is in `PS_DATABASE_URI`.
