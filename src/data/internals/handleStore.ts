@@ -105,6 +105,10 @@ interface RegisteredHandle {
    *  re-checked against the freshly-collected deps once the loader
    *  settles. No-op when the handle isn't currently loading. */
   observeDuringLoad: (change: ChangeNotification) => void
+  /** Number of currently-registered Dependencies. Read by
+   *  `HandleStore.snapshotInventory()` to surface fat-handle outliers
+   *  without exposing the full dep list. */
+  depCount: () => number
 }
 
 /** Coordinates notify-fan-out across multiple handles invalidated by the
@@ -374,6 +378,47 @@ export class HandleStore {
   /** Test/debug: how many handles are currently registered. */
   size(): number { return this.handles.size }
 
+  /** Snapshot of live-state aggregates over registered handles. Pairs
+   *  with `metrics.snapshot()` (counters) to give a complete read on
+   *  the store with one call. Use this to find fat-handle outliers
+   *  (resolvers declaring lots of deps) without having to walk
+   *  `this.handles` from a devtools eval.
+   *
+   *  `topHeavy` is the K=3 handles with the most deps. Three is enough
+   *  to spot a pattern (one outlier vs a cluster) and small enough to
+   *  surface in a log line. */
+  snapshotInventory(): Readonly<{
+    handleCount: number
+    totalDeps: number
+    maxDeps: number
+    p50Deps: number
+    p95Deps: number
+    topHeavy: ReadonlyArray<Readonly<{key: string; depCount: number}>>
+  }> {
+    const counts: Array<{key: string; depCount: number}> = []
+    let totalDeps = 0
+    let maxDeps = 0
+    for (const [key, h] of this.handles) {
+      const n = h.depCount()
+      counts.push({key, depCount: n})
+      totalDeps += n
+      if (n > maxDeps) maxDeps = n
+    }
+    const sortedDescByDepCount = counts.slice().sort((a, b) => b.depCount - a.depCount)
+    const topHeavy = Object.freeze(
+      sortedDescByDepCount.slice(0, 3).map(c => Object.freeze({...c})),
+    )
+    const sortedAsc = counts.map(c => c.depCount).sort((a, b) => a - b)
+    return Object.freeze({
+      handleCount: counts.length,
+      totalDeps,
+      maxDeps,
+      p50Deps: nearestRankPercentile(sortedAsc, 50),
+      p95Deps: nearestRankPercentile(sortedAsc, 95),
+      topHeavy,
+    })
+  }
+
   /** Dispose every handle (test cleanup). */
   clear(): void {
     const snapshot = Array.from(this.handles.values())
@@ -384,6 +429,14 @@ export class HandleStore {
 
 const sizeOf = (xs: ReadonlySet<string> | readonly string[]): number =>
   xs instanceof Set ? xs.size : (xs as readonly string[]).length
+
+/** Nearest-rank percentile over an ascending-sorted, non-empty array.
+ *  Returns 0 for an empty input so callers don't need a guard. */
+const nearestRankPercentile = (sortedAsc: readonly number[], p: number): number => {
+  if (sortedAsc.length === 0) return 0
+  const rank = Math.ceil((p / 100) * sortedAsc.length)
+  return sortedAsc[Math.min(sortedAsc.length - 1, Math.max(0, rank - 1))]
+}
 
 /** Generic loader-backed handle. The collection factories (`repo.children`,
  *  `repo.subtree`, etc.) construct one of these with a key + loader. */
@@ -704,6 +757,8 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     }
     return false
   }
+
+  depCount(): number { return this.deps.length }
 
   observeDuringLoad(change: ChangeNotification): void {
     // Only worth recording while a load is actually in flight.

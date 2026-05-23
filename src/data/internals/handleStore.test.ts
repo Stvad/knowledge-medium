@@ -1240,6 +1240,57 @@ describe('HandleStore metrics counters', () => {
   })
 })
 
+describe('HandleStore.snapshotInventory()', () => {
+  it('reports live state — handle count, totals, percentiles, top-heavy', async () => {
+    const store = makeStore()
+    // 5 handles with dep counts: 1, 2, 3, 10, 20 → totals: count=5, sum=36,
+    // max=20, p50=3 (median), p95=20 (top of range under nearest-rank).
+    const sizes = [1, 2, 3, 10, 20]
+    for (const n of sizes) {
+      const k = `q${n}`
+      const h = store.getOrCreate(k, () =>
+        new LoaderHandle<number>({
+          store, key: k,
+          loader: async (ctx) => {
+            for (let i = 0; i < n; i++) ctx.depend({ kind: 'row', id: `${k}-r${i}` })
+            return n
+          },
+        }),
+      )
+      await h.load()
+    }
+    const inv = store.snapshotInventory()
+    expect(inv.handleCount).toBe(5)
+    expect(inv.totalDeps).toBe(36)
+    expect(inv.maxDeps).toBe(20)
+    expect(inv.p50Deps).toBe(3)
+    expect(inv.p95Deps).toBe(20)
+    expect(inv.topHeavy).toEqual([
+      { key: 'q20', depCount: 20 },
+      { key: 'q10', depCount: 10 },
+      { key: 'q3', depCount: 3 },
+    ])
+  })
+
+  it('handles an empty store gracefully', () => {
+    const store = makeStore()
+    const inv = store.snapshotInventory()
+    expect(inv.handleCount).toBe(0)
+    expect(inv.totalDeps).toBe(0)
+    expect(inv.maxDeps).toBe(0)
+    expect(inv.p50Deps).toBe(0)
+    expect(inv.p95Deps).toBe(0)
+    expect(inv.topHeavy).toEqual([])
+  })
+
+  it('frozen result — caller cannot mutate', () => {
+    const store = makeStore()
+    const inv = store.snapshotInventory()
+    expect(Object.isFrozen(inv)).toBe(true)
+    expect(Object.isFrozen(inv.topHeavy)).toBe(true)
+  })
+})
+
 describe('Dep dedup at registration', () => {
   it('drops repeated ctx.depend(...) of the same row dep within one resolve', async () => {
     const store = makeStore()

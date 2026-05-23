@@ -890,6 +890,13 @@ export class Repo {
    *      without needing a Playwright + profiler harness. */
   metrics(): Readonly<{
     handleStore: Readonly<Record<string, number>>
+    /** Live-state aggregates over the registered handle set: handle
+     *  count, dep-count percentiles, and the top-3 keys by dep count.
+     *  Pairs with `handleStore` counters — counters describe events
+     *  since the last reset, this describes the store right now. Use
+     *  the top-heavy list to spot resolvers that are over-registering
+     *  deps. */
+    handleStoreInventory: ReturnType<HandleStore['snapshotInventory']>
     blockCache: Readonly<Record<string, number>>
     queries: Readonly<Record<string, ReturnType<QueryMetrics['snapshot']>[string]>>
     db: ReturnType<DbMetrics['snapshot']>
@@ -916,6 +923,7 @@ export class Repo {
   }> {
     return Object.freeze({
       handleStore: this.handleStore.metrics.snapshot(),
+      handleStoreInventory: this.handleStore.snapshotInventory(),
       blockCache: this.cache.metrics.snapshot(),
       queries: this.queryMetrics.snapshot(),
       db: this.dbMetrics.snapshot(),

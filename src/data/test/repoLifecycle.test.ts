@@ -132,11 +132,13 @@ describe('repo.instanceId', () => {
 })
 
 describe('repo.metrics() / resetMetrics()', () => {
-  it('exposes all four subsections; all start empty / at zero', () => {
+  it('exposes all subsections; all start empty / at zero', () => {
     const m = env.repo.metrics()
-    expect(Object.keys(m).sort()).toEqual(['blockCache', 'db', 'handleStore', 'queries', 'reprojection', 'slowestTx', 'txLog'])
+    expect(Object.keys(m).sort()).toEqual(['blockCache', 'db', 'handleStore', 'handleStoreInventory', 'queries', 'reprojection', 'slowestTx', 'txLog'])
     expect(Object.isFrozen(m)).toBe(true)
     expect(m.handleStore.invalidations).toBe(0)
+    expect(m.handleStoreInventory.handleCount).toBe(0)
+    expect(m.handleStoreInventory.topHeavy).toEqual([])
     expect(m.blockCache.setSnapshotCalls).toBe(0)
     // queries: empty map (no query has run yet).
     expect(Object.keys(m.queries)).toEqual([])
