@@ -13,6 +13,13 @@ import {
   pairingUrl,
   tokenStorePath as resolveTokenStorePath,
 } from './config.js'
+import {
+  type Audience,
+  type CommandPayload,
+  type CommandResult,
+  type CommandStatusResponse,
+  type WhoamiInfo,
+} from './protocol.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const serverScript = path.join(here, 'server.js')
@@ -39,29 +46,6 @@ interface TokenRecord {
 
 interface TokenStore {
   profiles: Record<string, TokenRecord>
-}
-
-// Whoami / status / command response shapes — the bridge & kernel
-// shape these JSON-side; once we have zod schemas we'll generate
-// the types from them. For now, hand-written.
-
-interface Audience {
-  userId: string | null
-  workspaceId: string | null
-}
-
-interface WhoamiInfo {
-  clientId: string
-  audience: Audience
-  scope: 'read-write' | 'read-only'
-  connected: boolean
-  clientLastSeen: number | null
-}
-
-interface CommandRecord {
-  status: 'pending' | 'delivered' | 'completed' | 'failed'
-  result: {ok: boolean, value?: unknown, error?: {message?: string}} | null
-  clientId: string | null
 }
 
 /** Subset of fetch's `RequestInit` we use. Typed narrowly so the
@@ -598,12 +582,7 @@ const authedRequest = async <T = unknown>(
   }
 }
 
-// Command bodies are agent-supplied and forwarded verbatim to the
-// kernel. We type the envelope just enough to require a `type`
-// discriminator; the rest is opaque until we add zod schemas.
-type CommandBody = {type: string} & Record<string, unknown>
-
-const submitCommand = async (command: CommandBody): Promise<string> => {
+const submitCommand = async (command: CommandPayload): Promise<string> => {
   const response = await authedRequest<{id: string}>(`${bridgeUrl}/runtime/commands`, {
     method: 'POST',
     body: JSON.stringify(command),
@@ -615,11 +594,11 @@ const submitCommand = async (command: CommandBody): Promise<string> => {
 const waitForCommand = async (
   id: string,
   timeoutMs = defaultTimeoutMs,
-): Promise<CommandRecord['result']> => {
+): Promise<CommandResult> => {
   const start = Date.now()
 
   while (Date.now() - start < timeoutMs) {
-    const command = await authedRequest<CommandRecord>(`${bridgeUrl}/runtime/commands/${id}`)
+    const command = await authedRequest<CommandStatusResponse>(`${bridgeUrl}/runtime/commands/${id}`)
     if (command.status === 'completed') {
       return command.result
     }
@@ -634,7 +613,7 @@ const waitForCommand = async (
   throw new Error(`Timed out waiting for runtime command ${id}`)
 }
 
-const runCommand = async (command: CommandBody): Promise<unknown> => {
+const runCommand = async (command: CommandPayload): Promise<unknown> => {
   const id = await submitCommand(command)
   const result = await waitForCommand(id)
 
@@ -649,7 +628,7 @@ const runCommand = async (command: CommandBody): Promise<unknown> => {
 /** Helper: connect to the bridge, run a wire-protocol command, and
  *  pretty-print the result. Used by the "thin" bridge-fronting commands
  *  (sql, get-block, runtime-summary, install-extension, …). */
-const runAndPrint = async (command: CommandBody): Promise<void> => {
+const runAndPrint = async (command: CommandPayload): Promise<void> => {
   await ensureBridgeRunning()
   const value = await runCommand(command)
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
@@ -925,7 +904,7 @@ cli
 cli
   .command('raw <json>', 'Send a raw JSON command envelope to the bridge')
   .action(async (json: string) => {
-    const command = parseJson(json, 'raw json') as CommandBody
+    const command = parseJson(json, 'raw json') as CommandPayload
     await runAndPrint(command)
   })
 

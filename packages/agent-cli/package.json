@@ -29,6 +29,7 @@
     "typescript": "*"
   },
   "dependencies": {
-    "cac": "^7.0.0"
+    "cac": "^7.0.0",
+    "zod": "^4.4.3"
   }
 }

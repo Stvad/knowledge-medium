@@ -8,6 +8,16 @@ import {
   bridgeSecret as resolveBridgeSecret,
   pairingUrl,
 } from './config.js'
+import {
+  type Audience,
+  type CommandPayload,
+  commandPayloadSchema,
+  registerClientMetadataSchema,
+  registerTokenSpecSchema,
+  type TokenAudience,
+  type TokenScope,
+  type RegisterClientMetadata,
+} from './protocol.js'
 
 const port = bridgePort()
 const host = bridgeHost()
@@ -50,25 +60,13 @@ class HttpError extends Error {
   }
 }
 
-// Internal shapes for the wire protocol. They're hand-written here
-// because every command type currently maps to a kernel handler on the
-// browser side; the eventual zod-schema introduction will be a 1:1
-// replacement that also generates runtime validators.
+// Wire shapes come from ./protocol.ts (zod schemas + inferred types).
+// What stays here are server-only / internal shapes — records that
+// never cross the network.
 
 type ClientId = string
 type Token = string
 type CommandId = string
-
-interface Audience {
-  userId: string | null
-  workspaceId: string | null
-}
-
-interface TokenAudience extends Audience {
-  label: string | null
-}
-
-type TokenScope = 'read-write' | 'read-only'
 
 interface ClientRecord {
   id: ClientId
@@ -82,13 +80,6 @@ interface TokenRecord {
   clientId: ClientId
   audience: TokenAudience
   scope: TokenScope
-}
-
-/** Minimum we need to recognize / route a command — extra fields pass
- *  through to the browser handler verbatim. */
-interface CommandPayload {
-  type: string
-  [key: string]: unknown
 }
 
 type CommandStatus = 'pending' | 'delivered' | 'completed' | 'failed'
@@ -109,23 +100,6 @@ interface CommandRecord {
 interface Waiter {
   response: http.ServerResponse
   timeout: NodeJS.Timeout
-}
-
-interface RegisterTokenSpec {
-  token?: unknown
-  userId?: unknown
-  workspaceId?: unknown
-  label?: unknown
-  scope?: unknown
-}
-
-interface RegisterClientMetadata {
-  tokens?: unknown
-  audience?: {
-    userId?: unknown
-    workspaceId?: unknown
-  }
-  [key: string]: unknown
 }
 
 // clientId -> client record
@@ -351,10 +325,14 @@ const tryDeliverToClient = (clientId: ClientId): void => {
 
 const registerClient = (clientId: ClientId, metadata: RegisterClientMetadata = {}): void => {
   const existing = clients.get(clientId)
-  const tokenList: RegisterTokenSpec[] = Array.isArray(metadata.tokens)
-    ? metadata.tokens as RegisterTokenSpec[]
-    : []
-  const audience: Audience | null = metadata.audience && typeof metadata.audience === 'object'
+  // The outer metadata shape was validated by handleRequest; per-entry
+  // token specs are validated individually so a single malformed entry
+  // doesn't reject the whole registration.
+  const validatedTokens = (metadata.tokens ?? [])
+    .map(entry => registerTokenSpecSchema.safeParse(entry))
+    .flatMap(result => (result.success ? [result.data] : []))
+
+  const audience: Audience | null = metadata.audience
     ? {
         userId: typeof metadata.audience.userId === 'string' ? metadata.audience.userId : null,
         workspaceId: typeof metadata.audience.workspaceId === 'string' ? metadata.audience.workspaceId : null,
@@ -364,22 +342,21 @@ const registerClient = (clientId: ClientId, metadata: RegisterClientMetadata = {
   // Drop tokens the client no longer authorizes
   if (existing) {
     for (const oldToken of existing.tokens) {
-      if (!tokenList.some(t => t?.token === oldToken)) {
+      if (!validatedTokens.some(t => t.token === oldToken)) {
         deleteTokenForClient(oldToken, clientId)
       }
     }
   }
 
   const tokenSet = new Set<Token>()
-  for (const entry of tokenList) {
-    if (!entry || typeof entry.token !== 'string' || !entry.token) continue
+  for (const entry of validatedTokens) {
     tokenSet.add(entry.token)
     tokens.set(entry.token, {
       clientId,
       audience: {
-        userId: typeof entry.userId === 'string' ? entry.userId : audience?.userId ?? null,
-        workspaceId: typeof entry.workspaceId === 'string' ? entry.workspaceId : audience?.workspaceId ?? null,
-        label: typeof entry.label === 'string' ? entry.label : null,
+        userId: entry.userId ?? audience?.userId ?? null,
+        workspaceId: entry.workspaceId ?? audience?.workspaceId ?? null,
+        label: entry.label ?? null,
       },
       scope: tokenScope(entry.scope),
     })
@@ -392,7 +369,7 @@ const registerClient = (clientId: ClientId, metadata: RegisterClientMetadata = {
 
   clients.set(clientId, {
     id: clientId,
-    metadata: publicMetadata as Record<string, unknown>,
+    metadata: publicMetadata,
     audience,
     lastSeen: now(),
     tokens: tokenSet,
@@ -606,12 +583,15 @@ const handleRequest = async (
         return
       }
 
-      const body = await readBody(request)
-      if (!body || typeof body !== 'object' || typeof (body as {type?: unknown}).type !== 'string') {
-        sendJson(response, 400, {error: 'Command body must include a string type'})
+      const parsed = commandPayloadSchema.safeParse(await readBody(request))
+      if (!parsed.success) {
+        sendJson(response, 400, {
+          error: 'Command body must include a string type',
+          issues: parsed.error.issues,
+        })
         return
       }
-      const payload = body as CommandPayload
+      const payload = parsed.data
       if (entry.scope === 'read-only' && !isReadOnlyCommand(payload)) {
         sendJson(response, 403, {error: `Token scope read-only does not allow command type: ${payload.type}`})
         return
@@ -625,7 +605,15 @@ const handleRequest = async (
     const clientMatch = requestUrl.pathname.match(/^\/runtime\/clients\/([^/]+)$/)
     if (request.method === 'POST' && clientMatch) {
       if (!requireBridgeSecret(request, response)) return
-      registerClient(clientMatch[1]!, (await readBody(request) as RegisterClientMetadata | null) ?? {})
+      const parsed = registerClientMetadataSchema.safeParse(await readBody(request) ?? {})
+      if (!parsed.success) {
+        sendJson(response, 400, {
+          error: 'Invalid client metadata',
+          issues: parsed.error.issues,
+        })
+        return
+      }
+      registerClient(clientMatch[1]!, parsed.data)
       sendJson(response, 200, {ok: true})
       return
     }
