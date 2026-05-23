@@ -5,6 +5,10 @@ import {
   describeAuthoringCatalog,
   type AuthoringCatalog,
 } from './authoringCatalog.ts'
+import {
+  getCommandMeta,
+  type KnownCommandType,
+} from '@knowledge-medium/agent-cli/protocol'
 
 interface ContextDependencySchema {
   acceptedKeys: readonly string[]
@@ -202,22 +206,35 @@ export interface RuntimeSummary {
   }>
 }
 
+// Cherry-pick the most useful wire commands per category. Strings come
+// from `knownCommandRegistry` so the runtime-summary hints, the CLI
+// --help, and any other surface that documents these commands share a
+// single source of truth — changing the usage of `sql` in protocol.ts
+// updates the hints here automatically.
+//
+// Local-only CLI commands (`profiles`, `status`, `raw`) aren't part of
+// the wire protocol; they stay hard-coded next to the wire-derived
+// entries. The `yarn agent` prefix is the monorepo wrapper for
+// kmagent — both invoke the same binary.
+const wireUsage = (type: KnownCommandType): string =>
+  `yarn agent ${getCommandMeta(type).usage.replace(/^kmagent /, '')}`
+
 const runtimeCommandHints = {
   baseline: [
-    'yarn agent ping',
-    'yarn agent runtime-summary',
+    wireUsage('ping'),
+    wireUsage('runtime-summary'),
     'yarn agent profiles',
   ],
   dataAccess: [
-    'yarn agent sql <all|get|optional|execute> <sql> [paramsJson]',
-    'yarn agent get-block <id>',
-    'yarn agent subtree <rootId> [--include-root]',
-    'yarn agent run-action <id> [depsJson]',
-    'yarn agent eval <code>  # use `return ...` to print a value',
+    wireUsage('sql'),
+    wireUsage('get-block'),
+    wireUsage('get-subtree'),
+    wireUsage('run-action'),
+    `${wireUsage('eval')}  # use \`return ...\` to print a value`,
   ],
   diagnostics: [
     'yarn agent status',
-    'yarn agent describe-runtime [--actions <text>] [--facets <text>] [--guide <id>] [--modules <text>] [--components <text>] [--storage]',
+    wireUsage('describe-runtime'),
     'yarn agent raw <json>',
   ],
 }

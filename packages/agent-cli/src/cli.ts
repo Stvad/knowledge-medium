@@ -18,7 +18,9 @@ import {
   type Audience,
   type CommandResult,
   type CommandStatusResponse,
+  getCommandMeta,
   type KnownCommand,
+  type KnownCommandType,
   sqlModeSchema,
   type WhoamiInfo,
 } from './protocol.js'
@@ -651,6 +653,14 @@ const runAndPrint = async (command: KnownCommand): Promise<void> => {
 
 const cli = cac('kmagent')
 
+/** Resolve a cac command's description from the wire-command registry
+ *  so the cli.ts surface and the runtime-summary surface share a
+ *  single source of truth. The kebab-cased `kmagent` verb (e.g.
+ *  `subtree`) sometimes differs from the wire type (`get-subtree`);
+ *  callers pass the wire type to be unambiguous. */
+const wireDescription = (type: KnownCommandType): string =>
+  getCommandMeta(type).description
+
 // Global option. The catch-all `--profile <name>` selects which CLI
 // token profile to use; defaults to AGENT_RUNTIME_PROFILE then to
 // "default". We apply it from `cli.options.profile` after parse rather
@@ -730,7 +740,7 @@ cli
   })
 
 cli
-  .command('ping', 'Ping the bridge + runtime; print a status summary')
+  .command('ping', wireDescription('ping'))
   .action(async () => {
     await printPing()
   })
@@ -765,13 +775,13 @@ cli
 // ----- Bridge-fronting commands -------------------------------------
 
 cli
-  .command('runtime-summary', 'Compact agent-oriented runtime context')
+  .command('runtime-summary', wireDescription('runtime-summary'))
   .action(async () => {
     await runAndPrint({type: 'runtime-summary'})
   })
 
 cli
-  .command('describe-runtime', 'Show full or targeted runtime diagnostics. Canonical "what is registered" view — prefer over reaching into facetRuntime/Repo internals via eval. When --guide is passed alone, defaults to brief output; pass --full to include actions/facets/modules/components too.')
+  .command('describe-runtime', wireDescription('describe-runtime'))
   .option('--actions <text>', 'Filter actions (repeatable)')
   .option('--facets <text>', 'Filter facets (repeatable)')
   .option('--guide, --guides <id>', 'Show specific guide(s) (repeatable)')
@@ -810,7 +820,7 @@ cli
   })
 
 cli
-  .command('sql <mode> <sql> [paramsJson]', 'Run SQL (mode: all|get|optional|execute)')
+  .command('sql <mode> <sql> [paramsJson]', wireDescription('sql'))
   .action(async (mode: string, sql: string, paramsJson: string | undefined) => {
     // Parse mode + params through the schemas so an invalid `--mode`
     // or non-array params fails fast with a clear error instead of
@@ -827,13 +837,13 @@ cli
   })
 
 cli
-  .command('get-block <id>', 'Fetch a block by id')
+  .command('get-block <id>', wireDescription('get-block'))
   .action(async (id: string) => {
     await runAndPrint({type: 'get-block', id})
   })
 
 cli
-  .command('subtree <rootId>', 'Fetch the subtree rooted at <rootId>')
+  .command('subtree <rootId>', wireDescription('get-subtree'))
   .option('--include-root', 'Include the root block itself in the response')
   .action(async (rootId: string, options: {includeRoot?: boolean}) => {
     await runAndPrint({
@@ -844,21 +854,21 @@ cli
   })
 
 cli
-  .command('create-block <json>', 'Create a block (body shape per <json>)')
+  .command('create-block <json>', wireDescription('create-block'))
   .action(async (json: string) => {
     const parsed = parseJson(json, 'create-block json') as Record<string, unknown>
     await runAndPrint({type: 'create-block', ...parsed})
   })
 
 cli
-  .command('update-block <json>', 'Update a block (body shape per <json>)')
+  .command('update-block <json>', wireDescription('update-block'))
   .action(async (json: string) => {
     const parsed = parseJson(json, 'update-block json') as Record<string, unknown>
     await runAndPrint({type: 'update-block', ...parsed})
   })
 
 cli
-  .command('install-extension <file> [...label]', 'Install a JS extension. Reload is automatic; --verify reports the contributed facets/actions; label defaults to the filename without ext.')
+  .command('install-extension <file> [...label]', wireDescription('install-extension'))
   .option('--verify', 'Verify the extension shape and report what it contributes')
   .option('--description <text>', 'Human-readable description')
   .action(async (
@@ -879,25 +889,25 @@ cli
   })
 
 cli
-  .command('enable-extension <handle>', 'Enable an installed extension by id or label')
+  .command('enable-extension <handle>', wireDescription('enable-extension'))
   .action(async (handle: string) => {
     await runAndPrint({type: 'enable-extension', ...extensionHandle(handle)})
   })
 
 cli
-  .command('disable-extension <handle>', 'Disable an installed extension by id or label')
+  .command('disable-extension <handle>', wireDescription('disable-extension'))
   .action(async (handle: string) => {
     await runAndPrint({type: 'disable-extension', ...extensionHandle(handle)})
   })
 
 cli
-  .command('uninstall-extension <handle>', 'Uninstall an extension by id or label')
+  .command('uninstall-extension <handle>', wireDescription('uninstall-extension'))
   .action(async (handle: string) => {
     await runAndPrint({type: 'uninstall-extension', ...extensionHandle(handle)})
   })
 
 cli
-  .command('run-action <id> [depsJson]', 'Run a registered action by id')
+  .command('run-action <id> [depsJson]', wireDescription('run-action'))
   .action(async (id: string, depsJson: string | undefined) => {
     const dependencies = depsJson ? parseJson(depsJson, 'depsJson') : {}
     if (typeof dependencies !== 'object' || dependencies === null || Array.isArray(dependencies)) {
@@ -911,7 +921,7 @@ cli
   })
 
 cli
-  .command('eval [...code]', 'Run JS in the app. Use "return …" to print a value.')
+  .command('eval [...code]', wireDescription('eval'))
   .option('--raw', 'Print the wire-format response instead of friendly output')
   .option('--file <path>', 'Read the code from a file instead of <code>')
   .action(async (

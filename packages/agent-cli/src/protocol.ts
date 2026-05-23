@@ -261,6 +261,96 @@ export const knownAgentCommandSchema = z.discriminatedUnion('type', [
 ])
 export type KnownAgentCommand = z.infer<typeof knownAgentCommandSchema>
 
+// ---------- Command catalog (schema-derived) ----------
+//
+// Single source of truth for "what wire commands exist" — co-located
+// with the schemas they describe. The kernel's `describe-runtime`
+// output, the CLI's --help, and any future surface (in-app palette,
+// AI agent prompt, README cheatsheet, etc.) all read from this
+// registry so the documented shape and the wire shape never drift.
+
+export interface KnownCommandMeta {
+  /** CLI usage example, including positional + flag hints. Phrased as
+   *  the user would type it via the published bin (`kmagent X`); the
+   *  monorepo `yarn agent X` wrapper invokes the same binary. */
+  usage: string
+  /** Short one-line description for help / summary surfaces. */
+  description: string
+}
+
+/** Schema-derived registry of every known wire command. Typed as
+ *  `Record<KnownCommandType, …>` so adding a variant to
+ *  `knownCommandSchema` without a registry entry is a TypeScript
+ *  error — the two sources of truth stay structurally in sync.
+ *
+ *  Consumers should reach for `getCommandMeta(type)` when they want a
+ *  specific entry, or iterate over the registry's entries (e.g. to
+ *  build a CLI help list, a runtime-summary hint set, or a README
+ *  cheatsheet). */
+export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = {
+  'ping': {
+    usage: 'kmagent ping',
+    description: 'Ping the bridge + runtime; print a status summary.',
+  },
+  'runtime-summary': {
+    usage: 'kmagent runtime-summary',
+    description: 'Compact agent-oriented runtime context.',
+  },
+  'describe-runtime': {
+    usage: 'kmagent describe-runtime [--actions <text>] [--facets <text>] [--guide <id>] [--modules <text>] [--components <text>] [--storage]',
+    description: 'Show full or targeted runtime diagnostics. Canonical "what is registered" view — prefer over reaching into facetRuntime/Repo internals via eval. When --guide is passed alone, defaults to brief output; pass --full to include actions/facets/modules/components too.',
+  },
+  'sql': {
+    usage: 'kmagent sql <all|get|optional|execute> <sql> [paramsJson]',
+    description: 'Run SQL (mode: all|get|optional|execute).',
+  },
+  'get-block': {
+    usage: 'kmagent get-block <id>',
+    description: 'Fetch a block by id.',
+  },
+  'get-subtree': {
+    usage: 'kmagent subtree <rootId> [--include-root]',
+    description: 'Fetch the subtree rooted at <rootId>.',
+  },
+  'create-block': {
+    usage: 'kmagent create-block <json>',
+    description: 'Create a block (body shape per <json>).',
+  },
+  'update-block': {
+    usage: 'kmagent update-block <json>',
+    description: 'Update a block (body shape per <json>).',
+  },
+  'install-extension': {
+    usage: 'kmagent install-extension [--verify] [--description <text>] <file> [label]',
+    description: 'Install a JS extension. Reload is automatic; --verify reports the contributed facets/actions; label defaults to the filename without ext.',
+  },
+  'enable-extension': {
+    usage: 'kmagent enable-extension <id|label>',
+    description: 'Enable an installed extension by id or label.',
+  },
+  'disable-extension': {
+    usage: 'kmagent disable-extension <id|label>',
+    description: 'Disable an installed extension by id or label.',
+  },
+  'uninstall-extension': {
+    usage: 'kmagent uninstall-extension <id|label>',
+    description: 'Uninstall an extension by id or label.',
+  },
+  'run-action': {
+    usage: 'kmagent run-action <id> [depsJson]',
+    description: 'Run a registered action by id.',
+  },
+  'eval': {
+    usage: 'kmagent eval [--raw] [--file <path>] <code>',
+    description: 'Run JS in the app. Use "return …" to print a value.',
+  },
+}
+
+/** Lookup helper for surfaces that want a single command's metadata.
+ *  Type-safe — TypeScript guarantees every `KnownCommandType` resolves. */
+export const getCommandMeta = (type: KnownCommandType): KnownCommandMeta =>
+  knownCommandRegistry[type]
+
 export const commandStatusSchema = z.enum(['pending', 'delivered', 'completed', 'failed'])
 export type CommandStatus = z.infer<typeof commandStatusSchema>
 
