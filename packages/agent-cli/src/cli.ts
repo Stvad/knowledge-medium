@@ -24,7 +24,10 @@ import {
   sqlModeSchema,
   type WhoamiInfo,
 } from './protocol.js'
-import { renderKernelTypesInstallSummary } from './kernelDts.js'
+import {
+  kernelTypeDeclarationCandidates,
+  renderKernelTypesInstallSummary,
+} from './kernelDts.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const serverScript = path.join(here, 'server.js')
@@ -266,6 +269,26 @@ const writeKernelTypes = async (
   const fileCount = await countFiles(outDir)
   const pathsTarget = normalizeTsconfigPath(path.relative(process.cwd(), path.join(outDir, 'src')))
   return {fileCount, pathsTarget}
+}
+
+const readKernelTypeModuleDeclaration = async (moduleSpec: string): Promise<string> => {
+  await assertBundledKernelTypes()
+
+  const tried: string[] = []
+  for (const candidate of kernelTypeDeclarationCandidates(moduleSpec)) {
+    const declarationPath = path.join(kernelTypesDir, candidate)
+    tried.push(declarationPath)
+    try {
+      return await fs.readFile(declarationPath, 'utf8')
+    } catch (error) {
+      if (!isErrnoException(error) || error.code !== 'ENOENT') throw error
+    }
+  }
+
+  throw new Error(
+    `No compiled declaration found for ${moduleSpec}. Tried:\n`
+    + tried.map(candidate => `  - ${candidate}`).join('\n'),
+  )
 }
 
 const loadStoredToken = async (profileName = selectedProfileName): Promise<string | null> => {
@@ -1016,14 +1039,23 @@ cli
 cli
   .command('types [outDir]', 'Write compiled TypeScript declarations for Knowledge Medium @/ modules to a directory.')
   .option('--out-dir <path>', 'Directory to write declarations into')
+  .option('--module <spec>', 'Print the compiled declaration for one @/ module instead of writing the tree')
   .option('--force', 'Replace a non-empty output directory')
   .action(async (
     outDirArg: string | undefined,
-    options: {outDir?: string, force?: boolean},
+    options: {outDir?: string, module?: string, force?: boolean},
   ) => {
     if (outDirArg && options.outDir) {
       throw new Error('Pass either [outDir] or --out-dir, not both.')
     }
+    if (options.module) {
+      if (outDirArg || options.outDir) {
+        throw new Error('Pass --module by itself; it prints a single declaration to stdout.')
+      }
+      process.stdout.write(await readKernelTypeModuleDeclaration(options.module))
+      return
+    }
+
     const outDir = path.resolve(options.outDir ?? outDirArg ?? 'agent-extensions/kernel-types')
     const result = await writeKernelTypes(outDir, {force: Boolean(options.force)})
     process.stdout.write(renderKernelTypesInstallSummary({

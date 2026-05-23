@@ -1,6 +1,7 @@
 import {describe, expect, it} from 'vitest'
 import {
   kernelTypeAssetDeclarations,
+  kernelTypeDeclarationCandidates,
   renderKernelTypesInstallSummary,
 } from '../src/kernelDts'
 
@@ -30,5 +31,25 @@ describe('kernel type tree helpers', () => {
         },
       },
     })
+  })
+
+  it('maps browser-style @/ module specifiers to declaration candidates', () => {
+    expect(kernelTypeDeclarationCandidates('@/extensions/api.js')).toEqual([
+      'src/extensions/api.d.ts',
+      'src/extensions/api/index.d.ts',
+    ])
+    expect(kernelTypeDeclarationCandidates('@/data/api')).toEqual([
+      'src/data/api.d.ts',
+      'src/data/api/index.d.ts',
+    ])
+    expect(kernelTypeDeclarationCandidates('@/data/api/index.js')).toEqual([
+      'src/data/api/index.d.ts',
+      'src/data/api/index/index.d.ts',
+    ])
+  })
+
+  it('rejects non-@/ and path-escaping module specifiers', () => {
+    expect(() => kernelTypeDeclarationCandidates('react')).toThrow('must start with "@/"')
+    expect(() => kernelTypeDeclarationCandidates('@/../secrets')).toThrow('Invalid @/ module specifier')
   })
 })

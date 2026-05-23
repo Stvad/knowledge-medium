@@ -25,6 +25,26 @@ export interface KernelTypesInstallSummaryOptions {
   pathsTarget: string
 }
 
+const stripRuntimeExtension = (specifier: string): string =>
+  specifier.replace(/\.(?:d\.ts|tsx?|jsx?|mjs|cjs|js)$/u, '')
+
+export const kernelTypeDeclarationCandidates = (specifier: string): string[] => {
+  const trimmed = specifier.trim()
+  if (!trimmed.startsWith('@/')) {
+    throw new Error(`Module specifier must start with "@/" (got "${specifier}")`)
+  }
+
+  const modulePath = stripRuntimeExtension(trimmed.slice(2))
+  if (!modulePath || modulePath.startsWith('/') || modulePath.split('/').includes('..')) {
+    throw new Error(`Invalid @/ module specifier: "${specifier}"`)
+  }
+
+  return [
+    `src/${modulePath}.d.ts`,
+    `src/${modulePath}/index.d.ts`,
+  ]
+}
+
 export const renderKernelTypesInstallSummary = (
   options: KernelTypesInstallSummaryOptions,
 ): string => `${JSON.stringify({

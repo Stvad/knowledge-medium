@@ -543,6 +543,7 @@ const guides: AuthoringGuide[] = [
       // modules, so TS-aware editors resolve extension imports with
       // the same signatures the app build checks.
       'yarn agent types agent-extensions/kernel-types',
+      'yarn agent types --module "@/extensions/api.js"',
       // Convention: extension source files live under `agent-extensions/`
       // at the repo root. The matrix-chat-client + canvas-layout
       // extensions are there as references.

@@ -98,6 +98,15 @@ The command prints the `compilerOptions.paths` mapping to add to your extension-
 
 Re-run with `--force` after updating the app or CLI.
 
+For quick inspection, print one compiled declaration to stdout:
+
+```bash
+kmagent types --module '@/extensions/api.js'
+kmagent types --module '@/data/api'
+```
+
+Single-module output is not bundled with its transitive dependencies; use the directory form above for editor/typechecker setup.
+
 ## Environment
 
 | Variable | Purpose |
