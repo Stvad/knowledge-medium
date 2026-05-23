@@ -24,10 +24,11 @@ import {
   sqlModeSchema,
   type WhoamiInfo,
 } from './protocol.js'
-import { renderKernelDts } from './kernelDts.js'
+import { renderKernelTypesInstallSummary } from './kernelDts.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const serverScript = path.join(here, 'server.js')
+const kernelTypesDir = path.join(here, 'kernel-types')
 
 // Read our own version from package.json at startup so `--version`
 // stays in sync without a build-time codegen step. `here` is dist/, so
@@ -201,6 +202,70 @@ const writeTokenStore = async (store: TokenStore): Promise<void> => {
     `${JSON.stringify({profiles}, null, 2)}\n`,
     {mode: 0o600},
   )
+}
+
+const assertBundledKernelTypes = async (): Promise<void> => {
+  try {
+    const stat = await fs.stat(kernelTypesDir)
+    if (stat.isDirectory()) return
+    throw new Error(`Compiled kernel types path is not a directory: ${kernelTypesDir}`)
+  } catch (error) {
+    if (isErrnoException(error) && error.code === 'ENOENT') {
+      throw new Error(
+        `Compiled kernel type tree is missing at ${kernelTypesDir}. `
+        + 'Run the package build before using `kmagent types` from source.',
+        {cause: error},
+      )
+    }
+    throw error
+  }
+}
+
+const countFiles = async (dir: string): Promise<number> => {
+  const entries = await fs.readdir(dir, {withFileTypes: true})
+  let count = 0
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name)
+    count += entry.isDirectory() ? await countFiles(fullPath) : 1
+  }
+  return count
+}
+
+const directoryHasEntries = async (dir: string): Promise<boolean> => {
+  try {
+    const entries = await fs.readdir(dir)
+    return entries.length > 0
+  } catch (error) {
+    if (isErrnoException(error) && error.code === 'ENOENT') return false
+    throw error
+  }
+}
+
+const normalizeTsconfigPath = (value: string): string => {
+  const normalized = value.split(path.sep).join('/')
+  return normalized === '' ? '.' : normalized
+}
+
+const writeKernelTypes = async (
+  outDir: string,
+  options: {force?: boolean} = {},
+): Promise<{fileCount: number, pathsTarget: string}> => {
+  await assertBundledKernelTypes()
+
+  const exists = await directoryHasEntries(outDir)
+  if (exists) {
+    if (!options.force) {
+      throw new Error(`Type output directory is not empty: ${outDir}. Pass --force to replace it.`)
+    }
+    await fs.rm(outDir, {recursive: true, force: true})
+  }
+
+  await fs.mkdir(path.dirname(outDir), {recursive: true})
+  await fs.cp(kernelTypesDir, outDir, {recursive: true})
+
+  const fileCount = await countFiles(outDir)
+  const pathsTarget = normalizeTsconfigPath(path.relative(process.cwd(), path.join(outDir, 'src')))
+  return {fileCount, pathsTarget}
 }
 
 const loadStoredToken = async (profileName = selectedProfileName): Promise<string | null> => {
@@ -949,23 +1014,22 @@ cli
   })
 
 cli
-  .command('types', 'Emit a TypeScript declaration file (.d.ts) for the kernel API surface. Pipe to a file: `kmagent types > kernel.d.ts`, then reference it from your tsconfig.')
-  .option('--module <spec>', 'Module specifier to declare', {
-    default: '@/extensions/api.js',
-  })
-  .action(async (options: {module?: string}) => {
-    await ensureBridgeRunning()
-    const description = await runCommand({type: 'describe-runtime', brief: true})
-    const apiSurface = (description as {apiSurface?: {exports?: unknown}})?.apiSurface
-    const rawExports = apiSurface?.exports
-    if (!Array.isArray(rawExports)) {
-      throw new Error('Bridge response did not include an apiSurface.exports array')
+  .command('types [outDir]', 'Write compiled TypeScript declarations for Knowledge Medium @/ modules to a directory.')
+  .option('--out-dir <path>', 'Directory to write declarations into')
+  .option('--force', 'Replace a non-empty output directory')
+  .action(async (
+    outDirArg: string | undefined,
+    options: {outDir?: string, force?: boolean},
+  ) => {
+    if (outDirArg && options.outDir) {
+      throw new Error('Pass either [outDir] or --out-dir, not both.')
     }
-    const exports = rawExports.filter((name): name is string => typeof name === 'string')
-    process.stdout.write(renderKernelDts({
-      moduleSpec: options.module ?? '@/extensions/api.js',
-      exports,
-      cliVersion: pkgVersion,
+    const outDir = path.resolve(options.outDir ?? outDirArg ?? 'agent-extensions/kernel-types')
+    const result = await writeKernelTypes(outDir, {force: Boolean(options.force)})
+    process.stdout.write(renderKernelTypesInstallSummary({
+      outDir,
+      fileCount: result.fileCount,
+      pathsTarget: result.pathsTarget,
     }))
   })
 

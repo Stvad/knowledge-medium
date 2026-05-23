@@ -44,7 +44,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc -b && chmod +x ./dist/cli.js ./dist/server.js",
+    "build": "tsc -b && node scripts/build-kernel-types.mjs && chmod +x ./dist/cli.js ./dist/server.js",
     "build:clean": "tsc -b --clean",
     "prepublishOnly": "yarn run build:clean && yarn run build"
   },

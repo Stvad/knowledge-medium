@@ -11,7 +11,7 @@
   ],
   "scripts": {
     "dev": "vite",
-    "compile": "tsc -b && chmod +x packages/agent-cli/dist/cli.js packages/agent-cli/dist/server.js",
+    "compile": "tsc -b && node packages/agent-cli/scripts/build-kernel-types.mjs && chmod +x packages/agent-cli/dist/cli.js packages/agent-cli/dist/server.js",
     "build": "yarn run compile && vite build --mode development && node scripts/inject-sw-build-id.mjs",
     "lint": "eslint .",
     "preview": "vite preview",

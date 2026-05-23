@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "emitDeclarationOnly": true,
+    "declaration": true,
+    "declarationMap": true,
+    "outDir": "./packages/agent-cli/dist/kernel-types",
+    "tsBuildInfoFile": "./node_modules/.tmp/kernel-types.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.d.ts"],
+  "exclude": [
+    "src/test/**",
+    "src/**/test/**",
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx"
+  ]
+}

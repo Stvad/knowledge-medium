@@ -56,7 +56,7 @@ The CLI exposes both *local* commands (pairing, profile management) and *bridge*
 | `kmagent eval [--raw] [--file <path>] <code>` | Run JS in the app (use `return …` to print a value). |
 | `kmagent reload` | Hard-reload the app tab and wait for it to reconnect. |
 | `kmagent navigate <hash>` | Set `window.location.hash`. |
-| `kmagent types` | Emit a `.d.ts` for the kernel API surface (see *Type-vending* below). |
+| `kmagent types [outDir]` | Write compiled declarations for Knowledge Medium `@/` modules (see *Type-vending* below). |
 | `kmagent raw <json>` | Send an arbitrary JSON command envelope to the bridge. |
 
 Run `kmagent <command> --help` for per-command details or `kmagent --help` for the full menu.
@@ -78,13 +78,25 @@ export AGENT_RUNTIME_PROFILE=chrome-dev
 
 ## Type-vending for extension authors
 
-When you're authoring an extension that imports from `@/extensions/api.js`, the kernel's exports list isn't published anywhere your editor can read. `kmagent types` writes a `.d.ts` from the *running* app's introspection so type-aware editors resolve the imports:
+When you're authoring an extension that imports from Knowledge Medium modules (`@/extensions/api.js`, `@/data/api`, `@/components/ui/button.js`, etc.), `kmagent types` writes the app's compiled TypeScript declaration tree so type-aware editors resolve those imports with real signatures:
 
 ```bash
-kmagent --profile chrome-dev types > agent-extensions/kernel.d.ts
+kmagent types agent-extensions/kernel-types
 ```
 
-Then reference the file from your `tsconfig.json` (`"types": ["./agent-extensions/kernel.d.ts"]`) or via a triple-slash directive at the top of an extension. Symbols are currently typed `any` (marker declarations); precise signatures are a future improvement.
+The command prints the `compilerOptions.paths` mapping to add to your extension-authoring `tsconfig.json`, usually:
+
+```json
+{
+  "compilerOptions": {
+    "paths": {
+      "@/*": ["agent-extensions/kernel-types/src/*"]
+    }
+  }
+}
+```
+
+Re-run with `--force` after updating the app or CLI.
 
 ## Environment
 

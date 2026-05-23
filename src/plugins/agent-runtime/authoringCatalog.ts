@@ -539,10 +539,10 @@ const guides: AuthoringGuide[] = [
     commands: [
       'yarn agent describe-runtime --guide external-sync-plugin --storage',
       'yarn agent describe-runtime --components dialog,input,button,label',
-      // Generates a marker .d.ts for `@/extensions/api.js` from the
-      // running app, so TS-aware editors resolve imports while
-      // authoring an extension. Re-run after kernel updates.
-      'yarn agent types > agent-extensions/kernel.d.ts',
+      // Writes compiled declarations for the app's vendored `@/...`
+      // modules, so TS-aware editors resolve extension imports with
+      // the same signatures the app build checks.
+      'yarn agent types agent-extensions/kernel-types',
       // Convention: extension source files live under `agent-extensions/`
       // at the repo root. The matrix-chat-client + canvas-layout
       // extensions are there as references.
