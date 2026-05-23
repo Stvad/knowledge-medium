@@ -60,7 +60,11 @@ export function BlockFocusShellDecorator({
     if (!active) return
     const element = contentRef.current
     if (element && !isElementProperlyVisible(element)) {
-      element.scrollIntoView({behavior: 'instant', block: 'nearest'})
+      // `block: 'nearest'` already gates this to boundary-crossings
+      // (in-viewport focus moves are no-ops), so making it smooth costs
+      // nothing for j/k stepping within the visible window but makes
+      // the catch-up at the edge feel less like a hard jump.
+      element.scrollIntoView({behavior: 'smooth', block: 'nearest'})
     }
   }, [active, contentRef])
 

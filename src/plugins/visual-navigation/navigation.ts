@@ -526,7 +526,11 @@ async function focusVisualNavigationTarget(
 
   const element = target.anchorElement ?? target.element
   if (typeof element.scrollIntoView === 'function') {
-    element.scrollIntoView({block: 'nearest', inline: 'nearest'})
+    // Smooth + `nearest` keeps in-viewport moves silent and turns
+    // edge-crossing scrolls into a short catch-up animation instead
+    // of a hard jump. Rapid j/k presses settle to a no-op once the
+    // target's already visible from the previous scroll.
+    element.scrollIntoView({behavior: 'smooth', block: 'nearest', inline: 'nearest'})
   }
   target.element.focus({preventScroll: true})
 }
