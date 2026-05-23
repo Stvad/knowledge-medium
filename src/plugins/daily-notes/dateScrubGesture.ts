@@ -218,8 +218,10 @@ const normalizeWheelDelta = (
 const scrubPixelsForWheelDelta = (
   event: Pick<globalThis.WheelEvent, 'deltaMode' | 'deltaX' | 'deltaY'>,
 ): number => {
-  const {dy} = normalizeWheelDelta(event)
-  return -dy
+  const {dx, dy} = normalizeWheelDelta(event)
+  // Browsers commonly remap Shift+wheel vertical motion into deltaX.
+  const axisPx = dy !== 0 ? dy : dx
+  return -axisPx
 }
 
 const escapeCssIdent = (value: string): string => {

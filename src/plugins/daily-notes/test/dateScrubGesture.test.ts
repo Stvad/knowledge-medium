@@ -198,7 +198,7 @@ describe('date scrub keyboard gesture', () => {
     expect(preventDefault).toHaveBeenCalled()
   })
 
-  it('ignores horizontal wheel events during active keyboard scrub', () => {
+  it('uses horizontal wheel delta when shift remaps vertical wheel motion', () => {
     window.dispatchEvent(new KeyboardEvent('keydown', {
       key: 'Shift',
       ctrlKey: true,
@@ -207,7 +207,7 @@ describe('date scrub keyboard gesture', () => {
 
     const event = new WheelEvent('wheel', {
       deltaMode: 0,
-      deltaX: 14,
+      deltaX: -14,
       deltaY: 0,
       ctrlKey: true,
       shiftKey: true,
@@ -217,7 +217,7 @@ describe('date scrub keyboard gesture', () => {
 
     window.dispatchEvent(event)
 
-    expect(handler.update).not.toHaveBeenCalled()
-    expect(preventDefault).not.toHaveBeenCalled()
+    expect(handler.update).toHaveBeenLastCalledWith(1, false)
+    expect(preventDefault).toHaveBeenCalled()
   })
 })
