@@ -294,19 +294,10 @@ const syncBookToBlocks = async (
     //    place. If the user edits a meta block we'll happily clobber on the
     //    next sync (matches Roam's behavior).
     const bookKids = await tx.childrenOf(bookId)
-    const metaPrefix = `book:${book.user_book_id}:meta:`
-    const existingMeta = bookKids
-      .filter((k: any) => typeof k.id === 'string')
     const metaIds = metaLines.map((_, i) =>
-      pluginBlockId(workspaceId, READWISE_NS, `${metaPrefix}${i}`))
+      pluginBlockId(workspaceId, READWISE_NS, `book:${book.user_book_id}:meta:${i}`))
 
-    // figure out where the meta lines should sit: at the very top of the
-    // book page, before any existing non-meta children
-    const nonMeta = bookKids.filter((k: any) =>
-      !existingMeta.some((m: any) => m.id === k.id) || true)
-    void nonMeta
-
-    // compute fresh order keys at the start of the children list
+    // Meta lines sit at the top of the book page, before any other children.
     const firstNonMetaKey = bookKids.find((k: any) => !metaIds.includes(k.id))?.orderKey ?? null
     const metaKeys = keysBetween(null, firstNonMetaKey, metaLines.length || 1)
 
