@@ -7,12 +7,7 @@ import type {
   BlockShellState,
 } from '@/extensions/blockInteraction.js'
 
-// `block-keyboard-focused` is a marker for the CSS rule (see index.css)
-// that puts `view-transition-name: keyboard-focus` on the inner content
-// row. Combined with `withMoveTransition` around the focus prop write,
-// this lets the browser match the highlight between the old and new
-// focused blocks and slide it instead of cutting.
-const FOCUSED_BLOCK_CLASS = 'block-keyboard-focused [&>.block-body>div:first-child]:bg-muted/95'
+const FOCUSED_BLOCK_CLASS = '[&>.block-body>div:first-child]:bg-muted/95'
 
 const mergeClassName = (...parts: Array<string | undefined>): string | undefined => {
   const className = parts.filter(Boolean).join(' ')

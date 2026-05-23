@@ -260,17 +260,6 @@
     transition: background-color 150ms ease;
   }
 
-  /* Shared view-transition-name for the keyboard-focus highlight: only
-     the active panel's focused block gets `block-keyboard-focused`, so
-     at most one element in any snapshot carries the `keyboard-focus`
-     name. When the focus prop change is wrapped in a view transition
-     (`focusBlock`/`focusVisualTarget`), the browser matches the
-     highlight across old → new and slides it between the two blocks
-     instead of cutting. */
-  .block-keyboard-focused > .block-body > div:first-child {
-    view-transition-name: keyboard-focus;
-  }
-
   .block-body {
     @apply flex-1;
     min-width: 0; /* Prevents flex items from overflowing */

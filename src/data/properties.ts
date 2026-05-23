@@ -24,7 +24,6 @@ import {
   defineProperty,
   type PropertySchema,
 } from '@/data/api'
-import { withMoveTransition } from '@/utils/viewTransition.js'
 
 // ──── UI-state schemas (changeScope: UiState) ────
 
@@ -300,17 +299,10 @@ export const focusBlock = async (
   // transition into edit mode, but it can still mark focus (highlight,
   // nav anchor).
   const targetEdit = edit && !uiStateBlock.repo.isReadOnly ? true : false
-  // Wrap in a view transition so the `keyboard-focus` view-transition-name
-  // (applied via FOCUSED_BLOCK_CLASS only to the currently-focused block)
-  // is matched across old → new snapshots and slides the highlight
-  // between blocks. Reentrancy-suppressed inside larger transitions
-  // (navigateInPanel), and a no-op under prefers-reduced-motion / SSR.
-  await withMoveTransition(async () => {
-    await uiStateBlock.repo.tx(async tx => {
-      await tx.setProperty(uiStateBlock.id, focusedBlockIdProp, blockId)
-      await tx.setProperty(uiStateBlock.id, isEditingProp, targetEdit)
-    }, {scope: ChangeScope.UiState, description: 'focus block'})
-  })
+  await uiStateBlock.repo.tx(async tx => {
+    await tx.setProperty(uiStateBlock.id, focusedBlockIdProp, blockId)
+    await tx.setProperty(uiStateBlock.id, isEditingProp, targetEdit)
+  }, {scope: ChangeScope.UiState, description: 'focus block'})
 }
 
 export const focusVisualTarget = async (
@@ -321,13 +313,11 @@ export const focusVisualTarget = async (
 ): Promise<void> => {
   const {edit = false} = options
   const targetEdit = edit && !uiStateBlock.repo.isReadOnly ? true : false
-  await withMoveTransition(async () => {
-    await uiStateBlock.repo.tx(async tx => {
-      await tx.setProperty(uiStateBlock.id, focusedBlockIdProp, blockId)
-      await tx.setProperty(uiStateBlock.id, focusedVisualTargetKeyProp, visualTargetKey)
-      await tx.setProperty(uiStateBlock.id, isEditingProp, targetEdit)
-    }, {scope: ChangeScope.UiState, description: 'focus visual target'})
-  })
+  await uiStateBlock.repo.tx(async tx => {
+    await tx.setProperty(uiStateBlock.id, focusedBlockIdProp, blockId)
+    await tx.setProperty(uiStateBlock.id, focusedVisualTargetKeyProp, visualTargetKey)
+    await tx.setProperty(uiStateBlock.id, isEditingProp, targetEdit)
+  }, {scope: ChangeScope.UiState, description: 'focus visual target'})
 }
 
 export const requestEditorFocus = (uiStateBlock: Block): void => {
