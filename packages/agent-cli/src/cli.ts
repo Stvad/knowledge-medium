@@ -21,6 +21,7 @@ import {
   type CommandStatusResponse,
   type WhoamiInfo,
 } from './protocol.js'
+import { renderKernelDts } from './kernelDts.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const serverScript = path.join(here, 'server.js')
@@ -919,6 +920,27 @@ cli
   .action(async (json: string) => {
     const command = parseJson(json, 'raw json') as CommandPayload
     await runAndPrint(command)
+  })
+
+cli
+  .command('types', 'Emit a TypeScript declaration file (.d.ts) for the kernel API surface. Pipe to a file: `kmagent types > kernel.d.ts`, then reference it from your tsconfig.')
+  .option('--module <spec>', 'Module specifier to declare', {
+    default: '@/extensions/api.js',
+  })
+  .action(async (options: {module?: string}) => {
+    await ensureBridgeRunning()
+    const description = await runCommand({type: 'describe-runtime', brief: true})
+    const apiSurface = (description as {apiSurface?: {exports?: unknown}})?.apiSurface
+    const rawExports = apiSurface?.exports
+    if (!Array.isArray(rawExports)) {
+      throw new Error('Bridge response did not include an apiSurface.exports array')
+    }
+    const exports = rawExports.filter((name): name is string => typeof name === 'string')
+    process.stdout.write(renderKernelDts({
+      moduleSpec: options.module ?? '@/extensions/api.js',
+      exports,
+      cliVersion: pkgVersion,
+    }))
   })
 
 cli.version(pkgVersion)
