@@ -128,6 +128,36 @@ The user is currently leaning toward **block-id keying as the destination** (per
 
 ## P3 — Deferred until trigger fires
 
+### Inverted dep-index in `HandleStore.invalidate` — re-evaluate with live metrics
+
+[handleStore.ts:306](src/data/internals/handleStore.ts:306) still walks every registered handle linearly on each invalidate, then walks every dep of each candidate inside `matches()`. perf-baseline's #1 open recommendation. Two follow-ups landed already to soften the symptom without changing the shape:
+- Per-handle dedup at `ctx.depend` registration (commit `62e913cf`) — drops within-resolve duplicates; manyAncestors saw 26% fewer deps live (99 instead of 133).
+- `repo.metrics().handleStoreInventory` (commit `1b4e8937`) — exposes `handleCount`, `totalDeps`, `maxDeps`, `p50/p95Deps`, `topHeavy[]` so the next investigation doesn't start from a devtools eval.
+
+**Why this might be worth doing sooner than the headline numbers suggest:** many minor UI interactions are db writes — selection changes, expand/collapse, property-panel toggle, focus moves. The perf-baseline framed write latency as a per-keystroke concern, but the cumulative cost across high-frequency UI interactions is what users actually feel. Sub-ms per walk × 100 writes/sec during scroll/drag is real. The 10-20ms band of savings the user flagged is meaningful at that frequency.
+
+Index shape, when it's time:
+- `Map<bucketKey, Set<RegisteredHandle>>` keyed per dep kind:
+  - `row:<id>`, `pe:<parentId>`, `ws:<workspaceId>`, `tbl:<table>`
+  - `p:<channel>\x00<key>` for plugin deps (today's hottest family in our workload — 55% of all live deps)
+- Maintained inline in `onDep` (add to bucket) and `dispose` (remove from all buckets). Live workload shows row + plugin are the only families that matter; workspace + table are empty.
+- **Bucket-membership-is-sufficient**: a handle is in `buckets[k]` iff one of its deps would match a change targeting `k`. At invalidate time, union the buckets the change touches and invalidate every handle in the union — *no* `matches()` confirmation pass needed. This is the real win: skips the per-dep walk inside `matches()` that currently dominates for fat handles (property-schema watcher at 385 deps, grouped-backlinks at 200+).
+
+Triggers to re-check (now measurable in `repo.metrics()`):
+- `handlesWalked / invalidations` ratio exceeds ~200 in real sessions
+- `handleStoreInventory.handleCount` materially above ~500 during normal use
+- `handleStoreInventory.maxDeps` over ~1000, or `p95Deps` growing toward the max
+- `mutate.setContent` p95 / per-tx-flush time visibly degrading in `repo.metrics().db.writeTransaction` p95
+- a flame graph of a scroll / drag / multi-select interaction shows `invalidate()` or `matches()` on the critical path
+
+Correctness surface to be careful about:
+- `runLoader` dep-replacement on settle ([handleStore.ts:520](src/data/internals/handleStore.ts:520)) needs to diff old vs new and patch buckets atomically — dropped entries are how "things stop refreshing sometimes" bugs land.
+- Mid-load live-publish ([handleStore.ts:506](src/data/internals/handleStore.ts:506)) must update buckets in the same step as `this.deps.push`.
+- `dispose` must remove from every bucket the handle was in.
+- `observeDuringLoad` ([handleStore.ts:341](src/data/internals/handleStore.ts:341)) currently walks all handles regardless of matching — add a sibling `Set<RegisteredHandle> inflightHandles` so it becomes `O(inflight)` instead of `O(N)`. Independent change but same theme.
+
+Verify-via-bench: [scripts/bench/bench-handles.ts:43](scripts/bench/bench-handles.ts:43) already has the `(N=…, 1 match)` and `mutate.setContent with M bystanders` rows — drive both to constant time as the acceptance criterion.
+
 ### Id-only collection handles for `subtree` / `ancestors` / `backlinks`
 
 `repo.childIds(id)` was added alongside `repo.children(id)` to give callers that only need the structural list a handle whose only dep is `parent-edge` — child property updates don't invalidate it, and the loader is a lighter `SELECT id` query. `useChildIds` and `useHasChildren` were rewritten on top of it; the symptom that motivated the split was an UI-state child mutation cascading a `useChildren`-driven re-render through `LayoutRenderer`.
