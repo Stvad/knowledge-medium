@@ -45,6 +45,7 @@ import {
   CLIENT_SCHEMA_STATEMENTS,
   backfillBlockAliasesIfEmpty,
   backfillBlockTypesIfEmpty,
+  backfillLocalEphemeralUploadsIfPending,
 } from '@/data/internals/clientSchema'
 import {
   applyLocalSchemaContributions,
@@ -94,7 +95,7 @@ const initializeTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
   // production startup ordering so any test that pre-seeds rows
   // before the harness opens still gets backfilled.
   const backfillDb = {
-    execute: (sql: string) => db.execute(sql),
+    execute: (sql: string, params?: unknown[]) => db.execute(sql, params as never[] | undefined),
     getOptional: async <T,>(sql: string) => {
       const row = await db.getOptional<T>(sql)
       return row ?? null
@@ -102,6 +103,7 @@ const initializeTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
   }
   await backfillBlockAliasesIfEmpty(backfillDb)
   await backfillBlockTypesIfEmpty(backfillDb)
+  await backfillLocalEphemeralUploadsIfPending(backfillDb, () => Date.now())
   await applyLocalSchemaContributions(
     backfillDb,
     localSchemaContributions,

@@ -361,9 +361,14 @@ export const CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL = `
 
 interface UploadColumnSpec {
   readonly name: string
-  readonly jsonValue: (rowRef: 'NEW' | 'OLD') => string
+  readonly jsonValue: (rowRef: string) => string
 }
 
+/** Column projection used by both the upload-routing triggers AND the
+ *  one-shot ps_crud backfill (`BACKFILL_LOCAL_EPHEMERAL_UPLOADS_SQL`).
+ *  Anything that emits an upload envelope must source its data shape
+ *  from this list so the trigger output and the backfill output stay
+ *  bit-identical. */
 const BLOCK_UPLOAD_COLUMNS: readonly UploadColumnSpec[] = [
   {name: 'workspace_id', jsonValue: rowRef => `${rowRef}.workspace_id`},
   {name: 'parent_id', jsonValue: rowRef => `${rowRef}.parent_id`},
@@ -381,7 +386,7 @@ const BLOCK_UPLOAD_COLUMNS: readonly UploadColumnSpec[] = [
   },
 ]
 
-const blockUploadJsonSql = (rowRef: 'NEW' | 'OLD') => `
+const blockUploadJsonSql = (rowRef: string) => `
       json_object(
 ${BLOCK_UPLOAD_COLUMNS.map(column => `        '${column.name}', ${column.jsonValue(rowRef)}`).join(',\n')}
       )
@@ -788,6 +793,76 @@ export const BACKFILL_BLOCK_TYPES_SQL = `
   WHERE b.deleted = 0 AND typeof(je.value) = 'text'
 `
 
+/** One-shot enqueue of pre-existing UI-state subtrees that the old
+ *  routing left out of the upload queue. Phase 2 dropped the
+ *  `source: 'local-ephemeral'` sink, so every NEW UI-state write goes
+ *  through ps_crud — but rows already in the local DB at upgrade time
+ *  are still server-side missing. Without this backfill, the first
+ *  user-touch on an existing UI-state row (e.g. selection state on a
+ *  panel) would PATCH→upsert and FK-fail on the chain of never-uploaded
+ *  ancestors (`ui-state` → `layout-sessions` → `<session>` → panel).
+ *
+ *  Identification: a row whose latest `row_events.source` is
+ *  `'local-ephemeral'` has never reached the upload queue (later 'user'
+ *  rows would be in ps_crud already; later 'sync' rows mean the server
+ *  already has the row).
+ *
+ *  Atomicity: every enqueued row gets the SAME `tx_id` so PowerSync
+ *  ships them as one server-side transaction. The composite FK on
+ *  `(workspace_id, parent_id)` is DEFERRABLE INITIALLY DEFERRED, so
+ *  the in-tx-but-not-yet-committed parents satisfy each child at
+ *  COMMIT time regardless of insertion order. If the batch somehow
+ *  fails, the orchestrator's per-tx fallback quarantines them all
+ *  together — visible via the rejection-quarantine UI for manual retry. */
+export const LOCAL_EPHEMERAL_BACKFILL_MARKER_KEY = 'local_ephemeral_upload_backfill_v1'
+
+export const SELECT_LOCAL_EPHEMERAL_BACKFILL_DONE_SQL = `
+  SELECT 1 FROM client_schema_state WHERE key = '${LOCAL_EPHEMERAL_BACKFILL_MARKER_KEY}'
+`
+
+export const RECORD_LOCAL_EPHEMERAL_BACKFILL_DONE_SQL = `
+  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
+  VALUES ('${LOCAL_EPHEMERAL_BACKFILL_MARKER_KEY}', strftime('%s', 'now') * 1000)
+`
+
+/** Counts what BACKFILL_LOCAL_EPHEMERAL_UPLOADS_SQL would enqueue. Used
+ *  by the bootstrap wrapper to decide whether to log and to expose a
+ *  number for debugging. */
+export const COUNT_LOCAL_EPHEMERAL_BACKFILL_PENDING_SQL = `
+  SELECT COUNT(*) AS n FROM blocks b
+  WHERE b.id IN (
+    SELECT r1.block_id FROM row_events r1
+    WHERE r1.source = 'local-ephemeral'
+      AND NOT EXISTS (
+        SELECT 1 FROM row_events r2
+        WHERE r2.block_id = r1.block_id AND r2.id > r1.id
+      )
+  )
+`
+
+/** Emits one PUT envelope per qualifying block, all stamped with the
+ *  same `?` tx_id parameter. */
+export const BACKFILL_LOCAL_EPHEMERAL_UPLOADS_SQL = `
+  INSERT INTO ps_crud (tx_id, data)
+  SELECT
+    ?,
+    json_object(
+      'op', 'PUT',
+      'type', 'blocks',
+      'id', b.id,
+      'data', ${blockUploadJsonSql('b')}
+    )
+  FROM blocks b
+  WHERE b.id IN (
+    SELECT r1.block_id FROM row_events r1
+    WHERE r1.source = 'local-ephemeral'
+      AND NOT EXISTS (
+        SELECT 1 FROM row_events r2
+        WHERE r2.block_id = r1.block_id AND r2.id > r1.id
+      )
+  )
+`
+
 /** Per-name reprojection markers. Once `reprojectRefTypedProperties`
  *  has done a catch-up pass for property name `X`, a row keyed
  *  `reproject_ref:<X>` lands in `client_schema_state`. Subsequent
@@ -884,7 +959,7 @@ export const CLIENT_SCHEMA_TRIGGER_NAMES = [
 ] as const
 
 interface ClientSchemaBootstrapDb {
-  execute: (sql: string) => Promise<unknown>
+  execute: (sql: string, params?: unknown[]) => Promise<unknown>
   getOptional: <T>(sql: string) => Promise<T | null>
 }
 
@@ -915,4 +990,20 @@ export const backfillBlockTypesIfEmpty = async (
   if (done !== null) return
   await db.execute(BACKFILL_BLOCK_TYPES_SQL)
   await db.execute(RECORD_BLOCK_TYPES_BACKFILL_DONE_SQL)
+}
+
+/** Enqueue pre-existing UI-state rows for upload on the first app
+ *  start after Phase 2 (see `LOCAL_EPHEMERAL_BACKFILL_MARKER_KEY` for
+ *  the full rationale). `newTxSeq` produces the integer tx_id every
+ *  enqueued row shares, so the server applies them atomically and the
+ *  DEFERRABLE composite FK doesn't trip on intra-batch parent chains. */
+export const backfillLocalEphemeralUploadsIfPending = async (
+  db: ClientSchemaBootstrapDb,
+  newTxSeq: () => number,
+): Promise<void> => {
+  const done = await db.getOptional<{1: number}>(SELECT_LOCAL_EPHEMERAL_BACKFILL_DONE_SQL)
+  if (done !== null) return
+  const txSeq = newTxSeq()
+  await db.execute(BACKFILL_LOCAL_EPHEMERAL_UPLOADS_SQL, [txSeq])
+  await db.execute(RECORD_LOCAL_EPHEMERAL_BACKFILL_DONE_SQL)
 }

@@ -48,6 +48,7 @@ import {
   CLIENT_SCHEMA_STATEMENTS,
   backfillBlockAliasesIfEmpty,
   backfillBlockTypesIfEmpty,
+  backfillLocalEphemeralUploadsIfPending,
 } from '@/data/internals/clientSchema'
 import {
   applyLocalSchemaContributions,
@@ -239,7 +240,7 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // pre-index schema. Steady-state startups noop on a single LIMIT 1
   // probe of `client_schema_state`.
   const backfillDb = {
-    execute: (sql: string) => powerSyncDb.execute(sql),
+    execute: (sql: string, params?: unknown[]) => powerSyncDb.execute(sql, params as never[] | undefined),
     getOptional: async <T,>(sql: string) => {
       const row = await powerSyncDb.getOptional<T>(sql)
       return row ?? null
@@ -247,6 +248,10 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   }
   await backfillBlockAliasesIfEmpty(backfillDb)
   await backfillBlockTypesIfEmpty(backfillDb)
+  // tx_seq seeded from wall-clock ms — same scheme the Repo uses for
+  // per-tx grouping, so the synthetic backfill batch is distinguishable
+  // from any real tx that follows.
+  await backfillLocalEphemeralUploadsIfPending(backfillDb, () => Date.now())
   await applyLocalSchemaContributions(
     backfillDb,
     resolveLocalSchemaContributions(staticDataExtensions),

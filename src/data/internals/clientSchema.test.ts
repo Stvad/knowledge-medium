@@ -39,7 +39,10 @@ import {
   BACKFILL_BLOCK_ALIASES_SQL,
   CLIENT_SCHEMA_STATEMENTS,
   CLIENT_SCHEMA_TRIGGER_NAMES,
+  COUNT_LOCAL_EPHEMERAL_BACKFILL_PENDING_SQL,
+  LOCAL_EPHEMERAL_BACKFILL_MARKER_KEY,
   backfillBlockAliasesIfEmpty,
+  backfillLocalEphemeralUploadsIfPending,
 } from './clientSchema'
 
 interface TestDb {
@@ -741,5 +744,136 @@ describe('block_aliases backfill', () => {
       await runBackfill()
       expect(aliasRows(h.db)).toHaveLength(0)
     })
+  })
+})
+
+describe('backfillLocalEphemeralUploadsIfPending', () => {
+  // Adapt node:sqlite (sync) to the async {execute, getOptional} the
+  // bootstrap helper expects. Forwards SQL params to db.prepare(sql).run.
+  const runBackfill = async (txSeq = 1_700_000_000_000) => {
+    await backfillLocalEphemeralUploadsIfPending({
+      execute: async (sql, params) => {
+        if (params && params.length > 0) {
+          h.db.prepare(sql).run(...(params as Array<string | number | null>))
+        } else {
+          h.db.exec(sql)
+        }
+      },
+      getOptional: async <T,>(sql: string) => {
+        const row = h.db.prepare(sql).get() as T | undefined
+        return row ?? null
+      },
+    }, () => txSeq)
+  }
+
+  const markerExists = (): boolean =>
+    h.db
+      .prepare(`SELECT 1 FROM client_schema_state WHERE key = '${LOCAL_EPHEMERAL_BACKFILL_MARKER_KEY}'`)
+      .get() !== undefined
+
+  const pendingCount = (): number =>
+    (h.db.prepare(COUNT_LOCAL_EPHEMERAL_BACKFILL_PENDING_SQL).get() as {n: number}).n
+
+  /** Production state on upgrade day: rows whose original write was
+   *  `source: 'local-ephemeral'` (under the old routing) NEVER landed
+   *  in ps_crud because the old trigger gate was `source = 'user'`.
+   *  In this test environment we're running the NEW trigger gate
+   *  (`source IS NOT NULL`), so we can't actually re-create that
+   *  history. Instead: snapshot ps_crud, perform the write under the
+   *  old source value, then delete just the trigger-emitted row(s) —
+   *  leaving any previously-enqueued rows in place. The end state
+   *  matches an upgrade user: row + its local-ephemeral row_event,
+   *  nothing new in the upload queue. */
+  const simulateOldLocalEphemeralInsert = (overrides: Partial<{id: string; workspace_id: string; parent_id: string | null}> = {}) => {
+    const maxBefore = (h.db.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM ps_crud').get() as {m: number}).m
+    h.setTxContext({txId: `tx-${overrides.id ?? 'b'}`, txSeq: 1, userId: 'user-1', scope: 'local-ui', source: 'local-ephemeral'})
+    h.insertBlock(overrides)
+    h.clearTxContext()
+    h.db.prepare('DELETE FROM ps_crud WHERE id > ?').run(maxBefore)
+  }
+
+  it('records the completion marker even when there is nothing to enqueue', async () => {
+    // Fresh device (no row_events to scan) takes the empty path — the
+    // marker still gets written so subsequent startups skip the scan.
+    expect(markerExists()).toBe(false)
+    expect(pendingCount()).toBe(0)
+    await runBackfill()
+    expect(markerExists()).toBe(true)
+    expect(h.psCrud()).toHaveLength(0)
+  })
+
+  it("enqueues blocks whose latest row_events.source is 'local-ephemeral' and skips already-queued ones", async () => {
+    simulateOldLocalEphemeralInsert({id: 'ui-1', workspace_id: 'ws1'})
+    simulateOldLocalEphemeralInsert({id: 'ui-2', workspace_id: 'ws1', parent_id: 'ui-1'})
+
+    // A regular doc write uploads via the (new) trigger and IS already
+    // in ps_crud — the backfill must not double-enqueue it.
+    h.setTxContext({txId: 'tx-doc', txSeq: 11, userId: 'user-1', scope: 'block-default', source: 'user'})
+    h.insertBlock({id: 'doc-1', workspace_id: 'ws1'})
+    h.clearTxContext()
+
+    expect(h.psCrud()).toHaveLength(1) // doc-1 from trigger
+    expect(pendingCount()).toBe(2)     // ui-1 + ui-2 from backfill
+
+    await runBackfill(99_999)
+
+    const crud = h.psCrud()
+    expect(crud).toHaveLength(3)
+    const backfilledIds = crud
+      .filter(r => r.tx_id === 99_999)
+      .map(r => JSON.parse(r.data).id)
+      .sort()
+    expect(backfilledIds).toEqual(['ui-1', 'ui-2'])
+    // All backfilled rows share the same tx_id so they ship as one
+    // server-side transaction; the DEFERRABLE composite FK then accepts
+    // the parent-child chain regardless of insertion order.
+  })
+
+  it('skips a stale row whose latest event has since become a sync apply', async () => {
+    // The row was first written local-ephemeral, then an incoming sync
+    // applied a server-side change to it. That means the server DOES
+    // have the row now, so the backfill should not re-upload it.
+    simulateOldLocalEphemeralInsert({id: 'b1', workspace_id: 'ws1'})
+    // Sync apply: source is NULL so the row_events trigger tags 'sync'.
+    h.updateBlock('b1', {content: 'from-other-device'})
+
+    expect(pendingCount()).toBe(0)
+    await runBackfill()
+    expect(h.psCrud()).toHaveLength(0)
+  })
+
+  it('is idempotent: a second call after the marker is set is a no-op', async () => {
+    simulateOldLocalEphemeralInsert({id: 'b1', workspace_id: 'ws1'})
+
+    await runBackfill(42)
+    expect(h.psCrud()).toHaveLength(1)
+    expect(markerExists()).toBe(true)
+
+    // Add a fresh stale row AFTER the marker. The second call should
+    // short-circuit on the marker and leave the new row un-enqueued.
+    simulateOldLocalEphemeralInsert({id: 'b2', workspace_id: 'ws1'})
+
+    await runBackfill(43)
+    expect(h.psCrud()).toHaveLength(1)
+  })
+
+  it('emits the same upload envelope shape as the upload-routing trigger', async () => {
+    // The backfill and the trigger MUST emit byte-identical envelopes so
+    // the server's upload handler doesn't see two shapes. If a column
+    // is added/removed from BLOCK_UPLOAD_COLUMNS, both code paths
+    // change together — this test pins that contract.
+    simulateOldLocalEphemeralInsert({id: 'stale-1', workspace_id: 'ws1'})
+
+    h.setTxContext({txId: 'tx-doc', txSeq: 2, userId: 'user-1', scope: 'block-default', source: 'user'})
+    h.insertBlock({id: 'live-1', workspace_id: 'ws1', content: 'live-content'})
+    h.clearTxContext()
+
+    await runBackfill()
+
+    const triggerEnvelope = JSON.parse(h.psCrud().find(r => JSON.parse(r.data).id === 'live-1')!.data)
+    const backfillEnvelope = JSON.parse(h.psCrud().find(r => JSON.parse(r.data).id === 'stale-1')!.data)
+    expect(Object.keys(triggerEnvelope.data).sort()).toEqual(Object.keys(backfillEnvelope.data).sort())
+    expect(triggerEnvelope.op).toBe('PUT')
+    expect(backfillEnvelope.op).toBe('PUT')
   })
 })
