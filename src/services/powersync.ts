@@ -7,6 +7,7 @@ import {
 } from '@powersync/common'
 import { BLOCK_STORAGE_COLUMNS, type BlockRow } from '@/data/blockSchema.js'
 import { supabase, hasSupabaseAuthConfig } from '@/services/supabase.js'
+import { classifyUploadError } from '@/services/uploadErrorClassifier.js'
 
 const powerSyncUrl = import.meta.env.VITE_POWERSYNC_URL?.trim()
 
@@ -22,7 +23,7 @@ export const hasRemoteSyncConfig = hasSupabaseAuthConfig && hasPowerSyncServiceC
 
 type BlockUploadPayload = Record<string, unknown> & {id: string}
 
-type CompactedBlockOperation =
+export type CompactedBlockOperation =
   | {
       kind: 'create'
       id: string
@@ -40,6 +41,22 @@ type CompactedBlockOperation =
       id: string
       order: number
     }
+
+/** Seams the rejection-tolerant upload orchestrator pokes through so tests
+ *  can mock the two side-effects (Supabase write + rejection-table write)
+ *  without spinning up a real DB or HTTP client. The default wiring lives
+ *  in `defaultUploadDeps` below. */
+export interface UploadDeps {
+  applyOperations: (
+    database: AbstractPowerSyncDatabase,
+    operations: readonly CompactedBlockOperation[],
+  ) => Promise<void>
+  recordRejection: (
+    database: AbstractPowerSyncDatabase,
+    transaction: CrudTransaction,
+    error: unknown,
+  ) => Promise<void>
+}
 
 // Per-id accumulator used by `compactBlockCrudEntries`.
 //
@@ -369,33 +386,147 @@ const collectUploadBatch = async (
   return transactions
 }
 
-const uploadTransactions = async (
+/** Records a permanently-rejected upload to the `ps_crud_rejected`
+ *  quarantine table so the bucket can keep draining. The row preserves
+ *  enough context (original ps_crud id, tx id, full envelope, error
+ *  code + message, wall-clock time) for a later UI surface or for
+ *  manual inspection via `kmagent sql`. */
+const recordRejectionToTable = async (
+  database: AbstractPowerSyncDatabase,
+  transaction: CrudTransaction,
+  error: unknown,
+): Promise<void> => {
+  const errorCode = errorCodeOf(error)
+  const errorMessage = errorMessageOf(error)
+  const rejectedAt = Date.now()
+
+  // Preserve every entry in the rejected tx — a single CrudTransaction
+  // can carry many CrudEntries (multi-row repo.tx). Inserting one
+  // ps_crud_rejected row per entry keeps the audit shape symmetric with
+  // ps_crud and lets a future UI count "N changes couldn't sync" directly.
+  for (const entry of transaction.crud) {
+    await database.execute(
+      `INSERT INTO ps_crud_rejected
+         (original_id, tx_id, data, error_code, error_message, rejected_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        entry.clientId,
+        transaction.transactionId ?? entry.transactionId ?? 0,
+        JSON.stringify(crudEntryEnvelope(entry)),
+        errorCode,
+        errorMessage,
+        rejectedAt,
+      ],
+    )
+  }
+}
+
+const errorCodeOf = (error: unknown): string | null => {
+  if (typeof error === 'object' && error !== null) {
+    const candidate = (error as {code?: unknown; status?: unknown}).code
+      ?? (error as {status?: unknown}).status
+    if (typeof candidate === 'string' || typeof candidate === 'number') {
+      return String(candidate)
+    }
+  }
+  return null
+}
+
+const errorMessageOf = (error: unknown): string => {
+  if (error instanceof Error) return error.message
+  if (typeof error === 'string') return error
+  try {
+    return JSON.stringify(error)
+  } catch {
+    return String(error)
+  }
+}
+
+/** Reconstruct the JSON envelope that the upload-routing triggers wrote
+ *  into `ps_crud.data` (see clientSchema.ts). Keeping the same shape
+ *  here means a rejected row carries the exact wire payload, so the
+ *  rejection log reads symmetrically with the original queue. */
+const crudEntryEnvelope = (entry: CrudEntry): Record<string, unknown> => {
+  const opName =
+    entry.op === UpdateType.PUT ? 'PUT'
+    : entry.op === UpdateType.PATCH ? 'PATCH'
+    : 'DELETE'
+  const data = entry.opData ?? {}
+  return entry.op === UpdateType.DELETE
+    ? {op: opName, type: entry.table, id: entry.id}
+    : {op: opName, type: entry.table, id: entry.id, data}
+}
+
+const defaultUploadDeps = (): UploadDeps => ({
+  applyOperations: applyCompactedBlockOperations,
+  recordRejection: recordRejectionToTable,
+})
+
+/** Optimistic-batch / pessimistic-per-tx upload orchestrator.
+ *
+ *  Happy path: one compacted batch → one applyOperations call → complete
+ *  the tail tx (which drains every preceding tx from ps_crud). Identical
+ *  perf to the original handler.
+ *
+ *  On batch failure: classify the error. Transient (5xx / network /
+ *  unknown) → re-throw so PowerSync retries the batch later. Permanent
+ *  (FK violation, RLS denial, 4xx) → drop into per-tx fallback: apply
+ *  each tx individually, completing on success, recording-then-completing
+ *  on permanent failure, re-throwing on transient. This way one bad tx
+ *  no longer jams the bucket — the rest of the queue drains and the
+ *  bad one lands in ps_crud_rejected for inspection. */
+const uploadTransactionsWithFallback = async (
   database: AbstractPowerSyncDatabase,
   transactions: readonly CrudTransaction[],
-) => {
-  const entries = transactions.flatMap(transaction => transaction.crud)
-  const operations = compactBlockCrudEntries(entries)
+  deps: UploadDeps,
+): Promise<void> => {
+  const batchOps = compactBlockCrudEntries(transactions.flatMap(t => t.crud))
 
   try {
-    await applyCompactedBlockOperations(database, operations)
+    await deps.applyOperations(database, batchOps)
+    await transactions[transactions.length - 1]?.complete()
+    return
   } catch (err) {
-    // Surface upload errors loudly — silent failures here look like
-    // "sync isn't working" with no explanation in the UI.
-    console.error('[powersync] upload failed', err)
-    throw err
+    if (classifyUploadError(err) === 'transient') {
+      console.error('[powersync] upload failed (transient, will retry)', err)
+      throw err
+    }
+    console.warn(
+      `[powersync] batch upload rejected permanently — isolating ${transactions.length} tx(s)`,
+      err,
+    )
   }
 
-  await transactions[transactions.length - 1]?.complete()
+  // Per-tx fallback. Within-tx compaction still runs so the bootstrap
+  // PUT+PATCH fusion (clientSchema.ts upload triggers + addTypeInTx) is
+  // preserved — losing it would clobber properties_json on a server row
+  // the deterministic-id bootstrap already created.
+  for (const transaction of transactions) {
+    const txOps = compactBlockCrudEntries(transaction.crud)
+    try {
+      await deps.applyOperations(database, txOps)
+      await transaction.complete()
+    } catch (err) {
+      if (classifyUploadError(err) === 'transient') {
+        console.error('[powersync] per-tx upload failed (transient, will retry)', err)
+        throw err
+      }
+      console.warn(
+        `[powersync] tx ${transaction.transactionId} rejected — quarantining`,
+        err,
+      )
+      await deps.recordRejection(database, transaction, err)
+      await transaction.complete()
+    }
+  }
 }
 
 const uploadData = async (database: AbstractPowerSyncDatabase) => {
+  const deps = defaultUploadDeps()
   while (true) {
     const transactions = await collectUploadBatch(database)
-    if (transactions.length === 0) {
-      return
-    }
-
-    await uploadTransactions(database, transactions)
+    if (transactions.length === 0) return
+    await uploadTransactionsWithFallback(database, transactions, deps)
   }
 }
 
@@ -428,3 +559,4 @@ export const __compactBlockCrudEntriesForTest = compactBlockCrudEntries
 export const __orderedBlockUpsertsForTest = orderedBlockUpserts
 export const __normalizeLocalBlockUploadRowForTest = normalizeLocalBlockUploadRow
 export const __shouldBulkUpsertPatchesForTest = shouldBulkUpsertPatches
+export const __uploadTransactionsWithFallbackForTest = uploadTransactionsWithFallback
