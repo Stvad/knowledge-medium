@@ -8,13 +8,12 @@
  *  irrelevant. */
 
 import { propertyEditorOverridesFacet } from '@/data/facets'
-import { blockRenderersFacet } from '@/extensions/core'
+import { blockContentDecoratorsFacet } from '@/extensions/blockInteraction.js'
 import type { AppExtension } from '@/extensions/facet'
 import { systemToggle } from '@/extensions/togglable'
 import { referencesPlugin } from '@/plugins/references'
 import { geoDataExtension } from './dataExtension'
-import { LocationsPageBlockRenderer } from './LocationsPageBlockRenderer'
-import { PlaceBlockRenderer } from './PlaceBlockRenderer'
+import { geoContentDecoratorContribution } from './geoContentDecorator'
 import { locationPropertyEditorOverride } from './propertyEditorOverrides'
 
 export const geoPlugin: AppExtension = systemToggle({
@@ -27,13 +26,6 @@ export const geoPlugin: AppExtension = systemToggle({
   // don't depend on registration order in staticAppExtensions.
   referencesPlugin,
   geoDataExtension,
-  blockRenderersFacet.of({
-    id: 'geo:locationsPage',
-    renderer: LocationsPageBlockRenderer,
-  }, {source: 'geo'}),
-  blockRenderersFacet.of({
-    id: 'geo:place',
-    renderer: PlaceBlockRenderer,
-  }, {source: 'geo'}),
+  blockContentDecoratorsFacet.of(geoContentDecoratorContribution, {source: 'geo'}),
   propertyEditorOverridesFacet.of(locationPropertyEditorOverride, {source: 'geo'}),
 ])
