@@ -82,31 +82,23 @@ const splitCodeMirrorBlockAtCursor = async (
   const afterCursor = doc.sliceString(cursorPos)
   const repo = block.repo
 
-  // Wrap the editor mutation + split in a single view transition so
-  // the OLD snapshot still shows the pre-split block (with full
-  // content at the original position) and the NEW snapshot shows the
-  // new sibling above with `before` plus self with `after`. Putting
-  // `editorView.dispatch` BEFORE `startViewTransition` would capture
-  // the post-dispatch state as "old" — misleading.
-  await withMoveTransition(async () => {
-    // Push the suffix into the editor synchronously so its debounced
-    // pushChange re-arms with the post-split text. Without this the
-    // pending debounce would later flush the pre-split full content
-    // and clobber the suffix that core.split wrote to SQL.
-    editorView.dispatch({
-      changes: {from: 0, to: doc.length, insert: afterCursor},
-      selection: EditorSelection.cursor(0),
-    })
+  // Push the suffix into the editor synchronously so its debounced
+  // pushChange re-arms with the post-split text. Without this the
+  // pending debounce would later flush the pre-split full content
+  // and clobber the suffix that core.split wrote to SQL.
+  editorView.dispatch({
+    changes: {from: 0, to: doc.length, insert: afterCursor},
+    selection: EditorSelection.cursor(0),
+  })
 
-    // core.split creates a new sibling BEFORE self with before-text, and
-    // leaves self as the after-text block. Pass the live before/after
-    // strings — the mutator does NOT slice persisted content, since a
-    // debounced editor can leave SQL stale.
-    await repo.mutate.split({
-      id: block.id,
-      before: beforeCursor,
-      after: afterCursor,
-    })
+  // core.split creates a new sibling BEFORE self with before-text, and
+  // leaves self as the after-text block. Pass the live before/after
+  // strings — the mutator does NOT slice persisted content, since a
+  // debounced editor can leave SQL stale.
+  await repo.mutate.split({
+    id: block.id,
+    before: beforeCursor,
+    after: afterCursor,
   })
   return block
 }
@@ -744,11 +736,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
             })
             await focusBlock(uiStateBlock, prevVisible.id, {edit: true})
           }
-          // Wrap the delete so the empty-block removal crossfades into
-          // the surrounding shift-up instead of snapping.
-          await withMoveTransition(async () => {
-            await block.delete()
-          })
+          await block.delete()
           return
         }
 
@@ -778,14 +766,10 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // Single tx: flush the editor's live content into `from` first so
         // core.merge concatenates the latest text, then run the merge.
         // tx.run sees writes from the same tx via SQL.
-        // Wrap so the OLD snapshot has two separate blocks and NEW has
-        // the merged single block — crossfade between them.
-        await withMoveTransition(async () => {
-          await repo.tx(async tx => {
-            await tx.update(block.id, {content: liveContent})
-            await tx.run(mergeMutator, {intoId: prevId, fromId: block.id})
-          }, {scope: ChangeScope.BlockDefault, description: 'merge into previous block'})
-        })
+        await repo.tx(async tx => {
+          await tx.update(block.id, {content: liveContent})
+          await tx.run(mergeMutator, {intoId: prevId, fromId: block.id})
+        }, {scope: ChangeScope.BlockDefault, description: 'merge into previous block'})
 
         await uiStateBlock.set(editorSelection, {
           blockId: prevId,
