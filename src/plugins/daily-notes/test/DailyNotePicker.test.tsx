@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   getOrCreateDailyNote: vi.fn(async (_repo: unknown, _workspaceId: string, iso: string) => ({
     id: `daily-${iso}`,
   })),
+  navigate: vi.fn(),
   navigateFromGlobalCommand: vi.fn(),
   repo: {activeWorkspaceId: 'ws-1'},
   resolveCurrentDailyNoteIso: vi.fn<(_repo: unknown, _workspaceId: string) => Promise<string | null>>(async () => null),
@@ -28,9 +29,14 @@ vi.mock('@/context/repo.tsx', () => ({
   useRepo: () => mocks.repo,
 }))
 
-vi.mock('@/utils/navigation.ts', () => ({
-  useNavigateFromGlobalCommand: () => mocks.navigateFromGlobalCommand,
-}))
+vi.mock('@/utils/navigation.ts', async () => {
+  const actual = await vi.importActual<typeof import('@/utils/navigation.ts')>('@/utils/navigation.ts')
+  return {
+    ...actual,
+    useNavigate: () => mocks.navigate,
+    useNavigateFromGlobalCommand: () => mocks.navigateFromGlobalCommand,
+  }
+})
 
 vi.mock('@/shortcuts/runAction.ts', () => ({
   useRunAction: () => mocks.runAction,
@@ -69,6 +75,7 @@ describe('DailyNotePicker', () => {
   afterEach(() => {
     cleanup()
     mocks.getOrCreateDailyNote.mockClear()
+    mocks.navigate.mockClear()
     mocks.navigateFromGlobalCommand.mockClear()
     mocks.runAction.mockClear()
   })
@@ -134,6 +141,37 @@ describe('DailyNotePicker', () => {
       blockId: 'daily-2026-05-13',
       workspaceId: 'ws-1',
     })
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', {name: 'Daily note picker'})).toBeNull()
+    })
+  })
+
+  it('opens the selected daily note in the sidebar stack on shift-click', async () => {
+    render(<DailyNotePicker/>)
+
+    act(() => {
+      openDailyNotePicker({initialIso: '2026-05-13'})
+    })
+
+    fireEvent.click(screen.getByRole('button', {name: 'May 13, 2026'}), {
+      button: 0,
+      shiftKey: true,
+    })
+
+    await waitFor(() => {
+      expect(mocks.getOrCreateDailyNote).toHaveBeenCalledExactlyOnceWith(
+        mocks.repo,
+        'ws-1',
+        '2026-05-13',
+      )
+    })
+    expect(mocks.navigate).toHaveBeenCalledExactlyOnceWith({
+      blockId: 'daily-2026-05-13',
+      workspaceId: 'ws-1',
+      target: 'sidebar-stack',
+      sourcePanelId: undefined,
+    })
+    expect(mocks.navigateFromGlobalCommand).not.toHaveBeenCalled()
     await waitFor(() => {
       expect(screen.queryByRole('dialog', {name: 'Daily note picker'})).toBeNull()
     })

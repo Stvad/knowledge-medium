@@ -10,7 +10,7 @@
  * Each caller wraps it in their own chrome (popover / bottom sheet)
  * and supplies their own `onSelect` handler — navigation vs. write.
  */
-import { useMemo } from 'react'
+import { useMemo, type MouseEvent } from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils.js'
 import { todayIso } from './dailyNotes.ts'
@@ -33,7 +33,7 @@ export interface CalendarGridProps {
   selectedIso: string | null
   /** Fires when the user taps a day cell. The caller decides what
    *  "select" means (navigate vs. write). */
-  onSelect: (iso: string) => void
+  onSelect: (iso: string, event: MouseEvent<HTMLButtonElement>) => void
   /** Greys out the grid while a write is in flight. Day cells stay
    *  rendered so the user sees what they picked; they're just
    *  un-clickable until the writer settles. */
@@ -127,7 +127,7 @@ export const CalendarGrid = ({
               disabled={disabled}
               aria-label={formatDayLabel(cell.date)}
               aria-current={isToday ? 'date' : undefined}
-              onClick={() => onSelect(iso)}
+              onClick={event => onSelect(iso, event)}
               className={cn(
                 'inline-flex h-10 items-center justify-center rounded-sm text-base transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60',
                 isToday && tone.todayText,

@@ -220,10 +220,59 @@ export interface BlockLinkClickContext {
   workspaceId: string
 }
 
+export interface BlockLinkClickModifierState {
+  shiftKey: boolean
+  altKey: boolean
+  metaKey: boolean
+  ctrlKey: boolean
+  button: number
+}
+
+export type BlockLinkClickIntent =
+  | 'new-panel'
+  | 'sidebar-stack'
+  | 'main'
+  | 'default'
+  | 'native'
+
+export const blockLinkClickIntent = (
+  event: BlockLinkClickModifierState,
+): BlockLinkClickIntent => {
+  if (event.shiftKey && event.altKey && !event.metaKey && !event.ctrlKey && event.button === 0) {
+    return 'new-panel'
+  }
+  if (event.shiftKey && !event.metaKey && !event.ctrlKey && event.button === 0) {
+    return 'sidebar-stack'
+  }
+  if (event.altKey && !event.metaKey && !event.ctrlKey && event.button === 0) {
+    return 'main'
+  }
+  if (event.metaKey || event.ctrlKey || event.button !== 0) return 'native'
+  return 'default'
+}
+
+export const navigateInputFromBlockLinkClickIntent = (
+  intent: BlockLinkClickIntent,
+  panelId: string | undefined,
+  {blockId, workspaceId}: BlockLinkClickContext,
+): NavigateInput | null => {
+  if (intent === 'new-panel') return {blockId, workspaceId, target: 'new-panel', sourcePanelId: panelId}
+  if (intent === 'sidebar-stack') return {blockId, workspaceId, target: 'sidebar-stack', sourcePanelId: panelId}
+  if (intent === 'main') return {blockId, workspaceId, target: 'main'}
+  if (intent === 'default') {
+    return panelId
+      ? {blockId, workspaceId, target: 'panel', panelId}
+      : {blockId, workspaceId, target: 'active'}
+  }
+  return null
+}
+
 /** Standard click handler for in-document block links — wikilinks, block
  *  refs, bullets, and other anchors whose href encodes a block target.
  *  Centralises the modifier-key policy so individual components don't
- *  re-implement it (and drift apart):
+ *  re-implement it (and drift apart). Link-like controls that resolve a
+ *  block asynchronously should use `blockLinkClickIntent` first, then call
+ *  `navigateInputFromBlockLinkClickIntent` once they have a block id:
  *    - shift+click: open in the Roam-style vertical sidebar stack
  *    - shift+alt+click: open in a new side panel
  *    - alt+click: open in the current layout session's main panel
@@ -239,26 +288,14 @@ export const handleBlockLinkClick = (
   {blockId, workspaceId}: BlockLinkClickContext,
 ): void => {
   e.stopPropagation()
-  if (e.shiftKey && e.altKey && !e.metaKey && !e.ctrlKey && e.button === 0) {
-    e.preventDefault()
-    navigate({blockId, workspaceId, target: 'new-panel', sourcePanelId: panelId})
-    return
-  }
-  if (e.shiftKey && !e.metaKey && !e.ctrlKey && e.button === 0) {
-    e.preventDefault()
-    navigate({blockId, workspaceId, target: 'sidebar-stack', sourcePanelId: panelId})
-    return
-  }
-  if (e.altKey && !e.metaKey && !e.ctrlKey && e.button === 0) {
-    e.preventDefault()
-    navigate({blockId, workspaceId, target: 'main'})
-    return
-  }
-  if (e.metaKey || e.ctrlKey || e.button !== 0) return
+  const input = navigateInputFromBlockLinkClickIntent(
+    blockLinkClickIntent(e),
+    panelId,
+    {blockId, workspaceId},
+  )
+  if (!input) return
   e.preventDefault()
-  navigate(panelId
-    ? {blockId, workspaceId, target: 'panel', panelId}
-    : {blockId, workspaceId, target: 'active'})
+  navigate(input)
 }
 
 export const useBlockLinkClick = ({blockId, workspaceId}: BlockLinkClickContext) => {

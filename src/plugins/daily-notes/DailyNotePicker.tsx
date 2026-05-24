@@ -1,7 +1,13 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react'
 import { createPortal } from 'react-dom'
+import { useBlockContext } from '@/context/block.js'
 import { useRepo } from '@/context/repo.js'
-import { useNavigateFromGlobalCommand } from '@/utils/navigation.js'
+import {
+  blockLinkClickIntent,
+  navigateInputFromBlockLinkClickIntent,
+  useNavigate,
+  useNavigateFromGlobalCommand,
+} from '@/utils/navigation.js'
 import {
   type DailyNotePickerAnchorRect,
   type OpenDailyNotePickerEventDetail,
@@ -36,7 +42,9 @@ const pickerPosition = (
 
 export function DailyNotePicker() {
   const repo = useRepo()
+  const navigate = useNavigate()
   const navigateFromGlobalCommand = useNavigateFromGlobalCommand()
+  const {panelId} = useBlockContext()
   const panelRef = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
   const [anchorRect, setAnchorRect] = useState<DailyNotePickerAnchorRect | null>(null)
@@ -72,13 +80,24 @@ export function DailyNotePicker() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [open])
 
-  const openDailyNote = async (iso: string) => {
+  const openDailyNote = async (iso: string, event: MouseEvent<HTMLButtonElement>) => {
+    const clickIntent = blockLinkClickIntent(event)
     const workspaceId = repo.activeWorkspaceId
     if (!workspaceId) return
 
     setSelectedIso(iso)
     const note = await getOrCreateDailyNote(repo, workspaceId, iso)
-    navigateFromGlobalCommand({blockId: note.id, workspaceId})
+    const modifierInput = clickIntent === 'default' || clickIntent === 'native'
+      ? null
+      : navigateInputFromBlockLinkClickIntent(clickIntent, panelId, {
+        blockId: note.id,
+        workspaceId,
+      })
+    if (modifierInput) {
+      navigate(modifierInput)
+    } else {
+      navigateFromGlobalCommand({blockId: note.id, workspaceId})
+    }
     setOpen(false)
   }
 
@@ -103,7 +122,7 @@ export function DailyNotePicker() {
           visibleMonth={visibleMonth}
           onVisibleMonthChange={setVisibleMonth}
           selectedIso={selectedIso}
-          onSelect={iso => void openDailyNote(iso)}
+          onSelect={(iso, event) => void openDailyNote(iso, event)}
           variant="destructive"
         />
       </div>
