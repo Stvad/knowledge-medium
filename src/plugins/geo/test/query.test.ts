@@ -88,6 +88,25 @@ describe('placesUnderBlockQuery', () => {
     })
   })
 
+  it('surfaces the referenced Place address on the pin (for marker callouts)', async () => {
+    const dandelion = await createOrFindPlace(env.repo, WS, {
+      name: 'Dandelion',
+      lat: 37.76,
+      lng: -122.42,
+      googlePlaceId: 'ChIJD',
+      address: '740 Valencia St, San Francisco, CA',
+    })
+    await createBlock('note', {parentId: null, content: 'Coffee with K'})
+    await setLocation('note', dandelion.id)
+
+    const pins = await env.repo
+      .query[placesUnderBlockQuery.name]({rootBlockId: 'note'})
+      .load()
+
+    expect(pins).toHaveLength(1)
+    expect(pins[0].address).toBe('740 Valencia St, San Francisco, CA')
+  })
+
   it('pins activity blocks at the coords of their referenced Place', async () => {
     const dandelion = await createOrFindPlace(env.repo, WS, {
       name: 'Dandelion', lat: 37.76, lng: -122.42, googlePlaceId: 'ChIJD',

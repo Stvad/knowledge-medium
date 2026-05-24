@@ -1,19 +1,25 @@
 /** Map view component — renders pins for blocks under a root.
  *
- *  Single component, used both inline (over any block subtree) and
- *  globally (rooted at the Locations page). The `placesUnderBlock`
- *  query handles both shapes uniformly — Place blocks pin at their
- *  own coords, non-Place blocks with `location` pin at the referenced
- *  Place's coords.
+ *  Single component, used both inline (over any block subtree, e.g. a
+ *  Place page's own mini-map) and globally (rooted at the Locations
+ *  page). The `placesUnderBlock` query handles both shapes uniformly —
+ *  Place blocks pin at their own coords, non-Place blocks with
+ *  `location` pin at the referenced Place's coords.
+ *
+ *  Click a marker → opens an InfoWindow with the place name, address,
+ *  and an "Open" button that navigates to the source block. This
+ *  preview-on-click pattern lets the user scan a busy map without
+ *  losing the map context.
  *
  *  Renders a graceful placeholder when the Google Maps API key is
  *  missing — the picker UX in Phases C / E still works, the map just
  *  doesn't render. */
 
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import {
   APIProvider,
   AdvancedMarker,
+  InfoWindow,
   Map,
   Pin,
   useAdvancedMarkerRef,
@@ -28,6 +34,9 @@ export interface MapViewProps {
   rootBlockId: string
   /** Override the default sizing — pass e.g. `h-full w-full` for fill. */
   className?: string
+  /** Initial map zoom. Defaults to 11 (city-level) which suits the
+   *  global Locations map; per-Place mini-maps should pass ~15. */
+  defaultZoom?: number
 }
 
 const DEFAULT_CENTER = {lat: 37.7749, lng: -122.4194}
@@ -48,29 +57,59 @@ const center = (pins: readonly MapPin[]): {lat: number; lng: number} => {
   return {lat: sumLat / pins.length, lng: sumLng / pins.length}
 }
 
+const pinKey = (pin: MapPin): string => `${pin.blockId}-${pin.placeId}`
+
 function MapMarker({
   pin,
-  onPick,
+  isOpen,
+  onSelect,
+  onClose,
+  onOpen,
 }: {
   pin: MapPin
-  onPick: (pin: MapPin) => void
+  isOpen: boolean
+  onSelect: (pin: MapPin) => void
+  onClose: () => void
+  onOpen: (pin: MapPin) => void
 }) {
-  const [markerRef] = useAdvancedMarkerRef()
+  const [markerRef, marker] = useAdvancedMarkerRef()
   return (
-    <AdvancedMarker
-      ref={markerRef}
-      position={{lat: pin.lat, lng: pin.lng}}
-      title={pin.name}
-      onClick={() => onPick(pin)}
-    >
-      <Pin />
-    </AdvancedMarker>
+    <>
+      <AdvancedMarker
+        ref={markerRef}
+        position={{lat: pin.lat, lng: pin.lng}}
+        title={pin.name}
+        onClick={() => onSelect(pin)}
+      >
+        <Pin />
+      </AdvancedMarker>
+      {isOpen && marker && (
+        <InfoWindow
+          anchor={marker}
+          onCloseClick={onClose}
+          headerContent={<span className="text-sm font-medium">{pin.name}</span>}
+        >
+          <div className="flex flex-col gap-2 py-1 text-sm">
+            {pin.address && (
+              <p className="text-muted-foreground">{pin.address}</p>
+            )}
+            <button
+              type="button"
+              className="self-start rounded border border-border bg-background px-2 py-1 text-xs hover:bg-muted"
+              onClick={() => onOpen(pin)}
+            >
+              Open
+            </button>
+          </div>
+        </InfoWindow>
+      )}
+    </>
   )
 }
 
 const EMPTY_PINS: readonly MapPin[] = Object.freeze([])
 
-function MapBody({rootBlockId, className}: MapViewProps) {
+function MapBody({rootBlockId, className, defaultZoom}: MapViewProps) {
   const repo = useRepo()
   const navigate = useNavigateFromGlobalCommand()
   const pins = useHandle(
@@ -78,22 +117,32 @@ function MapBody({rootBlockId, className}: MapViewProps) {
     {selector: data => (data ?? EMPTY_PINS) as readonly MapPin[]},
   )
   const initialCenter = useMemo(() => center(pins), [pins])
-
-  const onPick = (pin: MapPin) => {
-    navigate({blockId: pin.blockId})
-  }
+  const [openPinId, setOpenPinId] = useState<string | null>(null)
 
   return (
     <div className={className ?? 'h-96 w-full overflow-hidden rounded-md border'}>
       <Map
         defaultCenter={initialCenter}
-        defaultZoom={DEFAULT_ZOOM}
+        defaultZoom={defaultZoom ?? DEFAULT_ZOOM}
         mapId={MAP_ID}
         gestureHandling="cooperative"
       >
-        {pins.map(pin => (
-          <MapMarker key={`${pin.blockId}-${pin.placeId}`} pin={pin} onPick={onPick} />
-        ))}
+        {pins.map(pin => {
+          const key = pinKey(pin)
+          return (
+            <MapMarker
+              key={key}
+              pin={pin}
+              isOpen={openPinId === key}
+              onSelect={p => setOpenPinId(pinKey(p))}
+              onClose={() => setOpenPinId(null)}
+              onOpen={p => {
+                setOpenPinId(null)
+                navigate({blockId: p.blockId})
+              }}
+            />
+          )
+        })}
       </Map>
     </div>
   )

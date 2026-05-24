@@ -22,6 +22,7 @@ import { typesProp } from '@/data/properties'
 import { PLACE_TYPE } from './blockTypes'
 import {
   locationProp,
+  placeAddressProp,
   placeLatProp,
   placeLngProp,
 } from './properties'
@@ -39,6 +40,9 @@ export interface MapPin {
   name: string
   lat: number
   lng: number
+  /** Formatted address from the referenced Place — used in marker
+   *  callouts. Undefined for ad-hoc coord pins. */
+  address?: string
 }
 
 const pinArraySchema: Schema<MapPin[]> = {
@@ -63,6 +67,11 @@ const refProp = (block: BlockData, name: string): string | undefined => {
   return typeof raw === 'string' ? raw : undefined
 }
 
+const strProp = (block: BlockData, name: string): string | undefined => {
+  const raw = block.properties[name]
+  return typeof raw === 'string' ? raw : undefined
+}
+
 const pinFromPlace = (source: BlockData, place: BlockData): MapPin | null => {
   const lat = numProp(place, placeLatProp.name)
   const lng = numProp(place, placeLngProp.name)
@@ -73,6 +82,7 @@ const pinFromPlace = (source: BlockData, place: BlockData): MapPin | null => {
     name: place.content,
     lat,
     lng,
+    address: strProp(place, placeAddressProp.name),
   }
 }
 
