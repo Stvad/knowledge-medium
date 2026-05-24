@@ -12,9 +12,8 @@ import { handleBlockLinkClick, useNavigate } from '@/utils/navigation.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
 import {
   backlinkEntryShortcutContextOverrides,
-  createBacklinkBreadcrumbExpansionGate,
   findNextCollapsedBreadcrumb,
-  openNextCollapsedBreadcrumbOnce,
+  openNextCollapsedBreadcrumb,
   type BacklinkEntryShortcutController,
 } from './backlinkBreadcrumbShortcuts.ts'
 
@@ -85,11 +84,10 @@ const BacklinkItemContent = ({
 }) => {
   const repo = useRepo()
   const workspaceId = repo.activeWorkspaceId
-  const [expansionGate] = useState(createBacklinkBreadcrumbExpansionGate)
 
   const expandNextCollapsedBreadcrumb = useCallback(
-    () => openNextCollapsedBreadcrumbOnce(expansionGate, parents, onShowBlock),
-    [expansionGate, parents, onShowBlock],
+    () => openNextCollapsedBreadcrumb(parents, onShowBlock),
+    [parents, onShowBlock],
   )
   const hasCollapsedBreadcrumb = useCallback(
     () => findNextCollapsedBreadcrumb(parents) !== null,

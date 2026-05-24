@@ -82,27 +82,6 @@ export const openNextCollapsedBreadcrumb = async (
   return true
 }
 
-export interface BacklinkBreadcrumbExpansionGate {
-  consumedParents: readonly Block[] | null
-}
-
-export const createBacklinkBreadcrumbExpansionGate = (): BacklinkBreadcrumbExpansionGate => ({
-  consumedParents: null,
-})
-
-export const openNextCollapsedBreadcrumbOnce = async (
-  gate: BacklinkBreadcrumbExpansionGate,
-  parents: readonly Block[],
-  setShownBlockId: (blockId: string) => void,
-): Promise<boolean> => {
-  if (gate.consumedParents === parents) return false
-
-  gate.consumedParents = parents
-  const opened = await openNextCollapsedBreadcrumb(parents, setShownBlockId)
-  if (!opened) gate.consumedParents = null
-  return opened
-}
-
 export const backlinkEntryActionContext: ActionContextConfig = {
   type: BACKLINK_ENTRY_ACTION_CONTEXT,
   displayName: 'Backlink Entry',
@@ -113,7 +92,11 @@ export const expandNextCollapsedBreadcrumbAction: ActionConfig = {
   id: 'backlinks.expand_next_collapsed_breadcrumb',
   description: 'Expand next collapsed backlink breadcrumb',
   context: BACKLINK_ENTRY_ACTION_CONTEXT,
-  handler: async (dependencies) => {
+  handler: async (dependencies, trigger) => {
+    if ((trigger as {repeat?: boolean}).repeat === true) {
+      return
+    }
+
     const deps = toBacklinkEntryShortcutDependencies(dependencies)
     await deps.expandNextCollapsedBreadcrumb?.()
   },

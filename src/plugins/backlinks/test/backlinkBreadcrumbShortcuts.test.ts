@@ -7,11 +7,9 @@ import {
   BACKLINK_ENTRY_ACTION_CONTEXT,
   BACKLINK_ENTRY_SHORTCUT_CONTROLLER_KEY,
   backlinkEntryShortcutActivation,
-  createBacklinkBreadcrumbExpansionGate,
   expandNextCollapsedBreadcrumbAction,
   findNextCollapsedBreadcrumb,
   openNextCollapsedBreadcrumb,
-  openNextCollapsedBreadcrumbOnce,
   type BacklinkEntryShortcutController,
 } from '../backlinkBreadcrumbShortcuts.ts'
 
@@ -20,19 +18,6 @@ const fakeBlock = (id: string, collapsed: boolean): Block => ({
   peekProperty: (schema: unknown) => schema === isCollapsedProp ? collapsed : undefined,
   set: vi.fn(),
 }) as unknown as Block
-
-const mutableFakeBlock = (id: string, collapsed: boolean): Block => {
-  let nextCollapsed = collapsed
-  return {
-    id,
-    peekProperty: (schema: unknown) => schema === isCollapsedProp ? nextCollapsed : undefined,
-    set: vi.fn(async (schema: unknown, value: unknown) => {
-      if (schema === isCollapsedProp && typeof value === 'boolean') {
-        nextCollapsed = value
-      }
-    }),
-  } as unknown as Block
-}
 
 describe('backlink breadcrumb shortcuts', () => {
   it('targets the closest collapsed breadcrumb to the backlink block', () => {
@@ -78,7 +63,7 @@ describe('backlink breadcrumb shortcuts', () => {
     expect(expandNextCollapsedBreadcrumb).toHaveBeenCalledOnce()
   })
 
-  it('keeps key-repeat filtering out of the action layer', async () => {
+  it('ignores repeated keydown events so one held shortcut cannot skip levels', async () => {
     const expandNextCollapsedBreadcrumb = vi.fn()
 
     await expandNextCollapsedBreadcrumbAction.handler({
@@ -88,42 +73,7 @@ describe('backlink breadcrumb shortcuts', () => {
       hasCollapsedBreadcrumb: () => true,
     } as never, {repeat: true} as KeyboardEvent)
 
-    expect(expandNextCollapsedBreadcrumb).toHaveBeenCalledOnce()
-  })
-
-  it('dedupes duplicate expansion attempts against the same rendered parent chain', async () => {
-    const root = mutableFakeBlock('root', true)
-    const immediate = mutableFakeBlock('immediate', true)
-    const parents = [root, immediate]
-    const gate = createBacklinkBreadcrumbExpansionGate()
-    const setShownBlockId = vi.fn()
-
-    await expect(openNextCollapsedBreadcrumbOnce(gate, parents, setShownBlockId))
-      .resolves.toBe(true)
-    await expect(openNextCollapsedBreadcrumbOnce(gate, parents, setShownBlockId))
-      .resolves.toBe(false)
-
-    expect(immediate.set).toHaveBeenCalledExactlyOnceWith(isCollapsedProp, false)
-    expect(root.set).not.toHaveBeenCalled()
-    expect(setShownBlockId).toHaveBeenCalledExactlyOnceWith('immediate')
-  })
-
-  it('allows the next expansion after the breadcrumb chain re-renders', async () => {
-    const root = mutableFakeBlock('root', true)
-    const immediate = mutableFakeBlock('immediate', true)
-    const initialParents = [root, immediate]
-    const rerenderedParents = [root]
-    const gate = createBacklinkBreadcrumbExpansionGate()
-    const setShownBlockId = vi.fn()
-
-    await openNextCollapsedBreadcrumbOnce(gate, initialParents, setShownBlockId)
-    await expect(openNextCollapsedBreadcrumbOnce(gate, rerenderedParents, setShownBlockId))
-      .resolves.toBe(true)
-
-    expect(immediate.set).toHaveBeenCalledExactlyOnceWith(isCollapsedProp, false)
-    expect(root.set).toHaveBeenCalledExactlyOnceWith(isCollapsedProp, false)
-    expect(setShownBlockId).toHaveBeenCalledTimes(2)
-    expect(setShownBlockId).toHaveBeenLastCalledWith('root')
+    expect(expandNextCollapsedBreadcrumb).not.toHaveBeenCalled()
   })
 
   it('activates only for focused backlink block surfaces with a controller', () => {
