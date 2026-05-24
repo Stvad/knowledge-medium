@@ -57,6 +57,14 @@ const setLocation = async (sourceId: string, placeId: string): Promise<void> => 
   }, {scope: ChangeScope.BlockDefault})
 }
 
+const setBodyRef = async (sourceId: string, targetId: string, alias: string): Promise<void> => {
+  await env.repo.tx(async tx => {
+    // Body refs are sourceField-empty entries — same shape the references
+    // post-commit processor would write for an `[[Alias]]` wikilink.
+    await tx.update(sourceId, {references: [{id: targetId, alias}]})
+  }, {scope: ChangeScope.BlockDefault})
+}
+
 const PIN_KEY = (p: MapPin): string => `${p.blockId}|${p.placeId}|${p.lat}|${p.lng}`
 
 describe('placesUnderBlockQuery', () => {
@@ -151,6 +159,69 @@ describe('placesUnderBlockQuery', () => {
       .load()
 
     expect(pins).toEqual([])
+  })
+
+  it('pins via body wikilinks/blockrefs to Place blocks', async () => {
+    const dandelion = await createOrFindPlace(env.repo, WS, {
+      name: 'Dandelion', lat: 37.76, lng: -122.42, googlePlaceId: 'ChIJD',
+    })
+    await createBlock('parent', {parentId: null, content: 'SF plans'})
+    await createBlock('child', {parentId: 'parent', content: 'we should go to [[Dandelion]]'})
+    await setBodyRef('child', dandelion.id, 'Dandelion')
+
+    const pins = await env.repo
+      .query[placesUnderBlockQuery.name]({rootBlockId: 'parent'})
+      .load()
+
+    expect(pins).toHaveLength(1)
+    expect(pins[0]).toMatchObject({
+      blockId: 'child',
+      placeId: dandelion.id,
+      lat: 37.76,
+      lng: -122.42,
+    })
+  })
+
+  it('dedups when a block both has a location prop and body-refs the same Place', async () => {
+    const dandelion = await createOrFindPlace(env.repo, WS, {
+      name: 'Dandelion', lat: 37.76, lng: -122.42, googlePlaceId: 'ChIJD',
+    })
+    await createBlock('note', {parentId: null, content: 'visited [[Dandelion]]'})
+    await setLocation('note', dandelion.id)
+    await setBodyRef('note', dandelion.id, 'Dandelion')
+
+    const pins = await env.repo
+      .query[placesUnderBlockQuery.name]({rootBlockId: 'note'})
+      .load()
+
+    expect(pins).toHaveLength(1)
+  })
+
+  it('ignores body refs whose target is not a Place', async () => {
+    await createBlock('other', {parentId: null, content: 'just a page'})
+    await createBlock('parent', {parentId: null, content: 'plans'})
+    await createBlock('child', {parentId: 'parent', content: 'see [[other]]'})
+    await setBodyRef('child', 'other', 'other')
+
+    const pins = await env.repo
+      .query[placesUnderBlockQuery.name]({rootBlockId: 'parent'})
+      .load()
+
+    expect(pins).toEqual([])
+  })
+
+  it('re-resolves when a descendant body ref is added/removed', async () => {
+    const dandelion = await createOrFindPlace(env.repo, WS, {
+      name: 'Dandelion', lat: 37.76, lng: -122.42, googlePlaceId: 'ChIJD',
+    })
+    await createBlock('parent', {parentId: null, content: 'plans'})
+    await createBlock('child', {parentId: 'parent', content: 'no ref yet'})
+
+    const handle = env.repo.query[placesUnderBlockQuery.name]({rootBlockId: 'parent'})
+    expect(await handle.load()).toEqual([])
+
+    await setBodyRef('child', dandelion.id, 'Dandelion')
+    expect(await handle.load()).toHaveLength(1)
   })
 
   it('re-resolves when a referenced Place’s lat changes', async () => {
