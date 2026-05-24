@@ -25,6 +25,10 @@ jobs:
       VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL || secrets.VITE_SUPABASE_URL }}
       VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY || secrets.VITE_SUPABASE_ANON_KEY }}
       VITE_POWERSYNC_URL: ${{ vars.VITE_POWERSYNC_URL || secrets.VITE_POWERSYNC_URL }}
+      # Vite inlines this into the client bundle, so the key is
+      # effectively public — protection comes from the HTTP-referrer
+      # restriction on the GCP key itself (see docs/domain-onboarding.md).
+      VITE_GOOGLE_MAPS_API_KEY: ${{ vars.VITE_GOOGLE_MAPS_API_KEY || secrets.VITE_GOOGLE_MAPS_API_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -43,6 +47,7 @@ jobs:
           test -n "$VITE_SUPABASE_URL"
           test -n "$VITE_SUPABASE_ANON_KEY"
           test -n "$VITE_POWERSYNC_URL"
+          test -n "$VITE_GOOGLE_MAPS_API_KEY"
 
       - name: Install dependencies
         run: yarn install --frozen-lockfile
