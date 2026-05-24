@@ -14,6 +14,7 @@ import { systemToggle } from '@/extensions/togglable'
 import { referencesPlugin } from '@/plugins/references'
 import { geoDataExtension } from './dataExtension'
 import { LocationsPageBlockRenderer } from './LocationsPageBlockRenderer'
+import { PlaceBlockRenderer } from './PlaceBlockRenderer'
 import { locationPropertyEditorOverride } from './propertyEditorOverrides'
 
 export const geoPlugin: AppExtension = systemToggle({
@@ -29,6 +30,10 @@ export const geoPlugin: AppExtension = systemToggle({
   blockRenderersFacet.of({
     id: 'geo:locationsPage',
     renderer: LocationsPageBlockRenderer,
+  }, {source: 'geo'}),
+  blockRenderersFacet.of({
+    id: 'geo:place',
+    renderer: PlaceBlockRenderer,
   }, {source: 'geo'}),
   propertyEditorOverridesFacet.of(locationPropertyEditorOverride, {source: 'geo'}),
 ])
