@@ -12,8 +12,7 @@ import { handleBlockLinkClick, useNavigate } from '@/utils/navigation.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
 import {
   backlinkEntryShortcutContextOverrides,
-  findNextCollapsedBreadcrumb,
-  openNextCollapsedBreadcrumb,
+  promoteClosestBreadcrumb,
   type BacklinkEntryShortcutController,
 } from './backlinkBreadcrumbShortcuts.ts'
 
@@ -85,18 +84,18 @@ const BacklinkItemContent = ({
   const repo = useRepo()
   const workspaceId = repo.activeWorkspaceId
 
-  const expandNextCollapsedBreadcrumb = useCallback(
-    () => openNextCollapsedBreadcrumb(parents, onShowBlock),
+  const promoteBreadcrumb = useCallback(
+    () => promoteClosestBreadcrumb(parents, onShowBlock),
     [parents, onShowBlock],
   )
-  const hasCollapsedBreadcrumb = useCallback(
-    () => findNextCollapsedBreadcrumb(parents) !== null,
+  const hasBreadcrumb = useCallback(
+    () => parents.length > 0,
     [parents],
   )
   const shortcutController = useMemo<BacklinkEntryShortcutController>(() => ({
-    expandNextCollapsedBreadcrumb,
-    hasCollapsedBreadcrumb,
-  }), [expandNextCollapsedBreadcrumb, hasCollapsedBreadcrumb])
+    promoteClosestBreadcrumb: promoteBreadcrumb,
+    hasBreadcrumb,
+  }), [promoteBreadcrumb, hasBreadcrumb])
   const bodyOverrides = useMemo(() => ({
     ...NESTED_OVERRIDES,
     ...backlinkEntryShortcutContextOverrides(shortcutController),

@@ -1,5 +1,4 @@
 import { Block } from '@/data/block'
-import { isCollapsedProp } from '@/data/properties.js'
 import {
   actionsFacet,
   actionContextsFacet,
@@ -20,14 +19,14 @@ export const BACKLINK_ENTRY_ACTION_CONTEXT = 'backlinks.entry'
 export const BACKLINK_ENTRY_SHORTCUT_CONTROLLER_KEY = 'backlinks.entryShortcutController'
 
 export interface BacklinkEntryShortcutController {
-  expandNextCollapsedBreadcrumb: () => void | boolean | Promise<void | boolean>
-  hasCollapsedBreadcrumb: () => boolean
+  promoteClosestBreadcrumb: () => boolean
+  hasBreadcrumb: () => boolean
 }
 
 interface BacklinkEntryShortcutDependencies extends BaseShortcutDependencies {
   block: Block
-  expandNextCollapsedBreadcrumb: () => void | boolean | Promise<void | boolean>
-  hasCollapsedBreadcrumb: () => boolean
+  promoteClosestBreadcrumb: () => boolean
+  hasBreadcrumb: () => boolean
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -37,8 +36,8 @@ export const isBacklinkEntryShortcutController = (
   value: unknown,
 ): value is BacklinkEntryShortcutController =>
   isRecord(value) &&
-  typeof value.expandNextCollapsedBreadcrumb === 'function' &&
-  typeof value.hasCollapsedBreadcrumb === 'function'
+  typeof value.promoteClosestBreadcrumb === 'function' &&
+  typeof value.hasBreadcrumb === 'function'
 
 const isBacklinkEntryShortcutDependencies = (
   value: unknown,
@@ -46,8 +45,8 @@ const isBacklinkEntryShortcutDependencies = (
   isRecord(value) &&
   value.block instanceof Block &&
   value.uiStateBlock instanceof Block &&
-  typeof value.expandNextCollapsedBreadcrumb === 'function' &&
-  typeof value.hasCollapsedBreadcrumb === 'function'
+  typeof value.promoteClosestBreadcrumb === 'function' &&
+  typeof value.hasBreadcrumb === 'function'
 
 const toBacklinkEntryShortcutDependencies = (
   value: BaseShortcutDependencies,
@@ -60,24 +59,16 @@ export const backlinkEntryShortcutContextOverrides = (
   [BACKLINK_ENTRY_SHORTCUT_CONTROLLER_KEY]: controller,
 })
 
-export const findNextCollapsedBreadcrumb = (
-  parents: readonly Block[],
-): Block | null => {
-  for (let index = parents.length - 1; index >= 0; index--) {
-    const parent = parents[index]
-    if (parent.peekProperty(isCollapsedProp) === true) return parent
-  }
-  return null
-}
-
-export const openNextCollapsedBreadcrumb = async (
+// Promote the breadcrumb segment closest to the body — i.e. the immediate
+// parent of the currently-shown block — to be the new shown block. Mirrors
+// what clicking the rightmost breadcrumb does, so repeated invocations
+// peel off one ancestor at a time and surface more surrounding context.
+export const promoteClosestBreadcrumb = (
   parents: readonly Block[],
   setShownBlockId: (blockId: string) => void,
-): Promise<boolean> => {
-  const target = findNextCollapsedBreadcrumb(parents)
+): boolean => {
+  const target = parents.at(-1)
   if (!target) return false
-
-  await target.set(isCollapsedProp, false)
   setShownBlockId(target.id)
   return true
 }
@@ -88,17 +79,17 @@ export const backlinkEntryActionContext: ActionContextConfig = {
   validateDependencies: isBacklinkEntryShortcutDependencies,
 }
 
-export const expandNextCollapsedBreadcrumbAction: ActionConfig = {
-  id: 'backlinks.expand_next_collapsed_breadcrumb',
-  description: 'Expand next collapsed backlink breadcrumb',
+export const promoteClosestBreadcrumbAction: ActionConfig = {
+  id: 'backlinks.promote_closest_breadcrumb',
+  description: 'Promote closest backlink breadcrumb',
   context: BACKLINK_ENTRY_ACTION_CONTEXT,
-  handler: async (dependencies) => {
+  handler: (dependencies) => {
     const deps = toBacklinkEntryShortcutDependencies(dependencies)
-    await deps.expandNextCollapsedBreadcrumb?.()
+    deps.promoteClosestBreadcrumb?.()
   },
   canRun: (dependencies) => {
     const deps = toBacklinkEntryShortcutDependencies(dependencies)
-    return deps.hasCollapsedBreadcrumb?.() === true
+    return deps.hasBreadcrumb?.() === true
   },
   defaultBinding: {
     keys: 'alt+z',
@@ -123,14 +114,14 @@ export const backlinkEntryShortcutActivation: ShortcutActivationContribution = c
     context: BACKLINK_ENTRY_ACTION_CONTEXT,
     dependencies: {
       block: context.block,
-      expandNextCollapsedBreadcrumb: controller.expandNextCollapsedBreadcrumb,
-      hasCollapsedBreadcrumb: controller.hasCollapsedBreadcrumb,
+      promoteClosestBreadcrumb: controller.promoteClosestBreadcrumb,
+      hasBreadcrumb: controller.hasBreadcrumb,
     },
   }]
 }
 
 export const backlinkBreadcrumbShortcutsExtension: AppExtension = [
   actionContextsFacet.of(backlinkEntryActionContext, {source: 'backlinks'}),
-  actionsFacet.of(expandNextCollapsedBreadcrumbAction, {source: 'backlinks'}),
+  actionsFacet.of(promoteClosestBreadcrumbAction, {source: 'backlinks'}),
   shortcutSurfaceActivationsFacet.of(backlinkEntryShortcutActivation, {source: 'backlinks'}),
 ]
