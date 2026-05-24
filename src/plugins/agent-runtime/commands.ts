@@ -613,9 +613,10 @@ const runRuntimeAction = async (
 const executeArbitraryCode = async (
   code: string,
   context: AgentRuntimeContext,
+  data: unknown,
 ) => {
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as {
-    new (...args: string[]): (context: AgentRuntimeContext) => Promise<unknown>
+    new (...args: string[]): (context: AgentRuntimeContext, data: unknown) => Promise<unknown>
   }
 
   // Wrap user code in a nested async IIFE so its `const`/`let` get a
@@ -623,8 +624,14 @@ const executeArbitraryCode = async (
   // in user code would collide with the destructured `block` binding
   // exposed from ctx — the "Identifier 'block' has already been
   // declared" papercut the agent kept hitting.
+  //
+  // `data` is passed as a separate function arg (not via ctx) so it
+  // can't collide with a `data` key the runtime context might gain
+  // later. It's `undefined` when the caller didn't pass `--data` /
+  // `--data-json`.
   const fn = new AsyncFunction(
     'ctx',
+    'data',
     `
 const {
   repo,
@@ -655,7 +662,7 @@ ${code}
 `,
   )
 
-  return fn(context)
+  return fn(context, data)
 }
 
 export const createAgentRuntimeContext = ({
@@ -818,7 +825,7 @@ export const executeCommand = async (
       return runRuntimeAction(command, context)
 
     case 'eval':
-      return executeArbitraryCode(requireString(command.code, 'code'), context)
+      return executeArbitraryCode(requireString(command.code, 'code'), context, command.data)
 
     default: {
       // Exhaustive — the union covers everything; TS narrows `command`

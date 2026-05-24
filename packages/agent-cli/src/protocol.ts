@@ -208,6 +208,12 @@ export const actionCommandSchema = z.looseObject({
 export const evalCommandSchema = z.looseObject({
   type: z.literal('eval'),
   code: z.string(),
+  /** Structured input bound as `data` in the eval execution scope. The
+   *  CLI populates this from `--data <path>` / `--data-json <inline>`;
+   *  the kernel passes it through to the user code's destructured
+   *  context. JSON-serialized over the wire, so callers should keep
+   *  values to JSON-representable types. */
+  data: z.unknown().optional(),
   ...commandIdField,
 })
 
@@ -341,8 +347,8 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     description: 'Run a registered action by id.',
   },
   'eval': {
-    usage: 'kmagent eval [--raw] [--file <path>] <code>',
-    description: 'Run JS in the app. Use "return …" to print a value.',
+    usage: 'kmagent eval [--raw] [--file <path>] [--data <path> | --data-json <json>] <code>',
+    description: 'Run JS in the app. Use "return …" to print a value. The code runs with `repo`, `db`, `runtime`, `sql`, `block`, `getBlock`, `getSubtree`, `createBlock`, `updateBlock`, `installExtension`, `setExtensionEnabled`, `uninstallExtension`, `actions`, `renderers`, `refreshAppRuntime`, `React`, `ReactDOM`, `window`, `document` already in scope. `--data <path>` reads JSON from a file (or `--data-json <inline>` for an inline payload) and binds the parsed value as `data` — avoids template-embedding structured input in the code string.',
   },
 }
 

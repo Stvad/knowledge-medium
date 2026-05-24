@@ -1012,15 +1012,28 @@ cli
   .command('eval [...code]', wireDescription('eval'))
   .option('--raw', 'Print the wire-format response instead of friendly output')
   .option('--file <path>', 'Read the code from a file instead of <code>')
+  .option('--data <path>', 'Read JSON from a file and bind it as `data` in the eval scope')
+  .option('--data-json <json>', 'Inline JSON to bind as `data` in the eval scope (mutually exclusive with --data)')
   .action(async (
     code: string[],
-    options: {raw?: boolean, file?: string},
+    options: {raw?: boolean, file?: string, data?: string, dataJson?: string},
   ) => {
+    if (options.data !== undefined && options.dataJson !== undefined) {
+      throw new Error('Pass either --data <path> or --data-json <json>, not both.')
+    }
     const codeText = options.file
       ? await fs.readFile(options.file, 'utf8')
       : code.join(' ')
+    const dataValue = options.data !== undefined
+      ? parseJson(await fs.readFile(options.data, 'utf8'), `--data ${options.data}`)
+      : options.dataJson !== undefined
+        ? parseJson(options.dataJson, '--data-json')
+        : undefined
     await ensureBridgeRunning()
-    const value = await runCommand({type: 'eval', code: codeText})
+    const command: KnownCommand = options.data !== undefined || options.dataJson !== undefined
+      ? {type: 'eval', code: codeText, data: dataValue}
+      : {type: 'eval', code: codeText}
+    const value = await runCommand(command)
     process.stdout.write(`${formatEvalOutput(value, Boolean(options.raw))}\n`)
   })
 

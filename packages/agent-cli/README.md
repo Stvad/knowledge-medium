@@ -53,13 +53,48 @@ The CLI exposes both *local* commands (pairing, profile management) and *bridge*
 | `kmagent install-extension <file> [label]` | Install a JS extension; `--verify` reports what it contributed. |
 | `kmagent enable-extension <handle>` | Enable / `disable-extension`, `uninstall-extension`. |
 | `kmagent run-action <id> [depsJson]` | Run a registered action by id. |
-| `kmagent eval [--raw] [--file <path>] <code>` | Run JS in the app (use `return …` to print a value). |
+| `kmagent eval [--raw] [--file <path>] [--data <path> \| --data-json <json>] <code>` | Run JS in the app (use `return …` to print a value). See [Eval execution scope](#eval-execution-scope) for the bindings available inside the code. |
 | `kmagent reload` | Hard-reload the app tab and wait for it to reconnect. |
 | `kmagent navigate <hash>` | Set `window.location.hash`. |
 | `kmagent types [outDir]` | Write compiled declarations for Knowledge Medium `@/` modules; `--module <spec>` prints one declaration. |
 | `kmagent raw <json>` | Send an arbitrary JSON command envelope to the bridge. |
 
 Run `kmagent <command> --help` for per-command details or `kmagent --help` for the full menu.
+
+## Eval execution scope
+
+`kmagent eval` runs your code inside the app tab, with the runtime context already destructured into the local scope. You do **not** need to dig values out of `window.__omniliner` — the following names are bound for you:
+
+| Name | What it is |
+| --- | --- |
+| `repo` | The live `Repo` (workspace, user, mutate, query, tx, …). |
+| `db` | `repo.db` — the underlying database handle. |
+| `runtime` | The `FacetRuntime`. Prefer `describe-runtime` over reading internal caches. |
+| `safeMode` | `true` when the runtime is paused for safe-mode boot. |
+| `sql(sql, params?, mode?)` | Thin SQL helper, matches `kmagent sql`. |
+| `block(id)` / `getBlock(id)` / `getSubtree(rootId)` | Block accessors. |
+| `createBlock(input)` / `updateBlock(input)` | Block mutators (same shape as the wire commands). |
+| `installExtension(input)` / `setExtensionEnabled(input)` / `uninstallExtension(input)` | Extension lifecycle. |
+| `actions`, `renderers` | Registered actions and block renderers. |
+| `refreshAppRuntime` | Re-run runtime registration (rarely needed). |
+| `React`, `ReactDOM`, `window`, `document` | The app's React + DOM. |
+| `data` | Parsed value from `--data <path>` / `--data-json <json>`, or `undefined` when neither flag was passed. |
+
+Use `return …` to print a value back to the CLI (anything else is silently discarded).
+
+### Passing structured input
+
+For one-off scripts that need a chunk of structured input, the `--data` flag is cleaner than template-embedding JSON in the code string:
+
+```bash
+# Apply logic in one file, input in a sibling JSON file:
+kmagent eval --file apply.js --data plans.json
+
+# Or inline for small payloads:
+kmagent eval --data-json '{"x":1}' 'return data.x'
+```
+
+`--data` reads JSON from a file and parses it; `--data-json` parses the inline argument directly. The parsed value is bound as `data` in the eval scope. The two flags are mutually exclusive.
 
 ## Profiles
 

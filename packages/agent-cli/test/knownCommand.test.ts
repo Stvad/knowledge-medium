@@ -68,6 +68,27 @@ describe('knownCommandSchema — rejection', () => {
     expect(knownCommandSchema.safeParse({type: 'eval'}).success).toBe(false)
   })
 
+  it('accepts eval with a structured `data` payload', () => {
+    const result = knownCommandSchema.safeParse({
+      type: 'eval',
+      code: 'return data.x',
+      data: {x: 1, nested: ['a', 'b']},
+    })
+    expect(result.success).toBe(true)
+    if (result.success) {
+      const data = result.data as Record<string, unknown>
+      expect(data.data).toEqual({x: 1, nested: ['a', 'b']})
+    }
+  })
+
+  it('accepts eval with `data: null` (a legal JSON-serialized value)', () => {
+    expect(knownCommandSchema.safeParse({
+      type: 'eval',
+      code: 'return data',
+      data: null,
+    }).success).toBe(true)
+  })
+
   it('rejects run-action without id', () => {
     expect(knownCommandSchema.safeParse({type: 'run-action'}).success).toBe(false)
   })

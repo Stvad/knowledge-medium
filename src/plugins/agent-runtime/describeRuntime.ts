@@ -507,8 +507,8 @@ export const describeRuntimeSummary = async (
         command: 'yarn agent status',
       },
       {
-        need: 'Targeted in-app inspection using the runtime context — but NOT for "what is registered". For actions/facets/renderers/contributions, prefer `describe-runtime`; reaching into `facetRuntime.staticContributionsByFacet` or `repo.runtimeContributionBuckets` from eval is reading internal caches with different shapes and will mislead you.',
-        command: 'yarn agent eval <code>  # use `return ...` to print a value',
+        need: 'Targeted in-app inspection using the runtime context — but NOT for "what is registered". For actions/facets/renderers/contributions, prefer `describe-runtime`; reaching into `facetRuntime.staticContributionsByFacet` or `repo.runtimeContributionBuckets` from eval is reading internal caches with different shapes and will mislead you. Inside the code, `repo`, `db`, `runtime`, `sql`, `block`, `getBlock`, `getSubtree`, `createBlock`, `updateBlock`, `installExtension`, `setExtensionEnabled`, `uninstallExtension`, `actions`, `renderers`, `refreshAppRuntime`, `React`, `ReactDOM`, `window`, `document` are already bound — do not dig into `window.__omniliner`. For structured input, pass `--data <path>` (or `--data-json <inline>`) and read it as `data`.',
+        command: 'yarn agent eval <code>  # use `return ...` to print a value; --data <path> binds JSON as `data`',
       },
       {
         need: 'Raw protocol access for uncommon runtime commands',
