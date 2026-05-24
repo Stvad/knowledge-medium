@@ -92,11 +92,7 @@ export const expandNextCollapsedBreadcrumbAction: ActionConfig = {
   id: 'backlinks.expand_next_collapsed_breadcrumb',
   description: 'Expand next collapsed backlink breadcrumb',
   context: BACKLINK_ENTRY_ACTION_CONTEXT,
-  handler: async (dependencies, trigger) => {
-    if ((trigger as {repeat?: boolean}).repeat === true) {
-      return
-    }
-
+  handler: async (dependencies) => {
     const deps = toBacklinkEntryShortcutDependencies(dependencies)
     await deps.expandNextCollapsedBreadcrumb?.()
   },

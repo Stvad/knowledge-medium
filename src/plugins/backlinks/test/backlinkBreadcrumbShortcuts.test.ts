@@ -63,19 +63,6 @@ describe('backlink breadcrumb shortcuts', () => {
     expect(expandNextCollapsedBreadcrumb).toHaveBeenCalledOnce()
   })
 
-  it('ignores repeated keydown events so one held shortcut cannot skip levels', async () => {
-    const expandNextCollapsedBreadcrumb = vi.fn()
-
-    await expandNextCollapsedBreadcrumbAction.handler({
-      block: fakeBlock('focused', false),
-      uiStateBlock: fakeBlock('ui', false),
-      expandNextCollapsedBreadcrumb,
-      hasCollapsedBreadcrumb: () => true,
-    } as never, {repeat: true} as KeyboardEvent)
-
-    expect(expandNextCollapsedBreadcrumb).not.toHaveBeenCalled()
-  })
-
   it('activates only for focused backlink block surfaces with a controller', () => {
     const controller: BacklinkEntryShortcutController = {
       expandNextCollapsedBreadcrumb: vi.fn(),
