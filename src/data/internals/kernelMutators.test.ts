@@ -119,19 +119,21 @@ describe('core.setProperty', () => {
     expect(env.read('p1')!.properties.title).toBe('Hello')
   })
 
-  it('derives tx scope from schema.changeScope: a UiState property writes as local-ephemeral', async () => {
+  it('derives tx scope from schema.changeScope: a UiState property tags the second tx with UiState', async () => {
     await env.repo.tx(
       tx => tx.create({id: 'p2', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
       {scope: ChangeScope.BlockDefault},
     )
     await env.repo.mutate.setProperty({id: 'p2', schema: uiFlagProp, value: true})
-    // Inspect command_events for the second tx; it should be tagged
-    // with scope=UiState and source=local-ephemeral, NOT BlockDefault/user.
+    // The second tx is tagged scope=UiState (not inheriting BlockDefault
+    // from the outer registration). source is always 'user' under
+    // Phase 2 — the scope identity drives undo bucketing and schema
+    // validation, not upload routing.
     const events = await env.h.db.getAll<{scope: string; source: string}>(
       'SELECT scope, source FROM command_events ORDER BY created_at',
     )
     expect(events).toHaveLength(2)
-    expect(events[1]).toEqual({scope: ChangeScope.UiState, source: 'local-ephemeral'})
+    expect(events[1]).toEqual({scope: ChangeScope.UiState, source: 'user'})
   })
 
   it('writes collapsed state in BlockDefault scope so it is synced', async () => {
@@ -179,17 +181,19 @@ describe('core.setProperty', () => {
       user: {id: 'user-1', name: 'Test'},
       isReadOnly: true,
     }))
-    // BlockDefault throws ReadOnlyError; UiState passes through.
+    // BlockDefault throws ReadOnlyError; UiState and UserPrefs pass through.
     await expect(
       ro.mutate.setProperty({id: 'p3', schema: titleProp, value: 'no'}),
     ).rejects.toThrow(/read.?only/i)
     await ro.mutate.setProperty({id: 'p3', schema: uiFlagProp, value: true})
     await ro.mutate.setProperty({id: 'p3', schema: prefsFlagProp, value: true})
-    // Local-ephemeral source so it didn't enter the upload queue.
-    const ephemeral = await env.h.db.getAll<{source: string}>(
+    // source='user' for both — Phase 2 dropped the local-ephemeral
+    // downgrade. The writes queue and the server will refuse them in
+    // read-only mode (RLS); the rejection-quarantine surfaces that.
+    const events = await env.h.db.getAll<{source: string}>(
       "SELECT source FROM command_events WHERE scope IN ('local-ui', 'user-prefs') ORDER BY created_at",
     )
-    expect(ephemeral.every(e => e.source === 'local-ephemeral')).toBe(true)
+    expect(events.every(e => e.source === 'user')).toBe(true)
   })
 })
 

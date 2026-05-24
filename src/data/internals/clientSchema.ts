@@ -340,9 +340,12 @@ export const CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL = `
 `
 
 // ============================================================================
-// Upload-routing triggers (2) — fire only for LOCAL USER writes
-// (source = 'user'). Sync-applied writes (source = NULL → 'sync') and
-// UI-state writes (source = 'local-ephemeral') do NOT upload.
+// Upload-routing triggers (2) — fire for any LOCAL repo.tx write
+// (source IS NOT NULL). Sync-applied writes leave source = NULL and so
+// are skipped — those rows are already on the server. Every other write
+// (BlockDefault / UiState / UserPrefs / References) enqueues; the
+// upload handler's per-tx fallback + rejection quarantine handles any
+// server-side refusal.
 //
 // v1: NO upload-routing trigger for DELETE. Hard-delete (physical removal)
 // is not a v1 operation and would require a separate purge-semantics
@@ -410,7 +413,7 @@ const triggerTxSeqSql = `(SELECT tx_seq FROM tx_context WHERE id = 1)`
 export const CREATE_BLOCKS_UPLOAD_INSERT_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS blocks_upload_insert
   AFTER INSERT ON blocks
-  WHEN (SELECT source FROM tx_context WHERE id = 1) = 'user'
+  WHEN (SELECT source FROM tx_context WHERE id = 1) IS NOT NULL
   BEGIN
     INSERT INTO ps_crud (tx_id, data) VALUES (
       ${triggerTxSeqSql},
@@ -427,7 +430,7 @@ export const CREATE_BLOCKS_UPLOAD_INSERT_TRIGGER_SQL = `
 export const CREATE_BLOCKS_UPLOAD_UPDATE_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS blocks_upload_update
   AFTER UPDATE ON blocks
-  WHEN (SELECT source FROM tx_context WHERE id = 1) = 'user'
+  WHEN (SELECT source FROM tx_context WHERE id = 1) IS NOT NULL
     AND (
     ${blockUploadDiffPredicateSql}
     )

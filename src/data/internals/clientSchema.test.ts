@@ -9,11 +9,12 @@
  *
  * What this covers (data-layer-redesign §4.3 / §4.5 / §4.1.1):
  *   - row_events triggers fire for INSERT / UPDATE / DELETE
- *   - source COALESCE: NULL → 'sync'; 'user' / 'local-ephemeral' pass through
+ *   - source COALESCE: NULL → 'sync'; 'user' passes through
  *   - tx_id belt-and-suspenders: NULL when source is NULL, even with a
  *     stale tx_id left in tx_context
  *   - soft-delete UPDATE emits kind='soft-delete'
- *   - upload-routing triggers fire only on source = 'user'
+ *   - upload-routing triggers fire on every repo.tx write (source IS NOT NULL),
+ *     and skip sync-applied writes (source = NULL)
  *   - workspace-invariant triggers reject cross-workspace + dangling
  *     parents on local writes; bypass cleanly on sync writes
  *   - all documented trigger names exist after running CLIENT_SCHEMA_STATEMENTS
@@ -222,11 +223,15 @@ describe('row_events trigger — INSERT', () => {
     expect(events[0].after_json).toContain('"id":"b1"')
   })
 
-  it("tags source='local-ephemeral' for UI-state writes", () => {
-    h.setTxContext({txId: 'tx-B', userId: 'user-1', scope: 'local-ui', source: 'local-ephemeral'})
+  it("tags source='user' for UI-state writes (no separate local-ephemeral sink)", () => {
+    // UI-state writes used to land with source='local-ephemeral' and
+    // bypass the upload triggers. Phase 2 dropped that distinction —
+    // every repo.tx write is tagged 'user'; the rejection quarantine
+    // catches anything the server refuses.
+    h.setTxContext({txId: 'tx-B', userId: 'user-1', scope: 'local-ui', source: 'user'})
     h.insertBlock({id: 'b2'})
     h.clearTxContext()
-    expect(h.rowEvents()[0]).toMatchObject({source: 'local-ephemeral', tx_id: 'tx-B'})
+    expect(h.rowEvents()[0]).toMatchObject({source: 'user', tx_id: 'tx-B'})
   })
 
   it("COALESCEs NULL source to 'sync' and ZEROES tx_id (sync apply)", () => {
@@ -416,14 +421,20 @@ describe('upload-routing triggers', () => {
     expect(new Set(crud.map(r => r.tx_id))).toEqual(new Set([100, 101]))
   })
 
-  it("does NOT forward when source='local-ephemeral' (UI-state)", () => {
-    h.setTxContext({txId: 'tx-2', userId: 'user-1', scope: 'local-ui', source: 'local-ephemeral'})
+  it("forwards UI-state writes the same way as content writes", () => {
+    // Phase 2: every repo.tx write enqueues. The UI-state scope identity
+    // still matters for undo bucketing and schema validation, but the
+    // upload-routing trigger no longer special-cases it.
+    h.setTxContext({txId: 'tx-2', txSeq: 200, userId: 'user-1', scope: 'local-ui', source: 'user'})
     h.insertBlock({id: 'b2'})
     h.clearTxContext()
-    expect(h.psCrud()).toHaveLength(0)
+    const crud = h.psCrud()
+    expect(crud).toHaveLength(1)
+    expect(crud[0].tx_id).toBe(200)
+    expect(JSON.parse(crud[0].data)).toMatchObject({op: 'PUT', type: 'blocks', id: 'b2'})
   })
 
-  it("does NOT forward sync-applied writes (source NULL → 'sync' is not 'user')", () => {
+  it("does NOT forward sync-applied writes (source IS NULL gate)", () => {
     h.insertBlock({id: 'b1'})  // source is NULL
     expect(h.psCrud()).toHaveLength(0)
   })
@@ -490,10 +501,13 @@ describe('workspace-invariant triggers', () => {
     expect(() => h.insertBlock({id: 'orphan', parent_id: 'not-yet-synced'})).not.toThrow()
   })
 
-  it("DOES NOT fire on UI-state writes either, since UPDATE OF parent_id excludes other-column UI updates", () => {
+  it("DOES NOT fire on UI-state writes when the columns it gates on are unchanged", () => {
+    // UI-state writes carry source='user' like any other repo.tx write,
+    // so the source IS NOT NULL gate IS satisfied — but the trigger is
+    // declared UPDATE OF parent_id, workspace_id, so a content-only edit
+    // never even fires the BEFORE-UPDATE check.
     h.insertBlock({id: 'b1', workspace_id: 'ws1'})
-    h.setTxContext({txId: 'tx-1', userId: 'user-1', scope: 'local-ui', source: 'local-ephemeral'})
-    // Updating content (not parent_id/workspace_id) should not invoke the workspace-invariant UPDATE trigger.
+    h.setTxContext({txId: 'tx-1', userId: 'user-1', scope: 'local-ui', source: 'user'})
     expect(() => h.updateBlock('b1', {content: 'x'})).not.toThrow()
     h.clearTxContext()
   })

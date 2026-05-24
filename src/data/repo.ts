@@ -454,11 +454,11 @@ export class Repo {
   readonly cache: BlockCache
   user: User
   /** Read-only mode disables `BlockDefault` / `References` writes;
-   *  UI-state writes still pass through, and UserPrefs writes pass
-   *  through as local-ephemeral. Mutate via
-   *  `repo.setReadOnly(value)` rather than direct field assignment so
-   *  callers from inside React hooks don't trip
-   *  `react-hooks/immutability` lint (the mutation should travel
+   *  UI-state and UserPrefs writes still pass through and queue to
+   *  ps_crud — server-side rejection (RLS) lands in the rejection
+   *  quarantine. Mutate via `repo.setReadOnly(value)` rather than
+   *  direct field assignment so callers from inside React hooks don't
+   *  trip `react-hooks/immutability` lint (the mutation should travel
    *  through a method, not a property write). */
   isReadOnly: boolean
 

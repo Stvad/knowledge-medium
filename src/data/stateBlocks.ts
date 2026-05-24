@@ -36,8 +36,8 @@ import { PAGE_TYPE } from '@/data/blockTypes.js'
 
 // Per-user "user page" — parent-less alias-bearing block hosting the
 // user's prefs + UI-state subtree for a given workspace. This namespace
-// intentionally differs from the pre-UserPrefs UI-state namespace, whose
-// rows were local-ephemeral and may not exist on the server.
+// intentionally differs from the pre-UserPrefs UI-state namespace whose
+// rows predate uniform upload routing and may not exist on the server.
 const USER_PAGE_NS = '99b1b4e5-6f58-4fd2-9089-dc3b358dd4df'
 // Per-(parent, content) state child — used by the bootstrap below
 // (user-prefs, ui-state, panels, panel/main, etc.) so each name resolves

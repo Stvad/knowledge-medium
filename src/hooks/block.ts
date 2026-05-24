@@ -247,9 +247,10 @@ export const useUpdateMetadata = (block: Block): BlockUpdateMetadata | undefined
 
 /** Reactive typed property read + setter. The setter opens its own tx
  *  via `repo.mutate.setProperty` (whose scope derives from
- *  `schema.changeScope` — UiState writes go local-ephemeral, content
- *  writes upload). Returns `[value, setValue]` where value falls back
- *  to `schema.defaultValue` when the property isn't present. */
+ *  `schema.changeScope` — the scope identity drives undo bucketing and
+ *  schema validation; the actual upload routing is uniform across
+ *  scopes). Returns `[value, setValue]` where value falls back to
+ *  `schema.defaultValue` when the property isn't present. */
 export function useProperty<T>(
   block: Block,
   schema: PropertySchema<T>,

@@ -5,11 +5,13 @@
 export const ChangeScope = {
   /** User document edits. Undoable; uploads to server. */
   BlockDefault: 'block-default',
-  /** Selection / focus / chrome state. Not undoable; never uploads
-   *  (`tx_context.source = 'local-ephemeral'`). */
+  /** Selection / focus / chrome state. Not undoable; uploads like any
+   *  other write — server-side RLS or FK errors land in the rejection
+   *  quarantine rather than blocking the queue. The scope identity is
+   *  still load-bearing for undo bucketing and schema validation
+   *  (`requireSchemaScope`). */
   UiState: 'local-ui',
-  /** User-owned preferences. Not undoable; uploads when writable, but
-   *  degrades to local-ephemeral in read-only workspaces. */
+  /** User-owned preferences. Not undoable; uploads. */
   UserPrefs: 'user-prefs',
   /** parseReferences bookkeeping. Separate undo bucket; uploads. */
   References: 'block-default:references',
@@ -20,10 +22,14 @@ export type ChangeScope = (typeof ChangeScope)[keyof typeof ChangeScope]
 /** `tx_context.source` values written by `repo.tx`. Sync-applied writes leave
  *  `source = NULL`; row_events triggers `COALESCE` it to `'sync'`. The string
  *  `'sync'` is therefore reserved for the trigger output and is not assignable
- *  from any caller. */
-export type TxSource = 'user' | 'local-ephemeral'
+ *  from any caller. Every `repo.tx` invocation is `'user'` — there is no
+ *  longer a routing-time downgrade. */
+export type TxSource = 'user'
 
-export type ReadOnlyScopeBehavior = 'reject' | 'preserve-source' | 'local-ephemeral'
+/** Read-only behavior per scope: either reject the write outright or let
+ *  it proceed (the upload will still be attempted; server-side RLS or FK
+ *  errors land in the rejection quarantine). */
+export type ReadOnlyScopeBehavior = 'reject' | 'allow'
 
 export interface ChangeScopePolicy {
   readonly undoable: boolean
@@ -39,13 +45,13 @@ export const CHANGE_SCOPE_POLICIES = {
   },
   [ChangeScope.UiState]: {
     undoable: false,
-    source: 'local-ephemeral',
-    readOnly: 'preserve-source',
+    source: 'user',
+    readOnly: 'allow',
   },
   [ChangeScope.UserPrefs]: {
     undoable: false,
     source: 'user',
-    readOnly: 'local-ephemeral',
+    readOnly: 'allow',
   },
   [ChangeScope.References]: {
     undoable: true,
@@ -53,12 +59,6 @@ export const CHANGE_SCOPE_POLICIES = {
     readOnly: 'reject',
   },
 } satisfies Readonly<Record<ChangeScope, ChangeScopePolicy>>
-
-export interface ScopeRoutingOptions {
-  /** Read-only repos may still record user preferences locally, but
-   *  those writes must not enter the upload queue. */
-  isReadOnly?: boolean
-}
 
 export const policyForScope = (scope: ChangeScope): ChangeScopePolicy =>
   CHANGE_SCOPE_POLICIES[scope]
@@ -69,18 +69,8 @@ export const scopeAllowedInReadOnly = (scope: ChangeScope): boolean =>
 export const scopeIsUndoable = (scope: ChangeScope): boolean =>
   policyForScope(scope).undoable
 
-export const sourceForScope = (
-  scope: ChangeScope,
-  opts: ScopeRoutingOptions = {},
-): TxSource => {
-  const policy = policyForScope(scope)
-  if (opts.isReadOnly && policy.readOnly === 'local-ephemeral') {
-    return 'local-ephemeral'
-  }
-  return policy.source
-}
+export const sourceForScope = (scope: ChangeScope): TxSource =>
+  policyForScope(scope).source
 
-export const scopeUploadsToServer = (
-  scope: ChangeScope,
-  opts: ScopeRoutingOptions = {},
-): boolean => sourceForScope(scope, opts) === 'user'
+export const scopeUploadsToServer = (scope: ChangeScope): boolean =>
+  sourceForScope(scope) === 'user'

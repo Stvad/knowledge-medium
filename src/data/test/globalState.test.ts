@@ -169,7 +169,11 @@ describe('getUserPrefsBlock', () => {
     expect(events.at(-1)).toEqual({scope: ChangeScope.UserPrefs, source: 'user', workspace_id: WS})
   })
 
-  it('routes to local-ephemeral in read-only repos', async () => {
+  it('still bootstraps the prefs block in read-only repos (writes queue normally)', async () => {
+    // Phase 2: read-only UserPrefs writes are no longer downgraded to a
+    // non-uploading source. They tag source='user' and enter ps_crud
+    // like any other write; the server's RLS rejection then lands in
+    // ps_crud_rejected, which the sync-status surface exposes.
     const h = await createTestDb()
     const repo = new Repo({
       db: h.db,
@@ -188,8 +192,9 @@ describe('getUserPrefsBlock', () => {
         'SELECT scope, source FROM command_events ORDER BY created_at',
       )
       expect(events.every(event => event.scope === ChangeScope.UserPrefs)).toBe(true)
-      expect(events.every(event => event.source === 'local-ephemeral')).toBe(true)
-      expect(await h.db.getAll('SELECT id FROM ps_crud')).toEqual([])
+      expect(events.every(event => event.source === 'user')).toBe(true)
+      const crud = await h.db.getAll<{id: number}>('SELECT id FROM ps_crud')
+      expect(crud.length).toBeGreaterThan(0)
     } finally {
       await h.cleanup()
     }
@@ -308,22 +313,21 @@ describe('getPluginUIStateBlock', () => {
     expect(a).toBe(b)
   })
 
-  it('routes its bootstrap write through ChangeScope.UiState (local-ephemeral)', async () => {
+  it('routes its bootstrap write through ChangeScope.UiState and uploads', async () => {
+    // Phase 2: UI-state writes now upload too. The scope identity still
+    // distinguishes them (undo bucketing, requireSchemaScope), but the
+    // upload routing no longer special-cases them.
     registerTypes(env.repo, [exampleUIStateType])
     const pluginUI = await getPluginUIStateBlock(env.repo, WS, USER, exampleUIStateType)
     const events = await env.h.db.getAll<{scope: string; source: string}>(
       'SELECT scope, source FROM command_events ORDER BY created_at',
     )
-    // Bootstrap should not enter the upload queue: ui-state writes are
-    // local-ephemeral. (Earlier UserPrefs bootstraps for the user page do
-    // populate ps_crud — we only assert the plugin-ui-state row itself
-    // never enters that queue.)
-    expect(events.at(-1)).toEqual({scope: ChangeScope.UiState, source: 'local-ephemeral'})
+    expect(events.at(-1)).toEqual({scope: ChangeScope.UiState, source: 'user'})
     const crudForBlock = await env.h.db.getAll<{id: string}>(
       "SELECT id FROM ps_crud WHERE data LIKE '%' || ? || '%'",
       [pluginUI.id],
     )
-    expect(crudForBlock).toEqual([])
+    expect(crudForBlock.length).toBeGreaterThan(0)
   })
 })
 
@@ -353,7 +357,7 @@ describe('getUIStateBlock', () => {
     const events = await env.h.db.getAll<{scope: string; source: string; workspace_id: string | null}>(
       'SELECT scope, source, workspace_id FROM command_events ORDER BY created_at',
     )
-    expect(events.at(-1)).toEqual({scope: ChangeScope.UiState, source: 'local-ephemeral', workspace_id: WS})
+    expect(events.at(-1)).toEqual({scope: ChangeScope.UiState, source: 'user', workspace_id: WS})
   })
 
   it('without panelId: idempotent — second call returns the same Block', async () => {

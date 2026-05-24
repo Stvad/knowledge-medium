@@ -635,9 +635,16 @@ describe('read-only mode', () => {
       )
       expect(prefId).toBe('prefs-1')
 
+      // Both writes are tagged source='user' and enqueue to ps_crud.
+      // In read-only workspaces the server will refuse these uploads
+      // (RLS), and the rejection-quarantine surface lets the user see
+      // and dismiss them. The earlier shape downgraded UserPrefs to
+      // source='local-ephemeral' and silently skipped the upload; that
+      // path is gone now.
       const cmds = await ro.commandEvents()
-      expect(cmds.at(-1)).toMatchObject({scope: ChangeScope.UserPrefs, source: 'local-ephemeral'})
-      expect(await ro.psCrud()).toEqual([])
+      expect(cmds.at(-1)).toMatchObject({scope: ChangeScope.UserPrefs, source: 'user'})
+      const crud = await ro.psCrud()
+      expect(crud.map(c => JSON.parse(c.data).id).sort()).toEqual(['prefs-1', 'ui-1'])
     } finally {
       await ro.h.cleanup()
     }
@@ -742,16 +749,20 @@ describe('commit pipeline bookkeeping', () => {
     expect(ctx).toMatchObject({tx_id: null, user_id: null, scope: null, source: null})
   })
 
-  it('UiState scope tags command_events.source as local-ephemeral and skips upload routing', async () => {
+  it('UiState scope tags command_events.source as user and enqueues to ps_crud', async () => {
+    // Phase 2 collapsed the routing distinction: every repo.tx write is
+    // source='user'. The UiState identity still matters (undo bucketing,
+    // requireSchemaScope), but uploads happen the same way as
+    // BlockDefault. Server-side refusal lands in ps_crud_rejected.
     await env.repo.tx(async tx => {
       await tx.create({id: 'ui-state-1', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
     }, {scope: ChangeScope.UiState})
 
     const cmds = await env.commandEvents()
-    expect(cmds.at(-1)!.source).toBe('local-ephemeral')
-    // Upload trigger gates on source = 'user'; UiState writes don't enqueue.
+    expect(cmds.at(-1)!.source).toBe('user')
     const crud = await env.psCrud()
-    expect(crud).toEqual([])
+    expect(crud).toHaveLength(1)
+    expect(JSON.parse(crud[0].data)).toMatchObject({op: 'PUT', type: 'blocks', id: 'ui-state-1'})
   })
 
   it('UserPrefs scope uploads in writable repos', async () => {

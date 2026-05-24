@@ -97,20 +97,23 @@ describe('pushRecentBlockId', () => {
     expect(block.peekProperty(recentBlockIdsProp)).toEqual(['first'])
   })
 
-  it('writes locally without entering the upload queue', async () => {
+  it('tags writes with ChangeScope.UiState and source="user" (uploads via standard routing)', async () => {
+    // Phase 2 dropped the local-ephemeral source. Recents writes still
+    // use ChangeScope.UiState (scope identity is meaningful for undo
+    // bucketing and schema validation), but they now upload like any
+    // other write. Device-locality is now an emergent property of the
+    // recents being scoped to a per-device pref subtree, not of the
+    // upload routing being special-cased.
     env = await setup([])
     const block = env.repo.block(PREFS_BLOCK_ID)
 
     pushRecentBlockId(block, 'first')
     await flush(env.repo)
 
-    // Recents are device-local — ChangeScope.UiState writes route to
-    // local-ephemeral and never appear in ps_crud.
     const events = await env.h.db.getAll<{scope: string; source: string}>(
       'SELECT scope, source FROM command_events WHERE workspace_id = ? ORDER BY created_at',
       [WS],
     )
-    expect(events.at(-1)).toEqual({scope: ChangeScope.UiState, source: 'local-ephemeral'})
-    expect(await env.h.db.getAll('SELECT id FROM ps_crud')).toEqual([])
+    expect(events.at(-1)).toEqual({scope: ChangeScope.UiState, source: 'user'})
   })
 })

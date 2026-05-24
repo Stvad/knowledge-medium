@@ -195,15 +195,16 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
   } = params
   const {scope, description} = opts
 
-  // §10.3 read-only gate. UiState is always allowed (local chrome state);
-  // UserPrefs is allowed but routed to local-ephemeral below.
+  // §10.3 read-only gate. UiState and UserPrefs writes are allowed even
+  // in read-only mode; they queue normally and any server-side rejection
+  // (RLS / FK) lands in the upload-rejection quarantine.
   if (isReadOnly && !scopeAllowedInReadOnly(scope)) {
     throw new ReadOnlyError(scope)
   }
 
   const txId = newTxId()
   const txSeq = newTxSeq()
-  const source = sourceForScope(scope, {isReadOnly})
+  const source = sourceForScope(scope)
   const snapshots: SnapshotsMap = newSnapshotsMap()
   const afterCommitJobs: AfterCommitJob[] = []
   // `tx.run` pushes onto this list each time a mutator runs (including
@@ -282,8 +283,8 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
 
     // Step 4: write command_events row — one per repo.tx invocation
     // (per §4.4). workspace_id is the pinned value (or NULL on
-    // zero-write txs). source uniformly tags 'user' / 'local-ephemeral';
-    // sync-applied writes don't go through repo.tx.
+    // zero-write txs). source is uniformly 'user' for every repo.tx
+    // invocation; sync-applied writes don't go through repo.tx.
     await txDb.execute(
       `INSERT INTO command_events
         (tx_id, description, scope, user_id, workspace_id, mutator_calls, source, created_at)

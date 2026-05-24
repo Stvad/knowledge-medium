@@ -5,11 +5,11 @@
  * is the React-aware façade over them.
  *
  * Transient app-shell and plugin UI state (focus, selection, edit-mode,
- * top-level block, etc.) uses `ChangeScope.UiState` so writes route to
- * local-ephemeral storage and never enter the upload queue. User
- * preferences use `ChangeScope.UserPrefs` and live on their own child
- * rows so local-only properties cannot leak through whole-row
- * `properties_json` uploads.
+ * top-level block, etc.) uses `ChangeScope.UiState`; user preferences
+ * use `ChangeScope.UserPrefs` and live on their own child rows so
+ * unrelated properties never share a row-level UPDATE payload. Both
+ * scopes upload through the normal queue — the scope identity is what
+ * drives undo bucketing and schema validation, not the upload routing.
  */
 
 import { use, useCallback } from 'react'
@@ -130,7 +130,9 @@ export function usePluginUIStateBlock(type: TypeContribution): Block {
 
 /** Read/write a ui-state property on the plugin's own ui-state
  *  sub-block. The schema must declare `changeScope: ChangeScope.UiState`
- *  so writes stay local-ephemeral (persistent in SQLite, never synced). */
+ *  so writes route into the device-local ui-state subtree (and stay
+ *  undo-segregated from document edits). They still upload through the
+ *  normal queue. */
 export const usePluginUIStateProperty = <T>(
   type: TypeContribution,
   schema: PropertySchema<T>,
