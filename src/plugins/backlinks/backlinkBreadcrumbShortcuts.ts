@@ -126,18 +126,25 @@ export const expandNextCollapsedBreadcrumbAction: ActionConfig = {
   },
 }
 
-export const backlinkEntryShortcutActivation: ShortcutActivationContribution = context => {
-  if (
-    context.surface !== 'block' ||
-    !context.inFocus ||
-    context.inEditMode ||
-    context.isSelected ||
-    context.blockContext?.isBacklink !== true
-  ) {
-    return null
+const isActiveBacklinkEntrySurface = (
+  context: Parameters<ShortcutActivationContribution>[0],
+): boolean => {
+  if (!context.inFocus || context.isSelected || context.blockContext?.isBacklink !== true) {
+    return false
   }
 
-  const controller = context.blockContext[BACKLINK_ENTRY_SHORTCUT_CONTROLLER_KEY]
+  if (context.surface === 'block') return !context.inEditMode
+  if (context.surface === 'codemirror') return context.inEditMode
+  return false
+}
+
+export const backlinkEntryShortcutActivation: ShortcutActivationContribution = context => {
+  if (!isActiveBacklinkEntrySurface(context)) return null
+
+  const blockContext = context.blockContext
+  if (!blockContext) return null
+
+  const controller = blockContext[BACKLINK_ENTRY_SHORTCUT_CONTROLLER_KEY]
   if (!isBacklinkEntryShortcutController(controller)) return null
 
   return [{

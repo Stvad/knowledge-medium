@@ -162,4 +162,44 @@ describe('backlink breadcrumb shortcuts', () => {
       blockContext: {},
     } as never)).toBeNull()
   })
+
+  it('activates for focused backlink CodeMirror surfaces while editing', () => {
+    const controller: BacklinkEntryShortcutController = {
+      expandNextCollapsedBreadcrumb: vi.fn(),
+      hasCollapsedBreadcrumb: () => true,
+    }
+
+    const activations = backlinkEntryShortcutActivation({
+      surface: 'codemirror',
+      inFocus: true,
+      inEditMode: true,
+      isSelected: false,
+      block: fakeBlock('focused', false),
+      blockContext: {
+        isBacklink: true,
+        [BACKLINK_ENTRY_SHORTCUT_CONTROLLER_KEY]: controller,
+      },
+    } as never)
+
+    expect(activations).toEqual([{
+      context: BACKLINK_ENTRY_ACTION_CONTEXT,
+      dependencies: {
+        block: expect.objectContaining({id: 'focused'}),
+        expandNextCollapsedBreadcrumb: controller.expandNextCollapsedBreadcrumb,
+        hasCollapsedBreadcrumb: controller.hasCollapsedBreadcrumb,
+      },
+    }])
+
+    expect(backlinkEntryShortcutActivation({
+      surface: 'codemirror',
+      inFocus: true,
+      inEditMode: false,
+      isSelected: false,
+      block: fakeBlock('focused', false),
+      blockContext: {
+        isBacklink: true,
+        [BACKLINK_ENTRY_SHORTCUT_CONTROLLER_KEY]: controller,
+      },
+    } as never)).toBeNull()
+  })
 })
