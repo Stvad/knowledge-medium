@@ -1,9 +1,13 @@
-/** Block content decorator that wraps Locations pages and Place blocks
- *  with their respective MapView. Replaces the earlier
- *  `blockRenderersFacet`-based per-type renderer overrides: a decorator
- *  composes with the default content renderer rather than displacing
- *  it, so any future renderer the user picks for these blocks still
- *  works and the map just rides on top.
+/** Block content decorator that wraps any Place block or any block
+ *  tagged `MAP_TYPE` with the corresponding MapView. Replaces the
+ *  earlier `blockRenderersFacet`-based per-type renderer overrides: a
+ *  decorator composes with the default content renderer rather than
+ *  displacing it, so any future renderer the user picks for these
+ *  blocks still works and the map just rides on top.
+ *
+ *  `MAP_TYPE` is generic — users can add it to any block (a trip page,
+ *  an event, …) to get an inline map of every place in that subtree.
+ *  The shipping Locations page is just the default home for it.
  *
  *  Cached per inner renderer (and per kind) so React keeps a stable
  *  component identity across re-renders — required by
@@ -16,10 +20,10 @@ import {
   type BlockContentDecoratorContribution,
 } from '@/extensions/blockInteraction.js'
 import type { BlockRenderer } from '@/types.js'
-import { LOCATIONS_PAGE_TYPE, PLACE_TYPE } from './blockTypes'
+import { MAP_TYPE, PLACE_TYPE } from './blockTypes'
 import { MapView } from './MapView'
 
-type GeoMapKind = 'place' | 'locations'
+type GeoMapKind = 'place' | 'map'
 
 interface GeoMapDecoratorProps {
   block: Block
@@ -67,7 +71,9 @@ const decorateWith = (kind: GeoMapKind): BlockContentDecorator => inner => {
 }
 
 export const geoContentDecoratorContribution: BlockContentDecoratorContribution = ctx => {
+  // Place trumps map: a Place that's also tagged MAP_TYPE still gets
+  // the place-style header (zoom-15 mini-map above content).
   if (ctx.types.includes(PLACE_TYPE)) return decorateWith('place')
-  if (ctx.types.includes(LOCATIONS_PAGE_TYPE)) return decorateWith('locations')
+  if (ctx.types.includes(MAP_TYPE)) return decorateWith('map')
   return null
 }

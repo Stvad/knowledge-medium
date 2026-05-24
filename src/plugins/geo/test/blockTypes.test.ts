@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { resolveFacetRuntimeSync } from '@/extensions/facet'
 import { aliasesProp } from '@/data/internals/coreProperties'
 import { propertySchemasFacet, typesFacet } from '@/data/facets'
-import { LOCATIONS_PAGE_TYPE, PLACE_TYPE } from '../blockTypes'
+import { MAP_TYPE, PLACE_TYPE } from '../blockTypes'
 import {
   locationProp,
   placeAddressProp,
@@ -41,9 +41,10 @@ describe('geoDataExtension types', () => {
     expect(propertyNames).not.toContain(locationProp.name)
   })
 
-  it('registers LOCATIONS_PAGE_TYPE with aliasesProp lifted', () => {
-    const page = types.get(LOCATIONS_PAGE_TYPE)
+  it('registers MAP_TYPE with the user-facing label "Map" and aliasesProp lifted', () => {
+    const page = types.get(MAP_TYPE)
     expect(page).toBeDefined()
+    expect(page?.label).toBe('Map')
     expect(page?.properties?.map(p => p.name)).toEqual([aliasesProp.name])
   })
 
