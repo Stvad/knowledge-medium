@@ -7,7 +7,9 @@ import {
   HardDrive,
   RefreshCw,
 } from 'lucide-react'
+import { useState } from 'react'
 import { useIsLocalOnly } from '@/components/Login.js'
+import { Button } from '@/components/ui/button.js'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -19,6 +21,7 @@ import {
   type SyncIndicatorIcon,
   type SyncIndicatorTone,
 } from './model.ts'
+import { RejectionDialog } from './RejectionDialog.tsx'
 
 interface UploadQueueCountRow {
   count: number
@@ -62,7 +65,14 @@ export function SyncStatusHeaderItem() {
     [],
     {reportFetching: false},
   )
+  const rejected = useQuery<UploadQueueCountRow>(
+    'SELECT COUNT(*) AS count FROM ps_crud_rejected',
+    [],
+    {reportFetching: false},
+  )
   const pendingChanges = Number(queue.data[0]?.count ?? 0)
+  const rejectedCount = Number(rejected.data[0]?.count ?? 0)
+  const [dialogOpen, setDialogOpen] = useState(false)
   const dataFlow = status.dataFlowStatus
   const errorMessage =
     queue.error?.message ??
@@ -84,43 +94,63 @@ export function SyncStatusHeaderItem() {
   const Icon = iconByName[view.icon]
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className={cn(
-            'flex h-7 w-7 shrink-0 items-center justify-center rounded-md border outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring sm:h-8 sm:w-8',
-            toneClass[view.tone],
-          )}
-          aria-label={view.title}
-          title={view.title}
-        >
-          <Icon className={cn('h-4 w-4', view.spinning && 'animate-spin')}/>
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-64 p-3">
-        <div className="space-y-3">
-          <div className="flex items-start gap-2">
-            <Icon className={cn('mt-0.5 h-4 w-4 shrink-0', view.spinning && 'animate-spin')}/>
-            <div className="min-w-0">
-              <div className="text-sm font-medium">{view.label}</div>
-              <div className="text-xs leading-5 text-muted-foreground">{view.title}</div>
-            </div>
-          </div>
-          <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
-            <div className="text-muted-foreground">Unsynced</div>
-            <div className="text-right">{formatPendingChanges(pendingChanges, localOnly)}</div>
-            {view.progressPercent !== null && (
-              <>
-                <div className="text-muted-foreground">Progress</div>
-                <div className="text-right">{view.progressPercent}%</div>
-              </>
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            className={cn(
+              'flex h-7 w-7 shrink-0 items-center justify-center rounded-md border outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring sm:h-8 sm:w-8',
+              toneClass[view.tone],
             )}
-            <div className="text-muted-foreground">Last sync</div>
-            <div className="text-right">{formatLastSyncedAt(status.lastSyncedAt)}</div>
+            aria-label={view.title}
+            title={view.title}
+          >
+            <Icon className={cn('h-4 w-4', view.spinning && 'animate-spin')}/>
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-64 p-3">
+          <div className="space-y-3">
+            <div className="flex items-start gap-2">
+              <Icon className={cn('mt-0.5 h-4 w-4 shrink-0', view.spinning && 'animate-spin')}/>
+              <div className="min-w-0">
+                <div className="text-sm font-medium">{view.label}</div>
+                <div className="text-xs leading-5 text-muted-foreground">{view.title}</div>
+              </div>
+            </div>
+            <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+              <div className="text-muted-foreground">Unsynced</div>
+              <div className="text-right">{formatPendingChanges(pendingChanges, localOnly)}</div>
+              {view.progressPercent !== null && (
+                <>
+                  <div className="text-muted-foreground">Progress</div>
+                  <div className="text-right">{view.progressPercent}%</div>
+                </>
+              )}
+              <div className="text-muted-foreground">Last sync</div>
+              <div className="text-right">{formatLastSyncedAt(status.lastSyncedAt)}</div>
+            </div>
+            {rejectedCount > 0 && (
+              <div className="border-t pt-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-xs text-destructive">
+                    {rejectedCount} {rejectedCount === 1 ? 'change' : 'changes'} couldn't sync
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs"
+                    onClick={() => setDialogOpen(true)}
+                  >
+                    View
+                  </Button>
+                </div>
+              </div>
+            )}
           </div>
-        </div>
-      </DropdownMenuContent>
-    </DropdownMenu>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <RejectionDialog open={dialogOpen} onOpenChange={setDialogOpen}/>
+    </>
   )
 }
