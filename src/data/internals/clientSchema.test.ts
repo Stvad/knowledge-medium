@@ -187,6 +187,27 @@ describe('client schema bootstrap', () => {
       expect(() => h.db.exec(stmt)).not.toThrow()
     }
   })
+
+  it('creates ps_crud_rejected with the columns the upload handler writes', () => {
+    // ps_crud_rejected quarantines uploads the server permanently
+    // refused (FK violation, RLS denial, 4xx). The upload handler in
+    // src/services/powersync.ts depends on this exact column set when
+    // it records a rejection; renaming or dropping any of these
+    // columns breaks rejection recording.
+    const columns = (h.db
+      .prepare("PRAGMA table_info(ps_crud_rejected)")
+      .all() as Array<{name: string; type: string; notnull: number}>)
+      .map(c => ({name: c.name, type: c.type, notnull: c.notnull}))
+    expect(columns).toEqual([
+      {name: 'id', type: 'INTEGER', notnull: 0},
+      {name: 'original_id', type: 'INTEGER', notnull: 1},
+      {name: 'tx_id', type: 'INTEGER', notnull: 1},
+      {name: 'data', type: 'TEXT', notnull: 1},
+      {name: 'error_code', type: 'TEXT', notnull: 0},
+      {name: 'error_message', type: 'TEXT', notnull: 0},
+      {name: 'rejected_at', type: 'INTEGER', notnull: 1},
+    ])
+  })
 })
 
 describe('row_events trigger — INSERT', () => {

@@ -194,6 +194,39 @@ export const CREATE_BLOCK_TYPES_TYPE_WORKSPACE_INDEX_SQL = `
   ON block_types (type, workspace_id)
 `
 
+/** Quarantine for `ps_crud` rows whose upload the server refused with a
+ *  permanent error (FK violation, RLS denial, insufficient privilege,
+ *  4xx that can't recover on retry). The PowerSync upload handler moves
+ *  rejected txs here so the queue can keep draining instead of blocking
+ *  on a write that will never succeed; the row preserves enough context
+ *  for a later UI surface ("N changes couldn't sync") and post-hoc
+ *  inspection.
+ *
+ *  Local-only — the server has no view of what its own rejections
+ *  looked like from the client side, and these rows reference the
+ *  client's `ps_crud.id` which doesn't exist on the server anyway. */
+export const CREATE_PS_CRUD_REJECTED_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS ps_crud_rejected (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    original_id   INTEGER NOT NULL,
+    tx_id         INTEGER NOT NULL,
+    data          TEXT NOT NULL,
+    error_code    TEXT,
+    error_message TEXT,
+    rejected_at   INTEGER NOT NULL
+  )
+`
+
+export const CREATE_PS_CRUD_REJECTED_REJECTED_AT_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_ps_crud_rejected_rejected_at
+  ON ps_crud_rejected (rejected_at DESC)
+`
+
+export const CREATE_PS_CRUD_REJECTED_TX_ID_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_ps_crud_rejected_tx_id
+  ON ps_crud_rejected (tx_id)
+`
+
 // ============================================================================
 // Helpers used inside trigger bodies. Centralised so the SQL fragments
 // match in every trigger.
@@ -801,6 +834,9 @@ export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = [
   CREATE_BLOCK_TYPES_TABLE_SQL,
   CREATE_BLOCK_TYPES_TYPE_WORKSPACE_INDEX_SQL,
   CREATE_CLIENT_SCHEMA_STATE_TABLE_SQL,
+  CREATE_PS_CRUD_REJECTED_TABLE_SQL,
+  CREATE_PS_CRUD_REJECTED_REJECTED_AT_INDEX_SQL,
+  CREATE_PS_CRUD_REJECTED_TX_ID_INDEX_SQL,
   DROP_BLOCKS_WORKSPACE_TYPE_INDEX_SQL,
   // 5 audit/upload triggers
   CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL,
