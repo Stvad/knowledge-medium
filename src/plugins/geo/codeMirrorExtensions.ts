@@ -1,26 +1,18 @@
-/** CodeMirror surfaces for the geo plugin.
- *
- *  Split into two contributions:
- *    - `geoCodeMirrorExtensions` — visual chrome (the autocomplete
- *      tooltip theme). Goes through `codeMirrorExtensionsFacet`.
- *    - `placeCompletionSourceContribution` — the `@` trigger completion
- *      source. Goes through the shared `completionSourcesFacet`, which
- *      the central editor autocomplete (in `defaultEditorInteractions`)
- *      bundles with every plugin's sources into one `autocompletion()`
- *      extension. Calling `autocompletion()` directly per plugin would
- *      collide on the `override` config field — see
- *      [src/extensions/editorAutocomplete.ts](../../extensions/editorAutocomplete.ts).
- *
- *  The session token, Google client, and resolver all live in a
- *  closure created per source instance (one per editor mount), so the
- *  billing session boundary still matches "one `@` press' worth of
+/** CodeMirror surface for the geo plugin: autocomplete theme + `@`
+ *  completion source contributed via `EditorState.languageData`. The
+ *  single central `autocompletion()` call (in
+ *  `src/extensions/editorAutocomplete.ts`) walks language data and
+ *  picks the source up. The session token, Google client, and resolver
+ *  all live in a closure created per editor mount, so the billing
+ *  session boundary still matches "one `@` press' worth of
  *  interactions". */
 
+import type { CompletionSource } from '@codemirror/autocomplete'
+import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import type {
   CodeMirrorExtensionContext,
   CodeMirrorExtensionContribution,
-  CompletionSourceContribution,
 } from '@/extensions/editor.js'
 import { typesProp } from '@/data/properties'
 import { aliasesProp } from '@/data/internals/coreProperties'
@@ -67,11 +59,7 @@ const isPlaceBlock = (block: { properties: Record<string, unknown> }): boolean =
   return Array.isArray(raw) && raw.includes(PLACE_TYPE)
 }
 
-export const geoCodeMirrorExtensions: CodeMirrorExtensionContribution = () => [
-  placeAutocompleteTheme,
-]
-
-export const placeCompletionSourceContribution: CompletionSourceContribution = ({repo}: CodeMirrorExtensionContext) => {
+const buildPlaceCompletionSource = ({repo}: CodeMirrorExtensionContext): CompletionSource => {
   const apiKey = resolveApiKey()
   const googleClient: GooglePlacesClient | null = apiKey
     ? createGooglePlacesClient({apiKey})
@@ -208,4 +196,12 @@ export const placeCompletionSourceContribution: CompletionSourceContribution = (
   }
 
   return placeCompletionSource({getCandidates, resolvePlace})
+}
+
+export const geoCodeMirrorExtensions: CodeMirrorExtensionContribution = (ctx) => {
+  const placeSource = buildPlaceCompletionSource(ctx)
+  return [
+    placeAutocompleteTheme,
+    EditorState.languageData.of(() => [{autocomplete: placeSource}]),
+  ]
 }

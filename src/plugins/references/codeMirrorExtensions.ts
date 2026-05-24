@@ -1,10 +1,9 @@
 import type { CompletionSource } from '@codemirror/autocomplete'
 import { EditorView } from '@codemirror/view'
-import { EditorSelection, Prec } from '@codemirror/state'
+import { EditorSelection, EditorState, Prec } from '@codemirror/state'
 import type {
   CodeMirrorExtensionContext,
   CodeMirrorExtensionContribution,
-  CompletionSourceContribution,
 } from '@/extensions/editor.js'
 import { formatRoamDate } from '@/utils/dailyPage.js'
 import { relativeDateCandidates } from '@/utils/relativeDate.js'
@@ -109,67 +108,75 @@ const insertAtCaretForMisplacedDiff = Prec.highest(
   }),
 )
 
-/** Plain-CM contributions — the autocomplete setup itself moved to
- *  `editorAutocomplete.ts`; this contribution only handles the theme +
- *  the chrome contenteditable diff workaround. Completion sources are
- *  registered separately via `completionSourcesFacet`. */
-export const referencesCodeMirrorExtensions: CodeMirrorExtensionContribution = () => [
-  insertAtCaretForMisplacedDiff,
-  referenceAutocompleteTheme,
-]
+const buildWikilinkSource = ({repo}: CodeMirrorExtensionContext): CompletionSource =>
+  backlinkCompletionSource({
+    getAliases: async (filter: string) => {
+      const workspaceId = repo.activeWorkspaceId
+      if (!workspaceId) {
+        console.warn('No active workspace for alias search')
+        return []
+      }
 
-export const wikilinkCompletionSourceContribution: CompletionSourceContribution =
-  ({repo}: CodeMirrorExtensionContext): CompletionSource =>
-    backlinkCompletionSource({
-      getAliases: async (filter: string) => {
-        const workspaceId = repo.activeWorkspaceId
-        if (!workspaceId) {
-          console.warn('No active workspace for alias search')
-          return []
+      const aliases = await searchAliasLabels(repo, {workspaceId, query: filter})
+      const dateCompletions = relativeDateCandidates(filter).map(candidate => {
+        const label = formatRoamDate(candidate.date)
+        return {
+          label,
+          apply: label,
+          detail: candidate.phrase,
+          iso: candidate.iso,
+          type: 'constant',
         }
+      })
+      if (dateCompletions.length === 0) return aliases
 
-        const aliases = await searchAliasLabels(repo, {workspaceId, query: filter})
-        const dateCompletions = relativeDateCandidates(filter).map(candidate => {
-          const label = formatRoamDate(candidate.date)
-          return {
-            label,
-            apply: label,
-            detail: candidate.phrase,
-            iso: candidate.iso,
-            type: 'constant',
-          }
-        })
-        if (dateCompletions.length === 0) return aliases
+      const dateLabels = new Set(dateCompletions.flatMap(candidate => [
+        candidate.label,
+        candidate.iso,
+      ]))
+      return [
+        ...dateCompletions,
+        ...aliases.filter(alias => !dateLabels.has(alias)),
+      ]
+    },
+  })
 
-        const dateLabels = new Set(dateCompletions.flatMap(candidate => [
-          candidate.label,
-          candidate.iso,
-        ]))
-        return [
-          ...dateCompletions,
-          ...aliases.filter(alias => !dateLabels.has(alias)),
-        ]
-      },
-    })
+const buildBlockrefSource = ({repo}: CodeMirrorExtensionContext): CompletionSource =>
+  blockrefCompletionSource({
+    searchBlocks: async (filter: string) => {
+      const workspaceId = repo.activeWorkspaceId
+      if (!workspaceId) return []
 
-export const blockrefCompletionSourceContribution: CompletionSourceContribution =
-  ({repo}: CodeMirrorExtensionContext): CompletionSource =>
-    blockrefCompletionSource({
-      searchBlocks: async (filter: string) => {
-        const workspaceId = repo.activeWorkspaceId
-        if (!workspaceId) return []
+      const query = filter.trim()
+      const blocks = query
+        ? await repo.query.searchByContent({
+          workspaceId,
+          query,
+          limit: 12,
+        }).load()
+        : await repo.query.recentBlocks({
+          workspaceId,
+          limit: 12,
+        }).load()
+      return blocks.map(block => ({id: block.id, content: block.content}))
+    },
+  })
 
-        const query = filter.trim()
-        const blocks = query
-          ? await repo.query.searchByContent({
-            workspaceId,
-            query,
-            limit: 12,
-          }).load()
-          : await repo.query.recentBlocks({
-            workspaceId,
-            limit: 12,
-          }).load()
-        return blocks.map(block => ({id: block.id, content: block.content}))
-      },
-    })
+/** References plugin CM contribution: theme + chrome diff workaround +
+ *  wikilink / blockref completion sources. Sources are built once per
+ *  editor mount (outside the languageData callback) so each instance
+ *  has stable identity across keystrokes. CM's single central
+ *  `autocompletion()` call walks `EditorState.languageData` and picks
+ *  up everything contributed via the `autocomplete` field. */
+export const referencesCodeMirrorExtensions: CodeMirrorExtensionContribution = (ctx) => {
+  const wikilinkSource = buildWikilinkSource(ctx)
+  const blockrefSource = buildBlockrefSource(ctx)
+  return [
+    insertAtCaretForMisplacedDiff,
+    referenceAutocompleteTheme,
+    EditorState.languageData.of(() => [
+      {autocomplete: wikilinkSource},
+      {autocomplete: blockrefSource},
+    ]),
+  ]
+}
