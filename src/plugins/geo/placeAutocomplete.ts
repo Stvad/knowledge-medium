@@ -6,31 +6,45 @@
  *  empty — that's the moment to surface the "Use current location"
  *  sentinel (Phase F).
  *
- *  On select: the caller-supplied `resolvePlace` returns a final
- *  PlaceCandidate (existing local Place, Google POI hydrated via
- *  getDetails, current-location pick, etc.). We then write
- *  `[[<name>]]` at the trigger span — the references plugin picks up
- *  the wikilink and writes the back-reference. No place-specific inline
- *  syntax.
+ *  On select: the caller-supplied `resolvePlace` returns a
+ *  `PlaceResolveResult`. Two kinds:
+ *    - `{kind: 'insert', name}` → we replace the trigger span with
+ *      `[[<name>]]` (the references plugin picks up the wikilink).
+ *    - `{kind: 'handled'}` → the resolver dispatched its own change /
+ *      opened a follow-up picker; the source stays out of the way.
+ *  Returning `null` cancels the insertion (user dismissed a sub-prompt).
+ *
+ *  Follow-up pickers (Phase F current-location list) re-enter the
+ *  source via `consumePendingCandidates`: a one-shot stash of
+ *  candidates + span that the caller pushes from a candidate's apply
+ *  handler, then triggers `startCompletion(view)` so CM re-opens the
+ *  dropdown with the new list — no second UI to maintain.
  *
  *  The source is *pure* w.r.t. data access — it takes already-resolved
- *  candidates and an `onPicked` callback. Wiring to the repo, the
+ *  candidates and a `resolvePlace` callback. Wiring to the repo, the
  *  Google client, and `createOrFindPlace` happens in the geo plugin's
  *  CodeMirror extension. */
 
 import { EditorSelection } from '@codemirror/state'
+import type { EditorView } from '@codemirror/view'
 import type {
+  Completion,
   CompletionContext,
   CompletionResult,
   CompletionSource,
 } from '@codemirror/autocomplete'
 
-export type PlaceCandidateSource = 'local' | 'google' | 'sentinel:current-location'
+export type PlaceCandidateSource =
+  | 'local'
+  | 'google'
+  | 'sentinel:current-location'
+  | 'drop-pin'
+  | 'create-named'
 
 export interface PlaceAutocompleteCandidate {
   /** Stable id used for de-dup across sources and for picking. For local
    *  candidates, the block id; for Google, the placeId; for sentinels, a
-   *  fixed string. */
+   *  fixed string; for picker-stage candidates, includes the coords. */
   id: string
   source: PlaceCandidateSource
   /** Display label for the dropdown row. */
@@ -41,6 +55,25 @@ export interface PlaceAutocompleteCandidate {
    *  during pick (after getDetails resolves the canonical name); for
    *  local matches it's the existing block's name. */
   insertText: string
+  /** Coords stashed on picker-stage candidates (drop-pin, create-named)
+   *  so resolution can create the Place without re-fetching geolocation. */
+  coords?: {lat: number, lng: number}
+}
+
+export type PlaceResolveResult =
+  | {kind: 'insert', name: string}
+  /** Resolver handled the change itself (e.g. opened a follow-up
+   *  picker). Source skips the default `[[...]]` insertion. */
+  | {kind: 'handled'}
+  | null
+
+export interface PlaceResolveContext {
+  view: EditorView
+  /** Trigger span in the doc — same range CM passes to the apply
+   *  callback. Resolvers that re-open the dropdown should re-use this
+   *  span for the follow-up so the user's `@here` text stays in place. */
+  from: number
+  to: number
 }
 
 export interface PlaceAutocompleteOptions {
@@ -49,12 +82,22 @@ export interface PlaceAutocompleteOptions {
    *  optionally Google autocomplete (gated by query length and API key),
    *  and the current-location sentinel when appropriate. */
   getCandidates: (query: string) => Promise<PlaceAutocompleteCandidate[]>
-  /** Called when the user selects a candidate. The caller resolves the
-   *  candidate to a final `{name}` (for Google candidates that means a
-   *  getDetails + createOrFindPlace round-trip; for sentinels that means
-   *  walking the geolocation flow). Returning `null` cancels the
-   *  insertion (e.g. the user dismissed a sub-dialog). */
-  resolvePlace: (candidate: PlaceAutocompleteCandidate) => Promise<{name: string} | null>
+  /** Called when the user selects a candidate. Returns either an insert
+   *  spec, `{kind:'handled'}` if the resolver took ownership of the
+   *  change, or `null` to cancel. */
+  resolvePlace: (
+    candidate: PlaceAutocompleteCandidate,
+    ctx: PlaceResolveContext,
+  ) => Promise<PlaceResolveResult>
+  /** Optional one-shot stash drained at the top of every source call.
+   *  Used by follow-up pickers: a candidate's resolver stashes the next
+   *  round of candidates (with their target span) and calls
+   *  `startCompletion(view)`. The next invocation returns them
+   *  verbatim, bypassing `@` trigger detection. */
+  consumePendingCandidates?: () => {
+    span: {from: number, to: number}
+    candidates: PlaceAutocompleteCandidate[]
+  } | null
 }
 
 interface TriggerMatch {
@@ -108,10 +151,43 @@ export const matchAtTrigger = (text: string, pos: number): TriggerMatch | null =
   return {from: atPos, query: text.slice(i, pos)}
 }
 
+const candidateToOption = (
+  candidate: PlaceAutocompleteCandidate,
+  resolve: PlaceAutocompleteOptions['resolvePlace'],
+): Completion => ({
+  label: candidate.label,
+  detail: candidate.detail,
+  type: candidate.source === 'sentinel:current-location' ? 'keyword' : 'class',
+  apply: (view, _completion, applyFrom, applyTo) => {
+    // Fire-and-forget — the dropdown closes immediately. Errors
+    // surface via the resolvePlace impl (toast, console).
+    void (async () => {
+      const resolved = await resolve(candidate, {view, from: applyFrom, to: applyTo})
+      if (!resolved) return
+      if (resolved.kind === 'handled') return
+      const insert = `[[${resolved.name}]]`
+      view.dispatch({
+        changes: {from: applyFrom, to: applyTo, insert},
+        selection: EditorSelection.cursor(applyFrom + insert.length),
+      })
+    })()
+  },
+})
+
 export const placeCompletionSource = (
   options: PlaceAutocompleteOptions,
 ): CompletionSource => {
   return async (context: CompletionContext): Promise<CompletionResult | null> => {
+    const pending = options.consumePendingCandidates?.()
+    if (pending) {
+      return {
+        from: pending.span.from,
+        to: pending.span.to,
+        filter: false,
+        options: pending.candidates.map(c => candidateToOption(c, options.resolvePlace)),
+      }
+    }
+
     const {state, pos, explicit} = context
     const line = state.doc.lineAt(pos)
     const lineText = line.text
@@ -135,24 +211,7 @@ export const placeCompletionSource = (
       // filter would hide e.g. a "Use current location" sentinel whose
       // label doesn't contain the typed text.
       filter: false,
-      options: candidates.map(candidate => ({
-        label: candidate.label,
-        detail: candidate.detail,
-        type: candidate.source === 'sentinel:current-location' ? 'keyword' : 'class',
-        apply: (view, _completion, applyFrom, applyTo) => {
-          // Fire-and-forget — the dropdown closes immediately. Errors
-          // surface via the resolvePlace impl (toast, console).
-          void (async () => {
-            const resolved = await options.resolvePlace(candidate)
-            if (!resolved) return
-            const insert = `[[${resolved.name}]]`
-            view.dispatch({
-              changes: {from: applyFrom, to: applyTo, insert},
-              selection: EditorSelection.cursor(applyFrom + insert.length),
-            })
-          })()
-        },
-      })),
+      options: candidates.map(c => candidateToOption(c, options.resolvePlace)),
     }
   }
 }
