@@ -3,6 +3,7 @@ import {
   ShortcutActivationContribution,
   shortcutSurfaceActivationsFacet,
 } from '@/extensions/blockInteraction.js'
+import { editorAutocompleteExtension } from '@/extensions/editorAutocomplete.js'
 import { AppExtension } from '@/extensions/facet.js'
 import { ActionContextTypes } from '@/shortcuts/types.js'
 import { blockFocusShellDecorator } from '@/extensions/BlockFocusShellDecorator.js'
@@ -33,4 +34,5 @@ export const defaultEditorInteractionExtension: AppExtension = systemToggle({
   shortcutSurfaceActivationsFacet.of(codeMirrorEditModeActivation, {
     source: 'codemirror-edit-mode',
   }),
+  editorAutocompleteExtension,
 ])

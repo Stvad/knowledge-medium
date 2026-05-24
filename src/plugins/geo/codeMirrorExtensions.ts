@@ -1,21 +1,27 @@
-/** CodeMirror extension contribution for the geo plugin's `@` trigger.
+/** CodeMirror surfaces for the geo plugin.
  *
- *  Wires together:
- *    - `placeCompletionSource` — the trigger detector + dropdown
- *    - local Place lookup via `repo.query.byType(PLACE_TYPE)`, filtered
- *      by the typed query against block aliases / content
- *    - Google Places autocomplete (gated by `VITE_GOOGLE_MAPS_API_KEY`)
- *    - `createOrFindPlace` for the apply step
+ *  Split into two contributions:
+ *    - `geoCodeMirrorExtensions` — visual chrome (the autocomplete
+ *      tooltip theme). Goes through `codeMirrorExtensionsFacet`.
+ *    - `placeCompletionSourceContribution` — the `@` trigger completion
+ *      source. Goes through the shared `completionSourcesFacet`, which
+ *      the central editor autocomplete (in `defaultEditorInteractions`)
+ *      bundles with every plugin's sources into one `autocompletion()`
+ *      extension. Calling `autocompletion()` directly per plugin would
+ *      collide on the `override` config field — see
+ *      [src/extensions/editorAutocomplete.ts](../../extensions/editorAutocomplete.ts).
  *
- *  The session token is held in a closure over the extension instance
- *  and refreshed after each successful Google getDetails call so the
- *  billing session boundary matches user intent (one `@` press = one
- *  session). */
+ *  The session token, Google client, and resolver all live in a
+ *  closure created per source instance (one per editor mount), so the
+ *  billing session boundary still matches "one `@` press' worth of
+ *  interactions". */
 
-import { autocompletion } from '@codemirror/autocomplete'
-import { EditorView, keymap } from '@codemirror/view'
-import type { CodeMirrorExtensionContribution } from '@/extensions/editor.js'
-import { completionKeymapWithEscapeFallthrough } from '@/utils/codemirrorCompletion.js'
+import { EditorView } from '@codemirror/view'
+import type {
+  CodeMirrorExtensionContext,
+  CodeMirrorExtensionContribution,
+  CompletionSourceContribution,
+} from '@/extensions/editor.js'
 import { typesProp } from '@/data/properties'
 import { aliasesProp } from '@/data/internals/coreProperties'
 import { PLACE_TYPE } from './blockTypes'
@@ -61,7 +67,11 @@ const isPlaceBlock = (block: { properties: Record<string, unknown> }): boolean =
   return Array.isArray(raw) && raw.includes(PLACE_TYPE)
 }
 
-export const geoCodeMirrorExtensions: CodeMirrorExtensionContribution = ({repo}) => {
+export const geoCodeMirrorExtensions: CodeMirrorExtensionContribution = () => [
+  placeAutocompleteTheme,
+]
+
+export const placeCompletionSourceContribution: CompletionSourceContribution = ({repo}: CodeMirrorExtensionContext) => {
   const apiKey = resolveApiKey()
   const googleClient: GooglePlacesClient | null = apiKey
     ? createGooglePlacesClient({apiKey})
@@ -153,7 +163,6 @@ export const geoCodeMirrorExtensions: CodeMirrorExtensionContribution = ({repo})
     if (!workspaceId) return null
 
     if (candidate.source === 'local') {
-      // Local Place — already in the workspace; just insert.
       return {name: candidate.insertText}
     }
 
@@ -198,14 +207,5 @@ export const geoCodeMirrorExtensions: CodeMirrorExtensionContribution = ({repo})
     return null
   }
 
-  return [
-    placeAutocompleteTheme,
-    autocompletion({
-      override: [placeCompletionSource({getCandidates, resolvePlace})],
-      defaultKeymap: false,
-      icons: false,
-      tooltipClass: () => 'tm-place-autocomplete',
-    }),
-    keymap.of(completionKeymapWithEscapeFallthrough),
-  ]
+  return placeCompletionSource({getCandidates, resolvePlace})
 }
