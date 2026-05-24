@@ -28,6 +28,7 @@ import { videoPlayerPlugin } from '@/plugins/video-player'
 import { aliasPlugin } from '@/plugins/alias'
 import { mergeBlocksPlugin } from '@/plugins/merge-blocks'
 import { referencesPlugin } from '@/plugins/references'
+import { geoPlugin } from '@/plugins/geo'
 import { backlinksPlugin } from '@/plugins/backlinks'
 import { groupedBacklinksPlugin } from '@/plugins/grouped-backlinks'
 import { backlinksViewPlugin } from '@/plugins/backlinks-view'
@@ -88,6 +89,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   vimNormalModePlugin({repo}),
   videoPlayerPlugin,
   referencesPlugin,
+  geoPlugin,
   aliasPlugin,
   mergeBlocksPlugin,
   // The backlinks-view coordinator reads variants registered by
