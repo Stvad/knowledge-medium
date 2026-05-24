@@ -40,7 +40,7 @@ const buildAction = (overrides: Partial<ActionConfig> & Pick<ActionConfig, 'id' 
   ...overrides,
 } as ActionConfig)
 
-const dispatchKeydown = (key: string, init: KeyboardEventInit = {}) => {
+const dispatchKeydown = (key: string) => {
   // hotkeys-js installs a keydown listener on document and reads the legacy
   // `event.keyCode`/`event.which` to look up handlers. jsdom doesn't populate
   // those automatically from `key`, so we set them explicitly here.
@@ -55,7 +55,6 @@ const dispatchKeydown = (key: string, init: KeyboardEventInit = {}) => {
       which: keyCode,
       bubbles: true,
       cancelable: true,
-      ...init,
     }),
   )
 }
@@ -197,49 +196,6 @@ describe('HotkeyReconciler', () => {
     )
 
     act(() => dispatchKeydown('k'))
-    expect(handler).toHaveBeenCalledTimes(1)
-  })
-
-  it('matches alt-letter bindings by physical code when Option produces a symbol key', () => {
-    const handler = vi.fn()
-    const action = buildAction({
-      id: 'test.option-letter',
-      handler,
-      defaultBinding: {keys: 'alt+z'},
-    })
-
-    render(
-      <Harness actions={[action]} contexts={[testContextConfig]}>
-        <Activator context={TEST_CONTEXT}/>
-      </Harness>,
-    )
-
-    act(() => dispatchKeydown('Ω', {
-      altKey: true,
-      code: 'KeyZ',
-      keyCode: 937,
-      which: 937,
-    }))
-
-    expect(handler).toHaveBeenCalledTimes(1)
-  })
-
-  it('does not double-fire alt-letter bindings when hotkeys-js handles the event', () => {
-    const handler = vi.fn()
-    const action = buildAction({
-      id: 'test.option-letter-normal-key',
-      handler,
-      defaultBinding: {keys: 'alt+z'},
-    })
-
-    render(
-      <Harness actions={[action]} contexts={[testContextConfig]}>
-        <Activator context={TEST_CONTEXT}/>
-      </Harness>,
-    )
-
-    act(() => dispatchKeydown('z', {altKey: true}))
-
     expect(handler).toHaveBeenCalledTimes(1)
   })
 

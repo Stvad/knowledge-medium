@@ -24,16 +24,6 @@ type HotkeyHandler = (event: KeyboardEvent) => boolean | void
 interface InstalledBinding {
   keys: readonly string[]
   handler: HotkeyHandler
-  codeFallbacks: readonly CodeFallbackBinding[]
-}
-
-interface CodeFallbackBinding {
-  key: string
-  code: string
-  altKey: boolean
-  ctrlKey: boolean
-  metaKey: boolean
-  shiftKey: boolean
 }
 
 const normalizeKeys = (keys: string | string[]): readonly string[] =>
@@ -41,70 +31,6 @@ const normalizeKeys = (keys: string | string[]): readonly string[] =>
 
 const defaultEventFilter = (event: KeyboardEvent) =>
   !(isSingleKeyPress(event) && hasEditableTarget(event))
-
-const modifierAliases: Readonly<Record<string, keyof Pick<CodeFallbackBinding, 'altKey' | 'ctrlKey' | 'metaKey' | 'shiftKey'>>> = {
-  alt: 'altKey',
-  option: 'altKey',
-  ctrl: 'ctrlKey',
-  control: 'ctrlKey',
-  cmd: 'metaKey',
-  command: 'metaKey',
-  meta: 'metaKey',
-  shift: 'shiftKey',
-}
-
-const codeFallbackForKey = (key: string): CodeFallbackBinding | null => {
-  const parts = key
-    .replace(/\s/g, '')
-    .split('+')
-    .filter(Boolean)
-  const letter = parts.at(-1)?.toLowerCase()
-  if (!letter || !/^[a-z]$/.test(letter)) return null
-
-  const modifiers = parts.slice(0, -1)
-  const fallback: CodeFallbackBinding = {
-    key: letter,
-    code: `Key${letter.toUpperCase()}`,
-    altKey: false,
-    ctrlKey: false,
-    metaKey: false,
-    shiftKey: false,
-  }
-
-  for (const modifier of modifiers) {
-    const field = modifierAliases[modifier.toLowerCase()]
-    if (!field) return null
-    fallback[field] = true
-  }
-
-  return fallback.altKey ? fallback : null
-}
-
-const codeFallbacksForKeys = (keys: readonly string[]): readonly CodeFallbackBinding[] =>
-  keys.map(codeFallbackForKey).filter((fallback): fallback is CodeFallbackBinding => fallback !== null)
-
-const eventMatchesCodeFallback = (
-  event: KeyboardEvent,
-  fallback: CodeFallbackBinding,
-): boolean =>
-  event.code === fallback.code &&
-  event.key.toLowerCase() !== fallback.key &&
-  event.altKey === fallback.altKey &&
-  event.ctrlKey === fallback.ctrlKey &&
-  event.metaKey === fallback.metaKey &&
-  event.shiftKey === fallback.shiftKey
-
-const shouldHandleShortcutEvent = (
-  event: KeyboardEvent,
-  active: ActiveContextsMap,
-  contextConfigsByType: ReadonlyMap<ActionContextType, ActionContextConfig>,
-): boolean => {
-  for (const type of active.keys()) {
-    const config = contextConfigsByType.get(type)
-    if (config?.eventFilter?.(event)) return true
-  }
-  return defaultEventFilter(event)
-}
 
 /**
  * Keeps `hotkeys-js` in sync with the facet runtime's declared actions and the
@@ -155,7 +81,11 @@ export function HotkeyReconciler(): null {
   useEffect(() => {
     const previousFilter = hotkeys.filter
     hotkeys.filter = (event) => {
-      return shouldHandleShortcutEvent(event, activeRef.current, contextConfigsByTypeRef.current)
+      for (const type of activeRef.current.keys()) {
+        const config = contextConfigsByTypeRef.current.get(type)
+        if (config?.eventFilter?.(event)) return true
+      }
+      return defaultEventFilter(event)
     }
     return () => {
       hotkeys.filter = previousFilter
@@ -221,10 +151,9 @@ export function HotkeyReconciler(): null {
       }
       const keys = normalizeKeys(binding.keys)
       const handler = makeHandler(action, binding, activeRef, contextConfigsByTypeRef)
-      const codeFallbacks = codeFallbacksForKeys(keys)
 
       for (const key of keys) hotkeys(key, handler)
-      state.byActionId.set(actionKey, {keys, handler, codeFallbacks})
+      state.byActionId.set(actionKey, {keys, handler})
     }
 
     // Uninstall actions whose context deactivated (or that disappeared).
@@ -235,27 +164,6 @@ export function HotkeyReconciler(): null {
     // through `contextConfigsByTypeRef`, so config changes propagate without
     // requiring a reinstallation pass.
   }, [actions, active])
-
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return
-      if (!shouldHandleShortcutEvent(event, activeRef.current, contextConfigsByTypeRef.current)) return
-
-      const bindings = installedRef.current.byActionId.values()
-      for (const binding of bindings) {
-        if (!binding.codeFallbacks.some(fallback => eventMatchesCodeFallback(event, fallback))) {
-          continue
-        }
-
-        binding.handler(event)
-      }
-    }
-
-    document.addEventListener('keydown', handleKeyDown)
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [])
 
   // Final teardown on unmount (test cleanup, HMR). Separate effect with
   // empty deps so it only runs once on unmount, after all reconcile effects
