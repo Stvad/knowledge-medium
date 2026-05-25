@@ -92,9 +92,14 @@ export const promoteClosestBreadcrumbAction: ActionConfig = {
     return deps.hasBreadcrumb?.() === true
   },
   defaultBinding: {
-    // Code form: Mac's Alt+z produces 'Ω' as event.key, so the binding
-    // has to match event.code 'KeyZ' instead.
-    keys: 'Alt+KeyZ',
+    // Dual-form: tinykeys matches an entry if event.key OR event.code
+    // matches. `Alt+z` covers Linux/Windows (every layout — event.key
+    // is the user's 'z'), while `Alt+KeyZ` covers Mac QWERTY where
+    // Alt-transformation makes event.key='Ω' so only the code lands.
+    // Mac + alt-layouts (Colemak/Dvorak) is the gap — Mac transforms
+    // based on physical position, so the user's logical 'z' is reached
+    // via neither key nor KeyZ. Out of scope without a custom matcher.
+    keys: ['Alt+z', 'Alt+KeyZ'],
   },
 }
 

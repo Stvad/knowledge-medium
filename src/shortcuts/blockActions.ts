@@ -318,9 +318,14 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       writeToClipboard(`((${block.id}))`)
     },
     defaultBinding: {
-      // event.key for Alt+y on Mac is a special char ('¥'); code 'KeyY'
-      // is stable across layouts and Mac's Alt-transformations.
-      keys: 'Alt+KeyY',
+      // Dual-form: tinykeys matches an entry if event.key OR event.code
+      // matches. `Alt+y` covers Linux/Windows on every layout (event.key
+      // is the user's typed 'y' there); `Alt+KeyY` covers Mac QWERTY
+      // where Alt-transformation makes event.key='¥' so only the code
+      // path lands. Mac + alt-layouts (Colemak/Dvorak) is the remaining
+      // gap — Mac's transformations key off physical position, so the
+      // user's logical 'y' shows up as neither 'y' nor 'KeyY'.
+      keys: ['Alt+y', 'Alt+KeyY'],
     },
   }
 
