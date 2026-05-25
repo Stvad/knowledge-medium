@@ -220,6 +220,7 @@ export const isActionContextConfig = (value: unknown): value is ActionContextCon
   typeof value.displayName === 'string' &&
   (value.defaultEventOptions === undefined || isRecord(value.defaultEventOptions)) &&
   (value.eventFilter === undefined || typeof value.eventFilter === 'function') &&
+  (value.exclusive === undefined || typeof value.exclusive === 'boolean') &&
   typeof value.validateDependencies === 'function'
 
 export const actionContextsFacet = defineFacet<ActionContextConfig, readonly ActionContextConfig[]>({

@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Block } from '@/data/block'
 import {
-  installDateKeyboardScrubListeners,
+  finishDateKeyboardScrub,
+  installDateWheelScrubListeners,
   registerScrubHandler,
+  startDateKeyboardScrub,
   type ScrubHandler,
+  updateDateKeyboardScrubByDays,
 } from '../dateScrubGesture.ts'
 
 const setMobileViewport = (matches: boolean): void => {
@@ -21,7 +24,7 @@ const setMobileViewport = (matches: boolean): void => {
 
 describe('date scrub keyboard gesture', () => {
   let unregisterHandler: (() => void) | null = null
-  let unregisterKeyboard: (() => void) | null = null
+  let unregisterWheel: (() => void) | null = null
   let handler: ScrubHandler
 
   beforeEach(() => {
@@ -32,156 +35,54 @@ describe('date scrub keyboard gesture', () => {
       end: vi.fn(),
     }
     unregisterHandler = registerScrubHandler(handler)
-    unregisterKeyboard = installDateKeyboardScrubListeners(() => ({
+    unregisterWheel = installDateWheelScrubListeners(() => ({
       block: {id: 'dated-block'} as Block,
     }))
   })
 
   afterEach(() => {
-    unregisterKeyboard?.()
-    unregisterKeyboard = null
+    unregisterWheel?.()
+    unregisterWheel = null
     unregisterHandler?.()
     unregisterHandler = null
+    finishDateKeyboardScrub(false)
     document.body.innerHTML = ''
   })
 
-  it('starts when ctrl and shift are both held and commits on modifier release', () => {
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'Control',
-      ctrlKey: true,
-    }))
-    expect(handler.start).not.toHaveBeenCalled()
+  it('starts explicit keyboard scrub sessions and runs onEnd after finish', () => {
+    const onEnd = vi.fn()
+    const started = startDateKeyboardScrub(
+      {block: {id: 'dated-block'} as Block},
+      {onEnd},
+    )
 
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'Shift',
-      ctrlKey: true,
-      shiftKey: true,
-    }))
-
+    expect(started).toBe(true)
     expect(handler.start).toHaveBeenCalledWith(expect.objectContaining({
       blockId: 'dated-block',
     }))
     expect(handler.update).not.toHaveBeenCalled()
 
-    window.dispatchEvent(new KeyboardEvent('keyup', {
-      key: 'Shift',
-      ctrlKey: true,
-    }))
+    finishDateKeyboardScrub(true)
 
     expect(handler.end).toHaveBeenCalledWith(true)
+    expect(onEnd).toHaveBeenCalledTimes(1)
   })
 
-  it('maps up/down and h/k to one-day increments', () => {
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'Shift',
-      ctrlKey: true,
-      shiftKey: true,
-    }))
+  it('updates an explicit keyboard scrub by day deltas', () => {
+    startDateKeyboardScrub({block: {id: 'dated-block'} as Block})
 
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'ArrowUp',
-      ctrlKey: true,
-      shiftKey: true,
-    }))
+    expect(updateDateKeyboardScrubByDays(1)).toBe(true)
     expect(handler.update).toHaveBeenLastCalledWith(1, false)
 
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'h',
-      ctrlKey: true,
-      shiftKey: true,
-    }))
-    expect(handler.update).toHaveBeenLastCalledWith(2, false)
-
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'ArrowDown',
-      ctrlKey: true,
-      shiftKey: true,
-    }))
-    expect(handler.update).toHaveBeenLastCalledWith(1, false)
-
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'k',
-      ctrlKey: true,
-      shiftKey: true,
-    }))
-    expect(handler.update).toHaveBeenLastCalledWith(0, false)
+    expect(updateDateKeyboardScrubByDays(7)).toBe(true)
+    expect(handler.update).toHaveBeenLastCalledWith(8, false)
   })
 
-  it('maps left/right and j/l to one-week increments', () => {
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'Control',
-      ctrlKey: true,
-      shiftKey: true,
-    }))
-
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'ArrowRight',
-      ctrlKey: true,
-      shiftKey: true,
-    }))
-    expect(handler.update).toHaveBeenLastCalledWith(7, false)
-
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'l',
-      ctrlKey: true,
-      shiftKey: true,
-    }))
-    expect(handler.update).toHaveBeenLastCalledWith(14, false)
-
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'ArrowLeft',
-      ctrlKey: true,
-      shiftKey: true,
-    }))
-    expect(handler.update).toHaveBeenLastCalledWith(7, false)
-
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'j',
-      ctrlKey: true,
-      shiftKey: true,
-    }))
-    expect(handler.update).toHaveBeenLastCalledWith(0, false)
+  it('returns false when no explicit keyboard scrub is active', () => {
+    expect(updateDateKeyboardScrubByDays(1)).toBe(false)
   })
 
-  it('cancels an active keyboard scrub on Escape', () => {
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'Shift',
-      ctrlKey: true,
-      shiftKey: true,
-    }))
-
-    window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))
-
-    expect(handler.end).toHaveBeenCalledWith(false)
-  })
-
-  it('prevents default handling for scrub movement keys', () => {
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'Shift',
-      ctrlKey: true,
-      shiftKey: true,
-    }))
-
-    const event = new KeyboardEvent('keydown', {
-      key: 'ArrowUp',
-      ctrlKey: true,
-      shiftKey: true,
-      cancelable: true,
-    })
-    const preventDefault = vi.spyOn(event, 'preventDefault')
-
-    window.dispatchEvent(event)
-
-    expect(preventDefault).toHaveBeenCalled()
-  })
-
-  it('updates an active keyboard scrub from ctrl-shift vertical wheel events', () => {
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'Shift',
-      ctrlKey: true,
-      shiftKey: true,
-    }))
-
+  it('starts and updates wheel scrub from ctrl-shift vertical wheel events', () => {
     const event = new WheelEvent('wheel', {
       deltaMode: 0,
       deltaX: 0,
@@ -194,17 +95,14 @@ describe('date scrub keyboard gesture', () => {
 
     window.dispatchEvent(event)
 
+    expect(handler.start).toHaveBeenCalledWith(expect.objectContaining({
+      blockId: 'dated-block',
+    }))
     expect(handler.update).toHaveBeenLastCalledWith(1, false)
     expect(preventDefault).toHaveBeenCalled()
   })
 
   it('uses horizontal wheel delta when shift remaps vertical wheel motion', () => {
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'Shift',
-      ctrlKey: true,
-      shiftKey: true,
-    }))
-
     const event = new WheelEvent('wheel', {
       deltaMode: 0,
       deltaX: -14,
@@ -218,6 +116,28 @@ describe('date scrub keyboard gesture', () => {
     window.dispatchEvent(event)
 
     expect(handler.update).toHaveBeenLastCalledWith(1, false)
+    expect(preventDefault).toHaveBeenCalled()
+  })
+
+  it('commits wheel scrub on modifier release', () => {
+    window.dispatchEvent(new WheelEvent('wheel', {
+      deltaMode: 0,
+      deltaY: -14,
+      ctrlKey: true,
+      shiftKey: true,
+      cancelable: true,
+    }))
+
+    const event = new KeyboardEvent('keyup', {
+      key: 'Shift',
+      ctrlKey: true,
+      cancelable: true,
+    })
+    const preventDefault = vi.spyOn(event, 'preventDefault')
+
+    window.dispatchEvent(event)
+
+    expect(handler.end).toHaveBeenCalledWith(true)
     expect(preventDefault).toHaveBeenCalled()
   })
 })

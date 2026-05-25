@@ -33,6 +33,17 @@ const normalizeKeys = (keys: string | string[]): readonly string[] =>
 const defaultEventFilter = (event: KeyboardEvent) =>
   !(isSingleKeyPress(event) && hasEditableTarget(event))
 
+const activeBindingContexts = (
+  active: ActiveContextsMap,
+  contextConfigsByType: ReadonlyMap<ActionContextType, ActionContextConfig>,
+): ReadonlySet<ActionContextType> => {
+  const contexts = Array.from(active.keys())
+  const exclusive = contexts.toReversed().find(type =>
+    contextConfigsByType.get(type)?.exclusive === true,
+  )
+  return new Set(exclusive ? [exclusive] : contexts)
+}
+
 /**
  * Keeps `hotkeys-js` in sync with the facet runtime's declared actions and the
  * currently-active contexts from `<ActiveContextsProvider>`.
@@ -156,10 +167,11 @@ export function HotkeyReconciler(): null {
     }
 
     const desiredActionIds = new Set<string>()
+    const bindingContexts = activeBindingContexts(active, contextConfigsByType)
 
     for (const action of actions) {
       if (!action.defaultBinding) continue
-      if (!active.has(action.context)) continue
+      if (!bindingContexts.has(action.context)) continue
       const actionKey = actionRuntimeKey(action)
       desiredActionIds.add(actionKey)
 
@@ -180,10 +192,7 @@ export function HotkeyReconciler(): null {
     for (const actionId of Array.from(state.byActionId.keys())) {
       if (!desiredActionIds.has(actionId)) uninstall(actionId)
     }
-    // `contextConfigsByType` is intentionally NOT a dep: handlers read it
-    // through `contextConfigsByTypeRef`, so config changes propagate without
-    // requiring a reinstallation pass.
-  }, [actions, active])
+  }, [actions, active, contextConfigsByType])
 
   // Final teardown on unmount (test cleanup, HMR). Separate effect with
   // empty deps so it only runs once on unmount, after all reconcile effects

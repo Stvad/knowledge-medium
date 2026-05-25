@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { actionsFacet, appMountsFacet, headerItemsFacet } from '@/extensions/core.js'
+import { actionContextsFacet, actionsFacet, appMountsFacet, headerItemsFacet } from '@/extensions/core.js'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
 import { typesFacet } from '@/data/facets.js'
 import { groupedBacklinksGroupHeaderActionsFacet } from '@/plugins/grouped-backlinks/facet.js'
@@ -7,8 +7,12 @@ import { ActionContextTypes } from '@/shortcuts/types.js'
 import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
 import {
   DAILY_NOTE_TYPE,
+  DATE_SCRUB_CONTEXT,
+  DATE_SCRUB_FORWARD_DAY_ACTION_ID,
+  EDIT_MODE_START_DATE_SCRUB_ACTION_ID,
   OPEN_DAILY_NOTE_PICKER_ACTION_ID,
   RESCHEDULE_BLOCK_DATE_ACTION_ID,
+  START_DATE_SCRUB_ACTION_ID,
   SPREAD_BLOCK_DATES_ACTION_ID,
   SPREAD_BLOCK_DATES_BLOCKS_ACTION_ID,
   dailyNotePickerHeaderItem,
@@ -69,5 +73,22 @@ describe('dailyNotesPlugin', () => {
 
     const entries = runtime.read(groupedBacklinksGroupHeaderActionsFacet)
     expect(entries.map(e => e.actionId)).toContain(SPREAD_BLOCK_DATES_BLOCKS_ACTION_ID)
+  })
+
+  it('contributes date scrub start actions and modal movement context', () => {
+    const fakeRepo = {} as Parameters<typeof dailyNotesPlugin>[0]['repo']
+    const runtime = resolveFacetRuntimeSync(dailyNotesPlugin({repo: fakeRepo}))
+
+    const context = runtime.read(actionContextsFacet).find(candidate =>
+      candidate.type === DATE_SCRUB_CONTEXT)
+    expect(context?.exclusive).toBe(true)
+
+    const actions = runtime.read(actionsFacet)
+    expect(actions.find(action => action.id === START_DATE_SCRUB_ACTION_ID)?.context)
+      .toBe(ActionContextTypes.NORMAL_MODE)
+    expect(actions.find(action => action.id === EDIT_MODE_START_DATE_SCRUB_ACTION_ID)?.context)
+      .toBe(ActionContextTypes.EDIT_MODE_CM)
+    expect(actions.find(action => action.id === DATE_SCRUB_FORWARD_DAY_ACTION_ID)?.context)
+      .toBe(DATE_SCRUB_CONTEXT)
   })
 })

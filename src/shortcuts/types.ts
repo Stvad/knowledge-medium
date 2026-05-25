@@ -30,6 +30,11 @@ export interface ActionContextConfig<T extends ActionContextType = ActionContext
    * If no active context's eventFilter returns true, the defaultEventFilter is used.
    */
   eventFilter?: (event: KeyboardEvent) => boolean;
+  /** When true, this context's active bindings suppress bindings from
+   *  other active contexts. Intended for short-lived modal contexts
+   *  such as date scrub mode, where bare movement keys should not also
+   *  trigger the block/editor movement actions underneath. */
+  exclusive?: boolean;
   /**
    * Type guard function to validate the dependencies provided when activating the context.
    */
