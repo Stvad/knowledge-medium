@@ -29,6 +29,19 @@ export interface UseToggleTreeResult {
   workspaceId?: string
 }
 
+interface ResolvedTreeState {
+  cacheKey: string | null
+  tree: readonly ToggleNode[]
+}
+
+const treeCacheKey = (workspaceId: string, safeMode: boolean): string =>
+  `${workspaceId}:${safeMode ? 'safe' : 'normal'}`
+
+// UI-only stale-while-refresh cache. The canonical toggle state remains
+// the prefs block + overrides cache; this just prevents remounts from
+// flashing the loading placeholder while discovery recomputes.
+const resolvedTreeCache = new Map<string, readonly ToggleNode[]>()
+
 export const useToggleTree = (): UseToggleTreeResult => {
   const repo = useRepo()
   const workspaceId = repo.activeWorkspaceId
@@ -42,13 +55,19 @@ export const useToggleTree = (): UseToggleTreeResult => {
   const runtime = useAppRuntime()
   const safeMode = runtime.context.safeMode === true
 
-  const [tree, setTree] = useState<readonly ToggleNode[]>([])
-  const [loading, setLoading] = useState(true)
+  const cacheKey = workspaceId ? treeCacheKey(workspaceId, safeMode) : null
+  const cachedTree = cacheKey ? resolvedTreeCache.get(cacheKey) : undefined
+  const hasCachedTree = cacheKey ? resolvedTreeCache.has(cacheKey) : false
+
+  const [resolved, setResolved] = useState<ResolvedTreeState>(() => ({
+    cacheKey: hasCachedTree ? cacheKey : null,
+    tree: cachedTree ?? [],
+  }))
 
   const baseExtensions = useMemo(() => staticAppExtensions({repo}), [repo])
 
   useEffect(() => {
-    if (!workspaceId) return
+    if (!workspaceId || !cacheKey) return
     let cancelled = false
 
     void (async () => {
@@ -77,13 +96,18 @@ export const useToggleTree = (): UseToggleTreeResult => {
       )
 
       if (!cancelled) {
-        setTree(next)
-        setLoading(false)
+        resolvedTreeCache.set(cacheKey, next)
+        setResolved({cacheKey, tree: next})
       }
     })()
 
     return () => { cancelled = true }
-  }, [baseExtensions, repo, workspaceId, overrides, generation, safeMode])
+  }, [baseExtensions, repo, workspaceId, overrides, generation, safeMode, cacheKey])
+
+  const tree = resolved.cacheKey === cacheKey ? resolved.tree : cachedTree ?? []
+  const loading = cacheKey === null
+    ? false
+    : !(resolved.cacheKey === cacheKey || hasCachedTree)
 
   return {tree, loading, workspaceId: workspaceId ?? undefined}
 }
