@@ -33,12 +33,20 @@ import {
   type BlockContentSurfaceContribution,
 } from '@/extensions/blockInteraction.js'
 import {
+  claimBlockGesture,
+  releaseBlockGesture,
+} from '@/extensions/blockGestureConflicts.js'
+import {
   focusedBlockIdProp,
   isEditingProp,
 } from '@/data/properties.js'
 import type { Block } from '@/data/block'
-import { cancelSwipeCandidate } from '@/plugins/swipe-quick-actions'
 import type { BlockDateAdapter } from './blockDateAdapter.ts'
+
+/** Identifier for the block-gesture-conflicts facet contribution. Used
+ *  to claim the per-block gesture slot when touch scrub activates and
+ *  to route eviction calls when another gesture claims the slot. */
+export const DATE_SCRUB_GESTURE_ID = 'date-scrub'
 
 const MOBILE_BREAKPOINT_QUERY = '(max-width: 767px)'
 const isMobileViewport = (): boolean =>
@@ -183,6 +191,19 @@ const clearAllForBlock = (blockId: string): void => {
   singleByBlockId.delete(blockId)
   multiByBlockId.delete(blockId)
   if (keyboardScrub?.blockId === blockId) finishKeyboardScrub(false)
+}
+
+/** Drop any in-flight touch-scrub state for `blockId`. Registered as
+ *  this gesture's `onCancel` on the block-gesture-conflicts facet so
+ *  another gesture taking the slot tears down the overlay if scrub
+ *  had already started. Keyboard / wheel scrub deliberately stays
+ *  outside the conflict facet (no touch-level competitor) so it isn't
+ *  touched here. */
+export const cancelDateScrubForBlock = (blockId: string): void => {
+  const multi = multiByBlockId.get(blockId)
+  singleByBlockId.delete(blockId)
+  multiByBlockId.delete(blockId)
+  if (multi?.scrubbing) activeHandler?.end(false)
 }
 
 const finishKeyboardScrub = (commit: boolean): void => {
@@ -494,10 +515,18 @@ export const dateScrubContentSurface: BlockContentSurfaceContribution = context 
           return
         }
         multi.scrubbing = true
-        // The first finger is also being tracked by the swipe
-        // gesture; cancel its candidate so the eventual touchend
-        // doesn't open the swipe menu on top of our scrub.
-        cancelSwipeCandidate(block.id)
+        // Claim the block-level gesture slot. Any other gesture
+        // holding it (notably the single-finger swipe candidate
+        // recorded from the first finger landing) gets its onCancel
+        // fired, which drops its in-flight state so the eventual
+        // touchend doesn't fire its semantic action on top of our
+        // scrub. Routed via the block-gesture-conflicts facet so we
+        // don't need to know what other gestures exist.
+        claimBlockGesture(
+          block.repo.facetRuntime,
+          block.id,
+          DATE_SCRUB_GESTURE_ID,
+        )
       }
 
       // Active scrub: feed the overlay the candidate offset and the
@@ -527,6 +556,7 @@ export const dateScrubContentSurface: BlockContentSurfaceContribution = context 
 
       const wasScrubbing = multi.scrubbing
       multiByBlockId.delete(block.id)
+      releaseBlockGesture(block.id, DATE_SCRUB_GESTURE_ID)
       if (!wasScrubbing) return
 
       const dy = multi.lastMidY - multi.startMidY
@@ -552,6 +582,7 @@ export const dateScrubContentSurface: BlockContentSurfaceContribution = context 
 
       const wasScrubbing = multi.scrubbing
       multiByBlockId.delete(block.id)
+      releaseBlockGesture(block.id, DATE_SCRUB_GESTURE_ID)
       if (wasScrubbing) activeHandler?.end(false)
     },
   }

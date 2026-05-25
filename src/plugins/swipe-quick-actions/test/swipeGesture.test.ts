@@ -8,6 +8,7 @@ import {
   type BlockInteractionContext,
 } from '@/extensions/blockInteraction.js'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { __resetBlockGestureClaimsForTest } from '@/extensions/blockGestureConflicts.js'
 import { swipeQuickActionsContentSurface } from '../swipeGesture.ts'
 import {
   SWIPE_QUICK_ACTION_CLOSE_EVENT,
@@ -33,18 +34,23 @@ const makeFakeUiStateBlock = (): Block => {
   } as unknown as Block
 }
 
-const makeContext = (id = 'block-1', uiStateBlock = makeFakeUiStateBlock()): BlockInteractionContext => ({
-  block: {id} as Block,
-  repo: {} as Repo,
-  uiStateBlock,
-  types: [],
-  topLevelBlockId: 'root',
-  inFocus: true,
-  inEditMode: false,
-  isSelected: false,
-  isTopLevel: false,
-  contentRenderers: [],
-})
+const makeFakeRepo = (): Repo => ({facetRuntime: null} as unknown as Repo)
+
+const makeContext = (id = 'block-1', uiStateBlock = makeFakeUiStateBlock()): BlockInteractionContext => {
+  const repo = makeFakeRepo()
+  return {
+    block: {id, repo} as Block,
+    repo,
+    uiStateBlock,
+    types: [],
+    topLevelBlockId: 'root',
+    inFocus: true,
+    inEditMode: false,
+    isSelected: false,
+    isTopLevel: false,
+    contentRenderers: [],
+  }
+}
 
 const runtime = () => resolveFacetRuntimeSync([
   blockContentSurfacePropsFacet.of(swipeQuickActionsContentSurface),
@@ -142,9 +148,11 @@ const setMobileViewport = (matches: boolean): void => {
 describe('swipe-quick-actions gesture', () => {
   beforeEach(() => {
     setMobileViewport(true)
+    __resetBlockGestureClaimsForTest()
   })
 
   afterEach(() => {
+    __resetBlockGestureClaimsForTest()
     document.body.innerHTML = ''
   })
 

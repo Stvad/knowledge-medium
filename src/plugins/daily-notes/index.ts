@@ -54,6 +54,10 @@ import {
 } from '@/extensions/core.js'
 import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
 import { blockContentSurfacePropsFacet } from '@/extensions/blockInteraction.js'
+import {
+  blockGestureConflictsFacet,
+  type BlockGestureConflictContribution,
+} from '@/extensions/blockGestureConflicts.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { parseAppHash } from '@/utils/routing.js'
 import { CalendarDays } from 'lucide-react'
@@ -71,7 +75,16 @@ import { dailyDateWikilinkDecorator } from './wikilinkDateDecorator.ts'
 import { ReschedulePicker } from './ReschedulePicker.tsx'
 import { DateScrubOverlay } from './DateScrubOverlay.tsx'
 import { DateKeyboardScrubController } from './DateKeyboardScrubController.tsx'
-import { dateScrubContentSurface } from './dateScrubGesture.ts'
+import {
+  cancelDateScrubForBlock,
+  dateScrubContentSurface,
+  DATE_SCRUB_GESTURE_ID,
+} from './dateScrubGesture.ts'
+
+const dateScrubGestureConflictContribution: BlockGestureConflictContribution = {
+  id: DATE_SCRUB_GESTURE_ID,
+  onCancel: cancelDateScrubForBlock,
+}
 import {
   rescheduleBlockDateAction,
   rescheduleQuickActionItem,
@@ -192,6 +205,9 @@ export const dailyNotesPlugin = ({repo}: {repo: Repo}): AppExtension =>
     blockDateAdapterFacet.of(referenceDateAdapter, {source: 'daily-notes'}),
     wikilinkDisplayDecoratorFacet.of(dailyDateWikilinkDecorator, {source: 'daily-notes'}),
     blockContentSurfacePropsFacet.of(dateScrubContentSurface, {source: 'daily-notes'}),
+    blockGestureConflictsFacet.of(dateScrubGestureConflictContribution, {
+      source: 'daily-notes',
+    }),
     actionsFacet.of(openDailyNotePickerAction({repo}), {source: 'daily-notes'}),
     headerItemsFacet.of(dailyNotePickerHeaderItem, {
       source: 'daily-notes',

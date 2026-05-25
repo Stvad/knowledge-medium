@@ -3,6 +3,10 @@ import {
   isInteractiveContentEvent,
   type BlockContentSurfaceContribution,
 } from '@/extensions/blockInteraction.js'
+import {
+  claimBlockGesture,
+  releaseBlockGesture,
+} from '@/extensions/blockGestureConflicts.js'
 import { focusedBlockIdProp, isEditingProp } from '@/data/properties.js'
 import type { Block } from '@/data/block'
 import {
@@ -13,6 +17,11 @@ import {
   SWIPE_QUICK_ACTION_OPEN_EVENT,
 } from './events.ts'
 import { SWIPE_RIGHT_BLOCK_ACTION_ID } from './actions.ts'
+
+/** Identifier for the block-gesture-conflicts facet contribution. The
+ *  facet uses this to route eviction `onCancel` calls when another
+ *  gesture claims a block this gesture currently holds. */
+export const SWIPE_QUICK_ACTIONS_GESTURE_ID = 'swipe-quick-actions'
 
 interface TouchStart {
   x: number
@@ -39,11 +48,13 @@ interface TouchStart {
 
 const touchStartByBlockId = new Map<string, TouchStart>()
 
-/** Allow another gesture handler that owns the same touch (e.g. the
- *  date-scrub long-press in `daily-notes/dateScrubGesture.ts`) to take
- *  over by clearing our candidate. Without this, the touchend would
- *  still open the swipe menu after the user has been scrubbing for
- *  several seconds. Returns true if a candidate was actually cleared. */
+/** Drop the swipe candidate for `blockId`. Registered as this gesture's
+ *  `onCancel` on the block-gesture-conflicts facet, so another gesture
+ *  taking the slot (e.g. date-scrub crossing its activation threshold)
+ *  fires this and prevents the eventual touchend from opening the
+ *  swipe menu on top of the new gesture. Also exported for callers
+ *  that need to clear local state directly. Returns true if a
+ *  candidate was actually cleared. */
 export const cancelSwipeCandidate = (blockId: string): boolean =>
   touchStartByBlockId.delete(blockId)
 
@@ -117,6 +128,7 @@ export const swipeQuickActionsContentSurface: BlockContentSurfaceContribution = 
       // horizontal swipe calls preventDefault.
       if (!isSwipeGestureSurfaceEvent(event) && isInteractiveContentEvent(event)) {
         touchStartByBlockId.delete(block.id)
+        releaseBlockGesture(block.id, SWIPE_QUICK_ACTIONS_GESTURE_ID)
         return
       }
       // While a block is being edited, the CodeMirror editor owns the
@@ -141,6 +153,15 @@ export const swipeQuickActionsContentSurface: BlockContentSurfaceContribution = 
         decided: null,
         previewed: false,
       })
+      // Claim the block-level gesture slot eagerly: another gesture
+      // that crosses its threshold later (e.g. two-finger scrub) needs
+      // to evict us so the eventual touchend doesn't open the menu on
+      // top of theirs. The claim is released on every exit path below.
+      claimBlockGesture(
+        block.repo.facetRuntime,
+        block.id,
+        SWIPE_QUICK_ACTIONS_GESTURE_ID,
+      )
     },
 
     onTouchMove: (event: TouchEvent) => {
@@ -165,6 +186,7 @@ export const swipeQuickActionsContentSurface: BlockContentSurfaceContribution = 
       // later horizontal pivot mid-scroll doesn't surprise the user.
       if (start.decided === 'vertical') {
         touchStartByBlockId.delete(block.id)
+        releaseBlockGesture(block.id, SWIPE_QUICK_ACTIONS_GESTURE_ID)
         return
       }
 
@@ -190,6 +212,7 @@ export const swipeQuickActionsContentSurface: BlockContentSurfaceContribution = 
       if (!touch) return
 
       touchStartByBlockId.delete(block.id)
+      releaseBlockGesture(block.id, SWIPE_QUICK_ACTIONS_GESTURE_ID)
 
       const dx = touch.clientX - start.x
       const dy = touch.clientY - start.y
@@ -257,6 +280,7 @@ export const swipeQuickActionsContentSurface: BlockContentSurfaceContribution = 
       // in play.
       if (findTrackedTouch(event.changedTouches, start.identifier)) {
         touchStartByBlockId.delete(block.id)
+        releaseBlockGesture(block.id, SWIPE_QUICK_ACTIONS_GESTURE_ID)
         // If we had been previewing, settle back. The dx isn't
         // recoverable here so we pass 0 — the menu just needs the
         // 'cancel' signal to start its hide animation.
