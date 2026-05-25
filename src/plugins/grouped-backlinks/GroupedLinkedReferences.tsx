@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react'
+import { useCallback, useEffect, useMemo, useState, type Dispatch, type MouseEvent, type SetStateAction } from 'react'
 import { Filter, Pause, Play } from 'lucide-react'
 import { Block } from '@/data/block'
 import { useWorkspaceId } from '@/hooks/block.js'
 import { useRepo } from '@/context/repo.js'
-import { useNavigateFromGlobalCommand } from '@/utils/navigation.js'
+import { useBlockOpener } from '@/utils/navigation.js'
 import { BacklinkFilters } from '@/plugins/backlinks/BacklinkFilters.js'
 import { LazyBacklinkItem } from '@/plugins/backlinks/BacklinkEntry.js'
 import type { BacklinksViewRendererProps } from '@/plugins/backlinks-view/facet.js'
@@ -183,7 +183,7 @@ interface SharedViewProps {
   filtersOpen: boolean
   setFiltersOpenOverride: Dispatch<SetStateAction<boolean | null>>
   setFilter: (next: BacklinksFilter) => void
-  openDefaultFilterConfig: () => void
+  openDefaultFilterConfig: (event: MouseEvent) => void
 }
 
 function GroupedLinkedReferencesInner({
@@ -203,7 +203,7 @@ function GroupedLinkedReferencesInner({
     defaultFilterConfigBlock,
     setFilter: setStoredFilter,
   } = useBacklinkFilterState(block)
-  const navigateFromGlobalCommand = useNavigateFromGlobalCommand()
+  const openBlock = useBlockOpener({plainClick: 'navigator'})
   const filterActive = hasBacklinksFilter(effectiveFilter)
   // `groupingConfig` lives in the parent so paused mode can compare it
   // against the snapshot's captured args and trigger a one-shot recompute
@@ -231,9 +231,9 @@ function GroupedLinkedReferencesInner({
     setStoredFilter(next)
     if (hasBacklinksFilter(next)) setFiltersOpenOverride(true)
   }, [setStoredFilter])
-  const openDefaultFilterConfig = useCallback(() => {
-    navigateFromGlobalCommand({blockId: defaultFilterConfigBlock.id, workspaceId})
-  }, [defaultFilterConfigBlock.id, navigateFromGlobalCommand, workspaceId])
+  const openDefaultFilterConfig = useCallback((event: MouseEvent) => {
+    openBlock(event, {blockId: defaultFilterConfigBlock.id, workspaceId})
+  }, [defaultFilterConfigBlock.id, openBlock, workspaceId])
 
   const handleLiveData = useCallback(
     (data: GroupedBacklinksSnapshot) => {

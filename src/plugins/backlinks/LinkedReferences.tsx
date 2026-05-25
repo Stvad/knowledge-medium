@@ -1,9 +1,9 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useState, type MouseEvent } from 'react'
 import { Filter } from 'lucide-react'
 import { Block } from '../../data/block'
 import { useManyParents, useWorkspaceId } from '@/hooks/block.js'
 import { useRepo } from '@/context/repo.js'
-import { useNavigateFromGlobalCommand } from '@/utils/navigation.js'
+import { useBlockOpener } from '@/utils/navigation.js'
 import type { BacklinksViewRendererProps } from '@/plugins/backlinks-view/facet.js'
 import { BacklinksEmptyState } from '@/plugins/backlinks-view/BacklinksEmptyState.js'
 import { useBacklinks } from './useBacklinks.ts'
@@ -45,7 +45,7 @@ function LinkedReferencesInner({
     defaultFilterConfigBlock,
     setFilter: setStoredFilter,
   } = useBacklinkFilterState(block)
-  const navigateFromGlobalCommand = useNavigateFromGlobalCommand()
+  const openBlock = useBlockOpener({plainClick: 'navigator'})
   const filterActive = hasBacklinksFilter(effectiveFilter)
   const unfilteredBacklinks = useBacklinks(block, workspaceId)
   const filteredBacklinks = useBacklinks(
@@ -68,9 +68,9 @@ function LinkedReferencesInner({
     setStoredFilter(next)
     if (hasBacklinksFilter(next)) setFiltersOpenOverride(true)
   }, [setStoredFilter])
-  const openDefaultFilterConfig = useCallback(() => {
-    navigateFromGlobalCommand({blockId: defaultFilterConfigBlock.id, workspaceId})
-  }, [defaultFilterConfigBlock.id, navigateFromGlobalCommand, workspaceId])
+  const openDefaultFilterConfig = useCallback((event: MouseEvent) => {
+    openBlock(event, {blockId: defaultFilterConfigBlock.id, workspaceId})
+  }, [defaultFilterConfigBlock.id, openBlock, workspaceId])
 
   if (unfilteredBacklinks.length === 0) return <BacklinksEmptyState controls={controls}/>
 

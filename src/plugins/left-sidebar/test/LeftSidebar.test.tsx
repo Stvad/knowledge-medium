@@ -28,7 +28,7 @@ const mocks = vi.hoisted(() => {
   return {
     closeSidebar: vi.fn(),
     getOrCreateShortcutsBlock: vi.fn(() => shortcutsBlockPromise),
-    navigateFromGlobalCommand: vi.fn(),
+    openBlock: vi.fn(),
     repo,
     shortcutsBlock,
     userBlock,
@@ -49,7 +49,7 @@ vi.mock('@/hooks/block.ts', () => ({
 }))
 
 vi.mock('@/utils/navigation.ts', () => ({
-  navigateFromGlobalCommand: mocks.navigateFromGlobalCommand,
+  useBlockOpener: () => mocks.openBlock,
 }))
 
 vi.mock('../shortcuts.ts', () => ({
@@ -96,7 +96,7 @@ afterEach(() => {
   cleanup()
   mocks.closeSidebar.mockClear()
   mocks.getOrCreateShortcutsBlock.mockClear()
-  mocks.navigateFromGlobalCommand.mockClear()
+  mocks.openBlock.mockClear()
 })
 
 describe('LeftSidebarShortcutsSection', () => {
@@ -113,10 +113,9 @@ describe('LeftSidebarShortcutsSection', () => {
 
     expect(mocks.getOrCreateShortcutsBlock).toHaveBeenCalledWith(mocks.userBlock)
     expect(mocks.closeSidebar).toHaveBeenCalledOnce()
-    expect(mocks.navigateFromGlobalCommand).toHaveBeenCalledExactlyOnceWith(
-      mocks.repo,
-      {blockId: mocks.shortcutsBlock.id},
-    )
+    expect(mocks.openBlock).toHaveBeenCalledOnce()
+    const [, ctx] = mocks.openBlock.mock.calls[0]
+    expect(ctx).toEqual({blockId: mocks.shortcutsBlock.id})
   })
 
   it('runs the shared active-panel create action from the footer', async () => {

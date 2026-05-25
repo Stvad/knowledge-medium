@@ -45,7 +45,7 @@ vi.mock('@/hooks/block.ts', () => ({
 }))
 
 vi.mock('@/utils/navigation.ts', () => ({
-  useNavigateFromGlobalCommand: () => vi.fn(),
+  useBlockOpener: () => vi.fn(),
 }))
 
 vi.mock('@/extensions/runtimeContext.ts', () => ({

@@ -70,15 +70,22 @@ describe('quick find selection', () => {
     })).toBe(quickFindDateValue('2026-05-12'))
   })
 
-  it('uses stack target for quick-find modifier selections', () => {
+  it('routes keyboard modifier chords to stack / new-panel / jump', () => {
     expect(quickFindOpenTargetFromModifiers({shiftKey: true})).toBe('stack')
     expect(quickFindOpenTargetFromModifiers({metaKey: true})).toBe('stack')
     expect(quickFindOpenTargetFromModifiers({ctrlKey: true})).toBe('stack')
+    expect(quickFindOpenTargetFromModifiers({shiftKey: true, altKey: true})).toBe('new-panel')
+    expect(quickFindOpenTargetFromModifiers({altKey: true})).toBe('jump')
     expect(quickFindOpenTargetFromModifiers({})).toBe('jump')
   })
 
-  it('uses stack target only for shift-click selections', () => {
+  it('routes click modifier chords through the canonical intent decoder', () => {
     expect(quickFindOpenTargetFromClickModifiers({shiftKey: true})).toBe('stack')
+    expect(quickFindOpenTargetFromClickModifiers({shiftKey: true, altKey: true})).toBe('new-panel')
+    expect(quickFindOpenTargetFromClickModifiers({altKey: true})).toBe('jump')
+    // Cmd/Ctrl click maps to 'native' in the canonical decoder; quick-find
+    // command items have no native href so it falls through to 'jump'.
+    expect(quickFindOpenTargetFromClickModifiers({metaKey: true})).toBe('jump')
     expect(quickFindOpenTargetFromClickModifiers({})).toBe('jump')
   })
 

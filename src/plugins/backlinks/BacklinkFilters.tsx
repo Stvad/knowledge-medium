@@ -1,6 +1,7 @@
 import {
   FormEvent,
   KeyboardEvent,
+  MouseEvent,
   ReactElement,
   useEffect,
   useId,
@@ -47,7 +48,7 @@ interface BacklinkFiltersProps {
   baseFilter?: BacklinksFilter
   baseLabel?: string
   baseConfigLabel?: string
-  onBaseConfigClick?: () => void
+  onBaseConfigClick?: (event: MouseEvent) => void
   readOnly?: boolean
 }
 

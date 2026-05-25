@@ -1,3 +1,4 @@
+import { blockLinkClickIntent } from '@/utils/navigation.js'
 import type {
   LinkTargetAliasMatch,
   LinkTargetBlockMatch,
@@ -13,29 +14,52 @@ export const quickFindCreateValue = (query: string) => `create:${query}`
 
 export const quickFindDateValue = (iso: string) => `date:${iso}`
 
-export type QuickFindOpenTarget = 'jump' | 'stack'
+/** Where a QuickFind selection ends up:
+ *  - `jump`: navigator default — main on desktop, active on mobile.
+ *  - `stack`: append to the Roam-style sidebar stack alongside the current panel.
+ *  - `new-panel`: insert as a new top-level panel row.
+ *  Cmd/Ctrl on keyboard maps to `stack` as a Mac-friendly affordance
+ *  (no native browser default to fall through to for an Enter chord). */
+export type QuickFindOpenTarget = 'jump' | 'stack' | 'new-panel'
 
 interface QuickFindModifierState {
   shiftKey?: boolean
+  altKey?: boolean
   metaKey?: boolean
   ctrlKey?: boolean
 }
 
 interface QuickFindClickModifierState {
   shiftKey?: boolean
+  altKey?: boolean
+  metaKey?: boolean
+  ctrlKey?: boolean
+  button?: number
 }
 
 export const quickFindOpenTargetFromModifiers = ({
   shiftKey,
+  altKey,
   metaKey,
   ctrlKey,
-}: QuickFindModifierState): QuickFindOpenTarget =>
-  shiftKey || metaKey || ctrlKey ? 'stack' : 'jump'
+}: QuickFindModifierState): QuickFindOpenTarget => {
+  if (shiftKey && altKey) return 'new-panel'
+  if (shiftKey || metaKey || ctrlKey) return 'stack'
+  return 'jump'
+}
 
 export const quickFindOpenTargetFromClickModifiers = ({
-  shiftKey,
-}: QuickFindClickModifierState): QuickFindOpenTarget =>
-  shiftKey ? 'stack' : 'jump'
+  shiftKey = false,
+  altKey = false,
+  metaKey = false,
+  ctrlKey = false,
+  button = 0,
+}: QuickFindClickModifierState): QuickFindOpenTarget => {
+  const intent = blockLinkClickIntent({shiftKey, altKey, metaKey, ctrlKey, button})
+  if (intent === 'new-panel') return 'new-panel'
+  if (intent === 'sidebar-stack') return 'stack'
+  return 'jump'
+}
 
 export type QuickFindSelectionAction =
   | {kind: 'create-page'; alias: string; target: QuickFindOpenTarget}

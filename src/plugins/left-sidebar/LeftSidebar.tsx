@@ -1,4 +1,4 @@
-import { Suspense, use, useCallback, useEffect, useState } from 'react'
+import { Suspense, use, useCallback, useEffect, useState, type MouseEvent } from 'react'
 import {
   ArrowLeft,
   ChevronRight,
@@ -13,7 +13,7 @@ import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.js'
 import { OPEN_TODAY_ACTION_ID } from '@/plugins/daily-notes'
 import { QUICK_FIND_ACTION_ID } from '@/plugins/quick-find'
-import { navigateFromGlobalCommand } from '@/utils/navigation.js'
+import { useBlockOpener } from '@/utils/navigation.js'
 import { useActiveContextsState } from '@/shortcuts/ActiveContexts.js'
 import { getEffectiveActions } from '@/shortcuts/effectiveActions.js'
 import { CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID } from '@/shortcuts/defaultShortcuts.js'
@@ -175,11 +175,12 @@ function ShortcutTargetItem({
       : undefined,
   })
   const label = blockLabel(targetData, fallbackLabel)
+  const openBlock = useBlockOpener({plainClick: 'navigator'})
 
-  const openShortcut = useCallback(() => {
+  const openShortcut = useCallback((event: MouseEvent) => {
     closeSidebar()
-    navigateFromGlobalCommand(repo, {blockId: targetId})
-  }, [closeSidebar, repo, targetId])
+    openBlock(event, {blockId: targetId})
+  }, [closeSidebar, openBlock, targetId])
 
   return (
     <button
@@ -231,13 +232,13 @@ function ShortcutItem({
 }
 
 export function LeftSidebarShortcutsSection({closeSidebar}: LeftSidebarSectionProps) {
-  const repo = useRepo()
   const shortcutsBlock = useShortcutsBlock()
   const shortcuts = useChildren(shortcutsBlock)
-  const openShortcutsBlock = useCallback(() => {
+  const openBlock = useBlockOpener({plainClick: 'navigator'})
+  const openShortcutsBlock = useCallback((event: MouseEvent) => {
     closeSidebar()
-    navigateFromGlobalCommand(repo, {blockId: shortcutsBlock.id})
-  }, [closeSidebar, repo, shortcutsBlock.id])
+    openBlock(event, {blockId: shortcutsBlock.id})
+  }, [closeSidebar, openBlock, shortcutsBlock.id])
 
   return (
     <section>

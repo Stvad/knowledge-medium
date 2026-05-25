@@ -304,6 +304,22 @@ export interface OpenBlockContext {
   workspaceId?: string
 }
 
+/** What a plain (no-modifier) primary click should do. Shift / alt always
+ *  follow the canonical policy regardless of this setting.
+ *  - `'follow-link'` (default): navigate the panel the click came from —
+ *    `{target: 'panel'}` when inside a panel, `{target: 'active'}` otherwise.
+ *    Matches `<a>` and inline-block-link semantics.
+ *  - `'navigator'`: open in the global-command target (main on desktop,
+ *    active on mobile). Use for command-bar–style UIs whose job is "go
+ *    to this thing" regardless of where the click came from — quick find,
+ *    daily-note picker, recents button, left-sidebar shortcuts, filter
+ *    config gear icons, map "Open" buttons. */
+export type BlockOpenerPlainClick = 'follow-link' | 'navigator'
+
+export interface BlockOpenerOptions {
+  plainClick?: BlockOpenerPlainClick
+}
+
 /** The standard way for plugins and components to wire a clickable surface
  *  that opens a block — links, buttons, map pins, calendar cells, anything.
  *  Returns a modifier-aware onClick handler that honours the shift / alt
@@ -312,8 +328,11 @@ export interface OpenBlockContext {
  *  For dynamic surfaces where the target block isn't known until the click
  *  fires (e.g. breadcrumb chains, search result lists), use
  *  `useBlockOpener` instead and pass the block at call time. */
-export const useOpenBlock = ({blockId, workspaceId}: OpenBlockContext) => {
-  const opener = useBlockOpener()
+export const useOpenBlock = (
+  {blockId, workspaceId}: OpenBlockContext,
+  {plainClick = 'follow-link'}: BlockOpenerOptions = {},
+) => {
+  const opener = useBlockOpener({plainClick})
   return useCallback(
     (e: MouseEvent) => opener(e, {blockId, workspaceId}),
     [opener, blockId, workspaceId],
@@ -324,7 +343,7 @@ export const useOpenBlock = ({blockId, workspaceId}: OpenBlockContext) => {
  *  that resolve the target block from the event (lists, breadcrumbs, map
  *  markers rendered in a loop). Single subscription per component instead
  *  of one hook per item. */
-export const useBlockOpener = () => {
+export const useBlockOpener = ({plainClick = 'follow-link'}: BlockOpenerOptions = {}) => {
   const navigate = useNavigate()
   const repo = useRepo()
   const {panelId} = useBlockContext()
@@ -332,8 +351,14 @@ export const useBlockOpener = () => {
     (e: MouseEvent, {blockId, workspaceId}: OpenBlockContext) => {
       const resolvedWorkspaceId = workspaceId ?? repo.activeWorkspaceId
       if (!resolvedWorkspaceId) return
+      if (plainClick === 'navigator' && blockLinkClickIntent(e) === 'default') {
+        e.stopPropagation()
+        e.preventDefault()
+        navigateFromGlobalCommand(repo, {blockId, workspaceId: resolvedWorkspaceId})
+        return
+      }
       handleBlockLinkClick(e, navigate, panelId, {blockId, workspaceId: resolvedWorkspaceId})
     },
-    [navigate, repo, panelId],
+    [navigate, repo, panelId, plainClick],
   )
 }

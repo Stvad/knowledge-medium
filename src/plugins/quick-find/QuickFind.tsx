@@ -251,6 +251,8 @@ function QuickFindDialog({
     pushRecentBlockId(quickFindUIStateBlock, blockId)
     if (target === 'stack') {
       navigate({blockId, target: 'sidebar-stack', sourcePanelId: activePanelId})
+    } else if (target === 'new-panel') {
+      navigate({blockId, target: 'new-panel', sourcePanelId: activePanelId})
     } else {
       navigateFromGlobalCommand({blockId})
     }
@@ -309,7 +311,10 @@ function QuickFindDialog({
   const handleKeyDown = (event: KeyboardEvent) => {
     if (event.key !== 'Enter') return
     const target = quickFindOpenTargetFromModifiers(event)
-    if (target !== 'stack') return
+    // Plain Enter falls through to cmdk's onSelect, which routes to the
+    // default 'jump'. We only intercept when a modifier picks a non-default
+    // target so we can pass it through pendingClickTarget's role.
+    if (target === 'jump') return
     event.preventDefault()
     event.stopPropagation()
     if (value) handleSelect(value, target)
@@ -454,6 +459,9 @@ function QuickFindDialog({
         </span>
         <span className="flex items-center gap-1">
           <Kbd>⇧↵</Kbd> open in stack
+        </span>
+        <span className="flex items-center gap-1">
+          <Kbd>⇧⌥↵</Kbd> new panel
         </span>
       </div>
     </CommandDialog>
