@@ -3,8 +3,7 @@
  *
  * The DOM is the source of truth. At keypress time we query the relevant
  * subtree for tagged instances and walk in document order. This avoids
- * the registry-churn / re-render invisibility / stale-ref problems of the
- * old visual-navigation plugin.
+ * registry-churn, re-render invisibility, and stale-ref problems.
  *
  * Tagging contract (set by the shell decorator + layout renderer):
  *
@@ -17,10 +16,10 @@
  *
  * Direction model:
  *
- *   `up`/`down` (h/k): walk block instances within the current panel in
+ *   `up`/`down`: walk block instances within the current panel in
  *     DOM order; on exhaustion, fall through to the panel that is the
  *     direct stack-sibling above/below in the same layout column.
- *   `left`/`right` (j/l): walk top-level layout columns; never moves
+ *   `left`/`right`: walk top-level layout columns; never moves
  *     within a panel.
  *
  * Recovery: two entry points share the same neighbor map.
