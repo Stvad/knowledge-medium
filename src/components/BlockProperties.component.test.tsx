@@ -15,7 +15,9 @@ import { Repo } from '@/data/repo'
 import { typesFacet } from '@/data/facets'
 import { resolveFacetRuntimeSync, type FacetRuntime } from '@/extensions/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
-import { blockRenderersFacet } from '@/extensions/core'
+import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
+import { actionContextsFacet, blockRenderersFacet } from '@/extensions/core'
+import { defaultActionContextConfigs } from '@/shortcuts/defaultContexts'
 import { BlockProperties } from './BlockProperties'
 import { degradedFallbackSchema } from './propertyEditors/defaults'
 import { requestPropertyCreate } from '@/utils/propertyNavigation'
@@ -124,6 +126,7 @@ describe('BlockProperties component', () => {
       blockRenderersFacet.of({id: 'default', renderer: TestBlockRenderer}, {source: 'test'}),
       typesFacet.of(reviewType, {source: 'test'}),
       typesFacet.of(assignmentType, {source: 'test'}),
+      defaultActionContextConfigs.map(c => actionContextsFacet.of(c, {source: 'test'})),
     ])
     repo.setFacetRuntime(runtime)
     repo.setActiveWorkspaceId('ws-1')
@@ -165,7 +168,9 @@ describe('BlockProperties component', () => {
 
     render(
       <AppRuntimeContextProvider value={runtime}>
+        <ActiveContextsProvider>
         <BlockProperties block={block}/>
+        </ActiveContextsProvider>
       </AppRuntimeContextProvider>,
     )
 
@@ -187,7 +192,9 @@ describe('BlockProperties component', () => {
 
     render(
       <AppRuntimeContextProvider value={runtime}>
+        <ActiveContextsProvider>
         <BlockProperties block={block}/>
+        </ActiveContextsProvider>
       </AppRuntimeContextProvider>,
     )
 
@@ -208,7 +215,9 @@ describe('BlockProperties component', () => {
 
     render(
       <AppRuntimeContextProvider value={runtime}>
+        <ActiveContextsProvider>
         <BlockProperties block={block}/>
+        </ActiveContextsProvider>
       </AppRuntimeContextProvider>,
     )
 
@@ -227,7 +236,9 @@ describe('BlockProperties component', () => {
 
     render(
       <AppRuntimeContextProvider value={runtime}>
+        <ActiveContextsProvider>
         <BlockProperties block={block}/>
+        </ActiveContextsProvider>
       </AppRuntimeContextProvider>,
     )
 
@@ -253,7 +264,9 @@ describe('BlockProperties component', () => {
 
     render(
       <AppRuntimeContextProvider value={runtime}>
+        <ActiveContextsProvider>
         <BlockProperties block={block}/>
+        </ActiveContextsProvider>
       </AppRuntimeContextProvider>,
     )
 
@@ -292,7 +305,9 @@ describe('BlockProperties component', () => {
 
     render(
       <AppRuntimeContextProvider value={runtime}>
+        <ActiveContextsProvider>
         <BlockProperties block={block}/>
+        </ActiveContextsProvider>
       </AppRuntimeContextProvider>,
     )
 
@@ -313,7 +328,9 @@ describe('BlockProperties component', () => {
 
     render(
       <AppRuntimeContextProvider value={runtime}>
+        <ActiveContextsProvider>
         <BlockProperties block={block}/>
+        </ActiveContextsProvider>
       </AppRuntimeContextProvider>,
     )
 
@@ -338,7 +355,9 @@ describe('BlockProperties component', () => {
 
     render(
       <AppRuntimeContextProvider value={runtime}>
+        <ActiveContextsProvider>
         <BlockProperties block={block}/>
+        </ActiveContextsProvider>
       </AppRuntimeContextProvider>,
     )
 
@@ -369,7 +388,9 @@ describe('BlockProperties component', () => {
 
     render(
       <AppRuntimeContextProvider value={runtime}>
+        <ActiveContextsProvider>
         <BlockProperties block={block}/>
+        </ActiveContextsProvider>
       </AppRuntimeContextProvider>,
     )
 
@@ -401,7 +422,9 @@ describe('BlockProperties component', () => {
 
     render(
       <AppRuntimeContextProvider value={runtime}>
+        <ActiveContextsProvider>
         <BlockProperties block={block}/>
+        </ActiveContextsProvider>
       </AppRuntimeContextProvider>,
     )
 
@@ -416,7 +439,9 @@ describe('BlockProperties component', () => {
 
     render(
       <AppRuntimeContextProvider value={runtime}>
+        <ActiveContextsProvider>
         <BlockProperties block={block}/>
+        </ActiveContextsProvider>
       </AppRuntimeContextProvider>,
     )
 
@@ -460,7 +485,9 @@ describe('BlockProperties component', () => {
 
     render(
       <AppRuntimeContextProvider value={runtime}>
+        <ActiveContextsProvider>
         <BlockProperties block={block}/>
+        </ActiveContextsProvider>
       </AppRuntimeContextProvider>,
     )
 
@@ -513,7 +540,9 @@ describe('BlockProperties component', () => {
 
     render(
       <AppRuntimeContextProvider value={runtime}>
+        <ActiveContextsProvider>
         <BlockProperties block={block}/>
+        </ActiveContextsProvider>
       </AppRuntimeContextProvider>,
     )
 
@@ -546,7 +575,9 @@ describe('BlockProperties component', () => {
 
     render(
       <AppRuntimeContextProvider value={runtime}>
+        <ActiveContextsProvider>
         <BlockProperties block={block}/>
+        </ActiveContextsProvider>
       </AppRuntimeContextProvider>,
     )
 
@@ -587,7 +618,9 @@ describe('BlockProperties component', () => {
 
     render(
       <AppRuntimeContextProvider value={runtime}>
+        <ActiveContextsProvider>
         <BlockProperties block={block}/>
+        </ActiveContextsProvider>
       </AppRuntimeContextProvider>,
     )
 
