@@ -127,6 +127,51 @@ describe('getEffectiveActions', () => {
     }])
   })
 
+  it("treats actionId '*' as a wildcard that matches every action", () => {
+    const first = baseAction({id: 'test.first'})
+    const second = baseAction({id: 'test.second'})
+    const visited: string[] = []
+    const runtime = resolveFacetRuntimeSync([
+      actionsFacet.of(first),
+      actionsFacet.of(second),
+      actionDecoratorsFacet.of({
+        actionId: '*',
+        decorate: action => {
+          visited.push(action.id)
+          return {...action, description: `seen:${action.id}`}
+        },
+      }),
+    ])
+
+    expect(getEffectiveActions(runtime).map(a => a.description)).toEqual([
+      'seen:test.first',
+      'seen:test.second',
+    ])
+    expect(visited).toEqual(['test.first', 'test.second'])
+  })
+
+  it("respects the context filter even when actionId is '*'", () => {
+    const normal = baseAction({id: 'test.normal'})
+    const edit = baseAction({
+      id: 'test.edit',
+      context: ActionContextTypes.EDIT_MODE_CM,
+    })
+    const runtime = resolveFacetRuntimeSync([
+      actionsFacet.of(normal),
+      actionsFacet.of(edit),
+      actionDecoratorsFacet.of({
+        actionId: '*',
+        context: ActionContextTypes.EDIT_MODE_CM,
+        decorate: action => ({...action, description: 'edit-only'}),
+      }),
+    ])
+
+    expect(getEffectiveActions(runtime).map(a => a.description)).toEqual([
+      'Base action',
+      'edit-only',
+    ])
+  })
+
   it('matches context-specific decorators only against that action context', async () => {
     const normal = baseAction({
       handler: async () => undefined,

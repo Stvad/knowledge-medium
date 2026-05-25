@@ -11,21 +11,32 @@ import type {
   ActionOverride,
 } from '@/shortcuts/types.js'
 import type { ActiveContextsMap } from './ActiveContexts.tsx'
+import { applyKeybindingOverrides } from './applyKeybindingOverrides.ts'
+import { keybindingOverridesFacet } from './keybindingOverrides.ts'
 
 export const actionRuntimeKey = (
   action: Pick<ActionConfig, 'context' | 'id'>,
 ): string => `${action.context}:${action.id}`
 
+/** Sentinel `actionId` that matches every action. Use sparingly — most
+ *  overrides/decorators target a specific id. The keybindings module
+ *  ships one wildcard decorator that reads the
+ *  `keybindingOverridesFacet` and rewrites whichever actions the user
+ *  has remapped; that needs to inspect every action so it can also
+ *  strip a default chord that lost a collision to a user override. */
+export const WILDCARD_ACTION_ID = '*'
+
 const matchesAction = (
   target: Pick<ActionOverride | ActionDecorator, 'actionId' | 'context'>,
   action: Pick<ActionConfig, 'id' | 'context'>,
 ): boolean =>
-  target.actionId === action.id &&
+  (target.actionId === WILDCARD_ACTION_ID || target.actionId === action.id) &&
   (target.context === undefined || target.context === action.context)
 
 export const getEffectiveActions = (runtime: FacetRuntime): readonly ActionConfig[] => {
   const overrides = runtime.read(actionOverridesFacet)
   const decorators = runtime.read(actionDecoratorsFacet)
+  const keybindingOverrides = runtime.read(keybindingOverridesFacet)
   const out: ActionConfig[] = []
 
   for (const rawAction of runtime.read(actionsFacet)) {
@@ -44,7 +55,11 @@ export const getEffectiveActions = (runtime: FacetRuntime): readonly ActionConfi
     if (action) out.push(action)
   }
 
-  return out
+  // Keybinding overrides run as a final pass — they need cross-action
+  // visibility (the "default loses on chord collision" rule reads
+  // every other action's effective binding), which the per-action
+  // override/decorator pipeline above can't express cleanly.
+  return applyKeybindingOverrides(out, keybindingOverrides)
 }
 
 export const getActiveActionById = (
