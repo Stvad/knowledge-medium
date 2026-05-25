@@ -42,6 +42,7 @@ import { PAGE_TYPE } from '@/data/blockTypes'
 import {
   aliasesProp,
   selectionStateProp,
+  showPropertiesProp,
   typesProp,
 } from '@/data/properties'
 import {
@@ -215,6 +216,14 @@ describe('getPluginPrefsBlock', () => {
     expect(pluginPrefs.peek()?.parentId).toBe(userPrefs.id)
     expect(pluginPrefs.peek()?.content).toBe('Example plugin prefs')
     expect(pluginPrefs.peekProperty(typesProp)).toEqual(['example-plugin-prefs'])
+  })
+
+  it('shows the property panel by default when creating plugin prefs blocks', async () => {
+    registerTypes(env.repo, [examplePrefsType])
+
+    const pluginPrefs = await getPluginPrefsBlock(env.repo, WS, USER, examplePrefsType)
+
+    expect(pluginPrefs.peekProperty(showPropertiesProp)).toBe(true)
   })
 
   it('falls back to the type id when the contribution omits a label', async () => {

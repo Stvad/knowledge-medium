@@ -27,6 +27,7 @@ import {
   aliasesProp,
   hasBlockType,
   selectionStateProp,
+  showPropertiesProp,
   type BlockSelectionState,
 } from '@/data/properties'
 import { USER_PREFS_PATH_PART } from '@/data/userPrefs.js'
@@ -264,7 +265,7 @@ export const getPluginPrefsBlock = memoize(
       userPrefsBlock,
       type.id,
       ChangeScope.UserPrefs,
-      {},
+      {[showPropertiesProp.name]: showPropertiesProp.codec.encode(true)},
       type.label ?? type.id,
       type,
     )
