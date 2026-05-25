@@ -5,7 +5,7 @@ import { useHandle } from '@/hooks/block.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { markdownExtensionsFacet } from '@/markdown/extensions.js'
 
-const DEFAULT_CONTAINER_CLASS = 'min-h-[1.7em] whitespace-pre-wrap overflow-x-hidden max-w-full'
+const DEFAULT_CONTAINER_CLASS = 'min-h-[1.7em] whitespace-pre-wrap overflow-x-clip overflow-y-visible max-w-full'
 
 interface MarkdownContentRendererProps extends BlockRendererProps {
   contentTransform?: (content: string) => string

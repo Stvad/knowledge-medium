@@ -264,7 +264,8 @@
     @apply flex-1;
     min-width: 0; /* Prevents flex items from overflowing */
     max-width: 100%;
-    overflow-x: hidden;
+    overflow-x: clip;
+    overflow-y: visible;
   }
 
   .block-bullet {
@@ -284,7 +285,8 @@
     width: 100%;
     box-sizing: border-box;
     max-width: 100vw;
-    overflow-x: hidden;
+    overflow-x: clip;
+    overflow-y: visible;
   }
 
   .block-properties.hidden {
@@ -320,7 +322,8 @@
 
   .block-content {
     max-width: 100%;
-    overflow-x: hidden;
+    overflow-x: clip;
+    overflow-y: visible;
     overflow-wrap: normal;
     word-wrap: normal;
     word-break: normal;
