@@ -35,6 +35,10 @@ import {
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
 } from '@/data/blockSchema'
 import {
+  CREATE_WORKSPACE_MEMBERS_INDEX_SQL,
+  CREATE_WORKSPACE_MEMBERS_TABLE_SQL,
+} from '@/data/workspaceSchema'
+import {
   ALIAS_BACKFILL_MARKER_KEY,
   BACKFILL_BLOCK_ALIASES_SQL,
   CLIENT_SCHEMA_STATEMENTS,
@@ -50,11 +54,28 @@ interface TestDb {
   setTxContext: (ctx: { txId?: string | null; txSeq?: number | null; userId?: string | null; scope?: string | null; source?: string | null }) => void
   clearTxContext: () => void
   insertBlock: (overrides?: Partial<BlockInsert>) => void
+  insertWorkspaceMember: (overrides?: Partial<WorkspaceMemberInsert>) => void
   updateBlock: (id: string, set: Record<string, unknown>) => void
   deleteBlock: (id: string) => void
   rowEvents: () => Array<RowEventRow>
   psCrud: () => Array<{ id: number; data: string; tx_id: number | null }>
   rowEventCount: () => number
+}
+
+interface WorkspaceMemberInsert {
+  id: string
+  workspace_id: string
+  user_id: string
+  role: 'owner' | 'editor' | 'viewer'
+  create_time: number
+}
+
+const defaultMember: WorkspaceMemberInsert = {
+  id: 'm-ws1-user-1',
+  workspace_id: 'ws1',
+  user_id: 'user-1',
+  role: 'owner',
+  create_time: 1700000000000,
 }
 
 interface RowEventRow {
@@ -123,6 +144,13 @@ const setupDb = (): TestDb => {
   db.exec(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   db.exec(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
 
+  // workspace_members is a sibling table that the local-ephemeral
+  // backfill consults to scope uploads to writable workspaces. Created
+  // here so tests can seed membership rows; production builds the same
+  // schema from src/data/workspaceSchema.ts.
+  db.exec(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
+  db.exec(CREATE_WORKSPACE_MEMBERS_INDEX_SQL)
+
   for (const stmt of CLIENT_SCHEMA_STATEMENTS) {
     db.exec(stmt)
   }
@@ -130,6 +158,9 @@ const setupDb = (): TestDb => {
   const columnNames = BLOCK_STORAGE_COLUMNS.map(c => c.name)
   const insertStmt = db.prepare(
     `INSERT INTO blocks (${columnNames.join(',')}) VALUES (${columnNames.map(() => '?').join(',')})`,
+  )
+  const insertMemberStmt = db.prepare(
+    'INSERT INTO workspace_members (id, workspace_id, user_id, role, create_time) VALUES (?, ?, ?, ?, ?)',
   )
 
   return {
@@ -145,6 +176,10 @@ const setupDb = (): TestDb => {
     insertBlock: (overrides = {}) => {
       const row = {...defaultBlock, ...overrides}
       insertStmt.run(...blockValues(row))
+    },
+    insertWorkspaceMember: (overrides = {}) => {
+      const row = {...defaultMember, ...overrides}
+      insertMemberStmt.run(row.id, row.workspace_id, row.user_id, row.role, row.create_time)
     },
     updateBlock: (id, set) => {
       const cols = Object.keys(set)
@@ -750,7 +785,10 @@ describe('block_aliases backfill', () => {
 describe('backfillLocalEphemeralUploadsIfPending', () => {
   // Adapt node:sqlite (sync) to the async {execute, getOptional} the
   // bootstrap helper expects. Forwards SQL params to db.prepare(sql).run.
-  const runBackfill = async (txSeq = 1_700_000_000_000) => {
+  const runBackfill = async (
+    txSeq = 1_700_000_000_000,
+    userId = 'user-1',
+  ) => {
     await backfillLocalEphemeralUploadsIfPending({
       execute: async (sql, params) => {
         if (params && params.length > 0) {
@@ -759,11 +797,13 @@ describe('backfillLocalEphemeralUploadsIfPending', () => {
           h.db.exec(sql)
         }
       },
-      getOptional: async <T,>(sql: string) => {
-        const row = h.db.prepare(sql).get() as T | undefined
+      getOptional: async <T,>(sql: string, params?: unknown[]) => {
+        const row = params && params.length > 0
+          ? h.db.prepare(sql).get(...(params as Array<string | number | null>)) as T | undefined
+          : h.db.prepare(sql).get() as T | undefined
         return row ?? null
       },
-    }, () => txSeq)
+    }, () => txSeq, userId)
   }
 
   const markerExists = (): boolean =>
@@ -771,8 +811,8 @@ describe('backfillLocalEphemeralUploadsIfPending', () => {
       .prepare(`SELECT 1 FROM client_schema_state WHERE key = '${LOCAL_EPHEMERAL_BACKFILL_MARKER_KEY}'`)
       .get() !== undefined
 
-  const pendingCount = (): number =>
-    (h.db.prepare(COUNT_LOCAL_EPHEMERAL_BACKFILL_PENDING_SQL).get() as {n: number}).n
+  const pendingCount = (userId = 'user-1'): number =>
+    (h.db.prepare(COUNT_LOCAL_EPHEMERAL_BACKFILL_PENDING_SQL).get(userId) as {n: number}).n
 
   /** Production state on upgrade day: rows whose original write was
    *  `source: 'local-ephemeral'` (under the old routing) NEVER landed
@@ -803,6 +843,7 @@ describe('backfillLocalEphemeralUploadsIfPending', () => {
   })
 
   it("enqueues blocks whose latest row_events.source is 'local-ephemeral' and skips already-queued ones", async () => {
+    h.insertWorkspaceMember()
     simulateOldLocalEphemeralInsert({id: 'ui-1', workspace_id: 'ws1'})
     simulateOldLocalEphemeralInsert({id: 'ui-2', workspace_id: 'ws1', parent_id: 'ui-1'})
 
@@ -833,6 +874,7 @@ describe('backfillLocalEphemeralUploadsIfPending', () => {
     // The row was first written local-ephemeral, then an incoming sync
     // applied a server-side change to it. That means the server DOES
     // have the row now, so the backfill should not re-upload it.
+    h.insertWorkspaceMember()
     simulateOldLocalEphemeralInsert({id: 'b1', workspace_id: 'ws1'})
     // Sync apply: source is NULL so the row_events trigger tags 'sync'.
     h.updateBlock('b1', {content: 'from-other-device'})
@@ -843,6 +885,7 @@ describe('backfillLocalEphemeralUploadsIfPending', () => {
   })
 
   it('is idempotent: a second call after the marker is set is a no-op', async () => {
+    h.insertWorkspaceMember()
     simulateOldLocalEphemeralInsert({id: 'b1', workspace_id: 'ws1'})
 
     await runBackfill(42)
@@ -862,6 +905,7 @@ describe('backfillLocalEphemeralUploadsIfPending', () => {
     // the server's upload handler doesn't see two shapes. If a column
     // is added/removed from BLOCK_UPLOAD_COLUMNS, both code paths
     // change together — this test pins that contract.
+    h.insertWorkspaceMember()
     simulateOldLocalEphemeralInsert({id: 'stale-1', workspace_id: 'ws1'})
 
     h.setTxContext({txId: 'tx-doc', txSeq: 2, userId: 'user-1', scope: 'block-default', source: 'user'})
@@ -875,5 +919,79 @@ describe('backfillLocalEphemeralUploadsIfPending', () => {
     expect(Object.keys(triggerEnvelope.data).sort()).toEqual(Object.keys(backfillEnvelope.data).sort())
     expect(triggerEnvelope.op).toBe('PUT')
     expect(backfillEnvelope.op).toBe('PUT')
+  })
+
+  describe('workspace-membership filter', () => {
+    // The filter exists because the local DB can hold stale UI-state
+    // blocks for workspaces the user no longer (or never did) belong
+    // to — leftovers from a workspace the user was a member of and got
+    // removed from, or test setups. Without filtering, those rows go
+    // into the same atomic ps_crud tx as the user's legit own-workspace
+    // backfill rows; one RLS denial then tanks the whole batch and
+    // every well-formed row gets quarantined alongside the bad apples.
+    // See ps_crud_rejected analysis on 2026-05-25 for the field
+    // observation that motivated this filter.
+
+    it('skips blocks in workspaces the user is not a member of', async () => {
+      // user-1 owns ws1 only. ws-foreign has a block but no member row.
+      h.insertWorkspaceMember({id: 'm-ws1', workspace_id: 'ws1', user_id: 'user-1', role: 'owner'})
+      simulateOldLocalEphemeralInsert({id: 'own-1', workspace_id: 'ws1'})
+      simulateOldLocalEphemeralInsert({id: 'foreign-1', workspace_id: 'ws-foreign'})
+
+      await runBackfill(7777)
+      const ids = h.psCrud().map(r => JSON.parse(r.data).id).sort()
+      expect(ids).toEqual(['own-1'])
+    })
+
+    it("skips blocks in workspaces where the user's role is 'viewer'", async () => {
+      // A viewer can read sync'd blocks but can't write — any local
+      // UI-state writes targeting that workspace would get RLS-denied.
+      // Skip them at the backfill stage so they don't poison the batch.
+      h.insertWorkspaceMember({id: 'm-ws-r', workspace_id: 'ws-read', user_id: 'user-1', role: 'viewer'})
+      h.insertWorkspaceMember({id: 'm-ws1', workspace_id: 'ws1', user_id: 'user-1', role: 'editor'})
+      simulateOldLocalEphemeralInsert({id: 'own-1', workspace_id: 'ws1'})
+      simulateOldLocalEphemeralInsert({id: 'viewer-only-1', workspace_id: 'ws-read'})
+
+      await runBackfill(7778)
+      const ids = h.psCrud().map(r => JSON.parse(r.data).id).sort()
+      expect(ids).toEqual(['own-1'])
+    })
+
+    it("includes blocks where the user's role is 'editor'", async () => {
+      h.insertWorkspaceMember({id: 'm-ws-e', workspace_id: 'ws-edit', user_id: 'user-1', role: 'editor'})
+      simulateOldLocalEphemeralInsert({id: 'edit-1', workspace_id: 'ws-edit'})
+
+      await runBackfill(7779)
+      const ids = h.psCrud().map(r => JSON.parse(r.data).id).sort()
+      expect(ids).toEqual(['edit-1'])
+    })
+
+    it("PENDING count agrees with the actual enqueue", async () => {
+      // pendingCount() and the INSERT must use the same filter — otherwise
+      // diagnostics ("backfilling N rows…") would diverge from reality.
+      h.insertWorkspaceMember({id: 'm-ws1', workspace_id: 'ws1', user_id: 'user-1', role: 'owner'})
+      simulateOldLocalEphemeralInsert({id: 'own-a', workspace_id: 'ws1'})
+      simulateOldLocalEphemeralInsert({id: 'own-b', workspace_id: 'ws1'})
+      simulateOldLocalEphemeralInsert({id: 'foreign-x', workspace_id: 'ws-foreign'})
+      simulateOldLocalEphemeralInsert({id: 'foreign-y', workspace_id: 'ws-foreign'})
+
+      expect(pendingCount('user-1')).toBe(2)
+      await runBackfill(7780)
+      expect(h.psCrud()).toHaveLength(2)
+    })
+
+    it("filters by the PASSED user_id, not by other members' rows", async () => {
+      // ws1 has two members; user-1 is owner and is the one running the
+      // backfill on this device. user-2 happens to also be a member, but
+      // their membership row should not let user-1 write to ws-other.
+      h.insertWorkspaceMember({id: 'm-ws1-u1', workspace_id: 'ws1', user_id: 'user-1', role: 'owner'})
+      h.insertWorkspaceMember({id: 'm-ws-other-u2', workspace_id: 'ws-other', user_id: 'user-2', role: 'owner'})
+      simulateOldLocalEphemeralInsert({id: 'own-1', workspace_id: 'ws1'})
+      simulateOldLocalEphemeralInsert({id: 'other-1', workspace_id: 'ws-other'})
+
+      await runBackfill(7781, 'user-1')
+      const ids = h.psCrud().map(r => JSON.parse(r.data).id).sort()
+      expect(ids).toEqual(['own-1'])
+    })
   })
 })

@@ -150,7 +150,7 @@ export const ensurePowerSyncReady = async (
 
   let initPromise = initPromises.get(userId)
   if (!initPromise) {
-    initPromise = initializePowerSyncDb(db)
+    initPromise = initializePowerSyncDb(db, userId)
     initPromises.set(userId, initPromise)
   }
   await initPromise
@@ -184,7 +184,7 @@ export const ensurePowerSyncReady = async (
     })
 }
 
-const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
+const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase, userId: string) => {
   await powerSyncDb.init()
 
   // No `PRAGMA journal_mode=WAL`: none of wa-sqlite's PowerSync-bundled
@@ -250,8 +250,10 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   await backfillBlockTypesIfEmpty(backfillDb)
   // tx_seq seeded from wall-clock ms — same scheme the Repo uses for
   // per-tx grouping, so the synthetic backfill batch is distinguishable
-  // from any real tx that follows.
-  await backfillLocalEphemeralUploadsIfPending(backfillDb, () => Date.now())
+  // from any real tx that follows. `userId` scopes the SELECT so we
+  // don't try to upload UI-state blocks for workspaces this user has
+  // no write access to (those rows would RLS-deny and tank the batch).
+  await backfillLocalEphemeralUploadsIfPending(backfillDb, () => Date.now(), userId)
   await applyLocalSchemaContributions(
     backfillDb,
     resolveLocalSchemaContributions(staticDataExtensions),

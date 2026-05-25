@@ -51,7 +51,23 @@ import {
   applyLocalSchemaContributions,
   resolveLocalSchemaContributions,
 } from '@/data/localSchema.js'
+import {
+  CREATE_WORKSPACES_TABLE_SQL,
+  CREATE_WORKSPACE_MEMBERS_INDEX_SQL,
+  CREATE_WORKSPACE_MEMBERS_TABLE_SQL,
+  WORKSPACES_RAW_TABLE,
+  WORKSPACE_MEMBERS_RAW_TABLE,
+} from '@/data/workspaceSchema'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
+
+// Synthetic user id used when running the local-ephemeral backfill in
+// the test template. The backfill is a no-op against the empty
+// template DB (it only runs once and finds nothing to enqueue), so
+// this value matters only as a stable identifier — tests don't depend
+// on it being any particular shape. Tests that exercise the backfill
+// directly (clientSchema.test.ts) use their own DatabaseSync harness
+// and don't go through createTestDb.
+export const TEST_USER_ID = 'test-user'
 
 export interface TestDb {
   /** The real PowerSync database — same type as production. */
@@ -65,7 +81,11 @@ const localSchemaContributions = resolveLocalSchemaContributions(staticDataExten
 
 const createTestSchema = (): Schema => {
   const schema = new Schema({})
-  schema.withRawTables({blocks: BLOCKS_RAW_TABLE})
+  schema.withRawTables({
+    blocks: BLOCKS_RAW_TABLE,
+    workspaces: WORKSPACES_RAW_TABLE,
+    workspace_members: WORKSPACE_MEMBERS_RAW_TABLE,
+  })
   return schema
 }
 
@@ -88,6 +108,9 @@ const initializeTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
   await db.execute(CREATE_BLOCKS_TABLE_SQL)
   await db.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   await db.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
+  await db.execute(CREATE_WORKSPACES_TABLE_SQL)
+  await db.execute(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
+  await db.execute(CREATE_WORKSPACE_MEMBERS_INDEX_SQL)
   for (const stmt of CLIENT_SCHEMA_STATEMENTS) {
     await db.execute(stmt)
   }
@@ -103,7 +126,9 @@ const initializeTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
   }
   await backfillBlockAliasesIfEmpty(backfillDb)
   await backfillBlockTypesIfEmpty(backfillDb)
-  await backfillLocalEphemeralUploadsIfPending(backfillDb, () => Date.now())
+  // Test harness uses a synthetic user-id; tests that exercise the
+  // backfill SELECT need to seed `workspace_members` for this id.
+  await backfillLocalEphemeralUploadsIfPending(backfillDb, () => Date.now(), TEST_USER_ID)
   await applyLocalSchemaContributions(
     backfillDb,
     localSchemaContributions,
@@ -127,6 +152,12 @@ const getTemplateFingerprint = (): string => {
   hash.update(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   hash.update('\0')
   hash.update(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
+  hash.update('\0')
+  hash.update(CREATE_WORKSPACES_TABLE_SQL)
+  hash.update('\0')
+  hash.update(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
+  hash.update('\0')
+  hash.update(CREATE_WORKSPACE_MEMBERS_INDEX_SQL)
   hash.update('\0')
   hash.update(CLIENT_SCHEMA_STATEMENTS.join('\0'))
   hash.update('\0')

@@ -814,7 +814,16 @@ export const BACKFILL_BLOCK_TYPES_SQL = `
  *  COMMIT time regardless of insertion order. If the batch somehow
  *  fails, the orchestrator's per-tx fallback quarantines them all
  *  together — visible via the rejection-quarantine UI for manual retry. */
-export const LOCAL_EPHEMERAL_BACKFILL_MARKER_KEY = 'local_ephemeral_upload_backfill_v1'
+// v2 = v1 + workspace-membership filter. The v1 backfill was unscoped
+// by workspace, so devices with stale UI-state blocks for workspaces
+// the user no longer (or never did) belong to enqueued them anyway —
+// one RLS denial then tanked the whole atomic backfill batch and every
+// well-formed own-workspace row got quarantined alongside the bad
+// apples. v2 scopes the SELECT to workspaces where the user is owner
+// or editor, so the batch only contains rows the server will accept.
+// Bumping the marker key (not editing the v1 row) ensures devices that
+// ran the buggy v1 re-run with v2's filter.
+export const LOCAL_EPHEMERAL_BACKFILL_MARKER_KEY = 'local_ephemeral_upload_backfill_v2'
 
 export const SELECT_LOCAL_EPHEMERAL_BACKFILL_DONE_SQL = `
   SELECT 1 FROM client_schema_state WHERE key = '${LOCAL_EPHEMERAL_BACKFILL_MARKER_KEY}'
@@ -825,23 +834,29 @@ export const RECORD_LOCAL_EPHEMERAL_BACKFILL_DONE_SQL = `
   VALUES ('${LOCAL_EPHEMERAL_BACKFILL_MARKER_KEY}', strftime('%s', 'now') * 1000)
 `
 
-/** Counts what BACKFILL_LOCAL_EPHEMERAL_UPLOADS_SQL would enqueue. Used
- *  by the bootstrap wrapper to decide whether to log and to expose a
- *  number for debugging. */
+/** Counts what BACKFILL_LOCAL_EPHEMERAL_UPLOADS_SQL would enqueue.
+ *  Takes one `?` parameter — the current user's id — so the count
+ *  matches the enqueue scope. */
 export const COUNT_LOCAL_EPHEMERAL_BACKFILL_PENDING_SQL = `
   SELECT COUNT(*) AS n FROM blocks b
-  WHERE b.id IN (
-    SELECT r1.block_id FROM row_events r1
-    WHERE r1.source = 'local-ephemeral'
-      AND NOT EXISTS (
-        SELECT 1 FROM row_events r2
-        WHERE r2.block_id = r1.block_id AND r2.id > r1.id
-      )
+  WHERE b.workspace_id IN (
+    SELECT workspace_id FROM workspace_members
+    WHERE user_id = ? AND role IN ('owner', 'editor')
   )
+    AND b.id IN (
+      SELECT r1.block_id FROM row_events r1
+      WHERE r1.source = 'local-ephemeral'
+        AND NOT EXISTS (
+          SELECT 1 FROM row_events r2
+          WHERE r2.block_id = r1.block_id AND r2.id > r1.id
+        )
+    )
 `
 
 /** Emits one PUT envelope per qualifying block, all stamped with the
- *  same `?` tx_id parameter. */
+ *  same `?` tx_id parameter. Second `?` is the current user's id,
+ *  used to scope by workspace_members. The order is (tx_id, user_id)
+ *  — same order callers pass via `db.execute(sql, [txSeq, userId])`. */
 export const BACKFILL_LOCAL_EPHEMERAL_UPLOADS_SQL = `
   INSERT INTO ps_crud (tx_id, data)
   SELECT
@@ -853,14 +868,18 @@ export const BACKFILL_LOCAL_EPHEMERAL_UPLOADS_SQL = `
       'data', ${blockUploadJsonSql('b')}
     )
   FROM blocks b
-  WHERE b.id IN (
-    SELECT r1.block_id FROM row_events r1
-    WHERE r1.source = 'local-ephemeral'
-      AND NOT EXISTS (
-        SELECT 1 FROM row_events r2
-        WHERE r2.block_id = r1.block_id AND r2.id > r1.id
-      )
+  WHERE b.workspace_id IN (
+    SELECT workspace_id FROM workspace_members
+    WHERE user_id = ? AND role IN ('owner', 'editor')
   )
+    AND b.id IN (
+      SELECT r1.block_id FROM row_events r1
+      WHERE r1.source = 'local-ephemeral'
+        AND NOT EXISTS (
+          SELECT 1 FROM row_events r2
+          WHERE r2.block_id = r1.block_id AND r2.id > r1.id
+        )
+    )
 `
 
 /** Per-name reprojection markers. Once `reprojectRefTypedProperties`
@@ -996,14 +1015,18 @@ export const backfillBlockTypesIfEmpty = async (
  *  start after Phase 2 (see `LOCAL_EPHEMERAL_BACKFILL_MARKER_KEY` for
  *  the full rationale). `newTxSeq` produces the integer tx_id every
  *  enqueued row shares, so the server applies them atomically and the
- *  DEFERRABLE composite FK doesn't trip on intra-batch parent chains. */
+ *  DEFERRABLE composite FK doesn't trip on intra-batch parent chains.
+ *  `userId` scopes the SELECT to workspaces this user is an
+ *  owner/editor of — rows for other workspaces would RLS-deny on the
+ *  server and tank the whole atomic batch (see v2 marker rationale). */
 export const backfillLocalEphemeralUploadsIfPending = async (
   db: ClientSchemaBootstrapDb,
   newTxSeq: () => number,
+  userId: string,
 ): Promise<void> => {
   const done = await db.getOptional<{1: number}>(SELECT_LOCAL_EPHEMERAL_BACKFILL_DONE_SQL)
   if (done !== null) return
   const txSeq = newTxSeq()
-  await db.execute(BACKFILL_LOCAL_EPHEMERAL_UPLOADS_SQL, [txSeq])
+  await db.execute(BACKFILL_LOCAL_EPHEMERAL_UPLOADS_SQL, [txSeq, userId])
   await db.execute(RECORD_LOCAL_EPHEMERAL_BACKFILL_DONE_SQL)
 }
