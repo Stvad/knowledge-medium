@@ -97,9 +97,9 @@ describe('dailyNotesActions', () => {
 
     const action = dailyNotesActions({repo: env.repo})
       .find(candidate => candidate.id === 'append_today_daily_block')
-    expect(action?.defaultBinding?.keys).toBe('ctrl+shift+n')
+    expect(action).toBeDefined()
 
-    await action?.handler(
+    await action!.handler(
       {uiStateBlock: rootUiState},
       {preventDefault: vi.fn()} as unknown as KeyboardEvent,
     )

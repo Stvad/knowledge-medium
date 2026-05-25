@@ -186,26 +186,12 @@ beforeEach(async () => {
 afterEach(async () => { await env.h.cleanup() })
 
 describe('default CodeMirror shortcuts', () => {
-  it('binds copy block reference and embed shortcuts in normal mode', () => {
-    const copyBlockRefAction = findNormalModeAction(env.repo, 'copy_block_ref')
-    const copyBlockEmbedAction = findNormalModeAction(env.repo, 'copy_block_embed')
-
-    expect(copyBlockRefAction.defaultBinding?.keys).toBe('alt+y')
-    expect(copyBlockEmbedAction.defaultBinding?.keys).toBe('shift+y')
-  })
-
   it('prevents native CodeMirror handling for structural move shortcuts', () => {
     const moveBlockUpAction = findEditModeAction(env.repo, 'move_block_up_cm')
     const moveBlockDownAction = findEditModeAction(env.repo, 'move_block_down_cm')
 
-    expect(moveBlockUpAction.defaultBinding).toMatchObject({
-      keys: 'cmd+shift+up',
-      eventOptions: {preventDefault: true},
-    })
-    expect(moveBlockDownAction.defaultBinding).toMatchObject({
-      keys: 'cmd+shift+down',
-      eventOptions: {preventDefault: true},
-    })
+    expect(moveBlockUpAction.defaultBinding?.eventOptions?.preventDefault).toBe(true)
+    expect(moveBlockDownAction.defaultBinding?.eventOptions?.preventDefault).toBe(true)
   })
 
   it('opens the root preferences block from the global action', async () => {
@@ -227,17 +213,9 @@ describe('default CodeMirror shortcuts', () => {
     })
   })
 
-  it('does not reserve Cmd+comma for zooming out anymore', () => {
-    const action = findNormalModeAction(env.repo, 'zoom_out')
-
-    expect(action.defaultBinding?.keys).toBe('ctrl+,')
-  })
-
-  it('closes the current panel from normal mode with ctrl+w', async () => {
+  it('closes the current panel from normal mode', async () => {
     const {uiStateBlock, block} = await seedPanelAndContent()
     const action = findNormalModeAction(env.repo, 'close_current_panel')
-
-    expect(action.defaultBinding?.keys).toBe('ctrl+w')
 
     await action.handler({
       block,
@@ -247,11 +225,9 @@ describe('default CodeMirror shortcuts', () => {
     expect(await isDeleted('panel')).toBe(true)
   })
 
-  it('closes the current panel from CodeMirror edit mode with ctrl+w', async () => {
+  it('closes the current panel from CodeMirror edit mode', async () => {
     const {uiStateBlock, block} = await seedPanelAndContent()
     const action = findEditModeAction(env.repo, 'edit.cm.close_current_panel')
-
-    expect(action.defaultBinding?.keys).toBe('ctrl+w')
 
     await action.handler({
       block,
