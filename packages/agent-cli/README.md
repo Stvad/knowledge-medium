@@ -13,6 +13,9 @@ npm install -g @knowledge-medium/agent-cli
 # Or per-project, then invoke via npx:
 npm install --save-dev @knowledge-medium/agent-cli
 npx kmagent ping
+
+# Or run the package directly:
+npx @knowledge-medium/agent-cli ping
 ```
 
 Requires Node ≥ 24.

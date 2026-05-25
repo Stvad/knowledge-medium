@@ -1,6 +1,6 @@
 {
   "name": "@knowledge-medium/agent-cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "CLI + local HTTP bridge for driving the Knowledge Medium app from an agent (Claude/etc.). Pairs once with a browser tab, then forwards JSON commands over loopback.",
   "keywords": [
     "cli",
@@ -29,6 +29,7 @@
     "node": ">=24.0.0"
   },
   "bin": {
+    "agent-cli": "./dist/cli.js",
     "kmagent": "./dist/cli.js",
     "kmagent-server": "./dist/server.js"
   },
