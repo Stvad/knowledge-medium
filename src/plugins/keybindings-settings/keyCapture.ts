@@ -44,17 +44,17 @@ export interface ChordEventShape {
   readonly shiftKey: boolean
 }
 
-/** Map `KeyboardEvent.code` to the unshifted character for keys
- *  that browsers report as their shifted form when modifiers are
- *  held. Restricted to letters / digits where the mapping is
- *  layout-agnostic enough to be reliable — punctuation keys (Minus,
- *  Equal, …) are skipped on purpose because their unshifted glyph
- *  varies by keyboard layout. */
-const codeToLogicalKey = (code: string | undefined): string | null => {
+/** Map `KeyboardEvent.code` to the unshifted character for the digit
+ *  row, where shift replaces the digit with a punctuation glyph
+ *  (3 → '#'). Restricted to digits on purpose: letters work
+ *  correctly via `event.key.toLowerCase()` on every layout
+ *  (Shift+E always yields key='E'), and using event.code for letters
+ *  would break Colemak/Dvorak — event.code is QWERTY-position-keyed,
+ *  so a Colemak user's 'E' (physical KeyF) would round-trip back to
+ *  'f'. Punctuation keys (Minus, Equal, BracketLeft, …) are also
+ *  skipped because their unshifted glyph varies by layout. */
+const digitFromCode = (code: string | undefined): string | null => {
   if (!code) return null
-  if (code.startsWith('Key') && code.length === 4) {
-    return code.slice(3).toLowerCase()
-  }
   if (code.startsWith('Digit') && code.length === 6) {
     return code.slice(5)
   }
@@ -72,12 +72,16 @@ export const chordFromEvent = (event: ChordEventShape): string | null => {
   if (event.altKey) parts.push('alt')
   if (event.shiftKey) parts.push('shift')
 
-  // Prefer the physical-key fallback when shift is held — otherwise
-  // shift+3 captures as "shift+#" on a US keyboard (and locale-specific
-  // gibberish elsewhere). Without shift, event.key is already correct
-  // and respects the user's layout.
-  const logical = event.shiftKey ? codeToLogicalKey(event.code) : null
-  const rawKey = (logical ?? event.key).toLowerCase()
+  // For digit keys, prefer the physical-key fallback when shift is
+  // held — otherwise shift+3 captures as "shift+#" on a US keyboard.
+  // For letters and everything else, event.key.toLowerCase() is
+  // already correct on every layout: shift just uppercases letters,
+  // and Colemak/Dvorak letter rearrangements happen at the key
+  // level (so event.key reports the layout's letter, while event.code
+  // would betray the user's chosen layout by reporting QWERTY-keyed
+  // physical positions).
+  const digit = event.shiftKey ? digitFromCode(event.code) : null
+  const rawKey = (digit ?? event.key).toLowerCase()
   const key = KEY_ALIASES[rawKey] ?? rawKey
   if (!key) return null
   parts.push(key)

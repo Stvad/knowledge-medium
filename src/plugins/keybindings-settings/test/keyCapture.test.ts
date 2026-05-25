@@ -46,9 +46,20 @@ describe('chordFromEvent', () => {
       .toBe('shift+3')
   })
 
-  it('uses event.code to recover the logical letter when shift is held', () => {
+  it('captures shift+letter using event.key on QWERTY (uppercased → lowercased)', () => {
     expect(chordFromEvent(mk({key: 'K', code: 'KeyK', shiftKey: true, metaKey: true})))
       .toBe('cmd+shift+k')
+  })
+
+  it('respects Colemak/Dvorak letter layouts — uses event.key, not event.code', () => {
+    // Colemak places the letter 'E' at QWERTY's KeyF position. When
+    // a Colemak user presses Shift+E, event.code='KeyF' but
+    // event.key='E' (their actual layout's letter, uppercased by
+    // shift). Using event.code here would capture as 'shift+f' —
+    // the physical position the user remapped *away* from. The
+    // right behaviour is to trust event.key for letters.
+    expect(chordFromEvent(mk({key: 'E', code: 'KeyF', shiftKey: true})))
+      .toBe('shift+e')
   })
 
   it('keeps trusting event.key when shift is not held (layout-respecting)', () => {
