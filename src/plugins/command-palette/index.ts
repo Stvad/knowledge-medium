@@ -48,7 +48,7 @@ export const commandPaletteAction: ActionConfig<typeof ActionContextTypes.GLOBAL
     window.dispatchEvent(new CustomEvent(toggleCommandPaletteEvent))
   },
   defaultBinding: {
-    keys: ['cmd+k', 'ctrl+k'],
+    keys: '$mod+k',
   },
 }
 

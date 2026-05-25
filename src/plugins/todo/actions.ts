@@ -17,7 +17,7 @@ type TodoActionContext =
 
 export const TODO_CYCLE_ACTION_ID = 'todo.cycle'
 export const EDIT_MODE_TODO_CYCLE_ACTION_ID = 'edit.cm.todo.cycle'
-const TODO_TOGGLE_KEYS = ['cmd+enter', 'ctrl+enter']
+const TODO_TOGGLE_KEYS = ['$mod+Enter']
 
 const readStatus = (properties: Record<string, unknown>) => {
   const stored = properties[statusProp.name]

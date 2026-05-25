@@ -174,7 +174,7 @@ export function getSpatialNavigationActions(): ActionConfig<typeof ActionContext
       handler: async (deps: BlockShortcutDependencies) => {
         await moveHorizontal(deps, 'left')
       },
-      defaultBinding: {keys: ['left', 'j']},
+      defaultBinding: {keys: ['ArrowLeft', 'j']},
     }),
     bindNormal({
       id: 'move_right',
@@ -182,7 +182,7 @@ export function getSpatialNavigationActions(): ActionConfig<typeof ActionContext
       handler: async (deps: BlockShortcutDependencies) => {
         await moveHorizontal(deps, 'right')
       },
-      defaultBinding: {keys: ['right', 'l']},
+      defaultBinding: {keys: ['ArrowRight', 'l']},
     }),
   ]
 }

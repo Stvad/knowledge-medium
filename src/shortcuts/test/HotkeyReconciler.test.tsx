@@ -1,6 +1,5 @@
-import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
+import { describe, expect, it, afterEach, vi } from 'vitest'
 import { act, render, cleanup } from '@testing-library/react'
-import hotkeys from 'hotkeys-js'
 import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler.js'
 import {
   ActiveContextsProvider,
@@ -67,18 +66,13 @@ const buildAction = (overrides: Partial<ActionConfig> & Pick<ActionConfig, 'id' 
 } as ActionConfig)
 
 const dispatchKeydown = (key: string) => {
-  // hotkeys-js installs a keydown listener on document and reads the legacy
-  // `event.keyCode`/`event.which` to look up handlers. jsdom doesn't populate
-  // those automatically from `key`, so we set them explicitly here. Pair the
-  // keydown with a keyup so hotkeys-js's held-key tracking doesn't carry
-  // state into the next dispatch (sequential keydowns with no keyup get
-  // misread as chords).
+  // tinykeys installs a keydown listener on window and matches via
+  // event.key / event.code. Synthesise both so single-letter chords ('k')
+  // match event.key and code-form chords ('KeyK') match event.code.
   const code =
     key.length === 1 && /[a-z]/i.test(key) ? `Key${key.toUpperCase()}` : key
-  const keyCode = key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0
-  const init = {key, code, keyCode, which: keyCode, bubbles: true, cancelable: true}
-  document.dispatchEvent(new KeyboardEvent('keydown', init))
-  document.dispatchEvent(new KeyboardEvent('keyup', init))
+  const init: KeyboardEventInit = {key, code, bubbles: true, cancelable: true}
+  window.dispatchEvent(new KeyboardEvent('keydown', init))
 }
 
 const Activator = ({context}: {context: ActionContextType}) => {
@@ -129,15 +123,8 @@ const Harness = ({
 }
 
 describe('HotkeyReconciler', () => {
-  beforeEach(() => {
-    // Each test starts with a clean hotkeys-js handler table so registrations
-    // from one test don't leak into another's dispatch.
-    hotkeys.unbind()
-  })
-
   afterEach(() => {
     cleanup()
-    hotkeys.unbind()
   })
 
   it('fires the handler for a single-character key when the context is active', () => {
@@ -219,7 +206,7 @@ describe('HotkeyReconciler', () => {
     const action = buildAction({
       id: 'test.array',
       handler,
-      defaultBinding: {keys: ['down', 'k']},
+      defaultBinding: {keys: ['ArrowDown', 'k']},
     })
 
     render(

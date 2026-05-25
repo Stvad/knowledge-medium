@@ -194,10 +194,10 @@ describe('default CodeMirror shortcuts', () => {
     expect(moveBlockDownAction.defaultBinding?.eventOptions?.preventDefault).toBe(true)
   })
 
-  it('binds zoom out to Cmd+comma and Ctrl+comma', () => {
+  it('binds zoom out to $mod+comma (Cmd on macOS, Ctrl elsewhere)', () => {
     const action = findNormalModeAction(env.repo, 'zoom_out')
 
-    expect(action.defaultBinding?.keys).toEqual(['cmd+,', 'ctrl+,'])
+    expect(action.defaultBinding?.keys).toBe('$mod+,')
   })
 
   it('opens the root preferences block from the global action', async () => {

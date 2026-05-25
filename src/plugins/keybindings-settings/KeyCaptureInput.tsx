@@ -1,6 +1,6 @@
 /**
  * Single-chord capture input. Mounts as a small interactive surface
- * that listens for keydown, builds a hotkeys-js chord string via
+ * that listens for keydown, builds a tinykeys chord string via
  * `chordFromEvent`, and surfaces it back to the parent via
  * `onCapture`. The user confirms with the next non-modifier keypress
  * (chord commits immediately) and cancels with Escape.
@@ -46,11 +46,16 @@ export const KeyCaptureInput = ({pending, onCapture, onPartial, onCancel}: KeyCa
     const native = event.nativeEvent
     if (isModifierOnly(native)) {
       // Partial: show ⌘… style preview while modifiers are pressed.
+      // Mirrors `chordFromEvent`'s $mod/Control/Meta normalisation so
+      // the preview glyphs match what'll be captured on commit.
+      const onMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform)
+      const primary = onMac ? native.metaKey : native.ctrlKey
+      const secondary = onMac ? native.ctrlKey : native.metaKey
       const previewParts: string[] = []
-      if (native.metaKey) previewParts.push('cmd')
-      if (native.ctrlKey) previewParts.push('ctrl')
-      if (native.altKey) previewParts.push('alt')
-      if (native.shiftKey) previewParts.push('shift')
+      if (primary) previewParts.push('$mod')
+      if (secondary) previewParts.push(onMac ? 'Control' : 'Meta')
+      if (native.altKey) previewParts.push('Alt')
+      if (native.shiftKey) previewParts.push('Shift')
       onPartial(previewParts.length ? previewParts.join('+') : null)
       return
     }

@@ -39,7 +39,7 @@ export const findReplaceAction: ActionConfig<typeof ActionContextTypes.GLOBAL> =
     window.dispatchEvent(new CustomEvent(toggleFindReplaceEvent))
   },
   defaultBinding: {
-    keys: ['cmd+shift+f', 'ctrl+shift+f'],
+    keys: '$mod+Shift+f',
   },
 }
 

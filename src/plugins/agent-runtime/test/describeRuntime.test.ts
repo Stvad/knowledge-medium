@@ -160,7 +160,7 @@ describe('describeRuntime', () => {
     description: `Description for ${id}`,
     context: 'global',
     handler: () => {},
-    ...(hasBinding ? {defaultBinding: {keys: 'mod+x'}} : {}),
+    ...(hasBinding ? {defaultBinding: {keys: '$mod+x'}} : {}),
   })
 
   it('produces a compact ping payload without diagnostics', async () => {

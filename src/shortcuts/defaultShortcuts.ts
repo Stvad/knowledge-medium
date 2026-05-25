@@ -180,7 +180,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       await navigateInPanel(uiStateBlock, block.id)
     },
     defaultBinding: {
-      keys: ['cmd+.', 'ctrl+.'],
+      keys: '$mod+.',
     },
   }
 
@@ -198,7 +198,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       await navigateInPanel(uiStateBlock, parent.id)
     },
     defaultBinding: {
-      keys: ['cmd+,', 'ctrl+,'],
+      keys: '$mod+,',
     },
   }
 
@@ -214,7 +214,10 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       })
     },
     defaultBinding: {
-      keys: ['cmd+shift+.', 'ctrl+shift+.'],
+      // event.key for shift+. is '>' on US layout, but event.code stays
+      // 'Period' regardless — code-form keeps the binding correct under
+      // any layout where the user can press the shifted period.
+      keys: '$mod+Shift+Period',
     },
   }
 
@@ -225,7 +228,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       await deletePanelRow(repo, uiStateBlock.id)
     },
     defaultBinding: {
-      keys: 'ctrl+w',
+      keys: 'Control+w',
       eventOptions: {preventDefault: true},
     },
   }
@@ -271,7 +274,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       icon: Undo2,
       handler: async () => { await repo.undo() },
       defaultBinding: {
-        keys: ['cmd+z', 'ctrl+z'],
+        keys: '$mod+z',
         eventOptions: {preventDefault: true},
       },
     },
@@ -281,10 +284,11 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       context: ActionContextTypes.GLOBAL,
       handler: async () => { await repo.redo() },
       defaultBinding: {
-        // cmd+shift+z is the macOS convention; ctrl+y is the
-        // Windows / Linux convention (and matches what the legacy
+        // $mod+Shift+z is the macOS (Cmd+Shift+Z) and Windows/Linux
+        // (Ctrl+Shift+Z) primary; Control+y is the additional
+        // Windows/Linux convention (and matches what the legacy
         // UndoRedoManager bindings used).
-        keys: ['cmd+shift+z', 'ctrl+shift+z', 'ctrl+y'],
+        keys: ['$mod+Shift+z', 'Control+y'],
         eventOptions: {preventDefault: true},
       },
     },
@@ -440,7 +444,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         window.history.back()
       },
       defaultBinding: {
-        keys: ['cmd+[', 'ctrl+['],
+        keys: '$mod+[',
       },
     },
     {
@@ -451,7 +455,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         window.history.forward()
       },
       defaultBinding: {
-        keys: ['cmd+]', 'ctrl+]'],
+        keys: '$mod+]',
       },
     },
   ]
@@ -482,7 +486,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       context: ActionContextTypes.EDIT_MODE_CM,
       handler: async (deps: CodeMirrorEditModeDependencies) => setIsEditing(deps.uiStateBlock, false),
       defaultBinding: {
-        keys: 'escape',
+        keys: 'Escape',
       },
     },
     {
@@ -546,7 +550,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         }
       },
       defaultBinding: {
-        keys: 'enter',
+        keys: 'Enter',
         eventOptions: {
           preventDefault: true,
         },
@@ -595,7 +599,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         await focusBlock(uiStateBlock, prevVisible.id, {edit: true})
       },
       defaultBinding: {
-        keys: 'up',
+        keys: 'ArrowUp',
         eventOptions: {
           preventDefault: false,
         },
@@ -638,7 +642,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         await focusBlock(uiStateBlock, nextVisible.id, {edit: true})
       },
       defaultBinding: {
-        keys: 'down',
+        keys: 'ArrowDown',
       },
     },
     {
@@ -669,7 +673,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         await focusBlock(uiStateBlock, prevVisible.id, {edit: true})
       },
       defaultBinding: {
-        keys: 'left',
+        keys: 'ArrowLeft',
       },
     },
     {
@@ -699,7 +703,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         await focusBlock(uiStateBlock, nextVisible.id, {edit: true})
       },
       defaultBinding: {
-        keys: 'right',
+        keys: 'ArrowRight',
       },
     },
     {
@@ -775,7 +779,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         await focusBlock(uiStateBlock, prevId, {edit: true})
       },
       defaultBinding: {
-        keys: 'backspace',
+        keys: 'Backspace',
       },
     },
     bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, indentBlock, {idPrefix: 'edit.cm'}),
@@ -809,7 +813,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       handler: async (deps: MultiSelectModeDependencies) =>
         deps.uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue),
       defaultBinding: {
-        keys: 'escape',
+        keys: 'Escape',
       },
     },
     {
@@ -818,7 +822,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       context: ActionContextTypes.MULTI_SELECT_MODE,
       handler: ({uiStateBlock}) => copySelectedBlocksToClipboard(uiStateBlock, repo),
       defaultBinding: {
-        keys: ['cmd+c', 'ctrl+c'],
+        keys: '$mod+c',
         eventOptions: {
           preventDefault: true,
         },
@@ -841,7 +845,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
       },
       defaultBinding: {
-        keys: ['cmd+x', 'ctrl+x', 'd'],
+        keys: ['$mod+x', 'd'],
         eventOptions: {
           preventDefault: true,
         },
@@ -888,7 +892,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         }
       },
       defaultBinding: {
-        keys: 'shift+p',
+        keys: 'Shift+p',
       },
     },
   ];

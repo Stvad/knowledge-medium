@@ -92,7 +92,9 @@ export const promoteClosestBreadcrumbAction: ActionConfig = {
     return deps.hasBreadcrumb?.() === true
   },
   defaultBinding: {
-    keys: 'alt+z',
+    // Code form: Mac's Alt+z produces 'Ω' as event.key, so the binding
+    // has to match event.code 'KeyZ' instead.
+    keys: 'Alt+KeyZ',
   },
 }
 

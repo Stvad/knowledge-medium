@@ -38,8 +38,8 @@ describe('todoPlugin', () => {
     expect(edit?.context).toBe(ActionContextTypes.EDIT_MODE_CM)
     expect(actions.find(action => action.id === SWIPE_RIGHT_BLOCK_ACTION_ID)?.context)
       .toBe(ActionContextTypes.NORMAL_MODE)
-    expect(normal?.defaultBinding?.keys).toEqual(['cmd+enter', 'ctrl+enter'])
-    expect(edit?.defaultBinding?.keys).toEqual(['cmd+enter', 'ctrl+enter'])
+    expect(normal?.defaultBinding?.keys).toEqual(['$mod+Enter'])
+    expect(edit?.defaultBinding?.keys).toEqual(['$mod+Enter'])
   })
 
   it('memoizes content decorators per inner renderer', () => {

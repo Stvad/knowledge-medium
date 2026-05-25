@@ -115,7 +115,7 @@ const insertVideoTimestamp: ActionConfig = {
     await appendToBlock(deps.block, timestamp)
   },
   defaultBinding: {
-    keys: ['cmd+shift+t', 'ctrl+shift+t'],
+    keys: '$mod+Shift+t',
     eventOptions: {
       preventDefault: true,
     },
@@ -138,7 +138,7 @@ const toggleVideoNotesView: ActionConfig = {
     await enterVideoNotesView(deps.videoBlock, deps.uiStateBlock)
   },
   defaultBinding: {
-    keys: ['cmd+shift+n', 'ctrl+shift+n'],
+    keys: '$mod+Shift+n',
     eventOptions: {
       preventDefault: true,
     },

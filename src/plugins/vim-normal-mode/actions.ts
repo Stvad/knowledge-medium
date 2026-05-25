@@ -84,7 +84,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         if (next) void focusBlock(uiStateBlock, next.id)
       },
       defaultBinding: {
-        keys: ['down', 'k'],
+        keys: ['ArrowDown', 'k'],
       },
     }),
     bindNormal({
@@ -101,7 +101,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         if (prev) void focusBlock(uiStateBlock, prev.id)
       },
       defaultBinding: {
-        keys: ['up', 'h'],
+        keys: ['ArrowUp', 'h'],
       },
     }),
     bindNormal({
@@ -164,7 +164,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         })
       },
       defaultBinding: {
-        keys: ['space', 'v'],
+        keys: ['Space', 'v'],
       },
     }),
     extendSelectionUpAction,
@@ -181,6 +181,10 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         void focusBlock(uiStateBlock, topLevelBlockId)
       },
       defaultBinding: {
+        // Two-press sequence — tinykeys dispatches on the second `g`
+        // after the first within ~1s. Under hotkeys-js this string
+        // was treated as a single chord with a literal space and
+        // never matched, which is why the binding was dead.
         keys: 'g g',
       },
     }),
@@ -197,7 +201,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         void focusBlock(uiStateBlock, lastBlock.id)
       },
       defaultBinding: {
-        keys: 'shift+g',
+        keys: 'Shift+g',
       },
     }),
     bindNormal({
@@ -211,7 +215,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         if (target) void focusBlock(uiStateBlock, target.id)
       },
       defaultBinding: {
-        keys: 'ctrl+d',
+        keys: 'Control+d',
       },
     }),
     bindNormal({
@@ -225,7 +229,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         if (target) void focusBlock(uiStateBlock, target.id)
       },
       defaultBinding: {
-        keys: 'ctrl+u',
+        keys: 'Control+u',
       },
     }),
     bindNormal({
@@ -237,7 +241,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         await focusBlock(uiStateBlock, newId, {edit: true})
       },
       defaultBinding: {
-        keys: 'shift+o',
+        keys: 'Shift+o',
       },
     }),
     bindNormal({
@@ -259,7 +263,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         if (pasted[0]) void focusBlock(uiStateBlock, pasted[0].id)
       },
       defaultBinding: {
-        keys: 'shift+p',
+        keys: 'Shift+p',
       },
     }),
     bindNormal({
@@ -275,7 +279,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
       description: 'Redo',
       handler: async () => { await repo.redo() },
       defaultBinding: {
-        keys: 'ctrl+r',
+        keys: 'Control+r',
       },
     }),
     bindNormal({
@@ -293,7 +297,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         void focusBlock(uiStateBlock, parent.id)
       },
       defaultBinding: {
-        keys: 'shift+z',
+        keys: 'Shift+z',
       },
     }),
   ]

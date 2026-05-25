@@ -1,12 +1,12 @@
 /**
  * Global keyboard actions for navigating daily notes:
  *
- *   - `open_today` (cmd+shift+`)               — today's note
- *   - `append_today_daily_block` (ctrl+shift+n) — new block in today's note,
+ *   - `open_today` ($mod+Shift+`)               — today's note
+ *   - `append_today_daily_block` (Ctrl+Shift+n) — new block in today's note,
  *     opened in a stacked panel
- *   - `open_previous_daily_note` (cmd+shift+[) — yesterday relative to
+ *   - `open_previous_daily_note` ($mod+Shift+[) — yesterday relative to
  *     the currently viewed daily note (or to today if not on one)
- *   - `open_next_daily_note` (cmd+shift+])     — tomorrow relative
+ *   - `open_next_daily_note` ($mod+Shift+])     — tomorrow relative
  *
  * The prev/next actions need to figure out "what daily note is this
  * panel showing right now" so the offset is relative. We do that by
@@ -165,7 +165,7 @@ export const dailyNotesActions = (
       navigateFromGlobalCommand(repo, {blockId: note.id, workspaceId})
     },
     defaultBinding: {
-      keys: ['cmd+shift+`', 'ctrl+shift+`'],
+      keys: '$mod+Shift+Backquote',
     },
   },
   {
@@ -178,7 +178,7 @@ export const dailyNotesActions = (
       await appendTodayDailyBlockInStack(repo, layoutSessionBlock)
     },
     defaultBinding: {
-      keys: 'ctrl+shift+n',
+      keys: 'Control+Shift+n',
       eventOptions: {
         preventDefault: true,
       },
@@ -192,7 +192,7 @@ export const dailyNotesActions = (
       await openDailyNoteByOffset(repo, -1)
     },
     defaultBinding: {
-      keys: ['cmd+shift+[', 'ctrl+shift+['],
+      keys: '$mod+Shift+BracketLeft',
     },
   },
   {
@@ -203,7 +203,7 @@ export const dailyNotesActions = (
       await openDailyNoteByOffset(repo, 1)
     },
     defaultBinding: {
-      keys: ['cmd+shift+]', 'ctrl+shift+]'],
+      keys: '$mod+Shift+BracketRight',
     },
   },
 ]

@@ -170,7 +170,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       requestEditorFocusIfEditing(deps.uiStateBlock)
     },
     defaultBinding: {
-      keys: 'tab',
+      keys: 'Tab',
       eventOptions: {
         preventDefault: true,
       },
@@ -188,7 +188,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       requestEditorFocusIfEditing(uiStateBlock)
     },
     defaultBinding: {
-      keys: 'shift+tab',
+      keys: 'Shift+Tab',
       eventOptions: {
         preventDefault: true,
       },
@@ -204,7 +204,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       requestEditorFocusIfEditing(uiStateBlock)
     },
     defaultBinding: {
-      keys: 'cmd+shift+up',
+      keys: '$mod+Shift+ArrowUp',
       eventOptions: {
         preventDefault: true,
       },
@@ -221,7 +221,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       requestEditorFocusIfEditing(uiStateBlock)
     },
     defaultBinding: {
-      keys: 'cmd+shift+down',
+      keys: '$mod+Shift+ArrowDown',
       eventOptions: {
         preventDefault: true,
       },
@@ -254,7 +254,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       if (next) void focusBlock(uiStateBlock, next.id)
     },
     defaultBinding: {
-      keys: 'delete',
+      keys: 'Delete',
     },
   }
 
@@ -305,7 +305,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     icon: Copy,
     handler: ({block}: BlockShortcutDependencies) => copyBlockToClipboard(block),
     defaultBinding: {
-      keys: ['cmd+c', 'ctrl+c'],
+      keys: '$mod+c',
       eventOptions: {preventDefault: true},
     },
   }
@@ -318,7 +318,9 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       writeToClipboard(`((${block.id}))`)
     },
     defaultBinding: {
-      keys: 'alt+y',
+      // event.key for Alt+y on Mac is a special char ('¥'); code 'KeyY'
+      // is stable across layouts and Mac's Alt-transformations.
+      keys: 'Alt+KeyY',
     },
   }
 
@@ -330,7 +332,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       writeToClipboard(`!((${block.id}))`)
     },
     defaultBinding: {
-      keys: 'shift+y',
+      keys: 'Shift+y',
     },
   }
 
@@ -340,7 +342,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     handler: async (deps: BlockShortcutDependencies) =>
       await extendSelectionUp(deps.uiStateBlock, repo),
     defaultBinding: {
-      keys: 'shift+up',
+      keys: 'Shift+ArrowUp',
     },
   }
 
@@ -350,7 +352,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     handler: async (deps: BlockShortcutDependencies) =>
       await extendSelectionDown(deps.uiStateBlock, repo),
     defaultBinding: {
-      keys: 'shift+down',
+      keys: 'Shift+ArrowDown',
     },
   }
 

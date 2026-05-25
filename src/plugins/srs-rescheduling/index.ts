@@ -52,9 +52,11 @@ import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
 
 const shortcutKeysForSignal = (signal: SrsSignal): string[] => {
   const key = String(signal)
+  // Use the Digit{n} code so the binding survives the Shift transform
+  // (shift+0 → ')', shift+1 → '!', etc.) on US layouts.
   return [
-    `ctrl+shift+${key}`,
-    `ctrl+shift+alt+cmd+${key}`,
+    `Control+Shift+Digit${key}`,
+    `Control+Shift+Alt+Meta+Digit${key}`,
   ]
 }
 

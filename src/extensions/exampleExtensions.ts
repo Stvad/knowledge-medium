@@ -92,14 +92,14 @@ const FOLD_ALL_ACTION_SOURCE = `import {
 // directly as uiStateBlock, so the per-panel topLevelBlockId is reachable
 // without walking into ui-state/panels.
 //
-// Note on key syntax: this app uses hotkeys-js, which has no 'mod'
-// alias — list cmd and ctrl variants explicitly for cross-platform
-// support.
+// Note on key syntax: this app uses tinykeys. Use '$mod' for the
+// platform-primary modifier (Cmd on macOS, Ctrl elsewhere); spell
+// other modifiers as 'Control', 'Alt', 'Shift'.
 export default actionsFacet.of({
   id: 'user.fold-all',
   description: 'Fold/unfold every block in the current view',
   context: ActionContextTypes.NORMAL_MODE,
-  defaultBinding: { keys: ['cmd+shift+f', 'ctrl+shift+f'] },
+  defaultBinding: { keys: '$mod+Shift+f' },
   handler: async ({ uiStateBlock }) => {
     const topLevelId = uiStateBlock.peekProperty(topLevelBlockIdProp)
     if (!topLevelId) return
@@ -184,7 +184,7 @@ export default [
     id: 'user.add-reaction',
     description: 'Add a reaction emoji to the focused block',
     context: ActionContextTypes.NORMAL_MODE,
-    defaultBinding: { keys: ['cmd+shift+r', 'ctrl+shift+r'] },
+    defaultBinding: { keys: '$mod+Shift+r' },
     handler: async ({ block }) => cycleReaction(block),
   }),
 

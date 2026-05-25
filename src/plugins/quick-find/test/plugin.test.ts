@@ -21,10 +21,8 @@ describe('quickFindPlugin', () => {
     expect(runtime.read(actionsFacet)).toEqual([quickFindAction])
     expect(runtime.read(headerItemsFacet)).toEqual([quickFindHeaderItem])
     expect(quickFindAction.defaultBinding?.keys).toEqual([
-      'cmd+p',
-      'ctrl+p',
-      'cmd+shift+k',
-      'ctrl+shift+k',
+      '$mod+p',
+      '$mod+Shift+k',
     ])
   })
 })

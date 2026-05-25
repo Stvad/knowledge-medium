@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import hotkeys from 'hotkeys-js'
+import { tinykeys } from 'tinykeys'
 import { actionContextsFacet } from '@/extensions/core.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { useActiveContextsState, ActiveContextsMap } from '@/shortcuts/ActiveContexts.js'
@@ -20,11 +20,8 @@ import {
 } from '@/shortcuts/types.js'
 import { hasEditableTarget, isTypingKeyEvent } from '@/shortcuts/utils.js'
 
-type HotkeyHandler = (event: KeyboardEvent) => boolean | void
-
 interface InstalledBinding {
-  keys: readonly string[]
-  handler: HotkeyHandler
+  unsubscribe: () => void
 }
 
 const normalizeKeys = (keys: string | string[]): readonly string[] =>
@@ -60,22 +57,46 @@ const computeInstallableContexts = (
 }
 
 /**
- * Keeps `hotkeys-js` in sync with the facet runtime's declared actions and the
+ * Run the same event-filter cascade tinykeys' default `ignore` would do,
+ * but extended with per-context eventFilter overrides. An active context's
+ * filter returning true means "I want this event even though it'd
+ * normally be ignored" (e.g. property-editing needs Escape from inside
+ * an <input>). Otherwise we apply the editable-target heuristic.
+ */
+const shouldHandleEvent = (
+  event: KeyboardEvent,
+  active: ActiveContextsMap,
+  contextConfigsByType: ReadonlyMap<ActionContextType, ActionContextConfig>,
+): boolean => {
+  for (const type of active.keys()) {
+    const config = contextConfigsByType.get(type)
+    if (config?.eventFilter?.(event)) return true
+  }
+  return defaultEventFilter(event)
+}
+
+/**
+ * Keeps `tinykeys` in sync with the facet runtime's declared actions and the
  * currently-active contexts from `<ActiveContextsProvider>`.
  *
- * - When the action set changes (runtime regeneration) all bindings are torn
- *   down and re-installed. This is uncommon; runtime regenerates only on
- *   dynamic extension reloads.
- * - When active contexts change, bindings are installed/uninstalled per action
- *   based on whether the action's context is active. Handlers read deps via
- *   refs so intra-context dependency changes (e.g. new focused block) don't
- *   require rebinding.
- * - Also installs `hotkeys.filter` for per-context event filtering and the
- *   module-level `runActionById` dispatcher for external callers.
+ * - Each enabled action gets its own `tinykeys(window, {...})` subscription
+ *   so per-action install/uninstall is just calling the returned
+ *   unsubscribe. Many small listeners > one big map: avoids tearing
+ *   everything down whenever a single context activates.
+ * - When the action set identity changes (runtime regeneration) every
+ *   subscription is torn down first; handlers close over the old action
+ *   objects and would otherwise become stale.
+ * - When active contexts change, subscriptions are added/removed per
+ *   action based on whether the action's context is active and installable
+ *   (modal stacking). Handlers read deps via refs so intra-context
+ *   dependency changes (e.g. new focused block) don't require rebinding.
+ * - Per-context eventFilter overrides run inside each handler — tinykeys'
+ *   built-in `ignore` is bypassed (`() => false`) so we can layer our
+ *   own filter cascade.
  *
  * NOTE: an earlier pass replaced the latest-ref pattern below with
  * `useEffectEvent`. That broke shortcut delivery in the browser (likely
- * because hotkeys-js fires its handlers from a global keydown listener,
+ * because tinykeys fires its handlers from a global keydown listener,
  * not a React-tracked event handler — outside that scope the
  * effect-event indirection doesn't see the latest closure reliably).
  * Reverted to the ref pattern; the refs are written in a useLayoutEffect
@@ -121,23 +142,6 @@ export function HotkeyReconciler(): null {
     contextConfigsByTypeRef.current = contextConfigsByType
   }, [active, contextConfigsByType])
 
-  // Install the hotkeys-js event filter. It reads activeRef/contextConfigsByTypeRef
-  // so it stays current without needing to re-install. Restore a permissive
-  // default on unmount so stale closures don't remain wired into the global.
-  useEffect(() => {
-    const previousFilter = hotkeys.filter
-    hotkeys.filter = (event) => {
-      for (const type of activeRef.current.keys()) {
-        const config = contextConfigsByTypeRef.current.get(type)
-        if (config?.eventFilter?.(event)) return true
-      }
-      return defaultEventFilter(event)
-    }
-    return () => {
-      hotkeys.filter = previousFilter
-    }
-  }, [])
-
   // Install the module-level runActionById dispatcher. Reads refs so it's
   // always current. Torn down on unmount so stray callers fail loudly.
   useEffect(() => {
@@ -154,10 +158,8 @@ export function HotkeyReconciler(): null {
   }, [runtime])
 
   // Track which actions currently have hotkeys installed.
-  // hotkeys-js supports handler-specific unbinding: `hotkeys.unbind(key, fn)`
-  // detects the function arg and maps it to `method`, so two actions sharing
-  // a key can independently install and uninstall their handlers without
-  // stepping on each other.
+  // Each entry owns its own tinykeys subscription — calling its
+  // unsubscribe removes only that handler's listener.
   const installedRef = useRef<{
     actions: readonly ActionConfig[]
     byActionId: Map<string, InstalledBinding>
@@ -169,7 +171,7 @@ export function HotkeyReconciler(): null {
     const uninstall = (actionId: string) => {
       const entry = state.byActionId.get(actionId)
       if (!entry) return
-      for (const key of entry.keys) hotkeys.unbind(key, entry.handler)
+      entry.unsubscribe()
       state.byActionId.delete(actionId)
     }
 
@@ -200,8 +202,14 @@ export function HotkeyReconciler(): null {
       const keys = normalizeKeys(binding.keys)
       const handler = makeHandler(action, binding, activeRef, contextConfigsByTypeRef)
 
-      for (const key of keys) hotkeys(key, handler)
-      state.byActionId.set(actionKey, {keys, handler})
+      const bindingMap: Record<string, (event: KeyboardEvent) => void> = {}
+      for (const key of keys) bindingMap[key] = handler
+      // ignore: () => false disables tinykeys' built-in editable-target
+      // filter; we run our own context-aware filter inside the handler so
+      // contexts like property-editing can opt in to events tinykeys
+      // would otherwise drop.
+      const unsubscribe = tinykeys(window, bindingMap, {ignore: () => false})
+      state.byActionId.set(actionKey, {unsubscribe})
     }
 
     // Uninstall actions whose context deactivated (or that disappeared).
@@ -217,9 +225,7 @@ export function HotkeyReconciler(): null {
   useEffect(() => {
     const state = installedRef.current
     return () => {
-      for (const [, entry] of state.byActionId) {
-        for (const key of entry.keys) hotkeys.unbind(key, entry.handler)
-      }
+      for (const [, entry] of state.byActionId) entry.unsubscribe()
       state.byActionId.clear()
       state.actions = []
     }
@@ -233,13 +239,13 @@ const makeHandler = (
   binding: ShortcutBinding,
   activeRef: { current: ActiveContextsMap },
   contextConfigsByTypeRef: { current: ReadonlyMap<ActionContextType, ActionContextConfig> },
-): HotkeyHandler => {
+) => {
   return (event: KeyboardEvent) => {
+    if (!shouldHandleEvent(event, activeRef.current, contextConfigsByTypeRef.current)) return
+
     const deps = activeRef.current.get(action.context)
-    // Context may have deactivated between the key event and this callback
-    // (or another action shares this key in a different, inactive context).
-    // Returning true lets the event propagate / default-handle.
-    if (!deps) return true
+    // Context may have deactivated between the key event and this callback.
+    if (!deps) return
 
     const contextConfig = contextConfigsByTypeRef.current.get(action.context)
     const options: EventOptions = {
@@ -264,7 +270,5 @@ const makeHandler = (
     } catch (error) {
       console.error(`[HotkeyReconciler] Action ${action.id} threw`, error)
     }
-
-    return !options.preventDefault
   }
 }

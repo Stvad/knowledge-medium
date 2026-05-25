@@ -85,16 +85,16 @@ describe('srsReschedulingPlugin', () => {
     ])
 
     expect(actions.map(action => action.defaultBinding?.keys)).toEqual([
-      ['ctrl+shift+1', 'ctrl+shift+alt+cmd+1'],
-      ['ctrl+shift+2', 'ctrl+shift+alt+cmd+2'],
-      ['ctrl+shift+3', 'ctrl+shift+alt+cmd+3'],
-      ['ctrl+shift+4', 'ctrl+shift+alt+cmd+4'],
-      ['ctrl+shift+5', 'ctrl+shift+alt+cmd+5'],
-      ['ctrl+shift+1', 'ctrl+shift+alt+cmd+1'],
-      ['ctrl+shift+2', 'ctrl+shift+alt+cmd+2'],
-      ['ctrl+shift+3', 'ctrl+shift+alt+cmd+3'],
-      ['ctrl+shift+4', 'ctrl+shift+alt+cmd+4'],
-      ['ctrl+shift+5', 'ctrl+shift+alt+cmd+5'],
+      ['Control+Shift+Digit1', 'Control+Shift+Alt+Meta+Digit1'],
+      ['Control+Shift+Digit2', 'Control+Shift+Alt+Meta+Digit2'],
+      ['Control+Shift+Digit3', 'Control+Shift+Alt+Meta+Digit3'],
+      ['Control+Shift+Digit4', 'Control+Shift+Alt+Meta+Digit4'],
+      ['Control+Shift+Digit5', 'Control+Shift+Alt+Meta+Digit5'],
+      ['Control+Shift+Digit1', 'Control+Shift+Alt+Meta+Digit1'],
+      ['Control+Shift+Digit2', 'Control+Shift+Alt+Meta+Digit2'],
+      ['Control+Shift+Digit3', 'Control+Shift+Alt+Meta+Digit3'],
+      ['Control+Shift+Digit4', 'Control+Shift+Alt+Meta+Digit4'],
+      ['Control+Shift+Digit5', 'Control+Shift+Alt+Meta+Digit5'],
       undefined,
       undefined,
     ])

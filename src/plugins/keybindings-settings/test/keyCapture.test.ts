@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, beforeEach } from 'vitest'
 import {
   chordFromEvent,
   formatChord,
@@ -15,27 +15,50 @@ const mk = (over: Partial<{key: string; code: string; metaKey: boolean; ctrlKey:
   ...over,
 })
 
+// chordFromEvent reads navigator.platform to decide which physical
+// modifier ($mod) normalises to. Stub it per-test so the captures we
+// assert about don't depend on whichever machine runs the suite.
+const stubPlatform = (platform: string) => {
+  Object.defineProperty(navigator, 'platform', {
+    configurable: true,
+    get: () => platform,
+  })
+}
+
 describe('chordFromEvent', () => {
+  beforeEach(() => {
+    stubPlatform('MacIntel')
+  })
+
   it('returns null while only a modifier is held', () => {
     expect(chordFromEvent(mk({key: 'Meta', metaKey: true}))).toBeNull()
     expect(chordFromEvent(mk({key: 'Shift', shiftKey: true}))).toBeNull()
   })
 
-  it('builds cmd+k from Meta+K', () => {
-    expect(chordFromEvent(mk({key: 'k', metaKey: true}))).toBe('cmd+k')
+  it('builds $mod+k from Meta+K on macOS', () => {
+    expect(chordFromEvent(mk({key: 'k', metaKey: true}))).toBe('$mod+k')
   })
 
-  it('builds cmd+shift+k with modifiers in a stable order', () => {
+  it('builds $mod+k from Ctrl+K on Windows', () => {
+    stubPlatform('Win32')
+    expect(chordFromEvent(mk({key: 'k', ctrlKey: true}))).toBe('$mod+k')
+  })
+
+  it('builds $mod+Shift+K with modifiers in a stable order', () => {
     expect(chordFromEvent(mk({key: 'K', metaKey: true, shiftKey: true})))
-      .toBe('cmd+shift+k')
+      .toBe('$mod+Shift+K')
     expect(chordFromEvent(mk({key: 'K', shiftKey: true, metaKey: true})))
-      .toBe('cmd+shift+k')
+      .toBe('$mod+Shift+K')
   })
 
-  it('aliases arrow keys and space to hotkeys-js canonical names', () => {
-    expect(chordFromEvent(mk({key: 'ArrowLeft', ctrlKey: true}))).toBe('ctrl+left')
-    expect(chordFromEvent(mk({key: ' ', metaKey: true}))).toBe('cmd+space')
-    expect(chordFromEvent(mk({key: 'Escape'}))).toBe('esc')
+  it('maps non-primary Ctrl on macOS to literal Control (so vim Ctrl+D survives)', () => {
+    expect(chordFromEvent(mk({key: 'd', ctrlKey: true}))).toBe('Control+d')
+  })
+
+  it('aliases arrow keys and Escape to tinykeys canonical names', () => {
+    expect(chordFromEvent(mk({key: 'ArrowLeft', ctrlKey: true}))).toBe('Control+ArrowLeft')
+    expect(chordFromEvent(mk({key: ' ', metaKey: true}))).toBe('$mod+Space')
+    expect(chordFromEvent(mk({key: 'Escape'}))).toBe('Escape')
   })
 
   it('uses event.code to recover the logical digit when shift is held', () => {
@@ -43,29 +66,36 @@ describe('chordFromEvent', () => {
     // character, not the user's intent. event.code = 'Digit3' is the
     // stable physical-key fallback.
     expect(chordFromEvent(mk({key: '#', code: 'Digit3', shiftKey: true})))
-      .toBe('shift+3')
+      .toBe('Shift+Digit3')
   })
 
-  it('captures shift+letter using event.key on QWERTY (uppercased → lowercased)', () => {
+  it('captures shift+letter using event.key on QWERTY (uppercased)', () => {
     expect(chordFromEvent(mk({key: 'K', code: 'KeyK', shiftKey: true, metaKey: true})))
-      .toBe('cmd+shift+k')
+      .toBe('$mod+Shift+K')
   })
 
   it('respects Colemak/Dvorak letter layouts — uses event.key, not event.code', () => {
     // Colemak places the letter 'E' at QWERTY's KeyF position. When
     // a Colemak user presses Shift+E, event.code='KeyF' but
     // event.key='E' (their actual layout's letter, uppercased by
-    // shift). Using event.code here would capture as 'shift+f' —
+    // shift). Using event.code here would capture as 'Shift+KeyF' —
     // the physical position the user remapped *away* from. The
     // right behaviour is to trust event.key for letters.
     expect(chordFromEvent(mk({key: 'E', code: 'KeyF', shiftKey: true})))
-      .toBe('shift+e')
+      .toBe('Shift+E')
   })
 
   it('keeps trusting event.key when shift is not held (layout-respecting)', () => {
     // On a German keyboard, AltGr+8 produces '[' with code='Digit8'.
     // Without shift, we keep event.key so the user's layout works.
     expect(chordFromEvent(mk({key: '[', code: 'Digit8'}))).toBe('[')
+  })
+
+  it('uses event.code for Alt+letter so Mac Alt-transformations do not poison the capture', () => {
+    // Mac alt+y produces '¥' as event.key. The binding has to match
+    // event.code, not the transformed character.
+    expect(chordFromEvent(mk({key: '¥', code: 'KeyY', altKey: true})))
+      .toBe('Alt+KeyY')
   })
 })
 
@@ -80,25 +110,35 @@ describe('isModifierOnly', () => {
 
 describe('formatChord', () => {
   it('renders modifier glyphs and uppercases the key', () => {
-    expect(formatChord('cmd+shift+k')).toBe('⌘⇧K')
-    expect(formatChord('ctrl+alt+left')).toBe('⌃⌥←')
+    expect(formatChord('$mod+Shift+k')).toBe('⌘⇧K')
+    expect(formatChord('Control+Alt+ArrowLeft')).toBe('⌃⌥←')
+  })
+
+  it('strips tinykeys code prefixes for display', () => {
+    expect(formatChord('Alt+KeyY')).toBe('⌥Y')
+    expect(formatChord('Shift+Digit3')).toBe('⇧3')
   })
 
   it('preserves multi-char keys with title casing', () => {
-    expect(formatChord('cmd+enter')).toBe('⌘⏎')
+    expect(formatChord('$mod+Enter')).toBe('⌘⏎')
     expect(formatChord('f5')).toBe('F5')
   })
 })
 
 describe('normalizeChord', () => {
-  it('canonicalises modifier order and aliases', () => {
-    expect(normalizeChord('Shift+Meta+K')).toBe('cmd+shift+k')
-    expect(normalizeChord('control+option+a')).toBe('ctrl+alt+a')
+  it('canonicalises modifier aliases to tinykeys names', () => {
+    expect(normalizeChord('Shift+Meta+K')).toBe('$mod+Shift+K')
+    expect(normalizeChord('control+option+a')).toBe('Control+Alt+a')
+  })
+
+  it('orders modifiers consistently: $mod, Control, Meta, Alt, Shift, key', () => {
+    expect(normalizeChord('Shift+Alt+$mod+k')).toBe('$mod+Alt+Shift+k')
   })
 
   it('is idempotent', () => {
-    const c = 'cmd+shift+k'
+    const c = '$mod+Shift+k'
     expect(normalizeChord(c)).toBe(c)
     expect(normalizeChord(normalizeChord(c))).toBe(c)
   })
 })
+
