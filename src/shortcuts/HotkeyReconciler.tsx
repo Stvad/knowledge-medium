@@ -18,7 +18,7 @@ import {
   EventOptions,
   ShortcutBinding,
 } from '@/shortcuts/types.js'
-import { hasEditableTarget, isSingleKeyPress } from '@/shortcuts/utils.js'
+import { hasEditableTarget, isTypingKeyEvent } from '@/shortcuts/utils.js'
 
 type HotkeyHandler = (event: KeyboardEvent) => boolean | void
 
@@ -31,7 +31,7 @@ const normalizeKeys = (keys: string | string[]): readonly string[] =>
   Array.isArray(keys) ? keys : [keys]
 
 const defaultEventFilter = (event: KeyboardEvent) =>
-  !(isSingleKeyPress(event) && hasEditableTarget(event))
+  !(isTypingKeyEvent(event) && hasEditableTarget(event))
 
 /**
  * Keeps `hotkeys-js` in sync with the facet runtime's declared actions and the
