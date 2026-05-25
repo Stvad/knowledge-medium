@@ -78,10 +78,18 @@ export const withRecoveredLetterKey = (event: KeyboardEvent): KeyboardEvent => {
   // Proxy preserves prototype methods (getModifierState, preventDefault).
   // We can't reassign event.key directly because KeyboardEvent props
   // are non-writable in jsdom and read-only via accessor in real browsers.
+  //
+  // Critical: read via `Reflect.get(target, prop)` (receiver omitted,
+  // defaults to target) — NOT `Reflect.get(target, prop, receiver)`.
+  // KeyboardEvent's accessor properties (code, repeat, isComposing, …)
+  // have opaque brand checks that throw "'get code' called on an object
+  // that does not implement interface KeyboardEvent" if their getter
+  // runs with `this` set to a Proxy. Passing `target` as receiver binds
+  // those getters to the real event.
   return new Proxy(event, {
-    get(target, prop, receiver) {
+    get(target, prop) {
       if (prop === 'key') return recovered
-      const value = Reflect.get(target, prop, receiver)
+      const value = Reflect.get(target, prop)
       return typeof value === 'function' ? value.bind(target) : value
     },
   })

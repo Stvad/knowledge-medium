@@ -76,4 +76,36 @@ describe('withRecoveredLetterKey', () => {
     const event = mk({key: 'Ÿ', code: 'KeyY', keyCode: 89, altKey: true, shiftKey: true})
     expect(withRecoveredLetterKey(event).key).toBe('y')
   })
+
+  it('invokes prototype getters with `this` bound to the underlying event, not the proxy', () => {
+    // Real-browser bug repro: KeyboardEvent.{code,key,repeat,isComposing,
+    // getModifierState,…} are accessor properties with opaque brand
+    // checks ('illegal invocation' / "'get code' called on an object
+    // that does not implement interface KeyboardEvent.") that throw
+    // when their getter runs with `this` set to a Proxy. jsdom can't
+    // reproduce the brand check (it goes through `instanceof`, which
+    // proxies pass), so assert the semantic directly: a getter on
+    // KeyboardEvent.prototype must observe the underlying event as
+    // `this`, not the proxy. If the proxy uses `Reflect.get(target,
+    // prop, receiver)`, `this` becomes the proxy and real browsers
+    // throw.
+    const original = Object.getOwnPropertyDescriptor(KeyboardEvent.prototype, 'code')!
+    let observedThis: unknown = null
+    Object.defineProperty(KeyboardEvent.prototype, 'code', {
+      configurable: true,
+      get(this: KeyboardEvent) {
+        observedThis = this
+        return original.get!.call(this)
+      },
+    })
+    try {
+      const event = mk({key: '¥', code: 'KeyY', keyCode: 89, altKey: true})
+      const recovered = withRecoveredLetterKey(event)
+      void recovered.code
+      expect(observedThis).toBe(event)
+      expect(observedThis).not.toBe(recovered)
+    } finally {
+      Object.defineProperty(KeyboardEvent.prototype, 'code', original)
+    }
+  })
 })
