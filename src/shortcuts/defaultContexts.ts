@@ -54,11 +54,13 @@ export const defaultActionContextConfigs: readonly ActionContextConfig[] = [
   {
     type: ActionContextTypes.PROPERTY_EDITING,
     displayName: 'Property Editing',
+    modal: true,
     validateDependencies: isPropertyEditingDependencies,
   },
   {
     type: ActionContextTypes.MULTI_SELECT_MODE,
     displayName: 'Multi-Select Mode',
+    modal: true,
     validateDependencies: isMultiSelectModeDependencies,
   },
 ]

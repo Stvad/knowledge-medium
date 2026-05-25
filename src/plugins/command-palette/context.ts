@@ -19,5 +19,6 @@ const isCommandPaletteDependencies = (deps: unknown): deps is CommandPaletteDepe
 export const commandPaletteActionContext: ActionContextConfig<typeof COMMAND_PALETTE_CONTEXT> = {
   type: COMMAND_PALETTE_CONTEXT,
   displayName: 'Command Palette',
+  modal: true,
   validateDependencies: isCommandPaletteDependencies,
 }

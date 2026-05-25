@@ -18,10 +18,36 @@ import {
 import { useEffect, type ReactNode } from 'react'
 
 const TEST_CONTEXT = 'test-mode' as ActionContextType
+const GLOBAL_CONTEXT = 'global' as ActionContextType
+const MODAL_CONTEXT = 'modal-mode' as ActionContextType
+const SECOND_MODAL_CONTEXT = 'second-modal-mode' as ActionContextType
 
 const testContextConfig: ActionContextConfig = {
   type: TEST_CONTEXT,
   displayName: 'Test Mode',
+  validateDependencies: (deps): deps is BaseShortcutDependencies =>
+    typeof deps === 'object' && deps !== null,
+}
+
+const globalContextConfig: ActionContextConfig = {
+  type: GLOBAL_CONTEXT,
+  displayName: 'Global',
+  validateDependencies: (deps): deps is BaseShortcutDependencies =>
+    typeof deps === 'object' && deps !== null,
+}
+
+const modalContextConfig: ActionContextConfig = {
+  type: MODAL_CONTEXT,
+  displayName: 'Modal Mode',
+  modal: true,
+  validateDependencies: (deps): deps is BaseShortcutDependencies =>
+    typeof deps === 'object' && deps !== null,
+}
+
+const secondModalContextConfig: ActionContextConfig = {
+  type: SECOND_MODAL_CONTEXT,
+  displayName: 'Second Modal Mode',
+  modal: true,
   validateDependencies: (deps): deps is BaseShortcutDependencies =>
     typeof deps === 'object' && deps !== null,
 }
@@ -43,20 +69,16 @@ const buildAction = (overrides: Partial<ActionConfig> & Pick<ActionConfig, 'id' 
 const dispatchKeydown = (key: string) => {
   // hotkeys-js installs a keydown listener on document and reads the legacy
   // `event.keyCode`/`event.which` to look up handlers. jsdom doesn't populate
-  // those automatically from `key`, so we set them explicitly here.
+  // those automatically from `key`, so we set them explicitly here. Pair the
+  // keydown with a keyup so hotkeys-js's held-key tracking doesn't carry
+  // state into the next dispatch (sequential keydowns with no keyup get
+  // misread as chords).
   const code =
     key.length === 1 && /[a-z]/i.test(key) ? `Key${key.toUpperCase()}` : key
   const keyCode = key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0
-  document.dispatchEvent(
-    new KeyboardEvent('keydown', {
-      key,
-      code,
-      keyCode,
-      which: keyCode,
-      bubbles: true,
-      cancelable: true,
-    }),
-  )
+  const init = {key, code, keyCode, which: keyCode, bubbles: true, cancelable: true}
+  document.dispatchEvent(new KeyboardEvent('keydown', init))
+  document.dispatchEvent(new KeyboardEvent('keyup', init))
 }
 
 const Activator = ({context}: {context: ActionContextType}) => {
@@ -65,6 +87,17 @@ const Activator = ({context}: {context: ActionContextType}) => {
     dispatch.activate(context, mockDeps)
     return () => dispatch.deactivate(context)
   }, [dispatch, context])
+  return null
+}
+
+const SequentialActivator = ({contexts}: {contexts: readonly ActionContextType[]}) => {
+  const dispatch = useActiveContextsDispatch()
+  useEffect(() => {
+    for (const context of contexts) dispatch.activate(context, mockDeps)
+    return () => {
+      for (const context of contexts) dispatch.deactivate(context)
+    }
+  }, [dispatch, contexts])
   return null
 }
 
@@ -240,6 +273,157 @@ describe('HotkeyReconciler', () => {
 
     act(() => dispatchKeydown('k'))
     expect(handler).toHaveBeenCalledTimes(1)
+  })
+
+  describe('modal contexts', () => {
+    it('does not change install behaviour when no modal is active', () => {
+      const baseHandler = vi.fn()
+      const globalHandler = vi.fn()
+      const baseAction = buildAction({
+        id: 'test.base',
+        handler: baseHandler,
+        defaultBinding: {keys: 'p'},
+      })
+      const globalAction = buildAction({
+        id: 'test.global',
+        context: GLOBAL_CONTEXT,
+        handler: globalHandler,
+        defaultBinding: {keys: 'k'},
+      })
+
+      render(
+        <Harness
+          actions={[baseAction, globalAction]}
+          contexts={[testContextConfig, globalContextConfig]}
+        >
+          <SequentialActivator contexts={[GLOBAL_CONTEXT, TEST_CONTEXT]}/>
+        </Harness>,
+      )
+
+      act(() => dispatchKeydown('p'))
+      expect(baseHandler).toHaveBeenCalledTimes(1)
+
+      act(() => dispatchKeydown('k'))
+      expect(globalHandler).toHaveBeenCalledTimes(1)
+    })
+
+    it('shadows every non-global context while a modal is active', () => {
+      const baseHandler = vi.fn()
+      const modalHandler = vi.fn()
+      const globalHandler = vi.fn()
+      const baseAction = buildAction({
+        id: 'test.base',
+        context: TEST_CONTEXT,
+        handler: baseHandler,
+        defaultBinding: {keys: 'p'},
+      })
+      const modalAction = buildAction({
+        id: 'test.modal',
+        context: MODAL_CONTEXT,
+        handler: modalHandler,
+        defaultBinding: {keys: 'm'},
+      })
+      const globalAction = buildAction({
+        id: 'test.global',
+        context: GLOBAL_CONTEXT,
+        handler: globalHandler,
+        defaultBinding: {keys: 'k'},
+      })
+
+      render(
+        <Harness
+          actions={[baseAction, modalAction, globalAction]}
+          contexts={[testContextConfig, modalContextConfig, globalContextConfig]}
+        >
+          <SequentialActivator contexts={[GLOBAL_CONTEXT, TEST_CONTEXT, MODAL_CONTEXT]}/>
+        </Harness>,
+      )
+
+      // Modal's own binding fires.
+      act(() => dispatchKeydown('m'))
+      expect(modalHandler).toHaveBeenCalledTimes(1)
+
+      // Global binding still fires — global carve-out keeps Cmd+K alive.
+      act(() => dispatchKeydown('k'))
+      expect(globalHandler).toHaveBeenCalledTimes(1)
+
+      // Underlying (non-global, non-modal) context's binding is shadowed.
+      act(() => dispatchKeydown('p'))
+      expect(baseHandler).not.toHaveBeenCalled()
+    })
+
+    it('restores underlying bindings after the modal context deactivates', () => {
+      const baseHandler = vi.fn()
+      const baseAction = buildAction({
+        id: 'test.base',
+        context: TEST_CONTEXT,
+        handler: baseHandler,
+        defaultBinding: {keys: 'p'},
+      })
+      const modalAction = buildAction({
+        id: 'test.modal',
+        context: MODAL_CONTEXT,
+        handler: vi.fn(),
+        defaultBinding: {keys: 'm'},
+      })
+
+      const harness = render(
+        <Harness
+          actions={[baseAction, modalAction]}
+          contexts={[testContextConfig, modalContextConfig]}
+        >
+          <SequentialActivator contexts={[TEST_CONTEXT, MODAL_CONTEXT]}/>
+        </Harness>,
+      )
+
+      act(() => dispatchKeydown('p'))
+      expect(baseHandler).not.toHaveBeenCalled()
+
+      // Remove the modal activation; underlying TEST_CONTEXT stays.
+      harness.rerender(
+        <Harness
+          actions={[baseAction, modalAction]}
+          contexts={[testContextConfig, modalContextConfig]}
+        >
+          <SequentialActivator contexts={[TEST_CONTEXT]}/>
+        </Harness>,
+      )
+
+      act(() => dispatchKeydown('p'))
+      expect(baseHandler).toHaveBeenCalledTimes(1)
+    })
+
+    it('most-recently-activated modal wins when two modals are active', () => {
+      const firstHandler = vi.fn()
+      const secondHandler = vi.fn()
+      const firstAction = buildAction({
+        id: 'test.first-modal',
+        context: MODAL_CONTEXT,
+        handler: firstHandler,
+        defaultBinding: {keys: 'm'},
+      })
+      const secondAction = buildAction({
+        id: 'test.second-modal',
+        context: SECOND_MODAL_CONTEXT,
+        handler: secondHandler,
+        defaultBinding: {keys: 'n'},
+      })
+
+      render(
+        <Harness
+          actions={[firstAction, secondAction]}
+          contexts={[modalContextConfig, secondModalContextConfig]}
+        >
+          <SequentialActivator contexts={[MODAL_CONTEXT, SECOND_MODAL_CONTEXT]}/>
+        </Harness>,
+      )
+
+      act(() => dispatchKeydown('n'))
+      expect(secondHandler).toHaveBeenCalledTimes(1)
+
+      act(() => dispatchKeydown('m'))
+      expect(firstHandler).not.toHaveBeenCalled()
+    })
   })
 
   it('observes the latest dependencies after the context re-activates with new ones', () => {

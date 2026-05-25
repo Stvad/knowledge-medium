@@ -31,6 +31,16 @@ export interface ActionContextConfig<T extends ActionContextType = ActionContext
    */
   eventFilter?: (event: KeyboardEvent) => boolean;
   /**
+   * When true, this context shadows every other active context (except
+   * `global`) for the duration of its activation: only this context's and
+   * `global`'s bindings install. Use for modes that should claim keyboard
+   * focus — command palette, multi-select, property editing, scrub. If
+   * multiple modal contexts are active, the most-recently-activated one
+   * wins (per `ActiveContextsMap` insertion order). `global` stays
+   * installed so app-wide chords (Cmd+K, Escape) remain reachable.
+   */
+  modal?: boolean;
+  /**
    * Type guard function to validate the dependencies provided when activating the context.
    */
   validateDependencies: DependencyValidator<T>;
