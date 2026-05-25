@@ -46,6 +46,10 @@ export const recentsPlugin = ({repo}: {repo: Repo}): AppExtension =>
       {id: 'recentsPage', renderer: RecentsPageBlockRenderer},
       {source: 'recents'},
     ),
-    headerItemsFacet.of(recentsHeaderItem, {source: 'recents', precedence: 15}),
+    // Precedence 35 places this just before the sync-status indicator
+    // (precedence 40), grouping the "workspace state" cluster together
+    // and keeping the dialog-launcher buttons (quick-find ⌘P at 10,
+    // command-palette ⌘K at 20) contiguous on their own.
+    headerItemsFacet.of(recentsHeaderItem, {source: 'recents', precedence: 35}),
     actionsFacet.of(openRecentsAction(repo), {source: 'recents'}),
   ])
