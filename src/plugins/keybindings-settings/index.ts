@@ -31,4 +31,3 @@ export {
   type StoredKeybindingOverride,
   type StoredKeybindingOverrides,
 } from './config.ts'
-export {buildUserKeybindingContributions} from './contributions.ts'

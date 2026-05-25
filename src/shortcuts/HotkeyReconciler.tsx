@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import hotkeys from 'hotkeys-js'
 import { actionContextsFacet } from '@/extensions/core.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
@@ -9,6 +9,7 @@ import {
   getActiveActionById,
   getEffectiveActions,
 } from './effectiveActions.ts'
+import { keybindingOverridesFacet } from './keybindingOverrides.ts'
 import {
   ActionConfig,
   ActionContextConfig,
@@ -58,7 +59,26 @@ export function HotkeyReconciler(): null {
   const runtime = useAppRuntime()
   const active = useActiveContextsState()
 
-  const actions = useMemo(() => getEffectiveActions(runtime), [runtime])
+  // Keybinding overrides are pushed at runtime via
+  // `setRuntimeContributions` (the keybindings-settings effect mirrors
+  // the user's prefs block into the facet). Subscribe to the facet's
+  // change listener so the memo recomputes when that bucket updates —
+  // otherwise the dep array (`[runtime]`) would only fire on a full
+  // runtime rebuild and miss in-place contribution changes.
+  const [overridesGeneration, setOverridesGeneration] = useState(0)
+  useEffect(() => {
+    return runtime.onFacetChange(keybindingOverridesFacet.id, () => {
+      setOverridesGeneration(g => g + 1)
+    })
+  }, [runtime])
+
+  const actions = useMemo(
+    () => getEffectiveActions(runtime),
+    // overridesGeneration is included so in-place facet updates flow
+    // through; runtime identity changes still trigger a recompute.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [runtime, overridesGeneration],
+  )
   const contextConfigs = useMemo(() => runtime.read(actionContextsFacet), [runtime])
   const contextConfigsByType = useMemo<ReadonlyMap<ActionContextType, ActionContextConfig>>(
     () => new Map(contextConfigs.map(c => [c.type, c])),

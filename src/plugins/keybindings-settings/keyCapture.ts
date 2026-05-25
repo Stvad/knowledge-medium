@@ -33,10 +33,32 @@ export const isModifierOnly = (event: Pick<KeyboardEvent, 'key'>): boolean =>
 
 export interface ChordEventShape {
   readonly key: string
+  /** `KeyboardEvent.code` — the physical key id. Used to recover the
+   *  logical character when `event.key` reports the shifted form
+   *  (e.g. shift+3 reports key='#' but code='Digit3'). May be absent
+   *  in tests; we fall back to `key` then. */
+  readonly code?: string
   readonly metaKey: boolean
   readonly ctrlKey: boolean
   readonly altKey: boolean
   readonly shiftKey: boolean
+}
+
+/** Map `KeyboardEvent.code` to the unshifted character for keys
+ *  that browsers report as their shifted form when modifiers are
+ *  held. Restricted to letters / digits where the mapping is
+ *  layout-agnostic enough to be reliable — punctuation keys (Minus,
+ *  Equal, …) are skipped on purpose because their unshifted glyph
+ *  varies by keyboard layout. */
+const codeToLogicalKey = (code: string | undefined): string | null => {
+  if (!code) return null
+  if (code.startsWith('Key') && code.length === 4) {
+    return code.slice(3).toLowerCase()
+  }
+  if (code.startsWith('Digit') && code.length === 6) {
+    return code.slice(5)
+  }
+  return null
 }
 
 /** Build a hotkeys-js chord string from a KeyboardEvent. Returns null
@@ -50,7 +72,12 @@ export const chordFromEvent = (event: ChordEventShape): string | null => {
   if (event.altKey) parts.push('alt')
   if (event.shiftKey) parts.push('shift')
 
-  const rawKey = event.key.toLowerCase()
+  // Prefer the physical-key fallback when shift is held — otherwise
+  // shift+3 captures as "shift+#" on a US keyboard (and locale-specific
+  // gibberish elsewhere). Without shift, event.key is already correct
+  // and respects the user's layout.
+  const logical = event.shiftKey ? codeToLogicalKey(event.code) : null
+  const rawKey = (logical ?? event.key).toLowerCase()
   const key = KEY_ALIASES[rawKey] ?? rawKey
   if (!key) return null
   parts.push(key)

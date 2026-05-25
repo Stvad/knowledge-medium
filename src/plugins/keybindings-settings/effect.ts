@@ -1,27 +1,32 @@
 /**
- * Subscribes to the keybindings prefs block, mirrors each change
- * into the localStorage cache, and dispatches `refreshAppRuntime`
- * whenever the synced overrides diverge from the cached snapshot.
+ * Subscribes to the keybindings prefs block and mirrors its
+ * contents into the `keybindingOverridesFacet` via
+ * `runtime.setRuntimeContributions`. No localStorage cache, no
+ * `refreshAppRuntime` dispatch — the facet's per-facet change
+ * listener (subscribed in `HotkeyReconciler`) is what triggers the
+ * downstream recompute. First paint shows defaults until the prefs
+ * block hydrates and this effect runs; that's intentional (keeps the
+ * code small and avoids a second source of truth).
  *
- * Same shape as `extensions-settings/effect.ts` — the canonical
- * state lives in the synced block; the cache is a first-paint
- * mirror. Codec failures are caught here so a malformed snapshot
- * falls back to "no overrides" rather than locking the user out.
+ * Codec failures decode to `[]` here so a malformed snapshot falls
+ * back to "no overrides" rather than locking the user out of
+ * editing.
  */
 import type {AppEffect} from '@/extensions/core.js'
 import {getPluginPrefsBlock} from '@/data/stateBlocks.js'
-import {refreshAppRuntime} from '@/extensions/runtimeEvents.js'
+import type {FacetRuntime} from '@/extensions/facet.js'
 import type {PropertySchema} from '@/data/api'
+import {
+  KEYBINDING_OVERRIDE_USER_SOURCE,
+  keybindingOverridesFacet,
+  type KeybindingOverride,
+} from '@/shortcuts/keybindingOverrides.js'
 import {
   keybindingOverridesProp,
   keybindingsPrefsType,
+  type StoredKeybindingOverride,
   type StoredKeybindingOverrides,
 } from './config.ts'
-import {
-  readKeybindingOverridesCache,
-  sameOverrides,
-  writeKeybindingOverridesCache,
-} from './overridesCache.ts'
 
 interface OverridesReadable {
   peekProperty<T>(schema: PropertySchema<T>): T | undefined
@@ -41,22 +46,31 @@ export const readOverridesFromBlock = (block: OverridesReadable): StoredKeybindi
   }
 }
 
-export const reconcileOverrides = (
-  workspaceId: string,
-  block: OverridesReadable,
-  dispatchRefresh: () => void = refreshAppRuntime,
-): boolean => {
-  const next = readOverridesFromBlock(block)
-  const cached = readKeybindingOverridesCache(workspaceId)
-  if (sameOverrides(next, cached)) return false
-  writeKeybindingOverridesCache(workspaceId, next)
-  dispatchRefresh()
-  return true
+const toFacetEntry = (entry: StoredKeybindingOverride): KeybindingOverride => ({
+  actionId: entry.actionId,
+  context: entry.context,
+  binding: entry.binding,
+  source: KEYBINDING_OVERRIDE_USER_SOURCE,
+})
+
+/** Push the stored overrides into the facet's runtime bucket. The
+ *  facet runtime invalidates its cache and fires per-facet listeners,
+ *  which `HotkeyReconciler` listens to and uses to re-run
+ *  `getEffectiveActions`. */
+export const pushOverridesToRuntime = (
+  runtime: FacetRuntime,
+  stored: StoredKeybindingOverrides,
+): void => {
+  runtime.setRuntimeContributions(
+    keybindingOverridesFacet,
+    KEYBINDING_OVERRIDE_USER_SOURCE,
+    stored.map(toFacetEntry),
+  )
 }
 
 export const keybindingsSyncEffect: AppEffect = {
-  id: 'keybindings.sync-cache',
-  start: ({repo, workspaceId}) => {
+  id: 'keybindings.sync-runtime',
+  start: ({repo, runtime, workspaceId}) => {
     let disposed = false
     let unsubscribe: (() => void) | undefined
 
@@ -69,9 +83,9 @@ export const keybindingsSyncEffect: AppEffect = {
       )
       if (disposed) return
 
-      const reconcile = () => reconcileOverrides(workspaceId, block)
-      reconcile()
-      unsubscribe = block.subscribe(reconcile)
+      const push = () => pushOverridesToRuntime(runtime, readOverridesFromBlock(block))
+      push()
+      unsubscribe = block.subscribe(push)
     })().catch(error => {
       console.error(
         'Keybindings: failed to resolve prefs block; ' +
@@ -83,6 +97,14 @@ export const keybindingsSyncEffect: AppEffect = {
     return () => {
       disposed = true
       unsubscribe?.()
+      // Drop our runtime bucket on shutdown so the next effect-start
+      // doesn't see a stale snapshot. setRuntimeContributions with []
+      // removes the source bucket entirely.
+      runtime.setRuntimeContributions(
+        keybindingOverridesFacet,
+        KEYBINDING_OVERRIDE_USER_SOURCE,
+        [],
+      )
     }
   },
 }

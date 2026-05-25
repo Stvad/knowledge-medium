@@ -6,7 +6,7 @@ import {
   normalizeChord,
 } from '../keyCapture.ts'
 
-const mk = (over: Partial<{key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean}>) => ({
+const mk = (over: Partial<{key: string; code: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean}>) => ({
   key: '',
   metaKey: false,
   ctrlKey: false,
@@ -36,6 +36,25 @@ describe('chordFromEvent', () => {
     expect(chordFromEvent(mk({key: 'ArrowLeft', ctrlKey: true}))).toBe('ctrl+left')
     expect(chordFromEvent(mk({key: ' ', metaKey: true}))).toBe('cmd+space')
     expect(chordFromEvent(mk({key: 'Escape'}))).toBe('esc')
+  })
+
+  it('uses event.code to recover the logical digit when shift is held', () => {
+    // Shift+3 reports key='#' on a US keyboard — that's the shifted
+    // character, not the user's intent. event.code = 'Digit3' is the
+    // stable physical-key fallback.
+    expect(chordFromEvent(mk({key: '#', code: 'Digit3', shiftKey: true})))
+      .toBe('shift+3')
+  })
+
+  it('uses event.code to recover the logical letter when shift is held', () => {
+    expect(chordFromEvent(mk({key: 'K', code: 'KeyK', shiftKey: true, metaKey: true})))
+      .toBe('cmd+shift+k')
+  })
+
+  it('keeps trusting event.key when shift is not held (layout-respecting)', () => {
+    // On a German keyboard, AltGr+8 produces '[' with code='Digit8'.
+    // Without shift, we keep event.key so the user's layout works.
+    expect(chordFromEvent(mk({key: '[', code: 'Digit8'}))).toBe('[')
   })
 })
 

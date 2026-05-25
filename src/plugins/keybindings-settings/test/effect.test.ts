@@ -1,34 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ClientLocalSettings } from '@/utils/ClientLocalSettings.js'
+import { describe, expect, it, vi } from 'vitest'
+import {
+  KEYBINDING_OVERRIDE_USER_SOURCE,
+  keybindingOverridesFacet,
+} from '@/shortcuts/keybindingOverrides.js'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
 import { keybindingOverridesProp } from '../config.ts'
 import {
+  pushOverridesToRuntime,
   readOverridesFromBlock,
-  reconcileOverrides,
 } from '../effect.ts'
-import {
-  readKeybindingOverridesCache,
-  writeKeybindingOverridesCache,
-} from '../overridesCache.ts'
-
-class MemoryStorage implements Storage {
-  private store = new Map<string, string>()
-  get length() { return this.store.size }
-  key(index: number) { return [...this.store.keys()][index] ?? null }
-  getItem(key: string) { return this.store.get(key) ?? null }
-  setItem(key: string, value: string) { this.store.set(key, value) }
-  removeItem(key: string) { this.store.delete(key) }
-  clear() { this.store.clear() }
-}
-
-const makeStorageStub = (): ClientLocalSettings => new ClientLocalSettings(new MemoryStorage())
-
-beforeEach(() => {
-  vi.useFakeTimers()
-})
-
-afterEach(() => {
-  vi.useRealTimers()
-})
 
 describe('readOverridesFromBlock', () => {
   it('returns the property value when the codec succeeds', () => {
@@ -53,6 +33,7 @@ describe('readOverridesFromBlock', () => {
     }
     expect(readOverridesFromBlock(block as never)).toEqual([])
     expect(consoleSpy).toHaveBeenCalled()
+    consoleSpy.mockRestore()
   })
 
   it('returns [] when the property is unset', () => {
@@ -61,43 +42,53 @@ describe('readOverridesFromBlock', () => {
   })
 })
 
-describe('reconcileOverrides', () => {
-  it('writes the cache and dispatches when the block diverges', () => {
-    // We pass a stub storage into the cache helpers below; this test
-    // injects its own dispatch and uses the default cache backing
-    // (which we pre-seed via writeKeybindingOverridesCache with a
-    // distinct storage). To keep the harness simple, we instead
-    // assert the dispatch behaviour with the default storage and
-    // clear it between runs.
-    const storage = makeStorageStub()
-    writeKeybindingOverridesCache('ws-1', [], storage)
-    const block = {
-      peekProperty: vi.fn().mockReturnValue([
-        {actionId: 'a', context: 'normal-mode', binding: {keys: 'cmd+k'}},
-      ]),
-    }
-    // The real reconcile uses the default ClientLocalSettings; we
-    // accept that coupling and just reset between tests.
-    const dispatch = vi.fn()
-    const refreshed = reconcileOverrides('ws-reconcile-1', block as never, dispatch)
-    expect(refreshed).toBe(true)
-    expect(dispatch).toHaveBeenCalledTimes(1)
-    expect(readKeybindingOverridesCache('ws-reconcile-1')).toEqual([
-      {actionId: 'a', context: 'normal-mode', binding: {keys: 'cmd+k'}},
+describe('pushOverridesToRuntime', () => {
+  it('publishes the stored overrides to the facet at the user-prefs source', () => {
+    const runtime = resolveFacetRuntimeSync([])
+    pushOverridesToRuntime(runtime, [
+      {actionId: 'demo', context: 'normal-mode', binding: {keys: 'cmd+k'}},
     ])
+    const contributions = runtime.read(keybindingOverridesFacet)
+    expect(contributions).toEqual([{
+      actionId: 'demo',
+      context: 'normal-mode',
+      binding: {keys: 'cmd+k'},
+      source: KEYBINDING_OVERRIDE_USER_SOURCE,
+    }])
   })
 
-  it('does NOT dispatch when the block matches the cache exactly', () => {
-    const block = {
-      peekProperty: vi.fn().mockReturnValue([
-        {actionId: 'a', context: 'normal-mode', binding: {keys: 'cmd+k'}},
-      ]),
-    }
-    // First reconcile primes the cache.
-    reconcileOverrides('ws-reconcile-2', block as never, vi.fn())
-    const dispatch = vi.fn()
-    const refreshed = reconcileOverrides('ws-reconcile-2', block as never, dispatch)
-    expect(refreshed).toBe(false)
-    expect(dispatch).not.toHaveBeenCalled()
+  it('replaces the previous bucket on each push (no accumulation)', () => {
+    const runtime = resolveFacetRuntimeSync([])
+    pushOverridesToRuntime(runtime, [
+      {actionId: 'a', context: 'normal-mode', binding: {keys: 'cmd+a'}},
+    ])
+    pushOverridesToRuntime(runtime, [
+      {actionId: 'b', context: 'normal-mode', binding: {keys: 'cmd+b'}},
+    ])
+    expect(runtime.read(keybindingOverridesFacet).map(o => o.actionId))
+      .toEqual(['b'])
+  })
+
+  it('clears the bucket when given an empty array', () => {
+    const runtime = resolveFacetRuntimeSync([])
+    pushOverridesToRuntime(runtime, [
+      {actionId: 'a', context: 'normal-mode', binding: {keys: 'cmd+a'}},
+    ])
+    pushOverridesToRuntime(runtime, [])
+    expect(runtime.read(keybindingOverridesFacet)).toEqual([])
+  })
+
+  it('fires the facet change listener on each push', () => {
+    const runtime = resolveFacetRuntimeSync([])
+    const listener = vi.fn()
+    const unsubscribe = runtime.onFacetChange(keybindingOverridesFacet.id, listener)
+
+    pushOverridesToRuntime(runtime, [
+      {actionId: 'a', context: 'normal-mode', binding: {keys: 'cmd+a'}},
+    ])
+    pushOverridesToRuntime(runtime, [])
+
+    expect(listener).toHaveBeenCalledTimes(2)
+    unsubscribe()
   })
 })
