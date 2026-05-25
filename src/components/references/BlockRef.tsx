@@ -7,7 +7,7 @@ import { useBlockExists, useContent, useWorkspaceId } from '@/hooks/block'
 import { useAppRuntime } from '@/extensions/runtimeContext'
 import { markdownExtensionsFacet } from '@/markdown/extensions'
 import { buildAppHash } from '@/utils/routing'
-import { useBlockLinkClick } from '@/utils/navigation'
+import { useOpenBlock } from '@/utils/navigation'
 import { BlockRefAncestorsProvider } from './cycleGuard'
 import { useBlockRefAncestors } from './useBlockRefAncestors'
 
@@ -35,7 +35,7 @@ export function BlockRef({blockId, children}: {blockId: string; children?: React
   const content = useContent(target)
   const workspaceId = useWorkspaceId(target, repo.activeWorkspaceId ?? '')
   const runtime = useAppRuntime()
-  const onClick = useBlockLinkClick({blockId, workspaceId})
+  const onClick = useOpenBlock({blockId, workspaceId})
   const display = hasDisplayChildren(children) ? children : null
 
   if (!targetExists) {

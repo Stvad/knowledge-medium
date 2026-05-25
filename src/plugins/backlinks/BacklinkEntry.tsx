@@ -3,12 +3,12 @@ import { Block } from '@/data/block'
 import { BlockLoadingPlaceholder } from '@/components/BlockLoadingPlaceholder.js'
 import { BlockComponent } from '@/components/BlockComponent.js'
 import { BreadcrumbList } from '@/plugins/breadcrumbs/BreadcrumbList.js'
-import { NestedBlockContextProvider, useBlockContext } from '@/context/block.js'
+import { NestedBlockContextProvider } from '@/context/block.js'
 import { LazyViewportMount } from '@/components/util/LazyViewportMount.js'
 import type { LazyViewportPlaceholderProps } from '@/components/util/LazyViewportMount.js'
 import { useParents } from '@/hooks/block.js'
 import { useRepo } from '@/context/repo.js'
-import { handleBlockLinkClick, useNavigate } from '@/utils/navigation.js'
+import { useBlockOpener } from '@/utils/navigation.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
 import {
   backlinkEntryShortcutContextOverrides,
@@ -31,14 +31,10 @@ interface BacklinkBreadcrumbListProps {
 }
 
 const BacklinkBreadcrumbList = ({parents, workspaceId, onSelect}: BacklinkBreadcrumbListProps) => {
-  const navigate = useNavigate()
-  const {panelId} = useBlockContext()
+  const openBlock = useBlockOpener()
   const handleLinkClick = useCallback((event: MouseEvent, parent: Block) => {
-    handleBlockLinkClick(event, navigate, panelId, {
-      blockId: parent.id,
-      workspaceId,
-    })
-  }, [navigate, panelId, workspaceId])
+    openBlock(event, {blockId: parent.id, workspaceId})
+  }, [openBlock, workspaceId])
 
   return (
     <BreadcrumbList

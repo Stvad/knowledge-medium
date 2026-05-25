@@ -3,7 +3,7 @@ import { useSignOut, useUser } from '@/components/Login.js'
 import { useRepo } from '@/context/repo.js'
 import { useUserBlock } from '@/data/globalState.js'
 import { buildAppHash } from '@/utils/routing.js'
-import { useBlockLinkClick } from '@/utils/navigation.js'
+import { useOpenBlock } from '@/utils/navigation.js'
 
 export function AccountHeaderItem() {
   const user = useUser()
@@ -11,9 +11,9 @@ export function AccountHeaderItem() {
   const repo = useRepo()
   const userBlock = useUserBlock()
   const workspaceId = repo.activeWorkspaceId
-  const handleUserLinkClick = useBlockLinkClick({
+  const handleUserLinkClick = useOpenBlock({
     blockId: userBlock.id,
-    workspaceId: workspaceId ?? '',
+    workspaceId: workspaceId ?? undefined,
   })
 
   if (!user || !workspaceId) return null

@@ -23,7 +23,7 @@ import {
 } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
 import { buildAppHash } from '@/utils/routing.js'
-import { navigate, useBlockLinkClick } from '@/utils/navigation.js'
+import { navigate, useOpenBlock } from '@/utils/navigation.js'
 import { pasteMultilineText } from '@/utils/paste.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
 import { useIsMobile } from '@/utils/react.js'
@@ -121,7 +121,7 @@ const BlockBullet = ({block}: { block: Block }) => {
   // App.tsx's bootstrap sets activeWorkspaceId before any block renders, so
   // the non-null assertion is the contract — not a defensive fallback.
   const workspaceId = repo.activeWorkspaceId!
-  const onClick = useBlockLinkClick({blockId: block.id, workspaceId})
+  const onClick = useOpenBlock({blockId: block.id, workspaceId})
 
   return (
     <ContextMenu>

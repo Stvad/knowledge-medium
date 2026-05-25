@@ -298,10 +298,42 @@ export const handleBlockLinkClick = (
   navigate(input)
 }
 
-export const useBlockLinkClick = ({blockId, workspaceId}: BlockLinkClickContext) => {
+export interface OpenBlockContext {
+  blockId: string
+  /** Defaults to repo.activeWorkspaceId. */
+  workspaceId?: string
+}
+
+/** The standard way for plugins and components to wire a clickable surface
+ *  that opens a block — links, buttons, map pins, calendar cells, anything.
+ *  Returns a modifier-aware onClick handler that honours the shift / alt
+ *  policy documented on `handleBlockLinkClick`.
+ *
+ *  For dynamic surfaces where the target block isn't known until the click
+ *  fires (e.g. breadcrumb chains, search result lists), use
+ *  `useBlockOpener` instead and pass the block at call time. */
+export const useOpenBlock = ({blockId, workspaceId}: OpenBlockContext) => {
+  const opener = useBlockOpener()
+  return useCallback(
+    (e: MouseEvent) => opener(e, {blockId, workspaceId}),
+    [opener, blockId, workspaceId],
+  )
+}
+
+/** Returns an opener `(event, {blockId, workspaceId?}) => void` for places
+ *  that resolve the target block from the event (lists, breadcrumbs, map
+ *  markers rendered in a loop). Single subscription per component instead
+ *  of one hook per item. */
+export const useBlockOpener = () => {
   const navigate = useNavigate()
+  const repo = useRepo()
   const {panelId} = useBlockContext()
-  return useCallback((e: MouseEvent) => {
-    handleBlockLinkClick(e, navigate, panelId, {blockId, workspaceId})
-  }, [navigate, panelId, blockId, workspaceId])
+  return useCallback(
+    (e: MouseEvent, {blockId, workspaceId}: OpenBlockContext) => {
+      const resolvedWorkspaceId = workspaceId ?? repo.activeWorkspaceId
+      if (!resolvedWorkspaceId) return
+      handleBlockLinkClick(e, navigate, panelId, {blockId, workspaceId: resolvedWorkspaceId})
+    },
+    [navigate, repo, panelId],
+  )
 }

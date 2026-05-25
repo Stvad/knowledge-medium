@@ -6,7 +6,7 @@ import { BlockContextProvider } from '@/context/block'
 import { LazyBacklinkItem } from '../BacklinkEntry.tsx'
 
 const mocks = vi.hoisted(() => ({
-  navigate: vi.fn(),
+  openBlock: vi.fn(),
   repo: {
     activeWorkspaceId: 'workspace',
     block: vi.fn((id: string) => ({id})),
@@ -17,13 +17,9 @@ vi.mock('@/context/repo.tsx', () => ({
   useRepo: () => mocks.repo,
 }))
 
-vi.mock('@/utils/navigation.ts', async importOriginal => {
-  const actual = await importOriginal<typeof import('@/utils/navigation.js')>()
-  return {
-    ...actual,
-    useNavigate: () => mocks.navigate,
-  }
-})
+vi.mock('@/utils/navigation.ts', () => ({
+  useBlockOpener: () => mocks.openBlock,
+}))
 
 vi.mock('@/components/BlockComponent.tsx', () => ({
   BlockComponent: ({blockId}: {blockId: string}) => (
@@ -37,12 +33,12 @@ vi.mock('@/components/util/LazyViewportMount.tsx', () => ({
 
 afterEach(() => {
   cleanup()
-  mocks.navigate.mockClear()
+  mocks.openBlock.mockClear()
   mocks.repo.block.mockClear()
 })
 
 describe('BacklinkEntry breadcrumbs', () => {
-  it('routes shift-clicks through sidebar stack navigation', () => {
+  it('routes shift-clicks through the block opener', () => {
     const source = {id: 'source-block'} as Block
     const parent = {id: 'parent-block'} as Block
 
@@ -58,12 +54,9 @@ describe('BacklinkEntry breadcrumbs', () => {
     })
     fireEvent(screen.getByTestId('block-parent-block'), event)
 
-    expect(mocks.navigate).toHaveBeenCalledExactlyOnceWith({
-      blockId: 'parent-block',
-      workspaceId: 'workspace',
-      target: 'sidebar-stack',
-      sourcePanelId: 'panel-a',
-    })
-    expect(event.defaultPrevented).toBe(true)
+    expect(mocks.openBlock).toHaveBeenCalledOnce()
+    const [forwardedEvent, ctx] = mocks.openBlock.mock.calls[0]
+    expect(forwardedEvent.shiftKey).toBe(true)
+    expect(ctx).toEqual({blockId: 'parent-block', workspaceId: 'workspace'})
   })
 })

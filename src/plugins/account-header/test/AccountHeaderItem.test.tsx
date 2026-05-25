@@ -24,7 +24,7 @@ vi.mock('@/data/globalState.ts', () => ({
 }))
 
 vi.mock('@/utils/navigation.ts', () => ({
-  useBlockLinkClick: () => mocks.handleUserLinkClick,
+  useOpenBlock: () => mocks.handleUserLinkClick,
 }))
 
 describe('AccountHeaderItem', () => {

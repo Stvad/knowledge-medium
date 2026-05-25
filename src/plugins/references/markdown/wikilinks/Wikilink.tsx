@@ -1,6 +1,6 @@
 import { ReactNode } from 'react'
 import { buildAppHash } from '@/utils/routing'
-import { useBlockLinkClick } from '@/utils/navigation'
+import { useOpenBlock } from '@/utils/navigation'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import {
   isWikilinkDisplayParts,
@@ -23,7 +23,7 @@ export function Wikilink({alias, blockId, sourceBlock, workspaceId, hasCustomDis
   // stays stable across renders. blockId may be empty during a transient
   // reference-resolution miss; the hook still binds to ('', workspaceId)
   // safely — it's never invoked in that branch since we render plain text.
-  const onClick = useBlockLinkClick({blockId, workspaceId})
+  const onClick = useOpenBlock({blockId, workspaceId})
   const runtime = useAppRuntime()
   const decorated = hasCustomDisplay
     ? null

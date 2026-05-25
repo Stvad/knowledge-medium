@@ -15,7 +15,7 @@
  *  missing — the picker UX in Phases C / E still works, the map just
  *  doesn't render. */
 
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type MouseEvent } from 'react'
 import {
   APIProvider,
   AdvancedMarker,
@@ -26,7 +26,7 @@ import {
 } from '@vis.gl/react-google-maps'
 import { useRepo } from '@/context/repo.js'
 import { useHandle } from '@/hooks/block.js'
-import { useNavigateFromGlobalCommand } from '@/utils/navigation.js'
+import { useBlockOpener } from '@/utils/navigation.js'
 import { resolveApiKey } from './googlePlacesClient'
 import { PLACES_UNDER_BLOCK_QUERY, type MapPin } from './query'
 
@@ -70,7 +70,7 @@ function MapMarker({
   isOpen: boolean
   onSelect: (pin: MapPin) => void
   onClose: () => void
-  onOpen: (pin: MapPin) => void
+  onOpen: (event: MouseEvent, pin: MapPin) => void
 }) {
   const [markerRef, marker] = useAdvancedMarkerRef()
   return (
@@ -96,7 +96,7 @@ function MapMarker({
             <button
               type="button"
               className="self-start rounded border border-border bg-background px-2 py-1 text-xs hover:bg-muted"
-              onClick={() => onOpen(pin)}
+              onClick={(event) => onOpen(event, pin)}
             >
               Open
             </button>
@@ -111,7 +111,7 @@ const EMPTY_PINS: readonly MapPin[] = Object.freeze([])
 
 function MapBody({rootBlockId, className, defaultZoom}: MapViewProps) {
   const repo = useRepo()
-  const navigate = useNavigateFromGlobalCommand()
+  const openBlock = useBlockOpener()
   const pins = useHandle(
     repo.query[PLACES_UNDER_BLOCK_QUERY]({rootBlockId}),
     {selector: data => (data ?? EMPTY_PINS) as readonly MapPin[]},
@@ -136,9 +136,9 @@ function MapBody({rootBlockId, className, defaultZoom}: MapViewProps) {
               isOpen={openPinId === key}
               onSelect={p => setOpenPinId(pinKey(p))}
               onClose={() => setOpenPinId(null)}
-              onOpen={p => {
+              onOpen={(event, p) => {
                 setOpenPinId(null)
-                navigate({blockId: p.blockId})
+                openBlock(event, {blockId: p.blockId})
               }}
             />
           )

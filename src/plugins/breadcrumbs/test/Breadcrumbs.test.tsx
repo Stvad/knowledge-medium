@@ -7,7 +7,7 @@ import { BlockContextProvider } from '@/context/block'
 import { Breadcrumbs } from '../Breadcrumbs.tsx'
 
 const mocks = vi.hoisted(() => ({
-  navigate: vi.fn(),
+  openBlock: vi.fn(),
   parent: {id: 'parent-block'} as Block,
   repo: {activeWorkspaceId: 'workspace'} as {activeWorkspaceId: string},
 }))
@@ -21,7 +21,7 @@ vi.mock('@/hooks/block.ts', () => ({
 }))
 
 vi.mock('@/utils/navigation.ts', () => ({
-  useNavigate: () => mocks.navigate,
+  useBlockOpener: () => mocks.openBlock,
 }))
 
 vi.mock('@/components/BlockComponent.tsx', () => ({
@@ -32,11 +32,11 @@ vi.mock('@/components/BlockComponent.tsx', () => ({
 
 afterEach(() => {
   cleanup()
-  mocks.navigate.mockClear()
+  mocks.openBlock.mockClear()
 })
 
 describe('Breadcrumbs', () => {
-  it('navigates the current panel when a panel breadcrumb is clicked', () => {
+  it('routes breadcrumb clicks through the block opener', () => {
     render(
       <BlockContextProvider initialValue={{panelId: 'panel-a'}}>
         <Breadcrumbs block={{id: 'child-block'} as Block}/>
@@ -45,11 +45,8 @@ describe('Breadcrumbs', () => {
 
     fireEvent.click(screen.getByTestId('breadcrumb-parent-block'))
 
-    expect(mocks.navigate).toHaveBeenCalledExactlyOnceWith({
-      blockId: 'parent-block',
-      workspaceId: 'workspace',
-      target: 'panel',
-      panelId: 'panel-a',
-    })
+    expect(mocks.openBlock).toHaveBeenCalledOnce()
+    const [, ctx] = mocks.openBlock.mock.calls[0]
+    expect(ctx).toEqual({blockId: 'parent-block', workspaceId: 'workspace'})
   })
 })
