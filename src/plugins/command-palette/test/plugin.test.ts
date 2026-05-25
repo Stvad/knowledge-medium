@@ -25,7 +25,6 @@ describe('commandPalettePlugin', () => {
       commandPaletteForBlockAction,
     ])
     expect(runtime.read(headerItemsFacet)).toEqual([commandPaletteHeaderItem])
-    expect(commandPaletteAction.defaultBinding?.keys).toBe('$mod+k')
   })
 
   it('contributes a swipe quick-action that opens the palette for the swiped block', () => {

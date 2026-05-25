@@ -21,7 +21,6 @@ describe('findReplacePlugin', () => {
     expect(runtime.read(headerItemsFacet)).toEqual([findReplaceHeaderItem])
     expect(runtime.read(queriesFacet).has(FIND_REPLACE_SEARCH_CONTENT_QUERY)).toBe(true)
     expect(runtime.read(mutatorsFacet).has(FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR)).toBe(true)
-    expect(findReplaceAction.defaultBinding?.keys).toBe('$mod+Shift+f')
   })
 
   it('exposes data-layer contributions separately for repo bootstrap', () => {

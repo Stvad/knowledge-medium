@@ -10,6 +10,10 @@ const noop = () => undefined
 
 describe('vim normal mode actions in the unified action surface', () => {
   it('owns the baseline hierarchical up and down movement bindings', () => {
+    // hjkl is the vim convention these actions exist to expose — pinning
+    // `j` and `k` here makes a silent rename to (say) `n` / `p` show up
+    // as a failing test rather than a quiet contract break for vim users.
+    // ArrowDown/ArrowUp pair-bindings keep non-vim users functional.
     const actions = getVimNormalModeActions({repo: {} as Repo})
 
     expect(actions.find(action => action.id === 'move_down')?.defaultBinding?.keys).toEqual(['ArrowDown', 'k'])

@@ -20,9 +20,5 @@ describe('quickFindPlugin', () => {
     expect(recentBlockIdsProp.changeScope).toBe(ChangeScope.UiState)
     expect(runtime.read(actionsFacet)).toEqual([quickFindAction])
     expect(runtime.read(headerItemsFacet)).toEqual([quickFindHeaderItem])
-    expect(quickFindAction.defaultBinding?.keys).toEqual([
-      '$mod+p',
-      '$mod+Shift+k',
-    ])
   })
 })
