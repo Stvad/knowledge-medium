@@ -900,11 +900,25 @@ describe('backfillLocalEphemeralUploadsIfPending', () => {
     expect(h.psCrud()).toHaveLength(1)
   })
 
-  it('emits the same upload envelope shape as the upload-routing trigger', async () => {
-    // The backfill and the trigger MUST emit byte-identical envelopes so
-    // the server's upload handler doesn't see two shapes. If a column
-    // is added/removed from BLOCK_UPLOAD_COLUMNS, both code paths
-    // change together — this test pins that contract.
+  it("emits PATCH so the orchestrator's full-row upsert can overwrite a divergent server row", async () => {
+    // The trigger INSERT path emits PUT, which the orchestrator routes
+    // through `applyBlockCreates` -> `upsert(..., {ignoreDuplicates:true})`.
+    // That semantic is correct for bootstrap (a fresh client's deterministic-
+    // id PUT mustn't clobber a row another device has already customized).
+    //
+    // For the backfill it is WRONG. By definition the backfill targets
+    // local rows that the server either lacks or has in a stale form
+    // (the v3 "no sync echo" filter is necessary but not sufficient —
+    // observed on ff-vlad-dev where 8 content blocks had a successful
+    // 'user' upload followed by silent local-ephemeral edits that never
+    // landed). Re-emitting them as PUT becomes a no-op against the
+    // existing-but-stale server row; the divergence is preserved.
+    //
+    // PATCH routes through `applyBlockPatches` which loads the full
+    // current local row and upserts it with `{onConflict:'id'}` (no
+    // ignoreDuplicates). For a missing server row that's an INSERT; for
+    // an existing-but-stale row it's a full replace — local wins, which
+    // is the right semantic for recovery.
     h.insertWorkspaceMember()
     simulateOldLocalEphemeralInsert({id: 'stale-1', workspace_id: 'ws1'})
 
@@ -916,9 +930,12 @@ describe('backfillLocalEphemeralUploadsIfPending', () => {
 
     const triggerEnvelope = JSON.parse(h.psCrud().find(r => JSON.parse(r.data).id === 'live-1')!.data)
     const backfillEnvelope = JSON.parse(h.psCrud().find(r => JSON.parse(r.data).id === 'stale-1')!.data)
-    expect(Object.keys(triggerEnvelope.data).sort()).toEqual(Object.keys(backfillEnvelope.data).sort())
     expect(triggerEnvelope.op).toBe('PUT')
-    expect(backfillEnvelope.op).toBe('PUT')
+    expect(backfillEnvelope.op).toBe('PATCH')
+    // Backfill envelope still carries the full row payload — `applyBlockPatches`
+    // re-reads local state regardless, but a complete payload keeps the
+    // rejection-quarantine log readable (the row's full state at queue time).
+    expect(Object.keys(triggerEnvelope.data).sort()).toEqual(Object.keys(backfillEnvelope.data).sort())
   })
 
   describe('workspace-membership filter', () => {

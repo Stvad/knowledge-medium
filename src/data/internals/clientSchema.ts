@@ -814,26 +814,35 @@ export const BACKFILL_BLOCK_TYPES_SQL = `
  *  COMMIT time regardless of insertion order. If the batch somehow
  *  fails, the orchestrator's per-tx fallback quarantines them all
  *  together — visible via the rejection-quarantine UI for manual retry. */
-// v3 = v2 + sync-echo heuristic. v2 used "latest event source =
-// local-ephemeral" as the needs-upload signal — it missed blocks whose
-// history was local-ephemeral *then* later 'user' writes that never
-// actually landed server-side. On ff-vlad-dev (2026-05-25) the ui-state
-// root block had this exact shape: 96 local-ephemeral events followed
-// by 2 'user' events that enqueued via the upload trigger but somehow
-// never reached the server (no rejection row, no sync echo, no pending
-// ps_crud entry). v2 excluded it because the latest source was 'user',
-// so its CHILDREN in the v2 batch FK-failed against a non-existent
-// parent and the whole atomic tx was quarantined.
+// v4 = v3 + emit PATCH instead of PUT. v3 widened the filter so the
+// ancestor chain of stale UI-state blocks made it into the backfill
+// batch — that fixed the FK cascade for never-uploaded rows. But it
+// missed a second failure mode: blocks whose history was local-ephemeral
+// AND whose properties_json diverged from the server's existing row
+// (e.g., `system:showProperties` toggle on a content block — written
+// via ChangeScope.UiState, never uploaded pre-Phase-2). v3 still emitted
+// PUT envelopes, which the orchestrator routes through
+// `applyBlockCreates` -> `upsert(..., {ignoreDuplicates: true})`. For
+// these rows the server already had a row by id, so ignoreDuplicates
+// kicked in and the divergent local state was silently dropped.
 //
-// v3 broadens the filter: any block with a local-ephemeral event AND
-// no 'sync' echo is a candidate. A 'sync' event on a block proves the
-// server has at least one version of it; absence is the only client-
-// side signal that it may still be missing. This guarantees the full
-// ancestor chain of UI-state blocks lands in the same atomic tx, so
-// DEFERRABLE FK can resolve every parent-child link at COMMIT.
+// v4 emits PATCH. The orchestrator routes PATCH through
+// `applyBlockPatches`, which reads the full current local row and
+// upserts with `{onConflict:'id'}` (no ignoreDuplicates). For a missing
+// server row that's an INSERT; for an existing-but-stale row it's a
+// full replace — local wins, which is the correct semantic for a
+// recovery flow that says "local is canonical for these rows."
 //
-// Bumping the marker to v3 makes devices that ran v1 or v2 re-run.
-export const LOCAL_EPHEMERAL_BACKFILL_MARKER_KEY = 'local_ephemeral_upload_backfill_v3'
+// IMPORTANT: the upload-routing TRIGGER stays on PUT. Trigger PUTs
+// fire on local INSERT — including the bootstrap pattern where a
+// fresh client creates a deterministic-id row (user-prefs, user-page,
+// ui-state root) with default values. Those PUTs MUST keep
+// ignoreDuplicates so they don't clobber another device's customization
+// of the same deterministic id. The backfill is a one-shot recovery,
+// not a bootstrap, so the same op needs different semantics there.
+//
+// Bumping the marker to v4 makes devices that ran v1, v2, or v3 re-run.
+export const LOCAL_EPHEMERAL_BACKFILL_MARKER_KEY = 'local_ephemeral_upload_backfill_v4'
 
 export const SELECT_LOCAL_EPHEMERAL_BACKFILL_DONE_SQL = `
   SELECT 1 FROM client_schema_state WHERE key = '${LOCAL_EPHEMERAL_BACKFILL_MARKER_KEY}'
@@ -863,16 +872,22 @@ export const COUNT_LOCAL_EPHEMERAL_BACKFILL_PENDING_SQL = `
     )
 `
 
-/** Emits one PUT envelope per qualifying block, all stamped with the
+/** Emits one PATCH envelope per qualifying block, all stamped with the
  *  same `?` tx_id parameter. Second `?` is the current user's id,
  *  used to scope by workspace_members. The order is (tx_id, user_id)
- *  — same order callers pass via `db.execute(sql, [txSeq, userId])`. */
+ *  — same order callers pass via `db.execute(sql, [txSeq, userId])`.
+ *
+ *  PATCH (not PUT) is deliberate — see v4 marker rationale. The
+ *  orchestrator's PATCH path re-reads the full local row at upload
+ *  time, so the payload here is informational; we still include it
+ *  so the quarantine log (`ps_crud_rejected.data`) has the full row
+ *  state at queue time for debugging. */
 export const BACKFILL_LOCAL_EPHEMERAL_UPLOADS_SQL = `
   INSERT INTO ps_crud (tx_id, data)
   SELECT
     ?,
     json_object(
-      'op', 'PUT',
+      'op', 'PATCH',
       'type', 'blocks',
       'id', b.id,
       'data', ${blockUploadJsonSql('b')}
