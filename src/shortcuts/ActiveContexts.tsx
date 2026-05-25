@@ -37,6 +37,17 @@ export interface ActiveContextsDispatch {
 const ActiveContextsStateCtx = createContext<ActiveContextsMap | null>(null)
 const ActiveContextsDispatchCtx = createContext<ActiveContextsDispatch | null>(null)
 
+/**
+ * Read the dispatch context without throwing when no provider is mounted.
+ * For consumers that legitimately render outside the app shell (isolated
+ * component tests, storybook stories) and treat shortcut activation as a
+ * no-op when unavailable. Most consumers want `useActiveContextsDispatch`
+ * (which throws) so missing provider bugs surface loudly.
+ */
+export function useActiveContextsDispatchOptional(): ActiveContextsDispatch | null {
+  return useContext(ActiveContextsDispatchCtx)
+}
+
 export function ActiveContextsProvider({children}: PropsWithChildren) {
   const runtime = useAppRuntime()
   // We want `activate` to stay reference-stable so consumers via the

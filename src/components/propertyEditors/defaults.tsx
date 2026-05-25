@@ -27,6 +27,7 @@ import { Block } from '@/data/block'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
+import { usePropertyEditingActivation } from '@/components/propertyPanel/usePropertyEditingActivation'
 
 const INLINE_INPUT_CLASS =
   'h-7 min-w-0 border-transparent bg-transparent px-0 text-sm shadow-none placeholder:text-muted-foreground/55 focus-visible:border-transparent focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-60'
@@ -38,6 +39,7 @@ const readOnlyForBlock = (block: unknown): boolean =>
 
 export function UrlPropertyEditor({value, onChange, block}: PropertyEditorProps<unknown>) {
   const readOnly = readOnlyForBlock(block)
+  const focusHandlers = usePropertyEditingActivation(block)
   const text = value === undefined || value === null ? '' : String(value)
   return (
     <Input
@@ -46,6 +48,8 @@ export function UrlPropertyEditor({value, onChange, block}: PropertyEditorProps<
       value={text}
       placeholder="https://…"
       readOnly={readOnly}
+      onFocus={focusHandlers.onFocus}
+      onBlur={focusHandlers.onBlur}
       onChange={(event) => {
         if (!readOnly) onChange(event.target.value)
       }}
@@ -55,12 +59,15 @@ export function UrlPropertyEditor({value, onChange, block}: PropertyEditorProps<
 
 export function StringPropertyEditor({value, onChange, block}: PropertyEditorProps<unknown>) {
   const readOnly = readOnlyForBlock(block)
+  const focusHandlers = usePropertyEditingActivation(block)
   return (
     <Input
       className={INLINE_INPUT_CLASS}
       value={value === undefined || value === null ? '' : String(value)}
       placeholder="Empty"
       readOnly={readOnly}
+      onFocus={focusHandlers.onFocus}
+      onBlur={focusHandlers.onBlur}
       onChange={(event) => {
         if (!readOnly) onChange(event.target.value)
       }}
@@ -70,6 +77,7 @@ export function StringPropertyEditor({value, onChange, block}: PropertyEditorPro
 
 export function NumberPropertyEditor({value, onChange, block}: PropertyEditorProps<unknown>) {
   const readOnly = readOnlyForBlock(block)
+  const focusHandlers = usePropertyEditingActivation(block)
   return (
     <Input
       type="number"
@@ -77,6 +85,8 @@ export function NumberPropertyEditor({value, onChange, block}: PropertyEditorPro
       value={value === undefined || value === null ? '' : String(value)}
       placeholder="Empty"
       readOnly={readOnly}
+      onFocus={focusHandlers.onFocus}
+      onBlur={focusHandlers.onBlur}
       onChange={(event) => {
         if (readOnly) return
         const n = parseFloat(event.target.value)
@@ -109,6 +119,8 @@ export function BooleanPropertyEditor({
 
 export function ListPropertyEditor({value, onChange, block}: PropertyEditorProps<unknown>) {
   const readOnly = readOnlyForBlock(block)
+  const itemFocusHandlers = usePropertyEditingActivation(block)
+  const newItemFocusHandlers = usePropertyEditingActivation(block)
   const [newItem, setNewItem] = useState('')
   const items = Array.isArray(value)
     ? value.map(v => typeof v === 'string' ? v : String(v))
@@ -134,6 +146,8 @@ export function ListPropertyEditor({value, onChange, block}: PropertyEditorProps
           <Input
             value={item}
             onChange={(e) => updateItem(index, e.target.value)}
+            onFocus={itemFocusHandlers.onFocus}
+            onBlur={itemFocusHandlers.onBlur}
             className="h-7 text-xs md:text-sm"
             placeholder="Enter value..."
             disabled={readOnly}
@@ -155,6 +169,8 @@ export function ListPropertyEditor({value, onChange, block}: PropertyEditorProps
           <Input
             value={newItem}
             onChange={(e) => setNewItem(e.target.value)}
+            onFocus={newItemFocusHandlers.onFocus}
+            onBlur={newItemFocusHandlers.onBlur}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 e.preventDefault()
@@ -175,12 +191,15 @@ export function ListPropertyEditor({value, onChange, block}: PropertyEditorProps
 
 export function ObjectPropertyEditor({value, onChange, block}: PropertyEditorProps<unknown>) {
   const readOnly = readOnlyForBlock(block)
+  const focusHandlers = usePropertyEditingActivation(block)
   return (
     <Input
       className={`${INLINE_INPUT_CLASS} font-mono`}
       value={JSON.stringify(value ?? {})}
       placeholder="Empty"
       readOnly={readOnly}
+      onFocus={focusHandlers.onFocus}
+      onBlur={focusHandlers.onBlur}
       onChange={(event) => {
         if (readOnly) return
         try {
@@ -195,6 +214,7 @@ export function ObjectPropertyEditor({value, onChange, block}: PropertyEditorPro
 
 export function DatePropertyEditor({value, onChange, block}: PropertyEditorProps<unknown>) {
   const readOnly = readOnlyForBlock(block)
+  const focusHandlers = usePropertyEditingActivation(block)
   const isoString = value instanceof Date
     ? value.toISOString().slice(0, 10)
     : (typeof value === 'string' && value ? value.slice(0, 10) : '')
@@ -205,6 +225,8 @@ export function DatePropertyEditor({value, onChange, block}: PropertyEditorProps
       value={isoString}
       placeholder="Empty"
       readOnly={readOnly}
+      onFocus={focusHandlers.onFocus}
+      onBlur={focusHandlers.onBlur}
       onChange={(event) => {
         if (readOnly) return
         const text = event.target.value

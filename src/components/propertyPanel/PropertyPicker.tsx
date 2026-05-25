@@ -28,6 +28,8 @@ import type {
 import { FloatingListbox } from '@/components/ui/floating-listbox.js'
 import { PropertyShapeGlyph, PropertyShapeButton } from './shapeUi'
 import { propertyShapeLabel } from './shapes'
+import { usePropertyEditingActivation } from './usePropertyEditingActivation'
+import type { Block } from '@/data/block'
 
 export const DEFAULT_PRESET_ID = 'ref'
 export const FALLBACK_PRESET_ID = 'string'
@@ -103,6 +105,11 @@ export interface PropertyPickerProps {
    *  already closed. Lets the parent cancel its outer container
    *  (e.g. the "+ Field" toggle in AddPropertyForm). */
   onEscape?: () => void
+  /** Block the picker is adding a property to. When provided, the name
+   *  input activates `PROPERTY_EDITING` on focus so block-scoped
+   *  bindings stop firing while the user types. Optional so callers
+   *  without an obvious target block can omit it (activation just no-ops). */
+  block?: Block
 }
 
 export function PropertyPicker({
@@ -115,7 +122,9 @@ export function PropertyPicker({
   autoFocus = false,
   initialName = '',
   onEscape,
+  block,
 }: PropertyPickerProps) {
+  const propertyEditingFocus = usePropertyEditingActivation(block)
   const runtime = useAppRuntime()
   const presets = runtime.read(valuePresetsFacet)
   const uis = runtime.read(propertyEditorOverridesFacet)
@@ -223,8 +232,12 @@ export function PropertyPicker({
             setSuggestionsOpen(true)
             setActiveSuggestion(0)
           }}
-          onFocus={() => setSuggestionsOpen(true)}
+          onFocus={(event) => {
+            propertyEditingFocus.onFocus(event)
+            setSuggestionsOpen(true)
+          }}
           onBlur={() => {
+            propertyEditingFocus.onBlur()
             setTimeout(() => setSuggestionsOpen(false), 100)
           }}
           aria-controls={showSuggestions ? listboxId : undefined}

@@ -246,6 +246,7 @@ const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererProps) =>
                 onAdd={handlePick}
                 onConfigureNewSchema={handleConfigureNewSchema}
                 excludedNames={excludedNames}
+                block={block}
                 // Phase 1 limitation: block-type:properties is a refList
                 // of property-schema BLOCK ids. Kernel/plugin schemas
                 // (status, aliases, etc.) have no backing block and

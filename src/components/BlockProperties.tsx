@@ -276,6 +276,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
       {!readOnly && (
         <AddPropertyForm
           key={block.id}
+          block={block}
           blockId={block.id}
           onAdd={async (args) => {
             const schema = await addProperty(block, schemas, uis, args)

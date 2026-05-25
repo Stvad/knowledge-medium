@@ -14,6 +14,7 @@ import {
   subscribePropertyCreateRequests,
 } from '@/utils/propertyNavigation.js'
 import type { AnyPropertySchema } from '@/data/api'
+import type { Block } from '@/data/block'
 import { PROPERTY_ROW_GRID_STYLE } from './layout'
 import {
   PropertyPicker,
@@ -31,10 +32,12 @@ interface OpenState {
 }
 
 export function AddPropertyForm({
+  block,
   blockId,
   onAdd,
   onConfigureNewSchema,
 }: {
+  block: Block
   blockId: string
   onAdd: (args: AddPropertyArgs) => void | Promise<void>
   /** Glyph-click handler — see PropertyPicker. */
@@ -91,6 +94,7 @@ export function AddPropertyForm({
         onConfigureNewSchema={onConfigureNewSchema}
         autoFocus
         onEscape={() => setOpenState(null)}
+        block={block}
       />
       <PropertyEmptyValue />
       <div />

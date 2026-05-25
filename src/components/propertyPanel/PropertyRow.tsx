@@ -8,6 +8,7 @@ import { propertyShapeLabel } from './shapes'
 import { PropertyShapeButton } from './shapeUi'
 import { PROPERTY_ROW_GRID_STYLE } from './layout'
 import type { PropertyPanelModelRow } from './model'
+import { usePropertyEditingActivation } from './usePropertyEditingActivation'
 
 const formatRawJsonValue = (value: unknown): string => {
   try {
@@ -61,6 +62,7 @@ export function PropertyRow({
   const Editor = row.Editor
   const rowReadOnly = readOnly
   const renameAllowed = row.canRename && !rowReadOnly
+  const renameFocusHandlers = usePropertyEditingActivation(block)
   const rowAlignment = isRefCodec(row.schema.codec) || isRefListCodec(row.schema.codec)
     ? 'items-start'
     : 'items-center'
@@ -108,7 +110,11 @@ export function PropertyRow({
                   onRename(event.currentTarget.value)
                 }
               }}
-              onBlur={(event) => onRename(event.target.value)}
+              onFocus={renameFocusHandlers.onFocus}
+              onBlur={(event) => {
+                renameFocusHandlers.onBlur()
+                onRename(event.target.value)
+              }}
             />
           ) : (
             <div
