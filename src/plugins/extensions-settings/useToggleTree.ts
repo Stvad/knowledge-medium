@@ -30,17 +30,17 @@ export interface UseToggleTreeResult {
 }
 
 interface ResolvedTreeState {
-  cacheKey: string | null
+  key: string
   tree: readonly ToggleNode[]
 }
 
-const treeCacheKey = (workspaceId: string, safeMode: boolean): string =>
+const treeViewKey = (workspaceId: string, safeMode: boolean): string =>
   `${workspaceId}:${safeMode ? 'safe' : 'normal'}`
 
-// UI-only stale-while-refresh cache. The canonical toggle state remains
-// the prefs block + overrides cache; this just prevents remounts from
-// flashing the loading placeholder while discovery recomputes.
-const resolvedTreeCache = new Map<string, readonly ToggleNode[]>()
+// UI-only stale-while-refresh state. The canonical toggle state remains
+// the prefs block + overrides cache; this just lets a remounted editor
+// keep showing the previous tree while discovery recomputes.
+let lastResolvedTree: ResolvedTreeState | null = null
 
 export const useToggleTree = (): UseToggleTreeResult => {
   const repo = useRepo()
@@ -55,19 +55,21 @@ export const useToggleTree = (): UseToggleTreeResult => {
   const runtime = useAppRuntime()
   const safeMode = runtime.context.safeMode === true
 
-  const cacheKey = workspaceId ? treeCacheKey(workspaceId, safeMode) : null
-  const cachedTree = cacheKey ? resolvedTreeCache.get(cacheKey) : undefined
-  const hasCachedTree = cacheKey ? resolvedTreeCache.has(cacheKey) : false
+  const viewKey = workspaceId ? treeViewKey(workspaceId, safeMode) : null
+  const lastTreeForView = lastResolvedTree?.key === viewKey
+    ? lastResolvedTree.tree
+    : undefined
 
-  const [resolved, setResolved] = useState<ResolvedTreeState>(() => ({
-    cacheKey: hasCachedTree ? cacheKey : null,
-    tree: cachedTree ?? [],
-  }))
+  const [resolved, setResolved] = useState<ResolvedTreeState | null>(() =>
+    viewKey !== null && lastResolvedTree?.key === viewKey
+      ? lastResolvedTree
+      : null,
+  )
 
   const baseExtensions = useMemo(() => staticAppExtensions({repo}), [repo])
 
   useEffect(() => {
-    if (!workspaceId || !cacheKey) return
+    if (!workspaceId || !viewKey) return
     let cancelled = false
 
     void (async () => {
@@ -96,18 +98,20 @@ export const useToggleTree = (): UseToggleTreeResult => {
       )
 
       if (!cancelled) {
-        resolvedTreeCache.set(cacheKey, next)
-        setResolved({cacheKey, tree: next})
+        const nextResolved = {key: viewKey, tree: next}
+        lastResolvedTree = nextResolved
+        setResolved(nextResolved)
       }
     })()
 
     return () => { cancelled = true }
-  }, [baseExtensions, repo, workspaceId, overrides, generation, safeMode, cacheKey])
+  }, [baseExtensions, repo, workspaceId, overrides, generation, safeMode, viewKey])
 
-  const tree = resolved.cacheKey === cacheKey ? resolved.tree : cachedTree ?? []
-  const loading = cacheKey === null
+  const resolvedTreeForView = resolved?.key === viewKey ? resolved.tree : undefined
+  const tree = resolvedTreeForView ?? lastTreeForView ?? []
+  const loading = viewKey === null
     ? false
-    : !(resolved.cacheKey === cacheKey || hasCachedTree)
+    : resolvedTreeForView === undefined && lastTreeForView === undefined
 
   return {tree, loading, workspaceId: workspaceId ?? undefined}
 }
