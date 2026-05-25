@@ -21,6 +21,12 @@ export interface SyncIndicatorInput {
   uploading: boolean
   downloading: boolean
   pendingChanges: number
+  /** Count of rows in `ps_crud_rejected` — writes the server permanently
+   *  refused (FK, RLS, 4xx). Sync may still be working for new writes;
+   *  these are unfinished business that needs manual retry or dismissal.
+   *  Defaults to 0 so callers that don't pipe it in stay backwards-
+   *  compatible. */
+  rejectedChanges?: number
   downloadFraction?: number | null
   errorMessage?: string | null
   lastSyncedAt?: Date
@@ -66,6 +72,16 @@ const appendPendingTitle = (title: string, pendingChanges: number, localOnly = f
   return `${title} ${suffix}`
 }
 
+const formatRejectedCount = (count: number): string => {
+  if (count === 1) return "1 change couldn't sync — review."
+  return `${count} changes couldn't sync — review.`
+}
+
+const appendRejectedTitle = (title: string, rejectedChanges: number): string => {
+  if (rejectedChanges <= 0) return title
+  return `${title} ${formatRejectedCount(rejectedChanges)}`
+}
+
 export const getSyncIndicatorView = ({
   localOnly,
   connected,
@@ -74,6 +90,7 @@ export const getSyncIndicatorView = ({
   uploading,
   downloading,
   pendingChanges,
+  rejectedChanges = 0,
   downloadFraction,
   errorMessage,
   lastSyncedAt,
@@ -173,7 +190,7 @@ export const getSyncIndicatorView = ({
       tone: 'neutral',
       icon: 'offline',
       label: 'Offline',
-      title: 'Sync is offline.',
+      title: appendRejectedTitle('Sync is offline.', rejectedChanges),
       pendingLabel,
       progressPercent: null,
       spinning: false,
@@ -181,6 +198,25 @@ export const getSyncIndicatorView = ({
   }
 
   if (hasSynced) {
+    // The bucket is drained, but if some earlier writes are sitting in
+    // the rejection quarantine, sync isn't fully "OK" from the user's
+    // perspective. Keep state='synced' (new writes do land) but make
+    // the chip visually distinct so it surfaces in passing.
+    if (rejectedChanges > 0) {
+      return {
+        state: 'synced',
+        tone: 'warning',
+        icon: 'alert',
+        label: 'Synced with issues',
+        title: appendRejectedTitle(
+          formatLastSyncedAt(lastSyncedAt) ?? 'All current changes are synced.',
+          rejectedChanges,
+        ),
+        pendingLabel,
+        progressPercent: null,
+        spinning: false,
+      }
+    }
     return {
       state: 'synced',
       tone: 'success',

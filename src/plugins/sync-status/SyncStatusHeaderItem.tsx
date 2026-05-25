@@ -87,6 +87,7 @@ export function SyncStatusHeaderItem() {
     uploading: Boolean(dataFlow.uploading),
     downloading: Boolean(dataFlow.downloading),
     pendingChanges,
+    rejectedChanges: rejectedCount,
     downloadFraction: status.downloadProgress?.downloadedFraction ?? null,
     errorMessage,
     lastSyncedAt: status.lastSyncedAt,
