@@ -1,13 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { useBlockContext } from '@/context/block.js'
 import { useRepo } from '@/context/repo.js'
-import {
-  blockLinkClickIntent,
-  navigateInputFromBlockLinkClickIntent,
-  useNavigate,
-  useNavigateFromGlobalCommand,
-} from '@/utils/navigation.js'
+import { useBlockOpener } from '@/utils/navigation.js'
 import {
   type DailyNotePickerAnchorRect,
   type OpenDailyNotePickerEventDetail,
@@ -42,9 +36,7 @@ const pickerPosition = (
 
 export function DailyNotePicker() {
   const repo = useRepo()
-  const navigate = useNavigate()
-  const navigateFromGlobalCommand = useNavigateFromGlobalCommand()
-  const {panelId} = useBlockContext()
+  const openBlock = useBlockOpener({plainClick: 'navigator'})
   const panelRef = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
   const [anchorRect, setAnchorRect] = useState<DailyNotePickerAnchorRect | null>(null)
@@ -81,23 +73,12 @@ export function DailyNotePicker() {
   }, [open])
 
   const openDailyNote = async (iso: string, event: MouseEvent<HTMLButtonElement>) => {
-    const clickIntent = blockLinkClickIntent(event)
     const workspaceId = repo.activeWorkspaceId
     if (!workspaceId) return
 
     setSelectedIso(iso)
     const note = await getOrCreateDailyNote(repo, workspaceId, iso)
-    const modifierInput = clickIntent === 'default' || clickIntent === 'native'
-      ? null
-      : navigateInputFromBlockLinkClickIntent(clickIntent, panelId, {
-        blockId: note.id,
-        workspaceId,
-      })
-    if (modifierInput) {
-      navigate(modifierInput)
-    } else {
-      navigateFromGlobalCommand({blockId: note.id, workspaceId})
-    }
+    openBlock(event, {blockId: note.id, workspaceId})
     setOpen(false)
   }
 

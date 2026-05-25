@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MouseEvent } from 'react'
 import {
+  blockOpenerAction,
   handleBlockLinkClick,
   navigate,
   navigateFromGlobalCommand,
@@ -297,5 +298,45 @@ describe('handleBlockLinkClick', () => {
     handleBlockLinkClick(e, navigate, 'panel-a', ctx)
     expect(navigate).not.toHaveBeenCalled()
     expect(callsOf(e)).toEqual({stopProp: 1, preventDefault: 0})
+  })
+})
+
+describe('blockOpenerAction', () => {
+  const ctx = {blockId: 'b-target', workspaceId: 'w-1'}
+
+  it('routes plain follow-link click to the current panel', () => {
+    expect(blockOpenerAction('default', 'follow-link', 'panel-a', ctx)).toEqual({
+      kind: 'navigate',
+      input: {...ctx, target: 'panel', panelId: 'panel-a'},
+    })
+  })
+
+  it('routes plain navigator click through the global-command path', () => {
+    expect(blockOpenerAction('default', 'navigator', 'panel-a', ctx)).toEqual({
+      kind: 'global-command',
+    })
+  })
+
+  it('routes shift-click to sidebar stack regardless of plainClick policy', () => {
+    const expected = {kind: 'navigate' as const, input: {...ctx, target: 'sidebar-stack' as const, sourcePanelId: 'panel-a'}}
+    expect(blockOpenerAction('sidebar-stack', 'follow-link', 'panel-a', ctx)).toEqual(expected)
+    expect(blockOpenerAction('sidebar-stack', 'navigator', 'panel-a', ctx)).toEqual(expected)
+  })
+
+  it('routes shift+alt-click to new-panel regardless of plainClick policy', () => {
+    const expected = {kind: 'navigate' as const, input: {...ctx, target: 'new-panel' as const, sourcePanelId: 'panel-a'}}
+    expect(blockOpenerAction('new-panel', 'follow-link', 'panel-a', ctx)).toEqual(expected)
+    expect(blockOpenerAction('new-panel', 'navigator', 'panel-a', ctx)).toEqual(expected)
+  })
+
+  it('routes alt-click to main regardless of plainClick policy', () => {
+    const expected = {kind: 'navigate' as const, input: {...ctx, target: 'main' as const}}
+    expect(blockOpenerAction('main', 'follow-link', 'panel-a', ctx)).toEqual(expected)
+    expect(blockOpenerAction('main', 'navigator', 'panel-a', ctx)).toEqual(expected)
+  })
+
+  it('returns noop for native clicks (cmd/ctrl/middle) so the browser handles it', () => {
+    expect(blockOpenerAction('native', 'follow-link', 'panel-a', ctx)).toEqual({kind: 'noop'})
+    expect(blockOpenerAction('native', 'navigator', 'panel-a', ctx)).toEqual({kind: 'noop'})
   })
 })

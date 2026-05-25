@@ -18,8 +18,7 @@ const mocks = vi.hoisted(() => ({
   getOrCreateDailyNote: vi.fn(async (_repo: unknown, _workspaceId: string, iso: string) => ({
     id: `daily-${iso}`,
   })),
-  navigate: vi.fn(),
-  navigateFromGlobalCommand: vi.fn(),
+  openBlock: vi.fn(),
   repo: {activeWorkspaceId: 'ws-1'},
   resolveCurrentDailyNoteIso: vi.fn<(_repo: unknown, _workspaceId: string) => Promise<string | null>>(async () => null),
   runAction: vi.fn(),
@@ -29,14 +28,9 @@ vi.mock('@/context/repo.tsx', () => ({
   useRepo: () => mocks.repo,
 }))
 
-vi.mock('@/utils/navigation.ts', async () => {
-  const actual = await vi.importActual<typeof import('@/utils/navigation.ts')>('@/utils/navigation.ts')
-  return {
-    ...actual,
-    useNavigate: () => mocks.navigate,
-    useNavigateFromGlobalCommand: () => mocks.navigateFromGlobalCommand,
-  }
-})
+vi.mock('@/utils/navigation.ts', () => ({
+  useBlockOpener: () => mocks.openBlock,
+}))
 
 vi.mock('@/shortcuts/runAction.ts', () => ({
   useRunAction: () => mocks.runAction,
@@ -75,8 +69,7 @@ describe('DailyNotePicker', () => {
   afterEach(() => {
     cleanup()
     mocks.getOrCreateDailyNote.mockClear()
-    mocks.navigate.mockClear()
-    mocks.navigateFromGlobalCommand.mockClear()
+    mocks.openBlock.mockClear()
     mocks.runAction.mockClear()
   })
 
@@ -119,7 +112,7 @@ describe('DailyNotePicker', () => {
     expect(selected.getAttribute('aria-current')).toBeNull()
   })
 
-  it('opens from the shared event and navigates to the selected daily note', async () => {
+  it('opens from the shared event and forwards the click to the block opener', async () => {
     render(<DailyNotePicker/>)
 
     act(() => {
@@ -137,16 +130,15 @@ describe('DailyNotePicker', () => {
         '2026-05-13',
       )
     })
-    expect(mocks.navigateFromGlobalCommand).toHaveBeenCalledExactlyOnceWith({
-      blockId: 'daily-2026-05-13',
-      workspaceId: 'ws-1',
-    })
+    expect(mocks.openBlock).toHaveBeenCalledOnce()
+    const [, ctx] = mocks.openBlock.mock.calls[0]
+    expect(ctx).toEqual({blockId: 'daily-2026-05-13', workspaceId: 'ws-1'})
     await waitFor(() => {
       expect(screen.queryByRole('dialog', {name: 'Daily note picker'})).toBeNull()
     })
   })
 
-  it('opens the selected daily note in the sidebar stack on shift-click', async () => {
+  it('forwards shift-click through the block opener for sidebar-stack routing', async () => {
     render(<DailyNotePicker/>)
 
     act(() => {
@@ -165,13 +157,10 @@ describe('DailyNotePicker', () => {
         '2026-05-13',
       )
     })
-    expect(mocks.navigate).toHaveBeenCalledExactlyOnceWith({
-      blockId: 'daily-2026-05-13',
-      workspaceId: 'ws-1',
-      target: 'sidebar-stack',
-      sourcePanelId: undefined,
-    })
-    expect(mocks.navigateFromGlobalCommand).not.toHaveBeenCalled()
+    expect(mocks.openBlock).toHaveBeenCalledOnce()
+    const [event, ctx] = mocks.openBlock.mock.calls[0]
+    expect(event.shiftKey).toBe(true)
+    expect(ctx).toEqual({blockId: 'daily-2026-05-13', workspaceId: 'ws-1'})
     await waitFor(() => {
       expect(screen.queryByRole('dialog', {name: 'Daily note picker'})).toBeNull()
     })

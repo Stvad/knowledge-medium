@@ -320,6 +320,29 @@ export interface BlockOpenerOptions {
   plainClick?: BlockOpenerPlainClick
 }
 
+/** Pure dispatch decision for the block opener: maps a click intent to
+ *  one of three actions — open via the global-command path (navigator
+ *  plain click), navigate with an explicit input (modifier or follow-link
+ *  default), or do nothing (cmd/ctrl/middle click that should fall
+ *  through to the browser). Exposed for tests; in production callers go
+ *  through `useBlockOpener`. */
+export type BlockOpenerAction =
+  | {kind: 'global-command'}
+  | {kind: 'navigate'; input: NavigateInput}
+  | {kind: 'noop'}
+
+export const blockOpenerAction = (
+  intent: BlockLinkClickIntent,
+  plainClick: BlockOpenerPlainClick,
+  panelId: string | undefined,
+  ctx: BlockLinkClickContext,
+): BlockOpenerAction => {
+  if (intent === 'native') return {kind: 'noop'}
+  if (intent === 'default' && plainClick === 'navigator') return {kind: 'global-command'}
+  const input = navigateInputFromBlockLinkClickIntent(intent, panelId, ctx)
+  return input ? {kind: 'navigate', input} : {kind: 'noop'}
+}
+
 /** The standard way for plugins and components to wire a clickable surface
  *  that opens a block — links, buttons, map pins, calendar cells, anything.
  *  Returns a modifier-aware onClick handler that honours the shift / alt
@@ -351,13 +374,20 @@ export const useBlockOpener = ({plainClick = 'follow-link'}: BlockOpenerOptions 
     (e: MouseEvent, {blockId, workspaceId}: OpenBlockContext) => {
       const resolvedWorkspaceId = workspaceId ?? repo.activeWorkspaceId
       if (!resolvedWorkspaceId) return
-      if (plainClick === 'navigator' && blockLinkClickIntent(e) === 'default') {
-        e.stopPropagation()
-        e.preventDefault()
+      const action = blockOpenerAction(
+        blockLinkClickIntent(e),
+        plainClick,
+        panelId,
+        {blockId, workspaceId: resolvedWorkspaceId},
+      )
+      if (action.kind === 'noop') return
+      e.stopPropagation()
+      e.preventDefault()
+      if (action.kind === 'global-command') {
         navigateFromGlobalCommand(repo, {blockId, workspaceId: resolvedWorkspaceId})
-        return
+      } else {
+        navigate(action.input)
       }
-      handleBlockLinkClick(e, navigate, panelId, {blockId, workspaceId: resolvedWorkspaceId})
     },
     [navigate, repo, panelId, plainClick],
   )
