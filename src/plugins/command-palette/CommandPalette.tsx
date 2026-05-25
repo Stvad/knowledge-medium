@@ -11,6 +11,7 @@ import { useActionContext } from '@/shortcuts/useActionContext.js'
 import { useRunAction } from '@/shortcuts/runAction.js'
 import type { ActionConfig, ShortcutBinding, ActionContextType } from '@/shortcuts/types.js'
 import { Kbd } from '@/components/ui/kbd'
+import { formatChord } from '@/plugins/keybindings-settings/keyCapture.ts'
 import { groupBy } from 'lodash'
 import { toggleCommandPaletteEvent } from './events.ts'
 import { COMMAND_PALETTE_CONTEXT } from './context.ts'
@@ -96,7 +97,7 @@ export function CommandPalette() {
                     {shortcutKeys.length > 0 && (
                       <div className="flex gap-1">
                         {shortcutKeys.map((keyStr, index) => (
-                          <Kbd key={index}>{keyStr}</Kbd>
+                          <Kbd key={index}>{formatChord(keyStr)}</Kbd>
                         ))}
                       </div>
                     )}

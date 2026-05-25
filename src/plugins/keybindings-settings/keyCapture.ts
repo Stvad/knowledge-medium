@@ -115,8 +115,15 @@ export const chordFromEvent = (event: ChordEventShape): string | null => {
   return parts.join('+')
 }
 
+/** Resolved `$mod` glyph for the current platform: ⌘ on macOS (Cmd),
+ *  Ctrl elsewhere. Matches what tinykeys actually binds (`Meta` on Mac,
+ *  `Control` on Windows/Linux) — see PLATFORM detection in
+ *  node_modules/tinykeys/dist/tinykeys.mjs. Cached at module load
+ *  since platform doesn't change mid-session. */
+const platformModGlyph = (): string =>
+  isMacPlatform() ? '⌘' : 'Ctrl'
+
 const GLYPH_BY_TOKEN: Record<string, string> = {
-  $mod: '⌘',
   cmd: '⌘',
   meta: '⌘',
   ctrl: '⌃',
@@ -151,20 +158,28 @@ const stripCodePrefix = (part: string): string => {
   return part
 }
 
-/** Render a chord string ('$mod+Shift+k') as display glyphs ('⌘⇧K').
- *  Letters are uppercased for visual scan-ability; modifier tokens
- *  map to their Mac-conventional glyphs. */
+/** Render a chord string ('$mod+Shift+k') as display glyphs ('⌘⇧K' on
+ *  Mac, 'Ctrl⇧K' on Win/Linux). `$mod` resolves to the platform-native
+ *  primary modifier — mirrors what tinykeys actually binds. Multi-press
+ *  sequences ('g g') keep their space separator so the glyph hint
+ *  reflects "press g, then g". Letters are uppercased for scan-ability;
+ *  modifier tokens map to their Mac-conventional glyphs. */
 export const formatChord = (chord: string): string => {
-  return chord.split('+')
-    .map(part => {
-      const lower = part.toLowerCase()
-      const glyph = GLYPH_BY_TOKEN[lower]
-      if (glyph) return glyph
-      const stripped = stripCodePrefix(part)
-      if (stripped.length === 1) return stripped.toUpperCase()
-      return stripped.charAt(0).toUpperCase() + stripped.slice(1)
-    })
-    .join('')
+  // Sequence chords are space-separated; format each press independently
+  // and rejoin with the same separator so "g g" displays as "G G".
+  return chord.split(' ').map(press =>
+    press.split('+')
+      .map(part => {
+        if (part === '$mod') return platformModGlyph()
+        const lower = part.toLowerCase()
+        const glyph = GLYPH_BY_TOKEN[lower]
+        if (glyph) return glyph
+        const stripped = stripCodePrefix(part)
+        if (stripped.length === 1) return stripped.toUpperCase()
+        return stripped.charAt(0).toUpperCase() + stripped.slice(1)
+      })
+      .join(''),
+  ).join(' ')
 }
 
 /** Canonicalise a chord — stable modifier ordering, aliases (`cmd` →
