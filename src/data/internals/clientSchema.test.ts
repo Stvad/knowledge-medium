@@ -994,4 +994,79 @@ describe('backfillLocalEphemeralUploadsIfPending', () => {
       expect(ids).toEqual(['own-1'])
     })
   })
+
+  describe('"no sync echo" heuristic', () => {
+    // v2 used "latest event source = local-ephemeral" as the
+    // needs-upload signal. That missed blocks whose history was
+    // local-ephemeral *then* later 'user' writes that never actually
+    // landed server-side — common when an early-Phase-2 write
+    // enqueued but its parent chain wasn't there yet, so the upload
+    // FK-failed and (under per-tx orchestration) only the single tx
+    // was quarantined. The phantom-on-local-only ancestor then trips
+    // the next backfill's FK because it's not in the candidate set.
+    //
+    // v3 includes any block with local-ephemeral history AND no
+    // 'sync' event (i.e., the server has never echoed it back). A
+    // sync echo proves the row landed; absence is the only signal we
+    // have from the client side that it may still be missing.
+
+    it("includes a block whose latest event is 'user' if it has no sync echo yet", async () => {
+      h.insertWorkspaceMember()
+      // pre-Phase-2 history: row was created/edited as local-ephemeral
+      simulateOldLocalEphemeralInsert({id: 'phantom', workspace_id: 'ws1'})
+      // post-Phase-2: a later 'user' edit emits a PATCH ps_crud entry,
+      // but suppose that upload silently never landed (FK on a missing
+      // ancestor, then the rejection bookkeeping or some other miss).
+      // From the local row_events alone, the latest source is 'user'
+      // but there's still no 'sync' echo.
+      h.setTxContext({txId: 'tx-u', txSeq: 9, userId: 'user-1', scope: 'block-default', source: 'user'})
+      h.updateBlock('phantom', {content: 'edited-locally', updated_at: 1700000010000})
+      h.clearTxContext()
+      // Drop the trigger-emitted ps_crud entry to mimic the "upload
+      // happened but row is still missing server-side" state.
+      h.db.exec(`DELETE FROM ps_crud WHERE json_extract(data, '$.id') = 'phantom'`)
+      expect(h.psCrud()).toHaveLength(0)
+
+      await runBackfill(9100)
+      const ids = h.psCrud().map(r => JSON.parse(r.data).id).sort()
+      expect(ids).toEqual(['phantom'])
+    })
+
+    it('excludes a block once any sync event has fired (server has it)', async () => {
+      h.insertWorkspaceMember()
+      simulateOldLocalEphemeralInsert({id: 'landed', workspace_id: 'ws1'})
+      // Any 'sync' event proves the row exists server-side. Even if a
+      // later local 'user' edit follows, we don't need to re-upload —
+      // the trigger has already enqueued that PATCH separately.
+      h.updateBlock('landed', {content: 'from-server'})  // source NULL → 'sync'
+      h.setTxContext({txId: 'tx-u', txSeq: 10, userId: 'user-1', scope: 'block-default', source: 'user'})
+      h.updateBlock('landed', {content: 'local-edit-after-sync'})
+      h.clearTxContext()
+
+      await runBackfill(9200)
+      const backfilled = h.psCrud()
+        .filter(r => r.tx_id === 9200)
+        .map(r => JSON.parse(r.data).id)
+      expect(backfilled).toEqual([])
+    })
+
+    it("excludes a block whose history has NO local-ephemeral event", async () => {
+      // Post-Phase-2 'user'-only history → the upload trigger already
+      // handles this block. No backfill needed.
+      h.insertWorkspaceMember()
+      h.setTxContext({txId: 'tx-u', txSeq: 11, userId: 'user-1', scope: 'block-default', source: 'user'})
+      h.insertBlock({id: 'born-user', workspace_id: 'ws1'})
+      h.clearTxContext()
+      // The trigger inserted a ps_crud entry for born-user; we don't
+      // want the backfill to duplicate it.
+      const beforeIds = h.psCrud().map(r => JSON.parse(r.data).id)
+      expect(beforeIds).toEqual(['born-user'])
+
+      await runBackfill(9300)
+      const backfilled = h.psCrud()
+        .filter(r => r.tx_id === 9300)
+        .map(r => JSON.parse(r.data).id)
+      expect(backfilled).toEqual([])
+    })
+  })
 })

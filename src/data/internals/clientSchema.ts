@@ -814,16 +814,26 @@ export const BACKFILL_BLOCK_TYPES_SQL = `
  *  COMMIT time regardless of insertion order. If the batch somehow
  *  fails, the orchestrator's per-tx fallback quarantines them all
  *  together — visible via the rejection-quarantine UI for manual retry. */
-// v2 = v1 + workspace-membership filter. The v1 backfill was unscoped
-// by workspace, so devices with stale UI-state blocks for workspaces
-// the user no longer (or never did) belong to enqueued them anyway —
-// one RLS denial then tanked the whole atomic backfill batch and every
-// well-formed own-workspace row got quarantined alongside the bad
-// apples. v2 scopes the SELECT to workspaces where the user is owner
-// or editor, so the batch only contains rows the server will accept.
-// Bumping the marker key (not editing the v1 row) ensures devices that
-// ran the buggy v1 re-run with v2's filter.
-export const LOCAL_EPHEMERAL_BACKFILL_MARKER_KEY = 'local_ephemeral_upload_backfill_v2'
+// v3 = v2 + sync-echo heuristic. v2 used "latest event source =
+// local-ephemeral" as the needs-upload signal — it missed blocks whose
+// history was local-ephemeral *then* later 'user' writes that never
+// actually landed server-side. On ff-vlad-dev (2026-05-25) the ui-state
+// root block had this exact shape: 96 local-ephemeral events followed
+// by 2 'user' events that enqueued via the upload trigger but somehow
+// never reached the server (no rejection row, no sync echo, no pending
+// ps_crud entry). v2 excluded it because the latest source was 'user',
+// so its CHILDREN in the v2 batch FK-failed against a non-existent
+// parent and the whole atomic tx was quarantined.
+//
+// v3 broadens the filter: any block with a local-ephemeral event AND
+// no 'sync' echo is a candidate. A 'sync' event on a block proves the
+// server has at least one version of it; absence is the only client-
+// side signal that it may still be missing. This guarantees the full
+// ancestor chain of UI-state blocks lands in the same atomic tx, so
+// DEFERRABLE FK can resolve every parent-child link at COMMIT.
+//
+// Bumping the marker to v3 makes devices that ran v1 or v2 re-run.
+export const LOCAL_EPHEMERAL_BACKFILL_MARKER_KEY = 'local_ephemeral_upload_backfill_v3'
 
 export const SELECT_LOCAL_EPHEMERAL_BACKFILL_DONE_SQL = `
   SELECT 1 FROM client_schema_state WHERE key = '${LOCAL_EPHEMERAL_BACKFILL_MARKER_KEY}'
@@ -844,11 +854,11 @@ export const COUNT_LOCAL_EPHEMERAL_BACKFILL_PENDING_SQL = `
     WHERE user_id = ? AND role IN ('owner', 'editor')
   )
     AND b.id IN (
-      SELECT r1.block_id FROM row_events r1
+      SELECT DISTINCT r1.block_id FROM row_events r1
       WHERE r1.source = 'local-ephemeral'
         AND NOT EXISTS (
           SELECT 1 FROM row_events r2
-          WHERE r2.block_id = r1.block_id AND r2.id > r1.id
+          WHERE r2.block_id = r1.block_id AND r2.source = 'sync'
         )
     )
 `
@@ -873,11 +883,11 @@ export const BACKFILL_LOCAL_EPHEMERAL_UPLOADS_SQL = `
     WHERE user_id = ? AND role IN ('owner', 'editor')
   )
     AND b.id IN (
-      SELECT r1.block_id FROM row_events r1
+      SELECT DISTINCT r1.block_id FROM row_events r1
       WHERE r1.source = 'local-ephemeral'
         AND NOT EXISTS (
           SELECT 1 FROM row_events r2
-          WHERE r2.block_id = r1.block_id AND r2.id > r1.id
+          WHERE r2.block_id = r1.block_id AND r2.source = 'sync'
         )
     )
 `
