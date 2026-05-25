@@ -299,9 +299,6 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const prefsBlock = await getUserPrefsBlock(repo, workspaceId, repo.user)
         navigateFromGlobalCommand(repo, {blockId: prefsBlock.id, workspaceId})
       },
-      defaultBinding: {
-        keys: 'cmd+,',
-      },
     },
     {
       id: CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID,

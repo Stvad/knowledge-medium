@@ -208,9 +208,8 @@ describe('default CodeMirror shortcuts', () => {
     })
   })
 
-  it('opens the root preferences block with Cmd+comma from global shortcuts', async () => {
+  it('opens the root preferences block from the global action', async () => {
     const action = findGlobalAction(env.repo, OPEN_PREFERENCES_ACTION_ID)
-    expect(action.defaultBinding?.keys).toBe('cmd+,')
 
     const rootUiState = await getUIStateBlock(env.repo, WS, USER, {})
     const layoutSession = await getLayoutSessionBlock(rootUiState, getLayoutSessionId())
