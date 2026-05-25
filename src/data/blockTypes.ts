@@ -29,6 +29,9 @@ export const BLOCK_TYPE_TYPE = 'block-type'
 /** Marker type for the singleton Types page that hosts every
  *  block-type block in a workspace. */
 export const TYPES_PAGE_TYPE = 'panel:types'
+/** Marker type for the singleton Recents page — a Tana-style view of
+ *  recently-edited blocks in the workspace. */
+export const RECENTS_PAGE_TYPE = 'panel:recents'
 
 export const KERNEL_TYPE_CONTRIBUTIONS: readonly TypeContribution[] = [
   defineBlockType({
@@ -61,6 +64,11 @@ export const KERNEL_TYPE_CONTRIBUTIONS: readonly TypeContribution[] = [
   defineBlockType({
     id: TYPES_PAGE_TYPE,
     label: 'Types page',
+    properties: [aliasesProp],
+  }),
+  defineBlockType({
+    id: RECENTS_PAGE_TYPE,
+    label: 'Recents page',
     properties: [aliasesProp],
   }),
 ]

@@ -22,6 +22,7 @@ import { recallRememberedWorkspace, rememberWorkspace } from '@/utils/lastWorksp
 import { seedTutorial } from '@/initData.js'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage.js'
 import { getOrCreateTypesPage } from '@/data/typesPage.js'
+import { getOrCreateRecentsPage } from '@/data/recentsPage.js'
 import { useMyWorkspaceRoles } from '@/hooks/useWorkspaces.js'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks.js'
 import { workspaceLandingFacet } from '@/extensions/core.js'
@@ -231,6 +232,10 @@ const resolveInitialLayout = async (
   // Ensure the Types page exists (idempotent, deterministic id).
   // User-defined block-type blocks live under it.
   await getOrCreateTypesPage(repo, workspaceId)
+
+  // Ensure the Recents page exists. The recents plugin renders a
+  // recently-edited list on it via `repo.query.recentBlocks`.
+  await getOrCreateRecentsPage(repo, workspaceId)
 
   const uiState = await getUIStateBlock(repo, workspaceId, repo.user, {})
   const layoutSessionBlock = await getLayoutSessionBlock(uiState, getLayoutSessionId())
