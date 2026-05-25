@@ -105,11 +105,10 @@ export interface PropertyPickerProps {
    *  already closed. Lets the parent cancel its outer container
    *  (e.g. the "+ Field" toggle in AddPropertyForm). */
   onEscape?: () => void
-  /** Block the picker is adding a property to. When provided, the name
-   *  input activates `PROPERTY_EDITING` on focus so block-scoped
-   *  bindings stop firing while the user types. Optional so callers
-   *  without an obvious target block can omit it (activation just no-ops). */
-  block?: Block
+  /** Block the picker is adding a property to. Required so the name
+   *  input can activate `PROPERTY_EDITING` on focus, shadowing
+   *  block-scoped bindings while the user types. */
+  block: Block
 }
 
 export function PropertyPicker({

@@ -14,6 +14,7 @@ import {
   ActionConfig,
   ActionContextConfig,
   ActionContextType,
+  ActionContextTypes,
   ActionTrigger,
   EventOptions,
   ShortcutBinding,
@@ -29,8 +30,6 @@ const normalizeKeys = (keys: string | string[]): readonly string[] =>
 
 const defaultEventFilter = (event: KeyboardEvent) =>
   !(isTypingKeyEvent(event) && hasEditableTarget(event))
-
-const GLOBAL_CONTEXT: ActionContextType = 'global'
 
 /**
  * When any active context is `modal: true`, the install set collapses to
@@ -53,7 +52,7 @@ const computeInstallableContexts = (
     contextConfigsByType.get(type)?.modal === true,
   )
   if (!latestModal) return new Set(contexts)
-  return new Set([GLOBAL_CONTEXT, latestModal])
+  return new Set([ActionContextTypes.GLOBAL, latestModal])
 }
 
 /**

@@ -33,18 +33,17 @@ interface OpenState {
 
 export function AddPropertyForm({
   block,
-  blockId,
   onAdd,
   onConfigureNewSchema,
 }: {
   block: Block
-  blockId: string
   onAdd: (args: AddPropertyArgs) => void | Promise<void>
   /** Glyph-click handler — see PropertyPicker. */
   onConfigureNewSchema: (
     args: ConfigureNewSchemaArgs,
   ) => Promise<AnyPropertySchema | undefined>
 }) {
+  const blockId = block.id
   const [initialRequest] = useState(() => consumePendingPropertyCreateRequest(blockId))
   const [openState, setOpenState] = useState<OpenState | null>(
     initialRequest ? {key: 0, initialName: initialRequest.initialName ?? ''} : null,
