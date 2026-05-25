@@ -198,7 +198,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       await navigateInPanel(uiStateBlock, parent.id)
     },
     defaultBinding: {
-      keys: 'ctrl+,',
+      keys: ['cmd+,', 'ctrl+,'],
     },
   }
 
