@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { tinykeys } from 'tinykeys'
+import { createKeybindingsHandler } from 'tinykeys'
 import { actionContextsFacet } from '@/extensions/core.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { useActiveContextsState, ActiveContextsMap } from '@/shortcuts/ActiveContexts.js'
@@ -19,7 +19,7 @@ import {
   EventOptions,
   ShortcutBinding,
 } from '@/shortcuts/types.js'
-import { hasEditableTarget, isTypingKeyEvent } from '@/shortcuts/utils.js'
+import { hasEditableTarget, isTypingKeyEvent, withRecoveredLetterKey } from '@/shortcuts/utils.js'
 
 interface InstalledBinding {
   unsubscribe: () => void
@@ -203,11 +203,25 @@ export function HotkeyReconciler(): null {
 
       const bindingMap: Record<string, (event: KeyboardEvent) => void> = {}
       for (const key of keys) bindingMap[key] = handler
-      // ignore: () => false disables tinykeys' built-in editable-target
+      // We use `createKeybindingsHandler` + a manual listener rather than
+      // tinykeys() directly so we can preprocess events with
+      // `withRecoveredLetterKey`. tinykeys' matcher reads event.key, which
+      // Mac's option-transformations and Linux compose-key setups can
+      // corrupt for letter chords (Alt+y → '¥' on Mac US). The wrapper
+      // restores the logical letter from event.keyCode before tinykeys
+      // sees it — matches hotkeys-js's pre-migration behavior, and works
+      // on Colemak/Dvorak where event.code lies about layout.
+      //
+      // `ignore: () => false` disables tinykeys' built-in editable-target
       // filter; we run our own context-aware filter inside the handler so
       // contexts like property-editing can opt in to events tinykeys
       // would otherwise drop.
-      const unsubscribe = tinykeys(window, bindingMap, {ignore: () => false})
+      const tinykeysHandler = createKeybindingsHandler(bindingMap, {ignore: () => false})
+      const listener: EventListener = (event) => {
+        tinykeysHandler(withRecoveredLetterKey(event as KeyboardEvent))
+      }
+      window.addEventListener('keydown', listener)
+      const unsubscribe = () => window.removeEventListener('keydown', listener)
       state.byActionId.set(actionKey, {unsubscribe})
     }
 

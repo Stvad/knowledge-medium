@@ -35,6 +35,58 @@ export const hasEditableTarget = (event: KeyboardEvent) => {
 export const isTypingKeyEvent = (event: KeyboardEvent): boolean =>
   !event.ctrlKey && !event.altKey && !event.metaKey
 
+/**
+ * Recover the logical letter of a keyboard event when an Alt or Meta
+ * modifier has corrupted `event.key`.
+ *
+ * `event.key` is unreliable for letter-keys under Alt/Meta:
+ *   - macOS option-transforms (Alt+y → '¥', Alt+z → 'Ω', …) on every layout.
+ *   - Linux xkb compose / dead-key setups that emit composing chars
+ *     when Alt is held.
+ *
+ * `event.code` is layout-INdependent — it reports the QWERTY-position
+ * id ('KeyY') even when the user is on Colemak/Dvorak. So matching on
+ * `event.code === 'KeyY'` works on Mac QWERTY but not on Mac Colemak,
+ * where the user's logical 'y' sits at the physical KeyO position.
+ *
+ * `event.keyCode` is what hotkeys-js used to get right. Modern browsers
+ * populate it for printable letters with the *logical* letter's char
+ * code — i.e. the letter the layout produces, derived before any
+ * modifier-induced transformation. So a Mac Colemak user pressing
+ * Alt+y gives `event.keyCode = 89` ('Y') regardless of `event.key`
+ * being a transformed glyph and `event.code` reporting KeyO.
+ *
+ * This helper returns the event unchanged when no recovery is needed,
+ * or a Proxy that overrides `event.key` with the recovered lowercase
+ * letter. Proxy (not spread/clone) so `getModifierState` and other
+ * prototype methods stay callable for tinykeys' matcher.
+ *
+ * Scope: letters only (`keyCode` in [65,90]) and only when Alt or
+ * Meta is held. Digit/punctuation keyCodes are layout-dependent in a
+ * way keyCode can't recover; those bindings use Digit{N} / code-form
+ * chord strings.
+ */
+const ASCII_A = 65
+const ASCII_Z = 90
+
+export const withRecoveredLetterKey = (event: KeyboardEvent): KeyboardEvent => {
+  if (!event.altKey && !event.metaKey) return event
+  const keyCode = event.keyCode
+  if (keyCode < ASCII_A || keyCode > ASCII_Z) return event
+  const recovered = String.fromCharCode(keyCode).toLowerCase()
+  if (event.key.toLowerCase() === recovered) return event
+  // Proxy preserves prototype methods (getModifierState, preventDefault).
+  // We can't reassign event.key directly because KeyboardEvent props
+  // are non-writable in jsdom and read-only via accessor in real browsers.
+  return new Proxy(event, {
+    get(target, prop, receiver) {
+      if (prop === 'key') return recovered
+      const value = Reflect.get(target, prop, receiver)
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  })
+}
+
 export const createAction = <T extends ActionContextType>(config: ActionConfig<T>): Action<T> => ({
   ...config,
 })

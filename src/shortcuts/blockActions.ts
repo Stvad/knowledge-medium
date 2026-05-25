@@ -318,14 +318,11 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       writeToClipboard(`((${block.id}))`)
     },
     defaultBinding: {
-      // Dual-form: tinykeys matches an entry if event.key OR event.code
-      // matches. `Alt+y` covers Linux/Windows on every layout (event.key
-      // is the user's typed 'y' there); `Alt+KeyY` covers Mac QWERTY
-      // where Alt-transformation makes event.key='¥' so only the code
-      // path lands. Mac + alt-layouts (Colemak/Dvorak) is the remaining
-      // gap — Mac's transformations key off physical position, so the
-      // user's logical 'y' shows up as neither 'y' nor 'KeyY'.
-      keys: ['Alt+y', 'Alt+KeyY'],
+      // Plain logical-letter form — `withRecoveredLetterKey` in the
+      // reconciler restores event.key from event.keyCode for alt+letter
+      // chords, so this matches on every platform AND every layout
+      // (Mac/Linux/Windows × QWERTY/Colemak/Dvorak).
+      keys: 'Alt+y',
     },
   }
 

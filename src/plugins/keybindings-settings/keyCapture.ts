@@ -46,6 +46,12 @@ export interface ChordEventShape {
    *  (e.g. shift+3 reports key='#' but code='Digit3'). May be absent
    *  in tests; we fall back to `key` then. */
   readonly code?: string
+  /** `KeyboardEvent.keyCode` — deprecated, but still populated by every
+   *  browser with the *logical* letter's char code for printable letter
+   *  keys (89 for 'Y' on every layout, regardless of Alt-transforms).
+   *  Used to recover the typed letter when Alt or Meta has corrupted
+   *  `event.key`. May be absent in tests; recovery skips when absent. */
+  readonly keyCode?: number
   readonly metaKey: boolean
   readonly ctrlKey: boolean
   readonly altKey: boolean
@@ -67,15 +73,21 @@ const digitCodeForShift = (code: string | undefined): string | null => {
   return null
 }
 
-/** When Alt is held on macOS the layout produces special characters
- *  (Alt+y → ¥), so event.key is not the letter the user pressed.
- *  Fall back to event.code (`KeyY`) for letter keys so the binding
- *  matches via tinykeys' code-form path. Letter codes are the only
- *  ones we use here — punctuation codes vary by layout. */
-const letterCodeForAlt = (code: string | undefined): string | null => {
-  if (!code) return null
-  if (/^Key[A-Z]$/.test(code)) return code
-  return null
+/** When Alt or Meta is held the layout can produce alt-transformed
+ *  chars (Mac: Alt+y → '¥'; Linux compose: Alt+y → 'ÿ'). event.keyCode
+ *  still reports the logical letter's char code (89 = 'Y') on every
+ *  platform AND every layout — even Colemak, where event.code reports
+ *  the QWERTY-position id ('KeyO' for the user's physical 'y' key).
+ *  Recover from keyCode and emit as the lowercase letter so the
+ *  captured chord matches what `withRecoveredLetterKey` produces in
+ *  the reconciler. Letters only — keyCode for digits/punctuation is
+ *  layout-dependent in a different way. */
+const ASCII_A = 65
+const ASCII_Z = 90
+const letterFromKeyCode = (keyCode: number | undefined): string | null => {
+  if (keyCode === undefined) return null
+  if (keyCode < ASCII_A || keyCode > ASCII_Z) return null
+  return String.fromCharCode(keyCode).toLowerCase()
 }
 
 /** Build a tinykeys chord string from a KeyboardEvent. Returns null
@@ -95,16 +107,20 @@ export const chordFromEvent = (event: ChordEventShape): string | null => {
   // For digit + punctuation under Shift, prefer the physical-key code
   // — otherwise shift+3 captures as "Shift+#" on a US keyboard and
   // wouldn't match on a European layout where 3's shifted form
-  // differs. For Alt+letter, the code form likewise avoids Mac's
-  // Alt-transformations (Alt+y → ¥) — see letterCodeForAlt.
+  // differs. For Alt/Meta + letter, recover the logical letter from
+  // event.keyCode so Mac Alt-transformations (Alt+y → ¥) and Linux
+  // compose-key setups don't corrupt the captured chord — see
+  // letterFromKeyCode.
   const digitCode = event.shiftKey ? digitCodeForShift(event.code) : null
-  const altLetterCode = event.altKey ? letterCodeForAlt(event.code) : null
+  const recoveredLetter = (event.altKey || event.metaKey)
+    ? letterFromKeyCode(event.keyCode)
+    : null
 
   let chordKey: string
   if (digitCode) {
     chordKey = digitCode
-  } else if (altLetterCode) {
-    chordKey = altLetterCode
+  } else if (recoveredLetter) {
+    chordKey = recoveredLetter
   } else {
     const rawKey = event.key.toLowerCase()
     chordKey = KEY_ALIASES[rawKey] ?? event.key

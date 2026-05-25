@@ -6,7 +6,7 @@ import {
   normalizeChord,
 } from '../keyCapture.ts'
 
-const mk = (over: Partial<{key: string; code: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean}>) => ({
+const mk = (over: Partial<{key: string; code: string; keyCode: number; metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean}>) => ({
   key: '',
   metaKey: false,
   ctrlKey: false,
@@ -91,11 +91,23 @@ describe('chordFromEvent', () => {
     expect(chordFromEvent(mk({key: '[', code: 'Digit8'}))).toBe('[')
   })
 
-  it('uses event.code for Alt+letter so Mac Alt-transformations do not poison the capture', () => {
-    // Mac alt+y produces '¥' as event.key. The binding has to match
-    // event.code, not the transformed character.
-    expect(chordFromEvent(mk({key: '¥', code: 'KeyY', altKey: true})))
-      .toBe('Alt+KeyY')
+  it('recovers the logical letter from keyCode under Alt — fixes Mac Alt-transforms', () => {
+    // Mac alt+y produces '¥' as event.key. event.keyCode still reports
+    // 89 ('Y'), the logical letter the user pressed, so emit `Alt+y`
+    // — matches what `withRecoveredLetterKey` produces in the reconciler.
+    expect(chordFromEvent(mk({key: '¥', code: 'KeyY', keyCode: 89, altKey: true})))
+      .toBe('Alt+y')
+  })
+
+  it('recovers the logical letter on Colemak — event.code lies about layout', () => {
+    // Colemak user pressing Alt+y: their 'y' sits at physical KeyO, so
+    // event.code='KeyO'. event.key on Linux is just 'y' (no transform);
+    // on Mac it's an option-transform glyph. Either way keyCode=89
+    // gives the logical 'y' the user meant.
+    expect(chordFromEvent(mk({key: 'y', code: 'KeyO', keyCode: 89, altKey: true})))
+      .toBe('Alt+y')
+    expect(chordFromEvent(mk({key: 'ÿ', code: 'KeyO', keyCode: 89, altKey: true})))
+      .toBe('Alt+y')
   })
 })
 

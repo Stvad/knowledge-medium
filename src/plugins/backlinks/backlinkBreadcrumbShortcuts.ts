@@ -92,14 +92,11 @@ export const promoteClosestBreadcrumbAction: ActionConfig = {
     return deps.hasBreadcrumb?.() === true
   },
   defaultBinding: {
-    // Dual-form: tinykeys matches an entry if event.key OR event.code
-    // matches. `Alt+z` covers Linux/Windows (every layout — event.key
-    // is the user's 'z'), while `Alt+KeyZ` covers Mac QWERTY where
-    // Alt-transformation makes event.key='Ω' so only the code lands.
-    // Mac + alt-layouts (Colemak/Dvorak) is the gap — Mac transforms
-    // based on physical position, so the user's logical 'z' is reached
-    // via neither key nor KeyZ. Out of scope without a custom matcher.
-    keys: ['Alt+z', 'Alt+KeyZ'],
+    // Plain logical-letter form — `withRecoveredLetterKey` in the
+    // reconciler restores event.key from event.keyCode for alt+letter
+    // chords, so this matches on every platform AND every layout
+    // (Mac/Linux/Windows × QWERTY/Colemak/Dvorak).
+    keys: 'Alt+z',
   },
 }
 

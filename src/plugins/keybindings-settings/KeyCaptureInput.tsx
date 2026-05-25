@@ -63,6 +63,7 @@ export const KeyCaptureInput = ({pending, onCapture, onPartial, onCancel}: KeyCa
     const chord = chordFromEvent({
       key: native.key,
       code: native.code,
+      keyCode: native.keyCode,
       metaKey: native.metaKey,
       ctrlKey: native.ctrlKey,
       altKey: native.altKey,
