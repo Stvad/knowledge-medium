@@ -33,10 +33,15 @@ const matchesAction = (
   (target.actionId === WILDCARD_ACTION_ID || target.actionId === action.id) &&
   (target.context === undefined || target.context === action.context)
 
-export const getEffectiveActions = (runtime: FacetRuntime): readonly ActionConfig[] => {
+/** The action list after `actionOverridesFacet` and
+ *  `actionDecoratorsFacet` have been applied but before any
+ *  keybinding-override rewrites. Used by the settings UI so it can
+ *  preview an unsaved `StoredKeybindingOverrides` map without waiting
+ *  for the runtime rebuild that happens after the canonical prefs
+ *  block subscription fires. */
+export const getActionsBeforeKeybindingOverrides = (runtime: FacetRuntime): readonly ActionConfig[] => {
   const overrides = runtime.read(actionOverridesFacet)
   const decorators = runtime.read(actionDecoratorsFacet)
-  const keybindingOverrides = runtime.read(keybindingOverridesFacet)
   const out: ActionConfig[] = []
 
   for (const rawAction of runtime.read(actionsFacet)) {
@@ -55,11 +60,18 @@ export const getEffectiveActions = (runtime: FacetRuntime): readonly ActionConfi
     if (action) out.push(action)
   }
 
+  return out
+}
+
+export const getEffectiveActions = (runtime: FacetRuntime): readonly ActionConfig[] => {
   // Keybinding overrides run as a final pass — they need cross-action
   // visibility (the "default loses on chord collision" rule reads
   // every other action's effective binding), which the per-action
   // override/decorator pipeline above can't express cleanly.
-  return applyKeybindingOverrides(out, keybindingOverrides)
+  return applyKeybindingOverrides(
+    getActionsBeforeKeybindingOverrides(runtime),
+    runtime.read(keybindingOverridesFacet),
+  )
 }
 
 export const getActiveActionById = (

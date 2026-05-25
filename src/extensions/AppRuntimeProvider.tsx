@@ -16,6 +16,7 @@ import { appEffectsFacet, appMountsFacet, type AppEffectCleanup } from '@/extens
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts.js'
 import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler.js'
 import { staticAppExtensions } from '@/extensions/staticAppExtensions.js'
+import { buildUserKeybindingContributions } from '@/plugins/keybindings-settings'
 import {
   ExtensionLoadErrorsProvider,
   ExtensionLoadErrorStore,
@@ -53,7 +54,18 @@ export function AppRuntimeProvider({
     generation,
   }), [generation, repo, workspaceId, safeMode])
 
-  const baseExtensions: AppExtension[] = useMemo(() => staticAppExtensions({repo}), [repo])
+  // User keybinding overrides are read from a per-workspace
+  // localStorage cache mirroring the synced prefs block. Read here
+  // (not as a function-valued AppExtension) because
+  // `resolveAppRuntimeSync` — used for first paint — doesn't accept
+  // function-valued contributions. `generation` is in deps so the
+  // memo re-runs after the keybindings-settings effect dispatches
+  // `refreshAppRuntime()` and the cache has the freshest snapshot.
+  const baseExtensions: AppExtension[] = useMemo(() => [
+    ...staticAppExtensions({repo}),
+    ...buildUserKeybindingContributions(workspaceId),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [repo, workspaceId, generation])
 
   const baseRuntime = useMemo(() =>
     resolveAppRuntimeSync(baseExtensions, {overrides, safeMode, context: runtimeContext}),

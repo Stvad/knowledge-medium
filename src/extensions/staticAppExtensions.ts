@@ -41,6 +41,7 @@ import { srsReschedulingPlugin } from '@/plugins/srs-rescheduling'
 import { todoPlugin } from '@/plugins/todo'
 import { syncStatusPlugin } from '@/plugins/sync-status'
 import { extensionsSettingsPlugin } from '@/plugins/extensions-settings'
+import { keybindingsSettingsPlugin } from '@/plugins/keybindings-settings'
 import { extractTypePlugin } from '@/plugins/extract-type'
 import type { AppExtension } from '@/extensions/facet.js'
 
@@ -50,6 +51,11 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   // kernel contribution must be present in every static runtime.
   // Extensions meta-plugin owns the overrides map + cache sync.
   extensionsSettingsPlugin,
+  // Keybindings meta-plugin owns the user shortcut-override map + cache.
+  // Registered after extensions-settings so its prefs sub-block sits
+  // below "Extensions" in the Preferences tree; functionally
+  // independent (no shared facet contributions).
+  keybindingsSettingsPlugin,
   kernelDataExtension,
   kernelPropertyUiExtension,
   kernelValuePresetsExtension,
