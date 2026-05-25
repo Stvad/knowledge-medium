@@ -2,7 +2,8 @@
  * Date scrub gestures:
  *   - mobile: two-finger horizontal drag
  *   - desktop: Ctrl+Shift + vertical wheel / trackpad scroll
- *   - desktop keyboard: action-driven date scrub mode
+ *   - desktop: hold Ctrl+Shift, then use arrows / h-k-j-l to scrub by
+ *     day or week
  *
  * Long-press is intentionally NOT used: that gesture belongs to
  * selection / bullet drag (Workflowy convention). The two-finger mobile
@@ -22,8 +23,9 @@
  *     start. If it accepts, we cancel the swipe-quick-actions
  *     candidate so the same gesture doesn't also open the swipe menu.
  *   - Either tracked finger lifting ends the mobile scrub. Desktop
- *     wheel scrub commits when the user releases Ctrl or Shift, which
- *     is the clearest "let go" signal for a modifier-gated stream.
+ *     wheel and keyboard scrub commit when the user releases Ctrl or
+ *     Shift, which is the clearest "let go" signal for a modifier-gated
+ *     stream.
  */
 import type { TouchEvent } from 'react'
 import {
@@ -129,30 +131,14 @@ interface KeyboardScrub {
   blockId: string
   keyDeltaDays: number
   wheelPx: number
-  finishOnModifierRelease: boolean
-  onEnd?: () => void
 }
 
-export interface KeyboardScrubOptions {
-  finishOnModifierRelease?: boolean
-  onEnd?: () => void
-}
-
-type DateKeyboardScrubStartHandler = () => void
-let dateKeyboardScrubStartHandler: DateKeyboardScrubStartHandler | null = null
-
-export const registerDateKeyboardScrubStartHandler = (
-  handler: DateKeyboardScrubStartHandler,
-): (() => void) => {
-  dateKeyboardScrubStartHandler = handler
-  return () => {
-    if (dateKeyboardScrubStartHandler === handler) dateKeyboardScrubStartHandler = null
-  }
-}
-
-export const requestDateKeyboardScrubStart = (): void => {
-  dateKeyboardScrubStartHandler?.()
-}
+const KEYBOARD_SCRUB_KEY_DELTAS = new Map<string, number>([
+  ['h', 1],
+  ['k', -1],
+  ['j', -7],
+  ['l', 7],
+])
 
 /** First finger landed on a block but the second hasn't arrived yet —
  *  remember it so the eventual second-finger touchstart can promote
@@ -204,7 +190,6 @@ const finishKeyboardScrub = (commit: boolean): void => {
   if (!current) return
   keyboardScrub = null
   activeHandler?.end(commit)
-  current.onEnd?.()
 }
 
 const isShiftReleaseEvent = (event: Pick<KeyboardEvent, 'code' | 'key'>): boolean =>
@@ -270,6 +255,21 @@ const keyboardScrubAnchorPoint = (blockId: string): {x: number; y: number} => {
   }
 }
 
+const keyboardDeltaDaysForKey = (event: KeyboardEvent): number | null => {
+  switch (event.key) {
+    case 'ArrowUp':
+      return 1
+    case 'ArrowDown':
+      return -1
+    case 'ArrowRight':
+      return 7
+    case 'ArrowLeft':
+      return -7
+  }
+
+  return KEYBOARD_SCRUB_KEY_DELTAS.get(event.key.toLowerCase()) ?? null
+}
+
 const keyboardScrubTotalDays = (scrub: KeyboardScrub): number =>
   clampDeltaDays(scrub.keyDeltaDays + computeDeltaDays(scrub.wheelPx))
 
@@ -279,16 +279,8 @@ const clampDeltaDays = (deltaDays: number): number => {
   return deltaDays
 }
 
-const startKeyboardScrub = (
-  target: KeyboardScrubTarget,
-  options: KeyboardScrubOptions = {},
-): KeyboardScrub | null => {
-  if (keyboardScrub) {
-    keyboardScrub.finishOnModifierRelease =
-      options.finishOnModifierRelease ?? keyboardScrub.finishOnModifierRelease
-    keyboardScrub.onEnd = options.onEnd ?? keyboardScrub.onEnd
-    return keyboardScrub
-  }
+const startKeyboardScrub = (target: KeyboardScrubTarget): KeyboardScrub | null => {
+  if (keyboardScrub) return keyboardScrub
   if (!activeHandler) return null
 
   const point = keyboardScrubAnchorPoint(target.block.id)
@@ -305,30 +297,24 @@ const startKeyboardScrub = (
     blockId: target.block.id,
     keyDeltaDays: 0,
     wheelPx: 0,
-    finishOnModifierRelease: options.finishOnModifierRelease ?? false,
-    onEnd: options.onEnd,
   }
   keyboardScrub = next
   return next
 }
 
-export const startDateKeyboardScrub = (
-  target: KeyboardScrubTarget,
-  options: KeyboardScrubOptions = {},
-): boolean => {
-  return startKeyboardScrub(target, options) !== null
+const consumeKeyboardScrubEvent = (event: KeyboardEvent): void => {
+  event.preventDefault()
+  event.stopPropagation()
 }
 
-export const updateDateKeyboardScrubByDays = (deltaDays: number): boolean => {
-  const scrub = keyboardScrub
-  if (!scrub) return false
+const updateKeyboardScrubByDays = (
+  scrub: KeyboardScrub,
+  deltaDays: number,
+  event: KeyboardEvent,
+): void => {
+  consumeKeyboardScrubEvent(event)
   scrub.keyDeltaDays = clampDeltaDays(scrub.keyDeltaDays + deltaDays)
   activeHandler?.update(keyboardScrubTotalDays(scrub), false)
-  return true
-}
-
-export const finishDateKeyboardScrub = (commit: boolean): void => {
-  finishKeyboardScrub(commit)
 }
 
 const updateKeyboardScrubByWheel = (
@@ -343,15 +329,44 @@ const updateKeyboardScrubByWheel = (
   activeHandler?.update(keyboardScrubTotalDays(scrub), false)
 }
 
-export const installDateWheelScrubListeners = (
+export const installDateKeyboardScrubListeners = (
   getTarget: KeyboardScrubTargetProvider,
 ): (() => void) => {
   if (typeof window === 'undefined') return () => undefined
 
+  const handleKeyDown = (event: KeyboardEvent): void => {
+    if (keyboardScrub) {
+      if (event.key === 'Escape') {
+        consumeKeyboardScrubEvent(event)
+        finishKeyboardScrub(false)
+        return
+      }
+
+      const delta = keyboardDeltaDaysForKey(event)
+      if (delta === null) return
+
+      updateKeyboardScrubByDays(keyboardScrub, delta, event)
+      return
+    }
+
+    if (!event.ctrlKey || !event.shiftKey) return
+
+    const delta = keyboardDeltaDaysForKey(event)
+    const modifierActivation = isCtrlShiftReleaseEvent(event)
+    if (delta === null && !modifierActivation) return
+
+    const target = getTarget()
+    if (!target) return
+    const current = startKeyboardScrub(target)
+    if (!current) return
+
+    if (delta === null) return
+    updateKeyboardScrubByDays(current, delta, event)
+  }
+
   const handleKeyUp = (event: KeyboardEvent): void => {
-    if (!keyboardScrub?.finishOnModifierRelease || !isCtrlShiftReleaseEvent(event)) return
-    event.preventDefault()
-    event.stopPropagation()
+    if (!keyboardScrub || !isCtrlShiftReleaseEvent(event)) return
+    consumeKeyboardScrubEvent(event)
     finishKeyboardScrub(true)
   }
 
@@ -363,17 +378,19 @@ export const installDateWheelScrubListeners = (
     if (!event.ctrlKey || !event.shiftKey) return
     const current = keyboardScrub ?? (() => {
       const target = getTarget()
-      return target ? startKeyboardScrub(target, {finishOnModifierRelease: true}) : null
+      return target ? startKeyboardScrub(target) : null
     })()
     if (!current) return
     updateKeyboardScrubByWheel(current, event)
   }
 
+  window.addEventListener('keydown', handleKeyDown, true)
   window.addEventListener('keyup', handleKeyUp, true)
   window.addEventListener('blur', handleBlur)
   window.addEventListener('wheel', handleWheel, {capture: true, passive: false})
 
   return () => {
+    window.removeEventListener('keydown', handleKeyDown, true)
     window.removeEventListener('keyup', handleKeyUp, true)
     window.removeEventListener('blur', handleBlur)
     window.removeEventListener('wheel', handleWheel, true)

@@ -18,19 +18,10 @@ import {
 import { useEffect, type ReactNode } from 'react'
 
 const TEST_CONTEXT = 'test-mode' as ActionContextType
-const EXCLUSIVE_CONTEXT = 'exclusive-mode' as ActionContextType
 
 const testContextConfig: ActionContextConfig = {
   type: TEST_CONTEXT,
   displayName: 'Test Mode',
-  validateDependencies: (deps): deps is BaseShortcutDependencies =>
-    typeof deps === 'object' && deps !== null,
-}
-
-const exclusiveContextConfig: ActionContextConfig = {
-  type: EXCLUSIVE_CONTEXT,
-  displayName: 'Exclusive Mode',
-  exclusive: true,
   validateDependencies: (deps): deps is BaseShortcutDependencies =>
     typeof deps === 'object' && deps !== null,
 }
@@ -74,17 +65,6 @@ const Activator = ({context}: {context: ActionContextType}) => {
     dispatch.activate(context, mockDeps)
     return () => dispatch.deactivate(context)
   }, [dispatch, context])
-  return null
-}
-
-const ActivatorList = ({contexts}: {contexts: readonly ActionContextType[]}) => {
-  const dispatch = useActiveContextsDispatch()
-  useEffect(() => {
-    for (const context of contexts) dispatch.activate(context, mockDeps)
-    return () => {
-      for (const context of contexts) dispatch.deactivate(context)
-    }
-  }, [dispatch, contexts])
   return null
 }
 
@@ -235,35 +215,6 @@ describe('HotkeyReconciler', () => {
 
     act(() => dispatchKeydown('k'))
     expect(handler).not.toHaveBeenCalled()
-  })
-
-  it('installs only the latest exclusive context bindings while active', () => {
-    const baseHandler = vi.fn()
-    const exclusiveHandler = vi.fn()
-    const baseAction = buildAction({
-      id: 'test.base',
-      handler: baseHandler,
-      defaultBinding: {keys: 'k'},
-    })
-    const exclusiveAction = buildAction({
-      id: 'test.exclusive',
-      context: EXCLUSIVE_CONTEXT,
-      handler: exclusiveHandler,
-      defaultBinding: {keys: 'k'},
-    })
-
-    render(
-      <Harness
-        actions={[baseAction, exclusiveAction]}
-        contexts={[testContextConfig, exclusiveContextConfig]}
-      >
-        <ActivatorList contexts={[TEST_CONTEXT, EXCLUSIVE_CONTEXT]}/>
-      </Harness>,
-    )
-
-    act(() => dispatchKeydown('k'))
-    expect(baseHandler).not.toHaveBeenCalled()
-    expect(exclusiveHandler).toHaveBeenCalledTimes(1)
   })
 
   it('starts firing once a context is activated mid-session', () => {

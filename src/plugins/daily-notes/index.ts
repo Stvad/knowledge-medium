@@ -71,7 +71,6 @@ import { dailyDateWikilinkDecorator } from './wikilinkDateDecorator.ts'
 import { ReschedulePicker } from './ReschedulePicker.tsx'
 import { DateScrubOverlay } from './DateScrubOverlay.tsx'
 import { DateKeyboardScrubController } from './DateKeyboardScrubController.tsx'
-import { dateScrubActionsExtension } from './dateScrubActions.ts'
 import { dateScrubContentSurface } from './dateScrubGesture.ts'
 import {
   rescheduleBlockDateAction,
@@ -179,7 +178,6 @@ export const dailyNotesPlugin = ({repo}: {repo: Repo}): AppExtension =>
     appMountsFacet.of(reschedulePickerMount, {source: 'daily-notes'}),
     appMountsFacet.of(dateScrubOverlayMount, {source: 'daily-notes'}),
     appMountsFacet.of(dateKeyboardScrubControllerMount, {source: 'daily-notes'}),
-    dateScrubActionsExtension,
     dailyNotesActions({repo}).map(action =>
       actionsFacet.of(action, {source: 'daily-notes'}),
     ),
@@ -203,20 +201,6 @@ export const dailyNotesPlugin = ({repo}: {repo: Repo}): AppExtension =>
   ])
 
 export { DAILY_NOTE_TYPE, dailyNoteDateProp, dailyNoteType } from './schema.ts'
-export {
-  DATE_SCRUB_BACKWARD_DAY_ACTION_ID,
-  DATE_SCRUB_BACKWARD_WEEK_ACTION_ID,
-  DATE_SCRUB_CANCEL_ACTION_ID,
-  DATE_SCRUB_COMMIT_ACTION_ID,
-  DATE_SCRUB_CONTEXT,
-  DATE_SCRUB_FORWARD_DAY_ACTION_ID,
-  DATE_SCRUB_FORWARD_WEEK_ACTION_ID,
-  EDIT_MODE_START_DATE_SCRUB_ACTION_ID,
-  START_DATE_SCRUB_ACTION_ID,
-  dateScrubActionContext,
-  dateScrubModeActions,
-  dateScrubStartActions,
-} from './dateScrubActions.ts'
 export { dailyNotesDataExtension } from './dataExtension.ts'
 export {
   DAILY_NOTE_NS,
