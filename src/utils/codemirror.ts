@@ -145,11 +145,22 @@ export const createMinimalMarkdownConfig = (
       },
       '.cm-editor': {outline: 'none'},
       '.cm-focused': {outline: 'none'},
-      '.cm-content': {padding: '0'},
+      '.cm-content': {
+        padding: '0',
+        // CodeMirror's base theme sets caret-color to transparent and
+        // relies on the drawSelection extension's painted cursor. We
+        // opt out of @uiw/react-codemirror's bundled `light` theme via
+        // theme="none", so neither path supplies a visible color on
+        // dark palettes. Point both at currentColor (inherited from
+        // the surrounding text) so the caret tracks the active theme.
+        caretColor: 'currentColor',
+      },
       '.cm-line': {padding: '0'},
-      /* Caret fix: remove the half-pixel shift */
-      ".cm-cursor": {
+      /* Caret fix: zero the half-pixel shift, and recolor the drawn
+         cursor (default is black) so it's visible against any palette. */
+      ".cm-cursor, .cm-dropCursor": {
         marginLeft: "0px",
+        borderLeftColor: "currentColor",
       },
     }),
     EditorView.lineWrapping,
