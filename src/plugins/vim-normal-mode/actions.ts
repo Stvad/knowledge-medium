@@ -68,8 +68,20 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
   }
   const togglePropertiesDisplayAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, togglePropertiesDisplay)
   const toggleBlockCollapseAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, toggleBlockCollapse)
-  const extendSelectionUpAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, extendSelectionUp)
-  const extendSelectionDownAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, extendSelectionDown)
+  const extendSelectionUpAction = {
+    ...bindBlockActionContext(ActionContextTypes.NORMAL_MODE, extendSelectionUp),
+    defaultBinding: {
+      ...extendSelectionUp.defaultBinding,
+      keys: ['Shift+ArrowUp', 'Shift+h'],
+    },
+  }
+  const extendSelectionDownAction = {
+    ...bindBlockActionContext(ActionContextTypes.NORMAL_MODE, extendSelectionDown),
+    defaultBinding: {
+      ...extendSelectionDown.defaultBinding,
+      keys: ['Shift+ArrowDown', 'Shift+k'],
+    },
+  }
   const bindNormal = (action: BlockAction) => bindBlockActionContext(ActionContextTypes.NORMAL_MODE, action)
 
   return [

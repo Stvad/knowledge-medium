@@ -161,8 +161,20 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   const deleteBlockAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, deleteBlock)
   const togglePropertiesDisplayAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, togglePropertiesDisplay)
   const toggleBlockCollapseAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, toggleBlockCollapse)
-  const extendSelectionUpAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, extendSelectionUpBlock)
-  const extendSelectionDownAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, extendSelectionDownBlock)
+  const extendSelectionUpAction = {
+    ...bindBlockActionContext(ActionContextTypes.NORMAL_MODE, extendSelectionUpBlock),
+    defaultBinding: {
+      ...extendSelectionUpBlock.defaultBinding,
+      keys: ['Shift+ArrowUp', 'Shift+h'],
+    },
+  }
+  const extendSelectionDownAction = {
+    ...bindBlockActionContext(ActionContextTypes.NORMAL_MODE, extendSelectionDownBlock),
+    defaultBinding: {
+      ...extendSelectionDownBlock.defaultBinding,
+      keys: ['Shift+ArrowDown', 'Shift+k'],
+    },
+  }
   const copyBlockAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, copyBlock)
   const copyBlockRefAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, copyBlockRef)
   const copyBlockEmbedAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, copyBlockEmbed)
