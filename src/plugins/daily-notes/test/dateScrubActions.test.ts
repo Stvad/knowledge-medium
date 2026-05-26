@@ -65,13 +65,9 @@ describe('dateScrubActions', () => {
     expect(dateScrubActionContext.modal).toBe(true)
   })
 
-  it('enter action: hold-s in NORMAL_MODE starts scrub and activates the modal context', () => {
+  it('enter action starts scrub and activates the modal context', () => {
     const enter = findAction(ENTER_DATE_SCRUB_ACTION_ID)
     expect(enter.context).toBe(ActionContextTypes.NORMAL_MODE)
-    expect(enter.defaultBinding).toEqual(expect.objectContaining({
-      keys: 's',
-      phase: 'hold',
-    }))
 
     const dispatch = fakeDispatch()
     const block = fakeBlock('b-1')
@@ -104,11 +100,11 @@ describe('dateScrubActions', () => {
   })
 
   it.each([
-    [DATE_SCRUB_DAY_FORWARD_ACTION_ID, 1, ['ArrowUp', 'h']],
-    [DATE_SCRUB_DAY_BACKWARD_ACTION_ID, -1, ['ArrowDown', 'k']],
-    [DATE_SCRUB_WEEK_FORWARD_ACTION_ID, 7, ['ArrowRight', 'l']],
-    [DATE_SCRUB_WEEK_BACKWARD_ACTION_ID, -7, ['ArrowLeft', 'j']],
-  ] as const)('movement action %s applies %i days via update', (id, delta, expectedKeys) => {
+    [DATE_SCRUB_DAY_FORWARD_ACTION_ID, 1],
+    [DATE_SCRUB_DAY_BACKWARD_ACTION_ID, -1],
+    [DATE_SCRUB_WEEK_FORWARD_ACTION_ID, 7],
+    [DATE_SCRUB_WEEK_BACKWARD_ACTION_ID, -7],
+  ] as const)('movement action %s applies %i days via update', (id, delta) => {
     const enter = findAction(ENTER_DATE_SCRUB_ACTION_ID)
     enter.handler(
       {block: fakeBlock('b-1'), uiStateBlock: fakeBlock('ui-1')},
@@ -118,7 +114,6 @@ describe('dateScrubActions', () => {
 
     const action = findAction(id)
     expect(action.context).toBe(DATE_SCRUB_CONTEXT)
-    expect(action.defaultBinding?.keys).toEqual(expectedKeys)
 
     const deps: BaseShortcutDependencies = {uiStateBlock: fakeBlock('ui-1')}
     action.handler(deps, fakeEvent(), fakeDispatch())
@@ -158,7 +153,6 @@ describe('dateScrubActions', () => {
 
     const commit = findAction(DATE_SCRUB_COMMIT_ACTION_ID)
     expect(commit.context).toBe(DATE_SCRUB_CONTEXT)
-    expect(commit.defaultBinding).toEqual({keys: 's', phase: 'keyup'})
 
     const dispatch = fakeDispatch()
     commit.handler({uiStateBlock: fakeBlock('ui-1')}, fakeEvent(), dispatch)
@@ -177,7 +171,6 @@ describe('dateScrubActions', () => {
 
     const cancel = findAction(DATE_SCRUB_CANCEL_ACTION_ID)
     expect(cancel.context).toBe(DATE_SCRUB_CONTEXT)
-    expect(cancel.defaultBinding).toEqual({keys: 'Escape'})
 
     const dispatch = fakeDispatch()
     cancel.handler({uiStateBlock: fakeBlock('ui-1')}, fakeEvent(), dispatch)

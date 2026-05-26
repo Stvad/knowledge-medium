@@ -64,7 +64,7 @@ describe('srsReschedulingPlugin', () => {
     ])
   })
 
-  it('contributes matching shortcuts in normal and edit mode', () => {
+  it('contributes matching actions in normal and edit mode', () => {
     const runtime = resolveFacetRuntimeSync(srsReschedulingPlugin)
     const actions = runtime.read(actionsFacet)
 
@@ -84,20 +84,6 @@ describe('srsReschedulingPlugin', () => {
       ActionContextTypes.NORMAL_MODE,
     ])
 
-    expect(actions.map(action => action.defaultBinding?.keys)).toEqual([
-      ['Control+Shift+Digit1', 'Control+Shift+Alt+Meta+Digit1'],
-      ['Control+Shift+Digit2', 'Control+Shift+Alt+Meta+Digit2'],
-      ['Control+Shift+Digit3', 'Control+Shift+Alt+Meta+Digit3'],
-      ['Control+Shift+Digit4', 'Control+Shift+Alt+Meta+Digit4'],
-      ['Control+Shift+Digit5', 'Control+Shift+Alt+Meta+Digit5'],
-      ['Control+Shift+Digit1', 'Control+Shift+Alt+Meta+Digit1'],
-      ['Control+Shift+Digit2', 'Control+Shift+Alt+Meta+Digit2'],
-      ['Control+Shift+Digit3', 'Control+Shift+Alt+Meta+Digit3'],
-      ['Control+Shift+Digit4', 'Control+Shift+Alt+Meta+Digit4'],
-      ['Control+Shift+Digit5', 'Control+Shift+Alt+Meta+Digit5'],
-      undefined,
-      undefined,
-    ])
     expect(actions.slice(0, 5).map(action => action.icon)).toEqual([
       RotateCcw,
       Gauge,
