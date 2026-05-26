@@ -137,9 +137,9 @@ describe('link target autocomplete helpers', () => {
     const blockRows = deferred<BlockData[]>()
     const repo = {
       query: {
-        aliasMatches: vi.fn(() => ({
+        aliasMatchesFuzzy: vi.fn(() => ({
           load: () => Promise.resolve([
-            {alias: 'Dating', blockId: 'page', content: 'Dating notes'},
+            {alias: 'Dating', blockId: 'page', content: 'Dating notes', updatedAt: 1},
           ]),
         })),
         searchByContent: vi.fn(() => ({
@@ -184,6 +184,40 @@ describe('link target autocomplete helpers', () => {
       workspaceId: WS,
       query: 'dating',
     })).resolves.toEqual(['Dating', 'Dating pool'])
+  })
+
+  it('matches out-of-order tokens (word skip)', async () => {
+    await create({id: 'match', aliases: ['PR Review Skill']})
+    await create({id: 'no-pr', aliases: ['Book Review']})
+
+    const out = await searchAliasLabels(env.repo, {
+      workspaceId: WS,
+      query: 'review pr',
+    })
+    expect(out).toContain('PR Review Skill')
+    expect(out).not.toContain('Book Review')
+  })
+
+  it('tolerates a single-char typo on tokens of length >= 4', async () => {
+    await create({id: 'a', aliases: ['Apples']})
+
+    const out = await searchAliasLabels(env.repo, {
+      workspaceId: WS,
+      query: 'appls',
+    })
+    expect(out).toEqual(['Apples'])
+  })
+
+  it('boosts recently-opened pages ahead of older matches', async () => {
+    await create({id: 'older', aliases: ['Apple Tarte']})
+    await create({id: 'recent', aliases: ['Apple Strudel']})
+
+    const out = await searchAliasLabels(env.repo, {
+      workspaceId: WS,
+      query: 'apple',
+      recentBlockIds: ['recent'],
+    })
+    expect(out).toEqual(['Apple Strudel', 'Apple Tarte'])
   })
 
   it('builds id candidates with excluded block ids', async () => {

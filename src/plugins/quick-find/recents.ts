@@ -1,5 +1,7 @@
 import type { Block } from '@/data/block'
+import type { Repo } from '@/data/repo'
 import { ChangeScope, codecs, defineBlockType, defineProperty } from '@/data/api'
+import { getPluginUIStateBlock } from '@/data/stateBlocks.js'
 
 export const RECENT_BLOCKS_LIMIT = 10
 
@@ -26,4 +28,24 @@ export const pushRecentBlockId = (uiStateBlock: Block, blockId: string): void =>
   const current = uiStateBlock.peekProperty(recentBlockIdsProp) ?? []
   const next = [blockId, ...current.filter(id => id !== blockId)].slice(0, RECENT_BLOCKS_LIMIT)
   void uiStateBlock.set(recentBlockIdsProp, next)
+}
+
+/** Read the MRU from anywhere with a `Repo` — autocomplete sources
+ *  (editor extensions, link-target searches) live outside the QuickFind
+ *  React tree but need the same recency signal to rank candidates. The
+ *  ui-state sub-block is resolved through the same memoized helper
+ *  QuickFind itself uses, so subsequent reads are O(1). Returns `[]` if
+ *  the sub-block hasn't been initialized yet (first-run before any
+ *  navigation). */
+export const loadRecentBlockIds = async (
+  repo: Repo,
+  workspaceId: string,
+): Promise<string[]> => {
+  if (!workspaceId) return []
+  try {
+    const block = await getPluginUIStateBlock(repo, workspaceId, repo.user, quickFindUIStateType)
+    return block.peekProperty(recentBlockIdsProp) ?? []
+  } catch {
+    return []
+  }
 }

@@ -186,6 +186,7 @@ function QuickFindDialog({
         workspaceId,
         query: trimmedQuery,
         limit: SEARCH_LIMIT,
+        recentBlockIds: recentIds ?? undefined,
       }, {
         onAliases: aliasResults => {
           if (cancelled) return
@@ -224,7 +225,7 @@ function QuickFindDialog({
       cancelled = true
       clearTimeout(timer)
     }
-  }, [open, trimmedQuery, dateValues, repo])
+  }, [open, trimmedQuery, dateValues, repo, recentIds])
 
   useEffect(() => {
     if (!open) return

@@ -412,6 +412,64 @@ describe('repo.query.aliasMatches', () => {
   })
 })
 
+describe('repo.query.aliasMatchesFuzzy', () => {
+  it('returns rows with updated_at for the JS ranker', async () => {
+    await create({id: 'a', content: 'Inbox content', aliases: ['Inbox']})
+    const out = await env.repo.query.aliasMatchesFuzzy({
+      workspaceId: WS,
+      prefixes: ['inb'],
+    }).load()
+    expect(out).toEqual([
+      {alias: 'Inbox', blockId: 'a', content: 'Inbox content', updatedAt: expect.any(Number)},
+    ])
+    expect(out[0].updatedAt).toBeGreaterThan(0)
+  })
+
+  it('AND-filters across prefixes (word-skip pre-filter)', async () => {
+    // "PR Review Skill" has both "pr" and "rev" as substrings
+    await create({id: 'match', aliases: ['PR Review Skill']})
+    await create({id: 'only-pr', aliases: ['PR notes']})
+    await create({id: 'only-rev', aliases: ['Review of books']})
+
+    const out = await env.repo.query.aliasMatchesFuzzy({
+      workspaceId: WS,
+      prefixes: ['pr', 'rev'],
+    }).load()
+    expect(out.map(row => row.blockId).sort()).toEqual(['match'])
+  })
+
+  it('returns workspace-wide rows when prefixes is empty', async () => {
+    await create({id: 'a', aliases: ['Foo']})
+    await create({id: 'b', aliases: ['Bar']})
+    const out = await env.repo.query.aliasMatchesFuzzy({
+      workspaceId: WS,
+      prefixes: [],
+    }).load()
+    expect(out.map(row => row.alias).sort()).toEqual(['Bar', 'Foo'])
+  })
+
+  it('respects the limit argument', async () => {
+    await create({id: 'a', aliases: ['x1', 'x2', 'x3']})
+    const out = await env.repo.query.aliasMatchesFuzzy({
+      workspaceId: WS,
+      prefixes: ['x'],
+      limit: 2,
+    }).load()
+    expect(out).toHaveLength(2)
+  })
+
+  it('excludes tombstoned blocks', async () => {
+    await create({id: 'live', aliases: ['Foo Live']})
+    await create({id: 'dead', aliases: ['Foo Dead']})
+    await env.repo.tx(tx => tx.delete('dead'), {scope: ChangeScope.BlockDefault})
+    const out = await env.repo.query.aliasMatchesFuzzy({
+      workspaceId: WS,
+      prefixes: ['foo'],
+    }).load()
+    expect(out.map(row => row.blockId)).toEqual(['live'])
+  })
+})
+
 describe('repo.query.aliasLookup', () => {
   it('returns the matching block (case-sensitive exact match)', async () => {
     await create({id: 'page', aliases: ['Inbox', 'inbox-2']})

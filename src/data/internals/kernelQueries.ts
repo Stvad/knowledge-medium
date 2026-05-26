@@ -167,6 +167,36 @@ export const SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_EXCLUDING_SQL = `
   LIMIT 1
 `
 
+/** Fuzzy alias-match pre-filter SQL builder. Token-AND prefix-substring
+ *  filter on `alias_lower` — the caller passes one LIKE pattern per
+ *  query token (typically the first 3 chars of each token, see
+ *  `buildFilterPrefixes` in fuzzyRank.ts). Permissive on purpose: the
+ *  final rank/keep decision happens in JS, where we score per-token
+ *  word-start / substring / edit-distance-1 plus recency. Returns
+ *  `updated_at` so the JS ranker can boost recently-edited rows.
+ *
+ *  Falls back to a workspace-scoped scan when `tokenCount === 0` (empty
+ *  query) so the same query handle can also serve the "browse all
+ *  aliases" path. */
+export const buildFuzzyAliasMatchesSql = (tokenCount: number): string => {
+  const filters = tokenCount > 0
+    ? Array(tokenCount).fill(`ba.alias_lower LIKE '%' || ? || '%'`).join(' AND ')
+    : '1=1'
+  return `
+    SELECT
+      ba.alias AS alias,
+      b.id AS blockId,
+      b.content AS content,
+      b.updated_at AS updatedAt
+    FROM block_aliases ba
+    JOIN blocks b ON b.id = ba.block_id
+    WHERE ba.workspace_id = ?
+      AND b.deleted = 0
+      AND (${filters})
+    LIMIT ?
+  `
+}
+
 /** Alias substring match used by alias-search surfaces; one row per
  *  (alias, block) pair. Same index plan as the distinct-aliases query
  *  above: filter on alias_lower, JOIN blocks for content + ordering. */
@@ -208,6 +238,10 @@ export interface AliasMatch {
   alias: string
   blockId: string
   content: string
+}
+
+export interface AliasMatchWithRecency extends AliasMatch {
+  updatedAt: number
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -872,6 +906,46 @@ export const aliasMatchesQuery = defineQuery<
   },
 })
 
+/** Fuzzy alias autocomplete pre-filter — token-AND prefix-substring
+ *  match. Returns a wider candidate set (caller chooses `limit`); the
+ *  fuzzy ranker in `fuzzyRank.ts` does the final scoring + ordering.
+ *  Empty `prefixes` returns every (alias, block) pair in the workspace
+ *  up to `limit`, suitable for the "browse all" path. */
+export const aliasMatchesFuzzyQuery = defineQuery<
+  {workspaceId: string; prefixes: string[]; limit?: number},
+  AliasMatchWithRecency[]
+>({
+  name: 'core.aliasMatchesFuzzy',
+  argsSchema: z.object({
+    workspaceId: z.string(),
+    prefixes: z.array(z.string()),
+    limit: z.number().optional(),
+  }),
+  resultSchema: z.array(z.object({
+    alias: z.string(),
+    blockId: z.string(),
+    content: z.string(),
+    updatedAt: z.number(),
+  })),
+  resolve: async ({workspaceId, prefixes, limit = 100}, ctx) => {
+    if (!workspaceId) return []
+    ctx.depend({
+      kind: 'plugin',
+      channel: KERNEL_ALIASES_CHANNEL,
+      key: kernelAliasesKey(workspaceId),
+    })
+    const sql = buildFuzzyAliasMatchesSql(prefixes.length)
+    const params: (string | number)[] = [workspaceId, ...prefixes, limit]
+    const rows = await ctx.db.getAll<AliasMatchWithRecency>(sql, params)
+    // Same reasoning as `aliasMatches`: this query returns a custom row
+    // shape (no BlockData hydration), so per-row deps have to be
+    // declared explicitly to catch content edits on a currently-shown
+    // alias block.
+    for (const row of rows) ctx.depend({kind: 'row', id: row.blockId})
+    return rows
+  },
+})
+
 /** Single-block lookup by exact alias in a workspace. */
 export const aliasLookupQuery = defineQuery<
   {workspaceId: string; alias: string},
@@ -944,6 +1018,7 @@ export const KERNEL_QUERIES: ReadonlyArray<AnyQuery> = [
   firstChildByContentQuery,
   aliasesInWorkspaceQuery,
   aliasMatchesQuery,
+  aliasMatchesFuzzyQuery,
   aliasLookupQuery,
   findExtensionBlocksQuery,
 ]
@@ -969,6 +1044,7 @@ declare module '@/data/api' {
     'core.firstChildByContent': typeof firstChildByContentQuery
     'core.aliasesInWorkspace': typeof aliasesInWorkspaceQuery
     'core.aliasMatches': typeof aliasMatchesQuery
+    'core.aliasMatchesFuzzy': typeof aliasMatchesFuzzyQuery
     'core.aliasLookup': typeof aliasLookupQuery
     'core.findExtensionBlocks': typeof findExtensionBlocksQuery
   }
