@@ -1,3 +1,5 @@
+import { isElementProperlyVisible } from '@/utils/dom.js'
+
 /**
  * Spatial-navigation walker — pure DOM queries, no in-memory registry.
  *
@@ -65,6 +67,15 @@ interface PanelPositionHint {
   prevBlockId: string | undefined
   nextBlockId: string | undefined
   ancestorBlockIds: readonly string[]
+}
+
+const pickViewportFallback = (
+  instances: readonly HTMLElement[],
+  positionalChoice: HTMLElement | null,
+): HTMLElement | null => {
+  if (positionalChoice && isElementProperlyVisible(positionalChoice)) return positionalChoice
+  const firstVisible = instances.find(el => isElementProperlyVisible(el))
+  return firstVisible ?? positionalChoice
 }
 
 const lastPositionByPanel = new Map<string, PanelPositionHint>()
@@ -230,8 +241,19 @@ export const rememberInstancePosition = (
  *      so neither sibling survives — but the parent itself does, and
  *      it's the natural place to land. Walks closest-first so the
  *      lowest surviving container wins.
- *   4. Positional clamp (last resort) — safety net for hints with
- *      no recoverable neighbors and no surviving ancestor.
+ *   4. Positional clamp, viewport-aware (last resort) — safety net for
+ *      hints with no recoverable neighbors and no surviving ancestor.
+ *      We start with `instances[clamp(hint.index)]` (same shape as the
+ *      original positional fallback) and KEEP it iff that block is
+ *      currently in the viewport; otherwise we switch to the topmost
+ *      in-viewport instance. The reason is the `BlockFocusShellDecorator`
+ *      reaction to a recovery write: an off-screen target triggers
+ *      `scrollIntoView`, yanking the viewport away from where the user
+ *      was looking. Especially painful in long backlinks panels where
+ *      the user is mid-scroll: the positional clamp can collapse to an
+ *      outline block above the backlinks section and pull the scroll
+ *      all the way up. Picking any visible block instead keeps the
+ *      pointer alive without disturbing the viewport.
  *
  * Returns null when there's no stored hint about this block, or when
  * the panel has no instances at all. The caller (proactive recovery)
@@ -266,7 +288,32 @@ export const findRecoveryAnchor = (
     if (ancestor) return ancestor
   }
 
-  return instances[clamp(hint.index, 0, instances.length - 1)] ?? null
+  const positionalChoice = instances[clamp(hint.index, 0, instances.length - 1)] ?? null
+  return pickViewportFallback(instances, positionalChoice)
+}
+
+/**
+ * Anchor lookup used by spatial-nav keystroke handlers. Returns the
+ * live DOM instance for `focusedBlockId` when it's still mounted in
+ * the panel; otherwise falls back to `findRecoveryAnchor` so j/k can
+ * walk from a sensible position even while the proactive recovery
+ * timer is still in its debounce window. Without this fallback, a
+ * keystroke during the window leaks through to vim's data-model
+ * walker, which can land on a block from another panel entirely
+ * (see the comment on `moveVertical`'s false-return contract).
+ */
+export const resolveCurrentAnchor = (
+  panelId: string,
+  focusedBlockId: string | undefined,
+): HTMLElement | null => {
+  if (!focusedBlockId) return null
+  const panel = panelById(panelId)
+  if (!panel) return null
+  const instances = panelInstances(panel)
+  if (instances.length === 0) return null
+  const live = instances.find(el => el.dataset.blockId === focusedBlockId)
+  if (live) return live
+  return findRecoveryAnchor(panelId, focusedBlockId)
 }
 
 /**

@@ -11,15 +11,34 @@ import {
 
 /**
  * How long to wait before committing a recovery write after the focused
- * block first appears to be gone. Anything that re-mounts the block in
- * a subsequent React commit — tab/shift-tab tree-moves, Enter splitting
- * a block, fast-refresh, virtualization scroll-in/out — briefly removes
- * the instance from the DOM. Without this delay every such operation
- * would race to a (wrong) recovery write before React's second commit
- * lands. 80ms is enough headroom for concurrent-mode batched commits
- * while staying short enough that real disappearances feel snappy.
+ * block first appears to be gone. Two pressures point in opposite
+ * directions and the value below is the compromise.
+ *
+ * Short side: anything that re-mounts the block in a subsequent React
+ * commit — tab/shift-tab tree-moves, Enter splitting a block,
+ * fast-refresh, virtualization scroll-in/out — briefly removes the
+ * instance from the DOM. We must not race ahead of React's second
+ * commit and write a (wrong) recovery target. Even 80ms is enough
+ * headroom for concurrent-mode batched commits.
+ *
+ * Long side: query-driven re-renders. The big offender is rescheduling
+ * a backlink — the reactive query refetches, the snapshot is replaced,
+ * and the list resorts / regroups across several commits. If we fire
+ * recovery before the new sibling layout has landed, tiers 1/2 miss
+ * (the previous neighbors aren't where they used to be) and we fall
+ * through to the positional clamp, which lands somewhere arbitrary.
+ * The watcher's mutation observer extends the debounce on every
+ * mutation burst, so a steady stream of churn pushes recovery out
+ * naturally — but isolated re-render storms with sub-frame gaps
+ * between bursts still slip through with 80ms.
+ *
+ * 250ms is comfortably above typical re-render lengths and short
+ * enough that the user can't tell the difference when recovery is
+ * the right answer — by the time a human registers a focus change,
+ * we're past the debounce. The viewport-aware tier 4 in
+ * `findRecoveryAnchor` keeps us honest when this still isn't enough.
  */
-const RECOVERY_DEBOUNCE_MS = 80
+const RECOVERY_DEBOUNCE_MS = 250
 
 /**
  * Per-panel watchdog that keeps `focusedBlockId` pointed at a block

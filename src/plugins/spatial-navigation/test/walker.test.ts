@@ -10,9 +10,52 @@ import {
   locateInstance,
   panelById,
   rememberInstancePosition,
+  resolveCurrentAnchor,
   stackSiblingPanel,
   verticalNeighbor,
 } from '@/plugins/spatial-navigation/walker.js'
+
+// Make `isElementProperlyVisible` produce sensible answers under jsdom:
+// real browser rects come from layout, but jsdom never lays out, so
+// every element looks "off-screen" by default. Tests opt instances into
+// the viewport by tagging them with data-test-visible="true" and rely
+// on this mock to translate that hint into a tall rect that the
+// production helper recognises as visible. Without the mock, every
+// element would read as not-visible and the viewport-aware branch
+// would silently fall back to the positional clamp.
+const tallVisibleRect = (top: number) =>
+  ({
+    top,
+    bottom: top + 1000,
+    left: 0,
+    right: 100,
+    width: 100,
+    height: 1000,
+    x: 0,
+    y: top,
+    toJSON: () => ({}),
+  }) as DOMRect
+
+const setTestVisible = (el: HTMLElement, visible: boolean): void => {
+  if (visible) {
+    el.dataset.testVisible = 'true'
+    el.getBoundingClientRect = () => tallVisibleRect(50)
+  } else {
+    delete el.dataset.testVisible
+    el.getBoundingClientRect = () =>
+      ({
+        top: 2000,
+        bottom: 3000,
+        left: 0,
+        right: 100,
+        width: 100,
+        height: 1000,
+        x: 0,
+        y: 2000,
+        toJSON: () => ({}),
+      }) as DOMRect
+  }
+}
 
 interface InstanceSpec {
   blockId: string
@@ -515,6 +558,138 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
 
     // X was at idx 1; clamp(1, 0, 1) = 1 = fresh-b.
     expect(findRecoveryAnchor('p1', 'X')?.dataset.blockId).toBe('fresh-b')
+  })
+})
+
+describe('findRecoveryAnchor: viewport-aware tier 4', () => {
+  it('keeps the positional clamp when its target is already in the viewport', () => {
+    buildLayout([
+      {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
+        {blockId: 'before', instance: 'p1:before'},
+        {blockId: 'X', instance: 'p1:X'},
+        {blockId: 'after', instance: 'p1:after'},
+      ]}},
+    ])
+    rememberInstancePosition('p1', findInstance('p1:X'))
+
+    document.body.innerHTML = ''
+    buildLayout([
+      {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
+        {blockId: 'fresh-a', instance: 'p1:fresh-a'},
+        {blockId: 'fresh-b', instance: 'p1:fresh-b'},
+      ]}},
+    ])
+    // Position clamp lands on fresh-b (idx 1 → clamp(1,0,1)=1). Mark
+    // it visible so the viewport-aware branch keeps it.
+    setTestVisible(findInstance('p1:fresh-b'), true)
+    setTestVisible(findInstance('p1:fresh-a'), false)
+
+    expect(findRecoveryAnchor('p1', 'X')?.dataset.blockId).toBe('fresh-b')
+  })
+
+  it('switches to the topmost in-viewport instance when the clamp target is off-screen', () => {
+    buildLayout([
+      {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
+        {blockId: 'before', instance: 'p1:before'},
+        {blockId: 'X', instance: 'p1:X'},
+        {blockId: 'after', instance: 'p1:after'},
+      ]}},
+    ])
+    rememberInstancePosition('p1', findInstance('p1:X'))
+
+    document.body.innerHTML = ''
+    buildLayout([
+      {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
+        {blockId: 'top-offscreen', instance: 'p1:top-offscreen'},
+        {blockId: 'middle-visible', instance: 'p1:middle-visible'},
+        {blockId: 'bottom-offscreen', instance: 'p1:bottom-offscreen'},
+      ]}},
+    ])
+    // Clamp index 1 = middle-visible, but pretend that one's
+    // off-screen and the bottom one is visible. We expect to land on
+    // bottom-offscreen (the first visible in DOM order) rather than
+    // the clamp target. The point of the fallback: don't pick a
+    // recovery target that will trigger scrollIntoView.
+    setTestVisible(findInstance('p1:top-offscreen'), false)
+    setTestVisible(findInstance('p1:middle-visible'), false)
+    setTestVisible(findInstance('p1:bottom-offscreen'), true)
+
+    expect(findRecoveryAnchor('p1', 'X')?.dataset.blockId).toBe('bottom-offscreen')
+  })
+
+  it('falls back to positional clamp when no instance is in the viewport', () => {
+    buildLayout([
+      {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
+        {blockId: 'before', instance: 'p1:before'},
+        {blockId: 'X', instance: 'p1:X'},
+        {blockId: 'after', instance: 'p1:after'},
+      ]}},
+    ])
+    rememberInstancePosition('p1', findInstance('p1:X'))
+
+    document.body.innerHTML = ''
+    buildLayout([
+      {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
+        {blockId: 'fresh-a', instance: 'p1:fresh-a'},
+        {blockId: 'fresh-b', instance: 'p1:fresh-b'},
+      ]}},
+    ])
+    // No element opted into visibility; default jsdom-zero rects keep
+    // them all "not visible". The fallback returns the positional
+    // clamp so we don't strand the user with null.
+    expect(findRecoveryAnchor('p1', 'X')?.dataset.blockId).toBe('fresh-b')
+  })
+})
+
+describe('resolveCurrentAnchor', () => {
+  it('returns the live focused instance when present', () => {
+    buildLayout([
+      {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
+        {blockId: 'A', instance: 'p1:A'},
+        {blockId: 'B', instance: 'p1:B'},
+      ]}},
+    ])
+    expect(resolveCurrentAnchor('p1', 'A')?.dataset.blockInstance).toBe('p1:A')
+  })
+
+  it('falls back to the recovery anchor when the focused block is missing', () => {
+    buildLayout([
+      {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
+        {blockId: 'A', instance: 'p1:A'},
+        {blockId: 'B', instance: 'p1:B'},
+        {blockId: 'C', instance: 'p1:C'},
+      ]}},
+    ])
+    // User was on B; B disappears. Recovery should land on C (next
+    // sibling), so resolveCurrentAnchor returns C even though B is
+    // what was asked for.
+    rememberInstancePosition('p1', findInstance('p1:B'))
+    findInstance('p1:B').remove()
+
+    expect(resolveCurrentAnchor('p1', 'B')?.dataset.blockId).toBe('C')
+  })
+
+  it('returns null when no live instance and no hint', () => {
+    buildLayout([
+      {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
+        {blockId: 'A', instance: 'p1:A'},
+      ]}},
+    ])
+    // No hint stored; missing block has nothing to recover to.
+    expect(resolveCurrentAnchor('p1', 'never-seen')).toBeNull()
+  })
+
+  it('returns null when the panel is not mounted', () => {
+    expect(resolveCurrentAnchor('no-such-panel', 'whatever')).toBeNull()
+  })
+
+  it('returns null for an undefined focused block id', () => {
+    buildLayout([
+      {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
+        {blockId: 'A', instance: 'p1:A'},
+      ]}},
+    ])
+    expect(resolveCurrentAnchor('p1', undefined)).toBeNull()
   })
 })
 

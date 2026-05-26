@@ -21,35 +21,27 @@ import { ChangeScope } from '@/data/api'
 import type { Block } from '@/data/block'
 import {
   horizontalNeighborPanel,
+  resolveCurrentAnchor,
   verticalNeighbor,
 } from './walker.ts'
 
 /**
- * Locate the DOM instance for `(panelId, blockId)`. With the focused
- * block tracked on the panel block via `focusedBlockIdProp` — the same
- * primitive vim normal-mode uses — we drive everything from that prop
- * + a DOM lookup. No `document.activeElement` reads, no in-memory
- * shadow state. If the same block appears more than once in the panel
- * (e.g. duplicate backlink references), we pick the first DOM
- * occurrence; the second is unreachable via spatial nav until the
- * surfacing plugin gives them distinct identities.
+ * Locate the anchor instance to walk from. Prefers the live DOM
+ * instance for the focused block; if it's missing (e.g. a backlink
+ * was just rescheduled and its entry unmounted while the proactive
+ * recovery is still in its debounce window), falls back to the same
+ * recovery anchor `PanelFocusRecovery` would pick. Without that
+ * fallback, a keystroke during the window would return null →
+ * `moveVertical` returns false → vim's data-model walker takes over
+ * and may cross panels (see `moveVertical`'s false-return contract).
  */
-const findInstance = (
-  panelId: string,
-  blockId: string,
-): HTMLElement | null => {
-  if (typeof document === 'undefined') return null
-  const panel = document.querySelector<HTMLElement>(`[data-panel-id="${CSS.escape(panelId)}"]`)
-  if (!panel) return null
-  return panel.querySelector<HTMLElement>(`[data-block-id="${CSS.escape(blockId)}"][data-block-instance]`)
-}
-
 const currentInstance = (
   deps: BlockShortcutDependencies,
 ): HTMLElement | null => {
   const {block, uiStateBlock} = deps
   if (!block || !uiStateBlock) return null
-  return findInstance(uiStateBlock.id, block.id)
+  if (typeof document === 'undefined') return null
+  return resolveCurrentAnchor(uiStateBlock.id, block.id)
 }
 
 /**
@@ -63,8 +55,8 @@ const currentInstance = (
  * Return contract (intentionally different from "did we move?"):
  *   - `false` → "no anchor; please fall through to the underlying
  *     vim handler". Only the `!current` early return takes this
- *     path — the spatial walker had no DOM anchor to start from
- *     so vim's data-model walk is a legitimate fallback.
+ *     path — neither a live focused instance nor a recovery anchor
+ *     exists, so vim's data-model walk is a legitimate fallback.
  *   - `true` → "spatial nav handled this keystroke". Includes the
  *     no-neighbor / panel-boundary case. We must NOT fall through
  *     to vim's `nextVisibleBlock` for a panel-boundary block on a
@@ -85,6 +77,20 @@ const moveVertical = async (
   if (!block || !uiStateBlock) return false
   const current = currentInstance(deps)
   if (!current) return false
+
+  // Recovery-anchor settle: the focused block instance is gone (e.g. a
+  // backlink was just rescheduled away) and `resolveCurrentAnchor`
+  // handed us its proactive recovery target instead. Land the user
+  // on that target as if recovery had already run; further j/k
+  // walks normally from there on the next keystroke. Walking past
+  // it here would feel like "j moved me two blocks".
+  if (current.dataset.blockId !== block.id) {
+    const anchorBlockId = current.dataset.blockId
+    if (!anchorBlockId) return false
+    void focusBlock(uiStateBlock, anchorBlockId)
+    return true
+  }
+
   const next = verticalNeighbor(current, direction)
   if (!next) return true // boundary — handled, no move
   const destPanel = next.closest<HTMLElement>('[data-panel-id]')

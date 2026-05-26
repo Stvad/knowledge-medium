@@ -45,6 +45,7 @@ export {
   locateInstance,
   panelById,
   rememberInstancePosition,
+  resolveCurrentAnchor,
   stackSiblingPanel,
   verticalNeighbor,
 } from './walker.ts'
