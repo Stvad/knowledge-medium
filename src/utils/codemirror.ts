@@ -124,9 +124,15 @@ export const createMinimalMarkdownConfig = (
     mdNoQuoteClose,
     EditorView.theme({
       '&': {
+        // Default CodeMirror styles paint the editor white; setting
+        // every typographic property to `inherit` and background to
+        // transparent lets the editor blend with the surrounding
+        // block, so the active palette (including the selection /
+        // focus tints on the parent) shows through cleanly.
         fontSize: 'inherit',
         fontFamily: 'inherit',
         color: 'inherit',
+        background: 'transparent',
         lineHeight: 'inherit',
         outline: 'none',
       },
@@ -157,7 +163,8 @@ export const createMinimalMarkdownConfig = (
 export const createTypeScriptConfig = (): Extension[] => [
   javascript({jsx: true, typescript: true}),
   EditorView.theme({
-    '.cm-editor': {border: '1px solid #ccc', borderRadius: '4px'},
+    '&': {background: 'transparent', color: 'inherit'},
+    '.cm-editor': {border: '1px solid hsl(var(--border))', borderRadius: '4px'},
     '.cm-content': {padding: '8px'},
   }),
 ]
