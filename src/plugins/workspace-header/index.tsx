@@ -53,6 +53,6 @@ export const workspaceHeaderPlugin: AppExtension = systemToggle({
   }),
   headerItemsFacet.of(headerSpacerItem, {
     source: 'workspace-header',
-    precedence: 45,
+    precedence: 37,
   }),
 ])
