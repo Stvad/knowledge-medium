@@ -22,7 +22,7 @@ import {
   cancelDateScrubForBlock,
   dateScrubContentSurface,
   DATE_SCRUB_GESTURE_ID,
-  installDateKeyboardScrubListeners,
+  installDateScrubAuxListeners,
   registerScrubHandler,
   type ScrubHandler,
 } from '../dateScrubGesture.ts'
@@ -40,9 +40,9 @@ const setMobileViewport = (matches: boolean): void => {
   })) as typeof window.matchMedia
 }
 
-describe('date scrub keyboard gesture', () => {
+describe('date scrub aux listeners (wheel + ctrl/shift release)', () => {
   let unregisterHandler: (() => void) | null = null
-  let unregisterKeyboard: (() => void) | null = null
+  let unregisterAux: (() => void) | null = null
   let handler: ScrubHandler
 
   beforeEach(() => {
@@ -53,156 +53,20 @@ describe('date scrub keyboard gesture', () => {
       end: vi.fn(),
     }
     unregisterHandler = registerScrubHandler(handler)
-    unregisterKeyboard = installDateKeyboardScrubListeners(() => ({
+    unregisterAux = installDateScrubAuxListeners(() => ({
       block: {id: 'dated-block'} as Block,
     }))
   })
 
   afterEach(() => {
-    unregisterKeyboard?.()
-    unregisterKeyboard = null
+    unregisterAux?.()
+    unregisterAux = null
     unregisterHandler?.()
     unregisterHandler = null
     document.body.innerHTML = ''
   })
 
-  it('starts when ctrl and shift are both held and commits on modifier release', () => {
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'Control',
-      ctrlKey: true,
-    }))
-    expect(handler.start).not.toHaveBeenCalled()
-
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'Shift',
-      ctrlKey: true,
-      shiftKey: true,
-    }))
-
-    expect(handler.start).toHaveBeenCalledWith(expect.objectContaining({
-      blockId: 'dated-block',
-    }))
-    expect(handler.update).not.toHaveBeenCalled()
-
-    window.dispatchEvent(new KeyboardEvent('keyup', {
-      key: 'Shift',
-      ctrlKey: true,
-    }))
-
-    expect(handler.end).toHaveBeenCalledWith(true)
-  })
-
-  it('maps up/down and h/k to one-day increments', () => {
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'Shift',
-      ctrlKey: true,
-      shiftKey: true,
-    }))
-
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'ArrowUp',
-      ctrlKey: true,
-      shiftKey: true,
-    }))
-    expect(handler.update).toHaveBeenLastCalledWith(1, false)
-
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'h',
-      ctrlKey: true,
-      shiftKey: true,
-    }))
-    expect(handler.update).toHaveBeenLastCalledWith(2, false)
-
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'ArrowDown',
-      ctrlKey: true,
-      shiftKey: true,
-    }))
-    expect(handler.update).toHaveBeenLastCalledWith(1, false)
-
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'k',
-      ctrlKey: true,
-      shiftKey: true,
-    }))
-    expect(handler.update).toHaveBeenLastCalledWith(0, false)
-  })
-
-  it('maps left/right and j/l to one-week increments', () => {
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'Control',
-      ctrlKey: true,
-      shiftKey: true,
-    }))
-
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'ArrowRight',
-      ctrlKey: true,
-      shiftKey: true,
-    }))
-    expect(handler.update).toHaveBeenLastCalledWith(7, false)
-
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'l',
-      ctrlKey: true,
-      shiftKey: true,
-    }))
-    expect(handler.update).toHaveBeenLastCalledWith(14, false)
-
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'ArrowLeft',
-      ctrlKey: true,
-      shiftKey: true,
-    }))
-    expect(handler.update).toHaveBeenLastCalledWith(7, false)
-
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'j',
-      ctrlKey: true,
-      shiftKey: true,
-    }))
-    expect(handler.update).toHaveBeenLastCalledWith(0, false)
-  })
-
-  it('cancels an active keyboard scrub on Escape', () => {
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'Shift',
-      ctrlKey: true,
-      shiftKey: true,
-    }))
-
-    window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))
-
-    expect(handler.end).toHaveBeenCalledWith(false)
-  })
-
-  it('prevents default handling for scrub movement keys', () => {
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'Shift',
-      ctrlKey: true,
-      shiftKey: true,
-    }))
-
-    const event = new KeyboardEvent('keydown', {
-      key: 'ArrowUp',
-      ctrlKey: true,
-      shiftKey: true,
-      cancelable: true,
-    })
-    const preventDefault = vi.spyOn(event, 'preventDefault')
-
-    window.dispatchEvent(event)
-
-    expect(preventDefault).toHaveBeenCalled()
-  })
-
-  it('updates an active keyboard scrub from ctrl-shift vertical wheel events', () => {
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'Shift',
-      ctrlKey: true,
-      shiftKey: true,
-    }))
-
+  it('starts a scrub on the first ctrl+shift wheel event', () => {
     const event = new WheelEvent('wheel', {
       deltaMode: 0,
       deltaX: 0,
@@ -215,17 +79,14 @@ describe('date scrub keyboard gesture', () => {
 
     window.dispatchEvent(event)
 
+    expect(handler.start).toHaveBeenCalledWith(expect.objectContaining({
+      blockId: 'dated-block',
+    }))
     expect(handler.update).toHaveBeenLastCalledWith(1, false)
     expect(preventDefault).toHaveBeenCalled()
   })
 
   it('uses horizontal wheel delta when shift remaps vertical wheel motion', () => {
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'Shift',
-      ctrlKey: true,
-      shiftKey: true,
-    }))
-
     const event = new WheelEvent('wheel', {
       deltaMode: 0,
       deltaX: -14,
@@ -240,6 +101,52 @@ describe('date scrub keyboard gesture', () => {
 
     expect(handler.update).toHaveBeenLastCalledWith(1, false)
     expect(preventDefault).toHaveBeenCalled()
+  })
+
+  it('commits the wheel-driven scrub when Ctrl or Shift releases', () => {
+    window.dispatchEvent(new WheelEvent('wheel', {
+      deltaMode: 0,
+      deltaX: 0,
+      deltaY: -14,
+      ctrlKey: true,
+      shiftKey: true,
+      cancelable: true,
+    }))
+    expect(handler.start).toHaveBeenCalled()
+
+    window.dispatchEvent(new KeyboardEvent('keyup', {
+      key: 'Shift',
+      ctrlKey: true,
+    }))
+
+    expect(handler.end).toHaveBeenCalledWith(true)
+  })
+
+  it('cancels on window blur', () => {
+    window.dispatchEvent(new WheelEvent('wheel', {
+      deltaMode: 0,
+      deltaY: -14,
+      ctrlKey: true,
+      shiftKey: true,
+    }))
+    expect(handler.start).toHaveBeenCalled()
+
+    window.dispatchEvent(new Event('blur'))
+    expect(handler.end).toHaveBeenCalledWith(false)
+  })
+
+  it('does not start a wheel scrub without both modifiers', () => {
+    window.dispatchEvent(new WheelEvent('wheel', {
+      deltaY: -14,
+      ctrlKey: true,
+    }))
+    expect(handler.start).not.toHaveBeenCalled()
+
+    window.dispatchEvent(new WheelEvent('wheel', {
+      deltaY: -14,
+      shiftKey: true,
+    }))
+    expect(handler.start).not.toHaveBeenCalled()
   })
 })
 

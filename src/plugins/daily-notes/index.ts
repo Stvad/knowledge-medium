@@ -45,6 +45,7 @@ import type { Repo } from '@/data/repo'
 import type { AppExtension } from '@/extensions/facet.js'
 import { systemToggle } from '@/extensions/togglable.js'
 import {
+  actionContextsFacet,
   actionsFacet,
   appMountsFacet,
   headerItemsFacet,
@@ -80,6 +81,10 @@ import {
   dateScrubContentSurface,
   DATE_SCRUB_GESTURE_ID,
 } from './dateScrubGesture.ts'
+import {
+  dateScrubActionContext,
+  dateScrubActions,
+} from './dateScrubActions.ts'
 
 const dateScrubGestureConflictContribution: BlockGestureConflictContribution = {
   id: DATE_SCRUB_GESTURE_ID,
@@ -208,6 +213,10 @@ export const dailyNotesPlugin = ({repo}: {repo: Repo}): AppExtension =>
     blockGestureConflictsFacet.of(dateScrubGestureConflictContribution, {
       source: 'daily-notes',
     }),
+    actionContextsFacet.of(dateScrubActionContext, {source: 'daily-notes'}),
+    dateScrubActions.map(action =>
+      actionsFacet.of(action, {source: 'daily-notes'}),
+    ),
     actionsFacet.of(openDailyNotePickerAction({repo}), {source: 'daily-notes'}),
     headerItemsFacet.of(dailyNotePickerHeaderItem, {
       source: 'daily-notes',
@@ -263,3 +272,15 @@ export {
   type OpenReschedulePickerEventDetail,
   type ReschedulePickerAnchorRect,
 } from './rescheduleEvents.ts'
+export {
+  DATE_SCRUB_CANCEL_ACTION_ID,
+  DATE_SCRUB_COMMIT_ACTION_ID,
+  DATE_SCRUB_CONTEXT,
+  DATE_SCRUB_DAY_BACKWARD_ACTION_ID,
+  DATE_SCRUB_DAY_FORWARD_ACTION_ID,
+  DATE_SCRUB_WEEK_BACKWARD_ACTION_ID,
+  DATE_SCRUB_WEEK_FORWARD_ACTION_ID,
+  ENTER_DATE_SCRUB_ACTION_ID,
+  dateScrubActionContext,
+  dateScrubActions,
+} from './dateScrubActions.ts'

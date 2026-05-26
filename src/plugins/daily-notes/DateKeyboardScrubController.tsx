@@ -16,7 +16,7 @@ import {
   referenceDateAdapter,
 } from './referenceDateAdapter.ts'
 import {
-  installDateKeyboardScrubListeners,
+  installDateScrubAuxListeners,
   type KeyboardScrubTarget,
 } from './dateScrubGesture.ts'
 
@@ -56,7 +56,7 @@ export const DateKeyboardScrubController = () => {
   }, [active, runtime])
 
   useEffect(() => {
-    return installDateKeyboardScrubListeners(() =>
+    return installDateScrubAuxListeners(() =>
       resolveKeyboardScrubTarget(activeRef.current, runtimeRef.current),
     )
   }, [])
