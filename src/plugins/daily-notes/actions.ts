@@ -173,7 +173,7 @@ export const dailyNotesActions = (
       navigateFromGlobalCommand(repo, {blockId: note.id, workspaceId})
     },
     defaultBinding: {
-      keys: '$mod+Shift+Backquote',
+      keys: 'Control+Shift+Backquote',
     },
   },
   {
