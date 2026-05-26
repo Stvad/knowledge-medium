@@ -220,6 +220,31 @@ Acceptance for landing this:
 
 The shape suggests an ordering race: when run alongside the rest of the suite, the property-type cleanup fires before/after the assertion's `vi.waitFor` window in a way that the in-isolation run doesn't trigger. Likely candidates: a shared trigger-flush queue across tests in the same vitest worker, or a `repo.tx` that races with the schema-swap delete. Worth instrumenting next time it fails: dump `references_json` history for `src` plus the `row_events` trail across the swap window. If the pattern matches `cycle-detection-test-flake.md`, the fix may be the same shape (await processor quiescence before asserting).
 
+### Legacy alias-seat cleanup tombstones — leave in place
+
+Audited 2026-05-26 on `ff-vlad-dev` (workspace `4bb3ac62-0487-4586-bee4-6a5f28003899`): 424 tombstoned alias seats match the exact restorability predicate the probe now uses (pristine seed shape, `content === alias[0]`, no live children, no inbound `block_references`). Worst-offender prefix: `browser em` at 20 tombstones — accumulated en route to typing `[[browser emacs]]`. The full table:
+
+| prefix | tombstones |
+|---|---:|
+| `browser em` | 20 |
+| `browse` | 9 |
+| `brow` | 9 |
+| `toda` | 8 |
+| `tod` | 8 |
+| `wcs/` | 7 |
+| `browser ` | 6 |
+| `bro` | 5 |
+| (… long tail …) | |
+
+The probe change in [targets.ts](src/data/targets.ts) restores pristine tombstones in place on retype, so future buildups self-limit at the active-slot level. But the probe only ever lands on the *first* matching slot — the rest of each alias chain (e.g. slots 1-19 of `browser em`) stays tombstoned forever, since the probe never reaches them. Storage cost is ~85 KB local + same on server; cleanup would mean destructive SQL on Supabase (hard-deletes don't sync; [clientSchema.ts:319-323](src/data/internals/clientSchema.ts:319)).
+
+Triggers to revisit:
+- New-device initial sync feels slow because of inert tombstones in the bucket.
+- Tombstone count climbs orders of magnitude beyond today's ~425.
+- Doing a generic "compact this workspace" pass for unrelated reasons (e.g. the `row_events` trim above) and it's cheap to fold in.
+
+The lift if you do it: lift the predicate from `isRestorableTransientTombstone` into a Postgres-shaped `DELETE FROM public.blocks WHERE …` (per-workspace scope advisable on a multi-tenant project). Predicate is *exactly* the restorability check, so the same correctness argument applies — only rows the probe would otherwise resurrect get purged. Related: [[Mark transient alias-seat cleanup tombstones explicitly]] below — if Option B ever lands, the audit becomes "purge where marker present" instead of shape-matching.
+
 ---
 
 # Architectural ideas (no current trigger)
