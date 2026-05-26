@@ -1,7 +1,3 @@
-when workin in a git repository, unless otherwise stated:
-- commit after each requested change
-- commit only changes you've done
-
 verification:
 - use `yarn run check` for verification unless otherwise stated
 
@@ -10,3 +6,6 @@ secret handling:
 - do not print, echo, cat, grep, or otherwise reveal secrets or secret-bearing files in chat or command output
 - when a task needs secret-backed config, infer variable names from code/docs and have the user provide or set values out of band
 - if a command must touch a secret file, avoid outputting its contents and avoid relaying secret values back to the user
+
+testing:
+- don't add tests that just re-state the code (like testing what is our default shortcut binding is. this just duplicates the shortcut string for no benefit)
