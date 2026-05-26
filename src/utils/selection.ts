@@ -130,14 +130,27 @@ export const blockAfterSubtreeRemoval = async (
 /** Last visible descendant of `block` (deepest, last child of last
  *  child, etc.). Used by keyboard navigation that needs to land on
  *  the bottom of an expanded subtree. Returns the input block if it
- *  is collapsed or has no children. */
-export const getLastVisibleDescendant = async (block: Block): Promise<Block> => {
+ *  is collapsed or has no children.
+ *
+ *  When `topLevelBlockId` is supplied and equals the block's id, its own
+ *  `isCollapsedProp` is ignored — matches `isExpanded`'s "panel root
+ *  always exposes children" rule. Necessary so vim `Shift+G` (jump to
+ *  last visible block) still descends from a panel whose root happens to
+ *  carry a stale collapsed flag from when it was viewed as a child. Mid-
+ *  walk collapsed blocks still terminate the descent so
+ *  `previousVisibleBlock`'s contract (don't dive into a collapsed
+ *  sibling) is preserved. */
+export const getLastVisibleDescendant = async (
+  block: Block,
+  topLevelBlockId?: string,
+): Promise<Block> => {
   const repo = block.repo
   await block.load()
   let current = block
   while (true) {
+    const isPanelRoot = current.id === topLevelBlockId
     const collapsed = current.peekProperty(isCollapsedProp) ?? false
-    if (collapsed) return current
+    if (collapsed && !isPanelRoot) return current
     const childIds = await current.childIds.load()
     if (childIds.length === 0) return current
     current = repo.block(childIds[childIds.length - 1])

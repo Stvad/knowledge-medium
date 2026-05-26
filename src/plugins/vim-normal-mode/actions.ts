@@ -195,7 +195,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
         if (!topLevelBlockId) return
 
-        const lastBlock = await getLastVisibleDescendant(repo.block(topLevelBlockId))
+        const lastBlock = await getLastVisibleDescendant(repo.block(topLevelBlockId), topLevelBlockId)
         if (!lastBlock) return
 
         void focusBlock(uiStateBlock, lastBlock.id)

@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { BlockCache } from '@/data/blockCache'
 import { ChangeScope, type User } from '@/data/api'
+import { isCollapsedProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
-import { blockAfterSubtreeRemoval } from '@/utils/selection.js'
+import { blockAfterSubtreeRemoval, getLastVisibleDescendant } from '@/utils/selection.js'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1'}
@@ -105,5 +106,62 @@ describe('blockAfterSubtreeRemoval', () => {
     ])
     const result = await blockAfterSubtreeRemoval(env.repo.block('top'), 'top')
     expect(result).toBeNull()
+  })
+})
+
+describe('getLastVisibleDescendant', () => {
+  it('descends into the last visible child of an expanded subtree', async () => {
+    // top > [a, b > [b1, b2]]; last visible descendant of top = b2
+    await seedOutline(env.repo, [
+      {id: 'top', parentId: null, orderKey: 'a'},
+      {id: 'a', parentId: 'top', orderKey: 'b'},
+      {id: 'b', parentId: 'top', orderKey: 'c'},
+      {id: 'b1', parentId: 'b', orderKey: 'd'},
+      {id: 'b2', parentId: 'b', orderKey: 'e'},
+    ])
+    const result = await getLastVisibleDescendant(env.repo.block('top'))
+    expect(result.id).toBe('b2')
+  })
+
+  it('stops at a collapsed mid-tree block (so previousVisibleBlock lands on the collapsed sibling, not inside its hidden subtree)', async () => {
+    // 'b' is collapsed; landing-from-above should stop at 'b', not its
+    // hidden 'b1'. This is the contract previousVisibleBlock depends on.
+    await seedOutline(env.repo, [
+      {id: 'top', parentId: null, orderKey: 'a'},
+      {id: 'b', parentId: 'top', orderKey: 'b'},
+      {id: 'b1', parentId: 'b', orderKey: 'c'},
+    ])
+    await env.repo.mutate.setProperty({id: 'b', schema: isCollapsedProp, value: true})
+    const result = await getLastVisibleDescendant(env.repo.block('b'))
+    expect(result.id).toBe('b')
+  })
+
+  it('descends from a collapsed entry block when its id matches the panel topLevelBlockId (vim Shift+G regression)', async () => {
+    // Repro for "Shift+G jumps to first block instead of last": a panel
+    // whose top-level block happens to carry isCollapsedProp=true from
+    // its previous life as a child. Without the topLevelBlockId-aware
+    // exemption, this returns 'top' — exactly where `gg` lands — so the
+    // two bindings appear to do the same thing.
+    await seedOutline(env.repo, [
+      {id: 'top', parentId: null, orderKey: 'a'},
+      {id: 'a', parentId: 'top', orderKey: 'b'},
+      {id: 'b', parentId: 'top', orderKey: 'c'},
+    ])
+    await env.repo.mutate.setProperty({id: 'top', schema: isCollapsedProp, value: true})
+    const result = await getLastVisibleDescendant(env.repo.block('top'), 'top')
+    expect(result.id).toBe('b')
+  })
+
+  it('still honors the collapsed flag on entry when the id does not match topLevelBlockId', async () => {
+    // Confirms the exemption is narrowly scoped to the panel root — a
+    // collapsed sibling encountered mid-walk still terminates the descent.
+    await seedOutline(env.repo, [
+      {id: 'top', parentId: null, orderKey: 'a'},
+      {id: 'b', parentId: 'top', orderKey: 'b'},
+      {id: 'b1', parentId: 'b', orderKey: 'c'},
+    ])
+    await env.repo.mutate.setProperty({id: 'b', schema: isCollapsedProp, value: true})
+    const result = await getLastVisibleDescendant(env.repo.block('b'), 'top')
+    expect(result.id).toBe('b')
   })
 })
