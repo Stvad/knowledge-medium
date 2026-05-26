@@ -90,11 +90,11 @@ describe('withRecoveredLetterKey', () => {
     // prop, receiver)`, `this` becomes the proxy and real browsers
     // throw.
     const original = Object.getOwnPropertyDescriptor(KeyboardEvent.prototype, 'code')!
-    let observedThis: unknown = null
+    const observedReceivers = new WeakSet<object>()
     Object.defineProperty(KeyboardEvent.prototype, 'code', {
       configurable: true,
       get(this: KeyboardEvent) {
-        observedThis = this
+        observedReceivers.add(this)
         return original.get!.call(this)
       },
     })
@@ -102,8 +102,8 @@ describe('withRecoveredLetterKey', () => {
       const event = mk({key: '¥', code: 'KeyY', keyCode: 89, altKey: true})
       const recovered = withRecoveredLetterKey(event)
       void recovered.code
-      expect(observedThis).toBe(event)
-      expect(observedThis).not.toBe(recovered)
+      expect(observedReceivers.has(event)).toBe(true)
+      expect(observedReceivers.has(recovered)).toBe(false)
     } finally {
       Object.defineProperty(KeyboardEvent.prototype, 'code', original)
     }
