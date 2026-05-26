@@ -1021,6 +1021,35 @@ describe('groupedBacklinksDataExtension query', () => {
       expect(out.groups.map(group => group.label)).not.toContain('person')
     })
 
+    it('resolves user-defined type ids to the type block\'s label', async () => {
+      // User-defined types store the block-type block's id in `types`,
+      // not its label. The group label needs to dereference: id →
+      // block.content (or alias). Without resolution, the UI shows a
+      // bare UUID at the top of the panel.
+      await create({id: 'target', content: 'Target'})
+      await create({id: 'person-type-block', content: 'Person'})
+      await create({id: 'alice', content: 'Alice', types: ['person-type-block']})
+      await create({id: 'bob', content: 'Bob', types: ['person-type-block']})
+      await create({
+        id: 'src-alice',
+        references: [{id: 'target', alias: 'T'}, {id: 'alice', alias: 'Alice'}],
+      })
+      await create({
+        id: 'src-bob',
+        references: [{id: 'target', alias: 'T'}, {id: 'bob', alias: 'Bob'}],
+      })
+
+      const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+        workspaceId: WS,
+        id: 'target',
+      }).load()
+
+      const personGroup = out.groups.find(group => group.label === 'Person')
+      expect(personGroup).toBeDefined()
+      expect(personGroup!.groupId).toBe('type:person-type-block')
+      expect(sorted(personGroup!.sourceIds)).toEqual(['src-alice', 'src-bob'])
+    })
+
     it('does not require the typed block itself to be a candidate', async () => {
       // Sanity: type strings never collide with a block id, so the
       // self-target guard on block-id-based groups (`groupId === targetId`)

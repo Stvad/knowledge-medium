@@ -408,6 +408,34 @@ export const groupedBacklinksForBlockQuery = defineQuery<
         [contextIdsJson, workspaceId, workspaceId, workspaceId],
       )
 
+    // User-defined types store the block-type block's id in `types[]`
+    // (not its label string), so a raw `type_name` is a UUID we have
+    // to dereference for display. Built-in string types ('project',
+    // 'note', etc.) don't match any block id; their entries fall
+    // through and use the type-name string verbatim. Subscribing each
+    // resolved block to the label channel makes a rename of the type
+    // block re-fire the handle.
+    const distinctTypeNames = Array.from(
+      new Set(typeCandidateRows.map(row => row.type_name)),
+    )
+    const typeBlockRows = distinctTypeNames.length === 0
+      ? []
+      : await ctx.db.getAll<BlockRow>(
+        `SELECT ${buildQualifiedBlockColumnsSql('b')}
+           FROM blocks b
+           JOIN json_each(?) j ON b.id = j.value
+          WHERE b.workspace_id = ?
+            AND b.deleted = 0`,
+        [JSON.stringify(distinctTypeNames), workspaceId],
+      )
+    const typeBlockData = ctx.primeBlocks(asBlockRows(typeBlockRows))
+    for (const block of typeBlockData) {
+      dependOnGroupLabel(ctx, block.workspaceId, block.id)
+    }
+    const typeLabelById = new Map(
+      typeBlockData.map(data => [data.id, labelForBlockData(data, data.id)]),
+    )
+
     const groupRowsById = new Map<string, BlockRow>()
     for (const row of candidateRows) {
       groupRowsById.set(row.id, row)
@@ -459,6 +487,7 @@ export const groupedBacklinksForBlockQuery = defineQuery<
       const sources = sourcesByContextId.get(row.context_id)
       if (!sources) continue
       const groupId = `type:${row.type_name}`
+      const groupLabel = typeLabelById.get(row.type_name) ?? row.type_name
       for (const sourceId of sources) {
         const key = `${sourceId} ${groupId}`
         if (emittedTypeCandidates.has(key)) continue
@@ -466,7 +495,7 @@ export const groupedBacklinksForBlockQuery = defineQuery<
         candidates.push({
           sourceId,
           groupId,
-          groupLabel: row.type_name,
+          groupLabel,
           kind: 'type',
         })
       }
