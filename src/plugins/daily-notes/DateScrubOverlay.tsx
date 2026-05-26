@@ -19,6 +19,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import type { Block } from '@/data/block'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { useRepo } from '@/context/repo.js'
 import { addDaysIso, todayIso } from './dailyNotes.ts'
@@ -28,8 +29,8 @@ import {
 } from './blockDateAdapter.ts'
 import {
   registerScrubHandler,
+  type DateScrubDraft,
   type ScrubStartArgs,
-  type StagedScrubCommit,
 } from './dateScrubGesture.ts'
 
 const formatPretty = (iso: string): string => {
@@ -51,6 +52,44 @@ const offsetLabel = (deltaDays: number, candidateIso: string): string => {
   return `${deltaDays}d`
 }
 
+const createDateDraft = ({
+  adapter,
+  repoBlock,
+  initialIso,
+  deltaDays,
+}: {
+  adapter: BlockDateAdapter
+  repoBlock: () => Block
+  initialIso: string
+  deltaDays: number
+}): DateScrubDraft => {
+  const currentIso = addDaysIso(initialIso, deltaDays)
+  return {
+    id: 'date-scrub.date',
+    currentIso,
+    preview: {
+      label: 'Scrub date',
+      value: formatPretty(currentIso),
+      detail: offsetLabel(deltaDays, currentIso),
+    },
+    payload: {
+      plugin: 'daily-notes.date-scrub',
+      initialIso,
+      deltaDays,
+    },
+    shiftDate: delta => createDateDraft({
+      adapter,
+      repoBlock,
+      initialIso,
+      deltaDays: deltaDays + delta,
+    }),
+    commit: async () => {
+      if (currentIso === initialIso) return
+      await adapter.setIso(repoBlock(), currentIso)
+    },
+  }
+}
+
 interface ActiveScrub {
   blockId: string
   /** Per-gesture token so a slow `getCurrentIso` from a previous
@@ -61,18 +100,17 @@ interface ActiveScrub {
    *  initialIso with X's-at-A-time value. */
   session: number
   adapter: BlockDateAdapter
-  initialIso: string
+  initialIso: string | null
+  fallbackIso: string
   startX: number
   startY: number
   deltaDays: number
-  candidateIso: string
   cancelIntent: boolean
-  stagedCommit?: StagedScrubCommit
-  /** False until `getCurrentIso` resolves and `initialIso/candidateIso`
-   *  reflect the block's real date. Commit is gated on this — without
-   *  it a fast drag-and-release on an SRS card (where the read does a
-   *  daily-note row load) would commit `today + delta` instead of
-   *  `actual + delta`. */
+  draft: DateScrubDraft | null
+  /** False until `getCurrentIso` resolves and the default date draft
+   *  reflects the block's real date. A plugin can still install its own
+   *  date-aware draft before resolution; otherwise commit is skipped
+   *  rather than writing `today + delta` by mistake. */
   resolved: boolean
 }
 
@@ -114,12 +152,13 @@ export const DateScrubOverlay = () => {
           blockId: args.blockId,
           session,
           adapter,
-          initialIso: fallback,
+          initialIso: null,
+          fallbackIso: fallback,
           startX: args.startX,
           startY: args.startY,
           deltaDays: 0,
-          candidateIso: fallback,
           cancelIntent: false,
+          draft: null,
           resolved: false,
         })
 
@@ -146,10 +185,23 @@ export const DateScrubOverlay = () => {
           // lands.
           const current = activeRef.current
           if (!current || current.session !== session) return
+          if (current.draft) {
+            writeActive({
+              ...current,
+              initialIso: iso,
+              resolved: true,
+            })
+            return
+          }
           writeActive({
             ...current,
             initialIso: iso,
-            candidateIso: addDaysIso(iso, current.deltaDays),
+            draft: createDateDraft({
+              adapter,
+              repoBlock: () => repo.block(args.blockId),
+              initialIso: iso,
+              deltaDays: current.deltaDays,
+            }),
             resolved: true,
           })
         })()
@@ -158,26 +210,31 @@ export const DateScrubOverlay = () => {
       update: (deltaDays: number, intentCancel: boolean) => {
         const current = activeRef.current
         if (!current) return
-        const candidateIso = addDaysIso(current.initialIso, deltaDays)
+        const stepDeltaDays = deltaDays - current.deltaDays
+        const draft = current.draft && stepDeltaDays !== 0
+          ? current.draft.shiftDate(stepDeltaDays)
+          : current.draft
         if (
           deltaDays === current.deltaDays &&
-          intentCancel === current.cancelIntent &&
-          candidateIso === current.candidateIso &&
-          current.stagedCommit === undefined
+          intentCancel === current.cancelIntent
         ) return
         writeActive({
           ...current,
           deltaDays,
-          candidateIso,
           cancelIntent: intentCancel,
-          stagedCommit: undefined,
+          draft,
         })
       },
-      stage: (blockId: string, stagedCommit: StagedScrubCommit) => {
+      stage: (blockId: string, draft: DateScrubDraft) => {
         const current = activeRef.current
         if (!current || current.blockId !== blockId) return false
-        writeActive({...current, stagedCommit})
+        writeActive({...current, draft})
         return true
+      },
+      getDraft: (blockId: string) => {
+        const current = activeRef.current
+        if (!current || current.blockId !== blockId) return null
+        return current.draft
       },
       end: (commit: boolean) => {
         // Snapshot the current scrub first, then clear state, then
@@ -190,13 +247,7 @@ export const DateScrubOverlay = () => {
         writeActive(null)
         if (!current) return
         if (!commit || current.cancelIntent) return
-        if (current.stagedCommit) {
-          void Promise.resolve(current.stagedCommit.commit()).catch(error => {
-            console.error('[date-scrub] staged commit failed', error)
-          })
-          return
-        }
-        if (!current.resolved) {
+        if (!current.draft) {
           // The user released before `getCurrentIso` resolved — we
           // don't know the block's real date, so we can't safely
           // compute `actual + delta`. Skipping is preferable to
@@ -204,9 +255,7 @@ export const DateScrubOverlay = () => {
           console.warn('[date-scrub] released before initial ISO resolved; skipped commit')
           return
         }
-        if (current.candidateIso === current.initialIso) return
-        const block = repo.block(current.blockId)
-        void current.adapter.setIso(block, current.candidateIso).catch(error => {
+        void Promise.resolve(current.draft.commit()).catch(error => {
           console.error('[date-scrub] commit failed', error)
         })
       },
@@ -235,23 +284,23 @@ export const DateScrubOverlay = () => {
     PILL_HALF_WIDTH + 8,
     Math.min(window.innerWidth - PILL_HALF_WIDTH - 8, active.startX),
   )
-  const stagedPreview = active.stagedCommit
+  const preview = active.draft?.preview
   const label = active.cancelIntent
     ? 'Release to cancel'
-    : stagedPreview
-      ? stagedPreview.label
+    : preview
+      ? preview.label
       : active.resolved
         ? 'Scrub date'
         : 'Loading current date…'
-  const value = stagedPreview?.value ?? formatPretty(active.candidateIso)
+  const value = preview?.value ?? formatPretty(active.fallbackIso)
   const detail = active.cancelIntent
     ? 'release will cancel'
-    : stagedPreview?.detail ?? (
+    : preview?.detail ?? (
       active.resolved
-        ? offsetLabel(active.deltaDays, active.candidateIso)
+        ? offsetLabel(active.deltaDays, active.draft?.currentIso ?? active.fallbackIso)
         : 'release will cancel'
     )
-  const valueResolved = active.resolved || stagedPreview !== undefined
+  const valueResolved = active.draft !== null
 
   return createPortal(
     <div

@@ -21,10 +21,10 @@ import {
   getOrCreateDailyNote,
 } from '@/plugins/daily-notes'
 import {
+  type DateScrubDraft,
   endKeyboardScrub,
   registerScrubHandler,
   startKeyboardScrubForTarget,
-  type StagedScrubCommit,
 } from '@/plugins/daily-notes/dateScrubGesture.js'
 import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
 import {
@@ -132,7 +132,15 @@ describe('srsReschedulingPlugin', () => {
     expect(actions.slice(15).map(action => action.icon)).toEqual([Scissors, ClipboardPaste])
   })
 
-  it('stages SRS reschedules in date scrub without writing until the staged commit runs', async () => {
+  const withSrsScrubRepo = async (
+    run: (
+      repo: Repo,
+      block: ReturnType<Repo['block']>,
+      actions: readonly ActionConfig[],
+      getDraft: () => DateScrubDraft | null,
+      setDraft: (draft: DateScrubDraft | null) => void,
+    ) => Promise<void>,
+  ) => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date(2026, 4, 5))
     vi.spyOn(Math, 'random').mockReturnValue(0.5)
@@ -170,15 +178,16 @@ describe('srsReschedulingPlugin', () => {
       const block = repo.block('srs-block')
       await block.load()
 
-      let staged: StagedScrubCommit | null = null
+      let draft: DateScrubDraft | null = null
       const unregister = registerScrubHandler({
         start: vi.fn(() => true),
         update: vi.fn(),
         end: vi.fn(),
         stage: vi.fn((_blockId, next) => {
-          staged = next
+          draft = next
           return true
         }),
+        getDraft: vi.fn(() => draft),
       })
 
       try {
@@ -186,25 +195,9 @@ describe('srsReschedulingPlugin', () => {
 
         const runtime = repo.facetRuntime
         if (!runtime) throw new Error('facet runtime missing')
-        const action = runtime.read(actionsFacet)
-          .find(it => it.id === 'date-scrub.srs.reschedule.good') as
-            ActionConfig<typeof DATE_SCRUB_CONTEXT>
-        expect(action.context).toBe(DATE_SCRUB_CONTEXT)
-
-        await action.handler({block, uiStateBlock: block} as never, {} as KeyboardEvent)
-
-        expect(staged).not.toBeNull()
-        expect(staged!.label).toBe('SRS GOOD')
-        expect(staged!.value).toBe('May 25')
-        expect(staged!.detail).toBe('10d -> 20d')
-        expect(block.get(srsReviewCountProp)).toBe(3)
-        expect(block.get(srsNextReviewDateProp)).toBe(nextReview.id)
-
-        await staged!.commit()
-
-        expect(block.get(srsReviewCountProp)).toBe(4)
-        expect(block.get(srsGradeProp)).toBe(4)
-        expect(block.get(srsNextReviewDateProp)).toBe(dailyNoteBlockId('ws-1', '2026-05-25'))
+        await run(repo, block, runtime.read(actionsFacet), () => draft, next => {
+          draft = next
+        })
       } finally {
         endKeyboardScrub(false)
         unregister()
@@ -212,6 +205,115 @@ describe('srsReschedulingPlugin', () => {
     } finally {
       await h.cleanup()
     }
+  }
+
+  const scrubAction = (
+    actions: readonly ActionConfig[],
+    id: string,
+  ): ActionConfig<typeof DATE_SCRUB_CONTEXT> => {
+    const action = actions.find(it => it.id === id) as
+      ActionConfig<typeof DATE_SCRUB_CONTEXT> | undefined
+    if (!action) throw new Error(`missing action ${id}`)
+    expect(action.context).toBe(DATE_SCRUB_CONTEXT)
+    return action
+  }
+
+  it('stages SRS reschedules in date scrub without writing until the draft commit runs', async () => {
+    await withSrsScrubRepo(async (_repo, block, actions, getDraft) => {
+      const action = scrubAction(actions, 'date-scrub.srs.reschedule.good')
+
+      await action.handler({block, uiStateBlock: block} as never, {} as KeyboardEvent)
+
+      const draft = getDraft()
+      expect(draft).not.toBeNull()
+      expect(draft!.preview.label).toBe('SRS GOOD')
+      expect(draft!.preview.value).toBe('May 25')
+      expect(draft!.preview.detail).toBe('10d -> 20d')
+      expect(draft!.currentIso).toBe('2026-05-25')
+      expect(block.get(srsReviewCountProp)).toBe(3)
+      expect(block.get(srsNextReviewDateProp)).toBe(dailyNoteBlockId('ws-1', '2026-05-01'))
+
+      await draft!.commit()
+
+      expect(block.get(srsReviewCountProp)).toBe(4)
+      expect(block.get(srsGradeProp)).toBe(4)
+      expect(block.get(srsNextReviewDateProp)).toBe(dailyNoteBlockId('ws-1', '2026-05-25'))
+    })
+  })
+
+  it('compounds repeated SRS scrub actions from the current SRS draft', async () => {
+    await withSrsScrubRepo(async (_repo, block, actions, getDraft) => {
+      const good = scrubAction(actions, 'date-scrub.srs.reschedule.good')
+
+      await good.handler({block, uiStateBlock: block} as never, {} as KeyboardEvent)
+      await good.handler({block, uiStateBlock: block} as never, {} as KeyboardEvent)
+
+      const draft = getDraft()
+      expect(draft).not.toBeNull()
+      expect(draft!.preview.label).toBe('SRS GOOD')
+      expect(draft!.preview.value).toBe('Jul 4')
+      expect(draft!.preview.detail).toBe('20d -> 1mo')
+      expect(draft!.currentIso).toBe('2026-07-04')
+
+      await draft!.commit()
+
+      expect(block.get(srsIntervalProp)).toBe(40)
+      expect(block.get(srsReviewCountProp)).toBe(5)
+      expect(block.get(srsNextReviewDateProp)).toBe(dailyNoteBlockId('ws-1', '2026-07-04'))
+      expect(block.get(srsSnapshotHistoryProp)).toHaveLength(2)
+    })
+  })
+
+  it('uses a date-adjusted scrub draft as the SRS scheduling base', async () => {
+    await withSrsScrubRepo(async (_repo, block, actions, getDraft, setDraft) => {
+      const good = scrubAction(actions, 'date-scrub.srs.reschedule.good')
+      const baseDraft: DateScrubDraft = {
+        id: 'date-scrub.date',
+        currentIso: '2026-05-02',
+        preview: {label: 'Scrub date', value: 'May 2', detail: '+1d'},
+        payload: {
+          plugin: 'daily-notes.date-scrub',
+          initialIso: '2026-05-01',
+          deltaDays: 1,
+        },
+        shiftDate: () => baseDraft,
+        commit: async () => undefined,
+      }
+      setDraft(baseDraft)
+
+      await good.handler({block, uiStateBlock: block} as never, {} as KeyboardEvent)
+
+      const draft = getDraft()
+      expect(draft).not.toBeNull()
+      expect(draft!.preview.value).toBe('May 22')
+      expect(draft!.currentIso).toBe('2026-05-22')
+    })
+  })
+
+  it('does not treat an unshifted default date draft as a custom SRS base', async () => {
+    await withSrsScrubRepo(async (_repo, block, actions, getDraft, setDraft) => {
+      const good = scrubAction(actions, 'date-scrub.srs.reschedule.good')
+      const baseDraft: DateScrubDraft = {
+        id: 'date-scrub.date',
+        currentIso: '2026-05-01',
+        preview: {label: 'Scrub date', value: 'May 1', detail: 'unchanged'},
+        payload: {
+          plugin: 'daily-notes.date-scrub',
+          initialIso: '2026-05-01',
+          deltaDays: 0,
+        },
+        shiftDate: () => baseDraft,
+        commit: async () => undefined,
+      }
+      setDraft(baseDraft)
+
+      await good.handler({block, uiStateBlock: block} as never, {} as KeyboardEvent)
+
+      const draft = getDraft()
+      expect(draft).not.toBeNull()
+      expect(draft!.preview.value).toBe('May 25')
+      expect(draft!.currentIso).toBe('2026-05-25')
+    })
   })
 
   it('contributes swipe quick actions and block decoration hook for SRS blocks', () => {

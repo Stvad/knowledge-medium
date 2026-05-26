@@ -9,8 +9,11 @@ import { ChangeScope, type PropertySchema } from '@/data/api'
 import {
   DATE_SCRUB_CONTEXT,
   blockDateAdapterFacet,
+  dailyNoteBlockId,
+  getDateScrubDraft,
   getOrCreateDailyNote,
-  stageDateScrubCommit,
+  stageDateScrubDraft,
+  type DateScrubDraft,
 } from '@/plugins/daily-notes'
 import { getBlockTypes } from '@/data/properties.js'
 import { formatIsoDate } from '@/utils/dailyPage'
@@ -140,10 +143,72 @@ export interface SrsReschedulePlan extends RescheduleResult {
   history: readonly SrsReviewSnapshot[]
 }
 
-export const planSrsReschedule = async (
+interface SrsRescheduleBasis {
+  workspaceId: string
+  interval: number
+  factor: number
+  reviewCount: number
+  history: readonly SrsReviewSnapshot[]
+  scheduleFrom: Date
+  reviewedIso: string
+}
+
+interface SrsScrubDraftPayload {
+  plugin: 'srs-rescheduling'
+  plan: SrsReschedulePlan
+}
+
+interface DateScrubDateDraftPayload {
+  plugin: 'daily-notes.date-scrub'
+  deltaDays: number
+}
+
+const isSrsScrubDraftPayload = (payload: unknown): payload is SrsScrubDraftPayload =>
+  typeof payload === 'object' &&
+  payload !== null &&
+  (payload as SrsScrubDraftPayload).plugin === 'srs-rescheduling'
+
+const isDateScrubDateDraftPayload = (payload: unknown): payload is DateScrubDateDraftPayload =>
+  typeof payload === 'object' &&
+  payload !== null &&
+  (payload as DateScrubDateDraftPayload).plugin === 'daily-notes.date-scrub'
+
+const scheduleFromIsoForDraft = (draft: DateScrubDraft | null): string | undefined => {
+  if (!draft) return undefined
+  if (isDateScrubDateDraftPayload(draft.payload) && draft.payload.deltaDays === 0) {
+    return undefined
+  }
+  return draft.currentIso
+}
+
+const dateFromIso = (iso: string): Date | null => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso)
+  if (!match) return null
+  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+}
+
+const snapshotForPlan = (plan: SrsReschedulePlan): SrsReviewSnapshot => ({
+  reviewedAt: dailyNoteBlockId(plan.workspaceId, plan.reviewedIso),
+  grade: plan.grade,
+  interval: plan.newInterval,
+  factor: plan.newFactor,
+  reviewCount: plan.nextReviewCount,
+})
+
+const basisFromPlan = (plan: SrsReschedulePlan): SrsRescheduleBasis => ({
+  workspaceId: plan.workspaceId,
+  interval: plan.newInterval,
+  factor: plan.newFactor,
+  reviewCount: plan.nextReviewCount,
+  history: [...plan.history, snapshotForPlan(plan)],
+  scheduleFrom: dateFromIso(plan.nextReviewIso) ?? plan.nextReviewDate,
+  reviewedIso: plan.reviewedIso,
+})
+
+const basisFromBlock = async (
   block: Block,
-  signal: SrsSignal,
-): Promise<SrsReschedulePlan | null> => {
+  scheduleFromIso?: string,
+): Promise<SrsRescheduleBasis | null> => {
   if (block.repo.isReadOnly) return null
 
   const data = block.peek() ?? await block.load()
@@ -151,30 +216,53 @@ export const planSrsReschedule = async (
 
   const hasSrsType = getBlockTypes(data).includes(SRS_SM25_TYPE)
   const sourceProperties = hasSrsType ? data.properties : {}
-
   const now = new Date()
-  const interval = readProperty(sourceProperties, srsIntervalProp, DEFAULT_INTERVAL)
-  const factor = readProperty(sourceProperties, srsFactorProp, DEFAULT_FACTOR)
-  const reviewCount = readProperty(sourceProperties, srsReviewCountProp, 0)
-  const history = readProperty(sourceProperties, srsSnapshotHistoryProp, [])
+  return {
+    workspaceId: data.workspaceId,
+    interval: readProperty(sourceProperties, srsIntervalProp, DEFAULT_INTERVAL),
+    factor: readProperty(sourceProperties, srsFactorProp, DEFAULT_FACTOR),
+    reviewCount: readProperty(sourceProperties, srsReviewCountProp, 0),
+    history: readProperty(sourceProperties, srsSnapshotHistoryProp, []),
+    scheduleFrom: scheduleFromIso ? dateFromIso(scheduleFromIso) ?? now : now,
+    reviewedIso: formatIsoDate(now),
+  }
+}
+
+const planSrsRescheduleFromBasis = (
+  basis: SrsRescheduleBasis,
+  signal: SrsSignal,
+): SrsReschedulePlan => {
   const grade = gradeForSignal(signal)
-  const scheduled = scheduleSrsProperties({interval, factor}, signal, {now})
-  const nextReviewCount = reviewCount + 1
+  const scheduled = scheduleSrsProperties(
+    {interval: basis.interval, factor: basis.factor},
+    signal,
+    {now: basis.scheduleFrom},
+  )
+  const nextReviewCount = basis.reviewCount + 1
 
   return {
     signal,
-    workspaceId: data.workspaceId,
-    previousInterval: interval,
+    workspaceId: basis.workspaceId,
+    previousInterval: basis.interval,
     newInterval: scheduled.interval,
     newFactor: scheduled.factor,
     nextReviewDate: scheduled.nextReviewDate,
-    previousReviewCount: reviewCount,
+    previousReviewCount: basis.reviewCount,
     grade,
     nextReviewIso: formatIsoDate(scheduled.nextReviewDate),
-    reviewedIso: formatIsoDate(now),
+    reviewedIso: basis.reviewedIso,
     nextReviewCount,
-    history,
+    history: basis.history,
   }
+}
+
+export const planSrsReschedule = async (
+  block: Block,
+  signal: SrsSignal,
+  options: {scheduleFromIso?: string} = {},
+): Promise<SrsReschedulePlan | null> => {
+  const basis = await basisFromBlock(block, options.scheduleFromIso)
+  return basis ? planSrsRescheduleFromBasis(basis, signal) : null
 }
 
 export const applySrsReschedulePlan = async (
@@ -194,11 +282,8 @@ export const applySrsReschedulePlan = async (
     plan.reviewedIso,
   )
   const snapshot: SrsReviewSnapshot = {
+    ...snapshotForPlan(plan),
     reviewedAt: reviewedDaily.id,
-    grade: plan.grade,
-    interval: plan.newInterval,
-    factor: plan.newFactor,
-    reviewCount: plan.nextReviewCount,
   }
   const typeSnapshot = block.repo.snapshotTypeRegistries()
 
@@ -277,6 +362,36 @@ const formatRescheduleScrubPreview = (result: RescheduleResult) => ({
   detail: formatRescheduleScrubDetail(result),
 })
 
+const shiftPlanDate = (
+  plan: SrsReschedulePlan,
+  deltaDays: number,
+): SrsReschedulePlan => {
+  const nextReviewDate = new Date(plan.nextReviewDate)
+  nextReviewDate.setDate(nextReviewDate.getDate() + deltaDays)
+  return {
+    ...plan,
+    nextReviewDate,
+    nextReviewIso: formatIsoDate(nextReviewDate),
+  }
+}
+
+const createSrsScrubDraft = (
+  block: Block,
+  plan: SrsReschedulePlan,
+): DateScrubDraft<SrsScrubDraftPayload> => ({
+  id: `date-scrub.srs.reschedule.${signalName(plan.signal).toLowerCase()}`,
+  currentIso: plan.nextReviewIso,
+  preview: formatRescheduleScrubPreview(plan),
+  payload: {
+    plugin: 'srs-rescheduling',
+    plan,
+  },
+  shiftDate: deltaDays => createSrsScrubDraft(block, shiftPlanDate(plan, deltaDays)),
+  commit: async () => {
+    await applySrsReschedulePlan(block, plan)
+  },
+})
+
 const runRescheduleWithFeedback = async (
   block: Block,
   signal: SrsSignal,
@@ -348,15 +463,15 @@ const createScrubRescheduleAction = (
     handler: async (deps: BaseShortcutDependencies) => {
       const block = blockFromDependencies(deps)
       if (!block) return
-      const plan = await planSrsReschedule(block, signal)
+      const currentDraft = getDateScrubDraft(block.id)
+      const currentPayload = currentDraft?.payload
+      const plan = isSrsScrubDraftPayload(currentPayload)
+        ? planSrsRescheduleFromBasis(basisFromPlan(currentPayload.plan), signal)
+        : await planSrsReschedule(block, signal, {
+          scheduleFromIso: scheduleFromIsoForDraft(currentDraft),
+        })
       if (!plan) return
-      stageDateScrubCommit(block.id, {
-        id,
-        ...formatRescheduleScrubPreview(plan),
-        commit: async () => {
-          await applySrsReschedulePlan(block, plan)
-        },
-      })
+      stageDateScrubDraft(block.id, createSrsScrubDraft(block, plan))
     },
     defaultBinding: {
       keys: `Digit${signal}`,

@@ -285,6 +285,8 @@ export {
   dateScrubActions,
 } from './dateScrubActions.ts'
 export {
-  stageDateScrubCommit,
-  type StagedScrubCommit,
+  getDateScrubDraft,
+  stageDateScrubDraft,
+  type DateScrubDraft,
+  type DateScrubDraftPreview,
 } from './dateScrubGesture.ts'

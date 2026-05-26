@@ -85,11 +85,18 @@ export interface ScrubStartArgs {
   startY: number
 }
 
-export interface StagedScrubCommit {
-  id: string
+export interface DateScrubDraftPreview {
   label: string
   value: string
   detail?: string
+}
+
+export interface DateScrubDraft<Payload = unknown> {
+  id: string
+  currentIso: string
+  preview: DateScrubDraftPreview
+  payload?: Payload
+  shiftDate: (deltaDays: number) => DateScrubDraft<Payload>
   commit: () => void | Promise<void>
 }
 
@@ -99,7 +106,8 @@ export interface ScrubHandler {
    *  no activation happened. */
   start: (args: ScrubStartArgs) => boolean
   update: (deltaDays: number, intentCancel: boolean) => void
-  stage?: (blockId: string, commit: StagedScrubCommit) => boolean
+  stage?: (blockId: string, draft: DateScrubDraft) => boolean
+  getDraft?: (blockId: string) => DateScrubDraft | null
   end: (commit: boolean) => void
 }
 
@@ -320,10 +328,14 @@ export const applyKeyboardScrubDelta = (deltaDays: number): void => {
   activeHandler?.update(keyboardScrubTotalDays(keyboardScrub), false)
 }
 
-export const stageDateScrubCommit = (
+export const stageDateScrubDraft = (
   blockId: string,
-  commit: StagedScrubCommit,
-): boolean => activeHandler?.stage?.(blockId, commit) ?? false
+  draft: DateScrubDraft,
+): boolean => activeHandler?.stage?.(blockId, draft) ?? false
+
+export const getDateScrubDraft = (
+  blockId: string,
+): DateScrubDraft | null => activeHandler?.getDraft?.(blockId) ?? null
 
 const updateKeyboardScrubByWheel = (
   scrub: KeyboardScrub,

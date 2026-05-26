@@ -5,8 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Block } from '@/data/block'
 import { DateScrubOverlay } from '../DateScrubOverlay.tsx'
 import {
+  applyKeyboardScrubDelta,
+  type DateScrubDraft,
   endKeyboardScrub,
-  stageDateScrubCommit,
+  stageDateScrubDraft,
   startKeyboardScrubForTarget,
 } from '../dateScrubGesture.ts'
 
@@ -55,6 +57,21 @@ describe('DateScrubOverlay staged commits', () => {
     mocks.repo.block.mockClear()
   })
 
+  const draft = (
+    currentIso: string,
+    commit = mocks.commit,
+  ): DateScrubDraft => ({
+    id: 'srs-good',
+    currentIso,
+    preview: {
+      label: 'SRS GOOD',
+      value: currentIso,
+      detail: '10d -> 20d',
+    },
+    shiftDate: deltaDays => draft(deltaDays === 1 ? '2026-05-26' : currentIso, commit),
+    commit,
+  })
+
   it('renders a staged preview and only runs its commit callback when scrub commits', async () => {
     render(<DateScrubOverlay/>)
     await act(async () => undefined)
@@ -66,17 +83,11 @@ describe('DateScrubOverlay staged commits', () => {
     await screen.findByText('Scrub date')
 
     await act(async () => {
-      expect(stageDateScrubCommit('block-1', {
-        id: 'srs-good',
-        label: 'SRS GOOD',
-        value: 'May 25',
-        detail: '10d -> 20d',
-        commit: mocks.commit,
-      })).toBe(true)
+      expect(stageDateScrubDraft('block-1', draft('2026-05-25'))).toBe(true)
     })
 
     expect(screen.getByText('SRS GOOD')).toBeInTheDocument()
-    expect(screen.getByText('May 25')).toBeInTheDocument()
+    expect(screen.getByText('2026-05-25')).toBeInTheDocument()
     expect(screen.getByText('10d -> 20d')).toBeInTheDocument()
 
     await act(async () => {
@@ -91,13 +102,7 @@ describe('DateScrubOverlay staged commits', () => {
     await screen.findByText('Scrub date')
 
     await act(async () => {
-      expect(stageDateScrubCommit('block-1', {
-        id: 'srs-good',
-        label: 'SRS GOOD',
-        value: 'May 25',
-        detail: '10d -> 20d',
-        commit: mocks.commit,
-      })).toBe(true)
+      expect(stageDateScrubDraft('block-1', draft('2026-05-25'))).toBe(true)
       endKeyboardScrub(true)
     })
 
@@ -118,13 +123,7 @@ describe('DateScrubOverlay staged commits', () => {
 
     await act(async () => {
       expect(startKeyboardScrubForTarget({block: mocks.block as Block})).toBe(true)
-      expect(stageDateScrubCommit('block-1', {
-        id: 'srs-good',
-        label: 'SRS GOOD',
-        value: 'May 25',
-        detail: '10d -> 20d',
-        commit: mocks.commit,
-      })).toBe(true)
+      expect(stageDateScrubDraft('block-1', draft('2026-05-25'))).toBe(true)
       endKeyboardScrub(true)
     })
 
@@ -134,5 +133,24 @@ describe('DateScrubOverlay staged commits', () => {
     await act(async () => {
       resolveIso?.('2026-05-15')
     })
+  })
+
+  it('shifts the active draft instead of replacing it with plain date scrub state', async () => {
+    render(<DateScrubOverlay/>)
+    await act(async () => undefined)
+
+    await act(async () => {
+      expect(startKeyboardScrubForTarget({block: mocks.block as Block})).toBe(true)
+    })
+    await screen.findByText('Scrub date')
+
+    await act(async () => {
+      expect(stageDateScrubDraft('block-1', draft('2026-05-25'))).toBe(true)
+      applyKeyboardScrubDelta(1)
+    })
+
+    expect(screen.getByText('SRS GOOD')).toBeInTheDocument()
+    expect(screen.getByText('2026-05-26')).toBeInTheDocument()
+    expect(screen.getByText('10d -> 20d')).toBeInTheDocument()
   })
 })
