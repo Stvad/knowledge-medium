@@ -220,8 +220,9 @@ export function HotkeyReconciler(): null {
       const listener: EventListener = (event) => {
         tinykeysHandler(withRecoveredLetterKey(event as KeyboardEvent))
       }
-      window.addEventListener('keydown', listener)
-      const unsubscribe = () => window.removeEventListener('keydown', listener)
+      const phase = binding.phase ?? 'keydown'
+      window.addEventListener(phase, listener)
+      const unsubscribe = () => window.removeEventListener(phase, listener)
       state.byActionId.set(actionKey, {unsubscribe})
     }
 

@@ -155,5 +155,12 @@ export interface ActionDecorator<T extends ActionContextType = ActionContextType
 export interface ShortcutBinding {
   action: string;
   keys: KeyCombination | KeyCombination[];
+  /** Which keyboard event phase fires the binding. Defaults to 'keydown'.
+   *  Use 'keyup' for "fires when this key/modifier is released" — e.g.
+   *  scrub mode commits when Ctrl/Shift releases. tinykeys' matcher
+   *  accepts a bare modifier name as the key (`'Shift'`, `'Control'`)
+   *  for this case; for letter chords prefer the same key string you'd
+   *  use on keydown (`'$mod+s'`). */
+  phase?: 'keydown' | 'keyup';
   eventOptions?: EventOptions; // Event handling options for this binding
 }

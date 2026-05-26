@@ -65,15 +65,26 @@ const buildAction = (overrides: Partial<ActionConfig> & Pick<ActionConfig, 'id' 
   ...overrides,
 } as ActionConfig)
 
-const dispatchKeydown = (key: string) => {
-  // tinykeys installs a keydown listener on window and matches via
-  // event.key / event.code. Synthesise both so single-letter chords ('k')
-  // match event.key and code-form chords ('KeyK') match event.code.
-  const code =
-    key.length === 1 && /[a-z]/i.test(key) ? `Key${key.toUpperCase()}` : key
-  const init: KeyboardEventInit = {key, code, bubbles: true, cancelable: true}
-  window.dispatchEvent(new KeyboardEvent('keydown', init))
+const codeFor = (key: string) => {
+  if (key === 'Shift') return 'ShiftLeft'
+  if (key === 'Control') return 'ControlLeft'
+  if (key === 'Alt') return 'AltLeft'
+  if (key === 'Meta') return 'MetaLeft'
+  return key.length === 1 && /[a-z]/i.test(key) ? `Key${key.toUpperCase()}` : key
 }
+
+const dispatchKey = (type: 'keydown' | 'keyup', key: string) => {
+  // tinykeys matches via event.key / event.code. Synthesise both so
+  // single-letter chords ('k') match event.key and code-form chords
+  // ('KeyK') match event.code. Bare modifier names ('Shift') get the
+  // matching code-form ('ShiftLeft') for keyup tests where event.key
+  // is the modifier itself.
+  const init: KeyboardEventInit = {key, code: codeFor(key), bubbles: true, cancelable: true}
+  window.dispatchEvent(new KeyboardEvent(type, init))
+}
+
+const dispatchKeydown = (key: string) => dispatchKey('keydown', key)
+const dispatchKeyup = (key: string) => dispatchKey('keyup', key)
 
 const Activator = ({context}: {context: ActionContextType}) => {
   const dispatch = useActiveContextsDispatch()
@@ -445,5 +456,64 @@ describe('HotkeyReconciler', () => {
     )
     act(() => dispatchKeydown('k'))
     expect(handler.mock.calls[1]?.[0]).toMatchObject({marker: 'second'})
+  })
+
+  describe('phase', () => {
+    it('does not fire a keyup binding on keydown', () => {
+      const handler = vi.fn()
+      const action = buildAction({
+        id: 'test.shift-release',
+        handler,
+        defaultBinding: {keys: 'Shift', phase: 'keyup'},
+      })
+
+      render(
+        <Harness actions={[action]} contexts={[testContextConfig]}>
+          <Activator context={TEST_CONTEXT}/>
+        </Harness>,
+      )
+
+      act(() => dispatchKeydown('Shift'))
+      expect(handler).not.toHaveBeenCalled()
+    })
+
+    it('fires a keyup binding on key release', () => {
+      const handler = vi.fn()
+      const action = buildAction({
+        id: 'test.shift-release',
+        handler,
+        defaultBinding: {keys: 'Shift', phase: 'keyup'},
+      })
+
+      render(
+        <Harness actions={[action]} contexts={[testContextConfig]}>
+          <Activator context={TEST_CONTEXT}/>
+        </Harness>,
+      )
+
+      act(() => dispatchKeyup('Shift'))
+      expect(handler).toHaveBeenCalledTimes(1)
+    })
+
+    it('still fires on keydown when phase is unset (default behaviour)', () => {
+      const handler = vi.fn()
+      const action = buildAction({
+        id: 'test.default-phase',
+        handler,
+        defaultBinding: {keys: 'k'},
+      })
+
+      render(
+        <Harness actions={[action]} contexts={[testContextConfig]}>
+          <Activator context={TEST_CONTEXT}/>
+        </Harness>,
+      )
+
+      act(() => dispatchKeydown('k'))
+      expect(handler).toHaveBeenCalledTimes(1)
+
+      act(() => dispatchKeyup('k'))
+      expect(handler).toHaveBeenCalledTimes(1)
+    })
   })
 })
