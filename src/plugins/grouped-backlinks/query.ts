@@ -23,6 +23,7 @@ import {
   typedBlocksStructureKey,
 } from '@/data/internals/kernelInvalidation.js'
 import { typesProp } from '@/data/properties.js'
+import { typesFacet } from '@/data/facets.js'
 import {
   buildGroupedBacklinks,
   type GroupedBacklinkCandidate,
@@ -410,31 +411,27 @@ export const groupedBacklinksForBlockQuery = defineQuery<
 
     // User-defined types store the block-type block's id in `types[]`
     // (not its label string), so a raw `type_name` is a UUID we have
-    // to dereference for display. Built-in string types ('project',
-    // 'note', etc.) don't match any block id; their entries fall
-    // through and use the type-name string verbatim. Subscribing each
-    // resolved block to the label channel makes a rename of the type
-    // block re-fire the handle.
-    const distinctTypeNames = Array.from(
-      new Set(typeCandidateRows.map(row => row.type_name)),
-    )
-    const typeBlockRows = distinctTypeNames.length === 0
-      ? []
-      : await ctx.db.getAll<BlockRow>(
-        `SELECT ${buildQualifiedBlockColumnsSql('b')}
-           FROM blocks b
-           JOIN json_each(?) j ON b.id = j.value
-          WHERE b.workspace_id = ?
-            AND b.deleted = 0`,
-        [JSON.stringify(distinctTypeNames), workspaceId],
-      )
-    const typeBlockData = ctx.primeBlocks(asBlockRows(typeBlockRows))
-    for (const block of typeBlockData) {
-      dependOnGroupLabel(ctx, block.workspaceId, block.id)
+    // to dereference for display. Use the in-memory `typesFacet`
+    // registry — it carries both kernel-contributed types and
+    // user-defined types materialized at runtime by
+    // `UserTypesService`. O(1) Map lookup, no DB roundtrip.
+    //
+    // A SQL-driven label lookup against `blocks` measured 4 seconds
+    // for 4 ids in practice on a real-world DB (the planner couldn't
+    // keep the join cheap regardless of whether json_each was on the
+    // left or the right). The in-memory path sidesteps that entirely.
+    //
+    // Eventual consistency: renaming a type block republishes the
+    // facet contribution but does not invalidate this query handle,
+    // so the panel keeps the previous label until any other dep
+    // wakes the resolver. Accepted in exchange for the perf win.
+    const typesRegistry = ctx.repo.facetRuntime?.read(typesFacet)
+    const typeLabelById = new Map<string, string>()
+    if (typesRegistry) {
+      for (const contribution of typesRegistry.values()) {
+        typeLabelById.set(contribution.id, contribution.label ?? contribution.id)
+      }
     }
-    const typeLabelById = new Map(
-      typeBlockData.map(data => [data.id, labelForBlockData(data, data.id)]),
-    )
 
     const groupRowsById = new Map<string, BlockRow>()
     for (const row of candidateRows) {

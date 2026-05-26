@@ -7,6 +7,7 @@ import { Repo } from '@/data/repo'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/extensions/facet.js'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { typesProp } from '@/data/properties.js'
+import { typesFacet } from '@/data/facets.js'
 import {
   invalidationRulesFacet,
   propertyEditorOverridesFacet,
@@ -1021,13 +1022,25 @@ describe('groupedBacklinksDataExtension query', () => {
       expect(out.groups.map(group => group.label)).not.toContain('person')
     })
 
-    it('resolves user-defined type ids to the type block\'s label', async () => {
+    it('resolves user-defined type ids via typesFacet to a label', async () => {
       // User-defined types store the block-type block's id in `types`,
-      // not its label. The group label needs to dereference: id →
-      // block.content (or alias). Without resolution, the UI shows a
-      // bare UUID at the top of the panel.
+      // not its label. In production the label comes from `typesFacet`
+      // — kernel-contributed types ride in at extension build, and
+      // user-defined types are materialized into the facet by
+      // `UserTypesService`. The resolver reads the facet at resolve
+      // time; we register a TypeContribution directly here to stand
+      // in for that materialization.
+      env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+        kernelDataExtension,
+        backlinksQueryInvalidationExtension,
+        groupedBacklinksDataExtension,
+        typesFacet.of(
+          {id: 'person-type-block', label: 'Person'},
+          {source: 'test'},
+        ),
+      ]))
+
       await create({id: 'target', content: 'Target'})
-      await create({id: 'person-type-block', content: 'Person'})
       await create({id: 'alice', content: 'Alice', types: ['person-type-block']})
       await create({id: 'bob', content: 'Bob', types: ['person-type-block']})
       await create({
