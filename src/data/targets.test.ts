@@ -34,6 +34,7 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from './repo'
 import {
+  aliasSeatSeed,
   computeAliasSeatId,
   createOrRestoreTargetBlock,
   ensureAliasTarget,
@@ -422,6 +423,28 @@ describe('ensureAliasTarget — indexed-deterministic seat probe', () => {
 
     expect(result.id).toBe(slot0Id)
     expect(result.inserted).toBe(false)
+  })
+})
+
+describe('ensureAliasTarget — seed-shape contract', () => {
+  it('writes a row whose (content, properties) matches aliasSeatSeed exactly', async () => {
+    // Drift detector. The probe's restorability predicate compares
+    // tombstoned rows against `aliasSeatSeed(alias)`; if a future change
+    // to ensureAliasTarget (or to addTypeInTx's PAGE_TYPE handling) ever
+    // produces a row that doesn't equal the seed, the predicate would
+    // silently fail to restore fresh tombstones too. Asserting the
+    // post-write shape here forces seed-builder + writer to stay
+    // in lockstep — fix one place when the contract changes.
+    const typeSnapshot = env.repo.snapshotTypeRegistries()
+    const result = await env.repo.tx(
+      tx => ensureAliasTarget(tx, env.repo, 'Foo', WS, typeSnapshot),
+      {scope: ChangeScope.BlockDefault},
+    )
+    const row = await env.h.db.get<{content: string; properties_json: string}>(
+      'SELECT content, properties_json FROM blocks WHERE id = ?', [result.id])
+    const seed = aliasSeatSeed('Foo')
+    expect(row.content).toBe(seed.content)
+    expect(JSON.parse(row.properties_json)).toEqual(seed.properties)
   })
 })
 
