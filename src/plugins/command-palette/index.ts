@@ -79,7 +79,7 @@ export const commandPaletteForBlockQuickAction: QuickActionItem = {
 
 export const commandPaletteHeaderItem: HeaderItemContribution = {
   id: 'command-palette.header',
-  region: 'end',
+  region: 'start',
   component: CommandPaletteHeaderItem,
 }
 

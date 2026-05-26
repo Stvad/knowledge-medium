@@ -139,7 +139,7 @@ export const dateKeyboardScrubControllerMount: AppMountContribution = {
 
 export const dailyNotePickerHeaderItem: HeaderItemContribution = {
   id: 'daily-notes.date-picker-header',
-  region: 'end',
+  region: 'start',
   component: DailyNotePickerHeaderItem,
 }
 

@@ -16,10 +16,6 @@ export const WorkspaceSwitcherSidebarSection = () => (
   </section>
 )
 
-export const HeaderSpacerItem = () => (
-  <div aria-hidden="true" className="min-w-0 flex-1"/>
-)
-
 export const workspaceSwitcherSidebarSection: LeftSidebarSectionContribution = {
   id: 'workspace-header.switcher',
   component: WorkspaceSwitcherSidebarSection,
@@ -29,12 +25,6 @@ export const pendingInvitationsHeaderItem: HeaderItemContribution = {
   id: 'workspace-header.pending-invitations',
   region: 'end',
   component: PendingInvitations,
-}
-
-export const headerSpacerItem: HeaderItemContribution = {
-  id: 'workspace-header.spacer',
-  region: 'end',
-  component: HeaderSpacerItem,
 }
 
 export const workspaceHeaderPlugin: AppExtension = systemToggle({
@@ -50,9 +40,5 @@ export const workspaceHeaderPlugin: AppExtension = systemToggle({
   headerItemsFacet.of(pendingInvitationsHeaderItem, {
     source: 'workspace-header',
     precedence: 30,
-  }),
-  headerItemsFacet.of(headerSpacerItem, {
-    source: 'workspace-header',
-    precedence: 37,
   }),
 ])

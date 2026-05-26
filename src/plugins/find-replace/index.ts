@@ -45,7 +45,7 @@ export const findReplaceAction: ActionConfig<typeof ActionContextTypes.GLOBAL> =
 
 export const findReplaceHeaderItem: HeaderItemContribution = {
   id: 'find-replace.header',
-  region: 'end',
+  region: 'start',
   component: FindReplaceHeaderItem,
 }
 

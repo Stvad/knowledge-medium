@@ -43,7 +43,7 @@ export const quickFindAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
 
 export const quickFindHeaderItem: HeaderItemContribution = {
   id: 'quick-find.header',
-  region: 'end',
+  region: 'start',
   component: QuickFindHeaderItem,
 }
 

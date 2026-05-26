@@ -32,7 +32,7 @@ export const openRecentsAction = (repo: Repo): ActionConfig<typeof ActionContext
 
 export const recentsHeaderItem: HeaderItemContribution = {
   id: 'recents.header',
-  region: 'end',
+  region: 'start',
   component: RecentsHeaderItem,
 }
 
@@ -46,10 +46,9 @@ export const recentsPlugin = ({repo}: {repo: Repo}): AppExtension =>
       {id: 'recentsPage', renderer: RecentsPageBlockRenderer},
       {source: 'recents'},
     ),
-    // Precedence 35 places this just before the sync-status indicator
-    // (precedence 40), grouping the "workspace state" cluster together
-    // and keeping the dialog-launcher buttons (quick-find ⌘P at 10,
-    // command-palette ⌘K at 20) contiguous on their own.
+    // Precedence 35 places this after the dialog-launcher buttons
+    // (quick-find at 10, command-palette at 20), keeping action /
+    // navigation items together in the header's start region.
     headerItemsFacet.of(recentsHeaderItem, {source: 'recents', precedence: 35}),
     actionsFacet.of(openRecentsAction(repo), {source: 'recents'}),
   ])
