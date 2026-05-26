@@ -128,6 +128,12 @@ The user is currently leaning toward **block-id keying as the destination** (per
 
 ## P3 — Deferred until trigger fires
 
+### Consider DB/query revisioning if dirty-load handle semantics become hard to reason about
+
+`LoaderHandle` now treats in-flight loads that observe a matching invalidation as dirty for subscriber publication: the dirty result may still satisfy the original `load()` promise and update the internal cache, but subscribers rebuild only from the clean follow-up reload. This is intentionally conservative and cheap.
+
+Longer-term correctness shape, if this area keeps producing edge cases: add a monotonic DB/query revision model. Every local commit and row-events-tail apply advances a revision; query loads carry the revision they read; handles publish only results whose read revision is at least the latest matching invalidation revision. That would make freshness explicit and could avoid redundant dirty reloads when a load is provably already fresh. Costs: thread revision accounting through repo txs, sync-applied invalidations, query loaders, and tests; dynamic deps still need the existing "changes during load" queue unless queries can declare every relevant dep before SQL. Do this only if the dirty-load generation model becomes ambiguous in practice.
+
 ### Inverted dep-index in `HandleStore.invalidate` — re-evaluate with live metrics
 
 [handleStore.ts:306](src/data/internals/handleStore.ts:306) still walks every registered handle linearly on each invalidate, then walks every dep of each candidate inside `matches()`. perf-baseline's #1 open recommendation. Two follow-ups landed already to soften the symptom without changing the shape:

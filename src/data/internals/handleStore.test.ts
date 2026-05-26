@@ -657,6 +657,69 @@ describe('Mid-load invalidations are not dropped (reviewer P2)', () => {
     expect(calls).toEqual([2, 2])
   })
 
+  it('does not notify subscribers with a stale value when a mid-load invalidate forces a rerun', async () => {
+    const store = makeStore()
+    let releaseFirstLoad!: () => void
+    let n = 1
+    let runs = 0
+    const fired: number[] = []
+    const h = store.getOrCreate('q', () =>
+      new LoaderHandle<number>({
+        store,
+        key: 'q',
+        loader: async (ctx) => {
+          runs++
+          ctx.depend({ kind: 'row', id: 'r1' })
+          const captured = n
+          if (runs === 1) {
+            await new Promise<void>((r) => { releaseFirstLoad = r })
+          }
+          return captured
+        },
+      }),
+    )
+    h.subscribe((value) => fired.push(value))
+
+    await vi.waitFor(() => expect(h.status()).toBe('loading'))
+    n = 2
+    store.invalidate({ rowIds: ['r1'] })
+    releaseFirstLoad()
+
+    await vi.waitFor(() => expect(runs).toBe(2))
+    await vi.waitFor(() => expect(fired).toEqual([2]))
+  })
+
+  it('notifies from the clean rerun even when the dirty run already returned the fresh value', async () => {
+    const store = makeStore()
+    let releaseFirstLoad!: () => void
+    let n = 1
+    let runs = 0
+    const fired: number[] = []
+    const h = store.getOrCreate('q', () =>
+      new LoaderHandle<number>({
+        store,
+        key: 'q',
+        loader: async (ctx) => {
+          runs++
+          ctx.depend({ kind: 'row', id: 'r1' })
+          if (runs === 1) {
+            await new Promise<void>((r) => { releaseFirstLoad = r })
+          }
+          return n
+        },
+      }),
+    )
+    h.subscribe((value) => fired.push(value))
+
+    await vi.waitFor(() => expect(h.status()).toBe('loading'))
+    n = 2
+    store.invalidate({ rowIds: ['r1'] })
+    releaseFirstLoad()
+
+    await vi.waitFor(() => expect(runs).toBe(2))
+    await vi.waitFor(() => expect(fired).toEqual([2]))
+  })
+
   it('coalesces multiple invalidations during one load into one rerun', async () => {
     const store = makeStore()
     let releaseLoad!: () => void

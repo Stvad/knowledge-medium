@@ -448,6 +448,8 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
   private readonly equality: (a: T, b: T) => boolean
 
   private value: T | undefined = undefined
+  private notifiedValue: T | undefined = undefined
+  private hasNotifiedValue = false
   private status_: HandleStatus = 'idle'
   private error: unknown = undefined
 
@@ -596,8 +598,6 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
       (value) => {
         // Disposal during a load: don't apply, don't notify.
         if (this.disposed) throw new Error(`Handle ${this.key} disposed mid-load`)
-        const priorValue = this.value
-        const hadPrior = this.status_ === 'ready' || this.status_ === 'error'
         // Replace live deps with the freshly-collected set (drops any
         // priorDeps the loader didn't re-declare).
         this.deps = collected
@@ -615,17 +615,25 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
           }
         }
         this.changesDuringLoad = []
+        const needsPostSettleReload = this.pendingReinvalidate && !this.disposed
         this.value = value
         this.status_ = 'ready'
         this.error = undefined
         this.inflight = null
         this.suspendingPromise = null
-        // Structural-diff: skip listener walk if value didn't change
-        // (spec §9.4). On the first successful load there's no prior
-        // value to compare against — always notify.
+        // Structural-diff against the last value subscribers actually saw,
+        // not merely the internal cache. A dirty mid-load result may update
+        // `value` for peek/load callers, but it must not consume the clean
+        // rerun's notification if both results are equal.
         const willNotify =
-          !hadPrior || priorValue === undefined || !this.equality(priorValue, value)
-        if (willNotify) {
+          !this.hasNotifiedValue || !this.equality(this.notifiedValue as T, value)
+        if (needsPostSettleReload) {
+          // The promise returned by this load may resolve with the value it
+          // read, but subscribers should not rebuild from a snapshot already
+          // known suspect. The queued reload below will publish the clean
+          // value if it differs from the last value subscribers saw.
+          batch?.finish(null)
+        } else if (willNotify) {
           // When this load was kicked off by a batched invalidate,
           // queue the notify so it lands in the same microtask as the
           // other batch members' notifies (one React commit). Without
@@ -647,7 +655,7 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
         // stale and skip the reload; the next `.load()` will re-resolve
         // off the stale flag, and we save a slow query (and the
         // SQLite-connection contention it causes) when nobody cares.
-        if (this.pendingReinvalidate && !this.disposed) {
+        if (needsPostSettleReload) {
           this.pendingReinvalidate = false
           if (this.listeners.size === 0) {
             this.stale = true
@@ -843,6 +851,8 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     this.deps = []
     this.changesDuringLoad = []
     this.value = undefined
+    this.notifiedValue = undefined
+    this.hasNotifiedValue = false
     this.status_ = 'idle'
     this.inflight = null
     this.suspendingPromise = null
@@ -853,13 +863,9 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
 
   private notify(value: T): void {
     if (this.listeners.size === 0) return
+    this.notifiedValue = value
+    this.hasNotifiedValue = true
     this.store.metrics.notifiesFired++
-    // Structural-diff against the prior value cheaply: if the value
-    // didn't actually change (re-resolve produced an equal result),
-    // skip the listener walk.
-    // We compare against the value we've already stored (above caller
-    // updated `this.value` first — peek() must return the new value
-    // when listeners fire).
     // Snapshot listeners — a listener may unsubscribe during dispatch.
     const snapshot = Array.from(this.listeners)
     for (const fn of snapshot) {
