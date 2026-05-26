@@ -1,5 +1,6 @@
 import {
   ChangeScope,
+  codecs,
   defineBlockType,
   defineProperty,
   type Codec,
@@ -151,4 +152,17 @@ export const groupedBacklinksPrefsType = defineBlockType({
   id: 'grouped-backlinks-prefs',
   label: 'Grouped backlinks',
   properties: [groupedBacklinksDefaultsProp],
+})
+
+/** Property name for `groupWith` — set on a block X to say "anything
+ *  referencing X should also be grouped under [[Y]]". Values are
+ *  projected into `block_references` with `source_field='groupWith'`
+ *  (via `projectPropertyReferences`), which the grouped-backlinks
+ *  query reads to expand each backlink's group set. */
+export const GROUP_WITH_PROP_NAME = 'groupWith'
+
+export const groupWithProp = defineProperty<readonly string[]>(GROUP_WITH_PROP_NAME, {
+  codec: codecs.refList(),
+  defaultValue: [],
+  changeScope: ChangeScope.BlockDefault,
 })

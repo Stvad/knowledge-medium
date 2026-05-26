@@ -687,4 +687,170 @@ describe('groupedBacklinksDataExtension query', () => {
       expect(fired[fired.length - 1]).toBe(1)
     })
   })
+
+  // groupWith expansion: when a context block C declares `groupWith:: [[X]]`,
+  // any backlink whose context chain includes C also gets X as a group
+  // candidate. Mirrors roam-date's `addAttributeGroups`
+  // (linked-reference-groups/datalog-groups.ts). The realistic use case is
+  // *multiple* declaring blocks pointing to a common umbrella group — the
+  // umbrella accumulates more members than any individual declarer and wins
+  // the consume-largest pass.
+  describe('groupWith expansion', () => {
+    const setupUmbrella = async () => {
+      // taxes, investments, banking → groupWith finance.
+      // Three backlinks each reference a different declaring block, so
+      // taxes/investments/banking are each size 1 (below minGroupSize), and
+      // Finance accumulates all three into a size-3 group.
+      await create({id: 'target', content: 'Target'})
+      await create({id: 'finance', content: 'Finance'})
+      for (const id of ['taxes', 'investments', 'banking']) {
+        const label = id[0].toUpperCase() + id.slice(1)
+        await create({
+          id,
+          content: label,
+          references: [{id: 'finance', alias: 'Finance', sourceField: 'groupWith'}],
+        })
+      }
+      await create({
+        id: 'src-taxes',
+        references: [{id: 'target', alias: 'T'}, {id: 'taxes', alias: 'Taxes'}],
+      })
+      await create({
+        id: 'src-investments',
+        references: [{id: 'target', alias: 'T'}, {id: 'investments', alias: 'Investments'}],
+      })
+      await create({
+        id: 'src-banking',
+        references: [{id: 'target', alias: 'T'}, {id: 'banking', alias: 'Banking'}],
+      })
+    }
+
+    it('surfaces an umbrella group when multiple declaring blocks share a groupWith target', async () => {
+      await setupUmbrella()
+
+      const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+        workspaceId: WS,
+        id: 'target',
+      }).load()
+
+      const financeGroup = out.groups.find(group => group.label === 'Finance')
+      expect(financeGroup).toBeDefined()
+      expect(sorted(financeGroup!.sourceIds))
+        .toEqual(['src-banking', 'src-investments', 'src-taxes'])
+    })
+
+    it('expands groupWith when the declaring block is reached via an ancestor', async () => {
+      await create({id: 'target', content: 'Target'})
+      await create({id: 'finance', content: 'Finance'})
+      for (const id of ['taxes', 'investments']) {
+        const label = id[0].toUpperCase() + id.slice(1)
+        await create({
+          id,
+          content: label,
+          references: [{id: 'finance', alias: 'Finance', sourceField: 'groupWith'}],
+        })
+      }
+      await create({id: 'parent-taxes', references: [{id: 'taxes', alias: 'Taxes'}]})
+      await create({id: 'parent-investments', references: [{id: 'investments', alias: 'Investments'}]})
+      await create({
+        id: 'child-taxes',
+        parentId: 'parent-taxes',
+        references: [{id: 'target', alias: 'T'}],
+      })
+      await create({
+        id: 'child-investments',
+        parentId: 'parent-investments',
+        references: [{id: 'target', alias: 'T'}],
+      })
+
+      const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+        workspaceId: WS,
+        id: 'target',
+      }).load()
+
+      const financeGroup = out.groups.find(group => group.label === 'Finance')
+      expect(financeGroup).toBeDefined()
+      expect(sorted(financeGroup!.sourceIds)).toEqual(['child-investments', 'child-taxes'])
+    })
+
+    it('does not chain groupWith transitively', async () => {
+      // taxes/investments/banking → finance → money. Backlinks reach
+      // Finance via the one-hop expansion but should NOT reach Money.
+      await create({id: 'target', content: 'Target'})
+      await create({id: 'money', content: 'Money'})
+      await create({
+        id: 'finance',
+        content: 'Finance',
+        references: [{id: 'money', alias: 'Money', sourceField: 'groupWith'}],
+      })
+      for (const id of ['taxes', 'investments', 'banking']) {
+        const label = id[0].toUpperCase() + id.slice(1)
+        await create({
+          id,
+          content: label,
+          references: [{id: 'finance', alias: 'Finance', sourceField: 'groupWith'}],
+        })
+      }
+      await create({
+        id: 'src-taxes',
+        references: [{id: 'target', alias: 'T'}, {id: 'taxes', alias: 'Taxes'}],
+      })
+      await create({
+        id: 'src-investments',
+        references: [{id: 'target', alias: 'T'}, {id: 'investments', alias: 'Investments'}],
+      })
+      await create({
+        id: 'src-banking',
+        references: [{id: 'target', alias: 'T'}, {id: 'banking', alias: 'Banking'}],
+      })
+
+      const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+        workspaceId: WS,
+        id: 'target',
+      }).load()
+
+      const labels = out.groups.map(group => group.label)
+      expect(labels).toContain('Finance')
+      expect(labels).not.toContain('Money')
+    })
+
+    it('respects excludedTags when expanding groupWith', async () => {
+      await setupUmbrella()
+
+      const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+        workspaceId: WS,
+        id: 'target',
+        groupingConfig: {
+          highPriorityTags: [],
+          lowPriorityTags: [],
+          excludedTags: ['Finance'],
+          excludedPatterns: [],
+        },
+      }).load()
+
+      expect(out.groups.map(group => group.label)).not.toContain('Finance')
+    })
+
+    it('does not emit the target block itself as a groupWith group', async () => {
+      // Edge case: taxes declares groupWith:: target. We're viewing target's
+      // backlinks, so target must not appear as one of its own groups.
+      await create({id: 'target', content: 'Target'})
+      await create({
+        id: 'taxes',
+        content: 'Taxes',
+        references: [{id: 'target', alias: 'Target', sourceField: 'groupWith'}],
+      })
+      await create({
+        id: 'src-1',
+        references: [{id: 'target', alias: 'T'}, {id: 'taxes', alias: 'Taxes'}],
+      })
+
+      const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+        workspaceId: WS,
+        id: 'target',
+      }).load()
+
+      expect(out.groups.map(group => group.groupId)).not.toContain('target')
+    })
+  })
 })

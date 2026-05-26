@@ -27,6 +27,7 @@ import {
 } from './grouping.ts'
 import {
   EMPTY_GROUPED_BACKLINKS_CONFIG,
+  GROUP_WITH_PROP_NAME,
   normalizeGroupedBacklinksConfig,
   type GroupedBacklinksConfig,
 } from './config.ts'
@@ -53,6 +54,10 @@ type CandidateRow = BlockRow & {
 interface FieldCandidateRow {
   source_id: string
   source_field: string
+}
+
+type AttributeCandidateRow = BlockRow & {
+  context_id: string
 }
 
 const groupedBacklinksSchema: Schema<GroupedBacklinksResult> = {
@@ -228,6 +233,29 @@ export const SELECT_GROUPED_BACKLINK_FIELD_CANDIDATES_SQL = `
   ORDER BY refs.source_id, refs.source_field
 `
 
+/** Roam-date `addAttributeGroups` equivalent. For each context block C
+ *  that the main candidates query surfaced (i.e. a block any backlink
+ *  references directly or through an ancestor), pull C's `groupWith`
+ *  property values via `block_references.source_field`. The caller
+ *  fans these out: every source whose context chain contained C also
+ *  gets C's groupWith targets as additional group candidates. The
+ *  context block ids ride in via the same JSON-array bind trick as
+ *  `SOURCE_IDS_CTE` so we don't hit the SQLite parameter ceiling. */
+export const SELECT_GROUPED_BACKLINK_ATTRIBUTE_CANDIDATES_SQL = `
+  WITH context_ids(id) AS (SELECT value FROM json_each(?))
+  SELECT DISTINCT
+    refs.source_id AS context_id,
+    ${buildQualifiedBlockColumnsSql('group_block')}
+  FROM context_ids c
+  JOIN block_references refs ON refs.source_id = c.id
+  JOIN blocks group_block ON group_block.id = refs.target_id
+  WHERE refs.workspace_id = ?
+    AND refs.source_field = ?
+    AND refs.target_id != ?
+    AND group_block.deleted = 0
+  ORDER BY refs.source_id, group_block.updated_at DESC, group_block.id
+`
+
 export const groupedBacklinksForBlockQuery = defineQuery<
   {
     workspaceId: string
@@ -292,9 +320,37 @@ export const groupedBacklinksForBlockQuery = defineQuery<
       [sourceIdsJson, workspaceId, id],
     )
 
+    // groupWith expansion (roam-date `addAttributeGroups` parallel). The
+    // distinct set of context blocks the main query found becomes the
+    // input set: for each, look up `block_references` rows with
+    // `source_field='groupWith'` and treat the targets as additional
+    // group candidates for every source whose context chain reached
+    // that context block. Refs invalidation on each context block is
+    // already registered below via `dependOnSourceContextNode`, so a
+    // groupWith property write re-fires the handle for free.
+    const sourcesByContextId = new Map<string, Set<string>>()
+    for (const row of candidateRows) {
+      let sources = sourcesByContextId.get(row.id)
+      if (!sources) {
+        sources = new Set()
+        sourcesByContextId.set(row.id, sources)
+      }
+      sources.add(row.source_id)
+    }
+    const contextIds = Array.from(sourcesByContextId.keys())
+    const attributeCandidateRows = contextIds.length === 0
+      ? []
+      : await ctx.db.getAll<AttributeCandidateRow>(
+        SELECT_GROUPED_BACKLINK_ATTRIBUTE_CANDIDATES_SQL,
+        [JSON.stringify(contextIds), workspaceId, GROUP_WITH_PROP_NAME, id],
+      )
+
     const groupRowsById = new Map<string, BlockRow>()
     for (const row of candidateRows) {
       groupRowsById.set(row.id, row)
+    }
+    for (const row of attributeCandidateRows) {
+      if (!groupRowsById.has(row.id)) groupRowsById.set(row.id, row)
     }
     const groupData = ctx.primeBlocks(asBlockRows(Array.from(groupRowsById.values())))
     for (const group of groupData) dependOnGroupLabel(ctx, group.workspaceId, group.id)
@@ -313,6 +369,19 @@ export const groupedBacklinksForBlockQuery = defineQuery<
         groupLabel: row.source_field,
         kind: 'field',
       })
+    }
+    for (const row of attributeCandidateRows) {
+      const sources = sourcesByContextId.get(row.context_id)
+      if (!sources) continue
+      const groupLabel = labelByGroupId.get(row.id) ?? (row.content.trim() || row.id)
+      for (const sourceId of sources) {
+        candidates.push({
+          sourceId,
+          groupId: row.id,
+          groupLabel,
+          kind: 'attribute',
+        })
+      }
     }
 
     return {
