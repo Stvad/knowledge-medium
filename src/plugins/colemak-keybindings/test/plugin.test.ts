@@ -48,6 +48,7 @@ describe('colemakKeybindingsPlugin', () => {
     expect(boundary).toMatchObject({
       id: COLEMAK_KEYBINDINGS_PLUGIN_ID,
       name: 'Colemak movement keybindings',
+      description: 'Uses Colemak-friendly movement keys for Vim-style navigation, selection, block moves, and date scrub.',
       defaultEnabled: false,
       kind: 'system',
     })

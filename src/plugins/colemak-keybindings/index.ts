@@ -130,7 +130,7 @@ export const colemakMovementKeybindingOverrides: readonly KeybindingOverride[] =
 export const colemakKeybindingsPlugin: AppExtension = systemToggle({
   id: COLEMAK_KEYBINDINGS_PLUGIN_ID,
   name: 'Colemak movement keybindings',
-  description: 'Restores the older Colemak-flavoured movement bindings for Vim-style navigation, selection, block moves, and date scrub.',
+  description: 'Uses Colemak-friendly movement keys for Vim-style navigation, selection, block moves, and date scrub.',
   defaultEnabled: false,
 }).of(
   colemakMovementKeybindingOverrides.map(override =>
