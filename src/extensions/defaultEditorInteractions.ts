@@ -1,5 +1,10 @@
+import type { MouseEvent } from 'react'
 import {
+  blockContentSurfacePropsFacet,
   blockShellDecoratorsFacet,
+  isInteractiveContentEvent,
+  isSelectionClick,
+  type BlockContentSurfaceContribution,
   ShortcutActivationContribution,
   shortcutSurfaceActivationsFacet,
 } from '@/extensions/blockInteraction.js'
@@ -21,12 +26,22 @@ export const codeMirrorEditModeActivation: ShortcutActivationContribution = cont
   }]
 }
 
+export const blockSelectionContentSurfaceBehavior: BlockContentSurfaceContribution = () => ({
+  onMouseDownCapture: (event: MouseEvent) => {
+    if (!isSelectionClick(event) || isInteractiveContentEvent(event)) return
+    event.preventDefault()
+  },
+})
+
 export const defaultEditorInteractionExtension: AppExtension = systemToggle({
   id: 'system:default-editor-interactions',
   name: 'Default editor interactions',
   description: 'Baseline block-interaction handlers (click-to-edit, selection, focus transitions).',
   essential: true,
 }).of([
+  blockContentSurfacePropsFacet.of(blockSelectionContentSurfaceBehavior, {
+    source: 'default-block-selection',
+  }),
   blockShellDecoratorsFacet.of(blockFocusShellDecorator, {
     precedence: 1000,
     source: 'default-block-focus',

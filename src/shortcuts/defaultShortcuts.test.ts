@@ -194,6 +194,14 @@ describe('default CodeMirror shortcuts', () => {
     expect(moveBlockDownAction.defaultBinding?.eventOptions?.preventDefault).toBe(true)
   })
 
+  it('prevents native CodeMirror text selection for block selection expansion shortcuts', () => {
+    const extendSelectionUpAction = findEditModeAction(env.repo, 'edit.cm.extend_selection_up')
+    const extendSelectionDownAction = findEditModeAction(env.repo, 'edit.cm.extend_selection_down')
+
+    expect(extendSelectionUpAction.defaultBinding?.eventOptions?.preventDefault).toBe(true)
+    expect(extendSelectionDownAction.defaultBinding?.eventOptions?.preventDefault).toBe(true)
+  })
+
   it('opens the root preferences block from the global action', async () => {
     const action = findGlobalAction(env.repo, OPEN_PREFERENCES_ACTION_ID)
 

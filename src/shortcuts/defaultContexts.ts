@@ -28,6 +28,13 @@ const isMultiSelectModeDependencies = (deps: unknown): deps is MultiSelectModeDe
   'selectedBlocks' in deps && Array.isArray(deps.selectedBlocks) && (deps.selectedBlocks as unknown[]).every(b => b instanceof Block) &&
   'anchorBlock' in deps && (deps.anchorBlock === null || deps.anchorBlock instanceof Block)
 
+const isMultiSelectRangeExpansionKey = (event: KeyboardEvent): boolean =>
+  event.shiftKey &&
+  !event.ctrlKey &&
+  !event.metaKey &&
+  !event.altKey &&
+  (event.key === 'ArrowUp' || event.key === 'ArrowDown')
+
 export const defaultActionContextConfigs: readonly ActionContextConfig[] = [
   {
     type: ActionContextTypes.GLOBAL,
@@ -61,6 +68,7 @@ export const defaultActionContextConfigs: readonly ActionContextConfig[] = [
     type: ActionContextTypes.MULTI_SELECT_MODE,
     displayName: 'Multi-Select Mode',
     modal: true,
+    eventFilter: isMultiSelectRangeExpansionKey,
     validateDependencies: isMultiSelectModeDependencies,
   },
 ]

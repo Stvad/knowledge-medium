@@ -345,6 +345,9 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       await extendSelectionUp(deps.uiStateBlock, repo),
     defaultBinding: {
       keys: 'Shift+ArrowUp',
+      eventOptions: {
+        preventDefault: true,
+      },
     },
   }
 
@@ -355,6 +358,9 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       await extendSelectionDown(deps.uiStateBlock, repo),
     defaultBinding: {
       keys: 'Shift+ArrowDown',
+      eventOptions: {
+        preventDefault: true,
+      },
     },
   }
 
