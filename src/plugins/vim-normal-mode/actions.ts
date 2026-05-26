@@ -60,7 +60,12 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
 
   const indentBlockAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, indentBlock)
   const outdentBlockAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, outdentBlock)
-  const deleteBlockAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, deleteBlock)
+  const deleteBlockAction = {
+    ...bindBlockActionContext(ActionContextTypes.NORMAL_MODE, deleteBlock),
+    defaultBinding: {
+      keys: ['Delete', 'Backspace', 'd d'],
+    },
+  }
   const togglePropertiesDisplayAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, togglePropertiesDisplay)
   const toggleBlockCollapseAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, toggleBlockCollapse)
   const extendSelectionUpAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, extendSelectionUp)

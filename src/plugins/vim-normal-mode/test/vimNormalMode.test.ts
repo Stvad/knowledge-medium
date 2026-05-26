@@ -20,6 +20,13 @@ describe('vim normal mode actions in the unified action surface', () => {
     expect(actions.find(action => action.id === 'move_up')?.defaultBinding?.keys).toEqual(['ArrowUp', 'h'])
   })
 
+  it('maps vim and keyboard delete bindings to delete block', () => {
+    const actions = getVimNormalModeActions({repo: {} as Repo})
+
+    expect(actions.find(action => action.id === 'delete_block')?.defaultBinding?.keys)
+      .toEqual(['Delete', 'Backspace', 'd d'])
+  })
+
   it('exposes normal-mode actions through the shared actions facet', () => {
     const globalAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
       id: 'global.test',
