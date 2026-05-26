@@ -14,7 +14,18 @@ import { propertySchemasFacet, typesFacet } from '@/data/facets.js'
 import { SWIPE_RIGHT_BLOCK_ACTION_ID } from '@/plugins/swipe-quick-actions'
 import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.js'
 import { getEffectiveActions } from '@/shortcuts/effectiveActions.js'
-import { dailyNotesDataExtension } from '@/plugins/daily-notes'
+import {
+  DATE_SCRUB_CONTEXT,
+  dailyNoteBlockId,
+  dailyNotesDataExtension,
+  getOrCreateDailyNote,
+} from '@/plugins/daily-notes'
+import {
+  endKeyboardScrub,
+  registerScrubHandler,
+  startKeyboardScrubForTarget,
+  type StagedScrubCommit,
+} from '@/plugins/daily-notes/dateScrubGesture.js'
 import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
 import {
   EDIT_MODE_TODO_CYCLE_ACTION_ID,
@@ -68,7 +79,7 @@ describe('srsReschedulingPlugin', () => {
     const runtime = resolveFacetRuntimeSync(srsReschedulingPlugin)
     const actions = runtime.read(actionsFacet)
 
-    expect(actions).toHaveLength(12)
+    expect(actions).toHaveLength(17)
     expect(actions.map(action => action.context)).toEqual([
       ActionContextTypes.NORMAL_MODE,
       ActionContextTypes.NORMAL_MODE,
@@ -80,6 +91,11 @@ describe('srsReschedulingPlugin', () => {
       ActionContextTypes.EDIT_MODE_CM,
       ActionContextTypes.EDIT_MODE_CM,
       ActionContextTypes.EDIT_MODE_CM,
+      DATE_SCRUB_CONTEXT,
+      DATE_SCRUB_CONTEXT,
+      DATE_SCRUB_CONTEXT,
+      DATE_SCRUB_CONTEXT,
+      DATE_SCRUB_CONTEXT,
       ActionContextTypes.NORMAL_MODE,
       ActionContextTypes.NORMAL_MODE,
     ])
@@ -98,8 +114,104 @@ describe('srsReschedulingPlugin', () => {
       Sparkles,
       ClockArrowDown,
     ])
-    expect(actions.slice(10).map(action => action.id)).toEqual(['srs.cut', 'srs.paste'])
-    expect(actions.slice(10).map(action => action.icon)).toEqual([Scissors, ClipboardPaste])
+    expect(actions.slice(10, 15).map(action => action.id)).toEqual([
+      'date-scrub.srs.reschedule.again',
+      'date-scrub.srs.reschedule.hard',
+      'date-scrub.srs.reschedule.good',
+      'date-scrub.srs.reschedule.easy',
+      'date-scrub.srs.reschedule.sooner',
+    ])
+    expect(actions.slice(10, 15).map(action => action.defaultBinding?.keys)).toEqual([
+      'Digit1',
+      'Digit2',
+      'Digit3',
+      'Digit4',
+      'Digit5',
+    ])
+    expect(actions.slice(15).map(action => action.id)).toEqual(['srs.cut', 'srs.paste'])
+    expect(actions.slice(15).map(action => action.icon)).toEqual([Scissors, ClipboardPaste])
+  })
+
+  it('stages SRS reschedules in date scrub without writing until the staged commit runs', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 4, 5))
+    vi.spyOn(Math, 'random').mockReturnValue(0.5)
+
+    const h = await createTestDb()
+    try {
+      const repo = new Repo({
+        db: h.db,
+        cache: new BlockCache(),
+        user: {id: 'user-1'},
+        registerKernelProcessors: false,
+      })
+      repo.setFacetRuntime(resolveFacetRuntimeSync([
+        kernelDataExtension,
+        dailyNotesDataExtension,
+        srsReschedulingPlugin,
+      ]))
+
+      const nextReview = await getOrCreateDailyNote(repo, 'ws-1', '2026-05-01')
+      await repo.tx(tx => tx.create({
+        id: 'srs-block',
+        workspaceId: 'ws-1',
+        parentId: null,
+        orderKey: 'a',
+        content: 'Card',
+        properties: {
+          types: [SRS_SM25_TYPE],
+          [srsIntervalProp.name]: srsIntervalProp.codec.encode(10),
+          [srsFactorProp.name]: srsFactorProp.codec.encode(2),
+          [srsNextReviewDateProp.name]: srsNextReviewDateProp.codec.encode(nextReview.id),
+          [srsReviewCountProp.name]: srsReviewCountProp.codec.encode(3),
+        },
+      }), {scope: ChangeScope.BlockDefault, description: 'seed srs block'})
+
+      const block = repo.block('srs-block')
+      await block.load()
+
+      let staged: StagedScrubCommit | null = null
+      const unregister = registerScrubHandler({
+        start: vi.fn(() => true),
+        update: vi.fn(),
+        end: vi.fn(),
+        stage: vi.fn((_blockId, next) => {
+          staged = next
+          return true
+        }),
+      })
+
+      try {
+        expect(startKeyboardScrubForTarget({block})).toBe(true)
+
+        const runtime = repo.facetRuntime
+        if (!runtime) throw new Error('facet runtime missing')
+        const action = runtime.read(actionsFacet)
+          .find(it => it.id === 'date-scrub.srs.reschedule.good') as
+            ActionConfig<typeof DATE_SCRUB_CONTEXT>
+        expect(action.context).toBe(DATE_SCRUB_CONTEXT)
+
+        await action.handler({block, uiStateBlock: block} as never, {} as KeyboardEvent)
+
+        expect(staged).not.toBeNull()
+        expect(staged!.label).toBe('SRS GOOD')
+        expect(staged!.value).toBe('May 25')
+        expect(staged!.detail).toBe('10d -> 20d')
+        expect(block.get(srsReviewCountProp)).toBe(3)
+        expect(block.get(srsNextReviewDateProp)).toBe(nextReview.id)
+
+        await staged!.commit()
+
+        expect(block.get(srsReviewCountProp)).toBe(4)
+        expect(block.get(srsGradeProp)).toBe(4)
+        expect(block.get(srsNextReviewDateProp)).toBe(dailyNoteBlockId('ws-1', '2026-05-25'))
+      } finally {
+        endKeyboardScrub(false)
+        unregister()
+      }
+    } finally {
+      await h.cleanup()
+    }
   })
 
   it('contributes swipe quick actions and block decoration hook for SRS blocks', () => {

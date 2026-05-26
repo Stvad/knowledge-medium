@@ -284,3 +284,7 @@ export {
   dateScrubActionContext,
   dateScrubActions,
 } from './dateScrubActions.ts'
+export {
+  stageDateScrubCommit,
+  type StagedScrubCommit,
+} from './dateScrubGesture.ts'

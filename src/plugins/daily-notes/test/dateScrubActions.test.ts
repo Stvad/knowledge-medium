@@ -81,7 +81,7 @@ describe('dateScrubActions', () => {
     }))
     expect(dispatch.activate).toHaveBeenCalledWith(
       DATE_SCRUB_CONTEXT,
-      {uiStateBlock},
+      {block, uiStateBlock},
     )
   })
 

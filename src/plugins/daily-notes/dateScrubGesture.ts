@@ -85,12 +85,21 @@ export interface ScrubStartArgs {
   startY: number
 }
 
+export interface StagedScrubCommit {
+  id: string
+  label: string
+  value: string
+  detail?: string
+  commit: () => void | Promise<void>
+}
+
 export interface ScrubHandler {
   /** Returns true if the overlay accepted the scrub (block is
    *  date-shiftable). Returning false makes the gesture revert as if
    *  no activation happened. */
   start: (args: ScrubStartArgs) => boolean
   update: (deltaDays: number, intentCancel: boolean) => void
+  stage?: (blockId: string, commit: StagedScrubCommit) => boolean
   end: (commit: boolean) => void
 }
 
@@ -310,6 +319,11 @@ export const applyKeyboardScrubDelta = (deltaDays: number): void => {
   keyboardScrub.keyDeltaDays = clampDeltaDays(keyboardScrub.keyDeltaDays + deltaDays)
   activeHandler?.update(keyboardScrubTotalDays(keyboardScrub), false)
 }
+
+export const stageDateScrubCommit = (
+  blockId: string,
+  commit: StagedScrubCommit,
+): boolean => activeHandler?.stage?.(blockId, commit) ?? false
 
 const updateKeyboardScrubByWheel = (
   scrub: KeyboardScrub,

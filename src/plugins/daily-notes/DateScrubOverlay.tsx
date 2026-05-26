@@ -29,6 +29,7 @@ import {
 import {
   registerScrubHandler,
   type ScrubStartArgs,
+  type StagedScrubCommit,
 } from './dateScrubGesture.ts'
 
 const formatPretty = (iso: string): string => {
@@ -66,6 +67,7 @@ interface ActiveScrub {
   deltaDays: number
   candidateIso: string
   cancelIntent: boolean
+  stagedCommit?: StagedScrubCommit
   /** False until `getCurrentIso` resolves and `initialIso/candidateIso`
    *  reflect the block's real date. Commit is gated on this — without
    *  it a fast drag-and-release on an SRS card (where the read does a
@@ -160,9 +162,22 @@ export const DateScrubOverlay = () => {
         if (
           deltaDays === current.deltaDays &&
           intentCancel === current.cancelIntent &&
-          candidateIso === current.candidateIso
+          candidateIso === current.candidateIso &&
+          current.stagedCommit === undefined
         ) return
-        writeActive({...current, deltaDays, candidateIso, cancelIntent: intentCancel})
+        writeActive({
+          ...current,
+          deltaDays,
+          candidateIso,
+          cancelIntent: intentCancel,
+          stagedCommit: undefined,
+        })
+      },
+      stage: (blockId: string, stagedCommit: StagedScrubCommit) => {
+        const current = activeRef.current
+        if (!current || current.blockId !== blockId) return false
+        writeActive({...current, stagedCommit})
+        return true
       },
       end: (commit: boolean) => {
         // Snapshot the current scrub first, then clear state, then
@@ -175,6 +190,12 @@ export const DateScrubOverlay = () => {
         writeActive(null)
         if (!current) return
         if (!commit || current.cancelIntent) return
+        if (current.stagedCommit) {
+          void Promise.resolve(current.stagedCommit.commit()).catch(error => {
+            console.error('[date-scrub] staged commit failed', error)
+          })
+          return
+        }
         if (!current.resolved) {
           // The user released before `getCurrentIso` resolved — we
           // don't know the block's real date, so we can't safely
@@ -214,6 +235,23 @@ export const DateScrubOverlay = () => {
     PILL_HALF_WIDTH + 8,
     Math.min(window.innerWidth - PILL_HALF_WIDTH - 8, active.startX),
   )
+  const stagedPreview = active.stagedCommit
+  const label = active.cancelIntent
+    ? 'Release to cancel'
+    : stagedPreview
+      ? stagedPreview.label
+      : active.resolved
+        ? 'Scrub date'
+        : 'Loading current date…'
+  const value = stagedPreview?.value ?? formatPretty(active.candidateIso)
+  const detail = active.cancelIntent
+    ? 'release will cancel'
+    : stagedPreview?.detail ?? (
+      active.resolved
+        ? offsetLabel(active.deltaDays, active.candidateIso)
+        : 'release will cancel'
+    )
+  const valueResolved = active.resolved || stagedPreview !== undefined
 
   return createPortal(
     <div
@@ -229,19 +267,13 @@ export const DateScrubOverlay = () => {
         }`}
       >
         <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-          {active.cancelIntent
-            ? 'Release to cancel'
-            : active.resolved
-              ? 'Scrub date'
-              : 'Loading current date…'}
+          {label}
         </div>
-        <div className={`text-lg font-semibold leading-none ${active.resolved ? '' : 'opacity-60'}`}>
-          {formatPretty(active.candidateIso)}
+        <div className={`text-lg font-semibold leading-none ${valueResolved ? '' : 'opacity-60'}`}>
+          {value}
         </div>
         <div className="text-xs text-muted-foreground">
-          {active.resolved
-            ? offsetLabel(active.deltaDays, active.candidateIso)
-            : 'release will cancel'}
+          {detail}
         </div>
       </div>
     </div>,

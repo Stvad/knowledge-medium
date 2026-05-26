@@ -29,6 +29,7 @@ import {
   type ActionConfig,
   type ActionContextConfig,
   type BaseShortcutDependencies,
+  type BlockShortcutDependencies,
 } from '@/shortcuts/types.js'
 import { Block } from '@/data/block'
 import {
@@ -77,7 +78,8 @@ const enterDateScrubAction: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> 
     // scrub started, no context activation. Silent UX-wise (no overlay
     // flash) which is what we want on non-dated blocks.
     if (!startKeyboardScrubForTarget({block})) return
-    dispatch?.activate(DATE_SCRUB_CONTEXT, {uiStateBlock})
+    const dependencies: BlockShortcutDependencies = {block, uiStateBlock}
+    dispatch?.activate(DATE_SCRUB_CONTEXT, dependencies)
   },
 }
 

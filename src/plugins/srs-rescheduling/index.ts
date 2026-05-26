@@ -6,7 +6,12 @@ import type { Block } from '@/data/block'
 import type { BlockContentSurfaceContribution } from '@/extensions/blockInteraction.js'
 import { blockContentSurfacePropsFacet } from '@/extensions/blockInteraction.js'
 import { ChangeScope, type PropertySchema } from '@/data/api'
-import { getOrCreateDailyNote } from '@/plugins/daily-notes'
+import {
+  DATE_SCRUB_CONTEXT,
+  blockDateAdapterFacet,
+  getOrCreateDailyNote,
+  stageDateScrubCommit,
+} from '@/plugins/daily-notes'
 import { getBlockTypes } from '@/data/properties.js'
 import { formatIsoDate } from '@/utils/dailyPage'
 import { createElement } from 'react'
@@ -16,6 +21,7 @@ import {
   ActionConfig,
   ActionContextTypes,
   ActionIcon,
+  BaseShortcutDependencies,
   BlockShortcutDependencies,
 } from '@/shortcuts/types.js'
 import {
@@ -47,7 +53,6 @@ import {
 import { srsBlockDateAdapter } from './srsBlockDateAdapter.ts'
 import { srsRescheduleDecorator } from './rescheduleDecorator.ts'
 import { srsSwipeRightDecorator, srsTodoCycleDecorators } from './swipeRightDecorator.ts'
-import { blockDateAdapterFacet } from '@/plugins/daily-notes'
 import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
 
 const shortcutKeysForSignal = (signal: SrsSignal): string[] => {
@@ -125,10 +130,20 @@ export interface RescheduleResult {
   previousReviewCount: number
 }
 
-export const rescheduleBlock = async (
+export interface SrsReschedulePlan extends RescheduleResult {
+  workspaceId: string
+  newFactor: number
+  grade: number
+  nextReviewIso: string
+  reviewedIso: string
+  nextReviewCount: number
+  history: readonly SrsReviewSnapshot[]
+}
+
+export const planSrsReschedule = async (
   block: Block,
   signal: SrsSignal,
-): Promise<RescheduleResult | null> => {
+): Promise<SrsReschedulePlan | null> => {
   if (block.repo.isReadOnly) return null
 
   const data = block.peek() ?? await block.load()
@@ -144,23 +159,46 @@ export const rescheduleBlock = async (
   const history = readProperty(sourceProperties, srsSnapshotHistoryProp, [])
   const grade = gradeForSignal(signal)
   const scheduled = scheduleSrsProperties({interval, factor}, signal, {now})
+  const nextReviewCount = reviewCount + 1
+
+  return {
+    signal,
+    workspaceId: data.workspaceId,
+    previousInterval: interval,
+    newInterval: scheduled.interval,
+    newFactor: scheduled.factor,
+    nextReviewDate: scheduled.nextReviewDate,
+    previousReviewCount: reviewCount,
+    grade,
+    nextReviewIso: formatIsoDate(scheduled.nextReviewDate),
+    reviewedIso: formatIsoDate(now),
+    nextReviewCount,
+    history,
+  }
+}
+
+export const applySrsReschedulePlan = async (
+  block: Block,
+  plan: SrsReschedulePlan,
+): Promise<boolean> => {
+  if (block.repo.isReadOnly) return false
+
   const nextReviewDaily = await getOrCreateDailyNote(
     block.repo,
-    data.workspaceId,
-    formatIsoDate(scheduled.nextReviewDate),
+    plan.workspaceId,
+    plan.nextReviewIso,
   )
   const reviewedDaily = await getOrCreateDailyNote(
     block.repo,
-    data.workspaceId,
-    formatIsoDate(now),
+    plan.workspaceId,
+    plan.reviewedIso,
   )
-  const nextReviewCount = reviewCount + 1
   const snapshot: SrsReviewSnapshot = {
     reviewedAt: reviewedDaily.id,
-    grade,
-    interval: scheduled.interval,
-    factor: scheduled.factor,
-    reviewCount: nextReviewCount,
+    grade: plan.grade,
+    interval: plan.newInterval,
+    factor: plan.newFactor,
+    reviewCount: plan.nextReviewCount,
   }
   const typeSnapshot = block.repo.snapshotTypeRegistries()
 
@@ -176,25 +214,31 @@ export const rescheduleBlock = async (
     await tx.update(block.id, {
       properties: {
         ...row.properties,
-        [srsIntervalProp.name]: srsIntervalProp.codec.encode(scheduled.interval),
-        [srsFactorProp.name]: srsFactorProp.codec.encode(scheduled.factor),
+        [srsIntervalProp.name]: srsIntervalProp.codec.encode(plan.newInterval),
+        [srsFactorProp.name]: srsFactorProp.codec.encode(plan.newFactor),
         [srsNextReviewDateProp.name]: srsNextReviewDateProp.codec.encode(nextReviewDaily.id),
-        [srsReviewCountProp.name]: srsReviewCountProp.codec.encode(nextReviewCount),
-        [srsGradeProp.name]: srsGradeProp.codec.encode(grade),
-        [srsSnapshotHistoryProp.name]: srsSnapshotHistoryProp.codec.encode([...history, snapshot]),
+        [srsReviewCountProp.name]: srsReviewCountProp.codec.encode(plan.nextReviewCount),
+        [srsGradeProp.name]: srsGradeProp.codec.encode(plan.grade),
+        [srsSnapshotHistoryProp.name]: srsSnapshotHistoryProp.codec.encode([
+          ...plan.history,
+          snapshot,
+        ]),
       },
     })
     written = true
   }, {scope: ChangeScope.BlockDefault, description: 'srs reschedule'})
 
-  if (!written) return null
-  return {
-    signal,
-    previousInterval: interval,
-    newInterval: scheduled.interval,
-    nextReviewDate: scheduled.nextReviewDate,
-    previousReviewCount: reviewCount,
-  }
+  return written
+}
+
+export const rescheduleBlock = async (
+  block: Block,
+  signal: SrsSignal,
+): Promise<RescheduleResult | null> => {
+  const plan = await planSrsReschedule(block, signal)
+  if (!plan) return null
+  const written = await applySrsReschedulePlan(block, plan)
+  return written ? plan : null
 }
 
 // Mirrors `scheduleSrsProperties` which uses `Math.ceil(interval)` to
@@ -220,6 +264,18 @@ export const formatRescheduleToastMessage = (result: RescheduleResult): string =
   }
   return `${name} · ${next} (${when})`
 }
+
+const formatRescheduleScrubDetail = (result: RescheduleResult): string => {
+  const next = formatIntervalDays(result.newInterval)
+  if (result.previousReviewCount === 0) return next
+  return `${formatIntervalDays(result.previousInterval)} -> ${next}`
+}
+
+const formatRescheduleScrubPreview = (result: RescheduleResult) => ({
+  label: `SRS ${signalName(result.signal)}`,
+  value: formatShortDate(result.nextReviewDate),
+  detail: formatRescheduleScrubDetail(result),
+})
 
 const runRescheduleWithFeedback = async (
   block: Block,
@@ -262,6 +318,48 @@ const createRescheduleAction = <T extends SrsActionContext>(
     }) as ActionConfig<T>['handler'],
     defaultBinding: {
       keys: shortcutKeysForSignal(signal),
+      eventOptions: {
+        preventDefault: true,
+      },
+    },
+  }
+}
+
+const blockFromDependencies = (deps: BaseShortcutDependencies): Block | null => {
+  const block = (deps as Partial<BlockShortcutDependencies>).block
+  return block && typeof block.id === 'string' ? block : null
+}
+
+const createScrubRescheduleAction = (
+  signal: SrsSignal,
+): ActionConfig<typeof DATE_SCRUB_CONTEXT> => {
+  const name = signalName(signal)
+  const id = `date-scrub.srs.reschedule.${name.toLowerCase()}`
+  return {
+    id,
+    description: `SRS: ${name} (Date Scrub)`,
+    context: DATE_SCRUB_CONTEXT,
+    icon: iconForSignal(signal),
+    canRun: (deps: BaseShortcutDependencies) => {
+      const block = blockFromDependencies(deps)
+      const data = block?.peek()
+      return !!data && getBlockTypes(data).includes(SRS_SM25_TYPE)
+    },
+    handler: async (deps: BaseShortcutDependencies) => {
+      const block = blockFromDependencies(deps)
+      if (!block) return
+      const plan = await planSrsReschedule(block, signal)
+      if (!plan) return
+      stageDateScrubCommit(block.id, {
+        id,
+        ...formatRescheduleScrubPreview(plan),
+        commit: async () => {
+          await applySrsReschedulePlan(block, plan)
+        },
+      })
+    },
+    defaultBinding: {
+      keys: `Digit${signal}`,
       eventOptions: {
         preventDefault: true,
       },
@@ -315,6 +413,7 @@ export const srsReschedulingActions: readonly ActionConfig[] = [
     idPrefix: 'edit.cm.',
     descriptionSuffix: ' (Edit Mode)',
   })),
+  ...srsSignals.map(signal => createScrubRescheduleAction(signal)),
   srsCutAction,
   srsPasteAction,
 ]
