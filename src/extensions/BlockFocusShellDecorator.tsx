@@ -7,7 +7,7 @@ import type {
   BlockShellState,
 } from '@/extensions/blockInteraction.js'
 
-const FOCUSED_BLOCK_CLASS = '[&>.block-body>div:first-child]:bg-muted/95'
+const FOCUSED_BLOCK_CLASS = '[&>.block-body>div:first-child]:bg-accent/40'
 
 const mergeClassName = (...parts: Array<string | undefined>): string | undefined => {
   const className = parts.filter(Boolean).join(' ')
@@ -31,7 +31,7 @@ export function BlockFocusShellDecorator({
   const inEditMode = useInEditMode(block.id)
   // Gate the highlight on "this surface owns keystrokes": when the
   // user crosses panels (j/l in spatial-nav, or a click), only the
-  // focused block in the *active* panel shows the bg-muted/95
+  // focused block in the *active* panel shows the bg-accent/40
   // class. The inactive panel still has its `focusedBlockId` set —
   // which we need so the highlight reappears when the user comes
   // back via h/k/j/l — but suppressing the visual until then makes

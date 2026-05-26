@@ -271,7 +271,7 @@
 
   /* Soft background fade for selection (multi-select) and keyboard
      focus. Without this, `bg-accent/80` (toggled on `.tm-block` by
-     `useIsSelected`) and `bg-muted/95` (toggled on the focused block's
+     `useIsSelected`) and `bg-accent/40` (toggled on the focused block's
      content row by `BlockFocusShellDecorator`) snap on/off the moment
      the user moves selection or focus — visually noisy on rapid j/k
      stepping. The same selectors that receive those classes are the

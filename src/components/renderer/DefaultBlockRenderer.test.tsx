@@ -223,7 +223,7 @@ describe('DefaultBlockRenderer paste handling', () => {
     renderBlock()
 
     const shell = document.querySelector<HTMLElement>('[data-block-id="block-1"][data-editing="false"]')
-    expect(shell?.className).toContain('bg-muted/95')
+    expect(shell?.className).toContain('bg-accent/40')
   })
 
   it('restores DOM focus to a focused normal-mode block shell after remount', async () => {
