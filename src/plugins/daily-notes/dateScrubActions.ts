@@ -47,10 +47,12 @@ export const DATE_SCRUB_DAY_BACKWARD_ACTION_ID = 'date-scrub.day-backward'
 export const DATE_SCRUB_WEEK_FORWARD_ACTION_ID = 'date-scrub.week-forward'
 export const DATE_SCRUB_WEEK_BACKWARD_ACTION_ID = 'date-scrub.week-backward'
 
-/** 200ms matches Apple's standard long-press threshold; short enough to
- *  feel responsive, long enough that a quick `s` tap doesn't trigger
- *  scrub on blocks where the user just wanted to dismiss focus. */
-const HOLD_THRESHOLD_MS = 200
+/** Long enough that a quick `s` tap doesn't trigger scrub on blocks the
+ *  user just wanted to focus, short enough to feel immediate when
+ *  intentionally holding. 200ms (the Apple long-press standard) felt
+ *  sluggish in practice; 100ms is comfortably under the perception
+ *  threshold while still distinguishable from a tap. */
+const HOLD_THRESHOLD_MS = 100
 
 const isDateScrubDependencies = (deps: unknown): deps is BaseShortcutDependencies =>
   typeof deps === 'object' &&

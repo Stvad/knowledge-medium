@@ -349,7 +349,6 @@ const installHoldBinding = (config: HoldBindingInstall): (() => void) => {
 
   const fire = (originalEvent: KeyboardEvent): void => {
     const deps = activeRef.current.get(action.context)
-    // Context may have deactivated between keydown and timer fire.
     if (!deps) return
 
     try {
@@ -363,8 +362,6 @@ const installHoldBinding = (config: HoldBindingInstall): (() => void) => {
 
   const onKeydown = (rawEvent: Event): void => {
     const event = withRecoveredLetterKey(rawEvent as KeyboardEvent)
-    // OS-repeat events while the key is still held: suppress the input
-    // event but don't re-arm.
     if (event.repeat) {
       if (pending) applyEventOptions(event, action, binding, contextConfigsByTypeRef.current)
       return

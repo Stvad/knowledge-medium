@@ -782,6 +782,100 @@ describe('HotkeyReconciler', () => {
         }
       })
 
+      it('hold-fired modal context shadows an underlying context binding on the next keydown', () => {
+        vi.useFakeTimers()
+        try {
+          const baseHandler = vi.fn()
+          const modalHandler = vi.fn()
+          const enterAction = buildAction({
+            id: 'test.hold-shadow-enter',
+            handler: (_deps, _trigger, dispatch) => {
+              dispatch?.activate(MODAL_CONTEXT, mockDeps)
+            },
+            defaultBinding: {keys: 's', phase: 'hold', holdMs: 100},
+          })
+          // Same key 'h' bound in both contexts. With modal shadowing
+          // the underlying TEST_CONTEXT binding should NOT fire while
+          // MODAL_CONTEXT is active.
+          const baseAction = buildAction({
+            id: 'test.base-h',
+            context: TEST_CONTEXT,
+            handler: baseHandler,
+            defaultBinding: {keys: 'h'},
+          })
+          const modalAction = buildAction({
+            id: 'test.modal-h',
+            context: MODAL_CONTEXT,
+            handler: modalHandler,
+            defaultBinding: {keys: 'h'},
+          })
+
+          render(
+            <Harness
+              actions={[enterAction, baseAction, modalAction]}
+              contexts={[testContextConfig, modalContextConfig]}
+            >
+              <Activator context={TEST_CONTEXT}/>
+            </Harness>,
+          )
+
+          act(() => dispatchKeydown('s'))
+          act(() => vi.advanceTimersByTime(100))
+
+          act(() => dispatchKeydown('h'))
+          expect(baseHandler).not.toHaveBeenCalled()
+          expect(modalHandler).toHaveBeenCalledTimes(1)
+        } finally {
+          vi.useRealTimers()
+        }
+      })
+
+      it('hold-fired modal shadowing works with real timers and no extra act wrapping around the keydown', async () => {
+        const baseHandler = vi.fn()
+        const modalHandler = vi.fn()
+        const enterAction = buildAction({
+          id: 'test.hold-real-enter',
+          handler: (_deps, _trigger, dispatch) => {
+            dispatch?.activate(MODAL_CONTEXT, mockDeps)
+          },
+          defaultBinding: {keys: 's', phase: 'hold', holdMs: 20},
+        })
+        const baseAction = buildAction({
+          id: 'test.real-base-h',
+          context: TEST_CONTEXT,
+          handler: baseHandler,
+          defaultBinding: {keys: 'h'},
+        })
+        const modalAction = buildAction({
+          id: 'test.real-modal-h',
+          context: MODAL_CONTEXT,
+          handler: modalHandler,
+          defaultBinding: {keys: 'h'},
+        })
+
+        render(
+          <Harness
+            actions={[enterAction, baseAction, modalAction]}
+            contexts={[testContextConfig, modalContextConfig]}
+          >
+            <Activator context={TEST_CONTEXT}/>
+          </Harness>,
+        )
+
+        // Real-time hold: dispatch s, wait past holdMs, then dispatch h
+        // WITHOUT wrapping the h in another act(). Mirrors the browser
+        // path where the user's next keypress arrives between React's
+        // commit and useEffect flushing.
+        dispatchKeydown('s')
+        await new Promise(r => setTimeout(r, 80))
+        dispatchKeydown('h')
+        // Allow any pending React work to settle, then assert.
+        await new Promise(r => setTimeout(r, 50))
+
+        expect(baseHandler).not.toHaveBeenCalled()
+        expect(modalHandler).toHaveBeenCalledTimes(1)
+      })
+
       it('skips sequence-chord hold bindings (warned at install)', () => {
         vi.useFakeTimers()
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
