@@ -19,7 +19,7 @@
 
 import type { AppEffect } from '@/extensions/core.js'
 import {
-  BUILTIN_THEMES,
+  FALLBACK_THEME,
   setThemeRegistry,
   themesFacet,
   type ThemeContribution,
@@ -55,10 +55,15 @@ export const themeStyleSyncEffect: AppEffect = {
     const apply = (): void => {
       const contributions = runtime.read(themesFacet)
       styleEl.textContent = buildThemeStylesheet(contributions)
-      setThemeRegistry([
-        ...BUILTIN_THEMES,
-        ...contributions.map(toDefinition),
-      ])
+      // Facet contributions are authoritative; the cycle order is
+      // simply their order. If no plugin contributed, fall back to
+      // the bootstrap sentinel so toggleTheme still has somewhere to
+      // land (a one-element cycle behaves as a no-op, which is what
+      // we want when nobody has defined any themes).
+      const definitions: readonly ThemeDefinition[] = contributions.length === 0
+        ? [FALLBACK_THEME]
+        : contributions.map(toDefinition)
+      setThemeRegistry(definitions)
     }
     apply()
 
@@ -67,7 +72,7 @@ export const themeStyleSyncEffect: AppEffect = {
     return () => {
       unsubscribe()
       styleEl.remove()
-      setThemeRegistry(BUILTIN_THEMES)
+      setThemeRegistry([FALLBACK_THEME])
     }
   },
 }

@@ -70,99 +70,108 @@
 }
 
 /*
-  Themes are selected by `data-theme` on the document root. `:root` carries
-  the light palette as the no-attribute default so the page renders sensibly
-  even if the pre-paint script in index.html never runs. Each named theme
-  block then fully overrides the tokens it cares about. Add new themes by
-  appending another `[data-theme="<id>"]` block here and a registry entry
-  in src/plugins/theme-toggle/theme.ts.
+  Themes are selected by `data-theme` on the document root. The full
+  set of palettes lives in
+  src/plugins/default-themes/themes.ts; they're contributed through
+  `themesFacet` and injected as `[data-theme="<id>"] { ... }` rules
+  by the theme-toggle style-sync effect at runtime.
+
+  The `:root` block here is intentionally a duplicate of the default
+  (sunset-light) palette — it's the *first-paint fallback* so the
+  page isn't blank in the brief window between pre-paint and the
+  style-sync effect mounting. The dark-prefer variant has its own
+  early-paint block below. Adding or tweaking a theme is a one-spot
+  edit in themes.ts; this file only needs to change if you want to
+  shift the bootstrap default itself.
 */
 @layer base {
-  :root,
-  [data-theme="light"] {
-    --background: 0 0% 100%;
-    --foreground: 0 0% 3.9%;
+  :root {
+    --background: 30 40% 99%;
+    --foreground: 20 30% 12%;
 
     --card: 0 0% 100%;
-    --card-foreground: 0 0% 3.9%;
+    --card-foreground: 20 30% 12%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 0 0% 3.9%;
+    --popover-foreground: 20 30% 12%;
 
-    --primary: 0 0% 9%;
-    --primary-foreground: 0 0% 98%;
+    --primary: 14 90% 53%;
+    --primary-foreground: 30 40% 99%;
 
-    --secondary: 0 0% 96.1%;
-    --secondary-foreground: 0 0% 9%;
+    --secondary: 20 60% 95%;
+    --secondary-foreground: 14 70% 30%;
 
-    --muted: 0 0% 96.1%;
-    --muted-foreground: 0 0% 45.1%;
+    --muted: 20 25% 95%;
+    --muted-foreground: 20 12% 42%;
 
-    --accent: 0 0% 96.1%;
-    --accent-foreground: 0 0% 9%;
+    --accent: 340 80% 92%;
+    --accent-foreground: 340 70% 30%;
 
-    --destructive: 0 84.2% 60.2%;
+    --destructive: 0 84% 55%;
     --destructive-foreground: 0 0% 98%;
 
-    --border: 0 0% 89.8%;
-    --input: 0 0% 89.8%;
-    --ring: 0 0% 3.9%;
+    --border: 20 25% 88%;
+    --input: 20 25% 86%;
+    --ring: 14 90% 53%;
 
-    --link: 217 91% 60%;
-    --wikilink: 271 81% 56%;
-    --code: 220 14% 96%;
+    --link: 14 90% 53%;
+    --wikilink: 330 75% 50%;
+    --code: 20 30% 95%;
 
-    --radius: 0.5rem;
+    --radius: 0.65rem;
 
-    --chart-1: 12 76% 61%;
-
-    --chart-2: 173 58% 39%;
-
-    --chart-3: 197 37% 24%;
-
-    --chart-4: 43 74% 66%;
-
-    --chart-5: 27 87% 67%;
+    --chart-1: 14 90% 53%;
+    --chart-2: 340 80% 60%;
+    --chart-3: 35 90% 55%;
+    --chart-4: 280 60% 60%;
+    --chart-5: 180 60% 45%;
   }
 
-  [data-theme="dark"] {
-    --background: 0 0% 3.9%;
-    --foreground: 0 0% 98%;
+  /* First-paint fallback for users whose system preference is dark.
+     The pre-paint script sets `data-theme="sunset-dark"` in that
+     case; this block matches so the page paints with a dark palette
+     immediately rather than flashing the :root light values. The
+     authoritative sunset-dark palette is in default-themes/themes.ts;
+     keep this block in sync (or accept a tolerable flash if you'd
+     rather not duplicate). */
+  [data-theme="sunset-dark"] {
+    --background: 20 30% 7%;
+    --foreground: 30 20% 95%;
 
-    --card: 0 0% 3.9%;
-    --card-foreground: 0 0% 98%;
+    --card: 20 30% 9%;
+    --card-foreground: 30 20% 95%;
 
-    --popover: 0 0% 3.9%;
-    --popover-foreground: 0 0% 98%;
+    --popover: 20 30% 9%;
+    --popover-foreground: 30 20% 95%;
 
-    --primary: 0 0% 98%;
-    --primary-foreground: 0 0% 9%;
+    --primary: 14 90% 60%;
+    --primary-foreground: 20 30% 7%;
 
-    --secondary: 0 0% 14.9%;
-    --secondary-foreground: 0 0% 98%;
+    --secondary: 20 30% 16%;
+    --secondary-foreground: 20 60% 92%;
 
-    --muted: 0 0% 14.9%;
-    --muted-foreground: 0 0% 63.9%;
+    --muted: 20 20% 14%;
+    --muted-foreground: 20 12% 65%;
 
-    --accent: 0 0% 14.9%;
-    --accent-foreground: 0 0% 98%;
+    --accent: 340 50% 25%;
+    --accent-foreground: 340 80% 92%;
 
-    --destructive: 0 62.8% 30.6%;
+    --destructive: 0 62% 45%;
     --destructive-foreground: 0 0% 98%;
 
-    --border: 0 0% 14.9%;
-    --input: 0 0% 14.9%;
-    --ring: 0 0% 83.1%;
+    --border: 20 25% 18%;
+    --input: 20 25% 18%;
+    --ring: 14 90% 60%;
 
-    --link: 217 91% 60%;
-    --wikilink: 270 95% 75%;
-    --code: 216 31% 17%;
+    --link: 14 90% 70%;
+    --wikilink: 330 85% 70%;
+    --code: 20 25% 18%;
 
-    --chart-1: 220 70% 50%;
-    --chart-2: 160 60% 45%;
-    --chart-3: 30 80% 55%;
-    --chart-4: 280 65% 60%;
-    --chart-5: 340 75% 55%;
+    --chart-1: 14 90% 60%;
+    --chart-2: 340 80% 65%;
+    --chart-3: 35 90% 60%;
+    --chart-4: 280 60% 65%;
+    --chart-5: 180 60% 55%;
   }
 }
 

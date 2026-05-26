@@ -15,6 +15,7 @@ import { dailyNotesPlugin } from '@/plugins/daily-notes'
 import { findReplacePlugin } from '@/plugins/find-replace'
 import { quickFindPlugin } from '@/plugins/quick-find'
 import { recentsPlugin } from '@/plugins/recents'
+import { defaultThemesPlugin } from '@/plugins/default-themes'
 import { themeTogglePlugin } from '@/plugins/theme-toggle'
 import { workspaceHeaderPlugin } from '@/plugins/workspace-header'
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
@@ -88,6 +89,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   recentsPlugin({repo}),
   findReplacePlugin,
   themeTogglePlugin,
+  defaultThemesPlugin,
   accountHeaderPlugin,
   plainOutlinerPlugin,
   mobileBottomNavPlugin,

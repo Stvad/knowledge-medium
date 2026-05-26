@@ -6,6 +6,8 @@ import {
 } from '@/extensions/core.js'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
 import {
+  FALLBACK_THEME,
+  setThemeRegistry,
   THEME_STORAGE_KEY,
   themeStyleSyncEffect,
   themeTogglePlugin,
@@ -16,11 +18,21 @@ describe('themeTogglePlugin', () => {
   beforeEach(() => {
     document.documentElement.removeAttribute('data-theme')
     window.localStorage.removeItem(THEME_STORAGE_KEY)
+    // The action exercises whatever the registry currently holds.
+    // Seed it with a two-theme cycle so toggle has somewhere to go;
+    // in real runs the style-sync effect would populate this from
+    // themesFacet contributions (light/dark are contributed by the
+    // default-themes plugin).
+    setThemeRegistry([
+      { id: 'light', label: 'Light', mode: 'light' },
+      { id: 'dark', label: 'Dark', mode: 'dark' },
+    ])
   })
 
   afterEach(() => {
     document.documentElement.removeAttribute('data-theme')
     window.localStorage.removeItem(THEME_STORAGE_KEY)
+    setThemeRegistry([FALLBACK_THEME])
   })
 
   it('contributes the toggle action and the style-sync effect (no header item)', () => {

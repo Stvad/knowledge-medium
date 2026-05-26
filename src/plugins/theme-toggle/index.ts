@@ -8,9 +8,10 @@ import { toggleTheme } from './theme.ts'
 export { ThemeToggle } from './ThemeToggle.tsx'
 export {
   applyTheme,
-  BUILTIN_THEMES,
+  FALLBACK_THEME,
   getCurrentTheme,
   getThemes,
+  setThemeRegistry,
   themesFacet,
   toggleTheme,
   THEME_STORAGE_KEY,

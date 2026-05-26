@@ -5,7 +5,7 @@ import {
   themeStyleSyncEffect,
 } from '../effect.ts'
 import {
-  BUILTIN_THEMES,
+  FALLBACK_THEME,
   getThemes,
   setThemeRegistry,
   themesFacet,
@@ -53,12 +53,12 @@ describe('buildThemeRule', () => {
 
 describe('themeStyleSyncEffect', () => {
   beforeEach(() => {
-    setThemeRegistry(BUILTIN_THEMES)
+    setThemeRegistry([FALLBACK_THEME])
     getManagedStyleEl()?.remove()
   })
 
   afterEach(() => {
-    setThemeRegistry(BUILTIN_THEMES)
+    setThemeRegistry([FALLBACK_THEME])
     getManagedStyleEl()?.remove()
   })
 
@@ -73,11 +73,17 @@ describe('themeStyleSyncEffect', () => {
     expect(styleEl?.textContent).toContain('[data-theme="solarized-dark"]')
     expect(styleEl?.textContent).toContain('--background: 192 100% 11%;')
 
-    expect(getThemes().map((t) => t.id)).toEqual([
-      'light',
-      'dark',
-      'solarized-dark',
-    ])
+    expect(getThemes().map((t) => t.id)).toEqual(['solarized-dark'])
+
+    dispose()
+  })
+
+  it('falls back to the bootstrap sentinel when no themes are contributed', () => {
+    const runtime = resolveFacetRuntimeSync([])
+    const dispose = startEffect(runtime)
+
+    expect(getManagedStyleEl()?.textContent).toBe('')
+    expect(getThemes()).toEqual([FALLBACK_THEME])
 
     dispose()
   })
@@ -86,34 +92,29 @@ describe('themeStyleSyncEffect', () => {
     const runtime = resolveFacetRuntimeSync([])
     const dispose = startEffect(runtime)
 
-    expect(getManagedStyleEl()?.textContent).toBe('')
-    expect(getThemes().map((t) => t.id)).toEqual(['light', 'dark'])
+    expect(getThemes()).toEqual([FALLBACK_THEME])
 
     runtime.setRuntimeContributions(themesFacet, 'runtime-source', [
       SOLARIZED_DARK,
     ])
 
     expect(getManagedStyleEl()?.textContent).toContain('solarized-dark')
-    expect(getThemes().map((t) => t.id)).toEqual([
-      'light',
-      'dark',
-      'solarized-dark',
-    ])
+    expect(getThemes().map((t) => t.id)).toEqual(['solarized-dark'])
 
     dispose()
   })
 
-  it('removes the style element and restores the built-in registry on dispose', () => {
+  it('removes the style element and restores the bootstrap registry on dispose', () => {
     const runtime = resolveFacetRuntimeSync([
       themesFacet.of(SOLARIZED_DARK, { source: 'test-theme' }),
     ])
     const dispose = startEffect(runtime)
     expect(getManagedStyleEl()).not.toBeNull()
-    expect(getThemes()).toHaveLength(3)
+    expect(getThemes()).toHaveLength(1)
 
     dispose()
 
     expect(getManagedStyleEl()).toBeNull()
-    expect(getThemes()).toEqual(BUILTIN_THEMES)
+    expect(getThemes()).toEqual([FALLBACK_THEME])
   })
 })

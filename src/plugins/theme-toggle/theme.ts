@@ -49,19 +49,25 @@ export const themesFacet = defineFacet<ThemeContribution, readonly ThemeContribu
   validate: isThemeContribution,
 })
 
-export const BUILTIN_THEMES: readonly ThemeDefinition[] = [
-  { id: 'light', label: 'Light', mode: 'light' },
-  { id: 'dark', label: 'Dark', mode: 'dark' },
-] as const
+/** Bootstrap sentinel. Used only when the registry is otherwise
+ *  empty (the few hundred ms between module load and the style-sync
+ *  effect mounting). Matches the `:root` palette in src/index.css
+ *  so the visual identity stays consistent during that window. The
+ *  default-themes plugin contributes a `sunset-light` theme of its
+ *  own once it loads; from then on this entry is unreferenced. */
+export const FALLBACK_THEME: ThemeDefinition = {
+  id: 'sunset-light',
+  label: 'Sunset Light',
+  mode: 'light',
+}
 
-// Mutable registry — the cycle order. Built-ins are present from
-// module load; the theme-toggle effect overwrites this on facet
-// changes to fold in plugin contributions. Outside callers should
-// read via `getThemes()`.
-let registry: readonly ThemeDefinition[] = BUILTIN_THEMES
-let registryById = new Map<string, ThemeDefinition>(
-  BUILTIN_THEMES.map((t) => [t.id, t]),
-)
+// Mutable registry — the cycle order. The style-sync effect
+// overwrites this on facet changes to mirror plugin contributions.
+// Outside callers should read via `getThemes()`.
+let registry: readonly ThemeDefinition[] = [FALLBACK_THEME]
+let registryById = new Map<string, ThemeDefinition>([
+  [FALLBACK_THEME.id, FALLBACK_THEME],
+])
 
 export const getThemes = (): readonly ThemeDefinition[] => registry
 
@@ -77,11 +83,14 @@ export const THEME_STORAGE_KEY = 'theme'
 const getDocumentRoot = (): HTMLElement => window.document.documentElement
 
 const resolveTheme = (theme: ThemeDefinition | string): ThemeDefinition =>
-  typeof theme === 'string' ? registryById.get(theme) ?? registry[0] : theme
+  typeof theme === 'string'
+    ? registryById.get(theme) ?? registry[0] ?? FALLBACK_THEME
+    : theme
 
 export const getCurrentTheme = (
   root: HTMLElement = getDocumentRoot(),
-): ThemeDefinition => registryById.get(root.dataset.theme ?? '') ?? registry[0]
+): ThemeDefinition =>
+  registryById.get(root.dataset.theme ?? '') ?? registry[0] ?? FALLBACK_THEME
 
 export const applyTheme = (
   theme: ThemeDefinition | string,
@@ -101,8 +110,13 @@ export const applyTheme = (
 export const toggleTheme = (
   root: HTMLElement = getDocumentRoot(),
 ): ThemeDefinition => {
+  if (registry.length === 0) return applyTheme(FALLBACK_THEME, root)
   const current = getCurrentTheme(root)
   const idx = registry.findIndex((t) => t.id === current.id)
+  // findIndex returns -1 when the current id isn't registered (e.g. a
+  // persisted plugin theme that's no longer loaded). Treat that as
+  // "start from the top" so the first toggle lands on registry[0]
+  // rather than wrapping past the end.
   const next = registry[(idx + 1) % registry.length]
   return applyTheme(next, root)
 }
