@@ -218,8 +218,8 @@ describe('default CodeMirror shortcuts', () => {
     const extendSelectionUpAction = findMultiSelectModeAction(env.repo, 'multi_select.extend_selection_up')
     const extendSelectionDownAction = findMultiSelectModeAction(env.repo, 'multi_select.extend_selection_down')
 
-    expect(extendSelectionUpAction.defaultBinding?.keys).toEqual(['ArrowUp', 'h', 'Shift+ArrowUp'])
-    expect(extendSelectionDownAction.defaultBinding?.keys).toEqual(['ArrowDown', 'k', 'Shift+ArrowDown'])
+    expect(extendSelectionUpAction.defaultBinding?.keys).toEqual(['ArrowUp', 'h', 'Shift+h', 'Shift+ArrowUp'])
+    expect(extendSelectionDownAction.defaultBinding?.keys).toEqual(['ArrowDown', 'k', 'Shift+k', 'Shift+ArrowDown'])
     expect(extendSelectionUpAction.defaultBinding?.eventOptions?.preventDefault).toBe(true)
     expect(extendSelectionDownAction.defaultBinding?.eventOptions?.preventDefault).toBe(true)
   })

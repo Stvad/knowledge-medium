@@ -799,7 +799,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   const extendSelectionUpMultiAction = {
     ...makeMultiSelect(extendSelectionUpAction),
     defaultBinding: {
-      keys: ['ArrowUp', 'h', 'Shift+ArrowUp'],
+      keys: ['ArrowUp', 'h', 'Shift+h', 'Shift+ArrowUp'],
       eventOptions: {
         preventDefault: true,
       },
@@ -808,7 +808,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   const extendSelectionDownMultiAction = {
     ...makeMultiSelect(extendSelectionDownAction),
     defaultBinding: {
-      keys: ['ArrowDown', 'k', 'Shift+ArrowDown'],
+      keys: ['ArrowDown', 'k', 'Shift+k', 'Shift+ArrowDown'],
       eventOptions: {
         preventDefault: true,
       },

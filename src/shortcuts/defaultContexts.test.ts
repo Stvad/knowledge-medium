@@ -22,6 +22,8 @@ describe('default action context configs', () => {
     expect(filter(new KeyboardEvent('keydown', {key: 'ArrowUp', shiftKey: true}))).toBe(true)
     expect(filter(new KeyboardEvent('keydown', {key: 'k'}))).toBe(true)
     expect(filter(new KeyboardEvent('keydown', {key: 'h'}))).toBe(true)
+    expect(filter(new KeyboardEvent('keydown', {key: 'K', shiftKey: true}))).toBe(true)
+    expect(filter(new KeyboardEvent('keydown', {key: 'H', shiftKey: true}))).toBe(true)
     expect(filter(new KeyboardEvent('keydown', {key: 'A', shiftKey: true}))).toBe(false)
     expect(filter(new KeyboardEvent('keydown', {key: 'k', metaKey: true}))).toBe(false)
   })

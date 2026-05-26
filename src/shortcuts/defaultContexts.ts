@@ -31,8 +31,8 @@ const isMultiSelectModeDependencies = (deps: unknown): deps is MultiSelectModeDe
 const isMultiSelectRangeExpansionKey = (event: KeyboardEvent): boolean => {
   if (event.ctrlKey || event.metaKey || event.altKey) return false
   if (event.key === 'ArrowUp' || event.key === 'ArrowDown') return true
-  if (event.shiftKey) return false
-  return event.key === 'h' || event.key === 'k'
+  const key = event.key.toLowerCase()
+  return key === 'h' || key === 'k'
 }
 
 export const defaultActionContextConfigs: readonly ActionContextConfig[] = [
