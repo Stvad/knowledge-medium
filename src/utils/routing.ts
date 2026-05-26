@@ -31,6 +31,38 @@ export type LayoutSlot =
 const flattenSlots = (slots: readonly LayoutSlot[]): string[] =>
   slots.flatMap(slot => slot.kind === 'leaf' ? [slot.blockId] : flattenSlots(slot.children))
 
+const splitHashRouteAndParams = (hash: string | undefined | null) => {
+  const raw = hash ?? ''
+  const trimmed = raw.startsWith('#') ? raw.slice(1) : raw
+  const queryIndex = trimmed.indexOf('?')
+  return {
+    route: queryIndex >= 0 ? trimmed.slice(0, queryIndex) : trimmed,
+    params: new URLSearchParams(queryIndex >= 0 ? trimmed.slice(queryIndex + 1) : ''),
+  }
+}
+
+const buildHashWithParams = (route: string, params: URLSearchParams): string => {
+  const query = params.toString()
+  if (!route && !query) return ''
+  return `#${route}${query ? `?${query}` : ''}`
+}
+
+export const preserveHashQueryParams = (
+  nextHash: string,
+  currentHash: string | undefined | null,
+): string => {
+  const next = splitHashRouteAndParams(nextHash)
+  const current = splitHashRouteAndParams(currentHash)
+  const merged = new URLSearchParams(next.params)
+  const nextKeys = new Set(merged.keys())
+
+  current.params.forEach((value, key) => {
+    if (!nextKeys.has(key)) merged.append(key, value)
+  })
+
+  return buildHashWithParams(next.route, merged)
+}
+
 const splitTopLevel = (input: string, separator: string): string[] => {
   const out: string[] = []
   let depth = 0
@@ -65,8 +97,7 @@ const parseSlot = (raw: string): LayoutSlot | null => {
 
 export const parseLayout = (hash: string | undefined | null): AppLayoutRoute => {
   if (!hash) return {slots: [], blockIds: []}
-  const trimmedWithParams = hash.startsWith('#') ? hash.slice(1) : hash
-  const trimmed = trimmedWithParams.split('?', 1)[0]
+  const trimmed = splitHashRouteAndParams(hash).route
   if (!trimmed) return {slots: [], blockIds: []}
 
   const [workspaceId, ...slotTokens] = splitTopLevel(trimmed, '/')

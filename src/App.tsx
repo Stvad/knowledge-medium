@@ -17,7 +17,12 @@ import {
   listLocalWorkspaces,
   primeLocalWorkspaceAndMember,
 } from '@/data/workspaces.js'
-import { buildLayout, layoutWorkspaceChanged, parseLayout } from '@/utils/routing.js'
+import {
+  buildLayout,
+  layoutWorkspaceChanged,
+  parseLayout,
+  preserveHashQueryParams,
+} from '@/utils/routing.js'
 import { recallRememberedWorkspace, rememberWorkspace } from '@/utils/lastWorkspace.js'
 import { seedTutorial } from '@/initData.js'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage.js'
@@ -140,8 +145,9 @@ const resolveWorkspace = async (
 
 const replaceHash = (hash: string): void => {
   if (typeof window === 'undefined') return
-  if (window.location.hash === hash) return
-  window.history.replaceState(null, '', hash)
+  const nextHash = preserveHashQueryParams(hash, window.location.hash)
+  if (window.location.hash === nextHash) return
+  window.history.replaceState(null, '', nextHash)
 }
 
 // Resolve the static-extension runtime once per (repo, workspace).

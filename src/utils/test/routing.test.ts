@@ -6,6 +6,7 @@ import {
   layoutWorkspaceChanged,
   parseAppHash,
   parseLayout,
+  preserveHashQueryParams,
 } from '@/utils/routing'
 
 describe('parseLayout', () => {
@@ -99,6 +100,26 @@ describe('buildLayout', () => {
         ],
       },
     ])).toBe('#ws-1/block-1/(s:block-2,block-3)')
+  })
+})
+
+describe('preserveHashQueryParams', () => {
+  it('carries bridge pairing params onto a replacement layout hash', () => {
+    expect(
+      preserveHashQueryParams(
+        '#ws-1/block-1',
+        '#?agent-runtime-secret=secret&agent-runtime-open-tokens=1',
+      ),
+    ).toBe('#ws-1/block-1?agent-runtime-secret=secret&agent-runtime-open-tokens=1')
+  })
+
+  it('keeps replacement hash params authoritative when keys overlap', () => {
+    expect(
+      preserveHashQueryParams(
+        '#ws-1/block-1?agent-runtime-secret=next&debug=1',
+        '#old?agent-runtime-secret=old&agent-runtime-open-tokens=1',
+      ),
+    ).toBe('#ws-1/block-1?agent-runtime-secret=next&debug=1&agent-runtime-open-tokens=1')
   })
 })
 

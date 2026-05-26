@@ -14,6 +14,7 @@ import { keyAtEnd, keyBetween, keysBetween } from '@/data/orderKey'
 import {
   buildLayoutFromSlots,
   parseLayout,
+  preserveHashQueryParams,
   type LayoutSlot,
 } from '@/utils/routing'
 import { panelHistory } from '@/utils/panelHistory'
@@ -504,7 +505,7 @@ export const applyCurrentLayoutUrl = async ({
 
   if (route.slots.length === 0) {
     if (currentSlots.length > 0) {
-      replaceHash?.(buildLayoutFromSlots(workspaceId, currentSlots))
+      replaceHash?.(preserveHashQueryParams(buildLayoutFromSlots(workspaceId, currentSlots), hash))
       return {kind: 'normalized'}
     }
     return {kind: 'empty'}
@@ -530,10 +531,10 @@ export interface PanelLayoutProjectionOptions {
 
 const defaultGetHash = (): string => window.location.hash
 const defaultPushHash = (hash: string): void => {
-  window.history.pushState(null, '', hash)
+  window.history.pushState(null, '', preserveHashQueryParams(hash, window.location.hash))
 }
 const defaultReplaceHash = (hash: string): void => {
-  window.history.replaceState(null, '', hash)
+  window.history.replaceState(null, '', preserveHashQueryParams(hash, window.location.hash))
 }
 const defaultSubscribeToUrl = (listener: () => void): Unsubscribe => {
   window.addEventListener('hashchange', listener)

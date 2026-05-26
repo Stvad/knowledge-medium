@@ -196,6 +196,23 @@ describe('applyCurrentLayoutUrl', () => {
     expect(panelBlockIds(await rows())).toEqual(['a', 'b'])
   })
 
+  it('preserves hash query params when normalizing a bare workspace URL', async () => {
+    await createPanelRows(['a', 'b'])
+    let replaced = ''
+
+    const result = await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: layoutSessionBlock(),
+      hash: '#ws-1?agent-runtime-secret=secret&agent-runtime-open-tokens=1',
+      replaceHash: hash => { replaced = hash },
+    })
+
+    expect(result.kind).toBe('normalized')
+    expect(replaced).toBe('#ws-1/a/b?agent-runtime-secret=secret&agent-runtime-open-tokens=1')
+    expect(panelBlockIds(await rows())).toEqual(['a', 'b'])
+  })
+
   it('ignores URLs for another workspace', async () => {
     const result = await applyCurrentLayoutUrl({
       repo: env.repo,
