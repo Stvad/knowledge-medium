@@ -37,7 +37,7 @@ export const quickFindAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
     window.dispatchEvent(new CustomEvent(toggleQuickFindEvent))
   },
   defaultBinding: {
-    keys: ['$mod+p', '$mod+Shift+k'],
+    keys: '$mod+p',
   },
 }
 
