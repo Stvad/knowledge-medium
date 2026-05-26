@@ -1,7 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { actionsFacet, headerItemsFacet } from '@/extensions/core.js'
+import {
+  actionsFacet,
+  appEffectsFacet,
+  headerItemsFacet,
+} from '@/extensions/core.js'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
-import { THEME_STORAGE_KEY, themeTogglePlugin, toggleThemeAction } from '../index.ts'
+import {
+  THEME_STORAGE_KEY,
+  themeStyleSyncEffect,
+  themeTogglePlugin,
+  toggleThemeAction,
+} from '../index.ts'
 
 describe('themeTogglePlugin', () => {
   beforeEach(() => {
@@ -14,10 +23,11 @@ describe('themeTogglePlugin', () => {
     window.localStorage.removeItem(THEME_STORAGE_KEY)
   })
 
-  it('contributes the theme toggle action without a header item', () => {
+  it('contributes the toggle action and the style-sync effect (no header item)', () => {
     const runtime = resolveFacetRuntimeSync(themeTogglePlugin)
 
     expect(runtime.read(actionsFacet)).toEqual([toggleThemeAction])
+    expect(runtime.read(appEffectsFacet)).toEqual([themeStyleSyncEffect])
     expect(runtime.read(headerItemsFacet)).toEqual([])
   })
 

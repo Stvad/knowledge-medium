@@ -1,14 +1,19 @@
 /*
   Theme registry. The active theme is written to `data-theme` on the
   document root; the matching `[data-theme="<id>"]` block in src/index.css
-  supplies the palette. A pre-paint script in index.html reads the
-  persisted value before React mounts to avoid a flash of the default
-  palette on reload.
+  (for built-ins) or in a runtime-managed <style> element (for plugin
+  contributions) supplies the palette. A pre-paint script in index.html
+  reads the persisted value before React mounts to avoid a flash of the
+  default palette on reload.
 
-  To add a theme: append a `ThemeDefinition` entry below and a matching
-  `[data-theme="<id>"]` CSS block. The `mode` field drives the sun/moon
-  icon and lets future code pick a default for `prefers-color-scheme`.
+  Plugins register themes via `themesFacet.of(...)` — see
+  `ThemeContribution` below. The theme-toggle plugin's effect mirrors
+  those contributions into a managed <style> block and folds them into
+  the cycle order so toggleTheme() cycles through them alongside the
+  built-in light/dark.
 */
+
+import { defineFacet } from '@/extensions/facet.js'
 
 export interface ThemeDefinition {
   readonly id: string
@@ -16,25 +21,67 @@ export interface ThemeDefinition {
   readonly mode: 'light' | 'dark'
 }
 
-export const themes: readonly ThemeDefinition[] = [
+/** A plugin-contributed theme. `tokens` maps CSS variable names (no
+ *  `--` prefix) to HSL value strings, e.g. `{ background: '249 22% 12%',
+ *  foreground: '245 50% 91%', ... }`. The full set of recommended
+ *  tokens lives in src/index.css; omitting one leaves it inheriting the
+ *  `:root` (light) default for that token, which can produce
+ *  half-light/half-dark palettes — pass a complete set to avoid
+ *  surprises. */
+export interface ThemeContribution extends ThemeDefinition {
+  readonly tokens: Readonly<Record<string, string>>
+}
+
+const isThemeContribution = (value: unknown): value is ThemeContribution => {
+  if (!value || typeof value !== 'object') return false
+  const v = value as Partial<ThemeContribution>
+  return (
+    typeof v.id === 'string' &&
+    typeof v.label === 'string' &&
+    (v.mode === 'light' || v.mode === 'dark') &&
+    !!v.tokens &&
+    typeof v.tokens === 'object'
+  )
+}
+
+export const themesFacet = defineFacet<ThemeContribution, readonly ThemeContribution[]>({
+  id: 'theme-toggle.themes',
+  validate: isThemeContribution,
+})
+
+export const BUILTIN_THEMES: readonly ThemeDefinition[] = [
   { id: 'light', label: 'Light', mode: 'light' },
   { id: 'dark', label: 'Dark', mode: 'dark' },
 ] as const
 
-export const THEME_STORAGE_KEY = 'theme'
-
-const themesById: ReadonlyMap<string, ThemeDefinition> = new Map(
-  themes.map((theme) => [theme.id, theme]),
+// Mutable registry — the cycle order. Built-ins are present from
+// module load; the theme-toggle effect overwrites this on facet
+// changes to fold in plugin contributions. Outside callers should
+// read via `getThemes()`.
+let registry: readonly ThemeDefinition[] = BUILTIN_THEMES
+let registryById = new Map<string, ThemeDefinition>(
+  BUILTIN_THEMES.map((t) => [t.id, t]),
 )
+
+export const getThemes = (): readonly ThemeDefinition[] => registry
+
+/** Used by the theme-toggle effect. Plugins should not call this
+ *  directly — contribute via `themesFacet.of(...)` instead. */
+export const setThemeRegistry = (next: readonly ThemeDefinition[]): void => {
+  registry = next
+  registryById = new Map(next.map((t) => [t.id, t]))
+}
+
+export const THEME_STORAGE_KEY = 'theme'
 
 const getDocumentRoot = (): HTMLElement => window.document.documentElement
 
 const resolveTheme = (theme: ThemeDefinition | string): ThemeDefinition =>
-  typeof theme === 'string' ? themesById.get(theme) ?? themes[0] : theme
+  typeof theme === 'string' ? registryById.get(theme) ?? registry[0] : theme
 
 export const getCurrentTheme = (
   root: HTMLElement = getDocumentRoot(),
-): ThemeDefinition => themesById.get(root.dataset.theme ?? '') ?? themes[0]
+): ThemeDefinition => registryById.get(root.dataset.theme ?? '') ?? registry[0]
 
 export const applyTheme = (
   theme: ThemeDefinition | string,
@@ -55,7 +102,7 @@ export const toggleTheme = (
   root: HTMLElement = getDocumentRoot(),
 ): ThemeDefinition => {
   const current = getCurrentTheme(root)
-  const idx = themes.findIndex((theme) => theme.id === current.id)
-  const next = themes[(idx + 1) % themes.length]
+  const idx = registry.findIndex((t) => t.id === current.id)
+  const next = registry[(idx + 1) % registry.length]
   return applyTheme(next, root)
 }
