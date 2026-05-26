@@ -238,6 +238,14 @@ export const BlockEditor = ({
 
   return (
     <CodeMirror
+      // `theme="none"` opts out of @uiw/react-codemirror's bundled
+      // light-mode theme — that theme paints .cm-editor and .cm-content
+      // white, which leaks through every block in any palette other
+      // than plain white. Our own `createMinimalMarkdownConfig` sets
+      // background: transparent so the surrounding block's palette
+      // shows through. Callers can still pass `theme` via the spread
+      // below to force a specific look.
+      theme="none"
       ref={(value) => {
         cm.current = value
         setEditorView(value?.view ?? null)
