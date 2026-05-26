@@ -1042,6 +1042,84 @@
             "chart-5": "14 80% 65%",
           },
         },
+
+        // Solarized — Ethan Schoonover's canonical palette
+        // (https://ethanschoonover.com/solarized/). Backgrounds use the
+        // warm-cream base3 / dark-teal base03; chromatic accents come
+        // from the fixed yellow / orange / red / magenta / violet /
+        // blue / cyan / green wheel. Accent is a soft blue tint so the
+        // focus highlight (bg-accent/40) reads as blue-on-cream rather
+        // than another grey.
+        "solarized-light": {
+          name: "Solarized Light",
+          family: "solarized",
+          mode: "light",
+          radius: 0.5,
+          tokens: {
+            background: "44 87% 94%",
+            foreground: "196 13% 45%",
+            card: "44 87% 94%",
+            "card-foreground": "196 13% 45%",
+            popover: "44 87% 94%",
+            "popover-foreground": "196 13% 45%",
+            primary: "205 69% 49%",
+            "primary-foreground": "44 87% 94%",
+            secondary: "46 42% 88%",
+            "secondary-foreground": "194 14% 40%",
+            muted: "46 42% 88%",
+            "muted-foreground": "180 9% 60%",
+            accent: "205 50% 78%",
+            "accent-foreground": "194 14% 40%",
+            destructive: "1 71% 52%",
+            "destructive-foreground": "44 87% 94%",
+            border: "46 30% 80%",
+            input: "46 30% 80%",
+            ring: "205 69% 49%",
+            link: "205 69% 49%",
+            wikilink: "237 43% 60%",
+            code: "46 42% 88%",
+            "chart-1": "18 80% 44%",
+            "chart-2": "68 100% 30%",
+            "chart-3": "175 59% 40%",
+            "chart-4": "331 64% 52%",
+            "chart-5": "237 43% 60%",
+          },
+        },
+        "solarized-dark": {
+          name: "Solarized Dark",
+          family: "solarized",
+          mode: "dark",
+          radius: 0.5,
+          tokens: {
+            background: "192 100% 11%",
+            foreground: "186 8% 55%",
+            card: "192 100% 11%",
+            "card-foreground": "186 8% 55%",
+            popover: "192 100% 11%",
+            "popover-foreground": "186 8% 55%",
+            primary: "205 69% 49%",
+            "primary-foreground": "192 100% 11%",
+            secondary: "192 81% 14%",
+            "secondary-foreground": "180 9% 60%",
+            muted: "192 81% 14%",
+            "muted-foreground": "194 14% 40%",
+            accent: "200 60% 22%",
+            "accent-foreground": "180 9% 60%",
+            destructive: "1 71% 52%",
+            "destructive-foreground": "44 87% 94%",
+            border: "192 60% 18%",
+            input: "192 60% 18%",
+            ring: "205 75% 55%",
+            link: "205 75% 60%",
+            wikilink: "237 55% 70%",
+            code: "192 81% 14%",
+            "chart-1": "18 80% 50%",
+            "chart-2": "68 80% 45%",
+            "chart-3": "175 59% 50%",
+            "chart-4": "331 64% 60%",
+            "chart-5": "237 55% 65%",
+          },
+        },
       };
 
       // ----- Family helpers -------------------------------------------------
@@ -1051,6 +1129,7 @@
         { id: "ocean", label: "Ocean" },
         { id: "sunset", label: "Sunset" },
         { id: "forest", label: "Forest" },
+        { id: "solarized", label: "Solarized" },
       ];
 
       function presetKey(family, mode) {
