@@ -6,6 +6,7 @@ import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/extensions/facet.js'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
+import { typesProp } from '@/data/properties.js'
 import {
   invalidationRulesFacet,
   propertyEditorOverridesFacet,
@@ -72,6 +73,7 @@ const create = async (args: {
   parentId?: string | null
   orderKey?: string
   references?: BlockReference[]
+  types?: readonly string[]
 }) => {
   await env.repo.tx(async tx => {
     await tx.create({
@@ -82,6 +84,9 @@ const create = async (args: {
       content: args.content ?? args.id,
       references: args.references ?? [],
     })
+    if (args.types && args.types.length > 0) {
+      await tx.setProperty(args.id, typesProp, args.types)
+    }
   }, {scope: ChangeScope.BlockDefault})
 }
 
@@ -851,6 +856,197 @@ describe('groupedBacklinksDataExtension query', () => {
       }).load()
 
       expect(out.groups.map(group => group.groupId)).not.toContain('target')
+    })
+  })
+
+  // Type enrichment: for each distinct context block C the main query
+  // surfaced, contribute the type names of (A) C itself and (B) blocks
+  // C references one hop out. Mirrors the future migration of Roam's
+  // `isa` to typed-block membership: backlinks that share an "is-a"
+  // semantic type — even when no single peer ref unifies them —
+  // accumulate under that type name.
+  describe('type enrichment', () => {
+    it('surfaces a type group from the root context block\'s own types', async () => {
+      // Two backlinks parented by a project-typed page. The page's content
+      // would never group them on its own (root kind is low-priority), but
+      // its `types: ['project']` lifts them into a 'project' group.
+      await create({id: 'target', content: 'Target'})
+      await create({id: 'project-page', content: 'Acme Rollout', types: ['project']})
+      for (const id of ['src-1', 'src-2']) {
+        await create({
+          id,
+          parentId: 'project-page',
+          references: [{id: 'target', alias: 'T'}],
+        })
+      }
+
+      const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+        workspaceId: WS,
+        id: 'target',
+      }).load()
+
+      const projectGroup = out.groups.find(group => group.label === 'project')
+      expect(projectGroup).toBeDefined()
+      expect(projectGroup!.groupId).toBe('type:project')
+      expect(sorted(projectGroup!.sourceIds)).toEqual(['src-1', 'src-2'])
+    })
+
+    it('surfaces an umbrella type group across distinct typed refs', async () => {
+      // alice / bob / carol each have type ['person']. Each is referenced
+      // by exactly one backlink — individual person refs would each be
+      // singletons (below minGroupSize), but 'person' from Path A on the
+      // alice/bob/carol context blocks accumulates all three.
+      await create({id: 'target', content: 'Target'})
+      await create({id: 'alice', content: 'Alice', types: ['person']})
+      await create({id: 'bob', content: 'Bob', types: ['person']})
+      await create({id: 'carol', content: 'Carol', types: ['person']})
+      await create({
+        id: 'src-alice',
+        references: [{id: 'target', alias: 'T'}, {id: 'alice', alias: 'Alice'}],
+      })
+      await create({
+        id: 'src-bob',
+        references: [{id: 'target', alias: 'T'}, {id: 'bob', alias: 'Bob'}],
+      })
+      await create({
+        id: 'src-carol',
+        references: [{id: 'target', alias: 'T'}, {id: 'carol', alias: 'Carol'}],
+      })
+
+      const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+        workspaceId: WS,
+        id: 'target',
+      }).load()
+
+      const personGroup = out.groups.find(group => group.label === 'person')
+      expect(personGroup).toBeDefined()
+      expect(personGroup!.groupId).toBe('type:person')
+      expect(sorted(personGroup!.sourceIds))
+        .toEqual(['src-alice', 'src-bob', 'src-carol'])
+    })
+
+    it('uses types of blocks referenced by context blocks (Path B, one hop out)', async () => {
+      // The context block (an "alice-notes" page) refs alice; alice has
+      // type ['person']. alice itself is NOT a context block — only the
+      // notes page is — so Path A on the notes page yields nothing.
+      // Path B (types of refs from the notes page) is what produces the
+      // 'person' candidate. Three distinct notes/persons keep individual
+      // refs below minGroupSize so 'person' is the only viable group.
+      await create({id: 'target', content: 'Target'})
+      await create({id: 'alice', content: 'Alice', types: ['person']})
+      await create({id: 'bob', content: 'Bob', types: ['person']})
+      await create({id: 'carol', content: 'Carol', types: ['person']})
+      await create({
+        id: 'alice-notes',
+        content: 'Alice notes',
+        references: [{id: 'alice', alias: 'Alice'}],
+      })
+      await create({
+        id: 'bob-notes',
+        content: 'Bob notes',
+        references: [{id: 'bob', alias: 'Bob'}],
+      })
+      await create({
+        id: 'carol-notes',
+        content: 'Carol notes',
+        references: [{id: 'carol', alias: 'Carol'}],
+      })
+      await create({
+        id: 'meeting-alice',
+        content: 'Meeting w/ Alice',
+        references: [{id: 'alice-notes', alias: 'Alice notes'}],
+      })
+      await create({
+        id: 'meeting-bob',
+        content: 'Meeting w/ Bob',
+        references: [{id: 'bob-notes', alias: 'Bob notes'}],
+      })
+      await create({
+        id: 'meeting-carol',
+        content: 'Meeting w/ Carol',
+        references: [{id: 'carol-notes', alias: 'Carol notes'}],
+      })
+      await create({
+        id: 'src-alice',
+        parentId: 'meeting-alice',
+        references: [{id: 'target', alias: 'T'}],
+      })
+      await create({
+        id: 'src-bob',
+        parentId: 'meeting-bob',
+        references: [{id: 'target', alias: 'T'}],
+      })
+      await create({
+        id: 'src-carol',
+        parentId: 'meeting-carol',
+        references: [{id: 'target', alias: 'T'}],
+      })
+
+      const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+        workspaceId: WS,
+        id: 'target',
+      }).load()
+
+      const personGroup = out.groups.find(group => group.label === 'person')
+      expect(personGroup).toBeDefined()
+      expect(personGroup!.groupId).toBe('type:person')
+      expect(sorted(personGroup!.sourceIds))
+        .toEqual(['src-alice', 'src-bob', 'src-carol'])
+    })
+
+    it('respects excludedTags on type labels', async () => {
+      await create({id: 'target', content: 'Target'})
+      await create({id: 'alice', content: 'Alice', types: ['person']})
+      await create({id: 'bob', content: 'Bob', types: ['person']})
+      await create({
+        id: 'src-alice',
+        references: [{id: 'target', alias: 'T'}, {id: 'alice', alias: 'Alice'}],
+      })
+      await create({
+        id: 'src-bob',
+        references: [{id: 'target', alias: 'T'}, {id: 'bob', alias: 'Bob'}],
+      })
+
+      const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+        workspaceId: WS,
+        id: 'target',
+        groupingConfig: {
+          highPriorityTags: [],
+          lowPriorityTags: [],
+          excludedTags: ['person'],
+          excludedPatterns: [],
+        },
+      }).load()
+
+      expect(out.groups.map(group => group.label)).not.toContain('person')
+    })
+
+    it('does not require the typed block itself to be a candidate', async () => {
+      // Sanity: type strings never collide with a block id, so the
+      // self-target guard on block-id-based groups (`groupId === targetId`)
+      // doesn't accidentally drop type candidates even when the target's
+      // own id matches a possible groupId prefix.
+      await create({id: 'target', content: 'Target', types: ['note']})
+      await create({
+        id: 'src-1',
+        references: [{id: 'target', alias: 'T'}],
+      })
+      await create({
+        id: 'src-2',
+        references: [{id: 'target', alias: 'T'}],
+      })
+
+      const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+        workspaceId: WS,
+        id: 'target',
+      }).load()
+
+      // 'target' itself is a context block of its content-backlinks (refs
+      // with source_field=''), and its types should land as a candidate.
+      const noteGroup = out.groups.find(group => group.label === 'note')
+      expect(noteGroup).toBeDefined()
+      expect(noteGroup!.groupId).toBe('type:note')
+      expect(sorted(noteGroup!.sourceIds)).toEqual(['src-1', 'src-2'])
     })
   })
 })

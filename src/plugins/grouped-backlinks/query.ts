@@ -14,12 +14,15 @@ import { resolveTypedBlockIds } from '@/data/internals/kernelQueries.js'
 import { manyAncestorsSql } from '@/data/internals/treeQueries.js'
 import {
   TYPED_BLOCKS_LABEL_CHANNEL,
+  TYPED_BLOCKS_PROPERTY_CHANNEL,
   TYPED_BLOCKS_REFS_OF_CHANNEL,
   TYPED_BLOCKS_STRUCTURE_CHANNEL,
   typedBlocksLabelKey,
+  typedBlocksPropertyKey,
   typedBlocksRefsOfKey,
   typedBlocksStructureKey,
 } from '@/data/internals/kernelInvalidation.js'
+import { typesProp } from '@/data/properties.js'
 import {
   buildGroupedBacklinks,
   type GroupedBacklinkCandidate,
@@ -58,6 +61,11 @@ interface FieldCandidateRow {
 
 type AttributeCandidateRow = BlockRow & {
   context_id: string
+}
+
+interface TypeCandidateRow {
+  context_id: string
+  type_name: string
 }
 
 const groupedBacklinksSchema: Schema<GroupedBacklinksResult> = {
@@ -256,6 +264,35 @@ export const SELECT_GROUPED_BACKLINK_ATTRIBUTE_CANDIDATES_SQL = `
   ORDER BY refs.source_id, group_block.updated_at DESC, group_block.id
 `
 
+/** Type enrichment. For each distinct context block C the main query
+ *  surfaced, contribute the type names of (A) C itself and (B) blocks
+ *  that C references one hop out. The result is keyed by the original
+ *  context_id so the JS side can fan out: every source whose context
+ *  chain reached C also picks up the produced type names as group
+ *  candidates. UNION dedupes across A and B (e.g. when D is reached
+ *  via both paths through different context blocks for the same
+ *  source). The context block ids ride in via the same JSON-array
+ *  bind trick as `SOURCE_IDS_CTE` so we don't hit the SQLite
+ *  parameter ceiling. */
+export const SELECT_GROUPED_BACKLINK_TYPE_CANDIDATES_SQL = `
+  WITH context_ids(id) AS (SELECT value FROM json_each(?))
+  SELECT bt.block_id AS context_id, bt.type AS type_name
+    FROM context_ids c
+    JOIN block_types bt
+      ON bt.block_id = c.id
+     AND bt.workspace_id = ?
+  UNION
+  SELECT refs.source_id AS context_id, bt.type AS type_name
+    FROM context_ids c
+    JOIN block_references refs
+      ON refs.source_id = c.id
+     AND refs.workspace_id = ?
+    JOIN block_types bt
+      ON bt.block_id = refs.target_id
+     AND bt.workspace_id = ?
+  ORDER BY context_id, type_name
+`
+
 export const groupedBacklinksForBlockQuery = defineQuery<
   {
     workspaceId: string
@@ -290,6 +327,20 @@ export const groupedBacklinksForBlockQuery = defineQuery<
       kind: 'plugin',
       channel: TYPED_BLOCKS_STRUCTURE_CHANNEL,
       key: typedBlocksStructureKey(workspaceId, id),
+    })
+
+    // Type-enrichment dep. `types` is a plain string-list property, not a
+    // refList, so it doesn't project into `block_references` — the
+    // refs-of channel on each context block (registered via
+    // `dependOnSourceContextNode` during ancestor resolution) won't see
+    // type changes. Subscribe at the property channel for the workspace
+    // so any `types` write wakes the handle. Coarser than the per-block
+    // refs-of channels but it's the granularity the kernel exposes for
+    // non-refList property changes.
+    ctx.depend({
+      kind: 'plugin',
+      channel: TYPED_BLOCKS_PROPERTY_CHANNEL,
+      key: typedBlocksPropertyKey(workspaceId, typesProp.name),
     })
 
     // Inline-resolve the typed-block-id calls so their deps (typed-blocks
@@ -338,11 +389,23 @@ export const groupedBacklinksForBlockQuery = defineQuery<
       sources.add(row.source_id)
     }
     const contextIds = Array.from(sourcesByContextId.keys())
+    const contextIdsJson = contextIds.length === 0 ? '[]' : JSON.stringify(contextIds)
     const attributeCandidateRows = contextIds.length === 0
       ? []
       : await ctx.db.getAll<AttributeCandidateRow>(
         SELECT_GROUPED_BACKLINK_ATTRIBUTE_CANDIDATES_SQL,
-        [JSON.stringify(contextIds), workspaceId, GROUP_WITH_PROP_NAME, id],
+        [contextIdsJson, workspaceId, GROUP_WITH_PROP_NAME, id],
+      )
+
+    // Type enrichment runs against the same context_ids set: types of
+    // each context block (Path A) UNION types of blocks each context
+    // block references one hop out (Path B). Both paths feed 'type'-kind
+    // candidates that participate in the normal default-priority pool.
+    const typeCandidateRows = contextIds.length === 0
+      ? []
+      : await ctx.db.getAll<TypeCandidateRow>(
+        SELECT_GROUPED_BACKLINK_TYPE_CANDIDATES_SQL,
+        [contextIdsJson, workspaceId, workspaceId, workspaceId],
       )
 
     const groupRowsById = new Map<string, BlockRow>()
@@ -380,6 +443,31 @@ export const groupedBacklinksForBlockQuery = defineQuery<
           groupId: row.id,
           groupLabel,
           kind: 'attribute',
+        })
+      }
+    }
+
+    // Type candidates: groupId namespaces type names (`type:<name>`) so
+    // they never collide with block-id-based groups. Same source can be
+    // reached via Path A and Path B for the same type name — dedup per
+    // (sourceId, typeName) so we don't double-count members and skew
+    // pickLargestGroup. groupId equality alone isn't enough because
+    // CandidateGroup uses a Set on sourceIds, but a candidate already
+    // ingested would still re-trigger label/priority bookkeeping.
+    const emittedTypeCandidates = new Set<string>()
+    for (const row of typeCandidateRows) {
+      const sources = sourcesByContextId.get(row.context_id)
+      if (!sources) continue
+      const groupId = `type:${row.type_name}`
+      for (const sourceId of sources) {
+        const key = `${sourceId} ${groupId}`
+        if (emittedTypeCandidates.has(key)) continue
+        emittedTypeCandidates.add(key)
+        candidates.push({
+          sourceId,
+          groupId,
+          groupLabel: row.type_name,
+          kind: 'type',
         })
       }
     }

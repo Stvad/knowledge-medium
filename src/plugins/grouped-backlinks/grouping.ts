@@ -9,9 +9,12 @@ export interface GroupedBacklinkCandidate {
   groupId: string
   groupLabel: string
   /** `'attribute'` comes from a context block's `groupWith` property
-   *  expansion (roam-date's `addAttributeGroups` equivalent). Treated
-   *  like `'ref'` for priority — participates in the normal pool. */
-  kind: 'ref' | 'root' | 'field' | 'attribute'
+   *  expansion (roam-date's `addAttributeGroups` equivalent). `'type'`
+   *  comes from `types` property enrichment — either the context block's
+   *  own types, or types of blocks the context block references one hop
+   *  out. Both are treated like `'ref'` for priority — they participate
+   *  in the normal pool. */
+  kind: 'ref' | 'root' | 'field' | 'attribute' | 'type'
 }
 
 export interface GroupedBacklinkGroup {
