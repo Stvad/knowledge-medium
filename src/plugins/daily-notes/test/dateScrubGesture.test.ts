@@ -22,8 +22,10 @@ import {
   cancelDateScrubForBlock,
   dateScrubContentSurface,
   DATE_SCRUB_GESTURE_ID,
+  endKeyboardScrub,
   installDateScrubAuxListeners,
   registerScrubHandler,
+  startKeyboardScrubForTarget,
   type ScrubHandler,
 } from '../dateScrubGesture.ts'
 
@@ -40,7 +42,7 @@ const setMobileViewport = (matches: boolean): void => {
   })) as typeof window.matchMedia
 }
 
-describe('date scrub aux listeners (wheel + ctrl/shift release)', () => {
+describe('date scrub aux listeners (wheel feeder + blur cancel)', () => {
   let unregisterHandler: (() => void) | null = null
   let unregisterAux: (() => void) | null = null
   let handler: ScrubHandler
@@ -53,9 +55,7 @@ describe('date scrub aux listeners (wheel + ctrl/shift release)', () => {
       end: vi.fn(),
     }
     unregisterHandler = registerScrubHandler(handler)
-    unregisterAux = installDateScrubAuxListeners(() => ({
-      block: {id: 'dated-block'} as Block,
-    }))
+    unregisterAux = installDateScrubAuxListeners()
   })
 
   afterEach(() => {
@@ -63,90 +63,64 @@ describe('date scrub aux listeners (wheel + ctrl/shift release)', () => {
     unregisterAux = null
     unregisterHandler?.()
     unregisterHandler = null
+    // Module-level scrub state leaks across tests; clear it explicitly.
+    endKeyboardScrub(false)
     document.body.innerHTML = ''
   })
 
-  it('starts a scrub on the first ctrl+shift wheel event', () => {
+  it('ignores wheel events when no scrub is armed', () => {
+    window.dispatchEvent(new WheelEvent('wheel', {
+      deltaMode: 0,
+      deltaX: 0,
+      deltaY: -14,
+      cancelable: true,
+    }))
+
+    expect(handler.start).not.toHaveBeenCalled()
+    expect(handler.update).not.toHaveBeenCalled()
+  })
+
+  it('feeds wheel deltas to an already-armed scrub', () => {
+    startKeyboardScrubForTarget({block: {id: 'dated-block'} as Block})
+    expect(handler.start).toHaveBeenCalledWith(expect.objectContaining({
+      blockId: 'dated-block',
+    }))
+
     const event = new WheelEvent('wheel', {
       deltaMode: 0,
       deltaX: 0,
       deltaY: -14,
-      ctrlKey: true,
-      shiftKey: true,
       cancelable: true,
     })
     const preventDefault = vi.spyOn(event, 'preventDefault')
-
     window.dispatchEvent(event)
 
-    expect(handler.start).toHaveBeenCalledWith(expect.objectContaining({
-      blockId: 'dated-block',
-    }))
     expect(handler.update).toHaveBeenLastCalledWith(1, false)
     expect(preventDefault).toHaveBeenCalled()
   })
 
   it('uses horizontal wheel delta when shift remaps vertical wheel motion', () => {
+    startKeyboardScrubForTarget({block: {id: 'dated-block'} as Block})
+
     const event = new WheelEvent('wheel', {
       deltaMode: 0,
       deltaX: -14,
       deltaY: 0,
-      ctrlKey: true,
-      shiftKey: true,
       cancelable: true,
     })
     const preventDefault = vi.spyOn(event, 'preventDefault')
-
     window.dispatchEvent(event)
 
     expect(handler.update).toHaveBeenLastCalledWith(1, false)
     expect(preventDefault).toHaveBeenCalled()
   })
 
-  it('commits the wheel-driven scrub when Ctrl or Shift releases', () => {
-    window.dispatchEvent(new WheelEvent('wheel', {
-      deltaMode: 0,
-      deltaX: 0,
-      deltaY: -14,
-      ctrlKey: true,
-      shiftKey: true,
-      cancelable: true,
-    }))
-    expect(handler.start).toHaveBeenCalled()
-
-    window.dispatchEvent(new KeyboardEvent('keyup', {
-      key: 'Shift',
-      ctrlKey: true,
-    }))
-
-    expect(handler.end).toHaveBeenCalledWith(true)
-  })
-
-  it('cancels on window blur', () => {
-    window.dispatchEvent(new WheelEvent('wheel', {
-      deltaMode: 0,
-      deltaY: -14,
-      ctrlKey: true,
-      shiftKey: true,
-    }))
+  it('cancels on window blur while armed', () => {
+    startKeyboardScrubForTarget({block: {id: 'dated-block'} as Block})
     expect(handler.start).toHaveBeenCalled()
 
     window.dispatchEvent(new Event('blur'))
     expect(handler.end).toHaveBeenCalledWith(false)
-  })
-
-  it('does not start a wheel scrub without both modifiers', () => {
-    window.dispatchEvent(new WheelEvent('wheel', {
-      deltaY: -14,
-      ctrlKey: true,
-    }))
-    expect(handler.start).not.toHaveBeenCalled()
-
-    window.dispatchEvent(new WheelEvent('wheel', {
-      deltaY: -14,
-      shiftKey: true,
-    }))
-    expect(handler.start).not.toHaveBeenCalled()
   })
 })
 

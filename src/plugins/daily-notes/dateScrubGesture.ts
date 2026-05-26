@@ -1,16 +1,17 @@
 /**
  * Date scrub gestures:
  *   - mobile: two-finger horizontal drag
- *   - desktop trackpad: Ctrl+Shift + vertical wheel / scroll
- *   - desktop keyboard: hold `s` in NORMAL_MODE to enter scrub mode;
- *     arrows / h-k-j-l scrub by day or week; release `s` commits;
- *     Escape cancels. Routed through the action system as
- *     `DATE_SCRUB_CONTEXT` — see `dateScrubActions.ts`.
+ *   - desktop: hold `s` in NORMAL_MODE to enter scrub mode;
+ *     arrows / h-k-j-l scrub by day or week; the wheel also feeds the
+ *     same running scrub while armed; release `s` commits; Escape
+ *     cancels. Routed through the action system as `DATE_SCRUB_CONTEXT`
+ *     — see `dateScrubActions.ts`. Both keyboard and wheel scrub commit
+ *     via the context's `s`-keyup action.
  *
  * Long-press is intentionally NOT used: that gesture belongs to
  * selection / bullet drag (Workflowy convention). The two-finger mobile
- * drag and modifier-gated desktop wheel are rare enough to be
- * intentional and avoid single-finger tap / swipe / scroll conflicts.
+ * drag is rare enough to be intentional and avoid single-finger tap /
+ * swipe / scroll conflicts.
  *
  * Coordination contract:
  *   - The React overlay (`DateScrubOverlay`) registers itself as the
@@ -24,12 +25,7 @@
  *     midpoint stays put doesn't either), we ask the overlay to
  *     start. If it accepts, we cancel the swipe-quick-actions
  *     candidate so the same gesture doesn't also open the swipe menu.
- *   - Either tracked finger lifting ends the mobile scrub. Trackpad
- *     wheel scrub commits when the user releases Ctrl or Shift, which is
- *     the clearest "let go" signal for a modifier-gated stream — kept as
- *     a window listener because the action system has no wheel binding
- *     surface. Keyboard scrub commits via the `DATE_SCRUB_CONTEXT`'s
- *     `s`-keyup action.
+ *   - Either tracked finger lifting ends the mobile scrub.
  */
 import type { TouchEvent } from 'react'
 import {
@@ -137,8 +133,6 @@ export interface KeyboardScrubTarget {
   adapter?: BlockDateAdapter
 }
 
-type KeyboardScrubTargetProvider = () => KeyboardScrubTarget | null
-
 interface KeyboardScrub {
   blockId: string
   keyDeltaDays: number
@@ -211,18 +205,8 @@ const finishKeyboardScrub = (commit: boolean): void => {
 }
 
 /** Exposed to the `DATE_SCRUB_CONTEXT` commit/cancel actions. Idempotent
- *  — calling when no scrub is active is a no-op so the action handlers
- *  and the wheel-listener's keyup branch can both call it safely. */
+ *  — calling when no scrub is active is a no-op. */
 export const endKeyboardScrub = finishKeyboardScrub
-
-const isShiftReleaseEvent = (event: Pick<KeyboardEvent, 'code' | 'key'>): boolean =>
-  event.key === 'Shift' || event.code === 'ShiftLeft' || event.code === 'ShiftRight'
-
-const isControlReleaseEvent = (event: Pick<KeyboardEvent, 'code' | 'key'>): boolean =>
-  event.key === 'Control' || event.code === 'ControlLeft' || event.code === 'ControlRight'
-
-const isCtrlShiftReleaseEvent = (event: Pick<KeyboardEvent, 'code' | 'key'>): boolean =>
-  isShiftReleaseEvent(event) || isControlReleaseEvent(event)
 
 const normalizeWheelDelta = (
   event: Pick<globalThis.WheelEvent, 'deltaMode' | 'deltaX' | 'deltaY'>,
@@ -340,47 +324,30 @@ const updateKeyboardScrubByWheel = (
 }
 
 /** Window listeners the keyboard-scrub state machine needs that don't
- *  fit the action system: Ctrl+Shift+wheel (no wheel-trigger primitive),
- *  Ctrl/Shift keyup to commit a wheel-driven scrub (its activation came
- *  from a non-key gesture so its commit can't be a keyup action), and
- *  window blur to cancel.
+ *  fit the action system: wheel events as a feeder while a scrub is
+ *  already armed (no wheel-trigger primitive on the action substrate),
+ *  and window blur to cancel.
  *
- *  Keyboard-driven activation, movement, commit, and cancel are all
- *  routed through `DATE_SCRUB_CONTEXT` actions (see dateScrubActions.ts).
- *  Hold-`s` is the new entry trigger; this listener pair only handles
- *  the trackpad / wheel path. */
-export const installDateScrubAuxListeners = (
-  getTarget: KeyboardScrubTargetProvider,
-): (() => void) => {
+ *  Activation, movement, commit, and cancel are all routed through
+ *  `DATE_SCRUB_CONTEXT` actions (see dateScrubActions.ts). The wheel
+ *  here is purely a feeder — it never starts a scrub on its own, only
+ *  contributes deltas while one is armed via hold-`s`. */
+export const installDateScrubAuxListeners = (): (() => void) => {
   if (typeof window === 'undefined') return () => undefined
-
-  const handleKeyUp = (event: KeyboardEvent): void => {
-    if (!keyboardScrub || !isCtrlShiftReleaseEvent(event)) return
-    event.preventDefault()
-    event.stopPropagation()
-    finishKeyboardScrub(true)
-  }
 
   const handleBlur = (): void => {
     finishKeyboardScrub(false)
   }
 
   const handleWheel = (event: globalThis.WheelEvent): void => {
-    if (!event.ctrlKey || !event.shiftKey) return
-    const current = keyboardScrub ?? (() => {
-      const target = getTarget()
-      return target ? startKeyboardScrub(target) : null
-    })()
-    if (!current) return
-    updateKeyboardScrubByWheel(current, event)
+    if (!keyboardScrub) return
+    updateKeyboardScrubByWheel(keyboardScrub, event)
   }
 
-  window.addEventListener('keyup', handleKeyUp, true)
   window.addEventListener('blur', handleBlur)
   window.addEventListener('wheel', handleWheel, {capture: true, passive: false})
 
   return () => {
-    window.removeEventListener('keyup', handleKeyUp, true)
     window.removeEventListener('blur', handleBlur)
     window.removeEventListener('wheel', handleWheel, true)
     finishKeyboardScrub(false)
