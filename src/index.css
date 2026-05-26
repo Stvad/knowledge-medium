@@ -37,6 +37,10 @@
   --color-card: hsl(var(--card));
   --color-card-foreground: hsl(var(--card-foreground));
 
+  --color-link: hsl(var(--link));
+  --color-wikilink: hsl(var(--wikilink));
+  --color-code: hsl(var(--code));
+
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 2px);
   --radius-sm: calc(var(--radius) - 4px);
@@ -104,6 +108,10 @@
     --input: 0 0% 89.8%;
     --ring: 0 0% 3.9%;
 
+    --link: 217 91% 60%;
+    --wikilink: 271 81% 56%;
+    --code: 220 14% 96%;
+
     --radius: 0.5rem;
 
     --chart-1: 12 76% 61%;
@@ -145,6 +153,11 @@
     --border: 0 0% 14.9%;
     --input: 0 0% 14.9%;
     --ring: 0 0% 83.1%;
+
+    --link: 217 91% 60%;
+    --wikilink: 270 95% 75%;
+    --code: 217 19% 27%;
+
     --chart-1: 220 70% 50%;
     --chart-2: 160 60% 45%;
     --chart-3: 30 80% 55%;
@@ -200,7 +213,7 @@
 */
 @layer base {
   code {
-    @apply bg-gray-100 dark:bg-gray-800 rounded px-1;
+    @apply bg-code rounded px-1;
     max-width: 100%;
     overflow-x: auto;
   }
@@ -211,13 +224,13 @@
   }
 
   a {
-    @apply text-blue-500 underline;
+    @apply text-link underline;
     overflow-wrap: normal;
     word-break: normal;
   }
 
   a.wikilink {
-    @apply text-purple-600 dark:text-purple-400 no-underline;
+    @apply text-wikilink no-underline;
   }
 
   a.wikilink:hover {
