@@ -40,6 +40,8 @@ import {
 } from '@/data/workspaceSchema'
 import {
   ALIAS_BACKFILL_MARKER_KEY,
+  ANALYZE_MARKER_KEY,
+  ANALYZE_REFRESH_INTERVAL_MS,
   BACKFILL_BLOCK_ALIASES_SQL,
   CLIENT_SCHEMA_STATEMENTS,
   CLIENT_SCHEMA_TRIGGER_NAMES,
@@ -47,6 +49,7 @@ import {
   LOCAL_EPHEMERAL_BACKFILL_MARKER_KEY,
   backfillBlockAliasesIfEmpty,
   backfillLocalEphemeralUploadsIfPending,
+  runAnalyzeIfDue,
 } from './clientSchema'
 
 interface TestDb {
@@ -1085,5 +1088,68 @@ describe('backfillLocalEphemeralUploadsIfPending', () => {
         .map(r => JSON.parse(r.data).id)
       expect(backfilled).toEqual([])
     })
+  })
+})
+
+describe('runAnalyzeIfDue', () => {
+  // Adapter that records every `execute` call so the assertions can
+  // tell whether ANALYZE actually ran without poking at sqlite_stat1
+  // (which depends on how much data was indexed).
+  const buildRunner = (now: () => number) => {
+    const executed: string[] = []
+    const run = async () => {
+      const ran = await runAnalyzeIfDue({
+        execute: async (sql, params) => {
+          executed.push(sql.trim())
+          if (params && params.length > 0) {
+            h.db.prepare(sql).run(...(params as Array<string | number | null>))
+          } else {
+            h.db.exec(sql)
+          }
+        },
+        getOptional: async <T,>(sql: string) => {
+          const row = h.db.prepare(sql).get() as T | undefined
+          return row ?? null
+        },
+      }, now)
+      return {ran, executed}
+    }
+    return run
+  }
+
+  const recordedAt = (): number | null => {
+    const row = h.db
+      .prepare(`SELECT completed_at FROM client_schema_state WHERE key = '${ANALYZE_MARKER_KEY}'`)
+      .get() as {completed_at: number} | undefined
+    return row?.completed_at ?? null
+  }
+
+  it('runs ANALYZE and records the marker on first call', async () => {
+    expect(recordedAt()).toBeNull()
+    const run = buildRunner(() => 1_700_000_000_000)
+    const {ran, executed} = await run()
+    expect(ran).toBe(true)
+    expect(executed.some(sql => sql === 'ANALYZE')).toBe(true)
+    expect(recordedAt()).toBe(1_700_000_000_000)
+  })
+
+  it('is a no-op within the refresh interval', async () => {
+    await buildRunner(() => 1_700_000_000_000)()
+    // One ms before the interval elapses — still fresh, must skip.
+    const run = buildRunner(() => 1_700_000_000_000 + ANALYZE_REFRESH_INTERVAL_MS - 1)
+    const {ran, executed} = await run()
+    expect(ran).toBe(false)
+    expect(executed).toEqual([])
+    expect(recordedAt()).toBe(1_700_000_000_000)
+  })
+
+  it('refreshes once the interval has elapsed', async () => {
+    await buildRunner(() => 1_700_000_000_000)()
+    const refreshAt = 1_700_000_000_000 + ANALYZE_REFRESH_INTERVAL_MS + 1
+    const run = buildRunner(() => refreshAt)
+    const {ran, executed} = await run()
+    expect(ran).toBe(true)
+    expect(executed.some(sql => sql === 'ANALYZE')).toBe(true)
+    expect(recordedAt()).toBe(refreshAt)
   })
 })

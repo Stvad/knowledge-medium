@@ -49,7 +49,9 @@ import {
   backfillBlockAliasesIfEmpty,
   backfillBlockTypesIfEmpty,
   backfillLocalEphemeralUploadsIfPending,
+  runAnalyzeIfDue,
 } from '@/data/internals/clientSchema'
+import { scheduleIdle } from '@/utils/scheduleIdle.js'
 import {
   applyLocalSchemaContributions,
   resolveLocalSchemaContributions,
@@ -258,4 +260,18 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase, userId: str
     backfillDb,
     resolveLocalSchemaContributions(staticDataExtensions),
   )
+
+  // ANALYZE off the cold-start path. wa-sqlite never auto-populates
+  // `sqlite_stat1`, so the planner makes pessimal join-order choices
+  // on `blocks` once a workspace is large (a 4-id `json_each` lookup
+  // can degenerate to a 4-second scan of the workspace partial index).
+  // First-install + 30-day refresh keeps stats meaningful without
+  // blocking first paint behind the multi-second scan. Fire-and-forget
+  // — runtime queries that race the analyze keep using prior plans
+  // until it finishes, which is fine for the bootstrap window.
+  scheduleIdle(() => {
+    void runAnalyzeIfDue(backfillDb, () => Date.now()).catch(error => {
+      console.warn('[Repo] ANALYZE refresh failed:', error)
+    })
+  })
 }

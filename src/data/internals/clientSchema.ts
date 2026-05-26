@@ -793,6 +793,33 @@ export const BACKFILL_BLOCK_TYPES_SQL = `
   WHERE b.deleted = 0 AND typeof(je.value) = 'text'
 `
 
+/** Planner-stats marker. wa-sqlite ships without an automatic
+ *  `sqlite_stat1`, so the planner falls back to row-count heuristics
+ *  that consistently mis-rank join orders on `blocks` once the
+ *  workspace is large — a 4-id `json_each` lookup with
+ *  `(workspace_id, deleted)` filtering scans the workspace partial
+ *  index (300k+ rows) instead of driving from the small set into the
+ *  PK. Running `ANALYZE` once populates `sqlite_stat1` and flips that
+ *  decision; the recorded `completed_at` lets the bootstrap re-run on
+ *  a long interval so stats don't drift indefinitely as the workspace
+ *  grows. */
+export const ANALYZE_MARKER_KEY = 'analyze_v1'
+
+/** How long stats stay fresh before the bootstrap schedules another
+ *  refresh. 30 days is well past steady-state churn for a personal
+ *  workspace; users with huge import bursts can clear the marker by
+ *  hand. The cost paid per refresh is one ANALYZE pass at idle. */
+export const ANALYZE_REFRESH_INTERVAL_MS = 30 * 24 * 60 * 60 * 1000
+
+export const SELECT_ANALYZE_COMPLETED_AT_SQL = `
+  SELECT completed_at FROM client_schema_state WHERE key = '${ANALYZE_MARKER_KEY}'
+`
+
+export const RECORD_ANALYZE_DONE_SQL = `
+  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
+  VALUES ('${ANALYZE_MARKER_KEY}', ?)
+`
+
 /** One-shot enqueue of pre-existing UI-state subtrees that the old
  *  routing left out of the upload queue. Phase 2 dropped the
  *  `source: 'local-ephemeral'` sink, so every NEW UI-state write goes
@@ -1034,6 +1061,32 @@ export const backfillBlockTypesIfEmpty = async (
   if (done !== null) return
   await db.execute(BACKFILL_BLOCK_TYPES_SQL)
   await db.execute(RECORD_BLOCK_TYPES_BACKFILL_DONE_SQL)
+}
+
+/** Run `ANALYZE` if the marker is missing (first install) or the
+ *  recorded `completed_at` is older than `intervalMs`. Caller is
+ *  responsible for scheduling this off the cold-start critical path
+ *  (see `repoProvider.ts` — runs via `scheduleIdle`), since the scan
+ *  itself can take seconds on a multi-GB DB and we don't want to
+ *  block first paint behind it.
+ *
+ *  `now` is injected so tests can drive the interval check
+ *  deterministically without `vi.useFakeTimers` reaching into the
+ *  trigger bodies that already depend on `julianday('now')`.
+ *  Returns `true` iff `ANALYZE` actually ran. */
+export const runAnalyzeIfDue = async (
+  db: ClientSchemaBootstrapDb,
+  now: () => number,
+  intervalMs: number = ANALYZE_REFRESH_INTERVAL_MS,
+): Promise<boolean> => {
+  const existing = await db.getOptional<{completed_at: number}>(SELECT_ANALYZE_COMPLETED_AT_SQL)
+  const nowMs = now()
+  if (existing !== null && nowMs - existing.completed_at < intervalMs) {
+    return false
+  }
+  await db.execute('ANALYZE')
+  await db.execute(RECORD_ANALYZE_DONE_SQL, [nowMs])
+  return true
 }
 
 /** Enqueue pre-existing UI-state rows for upload on the first app
