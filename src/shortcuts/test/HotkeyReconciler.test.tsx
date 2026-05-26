@@ -154,7 +154,14 @@ describe('HotkeyReconciler', () => {
 
     act(() => dispatchKeydown('k'))
     expect(handler).toHaveBeenCalledTimes(1)
-    expect(handler).toHaveBeenCalledWith(mockDeps, expect.any(KeyboardEvent))
+    expect(handler).toHaveBeenCalledWith(
+      mockDeps,
+      expect.any(KeyboardEvent),
+      expect.objectContaining({
+        activate: expect.any(Function),
+        deactivate: expect.any(Function),
+      }),
+    )
   })
 
   it('fires the decorated action handler for installed hotkeys', () => {
@@ -458,6 +465,107 @@ describe('HotkeyReconciler', () => {
     expect(handler.mock.calls[1]?.[0]).toMatchObject({marker: 'second'})
   })
 
+  describe('dispatch arg', () => {
+    it('passes a dispatch object with activate/deactivate to the handler', () => {
+      const handler = vi.fn()
+      const action = buildAction({
+        id: 'test.dispatch-shape',
+        handler,
+        defaultBinding: {keys: 'k'},
+      })
+
+      render(
+        <Harness actions={[action]} contexts={[testContextConfig]}>
+          <Activator context={TEST_CONTEXT}/>
+        </Harness>,
+      )
+
+      act(() => dispatchKeydown('k'))
+      const dispatchArg = handler.mock.calls[0]?.[2]
+      expect(dispatchArg).toEqual(expect.objectContaining({
+        activate: expect.any(Function),
+        deactivate: expect.any(Function),
+      }))
+    })
+
+    it('activate() from a handler makes another context fire', () => {
+      const secondaryHandler = vi.fn()
+      const enterAction = buildAction({
+        id: 'test.enter-secondary',
+        handler: (_deps, _trigger, dispatch) => {
+          dispatch?.activate(SECOND_MODAL_CONTEXT, mockDeps)
+        },
+        defaultBinding: {keys: 'g'},
+      })
+      const secondaryAction = buildAction({
+        id: 'test.secondary',
+        context: SECOND_MODAL_CONTEXT,
+        handler: secondaryHandler,
+        defaultBinding: {keys: 's'},
+      })
+
+      render(
+        <Harness
+          actions={[enterAction, secondaryAction]}
+          contexts={[testContextConfig, secondModalContextConfig]}
+        >
+          <Activator context={TEST_CONTEXT}/>
+        </Harness>,
+      )
+
+      // Secondary context not active yet — its binding doesn't fire.
+      act(() => dispatchKeydown('s'))
+      expect(secondaryHandler).not.toHaveBeenCalled()
+
+      // Entering activates the secondary context.
+      act(() => dispatchKeydown('g'))
+
+      // Now the secondary binding fires.
+      act(() => dispatchKeydown('s'))
+      expect(secondaryHandler).toHaveBeenCalledTimes(1)
+    })
+
+    it('deactivate() from a handler removes the context', () => {
+      const exitHandler = vi.fn((_deps, _trigger, dispatch?) => {
+        dispatch?.deactivate(SECOND_MODAL_CONTEXT)
+      })
+      const stillThereHandler = vi.fn()
+      const exitAction = buildAction({
+        id: 'test.exit-secondary',
+        context: SECOND_MODAL_CONTEXT,
+        handler: exitHandler,
+        defaultBinding: {keys: 'x'},
+      })
+      const stillThereAction = buildAction({
+        id: 'test.still-there',
+        context: SECOND_MODAL_CONTEXT,
+        handler: stillThereHandler,
+        defaultBinding: {keys: 's'},
+      })
+
+      render(
+        <Harness
+          actions={[exitAction, stillThereAction]}
+          contexts={[secondModalContextConfig]}
+        >
+          <Activator context={SECOND_MODAL_CONTEXT}/>
+        </Harness>,
+      )
+
+      // Both bindings live in the modal context — fires before exit.
+      act(() => dispatchKeydown('s'))
+      expect(stillThereHandler).toHaveBeenCalledTimes(1)
+
+      // Exit deactivates the context.
+      act(() => dispatchKeydown('x'))
+      expect(exitHandler).toHaveBeenCalledTimes(1)
+
+      // After deactivation the modal's bindings no longer fire.
+      act(() => dispatchKeydown('s'))
+      expect(stillThereHandler).toHaveBeenCalledTimes(1)
+    })
+  })
+
   describe('phase', () => {
     it('does not fire a keyup binding on keydown', () => {
       const handler = vi.fn()
@@ -514,6 +622,231 @@ describe('HotkeyReconciler', () => {
 
       act(() => dispatchKeyup('k'))
       expect(handler).toHaveBeenCalledTimes(1)
+    })
+
+    describe('hold', () => {
+      it('does not fire when the key is released before the threshold', () => {
+        vi.useFakeTimers()
+        try {
+          const handler = vi.fn()
+          const action = buildAction({
+            id: 'test.hold-short',
+            handler,
+            defaultBinding: {keys: 's', phase: 'hold', holdMs: 200},
+          })
+
+          render(
+            <Harness actions={[action]} contexts={[testContextConfig]}>
+              <Activator context={TEST_CONTEXT}/>
+            </Harness>,
+          )
+
+          act(() => dispatchKeydown('s'))
+          act(() => vi.advanceTimersByTime(100))
+          act(() => dispatchKeyup('s'))
+          act(() => vi.advanceTimersByTime(500))
+
+          expect(handler).not.toHaveBeenCalled()
+        } finally {
+          vi.useRealTimers()
+        }
+      })
+
+      it('fires once the threshold elapses with the key still held', () => {
+        vi.useFakeTimers()
+        try {
+          const handler = vi.fn()
+          const action = buildAction({
+            id: 'test.hold-fires',
+            handler,
+            defaultBinding: {keys: 's', phase: 'hold', holdMs: 200},
+          })
+
+          render(
+            <Harness actions={[action]} contexts={[testContextConfig]}>
+              <Activator context={TEST_CONTEXT}/>
+            </Harness>,
+          )
+
+          act(() => dispatchKeydown('s'))
+          act(() => vi.advanceTimersByTime(199))
+          expect(handler).not.toHaveBeenCalled()
+
+          act(() => vi.advanceTimersByTime(1))
+          expect(handler).toHaveBeenCalledTimes(1)
+        } finally {
+          vi.useRealTimers()
+        }
+      })
+
+      it('ignores OS-repeat keydowns while held', () => {
+        vi.useFakeTimers()
+        try {
+          const handler = vi.fn()
+          const action = buildAction({
+            id: 'test.hold-repeat',
+            handler,
+            defaultBinding: {keys: 's', phase: 'hold', holdMs: 200},
+          })
+
+          render(
+            <Harness actions={[action]} contexts={[testContextConfig]}>
+              <Activator context={TEST_CONTEXT}/>
+            </Harness>,
+          )
+
+          act(() => dispatchKeydown('s'))
+          // Several OS-repeat keydowns of the same key — should not
+          // re-arm or fire twice.
+          for (let i = 0; i < 5; i++) {
+            act(() => {
+              window.dispatchEvent(new KeyboardEvent('keydown', {
+                key: 's', code: codeFor('s'), repeat: true, bubbles: true, cancelable: true,
+              }))
+            })
+          }
+          act(() => vi.advanceTimersByTime(200))
+          expect(handler).toHaveBeenCalledTimes(1)
+        } finally {
+          vi.useRealTimers()
+        }
+      })
+
+      it('releasing the key after the timer fires does not re-fire', () => {
+        vi.useFakeTimers()
+        try {
+          const handler = vi.fn()
+          const action = buildAction({
+            id: 'test.hold-release-after',
+            handler,
+            defaultBinding: {keys: 's', phase: 'hold', holdMs: 100},
+          })
+
+          render(
+            <Harness actions={[action]} contexts={[testContextConfig]}>
+              <Activator context={TEST_CONTEXT}/>
+            </Harness>,
+          )
+
+          act(() => dispatchKeydown('s'))
+          act(() => vi.advanceTimersByTime(100))
+          expect(handler).toHaveBeenCalledTimes(1)
+
+          act(() => dispatchKeyup('s'))
+          expect(handler).toHaveBeenCalledTimes(1)
+        } finally {
+          vi.useRealTimers()
+        }
+      })
+
+      it('hold handler can activate another context, whose bindings then fire', () => {
+        vi.useFakeTimers()
+        try {
+          const secondaryHandler = vi.fn()
+          const enterAction = buildAction({
+            id: 'test.hold-enter',
+            handler: (_deps, _trigger, dispatch) => {
+              dispatch?.activate(SECOND_MODAL_CONTEXT, mockDeps)
+            },
+            defaultBinding: {keys: 's', phase: 'hold', holdMs: 100},
+          })
+          const secondaryAction = buildAction({
+            id: 'test.hold-secondary',
+            context: SECOND_MODAL_CONTEXT,
+            handler: secondaryHandler,
+            defaultBinding: {keys: 'j'},
+          })
+
+          render(
+            <Harness
+              actions={[enterAction, secondaryAction]}
+              contexts={[testContextConfig, secondModalContextConfig]}
+            >
+              <Activator context={TEST_CONTEXT}/>
+            </Harness>,
+          )
+
+          // Secondary context not yet active.
+          act(() => dispatchKeydown('j'))
+          expect(secondaryHandler).not.toHaveBeenCalled()
+
+          // Hold s for 100ms → enter action fires → activates secondary.
+          act(() => dispatchKeydown('s'))
+          act(() => vi.advanceTimersByTime(100))
+
+          // Secondary context's binding now fires.
+          act(() => dispatchKeydown('j'))
+          expect(secondaryHandler).toHaveBeenCalledTimes(1)
+        } finally {
+          vi.useRealTimers()
+        }
+      })
+
+      it('skips sequence-chord hold bindings (warned at install)', () => {
+        vi.useFakeTimers()
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        try {
+          const handler = vi.fn()
+          const action = buildAction({
+            id: 'test.hold-sequence',
+            handler,
+            defaultBinding: {keys: 'g g', phase: 'hold', holdMs: 100},
+          })
+
+          render(
+            <Harness actions={[action]} contexts={[testContextConfig]}>
+              <Activator context={TEST_CONTEXT}/>
+            </Harness>,
+          )
+
+          act(() => dispatchKeydown('g'))
+          act(() => vi.advanceTimersByTime(200))
+          act(() => dispatchKeydown('g'))
+          act(() => vi.advanceTimersByTime(200))
+
+          expect(handler).not.toHaveBeenCalled()
+          expect(warnSpy).toHaveBeenCalledWith(
+            expect.stringContaining('sequence chord'),
+          )
+        } finally {
+          warnSpy.mockRestore()
+          vi.useRealTimers()
+        }
+      })
+
+      it('does not arm when the keydown is filtered out (typing in editable)', () => {
+        vi.useFakeTimers()
+        const input = document.createElement('input')
+        document.body.appendChild(input)
+        input.focus()
+        try {
+          const handler = vi.fn()
+          const action = buildAction({
+            id: 'test.hold-filtered',
+            handler,
+            defaultBinding: {keys: 's', phase: 'hold', holdMs: 100},
+          })
+
+          render(
+            <Harness actions={[action]} contexts={[testContextConfig]}>
+              <Activator context={TEST_CONTEXT}/>
+            </Harness>,
+          )
+
+          // Dispatch a keydown whose target is the focused <input>.
+          act(() => {
+            input.dispatchEvent(new KeyboardEvent('keydown', {
+              key: 's', code: codeFor('s'), bubbles: true, cancelable: true,
+            }))
+          })
+          act(() => vi.advanceTimersByTime(200))
+
+          expect(handler).not.toHaveBeenCalled()
+        } finally {
+          input.remove()
+          vi.useRealTimers()
+        }
+      })
     })
   })
 })

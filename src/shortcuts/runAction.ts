@@ -1,6 +1,9 @@
 import { useCallback } from 'react'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
-import { useActiveContextsState } from '@/shortcuts/ActiveContexts.js'
+import {
+  useActiveContextsDispatch,
+  useActiveContextsState,
+} from '@/shortcuts/ActiveContexts.js'
 import { ActionTrigger } from '@/shortcuts/types.js'
 import { getActiveActionById, getEffectiveActions } from './effectiveActions.ts'
 
@@ -41,6 +44,7 @@ export const runActionById: RunActionByIdFn = (actionId, trigger) => {
 export function useRunAction(): RunActionByIdFn {
   const runtime = useAppRuntime()
   const active = useActiveContextsState()
+  const dispatch = useActiveContextsDispatch()
 
   return useCallback<RunActionByIdFn>(
     (actionId, trigger) => {
@@ -50,8 +54,8 @@ export function useRunAction(): RunActionByIdFn {
       }
       const deps = active.get(action.context)
       if (!deps) throw new Error(`[useRunAction] Context "${action.context}" is not active.`)
-      return action.handler(deps, trigger)
+      return action.handler(deps, trigger, dispatch)
     },
-    [runtime, active],
+    [runtime, active, dispatch],
   )
 }

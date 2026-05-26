@@ -22,7 +22,7 @@ import {
   ActionIcon,
   ActionTrigger,
   BlockShortcutDependencies,
-  ShortcutBinding,
+  ShortcutBindingDefaults,
 } from '@/shortcuts/types.js'
 import {
   blockAfterSubtreeRemoval,
@@ -35,7 +35,7 @@ export interface BlockAction {
   id: string
   description: string
   handler: (dependencies: BlockShortcutDependencies, trigger: ActionTrigger) => void | Promise<void>
-  defaultBinding?: Omit<ShortcutBinding, 'action'>
+  defaultBinding?: ShortcutBindingDefaults
   /** Optional glyph for visual surfaces (swipe menus, mobile toolbars,
    *  future command-palette icons). Carried verbatim through
    *  `bindBlockActionContext` onto the resulting `ActionConfig`. */

@@ -108,8 +108,28 @@ export interface ActionContextActivation {
 
 export type ActionTrigger = KeyboardEvent | CustomEvent
 
+/**
+ * Activation primitives surfaced to action handlers as the optional third
+ * argument. Handlers can `dispatch.activate(...)` to enter a modal mode
+ * (e.g. date-scrub's hold-to-enter-mode path) or `dispatch.deactivate(...)`
+ * to exit, without needing a React context.
+ *
+ * Always supplied when an action fires through `HotkeyReconciler` or
+ * `runActionById` / `useRunAction`. May be undefined when an action is
+ * invoked from a decorator that doesn't forward the third argument —
+ * which is fine: only handlers that need it bother to type-check for it.
+ */
+export interface ActionDispatch {
+  activate: (context: ActionContextType, dependencies: BaseShortcutDependencies) => void
+  deactivate: (context: ActionContextType) => void
+}
+
 export type ActionHandler<T extends ActionContextType = ActionContextType> = {
-  bivarianceHack(dependencies: ShortcutDependenciesMap[T], trigger: ActionTrigger): void | Promise<void>
+  bivarianceHack(
+    dependencies: ShortcutDependenciesMap[T],
+    trigger: ActionTrigger,
+    dispatch?: ActionDispatch,
+  ): void | Promise<void>
 }['bivarianceHack']
 
 export type ActionCanRun<T extends ActionContextType = ActionContextType> = {
@@ -121,7 +141,7 @@ export interface Action<T extends ActionContextType = ActionContextType> {
   description: string;
   context: T;
   handler: ActionHandler<T>;
-  defaultBinding?: Omit<ShortcutBinding, 'action'>; // Optional default binding
+  defaultBinding?: ShortcutBindingDefaults; // Optional default binding
   /** Optional icon for surfaces that render actions visually (toolbars,
    *  swipe menus, eventual command-palette icon column). Surfaces that
    *  don't render icons just ignore the field. */
@@ -152,15 +172,33 @@ export interface ActionDecorator<T extends ActionContextType = ActionContextType
 }
 
 
-export interface ShortcutBinding {
-  action: string;
+interface ShortcutBindingFields {
   keys: KeyCombination | KeyCombination[];
-  /** Which keyboard event phase fires the binding. Defaults to 'keydown'.
-   *  Use 'keyup' for "fires when this key/modifier is released" — e.g.
-   *  scrub mode commits when Ctrl/Shift releases. tinykeys' matcher
-   *  accepts a bare modifier name as the key (`'Shift'`, `'Control'`)
-   *  for this case; for letter chords prefer the same key string you'd
-   *  use on keydown (`'$mod+s'`). */
-  phase?: 'keydown' | 'keyup';
   eventOptions?: EventOptions; // Event handling options for this binding
 }
+
+/**
+ * Shape an action author provides as `defaultBinding`. Discriminated by
+ * `phase` so `holdMs` is required exactly when `phase === 'hold'` and
+ * forbidden otherwise:
+ *  - `'keydown'` (default) — fires on press.
+ *  - `'keyup'` — fires on release. tinykeys' matcher accepts a bare modifier
+ *    name as the key (`'Shift'`, `'Control'`); for letter chords prefer the
+ *    same key string you'd use on keydown (`'$mod+s'`).
+ *  - `'hold'` — fires after the chord has been held for `holdMs`. Released
+ *    before the threshold = no fire. Sequence chords (`'g g'`) are
+ *    rejected at install time.
+ */
+export type ShortcutBindingDefaults =
+  | (ShortcutBindingFields & {phase?: 'keydown' | 'keyup'; holdMs?: never})
+  | (ShortcutBindingFields & {phase: 'hold'; holdMs: number});
+
+/**
+ * Fully-realized binding — adds the owning action id to
+ * `ShortcutBindingDefaults`. Used by surfaces that list bindings
+ * (command palette, keybindings settings) and need to know which
+ * action a chord belongs to.
+ */
+export type ShortcutBinding = ShortcutBindingDefaults & {
+  action: string;
+};

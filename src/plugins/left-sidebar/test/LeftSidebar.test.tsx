@@ -145,6 +145,10 @@ describe('LeftSidebarShortcutsSection', () => {
       expect.objectContaining({
         type: 'left-sidebar-action',
       }),
+      expect.objectContaining({
+        activate: expect.any(Function),
+        deactivate: expect.any(Function),
+      }),
     )
   })
 })

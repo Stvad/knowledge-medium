@@ -1,8 +1,17 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { createKeybindingsHandler } from 'tinykeys'
+import {
+  createKeybindingsHandler,
+  matchKeybindingPress,
+  parseKeybinding,
+  type KeybindingPress,
+} from 'tinykeys'
 import { actionContextsFacet } from '@/extensions/core.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
-import { useActiveContextsState, ActiveContextsMap } from '@/shortcuts/ActiveContexts.js'
+import {
+  useActiveContextsDispatch,
+  useActiveContextsState,
+  ActiveContextsMap,
+} from '@/shortcuts/ActiveContexts.js'
 import { setRunActionDispatcher } from '@/shortcuts/runAction.js'
 import {
   actionRuntimeKey,
@@ -15,9 +24,10 @@ import {
   ActionContextConfig,
   ActionContextType,
   ActionContextTypes,
+  ActionDispatch,
   ActionTrigger,
   EventOptions,
-  ShortcutBinding,
+  ShortcutBindingDefaults,
 } from '@/shortcuts/types.js'
 import { hasEditableTarget, isTypingKeyEvent, withRecoveredLetterKey } from '@/shortcuts/utils.js'
 
@@ -104,6 +114,10 @@ const shouldHandleEvent = (
 export function HotkeyReconciler(): null {
   const runtime = useAppRuntime()
   const active = useActiveContextsState()
+  // `ActiveContextsDispatch` is reference-stable across renders of the
+  // same provider, but we still funnel it through a ref so handler
+  // closures don't capture a stale value if the provider remounts.
+  const dispatch = useActiveContextsDispatch()
 
   // Keybinding overrides are pushed at runtime via
   // `setRuntimeContributions` (the keybindings-settings effect mirrors
@@ -136,10 +150,12 @@ export function HotkeyReconciler(): null {
   // browser fires any user input event.
   const activeRef = useRef<ActiveContextsMap>(active)
   const contextConfigsByTypeRef = useRef<ReadonlyMap<ActionContextType, ActionContextConfig>>(contextConfigsByType)
+  const dispatchRef = useRef<ActionDispatch>(dispatch)
   useLayoutEffect(() => {
     activeRef.current = active
     contextConfigsByTypeRef.current = contextConfigsByType
-  }, [active, contextConfigsByType])
+    dispatchRef.current = dispatch
+  }, [active, contextConfigsByType, dispatch])
 
   // Install the module-level runActionById dispatcher. Reads refs so it's
   // always current. Torn down on unmount so stray callers fail loudly.
@@ -151,7 +167,7 @@ export function HotkeyReconciler(): null {
       }
       const deps = activeRef.current.get(action.context)
       if (!deps) throw new Error(`[HotkeyReconciler] Context "${action.context}" is not active.`)
-      return action.handler(deps, trigger)
+      return action.handler(deps, trigger, dispatchRef.current)
     })
     return () => setRunActionDispatcher(null)
   }, [runtime])
@@ -194,13 +210,24 @@ export function HotkeyReconciler(): null {
 
       if (state.byActionId.has(actionKey)) continue
 
-      const binding: ShortcutBinding = {
-        ...action.defaultBinding,
-        action: action.id,
-      }
+      const binding = action.defaultBinding
       const keys = normalizeKeys(binding.keys)
-      const handler = makeHandler(action, binding, activeRef, contextConfigsByTypeRef)
 
+      if (binding.phase === 'hold') {
+        const unsubscribe = installHoldBinding({
+          action,
+          binding,
+          keys,
+          holdMs: binding.holdMs,
+          activeRef,
+          contextConfigsByTypeRef,
+          dispatchRef,
+        })
+        state.byActionId.set(actionKey, {unsubscribe})
+        continue
+      }
+
+      const handler = makeHandler(action, binding, activeRef, contextConfigsByTypeRef, dispatchRef)
       const bindingMap: Record<string, (event: KeyboardEvent) => void> = {}
       for (const key of keys) bindingMap[key] = handler
       // We use `createKeybindingsHandler` + a manual listener rather than
@@ -248,11 +275,171 @@ export function HotkeyReconciler(): null {
   return null
 }
 
+interface HoldBindingInstall {
+  action: ActionConfig
+  binding: ShortcutBindingDefaults
+  keys: readonly string[]
+  holdMs: number
+  activeRef: { current: ActiveContextsMap }
+  contextConfigsByTypeRef: { current: ReadonlyMap<ActionContextType, ActionContextConfig> }
+  dispatchRef: { current: ActionDispatch }
+}
+
+/**
+ * Companion observer for `phase: 'hold'` bindings — tinykeys is purely
+ * event-driven and has no notion of duration.
+ *
+ * Lifecycle per armed hold:
+ *  - On a matching keydown (chord parsed via tinykeys' `matchKeybindingPress`,
+ *    so `'$mod+s'` etc. work the same as elsewhere), filter the event
+ *    through the existing context-aware filter (so typing into an input
+ *    doesn't arm a hold) AND check the binding's context is still
+ *    eligible. If both pass, preventDefault the keydown (suppresses OS
+ *    press-and-hold popups on Mac), start a timer for `holdMs`, and
+ *    remember the chord's primary `event.key` to match the eventual keyup.
+ *  - OS-driven `event.repeat` keydowns while the key is still held are
+ *    ignored — we treat the press as already armed. preventDefault is
+ *    still applied so the input event doesn't reach editable targets.
+ *  - On keyup of the same primary key before the timer fires, cancel.
+ *  - On `blur` of the window, cancel.
+ *  - On timer fire, run `action.handler(deps, originalKeydown, dispatch)`
+ *    after re-validating the context is still active. Same path as the
+ *    keydown / keyup makeHandler uses minus the preventDefault (already
+ *    done at arm time).
+ *
+ * Limitation: if the chord includes modifiers (e.g. `'$mod+s'`) and the
+ * user releases the modifier but keeps the primary key pressed, the timer
+ * still fires. Acceptable for the initial date-scrub usage which holds a
+ * bare letter. Tighten if a future caller needs modifier-release-cancels.
+ *
+ * Sequence chords (`'g g'`) are rejected at install time — a "hold a
+ * sequence" doesn't have well-defined semantics here.
+ */
+const installHoldBinding = (config: HoldBindingInstall): (() => void) => {
+  const {action, binding, keys, holdMs, activeRef, contextConfigsByTypeRef, dispatchRef} = config
+
+  interface ParsedHold {
+    rawKey: string
+    presses: readonly KeybindingPress[]
+  }
+
+  const parsed: ParsedHold[] = []
+  for (const rawKey of keys) {
+    const presses = parseKeybinding(rawKey)
+    if (presses.length !== 1) {
+      console.warn(
+        `[HotkeyReconciler] Hold binding "${rawKey}" on action "${action.id}" is a sequence chord; skipped (hold semantics are single-press only).`,
+      )
+      continue
+    }
+    parsed.push({rawKey, presses})
+  }
+  if (parsed.length === 0) return () => undefined
+
+  let pending: {
+    timer: ReturnType<typeof setTimeout>
+    primaryKey: string
+  } | null = null
+
+  const cancel = (): void => {
+    if (!pending) return
+    clearTimeout(pending.timer)
+    pending = null
+  }
+
+  const fire = (originalEvent: KeyboardEvent): void => {
+    const deps = activeRef.current.get(action.context)
+    // Context may have deactivated between keydown and timer fire.
+    if (!deps) return
+
+    try {
+      void Promise.resolve(action.handler(deps, originalEvent, dispatchRef.current)).catch(error => {
+        console.error(`[HotkeyReconciler] Action ${action.id} rejected`, error)
+      })
+    } catch (error) {
+      console.error(`[HotkeyReconciler] Action ${action.id} threw`, error)
+    }
+  }
+
+  const onKeydown = (rawEvent: Event): void => {
+    const event = withRecoveredLetterKey(rawEvent as KeyboardEvent)
+    // OS-repeat events while the key is still held: suppress the input
+    // event but don't re-arm.
+    if (event.repeat) {
+      if (pending) applyEventOptions(event, action, binding, contextConfigsByTypeRef.current)
+      return
+    }
+    if (pending) return
+
+    const matched = parsed.some(({presses}) =>
+      presses.every(press => matchKeybindingPress(event, press)),
+    )
+    if (!matched) return
+
+    if (!shouldHandleEvent(event, activeRef.current, contextConfigsByTypeRef.current)) return
+    if (!activeRef.current.has(action.context)) return
+
+    applyEventOptions(event, action, binding, contextConfigsByTypeRef.current)
+
+    pending = {
+      timer: setTimeout(() => {
+        pending = null
+        fire(event)
+      }, holdMs),
+      primaryKey: event.key,
+    }
+  }
+
+  const onKeyup = (rawEvent: Event): void => {
+    if (!pending) return
+    const event = rawEvent as KeyboardEvent
+    if (event.key !== pending.primaryKey) return
+    cancel()
+  }
+
+  const onBlur = (): void => cancel()
+
+  window.addEventListener('keydown', onKeydown)
+  window.addEventListener('keyup', onKeyup)
+  window.addEventListener('blur', onBlur)
+
+  return () => {
+    window.removeEventListener('keydown', onKeydown)
+    window.removeEventListener('keyup', onKeyup)
+    window.removeEventListener('blur', onBlur)
+    cancel()
+  }
+}
+
+/**
+ * preventDefault / stopPropagation per the same precedence the keydown /
+ * keyup handler uses (binding > context-default > built-in default). Pulled
+ * out so the hold companion can reuse it for both the arming keydown and
+ * any OS-repeat keydowns that follow before the timer fires.
+ */
+const applyEventOptions = (
+  event: KeyboardEvent,
+  action: ActionConfig,
+  binding: ShortcutBindingDefaults,
+  contextConfigsByType: ReadonlyMap<ActionContextType, ActionContextConfig>,
+): void => {
+  const contextConfig = contextConfigsByType.get(action.context)
+  const options: EventOptions = {
+    preventDefault: true,
+    stopPropagation: false,
+    ...contextConfig?.defaultEventOptions,
+    ...binding.eventOptions,
+  }
+  if (options.stopPropagation) event.stopPropagation()
+  if (options.preventDefault) event.preventDefault()
+}
+
 const makeHandler = (
   action: ActionConfig,
-  binding: ShortcutBinding,
+  binding: ShortcutBindingDefaults,
   activeRef: { current: ActiveContextsMap },
   contextConfigsByTypeRef: { current: ReadonlyMap<ActionContextType, ActionContextConfig> },
+  dispatchRef: { current: ActionDispatch },
 ) => {
   return (event: KeyboardEvent) => {
     if (!shouldHandleEvent(event, activeRef.current, contextConfigsByTypeRef.current)) return
@@ -278,7 +465,7 @@ const makeHandler = (
     }
 
     try {
-      void Promise.resolve(action.handler(deps, event)).catch(error => {
+      void Promise.resolve(action.handler(deps, event, dispatchRef.current)).catch(error => {
         console.error(`[HotkeyReconciler] Action ${action.id} rejected`, error)
       })
     } catch (error) {
