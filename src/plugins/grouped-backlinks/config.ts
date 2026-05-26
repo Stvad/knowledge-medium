@@ -49,6 +49,12 @@ export const INITIAL_GROUPED_BACKLINKS_CONFIG: GroupedBacklinksConfig = {
     'repeat interval',
     'make-public',
     'matrix-messages',
+    // Type-name exclusions: kernel infrastructure types that land on
+    // essentially every block and would produce a useless mega-group
+    // under type enrichment. Users can drop these from their config if
+    // they actually want to group by "page-ness" or daily-note-ness.
+    'page',
+    'daily-note',
   ],
   excludedPatterns: [
     '^\\[\\[factor]]:.+',
