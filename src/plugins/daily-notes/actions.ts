@@ -1,12 +1,20 @@
 /**
  * Global keyboard actions for navigating daily notes:
  *
- *   - `open_today` ($mod+Shift+`)               — today's note
- *   - `append_today_daily_block` (Ctrl+Shift+n) — new block in today's note,
+ *   - `open_today` ($mod+Shift+`)                — today's note
+ *   - `append_today_daily_block` (Ctrl+Shift+n)  — new block in today's note,
  *     opened in a stacked panel
- *   - `open_previous_daily_note` ($mod+Shift+[) — yesterday relative to
+ *   - `open_previous_daily_note` (Ctrl+Shift+[)  — yesterday relative to
  *     the currently viewed daily note (or to today if not on one)
- *   - `open_next_daily_note` ($mod+Shift+])     — tomorrow relative
+ *   - `open_next_daily_note` (Ctrl+Shift+])      — tomorrow relative
+ *
+ * Prev/next use literal Ctrl (not $mod) because Cmd+Shift+[ / Cmd+Shift+]
+ * are reserved on Mac for browser prev/next-tab and aren't reliably
+ * cancellable — falling through to the browser would silently swap
+ * tabs instead of navigating daily notes. Ctrl+Shift+[/] is free on
+ * every platform and matches what Mac users have been using
+ * historically (the legacy ['cmd+shift+[', 'ctrl+shift+['] pair only
+ * worked via the Ctrl entry in practice).
  *
  * The prev/next actions need to figure out "what daily note is this
  * panel showing right now" so the offset is relative. We do that by
@@ -192,7 +200,9 @@ export const dailyNotesActions = (
       await openDailyNoteByOffset(repo, -1)
     },
     defaultBinding: {
-      keys: '$mod+Shift+BracketLeft',
+      // Literal Control (not $mod) — Cmd+Shift+[ is browser prev-tab
+      // on Mac. See file-header comment.
+      keys: 'Control+Shift+BracketLeft',
     },
   },
   {
@@ -203,7 +213,9 @@ export const dailyNotesActions = (
       await openDailyNoteByOffset(repo, 1)
     },
     defaultBinding: {
-      keys: '$mod+Shift+BracketRight',
+      // Literal Control (not $mod) — Cmd+Shift+] is browser next-tab
+      // on Mac. See file-header comment.
+      keys: 'Control+Shift+BracketRight',
     },
   },
 ]
