@@ -53,11 +53,11 @@ export const themesFacet = defineFacet<ThemeContribution, readonly ThemeContribu
  *  empty (the few hundred ms between module load and the style-sync
  *  effect mounting). Matches the `:root` palette in src/index.css
  *  so the visual identity stays consistent during that window. The
- *  default-themes plugin contributes a `sunset-light` theme of its
- *  own once it loads; from then on this entry is unreferenced. */
+ *  default-themes plugin contributes a `sunset-warm-light` theme of
+ *  its own once it loads; from then on this entry is unreferenced. */
 export const FALLBACK_THEME: ThemeDefinition = {
-  id: 'sunset-light',
-  label: 'Sunset Light',
+  id: 'sunset-warm-light',
+  label: 'Sunset Warm Light',
   mode: 'light',
 }
 

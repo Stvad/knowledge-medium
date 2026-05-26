@@ -28,9 +28,9 @@
             window.matchMedia &&
             window.matchMedia('(prefers-color-scheme: dark)').matches
           document.documentElement.dataset.theme =
-            stored || (prefersDark ? 'sunset-dark' : 'sunset-light')
+            stored || (prefersDark ? 'sunset-warm-dark' : 'sunset-warm-light')
         } catch (e) {
-          document.documentElement.dataset.theme = 'sunset-light'
+          document.documentElement.dataset.theme = 'sunset-warm-light'
         }
       })()
     </script>

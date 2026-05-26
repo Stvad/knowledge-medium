@@ -13,9 +13,9 @@
 
 import type { ThemeContribution } from '@/plugins/theme-toggle'
 
-const SUNSET_LIGHT: ThemeContribution = {
-  id: 'sunset-light',
-  label: 'Sunset Light',
+const SUNSET_WARM_LIGHT: ThemeContribution = {
+  id: 'sunset-warm-light',
+  label: 'Sunset Warm Light',
   mode: 'light',
   tokens: {
     background: '30 40% 99%',
@@ -30,28 +30,28 @@ const SUNSET_LIGHT: ThemeContribution = {
     'secondary-foreground': '14 70% 30%',
     muted: '20 25% 95%',
     'muted-foreground': '20 12% 42%',
-    accent: '340 80% 92%',
-    'accent-foreground': '340 70% 30%',
+    accent: '5 80% 92%',
+    'accent-foreground': '5 70% 30%',
     destructive: '0 84% 55%',
     'destructive-foreground': '0 0% 98%',
     border: '20 25% 88%',
     input: '20 25% 86%',
     ring: '14 90% 53%',
     link: '14 90% 53%',
-    wikilink: '330 75% 50%',
+    wikilink: '0 75% 50%',
     code: '20 30% 95%',
     radius: '0.65rem',
     'chart-1': '14 90% 53%',
-    'chart-2': '340 80% 60%',
+    'chart-2': '5 80% 60%',
     'chart-3': '35 90% 55%',
     'chart-4': '280 60% 60%',
     'chart-5': '180 60% 45%',
   },
 }
 
-const SUNSET_DARK: ThemeContribution = {
-  id: 'sunset-dark',
-  label: 'Sunset Dark',
+const SUNSET_WARM_DARK: ThemeContribution = {
+  id: 'sunset-warm-dark',
+  label: 'Sunset Warm Dark',
   mode: 'dark',
   tokens: {
     background: '20 30% 7%',
@@ -66,19 +66,19 @@ const SUNSET_DARK: ThemeContribution = {
     'secondary-foreground': '20 60% 92%',
     muted: '20 20% 14%',
     'muted-foreground': '20 12% 65%',
-    accent: '340 50% 25%',
-    'accent-foreground': '340 80% 92%',
+    accent: '5 55% 25%',
+    'accent-foreground': '5 80% 92%',
     destructive: '0 62% 45%',
     'destructive-foreground': '0 0% 98%',
     border: '20 25% 18%',
     input: '20 25% 18%',
     ring: '14 90% 60%',
     link: '14 90% 70%',
-    wikilink: '330 85% 70%',
+    wikilink: '0 85% 70%',
     code: '20 25% 18%',
     radius: '0.65rem',
     'chart-1': '14 90% 60%',
-    'chart-2': '340 80% 65%',
+    'chart-2': '5 80% 65%',
     'chart-3': '35 90% 60%',
     'chart-4': '280 60% 65%',
     'chart-5': '180 60% 55%',
@@ -301,13 +301,14 @@ const SOLARIZED_DARK: ThemeContribution = {
   },
 }
 
-/** Cycle order. Sunset comes first because it's the runtime default
- *  (see the pre-paint script in index.html); the light/dark variant
- *  of each family are siblings so a single toggle from any theme
- *  hits its dark/light counterpart before moving to another family. */
+/** Cycle order. Sunset Warm comes first because it's the runtime
+ *  default (see the pre-paint script in index.html); the light/dark
+ *  variant of each family are siblings so a single toggle from any
+ *  theme hits its dark/light counterpart before moving to another
+ *  family. */
 export const defaultThemeContributions: readonly ThemeContribution[] = [
-  SUNSET_LIGHT,
-  SUNSET_DARK,
+  SUNSET_WARM_LIGHT,
+  SUNSET_WARM_DARK,
   LIGHT,
   DARK,
   INDIGO_LIGHT,
@@ -318,8 +319,8 @@ export const defaultThemeContributions: readonly ThemeContribution[] = [
 
 /** The id pre-paint falls back to when nothing is persisted and the
  *  system preference is "light". Kept in sync with index.html. */
-export const DEFAULT_THEME_ID_LIGHT = SUNSET_LIGHT.id
+export const DEFAULT_THEME_ID_LIGHT = SUNSET_WARM_LIGHT.id
 
 /** The id pre-paint falls back to when nothing is persisted and the
  *  system preference is "dark". */
-export const DEFAULT_THEME_ID_DARK = SUNSET_DARK.id
+export const DEFAULT_THEME_ID_DARK = SUNSET_WARM_DARK.id
