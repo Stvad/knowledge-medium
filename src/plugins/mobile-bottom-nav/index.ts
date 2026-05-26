@@ -54,7 +54,7 @@ export const mobileBottomNavPlugin: AppExtension = systemToggle({
   }),
   mobileBottomNavItemsFacet.of(todayBottomNavItem, {
     source: 'mobile-bottom-nav',
-    precedence: -20,
+    precedence: -35,
   }),
   mobileBottomNavItemsFacet.of(searchBottomNavItem, {
     source: 'mobile-bottom-nav',

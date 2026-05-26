@@ -28,9 +28,9 @@ describe('mobileBottomNavPlugin', () => {
 
     expect(runtime.read(mobileBottomNavItemsFacet)).toEqual([
       openSidebarBottomNavItem,
+      todayBottomNavItem,
       newNodeBottomNavItem,
       appendTodayDailyBlockBottomNavItem,
-      todayBottomNavItem,
       searchBottomNavItem,
       undoBottomNavItem,
       commandPaletteBottomNavItem,
