@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { actionsFacet } from '@/extensions/core.js'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
 import {
+  buildApplyThemeAction,
   buildThemeRule,
   themeStyleSyncEffect,
 } from '../effect.ts'
@@ -116,5 +118,43 @@ describe('themeStyleSyncEffect', () => {
 
     expect(getManagedStyleEl()).toBeNull()
     expect(getThemes()).toEqual([FALLBACK_THEME])
+  })
+
+  it('pushes one "Theme: <label>" apply action per contribution', () => {
+    const runtime = resolveFacetRuntimeSync([
+      themesFacet.of(SOLARIZED_DARK, { source: 'test-theme' }),
+    ])
+    const dispose = startEffect(runtime)
+
+    const applyActions = runtime
+      .read(actionsFacet)
+      .filter((a) => a.id.startsWith('theme-toggle.apply.'))
+    expect(applyActions).toHaveLength(1)
+    expect(applyActions[0]).toMatchObject({
+      id: 'theme-toggle.apply.solarized-dark',
+      description: 'Theme: Solarized Dark',
+    })
+
+    dispose()
+
+    expect(
+      runtime
+        .read(actionsFacet)
+        .filter((a) => a.id.startsWith('theme-toggle.apply.')),
+    ).toEqual([])
+  })
+
+  it('apply-action handler writes data-theme to the document root', () => {
+    const action = buildApplyThemeAction(SOLARIZED_DARK)
+    // Seed the registry so applyTheme can resolve the id.
+    setThemeRegistry([
+      { id: SOLARIZED_DARK.id, label: SOLARIZED_DARK.label, mode: SOLARIZED_DARK.mode },
+    ])
+    document.documentElement.removeAttribute('data-theme')
+
+    action.handler({} as never, new CustomEvent('test'))
+    expect(document.documentElement.dataset.theme).toBe('solarized-dark')
+
+    document.documentElement.removeAttribute('data-theme')
   })
 })

@@ -22,7 +22,7 @@ export { themeStyleSyncEffect } from './effect.ts'
 
 export const toggleThemeAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
   id: 'theme-toggle.toggle',
-  description: 'Toggle theme',
+  description: 'Cycle through themes',
   context: ActionContextTypes.GLOBAL,
   handler: () => {
     toggleTheme()
