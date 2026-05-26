@@ -72,14 +72,14 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
     ...bindBlockActionContext(ActionContextTypes.NORMAL_MODE, extendSelectionUp),
     defaultBinding: {
       ...extendSelectionUp.defaultBinding,
-      keys: ['Shift+ArrowUp', 'Shift+h'],
+      keys: ['Shift+ArrowUp', 'Shift+k'],
     },
   }
   const extendSelectionDownAction = {
     ...bindBlockActionContext(ActionContextTypes.NORMAL_MODE, extendSelectionDown),
     defaultBinding: {
       ...extendSelectionDown.defaultBinding,
-      keys: ['Shift+ArrowDown', 'Shift+k'],
+      keys: ['Shift+ArrowDown', 'Shift+j'],
     },
   }
   const bindNormal = (action: BlockAction) => bindBlockActionContext(ActionContextTypes.NORMAL_MODE, action)
@@ -101,7 +101,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         if (next) void focusBlock(uiStateBlock, next.id)
       },
       defaultBinding: {
-        keys: ['ArrowDown', 'k'],
+        keys: ['ArrowDown', 'j'],
       },
     }),
     bindNormal({
@@ -118,7 +118,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         if (prev) void focusBlock(uiStateBlock, prev.id)
       },
       defaultBinding: {
-        keys: ['ArrowUp', 'h'],
+        keys: ['ArrowUp', 'k'],
       },
     }),
     bindNormal({

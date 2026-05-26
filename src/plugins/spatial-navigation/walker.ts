@@ -295,8 +295,8 @@ export const findRecoveryAnchor = (
 /**
  * Anchor lookup used by spatial-nav keystroke handlers. Returns the
  * live DOM instance for `focusedBlockId` when it's still mounted in
- * the panel; otherwise falls back to `findRecoveryAnchor` so j/k can
- * walk from a sensible position even while the proactive recovery
+ * the panel; otherwise falls back to `findRecoveryAnchor` so vertical
+ * movement can walk from a sensible position even while the proactive recovery
  * timer is still in its debounce window. Without this fallback, a
  * keystroke during the window leaks through to vim's data-model
  * walker, which can land on a block from another panel entirely

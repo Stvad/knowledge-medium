@@ -81,9 +81,9 @@ const moveVertical = async (
   // Recovery-anchor settle: the focused block instance is gone (e.g. a
   // backlink was just rescheduled away) and `resolveCurrentAnchor`
   // handed us its proactive recovery target instead. Land the user
-  // on that target as if recovery had already run; further j/k
-  // walks normally from there on the next keystroke. Walking past
-  // it here would feel like "j moved me two blocks".
+  // on that target as if recovery had already run; further vertical
+  // movement walks normally from there on the next keystroke. Walking past
+  // it here would feel like one key press moved two blocks.
   if (current.dataset.blockId !== block.id) {
     const anchorBlockId = current.dataset.blockId
     if (!anchorBlockId) return false
@@ -180,7 +180,7 @@ export function getSpatialNavigationActions(): ActionConfig<typeof ActionContext
       handler: async (deps: BlockShortcutDependencies) => {
         await moveHorizontal(deps, 'left')
       },
-      defaultBinding: {keys: ['ArrowLeft', 'j']},
+      defaultBinding: {keys: ['ArrowLeft', 'h']},
     }),
     bindNormal({
       id: 'move_right',

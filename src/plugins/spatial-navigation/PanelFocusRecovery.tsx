@@ -46,8 +46,8 @@ const RECOVERY_DEBOUNCE_MS = 250
  *
  *   1. The user edits a block in the backlinks section so it stops
  *      matching the backlink query. The block unmounts but its id is
- *      still written on the panel's `focusedBlockId`. h/j/k/l would
- *      have no anchor to walk from and the highlight goes dark.
+ *      still written on the panel's `focusedBlockId`. Movement actions
+ *      would have no anchor to walk from and the highlight goes dark.
  *   2. The user collapses the parent of the focused block. The child
  *      unmounts; same problem.
  *

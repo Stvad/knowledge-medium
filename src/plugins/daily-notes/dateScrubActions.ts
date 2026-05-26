@@ -5,7 +5,7 @@
  * Trigger model: hold `s` in NORMAL_MODE for ~200ms to enter scrub
  * mode. While `DATE_SCRUB_CONTEXT` is active (modal, shadows the
  * underlying NORMAL_MODE/EDIT_MODE_CM bindings except `global`),
- * arrows / h-k-j-l scrub by ±1 or ±7 days. Releasing `s` commits;
+ * arrows / h-j-k-l scrub by ±1 or ±7 days. Releasing `s` commits;
  * Escape cancels.
  *
  * Why hold rather than a chord: avoids stealing common shortcuts and
@@ -125,13 +125,13 @@ export const dateScrubActions: readonly ActionConfig[] = [
   dateScrubMovementAction(
     DATE_SCRUB_DAY_FORWARD_ACTION_ID,
     'Date scrub: forward one day',
-    ['ArrowUp', 'h'],
+    ['ArrowUp', 'k'],
     1,
   ),
   dateScrubMovementAction(
     DATE_SCRUB_DAY_BACKWARD_ACTION_ID,
     'Date scrub: backward one day',
-    ['ArrowDown', 'k'],
+    ['ArrowDown', 'j'],
     -1,
   ),
   dateScrubMovementAction(
@@ -143,7 +143,7 @@ export const dateScrubActions: readonly ActionConfig[] = [
   dateScrubMovementAction(
     DATE_SCRUB_WEEK_BACKWARD_ACTION_ID,
     'Date scrub: backward one week',
-    ['ArrowLeft', 'j'],
+    ['ArrowLeft', 'h'],
     -7,
   ),
 ]

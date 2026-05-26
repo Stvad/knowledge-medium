@@ -204,7 +204,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       requestEditorFocusIfEditing(uiStateBlock)
     },
     defaultBinding: {
-      keys: ['$mod+Shift+ArrowUp', '$mod+Shift+h'],
+      keys: ['$mod+Shift+ArrowUp', '$mod+Shift+k'],
       eventOptions: {
         preventDefault: true,
       },
@@ -221,7 +221,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       requestEditorFocusIfEditing(uiStateBlock)
     },
     defaultBinding: {
-      keys: ['$mod+Shift+ArrowDown', '$mod+Shift+k'],
+      keys: ['$mod+Shift+ArrowDown', '$mod+Shift+j'],
       eventOptions: {
         preventDefault: true,
       },

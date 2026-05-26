@@ -165,14 +165,14 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     ...bindBlockActionContext(ActionContextTypes.NORMAL_MODE, extendSelectionUpBlock),
     defaultBinding: {
       ...extendSelectionUpBlock.defaultBinding,
-      keys: ['Shift+ArrowUp', 'Shift+h'],
+      keys: ['Shift+ArrowUp', 'Shift+k'],
     },
   }
   const extendSelectionDownAction = {
     ...bindBlockActionContext(ActionContextTypes.NORMAL_MODE, extendSelectionDownBlock),
     defaultBinding: {
       ...extendSelectionDownBlock.defaultBinding,
-      keys: ['Shift+ArrowDown', 'Shift+k'],
+      keys: ['Shift+ArrowDown', 'Shift+j'],
     },
   }
   const copyBlockAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, copyBlock)
@@ -811,7 +811,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   const extendSelectionUpMultiAction = {
     ...makeMultiSelect(extendSelectionUpAction),
     defaultBinding: {
-      keys: ['ArrowUp', 'h', 'Shift+h', 'Shift+ArrowUp'],
+      keys: ['ArrowUp', 'k', 'Shift+k', 'Shift+ArrowUp'],
       eventOptions: {
         preventDefault: true,
       },
@@ -820,7 +820,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   const extendSelectionDownMultiAction = {
     ...makeMultiSelect(extendSelectionDownAction),
     defaultBinding: {
-      keys: ['ArrowDown', 'k', 'Shift+k', 'Shift+ArrowDown'],
+      keys: ['ArrowDown', 'j', 'Shift+j', 'Shift+ArrowDown'],
       eventOptions: {
         preventDefault: true,
       },

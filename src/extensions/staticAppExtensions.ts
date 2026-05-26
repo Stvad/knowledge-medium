@@ -44,6 +44,7 @@ import { todoPlugin } from '@/plugins/todo'
 import { syncStatusPlugin } from '@/plugins/sync-status'
 import { extensionsSettingsPlugin } from '@/plugins/extensions-settings'
 import { keybindingsSettingsPlugin } from '@/plugins/keybindings-settings'
+import { colemakKeybindingsPlugin } from '@/plugins/colemak-keybindings'
 import { extractTypePlugin } from '@/plugins/extract-type'
 import type { AppExtension } from '@/extensions/facet.js'
 
@@ -58,6 +59,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   // below "Extensions" in the Preferences tree; functionally
   // independent (no shared facet contributions).
   keybindingsSettingsPlugin,
+  colemakKeybindingsPlugin,
   kernelDataExtension,
   kernelPropertyUiExtension,
   kernelValuePresetsExtension,

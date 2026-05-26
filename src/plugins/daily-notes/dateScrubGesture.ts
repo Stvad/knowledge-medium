@@ -2,7 +2,7 @@
  * Date scrub gestures:
  *   - mobile: two-finger horizontal drag
  *   - desktop: hold `s` in NORMAL_MODE to enter scrub mode;
- *     arrows / h-k-j-l scrub by day or week; the wheel also feeds the
+ *     arrows / h-j-k-l scrub by day or week; the wheel also feeds the
  *     same running scrub while armed; release `s` commits; Escape
  *     cancels. Routed through the action system as `DATE_SCRUB_CONTEXT`
  *     — see `dateScrubActions.ts`. Both keyboard and wheel scrub commit
