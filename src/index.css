@@ -41,6 +41,8 @@
   --color-wikilink: hsl(var(--wikilink));
   --color-code: hsl(var(--code));
 
+  --color-success: hsl(var(--success));
+
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 2px);
   --radius-sm: calc(var(--radius) - 4px);
@@ -118,6 +120,8 @@
     --wikilink: 0 75% 50%;
     --code: 20 30% 95%;
 
+    --success: 142 55% 38%;
+
     --radius: 0.65rem;
 
     --chart-1: 14 90% 53%;
@@ -166,6 +170,8 @@
     --link: 14 90% 70%;
     --wikilink: 0 85% 70%;
     --code: 20 25% 18%;
+
+    --success: 142 50% 50%;
 
     --chart-1: 14 90% 60%;
     --chart-2: 5 80% 65%;

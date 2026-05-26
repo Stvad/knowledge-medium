@@ -27,17 +27,19 @@ interface UploadQueueCountRow {
   count: number
 }
 
-// Hue-free tones: all four non-neutral states pull from existing
-// theme tokens so the indicator fits any palette. `success` and
-// `active` share the primary tint (the icons — CloudCheck vs
-// CloudUpload/RefreshCw — distinguish them visually). `warning`
-// is a softer destructive shade so a glance still differentiates
-// "needs attention" from a hard error.
+// Theme-aware tones. `success` reads `--success` (per-theme green
+// hue) rather than `--primary` so warm-primary palettes like
+// sunset-warm don't paint the "synced OK" chip in alarming reds.
+// `active` keeps the primary tint — a spinning icon plus primary
+// hue communicates "in progress" without colliding with the
+// "good/bad" semantic of success/error. `warning` is a softer
+// destructive shade so a glance still differentiates "needs
+// attention" from a hard error.
 const toneClass: Record<SyncIndicatorTone, string> = {
   error: 'border-destructive/30 bg-destructive/10 text-destructive',
   warning: 'border-destructive/20 bg-destructive/5 text-destructive',
   active: 'border-primary/30 bg-primary/10 text-primary',
-  success: 'border-primary/30 bg-primary/10 text-primary',
+  success: 'border-success/30 bg-success/10 text-success',
   local: 'border-border bg-muted/50 text-muted-foreground',
   neutral: 'border-border bg-background text-muted-foreground',
 }
