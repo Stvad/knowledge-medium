@@ -1,0 +1,1517 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Knowledge Medium — Theme Playground</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      /*
+        The playground UI ("chrome") uses a small set of neutral utility colors
+        that are NOT theme-dependent. The "preview" area uses the theme tokens
+        declared inside `.theme-scope` so the user can judge a palette without
+        the controls panel changing color along with it.
+      */
+
+      :root {
+        color-scheme: light;
+      }
+
+      html,
+      body {
+        height: 100%;
+      }
+
+      body {
+        margin: 0;
+        font-family:
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          "Segoe UI",
+          Roboto,
+          "Helvetica Neue",
+          Arial,
+          sans-serif;
+        background: #0b0d12;
+        color: #e6e8eb;
+      }
+
+      /* Chrome (controls panel + page frame) */
+      .chrome-panel {
+        background: #11141b;
+        border-color: #1f2330;
+        color: #e6e8eb;
+      }
+      .chrome-muted {
+        color: #8b91a1;
+      }
+      .chrome-input {
+        background: #0b0d12;
+        border: 1px solid #1f2330;
+        color: #e6e8eb;
+        border-radius: 6px;
+        padding: 4px 8px;
+        font-size: 12px;
+        width: 100%;
+      }
+      .chrome-input:focus {
+        outline: none;
+        border-color: #4f6df5;
+        box-shadow: 0 0 0 2px rgba(79, 109, 245, 0.35);
+      }
+      .chrome-btn {
+        background: #1a1f2c;
+        border: 1px solid #2a3142;
+        color: #e6e8eb;
+        border-radius: 6px;
+        padding: 6px 10px;
+        font-size: 12px;
+        cursor: pointer;
+        transition: background 120ms ease;
+      }
+      .chrome-btn:hover {
+        background: #232a3a;
+      }
+      .chrome-btn.is-active {
+        background: #4f6df5;
+        border-color: #4f6df5;
+        color: white;
+      }
+      .chrome-btn--ghost {
+        background: transparent;
+      }
+      .chrome-section-title {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #6b7080;
+        margin: 14px 0 6px;
+      }
+      .chrome-token-row {
+        display: grid;
+        grid-template-columns: 16px 1fr repeat(3, 56px);
+        gap: 6px;
+        align-items: center;
+        padding: 4px 0;
+      }
+      .chrome-token-row label {
+        font-size: 12px;
+        color: #c7ccd9;
+      }
+      .chrome-swatch {
+        width: 16px;
+        height: 16px;
+        border-radius: 4px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+      }
+      .chrome-slider-row {
+        display: grid;
+        grid-template-columns: 1fr 56px;
+        gap: 8px;
+        align-items: center;
+      }
+      input[type="range"].chrome-range {
+        width: 100%;
+        accent-color: #4f6df5;
+      }
+      .chrome-textarea {
+        background: #0b0d12;
+        border: 1px solid #1f2330;
+        color: #c7ccd9;
+        border-radius: 6px;
+        padding: 8px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11px;
+        width: 100%;
+        min-height: 220px;
+        resize: vertical;
+      }
+
+      details > summary {
+        cursor: pointer;
+        font-size: 12px;
+        color: #c7ccd9;
+        user-select: none;
+        padding: 6px 0;
+      }
+      details[open] > summary {
+        margin-bottom: 4px;
+      }
+
+      /* --- THEME SCOPE -------------------------------------------------- */
+      /*
+        The preview is rendered inside `.theme-scope`. All theme tokens are
+        declared on the scope itself (not :root) so the controls panel keeps
+        its own neutral styling regardless of what the user does to the
+        palette.
+
+        Note: we deliberately mirror the actual app's `hsl(var(--x))` pattern.
+        Tailwind classes like `bg-background` aren't available here (no build
+        step), so the preview uses inline classes that resolve the tokens
+        directly. The visual result is the same.
+      */
+      .theme-scope {
+        --background: 0 0% 100%;
+        --foreground: 0 0% 3.9%;
+        --card: 0 0% 100%;
+        --card-foreground: 0 0% 3.9%;
+        --popover: 0 0% 100%;
+        --popover-foreground: 0 0% 3.9%;
+        --primary: 0 0% 9%;
+        --primary-foreground: 0 0% 98%;
+        --secondary: 0 0% 96.1%;
+        --secondary-foreground: 0 0% 9%;
+        --muted: 0 0% 96.1%;
+        --muted-foreground: 0 0% 45.1%;
+        --accent: 0 0% 96.1%;
+        --accent-foreground: 0 0% 9%;
+        --destructive: 0 84.2% 60.2%;
+        --destructive-foreground: 0 0% 98%;
+        --border: 0 0% 89.8%;
+        --input: 0 0% 89.8%;
+        --ring: 0 0% 3.9%;
+        --radius: 0.5rem;
+        --chart-1: 12 76% 61%;
+        --chart-2: 173 58% 39%;
+        --chart-3: 197 37% 24%;
+        --chart-4: 43 74% 66%;
+        --chart-5: 27 87% 67%;
+
+        background: hsl(var(--background));
+        color: hsl(var(--foreground));
+        border: 1px solid hsl(var(--border));
+        border-radius: 12px;
+        overflow: hidden;
+        font-family:
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          "Segoe UI",
+          Roboto,
+          "Helvetica Neue",
+          Arial,
+          sans-serif;
+      }
+
+      /* Header */
+      .tp-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 14px;
+        background: hsl(var(--background));
+        border-bottom: 1px solid hsl(var(--border));
+      }
+      .tp-wordmark {
+        font-weight: 600;
+        font-size: 14px;
+        letter-spacing: -0.01em;
+        color: hsl(var(--foreground));
+      }
+      .tp-wordmark-accent {
+        color: hsl(var(--primary));
+      }
+      .tp-header-actions {
+        display: flex;
+        gap: 4px;
+      }
+      .tp-iconbtn {
+        width: 28px;
+        height: 28px;
+        border-radius: calc(var(--radius) - 2px);
+        border: none;
+        background: transparent;
+        color: hsl(var(--muted-foreground));
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 14px;
+        transition:
+          background 120ms ease,
+          color 120ms ease;
+      }
+      .tp-iconbtn:hover {
+        background: hsl(var(--accent));
+        color: hsl(var(--accent-foreground));
+      }
+
+      /* Page */
+      .tp-page {
+        padding: 14px 18px 20px;
+        background: hsl(var(--background));
+      }
+      .tp-page h1 {
+        font-size: 22px;
+        font-weight: 700;
+        margin: 4px 0 12px;
+        line-height: 1.25;
+        color: hsl(var(--foreground));
+      }
+      .tp-block {
+        display: flex;
+        flex-direction: row;
+        margin-bottom: 6px;
+        position: relative;
+        border-radius: calc(var(--radius) - 2px);
+        padding: 2px 4px;
+      }
+      .tp-block.is-selected {
+        background: hsl(var(--accent) / 0.8);
+      }
+      .tp-block.is-focused > .tp-block-body > .tp-block-content-row {
+        background: hsl(var(--muted) / 0.95);
+        border-radius: 4px;
+      }
+      .tp-block-bullet {
+        width: 16px;
+        height: 22px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        color: hsl(var(--muted-foreground));
+        user-select: none;
+        font-size: 18px;
+        line-height: 0;
+        flex-shrink: 0;
+      }
+      .tp-block-body {
+        flex: 1;
+        min-width: 0;
+      }
+      .tp-block-content-row {
+        padding: 1px 4px;
+        font-size: 14px;
+        line-height: 1.45;
+        color: hsl(var(--foreground));
+      }
+      .tp-block-children {
+        margin-left: 20px;
+      }
+
+      .tp-page a.tp-link {
+        color: rgb(59 130 246);
+        text-decoration: underline;
+      }
+      .tp-page a.tp-wikilink {
+        color: hsl(var(--primary));
+        text-decoration: none;
+        font-weight: 500;
+      }
+      .tp-page a.tp-wikilink:hover {
+        text-decoration: underline;
+      }
+
+      .tp-page code {
+        background: rgb(243 244 246);
+        border-radius: 4px;
+        padding: 1px 6px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.875em;
+      }
+      .theme-scope[data-theme="dark"] .tp-page code {
+        background: rgb(31 41 55);
+      }
+
+      /* Buttons (shadcn-style) */
+      .tp-btn-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin: 16px 0 8px;
+      }
+      .tp-btn {
+        height: 36px;
+        padding: 0 14px;
+        border-radius: calc(var(--radius) - 2px);
+        font-size: 13px;
+        font-weight: 500;
+        border: 1px solid transparent;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        transition:
+          background 120ms ease,
+          color 120ms ease,
+          border-color 120ms ease,
+          box-shadow 120ms ease;
+        font-family: inherit;
+      }
+      .tp-btn:focus-visible {
+        outline: none;
+        box-shadow: 0 0 0 2px hsl(var(--ring) / 0.5);
+      }
+      .tp-btn--primary {
+        background: hsl(var(--primary));
+        color: hsl(var(--primary-foreground));
+      }
+      .tp-btn--primary:hover {
+        background: hsl(var(--primary) / 0.9);
+      }
+      .tp-btn--secondary {
+        background: hsl(var(--secondary));
+        color: hsl(var(--secondary-foreground));
+      }
+      .tp-btn--secondary:hover {
+        background: hsl(var(--secondary) / 0.8);
+      }
+      .tp-btn--outline {
+        background: hsl(var(--background));
+        color: hsl(var(--foreground));
+        border-color: hsl(var(--border));
+      }
+      .tp-btn--outline:hover {
+        background: hsl(var(--accent));
+        color: hsl(var(--accent-foreground));
+      }
+      .tp-btn--ghost {
+        background: transparent;
+        color: hsl(var(--foreground));
+      }
+      .tp-btn--ghost:hover {
+        background: hsl(var(--accent));
+        color: hsl(var(--accent-foreground));
+      }
+      .tp-btn--destructive {
+        background: hsl(var(--destructive));
+        color: hsl(var(--destructive-foreground));
+      }
+      .tp-btn--destructive:hover {
+        background: hsl(var(--destructive) / 0.9);
+      }
+
+      /* Card */
+      .tp-card {
+        background: hsl(var(--card));
+        color: hsl(var(--card-foreground));
+        border: 1px solid hsl(var(--border));
+        border-radius: var(--radius);
+        padding: 14px 16px;
+        margin-top: 12px;
+      }
+      .tp-card-title {
+        font-weight: 600;
+        font-size: 14px;
+        margin-bottom: 4px;
+        color: hsl(var(--card-foreground));
+      }
+      .tp-card-body {
+        font-size: 13px;
+        line-height: 1.5;
+        color: hsl(var(--muted-foreground));
+      }
+      .tp-card-actions {
+        margin-top: 12px;
+        display: flex;
+        justify-content: flex-end;
+      }
+
+      /* Inputs */
+      .tp-field {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        margin-top: 12px;
+      }
+      .tp-label {
+        font-size: 12px;
+        font-weight: 500;
+        color: hsl(var(--foreground));
+      }
+      .tp-input,
+      .tp-textarea {
+        background: hsl(var(--background));
+        border: 1px solid hsl(var(--input));
+        color: hsl(var(--foreground));
+        border-radius: calc(var(--radius) - 2px);
+        padding: 8px 10px;
+        font-size: 13px;
+        font-family: inherit;
+        transition: box-shadow 120ms ease;
+      }
+      .tp-input:focus,
+      .tp-textarea:focus {
+        outline: none;
+        box-shadow: 0 0 0 2px hsl(var(--ring) / 0.45);
+        border-color: hsl(var(--ring));
+      }
+      .tp-textarea {
+        min-height: 64px;
+        resize: vertical;
+      }
+
+      /* Popover preview */
+      .tp-popover {
+        margin-top: 16px;
+        background: hsl(var(--popover));
+        color: hsl(var(--popover-foreground));
+        border: 1px solid hsl(var(--border));
+        border-radius: calc(var(--radius) - 2px);
+        padding: 8px;
+        max-width: 240px;
+        box-shadow:
+          0 4px 6px -1px rgb(0 0 0 / 0.1),
+          0 2px 4px -2px rgb(0 0 0 / 0.1);
+        font-size: 12px;
+      }
+      .tp-popover-item {
+        padding: 6px 8px;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      .tp-popover-item:hover {
+        background: hsl(var(--accent));
+        color: hsl(var(--accent-foreground));
+      }
+
+      /* Swatch summary */
+      .tp-swatches {
+        margin-top: 16px;
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+        gap: 8px;
+        padding: 12px;
+        background: hsl(var(--muted) / 0.4);
+        border: 1px solid hsl(var(--border));
+        border-radius: calc(var(--radius) - 2px);
+      }
+      .tp-swatch {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 11px;
+        color: hsl(var(--foreground));
+      }
+      .tp-swatch-chip {
+        width: 24px;
+        height: 24px;
+        border-radius: 5px;
+        border: 1px solid hsl(var(--border));
+        flex-shrink: 0;
+      }
+      .tp-swatch-meta {
+        display: flex;
+        flex-direction: column;
+        line-height: 1.2;
+        min-width: 0;
+      }
+      .tp-swatch-meta b {
+        font-weight: 600;
+        font-size: 11px;
+      }
+      .tp-swatch-meta span {
+        color: hsl(var(--muted-foreground));
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 10px;
+      }
+
+      .tp-note {
+        font-size: 11px;
+        color: hsl(var(--muted-foreground));
+        margin-top: 8px;
+        font-style: italic;
+      }
+
+      /* Layout */
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 380px;
+        gap: 16px;
+        padding: 16px;
+        min-height: 100vh;
+        box-sizing: border-box;
+      }
+      @media (max-width: 1100px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+      }
+      .previews {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 16px;
+        min-width: 0;
+      }
+      .previews.split {
+        grid-template-columns: 1fr 1fr;
+      }
+      @media (max-width: 1500px) {
+        .previews.split {
+          grid-template-columns: 1fr;
+        }
+      }
+      .preview-wrap {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .preview-label {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #8b91a1;
+        margin-bottom: 6px;
+      }
+      .controls {
+        position: sticky;
+        top: 16px;
+        align-self: start;
+        max-height: calc(100vh - 32px);
+        overflow-y: auto;
+        padding: 14px;
+        border-radius: 12px;
+        border: 1px solid;
+      }
+
+      .title-bar {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        margin-bottom: 8px;
+      }
+      .title-bar h1 {
+        font-size: 16px;
+        font-weight: 700;
+        margin: 0;
+        color: #e6e8eb;
+      }
+      .title-bar .sub {
+        font-size: 11px;
+        color: #8b91a1;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="layout">
+      <div>
+        <div class="title-bar">
+          <h1>Knowledge Medium — Theme Playground</h1>
+          <div class="sub" id="active-preset-label">Preset: Current Light</div>
+        </div>
+
+        <div class="previews" id="previews">
+          <div class="preview-wrap">
+            <div class="preview-label" id="primary-preview-label">Light preview</div>
+            <div class="theme-scope" id="preview-primary" data-theme="light"></div>
+          </div>
+          <div class="preview-wrap" id="secondary-preview-wrap" style="display: none">
+            <div class="preview-label">Dark preview</div>
+            <div class="theme-scope" id="preview-secondary" data-theme="dark"></div>
+          </div>
+        </div>
+      </div>
+
+      <aside class="controls chrome-panel">
+        <div style="font-size: 13px; font-weight: 600; margin-bottom: 10px">Controls</div>
+
+        <div class="chrome-section-title">Preset family</div>
+        <div id="preset-pills" style="display: flex; flex-wrap: wrap; gap: 4px"></div>
+
+        <div class="chrome-section-title">Mode</div>
+        <div style="display: flex; gap: 4px">
+          <button class="chrome-btn" data-mode="light" id="mode-light">Light</button>
+          <button class="chrome-btn" data-mode="dark" id="mode-dark">Dark</button>
+          <button class="chrome-btn chrome-btn--ghost" id="toggle-split" title="Show both modes side-by-side">
+            <span id="split-label">Show both</span>
+          </button>
+        </div>
+        <div class="chrome-muted" style="font-size: 11px; margin-top: 4px">
+          Editing applies to the <b id="editing-mode-label">light</b> half.
+        </div>
+
+        <div class="chrome-section-title">Core tokens</div>
+        <div id="core-tokens"></div>
+
+        <details style="margin-top: 6px">
+          <summary>Chart tokens</summary>
+          <div id="chart-tokens"></div>
+        </details>
+
+        <div class="chrome-section-title">Radius</div>
+        <div class="chrome-slider-row">
+          <input type="range" class="chrome-range" id="radius-slider" min="0" max="1.5" step="0.05" value="0.5" />
+          <input type="number" class="chrome-input" id="radius-input" min="0" max="1.5" step="0.05" value="0.5" />
+        </div>
+
+        <div class="chrome-section-title">Actions</div>
+        <div style="display: flex; gap: 6px; flex-wrap: wrap">
+          <button class="chrome-btn" id="reset-preset">Reset to preset</button>
+          <button class="chrome-btn" id="export-css">Export CSS</button>
+          <button class="chrome-btn chrome-btn--ghost" id="copy-css">Copy</button>
+        </div>
+
+        <textarea id="export-output" class="chrome-textarea" style="margin-top: 8px" readonly placeholder="Click 'Export CSS' to generate a snippet you can paste into src/index.css"></textarea>
+
+        <div class="chrome-muted" style="font-size: 11px; margin-top: 12px; line-height: 1.5">
+          Tweaks persist to localStorage. Press <b>R</b> to reset, <b>L</b>/<b>D</b> to switch mode, <b>B</b> to toggle split view.
+        </div>
+      </aside>
+    </div>
+
+    <script>
+      // ----- Token definitions ---------------------------------------------
+      // Each entry: [css-var-suffix, human label, group]
+      const TOKENS = [
+        ["background", "background", "core"],
+        ["foreground", "foreground", "core"],
+        ["card", "card", "core"],
+        ["card-foreground", "card-foreground", "core"],
+        ["popover", "popover", "core"],
+        ["popover-foreground", "popover-foreground", "core"],
+        ["primary", "primary", "core"],
+        ["primary-foreground", "primary-foreground", "core"],
+        ["secondary", "secondary", "core"],
+        ["secondary-foreground", "secondary-foreground", "core"],
+        ["muted", "muted", "core"],
+        ["muted-foreground", "muted-foreground", "core"],
+        ["accent", "accent", "core"],
+        ["accent-foreground", "accent-foreground", "core"],
+        ["destructive", "destructive", "core"],
+        ["destructive-foreground", "destructive-foreground", "core"],
+        ["border", "border", "core"],
+        ["input", "input", "core"],
+        ["ring", "ring", "core"],
+        ["chart-1", "chart-1", "chart"],
+        ["chart-2", "chart-2", "chart"],
+        ["chart-3", "chart-3", "chart"],
+        ["chart-4", "chart-4", "chart"],
+        ["chart-5", "chart-5", "chart"],
+      ];
+
+      // ----- Presets --------------------------------------------------------
+      // Each preset has a `light` and `dark` half, each is a flat object of
+      // token -> "H S% L%" string. `radius` is shared across both halves.
+      //
+      // Vibrancy strategy: primary/accent/ring get real saturation, while
+      // background/foreground get a very subtle hue tint (5-10% saturation)
+      // for a more sophisticated feel than pure neutral.
+      const PRESETS = {
+        "current-light": {
+          name: "Current Light",
+          family: "current",
+          mode: "light",
+          radius: 0.5,
+          tokens: {
+            background: "0 0% 100%",
+            foreground: "0 0% 3.9%",
+            card: "0 0% 100%",
+            "card-foreground": "0 0% 3.9%",
+            popover: "0 0% 100%",
+            "popover-foreground": "0 0% 3.9%",
+            primary: "0 0% 9%",
+            "primary-foreground": "0 0% 98%",
+            secondary: "0 0% 96.1%",
+            "secondary-foreground": "0 0% 9%",
+            muted: "0 0% 96.1%",
+            "muted-foreground": "0 0% 45.1%",
+            accent: "0 0% 96.1%",
+            "accent-foreground": "0 0% 9%",
+            destructive: "0 84.2% 60.2%",
+            "destructive-foreground": "0 0% 98%",
+            border: "0 0% 89.8%",
+            input: "0 0% 89.8%",
+            ring: "0 0% 3.9%",
+            "chart-1": "12 76% 61%",
+            "chart-2": "173 58% 39%",
+            "chart-3": "197 37% 24%",
+            "chart-4": "43 74% 66%",
+            "chart-5": "27 87% 67%",
+          },
+        },
+        "current-dark": {
+          name: "Current Dark",
+          family: "current",
+          mode: "dark",
+          radius: 0.5,
+          tokens: {
+            background: "0 0% 3.9%",
+            foreground: "0 0% 98%",
+            card: "0 0% 3.9%",
+            "card-foreground": "0 0% 98%",
+            popover: "0 0% 3.9%",
+            "popover-foreground": "0 0% 98%",
+            primary: "0 0% 98%",
+            "primary-foreground": "0 0% 9%",
+            secondary: "0 0% 14.9%",
+            "secondary-foreground": "0 0% 98%",
+            muted: "0 0% 14.9%",
+            "muted-foreground": "0 0% 63.9%",
+            accent: "0 0% 14.9%",
+            "accent-foreground": "0 0% 98%",
+            destructive: "0 62.8% 30.6%",
+            "destructive-foreground": "0 0% 98%",
+            border: "0 0% 14.9%",
+            input: "0 0% 14.9%",
+            ring: "0 0% 83.1%",
+            "chart-1": "220 70% 50%",
+            "chart-2": "160 60% 45%",
+            "chart-3": "30 80% 55%",
+            "chart-4": "280 65% 60%",
+            "chart-5": "340 75% 55%",
+          },
+        },
+
+        "indigo-light": {
+          name: "Indigo Light",
+          family: "indigo",
+          mode: "light",
+          radius: 0.6,
+          tokens: {
+            background: "240 25% 99%",
+            foreground: "240 30% 12%",
+            card: "0 0% 100%",
+            "card-foreground": "240 30% 12%",
+            popover: "0 0% 100%",
+            "popover-foreground": "240 30% 12%",
+            primary: "243 75% 59%",
+            "primary-foreground": "240 25% 99%",
+            secondary: "243 30% 95%",
+            "secondary-foreground": "243 60% 25%",
+            muted: "240 20% 96%",
+            "muted-foreground": "240 12% 45%",
+            accent: "270 80% 92%",
+            "accent-foreground": "270 60% 25%",
+            destructive: "0 84% 60%",
+            "destructive-foreground": "0 0% 98%",
+            border: "240 18% 90%",
+            input: "240 18% 88%",
+            ring: "243 75% 59%",
+            "chart-1": "243 75% 59%",
+            "chart-2": "270 70% 60%",
+            "chart-3": "199 80% 55%",
+            "chart-4": "330 70% 65%",
+            "chart-5": "35 90% 60%",
+          },
+        },
+        "indigo-dark": {
+          name: "Indigo Dark",
+          family: "indigo",
+          mode: "dark",
+          radius: 0.6,
+          tokens: {
+            background: "240 25% 7%",
+            foreground: "240 15% 95%",
+            card: "240 25% 9%",
+            "card-foreground": "240 15% 95%",
+            popover: "240 25% 9%",
+            "popover-foreground": "240 15% 95%",
+            primary: "243 75% 65%",
+            "primary-foreground": "240 25% 7%",
+            secondary: "243 25% 16%",
+            "secondary-foreground": "243 30% 90%",
+            muted: "240 18% 14%",
+            "muted-foreground": "240 12% 65%",
+            accent: "270 50% 25%",
+            "accent-foreground": "270 80% 92%",
+            destructive: "0 62% 45%",
+            "destructive-foreground": "0 0% 98%",
+            border: "240 20% 18%",
+            input: "240 20% 18%",
+            ring: "243 75% 65%",
+            "chart-1": "243 75% 65%",
+            "chart-2": "270 70% 70%",
+            "chart-3": "199 80% 60%",
+            "chart-4": "330 70% 70%",
+            "chart-5": "35 90% 65%",
+          },
+        },
+
+        "ocean-light": {
+          name: "Ocean Light",
+          family: "ocean",
+          mode: "light",
+          radius: 0.55,
+          tokens: {
+            background: "200 30% 99%",
+            foreground: "200 30% 12%",
+            card: "0 0% 100%",
+            "card-foreground": "200 30% 12%",
+            popover: "0 0% 100%",
+            "popover-foreground": "200 30% 12%",
+            primary: "199 89% 48%",
+            "primary-foreground": "200 30% 99%",
+            secondary: "199 40% 94%",
+            "secondary-foreground": "199 70% 22%",
+            muted: "200 20% 95%",
+            "muted-foreground": "200 12% 42%",
+            accent: "172 70% 88%",
+            "accent-foreground": "172 70% 20%",
+            destructive: "0 84% 60%",
+            "destructive-foreground": "0 0% 98%",
+            border: "200 20% 88%",
+            input: "200 20% 86%",
+            ring: "199 89% 48%",
+            "chart-1": "199 89% 48%",
+            "chart-2": "172 70% 45%",
+            "chart-3": "220 70% 55%",
+            "chart-4": "150 65% 50%",
+            "chart-5": "280 60% 60%",
+          },
+        },
+        "ocean-dark": {
+          name: "Ocean Dark",
+          family: "ocean",
+          mode: "dark",
+          radius: 0.55,
+          tokens: {
+            background: "210 35% 7%",
+            foreground: "200 20% 95%",
+            card: "210 35% 9%",
+            "card-foreground": "200 20% 95%",
+            popover: "210 35% 9%",
+            "popover-foreground": "200 20% 95%",
+            primary: "199 89% 55%",
+            "primary-foreground": "210 35% 7%",
+            secondary: "200 30% 16%",
+            "secondary-foreground": "199 40% 92%",
+            muted: "210 25% 14%",
+            "muted-foreground": "200 14% 65%",
+            accent: "172 50% 22%",
+            "accent-foreground": "172 70% 88%",
+            destructive: "0 62% 45%",
+            "destructive-foreground": "0 0% 98%",
+            border: "210 30% 18%",
+            input: "210 30% 18%",
+            ring: "199 89% 55%",
+            "chart-1": "199 89% 55%",
+            "chart-2": "172 70% 55%",
+            "chart-3": "220 70% 65%",
+            "chart-4": "150 65% 55%",
+            "chart-5": "280 60% 65%",
+          },
+        },
+
+        "sunset-light": {
+          name: "Sunset Light",
+          family: "sunset",
+          mode: "light",
+          radius: 0.65,
+          tokens: {
+            background: "30 40% 99%",
+            foreground: "20 30% 12%",
+            card: "0 0% 100%",
+            "card-foreground": "20 30% 12%",
+            popover: "0 0% 100%",
+            "popover-foreground": "20 30% 12%",
+            primary: "14 90% 53%",
+            "primary-foreground": "30 40% 99%",
+            secondary: "20 60% 95%",
+            "secondary-foreground": "14 70% 30%",
+            muted: "20 25% 95%",
+            "muted-foreground": "20 12% 42%",
+            accent: "340 80% 92%",
+            "accent-foreground": "340 70% 30%",
+            destructive: "0 84% 55%",
+            "destructive-foreground": "0 0% 98%",
+            border: "20 25% 88%",
+            input: "20 25% 86%",
+            ring: "14 90% 53%",
+            "chart-1": "14 90% 53%",
+            "chart-2": "340 80% 60%",
+            "chart-3": "35 90% 55%",
+            "chart-4": "280 60% 60%",
+            "chart-5": "180 60% 45%",
+          },
+        },
+        "sunset-dark": {
+          name: "Sunset Dark",
+          family: "sunset",
+          mode: "dark",
+          radius: 0.65,
+          tokens: {
+            background: "20 30% 7%",
+            foreground: "30 20% 95%",
+            card: "20 30% 9%",
+            "card-foreground": "30 20% 95%",
+            popover: "20 30% 9%",
+            "popover-foreground": "30 20% 95%",
+            primary: "14 90% 60%",
+            "primary-foreground": "20 30% 7%",
+            secondary: "20 30% 16%",
+            "secondary-foreground": "20 60% 92%",
+            muted: "20 20% 14%",
+            "muted-foreground": "20 12% 65%",
+            accent: "340 50% 25%",
+            "accent-foreground": "340 80% 92%",
+            destructive: "0 62% 45%",
+            "destructive-foreground": "0 0% 98%",
+            border: "20 25% 18%",
+            input: "20 25% 18%",
+            ring: "14 90% 60%",
+            "chart-1": "14 90% 60%",
+            "chart-2": "340 80% 65%",
+            "chart-3": "35 90% 60%",
+            "chart-4": "280 60% 65%",
+            "chart-5": "180 60% 55%",
+          },
+        },
+
+        "forest-light": {
+          name: "Forest Light",
+          family: "forest",
+          mode: "light",
+          radius: 0.5,
+          tokens: {
+            background: "150 25% 99%",
+            foreground: "150 30% 10%",
+            card: "0 0% 100%",
+            "card-foreground": "150 30% 10%",
+            popover: "0 0% 100%",
+            "popover-foreground": "150 30% 10%",
+            primary: "158 64% 40%",
+            "primary-foreground": "150 25% 99%",
+            secondary: "158 30% 94%",
+            "secondary-foreground": "158 60% 20%",
+            muted: "150 18% 95%",
+            "muted-foreground": "150 10% 40%",
+            accent: "40 90% 90%",
+            "accent-foreground": "40 70% 25%",
+            destructive: "0 84% 58%",
+            "destructive-foreground": "0 0% 98%",
+            border: "150 15% 87%",
+            input: "150 15% 85%",
+            ring: "158 64% 40%",
+            "chart-1": "158 64% 40%",
+            "chart-2": "40 90% 55%",
+            "chart-3": "199 80% 50%",
+            "chart-4": "280 55% 55%",
+            "chart-5": "14 80% 55%",
+          },
+        },
+        "forest-dark": {
+          name: "Forest Dark",
+          family: "forest",
+          mode: "dark",
+          radius: 0.5,
+          tokens: {
+            background: "150 25% 7%",
+            foreground: "150 15% 95%",
+            card: "150 25% 9%",
+            "card-foreground": "150 15% 95%",
+            popover: "150 25% 9%",
+            "popover-foreground": "150 15% 95%",
+            primary: "158 64% 50%",
+            "primary-foreground": "150 25% 7%",
+            secondary: "158 25% 16%",
+            "secondary-foreground": "158 30% 90%",
+            muted: "150 18% 14%",
+            "muted-foreground": "150 10% 65%",
+            accent: "40 50% 22%",
+            "accent-foreground": "40 90% 90%",
+            destructive: "0 62% 45%",
+            "destructive-foreground": "0 0% 98%",
+            border: "150 20% 17%",
+            input: "150 20% 17%",
+            ring: "158 64% 50%",
+            "chart-1": "158 64% 50%",
+            "chart-2": "40 90% 60%",
+            "chart-3": "199 80% 60%",
+            "chart-4": "280 55% 65%",
+            "chart-5": "14 80% 65%",
+          },
+        },
+      };
+
+      // ----- Family helpers -------------------------------------------------
+      const FAMILIES = [
+        { id: "current", label: "Current" },
+        { id: "indigo", label: "Indigo" },
+        { id: "ocean", label: "Ocean" },
+        { id: "sunset", label: "Sunset" },
+        { id: "forest", label: "Forest" },
+      ];
+
+      function presetKey(family, mode) {
+        return `${family}-${mode}`;
+      }
+
+      // ----- State ----------------------------------------------------------
+      const STORAGE_KEY = "knowledge-medium:theme-playground:v1";
+
+      const state = {
+        family: "current",
+        mode: "light",
+        split: false,
+        // Working palette: { light: { tokens: {...}, radius }, dark: { tokens: {...}, radius } }
+        // Modifications stick to whichever (family, mode) is active.
+        working: {},
+      };
+
+      function loadStorage() {
+        try {
+          const raw = localStorage.getItem(STORAGE_KEY);
+          if (!raw) return;
+          const parsed = JSON.parse(raw);
+          if (parsed && typeof parsed === "object") {
+            if (parsed.family) state.family = parsed.family;
+            if (parsed.mode) state.mode = parsed.mode;
+            if (typeof parsed.split === "boolean") state.split = parsed.split;
+            if (parsed.working && typeof parsed.working === "object") {
+              state.working = parsed.working;
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      function saveStorage() {
+        try {
+          localStorage.setItem(
+            STORAGE_KEY,
+            JSON.stringify({
+              family: state.family,
+              mode: state.mode,
+              split: state.split,
+              working: state.working,
+            })
+          );
+        } catch {
+          // ignore
+        }
+      }
+
+      // For a given (family, mode), return the active palette: either the
+      // user's edited version (from working) or a fresh clone of the preset.
+      function getPalette(family, mode) {
+        const key = presetKey(family, mode);
+        if (state.working[key]) return state.working[key];
+        const preset = PRESETS[key];
+        if (!preset) return null;
+        // Clone so subsequent edits don't mutate the preset.
+        return {
+          tokens: { ...preset.tokens },
+          radius: preset.radius,
+        };
+      }
+
+      function setPaletteToken(family, mode, token, value) {
+        const key = presetKey(family, mode);
+        if (!state.working[key]) {
+          const preset = PRESETS[key];
+          state.working[key] = {
+            tokens: { ...preset.tokens },
+            radius: preset.radius,
+          };
+        }
+        state.working[key].tokens[token] = value;
+        saveStorage();
+      }
+
+      function setPaletteRadius(family, mode, radius) {
+        const key = presetKey(family, mode);
+        if (!state.working[key]) {
+          const preset = PRESETS[key];
+          state.working[key] = {
+            tokens: { ...preset.tokens },
+            radius: preset.radius,
+          };
+        }
+        state.working[key].radius = radius;
+        saveStorage();
+      }
+
+      function resetActivePreset() {
+        const key = presetKey(state.family, state.mode);
+        delete state.working[key];
+        saveStorage();
+      }
+
+      // ----- HSL parsing ----------------------------------------------------
+      function parseHsl(str) {
+        // "H S% L%" with optional spaces
+        const m = String(str).match(
+          /^\s*(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)%\s+(-?\d+(?:\.\d+)?)%\s*$/
+        );
+        if (!m) return null;
+        return {
+          h: parseFloat(m[1]),
+          s: parseFloat(m[2]),
+          l: parseFloat(m[3]),
+        };
+      }
+
+      function formatHsl({ h, s, l }) {
+        const round = (n, d = 1) => {
+          const f = Math.pow(10, d);
+          return Math.round(n * f) / f;
+        };
+        return `${round(h, 0)} ${round(s, 1)}% ${round(l, 1)}%`;
+      }
+
+      // ----- Rendering: preview ---------------------------------------------
+      function previewHtml() {
+        return `
+          <div class="tp-header">
+            <div class="tp-wordmark"><span class="tp-wordmark-accent">◆</span> Knowledge Medium</div>
+            <div class="tp-header-actions">
+              <button class="tp-iconbtn" title="Search">⌕</button>
+              <button class="tp-iconbtn" title="Theme">☀</button>
+              <button class="tp-iconbtn" title="Settings">⚙</button>
+            </div>
+          </div>
+          <div class="tp-page">
+            <h1>Designing a vibrant palette</h1>
+
+            <div class="tp-block">
+              <div class="tp-block-bullet">•</div>
+              <div class="tp-block-body">
+                <div class="tp-block-content-row">Open with a top-level idea — this block is the page's anchor.</div>
+                <div class="tp-block-children">
+                  <div class="tp-block is-selected">
+                    <div class="tp-block-bullet">•</div>
+                    <div class="tp-block-body">
+                      <div class="tp-block-content-row">This block is <b>selected</b> — shown via <code>bg-accent/80</code>.</div>
+                    </div>
+                  </div>
+                  <div class="tp-block is-focused">
+                    <div class="tp-block-bullet">•</div>
+                    <div class="tp-block-body">
+                      <div class="tp-block-content-row">This block is <b>keyboard-focused</b> — <code>bg-muted/95</code> on the content row.</div>
+                    </div>
+                  </div>
+                  <div class="tp-block">
+                    <div class="tp-block-bullet">•</div>
+                    <div class="tp-block-body">
+                      <div class="tp-block-content-row">A nested child with a <a class="tp-wikilink" href="#">[[wikilink]]</a> and an <a class="tp-link" href="#">external link</a>.</div>
+                      <div class="tp-block-children">
+                        <div class="tp-block">
+                          <div class="tp-block-bullet">•</div>
+                          <div class="tp-block-body">
+                            <div class="tp-block-content-row">Grandchild with inline <code>code</code> — currently hardcoded gray.</div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="tp-block">
+              <div class="tp-block-bullet">•</div>
+              <div class="tp-block-body">
+                <div class="tp-block-content-row">A sibling block with longer prose: the muted background tint should feel calm, while the accent should grab attention when selection lands on it.</div>
+              </div>
+            </div>
+
+            <div class="tp-note">Links and wikilinks currently use hardcoded Tailwind colors (blue-500, purple-600). Consider replacing with theme tokens.</div>
+
+            <div class="tp-btn-row">
+              <button class="tp-btn tp-btn--primary">Primary</button>
+              <button class="tp-btn tp-btn--secondary">Secondary</button>
+              <button class="tp-btn tp-btn--outline">Outline</button>
+              <button class="tp-btn tp-btn--ghost">Ghost</button>
+              <button class="tp-btn tp-btn--destructive">Destructive</button>
+            </div>
+
+            <div class="tp-card">
+              <div class="tp-card-title">Card surface</div>
+              <div class="tp-card-body">
+                Cards use <code>--card</code> and <code>--card-foreground</code>. Body text typically uses the muted foreground so titles stand out.
+              </div>
+              <div class="tp-card-actions">
+                <button class="tp-btn tp-btn--primary" style="height: 30px; padding: 0 12px; font-size: 12px">Action</button>
+              </div>
+            </div>
+
+            <div class="tp-field">
+              <label class="tp-label" for="tp-input-1">Block content</label>
+              <input class="tp-input" id="tp-input-1" placeholder="What's on your mind?" />
+            </div>
+            <div class="tp-field">
+              <label class="tp-label" for="tp-textarea-1">Notes</label>
+              <textarea class="tp-textarea" id="tp-textarea-1" placeholder="Multi-line notes…"></textarea>
+            </div>
+
+            <div class="tp-popover" role="menu">
+              <div class="tp-popover-item">Open in new panel</div>
+              <div class="tp-popover-item">Copy link</div>
+              <div class="tp-popover-item">Archive</div>
+            </div>
+
+            <div class="tp-swatches" data-swatches></div>
+          </div>
+        `;
+      }
+
+      function renderSwatches(scopeEl) {
+        const wrap = scopeEl.querySelector("[data-swatches]");
+        if (!wrap) return;
+        const tokensToShow = TOKENS.filter(([, , g]) => g === "core").map(([t]) => t);
+        wrap.innerHTML = tokensToShow
+          .map((t) => {
+            const val = getComputedStyle(scopeEl).getPropertyValue(`--${t}`).trim();
+            return `
+              <div class="tp-swatch">
+                <div class="tp-swatch-chip" style="background: hsl(${val})"></div>
+                <div class="tp-swatch-meta">
+                  <b>${t}</b>
+                  <span>${val}</span>
+                </div>
+              </div>
+            `;
+          })
+          .join("");
+      }
+
+      function paintScope(scopeEl, palette) {
+        if (!palette) return;
+        for (const [token] of TOKENS) {
+          if (palette.tokens[token] !== undefined) {
+            scopeEl.style.setProperty(`--${token}`, palette.tokens[token]);
+          }
+        }
+        scopeEl.style.setProperty("--radius", `${palette.radius}rem`);
+      }
+
+      // ----- Rendering: controls --------------------------------------------
+      function renderPresetPills() {
+        const wrap = document.getElementById("preset-pills");
+        wrap.innerHTML = FAMILIES.map(
+          (f) =>
+            `<button class="chrome-btn ${f.id === state.family ? "is-active" : ""}" data-family="${f.id}">${f.label}</button>`
+        ).join("");
+        wrap.querySelectorAll("button[data-family]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            state.family = btn.dataset.family;
+            saveStorage();
+            renderAll();
+          });
+        });
+      }
+
+      function renderModeButtons() {
+        const lightBtn = document.getElementById("mode-light");
+        const darkBtn = document.getElementById("mode-dark");
+        lightBtn.classList.toggle("is-active", state.mode === "light");
+        darkBtn.classList.toggle("is-active", state.mode === "dark");
+        document.getElementById("editing-mode-label").textContent = state.mode;
+        document.getElementById("split-label").textContent = state.split ? "Single view" : "Show both";
+      }
+
+      function renderTokenControls() {
+        const palette = getPalette(state.family, state.mode);
+        const coreWrap = document.getElementById("core-tokens");
+        const chartWrap = document.getElementById("chart-tokens");
+
+        function rowHtml(token) {
+          const val = palette.tokens[token] || "0 0% 50%";
+          const { h, s, l } = parseHsl(val) || { h: 0, s: 0, l: 50 };
+          return `
+            <div class="chrome-token-row" data-token="${token}">
+              <div class="chrome-swatch" data-swatch style="background: hsl(${val})"></div>
+              <label>${token}</label>
+              <input class="chrome-input" data-h type="number" min="0" max="360" step="1" value="${Math.round(h)}" />
+              <input class="chrome-input" data-s type="number" min="0" max="100" step="0.5" value="${s}" />
+              <input class="chrome-input" data-l type="number" min="0" max="100" step="0.5" value="${l}" />
+            </div>
+            <div class="chrome-token-row" style="grid-template-columns: 16px 1fr;">
+              <span></span>
+              <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px;">
+                <input class="chrome-range" data-h-range type="range" min="0" max="360" step="1" value="${Math.round(h)}" title="hue" />
+                <input class="chrome-range" data-s-range type="range" min="0" max="100" step="0.5" value="${s}" title="saturation" />
+                <input class="chrome-range" data-l-range type="range" min="0" max="100" step="0.5" value="${l}" title="lightness" />
+              </div>
+            </div>
+          `;
+        }
+
+        coreWrap.innerHTML = TOKENS.filter(([, , g]) => g === "core")
+          .map(([t]) => rowHtml(t))
+          .join("");
+        chartWrap.innerHTML = TOKENS.filter(([, , g]) => g === "chart")
+          .map(([t]) => rowHtml(t))
+          .join("");
+
+        const onInput = (rowEl) => {
+          const token = rowEl.dataset.token;
+          const h = parseFloat(rowEl.querySelector("[data-h]").value) || 0;
+          const s = parseFloat(rowEl.querySelector("[data-s]").value) || 0;
+          const l = parseFloat(rowEl.querySelector("[data-l]").value) || 0;
+          const next = formatHsl({ h, s, l });
+          setPaletteToken(state.family, state.mode, token, next);
+          rowEl.querySelector("[data-swatch]").style.background = `hsl(${next})`;
+          paintPreviews();
+        };
+
+        document.querySelectorAll(".chrome-token-row[data-token]").forEach((rowEl) => {
+          const sliderRow = rowEl.nextElementSibling; // the slider triplet row
+          const sync = (channel) => (e) => {
+            const v = e.target.value;
+            rowEl.querySelector(`[data-${channel}]`).value = v;
+            if (sliderRow) sliderRow.querySelector(`[data-${channel}-range]`).value = v;
+            onInput(rowEl);
+          };
+          ["h", "s", "l"].forEach((ch) => {
+            rowEl.querySelector(`[data-${ch}]`).addEventListener("input", sync(ch));
+            if (sliderRow) sliderRow.querySelector(`[data-${ch}-range]`).addEventListener("input", sync(ch));
+          });
+        });
+      }
+
+      function renderRadius() {
+        const palette = getPalette(state.family, state.mode);
+        document.getElementById("radius-slider").value = palette.radius;
+        document.getElementById("radius-input").value = palette.radius;
+      }
+
+      function renderActivePresetLabel() {
+        const palette = PRESETS[presetKey(state.family, state.mode)];
+        document.getElementById("active-preset-label").textContent = `Preset: ${palette.name}`;
+      }
+
+      // ----- Render orchestration ------------------------------------------
+      function paintPreviews() {
+        const primary = document.getElementById("preview-primary");
+        const secondary = document.getElementById("preview-secondary");
+        const secondaryWrap = document.getElementById("secondary-preview-wrap");
+        const primaryLabel = document.getElementById("primary-preview-label");
+
+        if (state.split) {
+          const lightPalette = getPalette(state.family, "light");
+          const darkPalette = getPalette(state.family, "dark");
+          primary.setAttribute("data-theme", "light");
+          secondary.setAttribute("data-theme", "dark");
+          paintScope(primary, lightPalette);
+          paintScope(secondary, darkPalette);
+          primaryLabel.textContent = "Light preview";
+          secondaryWrap.style.display = "";
+          document.getElementById("previews").classList.add("split");
+        } else {
+          const palette = getPalette(state.family, state.mode);
+          primary.setAttribute("data-theme", state.mode);
+          paintScope(primary, palette);
+          primaryLabel.textContent = `${state.mode.charAt(0).toUpperCase() + state.mode.slice(1)} preview`;
+          secondaryWrap.style.display = "none";
+          document.getElementById("previews").classList.remove("split");
+        }
+
+        // Swatches inside each preview reflect its own resolved variables.
+        renderSwatches(primary);
+        if (state.split) renderSwatches(secondary);
+      }
+
+      function renderPreviewSkeletons() {
+        document.getElementById("preview-primary").innerHTML = previewHtml();
+        document.getElementById("preview-secondary").innerHTML = previewHtml();
+      }
+
+      function renderAll() {
+        renderActivePresetLabel();
+        renderPresetPills();
+        renderModeButtons();
+        renderTokenControls();
+        renderRadius();
+        paintPreviews();
+      }
+
+      // ----- Export ---------------------------------------------------------
+      function buildExportCss() {
+        const lightPalette = getPalette(state.family, "light");
+        const darkPalette = getPalette(state.family, "dark");
+
+        const lines = [];
+        lines.push(`/* Generated by docs/theme-playground.html — family: ${state.family} */`);
+        lines.push(`:root,`);
+        lines.push(`[data-theme="light"] {`);
+        for (const [t] of TOKENS) {
+          lines.push(`  --${t}: ${lightPalette.tokens[t]};`);
+        }
+        lines.push(`  --radius: ${lightPalette.radius}rem;`);
+        lines.push(`}`);
+        lines.push(``);
+        lines.push(`.dark,`);
+        lines.push(`[data-theme="dark"] {`);
+        for (const [t] of TOKENS) {
+          lines.push(`  --${t}: ${darkPalette.tokens[t]};`);
+        }
+        lines.push(`  --radius: ${darkPalette.radius}rem;`);
+        lines.push(`}`);
+
+        return lines.join("\n");
+      }
+
+      // ----- Wiring ---------------------------------------------------------
+      function wireEvents() {
+        document.getElementById("mode-light").addEventListener("click", () => {
+          state.mode = "light";
+          saveStorage();
+          renderAll();
+        });
+        document.getElementById("mode-dark").addEventListener("click", () => {
+          state.mode = "dark";
+          saveStorage();
+          renderAll();
+        });
+        document.getElementById("toggle-split").addEventListener("click", () => {
+          state.split = !state.split;
+          saveStorage();
+          renderAll();
+        });
+
+        const radiusSlider = document.getElementById("radius-slider");
+        const radiusInput = document.getElementById("radius-input");
+        const handleRadius = (v) => {
+          const num = Math.max(0, Math.min(1.5, parseFloat(v) || 0));
+          radiusSlider.value = num;
+          radiusInput.value = num;
+          setPaletteRadius(state.family, state.mode, num);
+          paintPreviews();
+        };
+        radiusSlider.addEventListener("input", (e) => handleRadius(e.target.value));
+        radiusInput.addEventListener("input", (e) => handleRadius(e.target.value));
+
+        document.getElementById("reset-preset").addEventListener("click", () => {
+          resetActivePreset();
+          renderAll();
+        });
+
+        document.getElementById("export-css").addEventListener("click", () => {
+          document.getElementById("export-output").value = buildExportCss();
+        });
+        document.getElementById("copy-css").addEventListener("click", async () => {
+          const out = document.getElementById("export-output");
+          if (!out.value) out.value = buildExportCss();
+          try {
+            await navigator.clipboard.writeText(out.value);
+            const btn = document.getElementById("copy-css");
+            const prev = btn.textContent;
+            btn.textContent = "Copied!";
+            setTimeout(() => (btn.textContent = prev), 1200);
+          } catch {
+            out.select();
+          }
+        });
+
+        document.addEventListener("keydown", (e) => {
+          if (e.target.matches("input, textarea, select")) return;
+          if (e.key === "l" || e.key === "L") {
+            state.mode = "light";
+            saveStorage();
+            renderAll();
+          } else if (e.key === "d" || e.key === "D") {
+            state.mode = "dark";
+            saveStorage();
+            renderAll();
+          } else if (e.key === "b" || e.key === "B") {
+            state.split = !state.split;
+            saveStorage();
+            renderAll();
+          } else if (e.key === "r" || e.key === "R") {
+            resetActivePreset();
+            renderAll();
+          }
+        });
+      }
+
+      // ----- Boot -----------------------------------------------------------
+      loadStorage();
+      renderPreviewSkeletons();
+      wireEvents();
+      renderAll();
+    </script>
+  </body>
+</html>
