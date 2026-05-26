@@ -57,6 +57,7 @@ import {
 import type { Repo } from '@/data/repo'
 import { keyAtEnd } from './orderKey'
 import { aliasesProp } from './internals/coreProperties'
+import { typesProp } from './properties'
 import { PAGE_TYPE } from './blockTypes'
 
 /** Layer 1 args. */
@@ -141,11 +142,26 @@ export const computeAliasSeatId = (
   index: number = 0,
 ): string => uuidv5(`${workspaceId}:${alias}:${index}`, ALIAS_NS)
 
-/** Minimal alias-seat row shape the probe needs. `aliases` is the
- *  decoded `alias` property; `deleted` is the tombstone flag. */
+/** Alias-seat row shape the probe needs. Carries enough info to detect
+ *  a *pristine transient tombstone* — a slot that cleanup soft-deleted
+ *  without the user ever touching the page (no content drift, no extra
+ *  properties, no children). Those are restorable in place; everything
+ *  else (drifted content, user-added props/children, explicit page
+ *  delete after edits) stays skipped so we don't resurrect content the
+ *  user already discarded. */
 export interface AliasSeatRow {
   deleted: boolean
   aliases: readonly string[]
+  content: string
+  /** True iff properties contain ONLY `alias` and `types`, and `types`
+   *  is exactly `[PAGE_TYPE]` — the shape `ensureAliasTarget` writes.
+   *  Any extra key or extra type means the user (or another plugin)
+   *  touched the seat. */
+  hasSeedProperties: boolean
+  /** True iff some live block has parent_id = this row's id. Soft-
+   *  delete does not cascade today, so a tombstoned seat with live
+   *  children is by definition not transient. */
+  hasLiveChildren: boolean
 }
 
 /** Read function passed to `resolveAliasSeatId`. Returns the row at
@@ -164,53 +180,121 @@ const decodeAliasList = (encoded: unknown): readonly string[] => {
   }
 }
 
+const decodeTypesList = (encoded: unknown): readonly string[] => {
+  if (encoded === undefined) return []
+  try {
+    return typesProp.codec.decode(encoded)
+  } catch {
+    return []
+  }
+}
+
+const checkSeedProperties = (propertyKeys: readonly string[], types: readonly string[]): boolean =>
+  propertyKeys.length === 2
+  && propertyKeys.includes(aliasesProp.name)
+  && propertyKeys.includes(typesProp.name)
+  && types.length === 1
+  && types[0] === PAGE_TYPE
+
 /** Tx-scoped reader: `tx.get` returns the row including tombstones,
- *  with codec-encoded properties (we decode the `alias` list here). */
+ *  with codec-encoded properties (we decode `alias` and `types` here).
+ *  `tx.childrenOf` filters `deleted = 0`, which is what we want — only
+ *  live children count as a "user touched" signal at probe time. */
 export const aliasSeatReaderFromTx = (tx: Tx): AliasSeatReader =>
   async (id) => {
     const block = await tx.get(id)
     if (block === null) return null
+    const propertyKeys = Object.keys(block.properties)
+    const aliases = decodeAliasList(block.properties[aliasesProp.name])
+    const types = decodeTypesList(block.properties[typesProp.name])
+    const hasSeedProperties = checkSeedProperties(propertyKeys, types)
+    // childrenOf needs a workspaceId pin or a non-null parent; the row
+    // we just loaded gives us workspaceId, so the lookup is well-scoped
+    // even for workspace-root seats (parentId === null is the typical
+    // alias-seat shape).
+    const children = await tx.childrenOf(id, block.workspaceId)
     return {
       deleted: block.deleted,
-      aliases: decodeAliasList(block.properties[aliasesProp.name]),
+      aliases,
+      content: block.content,
+      hasSeedProperties,
+      hasLiveChildren: children.length > 0,
     }
   }
 
 /** Committed-state SQL reader: used by the read phase of post-commit
  *  processors that don't hold a tx. Reads `deleted` + `properties_json`
- *  directly. Robust to property-JSON parse errors (returns `[]` so the
- *  probe treats the slot as "live with different alias" and steps past
- *  it — same behavior as a normal row that doesn't claim our alias). */
+ *  + `content` + a live-child existence probe. Robust to property-JSON
+ *  parse errors (returns `aliases: []`, `hasSeedProperties: false` so
+ *  the probe steps past the slot — same behavior as a row that doesn't
+ *  claim our alias). */
 export const aliasSeatReaderFromDb = (db: ProcessorReadDb): AliasSeatReader =>
   async (id) => {
-    const row = await db.getOptional<{deleted: 0 | 1; properties_json: string}>(
-      `SELECT deleted, properties_json FROM blocks WHERE id = ?`,
+    const row = await db.getOptional<{deleted: 0 | 1; properties_json: string; content: string}>(
+      `SELECT deleted, properties_json, content FROM blocks WHERE id = ?`,
       [id],
     )
     if (row === null) return null
     let aliases: readonly string[] = []
+    let hasSeedProperties = false
     try {
       const parsed = JSON.parse(row.properties_json) as Record<string, unknown>
       aliases = decodeAliasList(parsed[aliasesProp.name])
+      const types = decodeTypesList(parsed[typesProp.name])
+      hasSeedProperties = checkSeedProperties(Object.keys(parsed), types)
     } catch {
-      // Malformed properties_json — leave aliases empty, probe past.
+      // Malformed properties_json — treat as non-seed; probe steps past.
     }
-    return {deleted: row.deleted === 1, aliases}
+    // Partial index idx_blocks_parent_order covers (parent_id, deleted=0).
+    const childRow = await db.getOptional<{one: 1}>(
+      `SELECT 1 AS one FROM blocks WHERE parent_id = ? AND deleted = 0 LIMIT 1`,
+      [id],
+    )
+    return {
+      deleted: row.deleted === 1,
+      aliases,
+      content: row.content,
+      hasSeedProperties,
+      hasLiveChildren: childRow !== null,
+    }
   }
+
+/** Predicate: this tombstoned slot looks like it was created by
+ *  `ensureAliasTarget` for `alias` and was never touched before
+ *  cleanup tombstoned it — i.e., it's safe to restore in place via
+ *  `createOrRestoreTargetBlock` instead of probing past it. Keeping
+ *  the predicate strict (exact seed shape + content + alias match +
+ *  no live children) means a user who explicitly deleted a real
+ *  page never sees their content resurrected on a [[…]] retype. */
+const isRestorableTransientTombstone = (row: AliasSeatRow, alias: string): boolean =>
+  row.deleted
+  && row.aliases.length === 1
+  && row.aliases[0] === alias
+  && row.content === alias
+  && row.hasSeedProperties
+  && !row.hasLiveChildren
 
 /** Walk indexed-deterministic seat slots for `(alias, workspaceId)`
  *  until one of:
  *   - empty slot → return that id (caller will insert),
- *   - live row claiming `alias` → return that id (reuse / convergence).
- *  Skips tombstones and live rows claiming a different alias.
+ *   - live row claiming `alias` → return that id (reuse / convergence),
+ *   - pristine transient tombstone for `alias` → return that id (caller
+ *     restores via `createOrRestoreTargetBlock`'s `DeletedConflictError`
+ *     branch). This keeps slot 0 reusable for hot names instead of
+ *     burning a fresh slot every cleanup cycle.
+ *  Skips live rows claiming a different alias (post-rename) and
+ *  tombstones that fail the restorable predicate (drifted content,
+ *  user-added props, live children — i.e. anything that wasn't a
+ *  pristine cleanup target).
  *
  *  Two clients with the same observed world-state probe the same way
  *  and land on the same slot — that's the deterministic-id convergence
- *  guarantee. Clients with divergent state may pick different slots,
- *  but PowerSync convergence + the alias-lookup query handle this
- *  case: `block_aliases` is exact-match by alias text, so a second
- *  parseReferences pass on either client resolves through the lookup
- *  rather than the probe. */
+ *  guarantee. The restorable predicate is a pure function of the row,
+ *  so both clients evaluate it identically. Clients with divergent
+ *  state may pick different slots, but PowerSync convergence + the
+ *  alias-lookup query handle this case: `block_aliases` is exact-match
+ *  by alias text, so a second parseReferences pass on either client
+ *  resolves through the lookup rather than the probe. */
 export const resolveAliasSeatId = async (
   read: AliasSeatReader,
   alias: string,
@@ -220,7 +304,10 @@ export const resolveAliasSeatId = async (
     const id = computeAliasSeatId(alias, workspaceId, index)
     const row = await read(id)
     if (row === null) return id
-    if (row.deleted) continue
+    if (row.deleted) {
+      if (isRestorableTransientTombstone(row, alias)) return id
+      continue
+    }
     if (row.aliases.includes(alias)) return id
     // Live row claims a different alias — typical post-rename. Probe next.
   }

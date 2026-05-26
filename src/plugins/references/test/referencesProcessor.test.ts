@@ -745,11 +745,16 @@ describe('parseReferences — orphan cleanup (§7.5)', () => {
     expect((await env.read(aliasId('Inbox')))!.deleted).toBe(0)
   })
 
-  it('re-typing [[foo]] after a create-and-cleanup cycle → creates a fresh seat (probes past tombstone)', async () => {
-    // Indexed-deterministic seat probe: tombstoned slot 0 is skipped,
-    // so re-typing [[foo]] lands at slot 1 with a fresh target. The
-    // earlier "tombstone-restore-on-retype" shape is gone by design —
-    // a typed [[Foo]] always means a fresh Foo. (See spec doc.)
+  it('re-typing [[foo]] after a create-and-cleanup cycle → restores slot 0 in place', async () => {
+    // Indexed-deterministic seat probe restores pristine cleanup
+    // tombstones in place: a transient seat (content === alias, seed
+    // properties, no children) that cleanup tombstoned is by definition
+    // never-touched, so re-typing [[foo]] reuses the same id rather
+    // than burning slot 1. Keeps the slot space compact for hot names
+    // that get retyped many times (e.g. "browser em…" en route to
+    // "browser emacs"). User-touched tombstones — content drifted,
+    // extra props, live children — stay skipped, so an explicit page
+    // delete is not undone by a [[…]] retype.
     await env.repo.tx(
       tx => tx.create({id: 's1', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[foo]]'}),
       {scope: ChangeScope.BlockDefault},
@@ -758,24 +763,24 @@ describe('parseReferences — orphan cleanup (§7.5)', () => {
     const slot0Id = aliasId('foo')
     await env.repo.mutate.setContent({id: 's1', content: ''})
     await flush(4000)
-    expect((await env.read(slot0Id))!.deleted).toBe(1)  // slot 0 tombstoned
+    expect((await env.read(slot0Id))!.deleted).toBe(1)
 
     await env.repo.tx(
       tx => tx.create({id: 's2', workspaceId: WS, parentId: null, orderKey: 'a1', content: '[[foo]]'}),
       {scope: ChangeScope.BlockDefault},
     )
     await flush()
-    // Slot 0 stays tombstoned.
-    expect((await env.read(slot0Id))!.deleted).toBe(1)
-    // The new seat lives at slot 1.
-    const slot1Id = computeAliasSeatId('foo', WS, 1)
-    const target = await env.read(slot1Id)
+    // Slot 0 restored — same id, deleted flag flipped back, content
+    // reset to the alias text.
+    const target = await env.read(slot0Id)
     expect(target).not.toBeNull()
     expect(target!.deleted).toBe(0)
+    expect(target!.content).toBe('foo')
     const aliases = JSON.parse(target!.properties_json).alias as string[]
     expect(aliases).toEqual(['foo'])
+    // s2 references the restored slot 0 — no probe-past to slot 1.
     const refs = JSON.parse((await env.read('s2'))!.references_json)
-    expect(refs).toEqual([{id: slot1Id, alias: 'foo'}])
+    expect(refs).toEqual([{id: slot0Id, alias: 'foo'}])
   })
 })
 

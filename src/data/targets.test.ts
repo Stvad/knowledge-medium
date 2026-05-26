@@ -292,12 +292,14 @@ describe('ensureAliasTarget — indexed-deterministic seat probe', () => {
     expect(JSON.parse(slot1Row.properties_json)[aliasesProp.name]).toEqual(['foo'])
   })
 
-  it('probes past a tombstone (deleted seat does not get restored on retype)', async () => {
-    // Cycle 1: insert at slot 0, then soft-delete it. Spec says
-    // "tombstone-restore-on-retype goes away" — re-typing [[foo]]
-    // should land at slot 1 as a FRESH seat, not bring slot 0 back.
+  it('restores a pristine tombstone in place (transient-cleanup tombstones are reusable)', async () => {
+    // ensureAliasTarget creates slot 0 as a clean seed (content === alias,
+    // properties === {alias:[foo], types:['page']}, no children). Cleanup
+    // tombstones it. Re-typing [[foo]] should reuse slot 0 — the
+    // tombstone's only signal is "no one referenced this transient seat
+    // in time"; bringing it back at the same id keeps the deterministic-
+    // id slot space compact instead of probing deeper on every retype.
     const slot0Id = computeAliasSeatId('foo', WS, 0)
-    const slot1Id = computeAliasSeatId('foo', WS, 1)
     const typeSnapshot = env.repo.snapshotTypeRegistries()
     await env.repo.tx(tx => ensureAliasTarget(tx, env.repo, 'foo', WS, typeSnapshot),
       {scope: ChangeScope.BlockDefault})
@@ -307,12 +309,91 @@ describe('ensureAliasTarget — indexed-deterministic seat probe', () => {
       return ensureAliasTarget(tx, env.repo, 'foo', WS, typeSnapshot)
     }, {scope: ChangeScope.BlockDefault})
 
+    expect(result.id).toBe(slot0Id)
+    expect(result.inserted).toBe(true)
+    const slot0Row = await env.h.db.get<{deleted: 0 | 1, content: string}>(
+      'SELECT deleted, content FROM blocks WHERE id = ?', [slot0Id])
+    expect(slot0Row.deleted).toBe(0)
+    expect(slot0Row.content).toBe('foo')
+  })
+
+  it('probes past a tombstone whose content drifted from the alias (user renamed it)', async () => {
+    // Pre-rename signal: content differs from alias[0]. We can't tell
+    // whether the user explicitly deleted a real page or whether cleanup
+    // tombstoned a renamed-then-orphaned seat; either way restoring would
+    // resurrect the rename, so keep slot 0 dead and probe to slot 1.
+    const slot0Id = computeAliasSeatId('foo', WS, 0)
+    const slot1Id = computeAliasSeatId('foo', WS, 1)
+    const typeSnapshot = env.repo.snapshotTypeRegistries()
+    await env.repo.tx(tx => ensureAliasTarget(tx, env.repo, 'foo', WS, typeSnapshot),
+      {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(tx => tx.update(slot0Id, {content: 'renamed'}),
+      {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(tx => tx.delete(slot0Id), {scope: ChangeScope.BlockDefault})
+
+    const result = await env.repo.tx(async tx => {
+      return ensureAliasTarget(tx, env.repo, 'foo', WS, typeSnapshot)
+    }, {scope: ChangeScope.BlockDefault})
+
     expect(result.id).toBe(slot1Id)
     expect(result.inserted).toBe(true)
-    // Slot 0 stays tombstoned.
     const slot0Row = await env.h.db.get<{deleted: 0 | 1}>(
       'SELECT deleted FROM blocks WHERE id = ?', [slot0Id])
     expect(slot0Row.deleted).toBe(1)
+  })
+
+  it('probes past a tombstone with extra user-added properties', async () => {
+    // The seed shape is {alias:[X], types:['page']}. Anything beyond
+    // that is a user touch (a tag, a custom prop, etc.) and means the
+    // page wasn't "purely transient" — restoring would resurrect those
+    // edits.
+    const slot0Id = computeAliasSeatId('foo', WS, 0)
+    const slot1Id = computeAliasSeatId('foo', WS, 1)
+    const typeSnapshot = env.repo.snapshotTypeRegistries()
+    await env.repo.tx(tx => ensureAliasTarget(tx, env.repo, 'foo', WS, typeSnapshot),
+      {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(async tx => {
+      const block = await tx.get(slot0Id)
+      await tx.update(slot0Id, {
+        properties: {...block!.properties, 'user-tag': 'important'},
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(tx => tx.delete(slot0Id), {scope: ChangeScope.BlockDefault})
+
+    const result = await env.repo.tx(async tx => {
+      return ensureAliasTarget(tx, env.repo, 'foo', WS, typeSnapshot)
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(result.id).toBe(slot1Id)
+    expect(result.inserted).toBe(true)
+  })
+
+  it('probes past a tombstone that still has live children', async () => {
+    // A user could open the auto-created page and add child blocks
+    // before cleanup fires (or before they delete the page manually).
+    // Soft-delete doesn't cascade today, so a tombstoned seat with
+    // live kids is "user touched"; restoring it would expose the kids
+    // back under a now-live parent unannounced.
+    const slot0Id = computeAliasSeatId('foo', WS, 0)
+    const slot1Id = computeAliasSeatId('foo', WS, 1)
+    const typeSnapshot = env.repo.snapshotTypeRegistries()
+    await env.repo.tx(tx => ensureAliasTarget(tx, env.repo, 'foo', WS, typeSnapshot),
+      {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(tx => tx.create({
+      id: 'child-1',
+      workspaceId: WS,
+      parentId: slot0Id,
+      orderKey: 'a0',
+      content: 'child content',
+    }), {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(tx => tx.delete(slot0Id), {scope: ChangeScope.BlockDefault})
+
+    const result = await env.repo.tx(async tx => {
+      return ensureAliasTarget(tx, env.repo, 'foo', WS, typeSnapshot)
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(result.id).toBe(slot1Id)
+    expect(result.inserted).toBe(true)
   })
 
   it('reuses slot 0 when a live row already claims this alias', async () => {
