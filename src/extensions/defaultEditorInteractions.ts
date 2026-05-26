@@ -1,10 +1,14 @@
+import { useMemo } from 'react'
 import type { MouseEvent } from 'react'
 import {
-  blockContentSurfacePropsFacet,
   blockShellDecoratorsFacet,
+  handleBlockSelectionClick,
   isInteractiveContentEvent,
   isSelectionClick,
-  type BlockContentSurfaceContribution,
+  type BlockResolveContext,
+  type BlockShellDecoratorContribution,
+  type BlockShellDecoratorProps,
+  type BlockShellState,
   ShortcutActivationContribution,
   shortcutSurfaceActivationsFacet,
 } from '@/extensions/blockInteraction.js'
@@ -26,12 +30,54 @@ export const codeMirrorEditModeActivation: ShortcutActivationContribution = cont
   }]
 }
 
-export const blockSelectionContentSurfaceBehavior: BlockContentSurfaceContribution = () => ({
-  onMouseDownCapture: (event: MouseEvent) => {
-    if (!isSelectionClick(event) || isInteractiveContentEvent(event)) return
-    event.preventDefault()
+type ApplyBlockSelectionClick = (
+  context: BlockResolveContext,
+  event: MouseEvent<HTMLElement>,
+) => void | Promise<void>
+
+const isBlockSelectionGesture = (event: MouseEvent<HTMLElement>): boolean =>
+  isSelectionClick(event) && !isInteractiveContentEvent(event)
+
+export const createBlockSelectionShellState = (
+  resolveContext: BlockResolveContext,
+  state: BlockShellState,
+  applySelectionClick: ApplyBlockSelectionClick = handleBlockSelectionClick,
+): BlockShellState => ({
+  shellProps: {
+    ...state.shellProps,
+    onMouseDownCapture: event => {
+      if (isBlockSelectionGesture(event)) {
+        event.preventDefault()
+        return
+      }
+      state.shellProps.onMouseDownCapture?.(event)
+    },
+    onClick: event => {
+      if (isBlockSelectionGesture(event)) {
+        void applySelectionClick(resolveContext, event)
+        return
+      }
+      state.shellProps.onClick?.(event)
+    },
   },
+  shortcutSurfaceOptions: state.shortcutSurfaceOptions,
 })
+
+export function BlockSelectionShellDecorator({
+  resolveContext,
+  state,
+  children,
+}: BlockShellDecoratorProps) {
+  const nextState = useMemo(
+    () => createBlockSelectionShellState(resolveContext, state),
+    [resolveContext, state],
+  )
+
+  return children(nextState)
+}
+
+export const blockSelectionShellDecorator: BlockShellDecoratorContribution = () =>
+  BlockSelectionShellDecorator
 
 export const defaultEditorInteractionExtension: AppExtension = systemToggle({
   id: 'system:default-editor-interactions',
@@ -39,9 +85,7 @@ export const defaultEditorInteractionExtension: AppExtension = systemToggle({
   description: 'Baseline block-interaction handlers (click-to-edit, selection, focus transitions).',
   essential: true,
 }).of([
-  blockContentSurfacePropsFacet.of(blockSelectionContentSurfaceBehavior, {
-    source: 'default-block-selection',
-  }),
+  blockShellDecoratorsFacet.of(blockSelectionShellDecorator, {source: 'default-block-selection'}),
   blockShellDecoratorsFacet.of(blockFocusShellDecorator, {
     precedence: 1000,
     source: 'default-block-focus',

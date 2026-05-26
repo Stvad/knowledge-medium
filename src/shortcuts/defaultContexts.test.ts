@@ -11,14 +11,18 @@ const multiSelectContext = () => {
 }
 
 describe('default action context configs', () => {
-  it('accepts shift-arrow range expansion while multi-select owns the keyboard', () => {
+  it('accepts range expansion keys while multi-select owns the keyboard', () => {
     const context = multiSelectContext()
     const filter = context.eventFilter
     if (!filter) throw new Error('Expected multi-select to define an event filter')
 
+    expect(filter(new KeyboardEvent('keydown', {key: 'ArrowDown'}))).toBe(true)
+    expect(filter(new KeyboardEvent('keydown', {key: 'ArrowUp'}))).toBe(true)
     expect(filter(new KeyboardEvent('keydown', {key: 'ArrowDown', shiftKey: true}))).toBe(true)
     expect(filter(new KeyboardEvent('keydown', {key: 'ArrowUp', shiftKey: true}))).toBe(true)
-    expect(filter(new KeyboardEvent('keydown', {key: 'ArrowDown'}))).toBe(false)
+    expect(filter(new KeyboardEvent('keydown', {key: 'k'}))).toBe(true)
+    expect(filter(new KeyboardEvent('keydown', {key: 'h'}))).toBe(true)
     expect(filter(new KeyboardEvent('keydown', {key: 'A', shiftKey: true}))).toBe(false)
+    expect(filter(new KeyboardEvent('keydown', {key: 'k', metaKey: true}))).toBe(false)
   })
 })

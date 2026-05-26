@@ -796,9 +796,28 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   ]
 
   // Multi-select mode actions
+  const extendSelectionUpMultiAction = {
+    ...makeMultiSelect(extendSelectionUpAction),
+    defaultBinding: {
+      keys: ['ArrowUp', 'h', 'Shift+ArrowUp'],
+      eventOptions: {
+        preventDefault: true,
+      },
+    },
+  }
+  const extendSelectionDownMultiAction = {
+    ...makeMultiSelect(extendSelectionDownAction),
+    defaultBinding: {
+      keys: ['ArrowDown', 'k', 'Shift+ArrowDown'],
+      eventOptions: {
+        preventDefault: true,
+      },
+    },
+  }
+
   const multiSelectModeActions: ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE>[] = [
-    makeMultiSelect(extendSelectionUpAction),
-    makeMultiSelect(extendSelectionDownAction),
+    extendSelectionUpMultiAction,
+    extendSelectionDownMultiAction,
     applyToAllBlocksInSelection(toggleBlockCollapseAction),
     applyToAllBlocksInSelection(togglePropertiesDisplayAction),
     applyToAllBlocksInSelection(indentBlockAction),

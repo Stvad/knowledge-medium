@@ -80,6 +80,26 @@ describe('vim normal mode interactions', () => {
     expect(event.stopPropagation).not.toHaveBeenCalled()
   })
 
+  it('leaves selection clicks to the default selection shell owner', async () => {
+    const target = document.createElement('span')
+    const event = {
+      target,
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: true,
+    } as unknown as MouseEvent
+
+    const handler = vimBlockClickBehavior(context)
+    if (!handler) throw new Error('Expected Vim block click handler')
+
+    await handler(event)
+
+    expect(event.preventDefault).not.toHaveBeenCalled()
+    expect(event.stopPropagation).not.toHaveBeenCalled()
+  })
+
   it.each(interactiveTargets)('does not turn %s taps into edit-mode taps', (_label, createTarget) => {
     const runtime = resolveFacetRuntimeSync([
       blockContentSurfacePropsFacet.of(vimContentSurfaceBehavior),

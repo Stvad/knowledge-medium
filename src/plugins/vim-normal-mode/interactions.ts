@@ -5,6 +5,7 @@ import {
   enterBlockEditMode,
   handleBlockSelectionClick,
   isInteractiveContentEvent,
+  isSelectionClick,
   ShortcutActivationContribution,
 } from '@/extensions/blockInteraction.js'
 import { ActionContextTypes } from '@/shortcuts/types.js'
@@ -12,7 +13,10 @@ import { focusedBlockIdProp, isEditingProp } from '@/data/properties.js'
 import { Block } from '../../data/block'
 
 export const vimBlockClickBehavior: BlockClickContribution = context =>
-  event => handleBlockSelectionClick(context, event)
+  event => {
+    if (isSelectionClick(event)) return
+    void handleBlockSelectionClick(context, event)
+  }
 
 type TouchStart = { x: number; y: number; time: number }
 
@@ -30,6 +34,7 @@ export const vimContentSurfaceBehavior: BlockContentSurfaceContribution = contex
 
   return {
     onMouseDownCapture: (event: MouseEvent) => {
+      if (event.defaultPrevented) return
       if (isInteractiveContentEvent(event)) return
       if (isBlockInEditMode(uiStateBlock, block.id)) return
       // detail === 2 catches double-click before native text-selection kicks in

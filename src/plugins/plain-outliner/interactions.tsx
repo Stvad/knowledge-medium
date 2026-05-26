@@ -4,7 +4,6 @@ import {
   BlockContentRendererContribution,
   enterBlockEditMode,
   getBlockContentRendererSlot,
-  handleBlockSelectionClick,
   isInteractiveContentEvent,
   isSelectionClick,
 } from '@/extensions/blockInteraction.js'
@@ -49,10 +48,7 @@ export const plainOutlinerBlockClickBehavior: BlockClickContribution = context =
   async (event: MouseEvent) => {
     if (isInteractiveContentEvent(event)) return
 
-    if (isSelectionClick(event)) {
-      await handleBlockSelectionClick(context, event)
-      return
-    }
+    if (isSelectionClick(event)) return
 
     event.preventDefault()
     event.stopPropagation()

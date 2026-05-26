@@ -138,6 +138,18 @@ const findNormalModeAction = (
   return action
 }
 
+const findMultiSelectModeAction = (
+  repo: Repo,
+  id: string,
+): ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE> => {
+  const action = getDefaultActions({repo}).find(
+    (candidate): candidate is ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE> =>
+      candidate.id === id && candidate.context === ActionContextTypes.MULTI_SELECT_MODE,
+  )
+  if (!action) throw new Error(`Action not found: ${id}`)
+  return action
+}
+
 const findGlobalAction = (
   repo: Repo,
   id: string,
@@ -198,6 +210,16 @@ describe('default CodeMirror shortcuts', () => {
     const extendSelectionUpAction = findEditModeAction(env.repo, 'edit.cm.extend_selection_up')
     const extendSelectionDownAction = findEditModeAction(env.repo, 'edit.cm.extend_selection_down')
 
+    expect(extendSelectionUpAction.defaultBinding?.eventOptions?.preventDefault).toBe(true)
+    expect(extendSelectionDownAction.defaultBinding?.eventOptions?.preventDefault).toBe(true)
+  })
+
+  it('uses vertical navigation keys to expand selection while multi-select is active', () => {
+    const extendSelectionUpAction = findMultiSelectModeAction(env.repo, 'multi_select.extend_selection_up')
+    const extendSelectionDownAction = findMultiSelectModeAction(env.repo, 'multi_select.extend_selection_down')
+
+    expect(extendSelectionUpAction.defaultBinding?.keys).toEqual(['ArrowUp', 'h', 'Shift+ArrowUp'])
+    expect(extendSelectionDownAction.defaultBinding?.keys).toEqual(['ArrowDown', 'k', 'Shift+ArrowDown'])
     expect(extendSelectionUpAction.defaultBinding?.eventOptions?.preventDefault).toBe(true)
     expect(extendSelectionDownAction.defaultBinding?.eventOptions?.preventDefault).toBe(true)
   })

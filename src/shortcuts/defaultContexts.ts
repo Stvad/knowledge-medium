@@ -28,12 +28,12 @@ const isMultiSelectModeDependencies = (deps: unknown): deps is MultiSelectModeDe
   'selectedBlocks' in deps && Array.isArray(deps.selectedBlocks) && (deps.selectedBlocks as unknown[]).every(b => b instanceof Block) &&
   'anchorBlock' in deps && (deps.anchorBlock === null || deps.anchorBlock instanceof Block)
 
-const isMultiSelectRangeExpansionKey = (event: KeyboardEvent): boolean =>
-  event.shiftKey &&
-  !event.ctrlKey &&
-  !event.metaKey &&
-  !event.altKey &&
-  (event.key === 'ArrowUp' || event.key === 'ArrowDown')
+const isMultiSelectRangeExpansionKey = (event: KeyboardEvent): boolean => {
+  if (event.ctrlKey || event.metaKey || event.altKey) return false
+  if (event.key === 'ArrowUp' || event.key === 'ArrowDown') return true
+  if (event.shiftKey) return false
+  return event.key === 'h' || event.key === 'k'
+}
 
 export const defaultActionContextConfigs: readonly ActionContextConfig[] = [
   {

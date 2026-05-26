@@ -177,6 +177,7 @@ export interface BlockShellProps {
   tabIndex: number
   ref?: Ref<HTMLDivElement>
   onFocus?: (event: FocusEvent<HTMLElement>) => void
+  onMouseDownCapture?: (event: MouseEvent<HTMLElement>) => void
   onPointerDownCapture?: (event: PointerEvent<HTMLElement>) => void
   onClick?: (event: MouseEvent<HTMLElement>) => void
   onPaste?: (event: ClipboardEvent<HTMLElement>) => void
