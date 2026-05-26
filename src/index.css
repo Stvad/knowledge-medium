@@ -3,7 +3,7 @@
 
 @plugin "tailwind-scrollbar";
 
-@custom-variant dark (&:where(.dark, .dark *));
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 @theme {
   --breakpoint-xs: 375px;
@@ -65,8 +65,17 @@
   }
 }
 
+/*
+  Themes are selected by `data-theme` on the document root. `:root` carries
+  the light palette as the no-attribute default so the page renders sensibly
+  even if the pre-paint script in index.html never runs. Each named theme
+  block then fully overrides the tokens it cares about. Add new themes by
+  appending another `[data-theme="<id>"]` block here and a registry entry
+  in src/plugins/theme-toggle/theme.ts.
+*/
 @layer base {
-  :root {
+  :root,
+  [data-theme="light"] {
     --background: 0 0% 100%;
     --foreground: 0 0% 3.9%;
 
@@ -108,7 +117,7 @@
     --chart-5: 27 87% 67%;
   }
 
-  .dark {
+  [data-theme="dark"] {
     --background: 0 0% 3.9%;
     --foreground: 0 0% 98%;
 

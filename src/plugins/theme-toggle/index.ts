@@ -5,7 +5,14 @@ import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { toggleTheme } from './theme.ts'
 
 export { ThemeToggle } from './ThemeToggle.tsx'
-export { applyTheme, getCurrentTheme, toggleTheme, type Theme } from './theme.ts'
+export {
+  applyTheme,
+  getCurrentTheme,
+  themes,
+  toggleTheme,
+  THEME_STORAGE_KEY,
+  type ThemeDefinition,
+} from './theme.ts'
 
 export const toggleThemeAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
   id: 'theme-toggle.toggle',
@@ -19,7 +26,7 @@ export const toggleThemeAction: ActionConfig<typeof ActionContextTypes.GLOBAL> =
 export const themeTogglePlugin: AppExtension = systemToggle({
   id: 'system:theme-toggle',
   name: 'Theme toggle',
-  description: 'Switch between light and dark colour scheme.',
+  description: 'Cycle through the registered colour themes.',
 }).of([
   actionsFacet.of(toggleThemeAction, {
     source: 'theme-toggle',

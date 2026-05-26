@@ -1,9 +1,19 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { actionsFacet, headerItemsFacet } from '@/extensions/core.js'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
-import { themeTogglePlugin, toggleThemeAction } from '../index.ts'
+import { THEME_STORAGE_KEY, themeTogglePlugin, toggleThemeAction } from '../index.ts'
 
 describe('themeTogglePlugin', () => {
+  beforeEach(() => {
+    document.documentElement.removeAttribute('data-theme')
+    window.localStorage.removeItem(THEME_STORAGE_KEY)
+  })
+
+  afterEach(() => {
+    document.documentElement.removeAttribute('data-theme')
+    window.localStorage.removeItem(THEME_STORAGE_KEY)
+  })
+
   it('contributes the theme toggle action without a header item', () => {
     const runtime = resolveFacetRuntimeSync(themeTogglePlugin)
 
@@ -11,15 +21,13 @@ describe('themeTogglePlugin', () => {
     expect(runtime.read(headerItemsFacet)).toEqual([])
   })
 
-  it('toggles the document theme from its command action', () => {
-    document.documentElement.classList.remove('light', 'dark')
+  it('cycles the document theme from its command action and persists it', () => {
+    toggleThemeAction.handler({} as never, new CustomEvent('test'))
+    expect(document.documentElement.dataset.theme).toBe('dark')
+    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe('dark')
 
     toggleThemeAction.handler({} as never, new CustomEvent('test'))
-    expect(document.documentElement.classList.contains('dark')).toBe(true)
-    expect(document.documentElement.classList.contains('light')).toBe(false)
-
-    toggleThemeAction.handler({} as never, new CustomEvent('test'))
-    expect(document.documentElement.classList.contains('light')).toBe(true)
-    expect(document.documentElement.classList.contains('dark')).toBe(false)
+    expect(document.documentElement.dataset.theme).toBe('light')
+    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe('light')
   })
 })
