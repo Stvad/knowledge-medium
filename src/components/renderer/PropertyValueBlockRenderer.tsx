@@ -2,6 +2,7 @@ import type { BlockRenderer, BlockRendererProps } from '@/types'
 import { useHandle } from '@/hooks/block'
 import { usePropertySchemas } from '@/hooks/propertySchemas'
 import { propertyEditorOverridesFacet, valuePresetsFacet } from '@/data/facets'
+import { useIsSelected } from '@/data/globalState'
 import {
   findSchemaByFieldId,
   getPropertyFieldTargetId,
@@ -9,6 +10,7 @@ import {
   propertyValueToChildContent,
 } from '@/data/propertyChildren'
 import { useAppRuntime } from '@/extensions/runtimeContext'
+import type { BlockLayout } from '@/extensions/blockInteraction'
 import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer'
 
@@ -119,11 +121,40 @@ const PropertyValueContentRenderer: BlockRenderer = ({block}: BlockRendererProps
 
 PropertyValueContentRenderer.displayName = 'PropertyValueContentRenderer'
 
+const PropertyValueBlockLayout: BlockLayout = ({
+  block,
+  Content,
+  Properties,
+  Children,
+  Footer,
+  Header,
+  shellProps,
+}) => {
+  const isSelected = useIsSelected(block.id)
+  const {className: shellClassName, ...bodyProps} = shellProps
+
+  return (
+    <div>
+      <Header/>
+      <div
+        {...bodyProps}
+        className={`tm-property-value-block group/block relative min-w-0 outline-none focus:outline-none focus-visible:outline-none ${isSelected ? 'bg-accent/80' : ''} ${shellClassName ?? ''}`}
+      >
+        <Content/>
+        {Properties && <Properties/>}
+        <Children/>
+        <Footer/>
+      </div>
+    </div>
+  )
+}
+
 export const PropertyValueBlockRenderer: BlockRenderer = (props) => (
   <DefaultBlockRenderer
     {...props}
     ContentRenderer={PropertyValueContentRenderer}
     EditContentRenderer={PropertyValueContentRenderer}
+    LayoutRenderer={PropertyValueBlockLayout}
   />
 )
 
