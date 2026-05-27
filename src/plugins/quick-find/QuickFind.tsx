@@ -1,21 +1,23 @@
 import {
   Suspense,
   use,
+  useId,
   useState,
   useEffect,
   useMemo,
   useRef,
+  type ReactNode,
   type KeyboardEvent,
   type MouseEvent,
 } from 'react'
+import { Search } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import {
-  CommandDialog,
-  CommandInput,
-  CommandList,
-  CommandEmpty,
-  CommandGroup,
-  CommandItem,
-} from '@/components/ui/command'
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Kbd } from '@/components/ui/kbd'
 import { useUser } from '@/components/Login.js'
 import { useRepo } from '@/context/repo.js'
@@ -74,8 +76,267 @@ interface QuickFindDialogResources {
   layoutSessionBlock: Block
 }
 
+export interface QuickFindListItem {
+  key: string
+  value: string
+  children: ReactNode
+  className?: string
+}
+
+export interface QuickFindListGroup {
+  heading: string
+  items: QuickFindListItem[]
+}
+
 const truncate = (text: string, max = 80) =>
   text.length > max ? text.slice(0, max - 1) + '…' : text
+
+const quickFindListValueSeparator = '\u001f'
+
+const visuallyHiddenClassName = 'absolute h-px w-px overflow-hidden whitespace-nowrap border-0 p-0 -m-px [clip:rect(0,0,0,0)]'
+
+export function QuickFindList({
+  query,
+  onQueryChange,
+  value,
+  onValueChange,
+  groups,
+  emptyMessage,
+  onItemClickCapture,
+  onSelect,
+  onKeyDown,
+  placeholder = 'Find or create page or block...',
+}: {
+  query: string
+  onQueryChange: (query: string) => void
+  value: string
+  onValueChange: (value: string) => void
+  groups: QuickFindListGroup[]
+  emptyMessage: string
+  onItemClickCapture?: (event: MouseEvent) => void
+  onSelect: (value: string) => void
+  onKeyDown?: (event: KeyboardEvent) => void
+  placeholder?: string
+}) {
+  const reactId = useId()
+  const inputId = `${reactId}-input`
+  const labelId = `${reactId}-label`
+  const listId = `${reactId}-list`
+  const listRef = useRef<HTMLDivElement>(null)
+  const selectableItems = groups.flatMap(group => group.items)
+  const selectableValuesKey = selectableItems
+    .map(item => item.value)
+    .join(quickFindListValueSeparator)
+  const selectedIndex = selectableItems.findIndex(item => item.value === value)
+  const selectedItemId = selectedIndex === -1 ? undefined : `${listId}-item-${selectedIndex}`
+
+  useEffect(() => {
+    if (selectableItems.length === 0) {
+      if (value) onValueChange('')
+      return
+    }
+    if (!value || !selectableItems.some(item => item.value === value)) {
+      onValueChange(selectableItems[0].value)
+    }
+  }, [onValueChange, selectableItems, selectableValuesKey, value])
+
+  useEffect(() => {
+    if (!selectedItemId) return
+    const selectedElement = document.getElementById(selectedItemId)
+    selectedElement?.scrollIntoView({block: 'nearest'})
+  }, [selectedItemId])
+
+  const selectByIndex = (nextIndex: number) => {
+    const nextItem = selectableItems[nextIndex]
+    if (nextItem) onValueChange(nextItem.value)
+  }
+
+  const moveSelection = (delta: 1 | -1) => {
+    if (selectableItems.length === 0) return
+    if (selectedIndex === -1) {
+      selectByIndex(delta > 0 ? 0 : selectableItems.length - 1)
+      return
+    }
+    const nextIndex = Math.min(
+      Math.max(selectedIndex + delta, 0),
+      selectableItems.length - 1,
+    )
+    selectByIndex(nextIndex)
+  }
+
+  const handleRootKeyDown = (event: KeyboardEvent) => {
+    onKeyDown?.(event)
+    if (event.defaultPrevented || event.nativeEvent.isComposing || event.keyCode === 229) return
+
+    if ((event.key === 'n' || event.key === 'j') && event.ctrlKey) {
+      event.preventDefault()
+      moveSelection(1)
+      return
+    }
+
+    if ((event.key === 'p' || event.key === 'k') && event.ctrlKey) {
+      event.preventDefault()
+      moveSelection(-1)
+      return
+    }
+
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      if (event.metaKey) {
+        selectByIndex(selectableItems.length - 1)
+      } else {
+        moveSelection(1)
+      }
+      return
+    }
+
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      if (event.metaKey) {
+        selectByIndex(0)
+      } else {
+        moveSelection(-1)
+      }
+      return
+    }
+
+    if (event.key === 'Home') {
+      event.preventDefault()
+      selectByIndex(0)
+      return
+    }
+
+    if (event.key === 'End') {
+      event.preventDefault()
+      selectByIndex(selectableItems.length - 1)
+      return
+    }
+
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      if (value) onSelect(value)
+    }
+  }
+
+  return (
+    <div
+      className="flex h-full w-full flex-col overflow-hidden rounded-md bg-popover text-popover-foreground"
+      data-quick-find-root=""
+      onKeyDown={handleRootKeyDown}
+      tabIndex={-1}
+    >
+      <label className={visuallyHiddenClassName} htmlFor={inputId} id={labelId}>
+        Quick find
+      </label>
+      <div className="flex items-center border-b px-3" data-quick-find-input-wrapper="">
+        <Search className="mr-2 h-5 w-5 shrink-0 opacity-50" />
+        <input
+          aria-activedescendant={selectedItemId}
+          aria-autocomplete="list"
+          aria-controls={listId}
+          aria-expanded="true"
+          aria-labelledby={labelId}
+          autoComplete="off"
+          autoCorrect="off"
+          className="flex h-12 w-full rounded-md bg-transparent py-3 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          data-quick-find-input=""
+          id={inputId}
+          onChange={event => onQueryChange(event.target.value)}
+          placeholder={placeholder}
+          role="combobox"
+          spellCheck={false}
+          type="text"
+          value={query}
+        />
+      </div>
+      <div
+        aria-activedescendant={selectedItemId}
+        aria-label="Suggestions"
+        className="max-h-[300px] overflow-y-auto overflow-x-hidden"
+        data-quick-find-list=""
+        id={listId}
+        ref={listRef}
+        role="listbox"
+        tabIndex={-1}
+      >
+        {selectableItems.length === 0 && (
+          <div className="py-6 text-center text-sm" data-quick-find-empty="" role="presentation">
+            {emptyMessage}
+          </div>
+        )}
+
+        {groups.map((group, groupIndex) => {
+          if (group.items.length === 0) return null
+          const groupId = `${listId}-group-${groupIndex}`
+          const headingId = `${groupId}-heading`
+          const groupStartIndex = groups
+            .slice(0, groupIndex)
+            .reduce((total, previousGroup) => total + previousGroup.items.length, 0)
+
+          return (
+            <div
+              className="overflow-hidden px-2 py-1 text-foreground"
+              data-quick-find-group=""
+              key={group.heading}
+              role="presentation"
+            >
+              <div
+                aria-hidden="true"
+                className="px-2 py-1.5 text-xs font-medium text-muted-foreground"
+                data-quick-find-group-heading=""
+                id={headingId}
+              >
+                {group.heading}
+              </div>
+              <div
+                aria-labelledby={headingId}
+                data-quick-find-group-items=""
+                role="group"
+              >
+                {group.items.map((item, itemIndex) => {
+                  const currentIndex = groupStartIndex + itemIndex
+                  const selected = item.value === value
+
+                  return (
+                    <div
+                      aria-disabled={false}
+                      aria-selected={selected}
+                      className={cn(
+                        'relative flex cursor-default gap-2 select-none items-center rounded-sm px-2 py-3 text-sm outline-none data-[disabled=true]:pointer-events-none data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground data-[disabled=true]:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0',
+                        item.className,
+                      )}
+                      data-disabled="false"
+                      data-quick-find-item=""
+                      data-selected={selected ? 'true' : 'false'}
+                      data-value={item.value}
+                      id={`${listId}-item-${currentIndex}`}
+                      key={item.key}
+                      onAuxClick={event => {
+                        if (event.button !== 1) return
+                        event.preventDefault()
+                        onSelect(item.value)
+                      }}
+                      onAuxClickCapture={event => {
+                        if (event.button === 1) onItemClickCapture?.(event)
+                      }}
+                      onClick={() => onSelect(item.value)}
+                      onClickCapture={onItemClickCapture}
+                      onMouseDown={event => event.preventDefault()}
+                      onPointerMove={() => onValueChange(item.value)}
+                      role="option"
+                    >
+                      {item.children}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
 
 export function QuickFind() {
   const [open, setOpen] = useState(false)
@@ -312,9 +573,9 @@ function QuickFindDialog({
   const handleKeyDown = (event: KeyboardEvent) => {
     if (event.key !== 'Enter') return
     const target = quickFindOpenTargetFromModifiers(event)
-    // Plain Enter falls through to cmdk's onSelect, which routes to the
-    // default 'jump'. We only intercept when a modifier picks a non-default
-    // target so we can pass it through pendingClickTarget's role.
+    // Plain Enter falls through to QuickFindList's onSelect, which routes to
+    // the default 'jump'. Intercept modified Enter chords so the selected
+    // value can open in a stack or new panel.
     if (target === 'jump') return
     event.preventDefault()
     event.stopPropagation()
@@ -339,132 +600,125 @@ function QuickFindDialog({
   // fallback so we don't offer a duplicate path for the same intent.
   const showCreate = trimmedQuery.length > 0 && !exactAliasMatch && !parsedDate
   const showRecents = !trimmedQuery && recents.length > 0
+  const groups: QuickFindListGroup[] = []
+
+  if (showRecents) {
+    groups.push({
+      heading: 'Recent',
+      items: recents.map(item => ({
+        key: `recent:${item.blockId}`,
+        value: `recent:${item.blockId}`,
+        className: 'flex justify-between items-center',
+        children: (
+          <span className="truncate">{truncate(item.label)}</span>
+        ),
+      })),
+    })
+  }
+
+  if (dateCandidates.length > 0) {
+    groups.push({
+      heading: 'Date',
+      items: dateCandidates.map((candidate, index) => {
+        const detail = candidate.phrase.toLowerCase() === trimmedQuery.toLowerCase()
+          ? candidate.iso
+          : candidate.phrase
+
+        return {
+          key: `date:${candidate.iso}:${candidate.phrase}`,
+          value: dateValues[index] ?? quickFindDateValue(candidate.iso),
+          className: 'flex justify-between items-center gap-2',
+          children: (
+            <>
+              <span className="truncate">{formatRoamDate(candidate.date)}</span>
+              <span className="text-xs text-muted-foreground">{detail}</span>
+            </>
+          ),
+        }
+      }),
+    })
+  }
+
+  if (aliases.length > 0) {
+    groups.push({
+      heading: 'Pages',
+      items: aliases.map(match => ({
+        key: `page:${match.blockId}:${match.alias}`,
+        value: quickFindAliasValue(match),
+        className: 'flex justify-between items-center gap-2',
+        children: (
+          <>
+            <span className="truncate">{match.alias}</span>
+            {match.content && match.content !== match.alias && (
+              <span className="text-xs text-muted-foreground truncate max-w-[40%]">
+                {truncate(match.content, 50)}
+              </span>
+            )}
+          </>
+        ),
+      })),
+    })
+  }
+
+  if (blocks.length > 0) {
+    groups.push({
+      heading: 'Blocks',
+      items: blocks.map(match => ({
+        key: `block:${match.blockId}`,
+        value: quickFindBlockValue(match),
+        children: (
+          <span className="truncate">{truncate(match.content)}</span>
+        ),
+      })),
+    })
+  }
+
+  if (showCreate) {
+    groups.push({
+      heading: 'Create',
+      items: [{
+        key: `create:${trimmedQuery}`,
+        value: quickFindCreateValue(trimmedQuery),
+        children: (
+          <span>Create page “{trimmedQuery}”</span>
+        ),
+      }],
+    })
+  }
 
   return (
-    <CommandDialog
-      open={open}
-      onOpenChange={onOpenChange}
-      title="Quick find"
-      description="Find or create a page or block by alias or content."
-      contentClassName="top-[12vh] translate-y-0"
-      commandProps={{
-        shouldFilter: false,
-        value,
-        onValueChange: setValue,
-        onKeyDown: handleKeyDown,
-      }}
-    >
-      <CommandInput
-        placeholder="Find or create page or block..."
-        value={query}
-        onValueChange={nextQuery => {
-          setQuery(nextQuery)
-          setValue('')
-        }}
-      />
-      <CommandList>
-        <CommandEmpty>
-          {trimmedQuery ? 'No results.' : 'Type to search.'}
-        </CommandEmpty>
-
-        {showRecents && (
-          <CommandGroup heading="Recent">
-            {recents.map(item => (
-              <CommandItem
-                key={`recent:${item.blockId}`}
-                value={`recent:${item.blockId}`}
-                onClickCapture={handleItemClickCapture}
-                onSelect={handleItemSelect}
-                className="flex justify-between items-center"
-              >
-                <span className="truncate">{truncate(item.label)}</span>
-              </CommandItem>
-            ))}
-          </CommandGroup>
-        )}
-
-        {dateCandidates.length > 0 && (
-          <CommandGroup heading="Date">
-            {dateCandidates.map((candidate, index) => {
-              const detail = candidate.phrase.toLowerCase() === trimmedQuery.toLowerCase()
-                ? candidate.iso
-                : candidate.phrase
-              return (
-                <CommandItem
-                  key={`date:${candidate.iso}:${candidate.phrase}`}
-                  value={dateValues[index]}
-                  onClickCapture={handleItemClickCapture}
-                  onSelect={handleItemSelect}
-                  className="flex justify-between items-center gap-2"
-                >
-                  <span className="truncate">{formatRoamDate(candidate.date)}</span>
-                  <span className="text-xs text-muted-foreground">{detail}</span>
-                </CommandItem>
-              )
-            })}
-          </CommandGroup>
-        )}
-
-        {aliases.length > 0 && (
-          <CommandGroup heading="Pages">
-            {aliases.map(match => (
-              <CommandItem
-                key={`page:${match.blockId}:${match.alias}`}
-                value={quickFindAliasValue(match)}
-                onClickCapture={handleItemClickCapture}
-                onSelect={handleItemSelect}
-                className="flex justify-between items-center gap-2"
-              >
-                <span className="truncate">{match.alias}</span>
-                {match.content && match.content !== match.alias && (
-                  <span className="text-xs text-muted-foreground truncate max-w-[40%]">
-                    {truncate(match.content, 50)}
-                  </span>
-                )}
-              </CommandItem>
-            ))}
-          </CommandGroup>
-        )}
-
-        {blocks.length > 0 && (
-          <CommandGroup heading="Blocks">
-            {blocks.map(match => (
-              <CommandItem
-                key={`block:${match.blockId}`}
-                value={quickFindBlockValue(match)}
-                onClickCapture={handleItemClickCapture}
-                onSelect={handleItemSelect}
-              >
-                <span className="truncate">{truncate(match.content)}</span>
-              </CommandItem>
-            ))}
-          </CommandGroup>
-        )}
-
-        {showCreate && (
-          <CommandGroup heading="Create">
-            <CommandItem
-              key={`create:${trimmedQuery}`}
-              value={quickFindCreateValue(trimmedQuery)}
-              onClickCapture={handleItemClickCapture}
-              onSelect={handleItemSelect}
-            >
-              <span>Create page “{trimmedQuery}”</span>
-            </CommandItem>
-          </CommandGroup>
-        )}
-      </CommandList>
-      <div className="flex justify-end gap-3 border-t px-3 py-2 text-xs text-muted-foreground">
-        <span className="flex items-center gap-1">
-          <Kbd>↵</Kbd> jump
-        </span>
-        <span className="flex items-center gap-1">
-          <Kbd>⇧↵</Kbd> open in stack
-        </span>
-        <span className="flex items-center gap-1">
-          <Kbd>⇧⌥↵</Kbd> new panel
-        </span>
-      </div>
-    </CommandDialog>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="top-[12vh] translate-y-0 overflow-hidden p-0">
+        <DialogTitle className="sr-only">Quick find</DialogTitle>
+        <DialogDescription className="sr-only">
+          Find or create a page or block by alias or content.
+        </DialogDescription>
+        <QuickFindList
+          emptyMessage={trimmedQuery ? 'No results.' : 'Type to search.'}
+          groups={groups}
+          onItemClickCapture={handleItemClickCapture}
+          onKeyDown={handleKeyDown}
+          onQueryChange={nextQuery => {
+            setQuery(nextQuery)
+            setValue('')
+          }}
+          onSelect={handleItemSelect}
+          onValueChange={setValue}
+          query={query}
+          value={value}
+        />
+        <div className="flex justify-end gap-3 border-t px-3 py-2 text-xs text-muted-foreground">
+          <span className="flex items-center gap-1">
+            <Kbd>↵</Kbd> jump
+          </span>
+          <span className="flex items-center gap-1">
+            <Kbd>⇧↵</Kbd> open in stack
+          </span>
+          <span className="flex items-center gap-1">
+            <Kbd>⇧⌥↵</Kbd> new panel
+          </span>
+        </div>
+      </DialogContent>
+    </Dialog>
   )
 }
