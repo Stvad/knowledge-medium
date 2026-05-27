@@ -93,6 +93,13 @@ WHERE id = $id
 
 Keep the discriminator explicit (`metadata.mode = 'upsert'`) rather than implicit (e.g., "does `data` contain `created_at`?"). PowerSync's `CrudEntry` already exposes `entry.metadata` as a standard slot for upload-side discriminators, so we use it without inventing parallel infrastructure.
 
+**Runtime invariants — fail loudly on envelope drift.** Before routing, the uploader validates the entry shape against the discriminator. Mismatches are a programming error in the trigger/backfill emitters, not a runtime condition to recover from, so the right behavior is to throw (logged + quarantined via the existing rejection orchestrator) rather than silently route to the wrong path. Specifically:
+
+- If `metadata.mode === 'upsert'`: `data` must contain the full row (every column in `BLOCK_UPLOAD_COLUMNS`), and `previousValues` must be absent. A backfill envelope missing columns or carrying `previousValues` is malformed.
+- If `metadata.mode` is unset (trigger PATCH): `data` must not contain `created_at` (immutable post-INSERT — its presence implies an emitter mistakenly used `blockUploadJsonSql` instead of `blockUploadPatchJsonSql`), and the entry must not declare `metadata.mode`.
+
+These invariants are cheap to check, document the assumption inline, and turn the "future refactor accidentally harmonizes envelopes" hazard into a loud failure at upload time instead of silent data loss.
+
 `compactBlockCrudEntries` (`powersync.ts:112`) keeps fusing same-tx PUT+PATCH and PATCH+PATCH. The fusion direction stays right: later PATCH columns override earlier, and the fused entry carries the union of touched columns. **`CompactedBlockOperation` (`powersync.ts:25-42`) currently carries only `{kind, id, payload, order}` — extend it to also carry `previousValues?: {properties_json?: string}` and `metadata?: {mode?: 'upsert'}`** so the discriminators from Layer A survive into the uploader. Fusion rules:
 
 - `previousValues.properties_json` from PATCH fusion: keep the value from the *earliest* PATCH in the chain (since that's the true prior state on the server before any of these writes). Later PATCHes' `OLD.properties_json` is the previous PATCH's NEW; using it would silently drop intermediate keys.
