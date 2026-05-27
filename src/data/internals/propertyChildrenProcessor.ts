@@ -197,6 +197,35 @@ export const materializePropertyChildrenForExistingRow = async (
   }
 }
 
+export const materializePropertyFieldSlotsForExistingRow = async (
+  tx: Tx,
+  row: BlockData,
+  propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
+  names: readonly string[],
+): Promise<void> => {
+  if (row.deleted) return
+  if (names.length === 0) return
+
+  const children = await tx.childrenOf(row.id, undefined, {includePropertyChildren: true})
+  const existingFieldIds = new Set(
+    children.map(child => getPropertyFieldTargetId(child)).filter((id): id is string => id !== undefined),
+  )
+
+  for (const name of names) {
+    const schema = propertySchemas.get(name)
+    if (!schema) continue
+    if (existingFieldIds.has(schema.fieldId)) continue
+    await tx.create({
+      workspaceId: row.workspaceId,
+      parentId: row.id,
+      referenceTargetId: schema.fieldId,
+      orderKey: keyAtStart(null),
+      content: propertyFieldContent(schema),
+    })
+    existingFieldIds.add(schema.fieldId)
+  }
+}
+
 const materializePropertiesForChangedRow = async (
   tx: Tx,
   row: {before: BlockData | null; after: BlockData | null},

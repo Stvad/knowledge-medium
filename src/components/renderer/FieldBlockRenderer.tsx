@@ -1,19 +1,23 @@
 import type { BlockRenderer, BlockRendererProps } from '@/types'
-import { useHandle } from '@/hooks/block'
+import { useChildIds, useHandle, usePropertyValue } from '@/hooks/block'
 import { usePropertySchemas } from '@/hooks/propertySchemas'
 import { propertyEditorOverridesFacet, valuePresetsFacet } from '@/data/facets'
-import { findSchemaByFieldId, getPropertyFieldTargetId } from '@/data/propertyChildren'
+import {
+  findSchemaByFieldId,
+  getPropertyFieldTargetId,
+  propertyValueToChildContent,
+} from '@/data/propertyChildren'
 import { isCollapsedProp } from '@/data/properties'
 import { useAppRuntime } from '@/extensions/runtimeContext'
 import type { BlockLayout } from '@/extensions/blockInteraction'
 import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults'
 import { PropertyShapeGlyph } from '@/components/propertyPanel/shapeUi'
-import { usePropertyValue } from '@/hooks/block'
 import { useIsSelected } from '@/data/globalState'
 import { useIsFocalRender } from '@/hooks/useIsFocalRender'
 import { buildAppHash } from '@/utils/routing'
 import { useOpenBlock } from '@/utils/navigation'
 import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible'
+import { keyAtStart } from '@/data/orderKey'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer'
 import { CodeMirrorContentRenderer } from './CodeMirrorContentRenderer'
 
@@ -98,6 +102,78 @@ const FieldContentRenderer: BlockRenderer = ({block}: BlockRendererProps) => {
   )
 }
 
+const FieldEmptyValueEditor = ({block}: {block: BlockRendererProps['block']}) => {
+  const childIds = useChildIds(block)
+  const data = useHandle(block, {
+    selector: row => row
+      ? {
+        referenceTargetId: row.referenceTargetId,
+        parentId: row.parentId,
+        workspaceId: row.workspaceId,
+      }
+      : undefined,
+  })
+  const ownerBlock = data?.parentId ? block.repo.block(data.parentId) : block
+  useHandle(ownerBlock, {selector: row => row?.id})
+
+  const runtime = useAppRuntime()
+  const schemas = usePropertySchemas()
+  const uis = runtime.read(propertyEditorOverridesFacet)
+  const presets = runtime.read(valuePresetsFacet)
+  const fieldId = getPropertyFieldTargetId(data)
+  const schema = fieldId ? findSchemaByFieldId(schemas, fieldId) : undefined
+
+  if (childIds.length > 0 || !data || !schema) return null
+
+  const display = resolvePropertyDisplay({
+    name: schema.name,
+    encodedValue: undefined,
+    schemas,
+    uis,
+    presets,
+  })
+  const Editor = display.Editor
+  if (!Editor) return null
+
+  return (
+    <div
+      className="tm-property-empty-value-row min-w-0 py-0.5"
+      data-property-empty-value-row="true"
+      data-property-name={schema.name}
+      data-field-id={fieldId}
+    >
+      <Editor
+        value={schema.defaultValue}
+        schema={schema}
+        block={ownerBlock}
+        onChange={(next: unknown) => {
+          if (block.repo.isReadOnly) return
+          let content: string
+          try {
+            content = propertyValueToChildContent(schema, next)
+          } catch (err) {
+            console.warn(`[FieldBlockRenderer] cannot encode ${schema.name}:`, err)
+            return
+          }
+          void block.repo.tx(async tx => {
+            await tx.create({
+              workspaceId: data.workspaceId,
+              parentId: block.id,
+              orderKey: keyAtStart(null),
+              content,
+            })
+          }, {
+            scope: schema.changeScope,
+            description: `set empty property value ${schema.name}`,
+          }).catch(err => {
+            console.warn(`[FieldBlockRenderer] failed to set ${schema.name}:`, err)
+          })
+        }}
+      />
+    </div>
+  )
+}
+
 const FieldBlockLayout: BlockLayout = ({
   block,
   Content,
@@ -132,6 +208,7 @@ const FieldBlockLayout: BlockLayout = ({
             </div>
             <CollapsibleContent className="tm-field-value-cell min-w-0">
               <Children/>
+              <FieldEmptyValueEditor block={block}/>
             </CollapsibleContent>
           </div>
 
