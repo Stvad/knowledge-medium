@@ -25,6 +25,7 @@ The user-visible failures this produces:
 - **Server-side merge via a Postgres RPC, not PostgREST PATCH.** PostgREST `.update()` lost the "did the row exist?" signal (silently 0-rows-affected when the row is missing — the original footgun `applyBlockPatches` papered over). An RPC `apply_block_patches(patches jsonb)` does the merge in SQL, returns rowcount per id, and centralizes the conflict rules in one auditable place.
 - **`blocks_history` trigger needs no changes.** It already records per-column diffs and skips no-op UPDATEs (`supabase/migrations/20260522062437_add_blocks_history.sql:115-125`). Narrower writes just produce narrower history rows.
 - **Pull-down replay unchanged.** Server still pushes full rows back; local `BLOCKS_RAW_TABLE.put` continues to do `ON CONFLICT(id) DO UPDATE SET <all columns>`. That's correct because the server holds the merged truth.
+- **Postgres column type: `text` → `jsonb` for `properties_json` (and `references_json`).** Required for the Layer 3 RPC to use native `||` / `-` operators without parse/serialize on every write. One `ALTER TABLE blocks ALTER COLUMN properties_json TYPE jsonb USING properties_json::jsonb` (same for `references_json`) lands in the same migration as the RPC. The existing partial index `idx_blocks_workspace_with_references` predicate `references_json <> '[]'::text` (`20260510222352_consolidated_initial.sql:581`) must be re-created with `<> '[]'::jsonb`. **Local SQLite stays `TEXT`** — PowerSync's bundled SQLite has no jsonb type we can rely on, JSON1 functions over TEXT cover everything we read locally, and the merge happens server-side. PowerSync projects a Postgres `jsonb` column into the sync stream as JSON text, so the local raw `properties_json TEXT` column keeps receiving valid JSON. *Verify the sync-stream serialization before committing to the migration.*
 
 ## The three layers
 
@@ -62,13 +63,15 @@ In the uploader, when a PATCH entry includes `opData.properties_json` and `previ
 - `set`: keys whose value differs in `new` vs `prev`, mapped to the new value.
 - `unset`: keys present in `prev` but absent in `new`.
 
-Ship `{set, unset}` to the RPC. Server applies:
+Ship `{set, unset}` to the RPC. Server applies (after the `text` → `jsonb` migration above):
 
 ```sql
-properties_json = ((COALESCE(properties_json, '{}'::jsonb)) || $set) - $unset_array
+UPDATE blocks
+SET properties_json = (COALESCE(properties_json, '{}'::jsonb) || $set) - $unset_array
+WHERE id = $id
 ```
 
-`||` is shallow jsonb merge; `-` with a `text[]` removes keys. `properties_json` is a flat `Record<string, unknown>` (`src/data/api/blockData.ts`, `properties.ts:112-116`), so shallow merge is the right semantics — keys don't nest.
+`||` is shallow jsonb merge; `-` with a `text[]` removes keys. `properties_json` is a flat `Record<string, unknown>` (`src/data/api/blockData.ts`, `properties.ts:112-116`), so shallow merge is the right semantics — keys don't nest. If we postpone the column-type migration, the same expression has to be `(((properties_json::jsonb) || $set) - $unset_array)::text` per write — works, but parses and re-serializes on every property edit, which is exactly the kind of overhead we'd rather not eat on a hot path.
 
 If `previousValues.properties_json` is missing (shouldn't happen with `onlyWhenChanged: true`, but defensively), fall back to overwriting the column. This degrades that one entry to today's behavior, no worse.
 
@@ -110,7 +113,7 @@ After this work:
 
 1. **Layer 1** (small, contained). Narrow `tx.update`/`tx.restore` SQL. Add tests asserting that an update with only `{properties}` doesn't bump `content` in `row_events`/`blocks_history`. Land independently — it's a strict improvement and unblocks measuring the win.
 2. **Layer 3 schema flags + uploader diff** (medium). Add `trackPrevious` + `ignoreEmptyUpdates` to the blocks table. In the uploader, compute the property diff but *still* ship full-row UPSERT for now (validate that `previousValues` shape is what we expect, end-to-end). Add unit tests for the diff logic in isolation.
-3. **Layer 2 + RPC** (medium). Write `apply_block_patches(patches jsonb)`. Switch `applyBlockPatches` to call it with the partial payload (including the property `{set, unset}`). Keep the "row missing → quarantine" path. Integration test: two-client conflict on different property keys converges to both keys present.
+3. **Layer 2 + RPC** (medium). Migration: `ALTER TABLE blocks` to convert `properties_json` and `references_json` from `text` to `jsonb`; re-create `idx_blocks_workspace_with_references` with the jsonb predicate; write `apply_block_patches(patches jsonb)`. Switch `applyBlockPatches` to call it with the partial payload (including the property `{set, unset}`). Keep the "row missing → quarantine" path. Integration test: two-client conflict on different property keys converges to both keys present.
 4. **Remove the old fallback** once telemetry shows the new path is healthy. Drop `loadCurrentBlockUploadRows` from the PATCH path; it stays in the codebase only for the missing-local-row edge.
 
 Each phase ships independently. Stages 1–2 are pure correctness improvements with no behavior change at the user level; stage 3 is the one that fixes the cross-key clobber.
@@ -121,6 +124,7 @@ Each phase ships independently. Stages 1–2 are pure correctness improvements w
 - **Delete-key encoding.** Sentinel-in-`set` (`{key: __DELETED}`) vs separate `unset: string[]`. Voting for separate field — cleaner types, server can validate independently.
 - **RPC error shape.** Per-id success/failure array, or first-error-aborts-batch. Match whatever the existing orchestrator's quarantine path expects.
 - **What other "fields" are device-local hiding in `properties_json`?** Even with per-key merge, anything that's truly UI-only (scroll position, focus, transient zoom) should still come out of synced properties. Quick audit while we're in there is cheap insurance.
+- **PowerSync sync-stream serialization of `jsonb`.** Confirm that converting `properties_json` / `references_json` from `text` to `jsonb` in Postgres still arrives at the local SQLite raw table as valid JSON text (PowerSync's documented behavior is to stringify jsonb, but worth a smoke test before the migration lands). If PowerSync surfaces it as some other shape, we either keep the column as `text` and eat the cast-in-cast-out in the RPC, or add a generated `text` projection alongside.
 
 ## Out of scope (intentionally)
 
