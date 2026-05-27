@@ -575,8 +575,8 @@ export const merge = defineMutator<MergeArgs, void>({
     // its current children list. Their own descendants come along
     // naturally — parent_id chains stay intact under SQLite's
     // single-row updates.
-    const intoChildren = await tx.childrenOf(intoId)
-    const fromChildren = await tx.childrenOf(fromId)
+    const intoChildren = await tx.childrenOf(intoId, undefined, {includePropertyChildren: false})
+    const fromChildren = await tx.childrenOf(fromId, undefined, {includePropertyChildren: false})
     if (fromChildren.length > 0) {
       const keys = keysBetween(intoChildren.at(-1)?.orderKey ?? null, null, fromChildren.length)
       for (let i = 0; i < fromChildren.length; i++) {

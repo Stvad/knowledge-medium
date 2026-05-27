@@ -28,9 +28,6 @@
  * Path is internal to the CTE; consumers ignore it.
  */
 
-const PROPERTY_VALUE_CHILD_FILTER_SQL =
-  `field_id IS NULL`
-
 /** Returns the rooted subtree, ordered by path (i.e. depth-first, with
  *  siblings sorted by `(order_key, id)` via the path encoding). Filters
  *  `deleted = 0`. */
@@ -48,7 +45,6 @@ export const SUBTREE_SQL = `
       FROM subtree
       JOIN blocks AS child ON child.parent_id = subtree.id
      WHERE child.deleted = 0
-       AND child.field_id IS NULL
        AND subtree.depth < 100
        AND INSTR(subtree.path, '!' || hex(child.id) || '/') = 0
   )
@@ -192,7 +188,7 @@ export const cycleScanSql = (idCount: number): string => {
  *  `deleted = 0`. */
 export const CHILDREN_SQL = `
   SELECT * FROM blocks
-   WHERE parent_id = ? AND deleted = 0 AND ${PROPERTY_VALUE_CHILD_FILTER_SQL}
+   WHERE parent_id = ? AND deleted = 0
    ORDER BY order_key, id
 `
 
@@ -201,6 +197,6 @@ export const CHILDREN_SQL = `
  *  and only declares structural deps (`parent-edge`). */
 export const CHILDREN_IDS_SQL = `
   SELECT id FROM blocks
-   WHERE parent_id = ? AND deleted = 0 AND ${PROPERTY_VALUE_CHILD_FILTER_SQL}
+   WHERE parent_id = ? AND deleted = 0
    ORDER BY order_key, id
 `

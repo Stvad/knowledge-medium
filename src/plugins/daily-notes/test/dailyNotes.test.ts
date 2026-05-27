@@ -69,6 +69,11 @@ let env: Harness
 beforeEach(async () => { env = await setup() })
 afterEach(async () => { await env.h.cleanup() })
 
+const contentChildIds = async (parentId: string): Promise<string[]> =>
+  (await env.repo.block(parentId).children.load())
+    .filter(row => !row.fieldId)
+    .map(row => row.id)
+
 describe('deterministic ids', () => {
   it('journalBlockId is stable for a given workspace', () => {
     expect(journalBlockId('ws-1')).toBe(journalBlockId('ws-1'))
@@ -172,7 +177,7 @@ describe('getOrCreateDailyNote', () => {
     const journalId = journalBlockId(WS)
     const journal = await env.repo.load(journalId, {children: true})
     expect(journal).not.toBeNull()
-    const childIds = await env.repo.block(journalId).childIds.load()
+    const childIds = await contentChildIds(journalId)
     expect(childIds).toContain(note.id)
   })
 
@@ -195,7 +200,7 @@ describe('getOrCreateDailyNote', () => {
 
     const journalId = journalBlockId(WS)
     await env.repo.load(journalId, {children: true})
-    const childIds = await env.repo.block(journalId).childIds.load()
+    const childIds = await contentChildIds(journalId)
     expect(childIds).toEqual([b.id, a.id])
   })
 
@@ -223,7 +228,7 @@ describe('getOrCreateDailyNote', () => {
     await getOrCreateDailyNote(env.repo, WS, '2026-04-28')
     await getOrCreateDailyNote(env.repo, WS, '2026-04-29')
 
-    const childIds = await env.repo.block(journal.id).childIds.load()
+    const childIds = await contentChildIds(journal.id)
     expect(childIds).toEqual([newerId, olderId])
     expect(env.repo.block(olderId).hasType(PAGE_TYPE)).toBe(true)
     expect(env.repo.block(olderId).hasType(DAILY_NOTE_TYPE)).toBe(true)

@@ -141,10 +141,10 @@ export interface Tx {
   // ──── Within-tx tree primitives ────
 
   /** Children of `parentId`, ordered `(order_key, id)`, filtered
-   *  `deleted = 0`. Property-value children are hidden by default;
-   *  callers that maintain structural ownership/projection can opt
-   *  into them with `includePropertyChildren`. Reads SQL via the
-   *  writeTransaction.
+   *  `deleted = 0`. Property-value children are ordinary children on
+   *  this surface by default. Callers with a domain-specific "content
+   *  children only" contract can pass `{includePropertyChildren:false}`.
+   *  Reads SQL via the writeTransaction.
    *  Pass `null` to enumerate workspace-root rows (rows with
    *  `parent_id IS NULL`); the result is scoped to a workspace by
    *  one of three sources, in priority order:

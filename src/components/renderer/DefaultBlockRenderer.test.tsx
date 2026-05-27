@@ -24,6 +24,7 @@ import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
 import type { Block } from '@/data/block'
 import type { BlockRendererProps } from '@/types'
 import { pasteMultilineText } from '@/utils/paste'
+import { useChildIds } from '@/hooks/block'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer'
 
 const repoRef = vi.hoisted(() => ({
@@ -88,6 +89,11 @@ const propertyOnlyLayout: BlockLayout = ({Properties, shellProps}) => (
 const TestContentRenderer = ({block}: BlockRendererProps) => (
   <div>{block.id}</div>
 )
+
+const ChildIdsProbe = ({block}: {block: Block}) => {
+  const ids = useChildIds(block)
+  return <div data-testid="child-ids">{ids.join('|')}</div>
+}
 
 const dispatchPaste = (target: Element, text: string): Event => {
   const event = new Event('paste', {bubbles: true, cancelable: true})
@@ -255,5 +261,43 @@ describe('DefaultBlockRenderer paste handling', () => {
     const remountedShell = document.querySelector<HTMLElement>('[data-block-id="block-1"][data-editing="false"]')
     expect(remountedShell).not.toBe(firstShell)
     await waitFor(() => expect(document.activeElement).toBe(remountedShell))
+  })
+
+  it('treats visible fields as children while hiding internal fields from the outline', async () => {
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'probe-parent',
+        workspaceId: 'ws-1',
+        parentId: 'root',
+        orderKey: 'b0',
+        content: 'Probe parent',
+      })
+      await tx.create({
+        id: 'visible-status-field',
+        workspaceId: 'ws-1',
+        parentId: 'probe-parent',
+        fieldId: statusProp.fieldId,
+        orderKey: 'a0',
+        content: 'open',
+      })
+      await tx.create({
+        id: 'hidden-show-properties-field',
+        workspaceId: 'ws-1',
+        parentId: 'probe-parent',
+        fieldId: showPropertiesProp.fieldId,
+        orderKey: 'a1',
+        content: 'true',
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'create field child probe'})
+
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <ChildIdsProbe block={repo.block('probe-parent')} />
+      </AppRuntimeContextProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('child-ids').textContent).toBe('visible-status-field')
+    })
   })
 })

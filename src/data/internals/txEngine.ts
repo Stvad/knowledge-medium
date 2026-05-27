@@ -168,17 +168,15 @@ const COLUMN_PLACEHOLDERS = COLUMN_NAMES.map(() => '?').join(', ')
 
 const SELECT_BY_ID_SQL = `SELECT ${COLUMN_LIST} FROM blocks WHERE id = ?`
 const SELECT_CHILDREN_SQL =
-  `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id = ? AND deleted = 0 AND field_id IS NULL ORDER BY order_key, id`
-const SELECT_ALL_CHILDREN_SQL =
   `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id`
+const SELECT_CONTENT_CHILDREN_SQL =
+  `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id = ? AND deleted = 0 AND field_id IS NULL ORDER BY order_key, id`
 /** Root-level siblings (parent_id IS NULL). When a tx has pinned a
  *  workspace, scope to that workspace so `tx.childrenOf(null)` doesn't
  *  spill across workspaces — important for single-workspace-per-tx
  *  invariants and for sibling-position helpers like createSiblingAbove
  *  on root blocks. */
 const SELECT_ROOT_SIBLINGS_SQL =
-  `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id IS NULL AND deleted = 0 AND field_id IS NULL AND workspace_id = ? ORDER BY order_key, id`
-const SELECT_ALL_ROOT_SIBLINGS_SQL =
   `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id IS NULL AND deleted = 0 AND workspace_id = ? ORDER BY order_key, id`
 const SELECT_NEXT_CHILD_SIBLING_SQL =
   `SELECT ${COLUMN_LIST} FROM blocks
@@ -204,6 +202,8 @@ const SELECT_PREVIOUS_ROOT_SIBLING_SQL =
      AND (order_key < ? OR (order_key = ? AND id < ?))
    ORDER BY order_key DESC, id DESC
    LIMIT 1`
+const SELECT_CONTENT_ROOT_SIBLINGS_SQL =
+  `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id IS NULL AND deleted = 0 AND field_id IS NULL AND workspace_id = ? ORDER BY order_key, id`
 const SELECT_PARENT_SQL =
   `SELECT p.* FROM blocks AS c JOIN blocks AS p ON p.id = c.parent_id WHERE c.id = ? AND p.deleted = 0`
 const SELECT_PARENT_WORKSPACE_SQL =
@@ -489,7 +489,7 @@ export class TxImpl implements Tx {
     workspaceId?: string,
     options?: {includePropertyChildren?: boolean},
   ): Promise<BlockData[]> {
-    const includePropertyChildren = options?.includePropertyChildren === true
+    const includePropertyChildren = options?.includePropertyChildren !== false
     if (parentId === null) {
       // SQL `parent_id = NULL` never matches; use `IS NULL`. Scope to
       // a workspace by one of: explicit arg → pinned meta → throw.
@@ -506,13 +506,13 @@ export class TxImpl implements Tx {
         throw new WorkspaceNotPinnedError()
       }
       const rows = await this.ctx.txDb.getAll<BlockRow>(
-        includePropertyChildren ? SELECT_ALL_ROOT_SIBLINGS_SQL : SELECT_ROOT_SIBLINGS_SQL,
+        includePropertyChildren ? SELECT_ROOT_SIBLINGS_SQL : SELECT_CONTENT_ROOT_SIBLINGS_SQL,
         [ws],
       )
       return rows.map(parseBlockRow)
     }
     const rows = await this.ctx.txDb.getAll<BlockRow>(
-      includePropertyChildren ? SELECT_ALL_CHILDREN_SQL : SELECT_CHILDREN_SQL,
+      includePropertyChildren ? SELECT_CHILDREN_SQL : SELECT_CONTENT_CHILDREN_SQL,
       [parentId],
     )
     return rows.map(parseBlockRow)
