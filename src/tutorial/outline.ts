@@ -189,6 +189,16 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       },
     ]),
 
+    sect('Search', [
+      `QuickFind (${sharedKeys.quickFind}) searches page aliases first, then block content. Press Enter to open the selected result; if the name is missing, QuickFind can create a new page for it.`,
+      'Plain words are all required but can appear anywhere: `project notes` finds blocks containing both `project` and `notes`, even if the order is different.',
+      'Wrap text in quotes for an exact phrase: `"project notes"` only matches that contiguous text.',
+      'Use uppercase `OR` for alternatives: `project OR meeting` finds either term.',
+      'Use a leading minus to exclude a term when the query also has something positive to search for: `project -archived` and `-archived project` both mean "project, but not archived". By itself, `-archived` searches for the literal text `-archived`.',
+      'Punctuation stays literal when it is part of what you typed: `2024-01`, `sync -`, and `foo/bar` search for those characters instead of acting like special syntax.',
+      `For a dedicated workspace-wide text sweep, open Find and replace: ${sharedKeys.findReplace}.`,
+    ]),
+
     sect('Properties & types', [
       `Properties are typed key/value pairs attached to any block. To open the properties panel on a focused block: ${km.properties}.`,
       'Try giving me a property — e.g. `priority: high`. It will appear under my content.',
