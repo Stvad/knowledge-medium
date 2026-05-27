@@ -58,8 +58,10 @@ import {
   parseReferences as parseAliasMarks,
   parseBlockRefs,
 } from './referenceParser.ts'
+import { parseExactReferenceBlockContent } from '@/data/referenceBlock'
 import { projectPropertyReferences } from './referenceProjection.ts'
 import { aliasSeatReaderFromDb, ensureAliasTarget, resolveAliasSeatId } from '@/data/targets'
+import { aliasesProp, typesProp } from '@/data/properties'
 import {
   dailyNoteBlockId,
   ensureDailyNoteTarget,
@@ -115,6 +117,14 @@ const buildSourcePlan = async (
   const aliasesToEnsure: string[] = []
   const datesToEnsure: string[] = []
   const seenAliases = new Set<string>()
+  const exactReference = source.referenceTargetId
+    ? parseExactReferenceBlockContent(source.content)
+    : null
+
+  if (exactReference?.kind === 'alias') {
+    aliasRefs.push({id: source.referenceTargetId!, alias: exactReference.alias})
+    seenAliases.add(exactReference.alias)
+  }
 
   for (const mark of aliasMarks) {
     if (seenAliases.has(mark.alias)) continue
@@ -159,6 +169,10 @@ const buildSourcePlan = async (
 
   const blockRefs: BlockReference[] = []
   const seenBlockRefs = new Set<string>()
+  if (exactReference?.kind === 'blockRef') {
+    blockRefs.push({id: source.referenceTargetId!, alias: source.referenceTargetId!})
+    seenBlockRefs.add(source.referenceTargetId!)
+  }
   for (const mark of blockRefMarks) {
     if (seenBlockRefs.has(mark.blockId)) continue
     seenBlockRefs.add(mark.blockId)
@@ -288,6 +302,26 @@ declare module '@/data/api' {
   }
 }
 
+const TRANSIENT_ALIAS_SEAT_FIELD_IDS = new Set([aliasesProp.fieldId, typesProp.fieldId])
+
+const deleteSubtree = async (tx: Tx, id: string): Promise<void> => {
+  const children = await tx.childrenOf(id, undefined, {includePropertyChildren: true})
+  for (const child of children) {
+    await deleteSubtree(tx, child.id)
+  }
+  await tx.delete(id)
+}
+
+const deleteTransientAliasSeat = async (tx: Tx, id: string): Promise<void> => {
+  await tx.delete(id)
+  const children = await tx.childrenOf(id, undefined, {includePropertyChildren: true})
+  for (const child of children) {
+    if (!child.referenceTargetId) continue
+    if (!TRANSIENT_ALIAS_SEAT_FIELD_IDS.has(child.referenceTargetId)) continue
+    await deleteSubtree(tx, child.id)
+  }
+}
+
 export const cleanupOrphanAliasesProcessor = definePostCommitProcessor<CleanupArgs>({
   name: CLEANUP_ORPHAN_ALIASES_PROCESSOR,
   watches: { kind: 'explicit' },
@@ -312,12 +346,11 @@ export const cleanupOrphanAliasesProcessor = definePostCommitProcessor<CleanupAr
     // are atomic and produce one command_events row.
     await ctx.repo.tx(async tx => {
       for (const id of orphans) {
-        // No block references it — orphan. Soft-delete (the §7 cleanup
-        // is leaf-only by construction; the alias target was created
-        // empty so it has no children to cascade). tx.delete on the raw
-        // primitive is leaf-aware enough for v1; if a future processor
-        // wants subtree-cleanup it would call repo.mutate.delete instead.
-        await tx.delete(id)
+        // No block references it — orphan. The target's own seed
+        // properties now materialize as child-backed fields, so delete
+        // those generated rows after tombstoning the parent. Other
+        // children stay live and will make the tombstone non-restorable.
+        await deleteTransientAliasSeat(tx, id)
       }
     }, {
       scope: ChangeScope.References,

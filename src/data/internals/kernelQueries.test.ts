@@ -1058,10 +1058,9 @@ describe('invalidation', () => {
     }
   })
 
-  it('searchByContent: a UiState property write does NOT invalidate', async () => {
-    // The narrow `kernel.content` channel only fires on content edits +
-    // live-set membership. Property-only writes (the UiState shape) used
-    // to wake every workspace-broad alias/content handle.
+  it('searchByContent: a UiState property write invalidates when it materializes field rows', async () => {
+    // Field rows are normal content blocks now, so a property write can
+    // add searchable content and must wake content-search handles.
     await create({id: 'a', content: 'hello'})
     await create({id: 'panel'})
     const handle = env.repo.query.searchByContent({workspaceId: WS, query: 'hello'})
@@ -1075,13 +1074,13 @@ describe('invalidation', () => {
         {scope: ChangeScope.UiState},
       )
       await new Promise(r => setTimeout(r, 30))
-      expect(fired.length).toBe(0)
+      expect(fired.length).toBeGreaterThanOrEqual(1)
     } finally {
       unsub()
     }
   })
 
-  it('recentBlocks: a content edit invalidates; a UiState write does NOT', async () => {
+  it('recentBlocks: a content edit invalidates; a UiState write can materialize recent field rows', async () => {
     await create({id: 'a', content: 'aa'})
     await create({id: 'panel'})
     const handle = env.repo.query.recentBlocks({workspaceId: WS, limit: 10})
@@ -1090,19 +1089,22 @@ describe('invalidation', () => {
     const fired: number[] = []
     const unsub = handle.subscribe(() => { fired.push(1) })
     try {
-      // UiState writes must not wake the handle — recent-picker tolerates
-      // lightly stale `updated_at` ordering between content events.
+      // Field rows are normal blocks, so property materialization is a
+      // live-set/content change for recent-block candidates.
       await env.repo.tx(
         tx => tx.update('panel', {properties: {focusedBlockId: 'x'}}),
         {scope: ChangeScope.UiState},
       )
       await new Promise(r => setTimeout(r, 30))
-      expect(fired.length).toBe(0)
+      expect(fired.length).toBeGreaterThanOrEqual(1)
+      fired.length = 0
 
       // A new non-empty block must wake it (live-set membership).
       await create({id: 'b', content: 'bb'})
       await vi.waitFor(() => {
-        expect(asBlocks(handle.peek()).map(b => b.id).sort()).toEqual(['a', 'b'])
+        const ids = asBlocks(handle.peek()).map(b => b.id)
+        expect(ids).toContain('a')
+        expect(ids).toContain('b')
       })
     } finally {
       unsub()
@@ -1139,12 +1141,10 @@ describe('invalidation', () => {
     }
   })
 
-  it('searchByContent / recentBlocks: non-content property edit on a result row does NOT invalidate', async () => {
-    // Same rationale as the parent-move case: editing an unrelated
-    // property on a currently-returned row leaves content + liveness
-    // unchanged, so the kernel.content channel doesn't fire and the
-    // handle should stay quiet. Pre-fix per-row deps fired here for
-    // every result row on every property write.
+  it('searchByContent / recentBlocks: non-content property edits invalidate when field rows change', async () => {
+    // Property writes now materialize field/value rows as normal
+    // blocks. The content channel must fire so search/recent surfaces
+    // can include those rows when they match.
     await create({id: 'a', content: 'hello world'})
     const searchHandle = env.repo.query.searchByContent({workspaceId: WS, query: 'hello'})
     const recentHandle = env.repo.query.recentBlocks({workspaceId: WS, limit: 10})
@@ -1160,7 +1160,7 @@ describe('invalidation', () => {
         {scope: ChangeScope.BlockDefault},
       )
       await new Promise(r => setTimeout(r, 30))
-      expect(fired).toEqual([])
+      expect(fired.sort()).toEqual(['recent', 'search'])
     } finally {
       u1(); u2()
     }

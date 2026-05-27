@@ -1033,6 +1033,8 @@ export const snapshotsToChangeNotification = (
     const afterParent = entry.after?.parentId ?? null
     const beforeOrderKey = entry.before?.orderKey
     const afterOrderKey = entry.after?.orderKey
+    const beforeReferenceTargetId = entry.before?.referenceTargetId ?? null
+    const afterReferenceTargetId = entry.after?.referenceTargetId ?? null
     const beforeLive = !!entry.before && !entry.before.deleted
     const afterLive = !!entry.after && !entry.after.deleted
 
@@ -1059,6 +1061,16 @@ export const snapshotsToChangeNotification = (
       && afterLive
       && beforeParent !== null
       && beforeOrderKey !== afterOrderKey
+    ) {
+      parentIds.add(beforeParent)
+    }
+    else if (
+      beforeLive
+      && afterLive
+      && beforeParent !== null
+      && (
+        beforeReferenceTargetId !== afterReferenceTargetId
+      )
     ) {
       parentIds.add(beforeParent)
     }

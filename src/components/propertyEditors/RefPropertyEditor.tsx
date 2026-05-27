@@ -14,6 +14,7 @@ import { useWorkspaceId } from '@/hooks/block.js'
 import { BlockEmbed } from '@/components/references/BlockEmbed.js'
 import { BlockRefAncestorsProvider } from '@/components/references/cycleGuard.js'
 import {
+  isLinkTargetCandidateBlock,
   labelForBlockData,
   searchLinkTargetIdCandidates,
   type LinkTargetIdCandidate,
@@ -124,6 +125,7 @@ const searchReferenceCandidates = async (
       })
     }
     for (const block of recentBlocks ?? []) {
+      if (!(await isLinkTargetCandidateBlock(repo, block))) continue
       if (seen.has(block.id)) continue
       seen.add(block.id)
       candidates.push({

@@ -44,7 +44,7 @@ import type {
 import { Block } from '../data/block'
 import { useRepo } from '@/context/repo.js'
 import { propertyEditorOverridesFacet } from '@/data/facets'
-import { findSchemaByFieldId } from '@/data/propertyChildren'
+import { findSchemaByFieldId, getPropertyFieldTargetId } from '@/data/propertyChildren'
 import { useAppRuntime } from '@/extensions/runtimeContext'
 import { usePropertySchemas } from '@/hooks/propertySchemas.js'
 import { isPropertyPanelHiddenProperty } from '@/components/propertyPanel/visibility'
@@ -305,8 +305,9 @@ const isHiddenPropertyChild = (
   schemas: ReadonlyMap<string, AnyPropertySchema>,
   uis: ReadonlyMap<string, AnyPropertyEditorOverride>,
 ): boolean => {
-  if (!data?.fieldId) return false
-  const schema = findSchemaByFieldId(schemas, data.fieldId)
+  const fieldId = getPropertyFieldTargetId(data)
+  if (!fieldId) return false
+  const schema = findSchemaByFieldId(schemas, fieldId)
   if (!schema) return false
   return isPropertyPanelHiddenProperty(schema.name, schemas, uis)
 }

@@ -33,10 +33,11 @@ import { PowerSyncDatabase, Schema, WASQLiteOpenFactory, WASQLiteVFS } from '@po
 import { createPowerSyncConnector, hasRemoteSyncConfig } from '@/services/powersync.js'
 import {
   BLOCKS_RAW_TABLE,
-  CREATE_BLOCKS_FIELD_PARENT_INDEX_SQL,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
+  CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
+  DROP_BLOCKS_FIELD_PARENT_INDEX_SQL,
   ensureBlockStorageColumns,
 } from '@/data/blockSchema'
 import {
@@ -225,7 +226,8 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase, userId: str
   await powerSyncDb.execute(CREATE_BLOCKS_TABLE_SQL)
   await ensureBlockStorageColumns(powerSyncDb)
   await powerSyncDb.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
-  await powerSyncDb.execute(CREATE_BLOCKS_FIELD_PARENT_INDEX_SQL)
+  await powerSyncDb.execute(DROP_BLOCKS_FIELD_PARENT_INDEX_SQL)
+  await powerSyncDb.execute(CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
 
   // ── workspaces + workspace_members ──

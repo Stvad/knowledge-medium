@@ -178,7 +178,7 @@ describe('repo.queryBlocks', () => {
 
     const out = await env.repo.queryBlocks({workspaceId: WS, where: {status: null}})
 
-    expect(ids(out)).toEqual(['missing', 'nullish'])
+    expect(ids(out.filter(row => row.parentId === null))).toEqual(['missing', 'nullish'])
   })
 
   describe('where operators', () => {
@@ -259,7 +259,7 @@ describe('repo.queryBlocks', () => {
       expect(ids(set)).toEqual(['set'])
 
       const unset = await env.repo.queryBlocks({workspaceId: WS, where: {status: {exists: false}}})
-      expect(ids(unset).sort()).toEqual(['missing', 'nullish'])
+      expect(ids(unset.filter(row => row.parentId === null)).sort()).toEqual(['missing', 'nullish'])
     })
 
     it('rejects malformed operator objects with a clear message', async () => {
@@ -395,8 +395,8 @@ describe('repo.queryBlocks', () => {
   it('does not alias invalid undefined where filters to a cached empty where handle', async () => {
     await create({id: 'todo-open', types: ['todo'], properties: {status: 'open'}})
 
-    await expect(env.repo.queryBlocks({workspaceId: WS, where: {}}))
-      .resolves.toMatchObject([{id: 'todo-open'}])
+    const broad = await env.repo.queryBlocks({workspaceId: WS, where: {}})
+    expect(ids(broad)).toContain('todo-open')
     await expect(env.repo.queryBlocks({workspaceId: WS, where: {status: undefined}}))
       .rejects.toThrow('is undefined')
   })

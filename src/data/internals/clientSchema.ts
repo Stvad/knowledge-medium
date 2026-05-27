@@ -272,7 +272,7 @@ const blockJsonObjectSql = (rowRef: 'NEW' | 'OLD') => `
         'id', ${rowRef}.id,
         'workspaceId', ${rowRef}.workspace_id,
         'parentId', ${rowRef}.parent_id,
-        'fieldId', ${rowRef}.field_id,
+        'referenceTargetId', ${rowRef}.reference_target_id,
         'orderKey', ${rowRef}.order_key,
         'content', ${rowRef}.content,
         'properties', json(${rowRef}.properties_json),
@@ -300,6 +300,8 @@ const triggerTxIdSql = `
 `.trim()
 
 const triggerSourceSql = `COALESCE((SELECT source FROM tx_context WHERE id = 1), 'sync')`
+
+const dropTriggerSql = (name: string): string => `DROP TRIGGER IF EXISTS ${name}`
 
 // ============================================================================
 // row_events triggers (3) — fire for both local AND sync writes; the
@@ -405,7 +407,7 @@ interface UploadColumnSpec {
 const BLOCK_UPLOAD_COLUMNS: readonly UploadColumnSpec[] = [
   {name: 'workspace_id', jsonValue: rowRef => `${rowRef}.workspace_id`},
   {name: 'parent_id', jsonValue: rowRef => `${rowRef}.parent_id`},
-  {name: 'field_id', jsonValue: rowRef => `${rowRef}.field_id`},
+  {name: 'reference_target_id', jsonValue: rowRef => `${rowRef}.reference_target_id`},
   {name: 'order_key', jsonValue: rowRef => `${rowRef}.order_key`},
   {name: 'content', jsonValue: rowRef => `${rowRef}.content`},
   {name: 'properties_json', jsonValue: rowRef => `${rowRef}.properties_json`},
@@ -1079,7 +1081,9 @@ export const CLEAR_REPROJECT_REF_MARKER_SQL = `
 
 // ============================================================================
 // Bulk-apply ordered list. Run after `blocks` exists (PowerSync's schema
-// initialization creates it). Idempotent (`IF NOT EXISTS`).
+// initialization creates it). Idempotent (`IF NOT EXISTS` plus targeted
+// trigger drops before recreation where trigger bodies are part of the
+// evolving client schema).
 // ============================================================================
 
 export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = [
@@ -1105,6 +1109,11 @@ export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = [
   CREATE_PS_CRUD_REJECTED_REJECTED_AT_INDEX_SQL,
   CREATE_PS_CRUD_REJECTED_TX_ID_INDEX_SQL,
   DROP_BLOCKS_WORKSPACE_TYPE_INDEX_SQL,
+  dropTriggerSql('blocks_row_event_insert'),
+  dropTriggerSql('blocks_row_event_update'),
+  dropTriggerSql('blocks_row_event_delete'),
+  dropTriggerSql('blocks_upload_insert'),
+  dropTriggerSql('blocks_upload_update'),
   // 5 audit/upload triggers
   CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL,
   CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL,

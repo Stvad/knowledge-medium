@@ -85,8 +85,9 @@ export interface Tx {
 
   // ──── Data-field updates (non-structural) ────
 
-  /** Update non-structural data fields only (`content` / `references` /
-   *  `properties`). Structural mutations have their own primitives. The
+  /** Update non-structural data fields only (`content` /
+   *  `referenceTargetId` / `references` / `properties`). Structural
+   *  mutations have their own primitives. The
    *  patch type excludes `parentId`, `orderKey`, `workspaceId`, `deleted`,
    *  and metadata fields at the type level. */
   update(id: string, patch: BlockDataPatch, opts?: TxWriteOpts): Promise<void>

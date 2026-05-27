@@ -9,7 +9,7 @@ export interface BlockRow {
   id: string
   workspace_id: string
   parent_id: string | null
-  field_id: string | null
+  reference_target_id: string | null
   order_key: string
   content: string
   properties_json: string
@@ -39,7 +39,7 @@ export const BLOCK_STORAGE_COLUMNS = [
   {name: 'id', definition: 'id TEXT PRIMARY KEY NOT NULL'},
   {name: 'workspace_id', definition: 'workspace_id TEXT NOT NULL'},
   {name: 'parent_id', definition: 'parent_id TEXT'},
-  {name: 'field_id', definition: 'field_id TEXT'},
+  {name: 'reference_target_id', definition: 'reference_target_id TEXT'},
   {name: 'order_key', definition: 'order_key TEXT NOT NULL'},
   {name: 'content', definition: "content TEXT NOT NULL DEFAULT ''"},
   {name: 'properties_json', definition: "properties_json TEXT NOT NULL DEFAULT '{}'"},
@@ -96,10 +96,14 @@ export const CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL = `
   WHERE deleted = 0
 `
 
-export const CREATE_BLOCKS_FIELD_PARENT_INDEX_SQL = `
-  CREATE INDEX IF NOT EXISTS idx_blocks_field_parent
-  ON blocks (workspace_id, field_id, parent_id)
-  WHERE deleted = 0 AND field_id IS NOT NULL
+export const DROP_BLOCKS_FIELD_PARENT_INDEX_SQL = `
+  DROP INDEX IF EXISTS idx_blocks_field_parent
+`
+
+export const CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_blocks_reference_target_parent
+  ON blocks (workspace_id, reference_target_id, parent_id)
+  WHERE deleted = 0 AND reference_target_id IS NOT NULL
 `
 
 export const CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL = `
@@ -113,13 +117,97 @@ export interface BlockSchemaDb {
   getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
 }
 
-export const ensureBlockStorageColumns = async (db: BlockSchemaDb): Promise<void> => {
+const LEGACY_BLOCKS_FIELD_TRIGGER_NAMES = [
+  'blocks_row_event_insert',
+  'blocks_row_event_update',
+  'blocks_row_event_delete',
+  'blocks_upload_insert',
+  'blocks_upload_update',
+] as const
+
+const legacyFieldLabelSql = (rowRef: string): string => `
+  COALESCE(
+    (
+      SELECT json_extract(schema_block.properties_json, '$."property-schema:name"')
+      FROM blocks schema_block
+      WHERE schema_block.id = ${rowRef}.field_id
+    ),
+    CASE
+      WHEN ${rowRef}.field_id LIKE 'property:%' THEN substr(${rowRef}.field_id, length('property:') + 1)
+      ELSE ${rowRef}.field_id
+    END
+  )
+`
+
+const migrateLegacyFieldIdRows = async (db: BlockSchemaDb): Promise<void> => {
   const fieldIdColumn = await db.getOptional<{name: string}>(
     `SELECT name FROM pragma_table_info('blocks') WHERE name = 'field_id'`,
   )
-  if (!fieldIdColumn) {
-    await db.execute(`ALTER TABLE blocks ADD COLUMN field_id TEXT`)
+  if (!fieldIdColumn) return
+
+  await db.execute(DROP_BLOCKS_FIELD_PARENT_INDEX_SQL)
+  for (const triggerName of LEGACY_BLOCKS_FIELD_TRIGGER_NAMES) {
+    await db.execute(`DROP TRIGGER IF EXISTS ${triggerName}`)
   }
+
+  await db.execute(`
+    INSERT OR IGNORE INTO blocks (
+      id,
+      workspace_id,
+      parent_id,
+      reference_target_id,
+      order_key,
+      content,
+      properties_json,
+      references_json,
+      created_at,
+      updated_at,
+      created_by,
+      updated_by,
+      deleted
+    )
+    SELECT
+      legacy.id || ':value',
+      legacy.workspace_id,
+      legacy.id,
+      NULL,
+      'a0',
+      legacy.content,
+      legacy.properties_json,
+      legacy.references_json,
+      legacy.created_at,
+      legacy.updated_at,
+      legacy.created_by,
+      legacy.updated_by,
+      legacy.deleted
+    FROM blocks legacy
+    WHERE legacy.field_id IS NOT NULL
+      AND legacy.reference_target_id IS NULL
+  `)
+
+  const label = legacyFieldLabelSql('blocks')
+  await db.execute(`
+    UPDATE blocks
+    SET
+      reference_target_id = field_id,
+      content = '[[' || replace(${label}, ']]', '] ]') || ']]',
+      properties_json = '{}',
+      references_json = json_array(json_object('id', field_id, 'alias', ${label}))
+    WHERE field_id IS NOT NULL
+      AND reference_target_id IS NULL
+  `)
+
+  await db.execute(`ALTER TABLE blocks DROP COLUMN field_id`)
+}
+
+export const ensureBlockStorageColumns = async (db: BlockSchemaDb): Promise<void> => {
+  const referenceTargetIdColumn = await db.getOptional<{name: string}>(
+    `SELECT name FROM pragma_table_info('blocks') WHERE name = 'reference_target_id'`,
+  )
+  if (!referenceTargetIdColumn) {
+    await db.execute(`ALTER TABLE blocks ADD COLUMN reference_target_id TEXT`)
+  }
+  await migrateLegacyFieldIdRows(db)
 }
 
 export const UPSERT_BLOCK_SQL = `
@@ -180,7 +268,7 @@ const BLOCK_SNAPSHOT_JSON_FIELDS = [
   {key: 'id', sqlExpression: rowRef => `${rowRef}.id`},
   {key: 'workspaceId', sqlExpression: rowRef => `${rowRef}.workspace_id`},
   {key: 'parentId', sqlExpression: rowRef => `${rowRef}.parent_id`},
-  {key: 'fieldId', sqlExpression: rowRef => `${rowRef}.field_id`},
+  {key: 'referenceTargetId', sqlExpression: rowRef => `${rowRef}.reference_target_id`},
   {key: 'orderKey', sqlExpression: rowRef => `${rowRef}.order_key`},
   {key: 'content', sqlExpression: rowRef => `${rowRef}.content`},
   {key: 'properties', sqlExpression: rowRef => `json(${rowRef}.properties_json)`},
@@ -216,7 +304,7 @@ export const parseBlockRow = (row: BlockRow): BlockData => ({
   id: row.id,
   workspaceId: row.workspace_id,
   parentId: row.parent_id,
-  fieldId: row.field_id ?? null,
+  referenceTargetId: row.reference_target_id ?? null,
   orderKey: row.order_key,
   content: row.content,
   properties: safeJsonParse<Record<string, unknown>>(row.properties_json, {}),
@@ -232,7 +320,7 @@ type BlockRowParams = [
   id: string,
   workspaceId: string,
   parentId: string | null,
-  fieldId: string | null,
+  referenceTargetId: string | null,
   orderKey: string,
   content: string,
   propertiesJson: string,
@@ -248,7 +336,7 @@ export const blockToRowParams = (blockData: BlockData): BlockRowParams => [
   blockData.id,
   blockData.workspaceId,
   blockData.parentId,
-  blockData.fieldId ?? null,
+  blockData.referenceTargetId ?? null,
   blockData.orderKey,
   blockData.content,
   JSON.stringify(blockData.properties ?? {}),

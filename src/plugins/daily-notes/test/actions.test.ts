@@ -75,7 +75,7 @@ afterEach(async () => {
 
 const contentChildIds = async (parentId: string): Promise<string[]> =>
   (await env.repo.block(parentId).children.load())
-    .filter(row => !row.fieldId)
+    .filter(row => !row.referenceTargetId)
     .map(row => row.id)
 
 describe('dailyNotesActions', () => {

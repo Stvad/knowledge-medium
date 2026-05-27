@@ -22,10 +22,10 @@ export interface BlockData {
   id: string
   workspaceId: string
   parentId: string | null
-  /** Non-null when this row is a property-value child of `parentId`.
-   *  The value matches `PropertySchema.fieldId`; normal outline blocks
-   *  use null. */
-  fieldId: string | null
+  /** Non-null when the block's whole content is a reference to another
+   *  block/definition. For property fields, this points at
+   *  `PropertySchema.fieldId`; their child rows hold the value(s). */
+  referenceTargetId: string | null
   orderKey: string
   content: string
   /** Codec-encoded property values keyed by `PropertySchema.name`.
@@ -49,7 +49,7 @@ export interface BlockData {
  *  its own raw-row applier driven by snapshots. See spec §4.1.1. */
 export type BlockDataPatch = Partial<Pick<
   BlockData,
-  'content' | 'properties' | 'references'
+  'content' | 'referenceTargetId' | 'properties' | 'references'
 >>
 
 /** Canonical form for a `BlockReference[]`. Sorted by
@@ -102,7 +102,7 @@ export interface NewBlockData {
   id?: string
   workspaceId: string
   parentId: string | null
-  fieldId?: string | null
+  referenceTargetId?: string | null
   orderKey: string
   content?: string
   properties?: Record<string, unknown>

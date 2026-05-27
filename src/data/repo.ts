@@ -105,7 +105,6 @@ import {
 import type { InvalidationRule } from './invalidation'
 import { KERNEL_PROPERTY_SCHEMAS, getBlockTypes, typesProp } from './properties'
 import {
-  getPropertyFieldId,
   propertiesEqual,
   propertyChildContentToEncodedValue,
 } from './propertyChildren'
@@ -1372,7 +1371,7 @@ export class Repo {
           AND parent.workspace_id = child.workspace_id
           AND child.deleted = 0
           AND parent.deleted = 0
-          AND child.field_id = ?
+          AND child.reference_target_id = ?
       `,
       [workspaceId, args.fieldId],
     )
@@ -1386,11 +1385,19 @@ export class Repo {
         let projected: unknown = undefined
         let hasProjection = false
         for (const child of children) {
-          if (getPropertyFieldId(child) !== args.fieldId) continue
+          if (child.referenceTargetId !== args.fieldId) continue
           try {
-            projected = propertyChildContentToEncodedValue(args.schema, child.content)
-            hasProjection = true
-            break
+            const values = await tx.childrenOf(child.id, undefined, {includePropertyChildren: true})
+            for (const value of values) {
+              try {
+                projected = propertyChildContentToEncodedValue(args.schema, value.content)
+                hasProjection = true
+                break
+              } catch {
+                // Try the next value child below.
+              }
+            }
+            if (hasProjection) break
           } catch {
             // If all children for this field are currently invalid, the
             // cache projection below is removed instead of leaving stale

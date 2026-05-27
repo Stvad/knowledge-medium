@@ -4,14 +4,11 @@ import {
   type BlockData,
   type PropertySchema,
 } from '@/data/api'
+import { referenceBlockContentForLabel } from '@/data/referenceBlock'
 
-export const isPropertyValueChild = (
-  data: Pick<BlockData, 'fieldId'> | null | undefined,
-): boolean => Boolean(data?.fieldId)
-
-export const getPropertyFieldId = (
-  data: Pick<BlockData, 'fieldId'> | null | undefined,
-): string | undefined => data?.fieldId ?? undefined
+export const getPropertyFieldTargetId = (
+  data: Pick<BlockData, 'referenceTargetId'> | null | undefined,
+): string | undefined => data?.referenceTargetId ?? undefined
 
 export const isChildBackedPropertySchema = (
   schema: AnyPropertySchema,
@@ -27,6 +24,17 @@ export const findSchemaByFieldId = (
   }
   return undefined
 }
+
+export const isPropertyFieldInstance = (
+  data: Pick<BlockData, 'referenceTargetId'> | null | undefined,
+  propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
+): boolean => {
+  const fieldId = getPropertyFieldTargetId(data)
+  return fieldId !== undefined && findSchemaByFieldId(propertySchemas, fieldId) !== undefined
+}
+
+export const propertyFieldContent = (schema: AnyPropertySchema): string =>
+  referenceBlockContentForLabel(schema.name)
 
 const finiteNumberFromContent = (content: string): number => {
   const value = Number(content.trim())
