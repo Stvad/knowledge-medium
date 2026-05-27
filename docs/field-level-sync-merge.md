@@ -93,7 +93,12 @@ WHERE id = $id
 
 Keep the discriminator explicit (`metadata.mode = 'upsert'`) rather than implicit (e.g., "does `data` contain `created_at`?"). PowerSync's `CrudEntry` already exposes `entry.metadata` as a standard slot for upload-side discriminators, so we use it without inventing parallel infrastructure.
 
-`compactBlockCrudEntries` (`powersync.ts:112`) keeps fusing same-tx PUT+PATCH and PATCH+PATCH. The fusion direction stays right: later PATCH columns override earlier, and the fused entry carries the union of touched columns. Property `old` carries through from the *earlier* PATCH (since that reflects the true prior state) — the compaction logic needs to be careful here; see edge cases.
+`compactBlockCrudEntries` (`powersync.ts:112`) keeps fusing same-tx PUT+PATCH and PATCH+PATCH. The fusion direction stays right: later PATCH columns override earlier, and the fused entry carries the union of touched columns. **`CompactedBlockOperation` (`powersync.ts:25-42`) currently carries only `{kind, id, payload, order}` — extend it to also carry `previousValues?: {properties_json?: string}` and `metadata?: {mode?: 'upsert'}`** so the discriminators from Layer A survive into the uploader. Fusion rules:
+
+- `previousValues.properties_json` from PATCH fusion: keep the value from the *earliest* PATCH in the chain (since that's the true prior state on the server before any of these writes). Later PATCHes' `OLD.properties_json` is the previous PATCH's NEW; using it would silently drop intermediate keys.
+- `metadata.mode = 'upsert'` from PATCH fusion: in practice backfill entries and trigger entries don't co-occur for the same id in the same batch (backfill is one-shot, fired once per row that hasn't synced; trigger fires on subsequent `repo.tx` writes), so a simple "any entry's metadata wins" is fine. Document the assumption with a test that fails loudly if the two paths ever overlap.
+
+`applyCompactedBlockOperations` reads the extended shape and routes via `metadata.mode` and `previousValues.properties_json` exactly as Layer B describes.
 
 ### What gets sent over the wire (example)
 
@@ -121,7 +126,7 @@ After this work:
 
 ## Edge cases
 
-- **Same-tx fusion with `old`.** The current trigger fires once per AFTER UPDATE, so each statement gets its own `ps_crud` row with its own `OLD.properties_json` (= the value just before that statement). When `compactBlockCrudEntries` fuses two PATCH entries for the same id, the fused entry's `old.properties_json` must be the `old` from the *first* (earliest) PATCH, not the second — the second's `OLD` is the first's `NEW`. Update the compaction logic to preserve `old` from the earliest PATCH and drop subsequent ones. Tests must cover the two-PATCH-same-tx-different-keys case.
+- **Compaction must preserve discriminators.** `CompactedBlockOperation` (`powersync.ts:25-42`) is `{kind, id, payload, order}` — extend with `previousValues` and `metadata` slots so the trigger's `old.properties_json` and the backfill's `metadata.mode='upsert'` survive into the uploader. Same-tx PATCH fusion: each AFTER UPDATE fires its own trigger, so each `ps_crud` row carries its own `OLD.properties_json` (the value just before that statement). Fused entry must keep `previousValues.properties_json` from the *earliest* PATCH (the second's OLD is the first's NEW; using it silently drops intermediate keys). Tests must cover two-PATCH-same-tx-different-keys.
 - **Compaction across txs.** Two separate txs that both touch properties get separate CRUD entries with their own `previousValues`. The uploader can either ship them as two RPC entries or fuse them: fusion is `set' = (set1 \ unset2) ∪ set2`, `unset' = (unset1 \ keys(set2)) ∪ unset2`. Cheap, but only worth doing if backlog size becomes a problem.
 - **Soft delete vs property edit.** A delete and a concurrent property edit race: the delete wins (it writes `deleted = 1`, column-LWW). The property edit lands and merges into a tombstoned row; subsequent restore should preserve those merged property values. Acceptable; no special handling.
 - **CREATE in the same batch as a property PATCH.** Same-tx fusion already merges PATCH columns into the CREATE payload. After this change, a fused CREATE-with-property-patch ships as a full-row CREATE with the merged `properties_json` — no diff needed. The PATCH branch with `previousValues` only matters for cross-tx PATCHes.
