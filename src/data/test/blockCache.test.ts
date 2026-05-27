@@ -10,8 +10,10 @@
  *     fingerprint match
  *   - Subscriptions: fire on set + delete, dedupe on no-op set,
  *     unsubscribe stops firing
- *   - applySyncSnapshot (LWW): rejects sync arrivals whose updatedAt is
- *     older than the cached snapshot; accepts equal-or-newer
+ *   - applyIfNewer (LWW): rejects arrivals whose updatedAt is
+ *     older than the cached snapshot; accepts strictly newer. Both
+ *     'sync' and 'hydrate' sources share the gate; the source label
+ *     only routes per-bucket metric counters.
  *   - trackedIds: subscribed listener ids
  *   - dedupLoad: shares in-flight promise; restarts after resolve/reject
  *   - missing markers: markMissing notifies on first transition,
@@ -156,24 +158,24 @@ describe('BlockCache subscriptions', () => {
   })
 })
 
-describe('BlockCache applySyncSnapshot (LWW)', () => {
+describe('BlockCache applyIfNewer (LWW)', () => {
   it('accepts when nothing is cached', () => {
     const cache = new BlockCache()
-    expect(cache.applySyncSnapshot(snap({content: 'fresh', updatedAt: 100}))).toBe(true)
+    expect(cache.applyIfNewer(snap({content: 'fresh', updatedAt: 100}), 'sync')).toBe(true)
     expect(cache.getSnapshot('block-1')?.content).toBe('fresh')
   })
 
   it('rejects an older snapshot', () => {
     const cache = new BlockCache()
     cache.setSnapshot(snap({content: 'newer', updatedAt: 200}))
-    expect(cache.applySyncSnapshot(snap({content: 'older', updatedAt: 100}))).toBe(false)
+    expect(cache.applyIfNewer(snap({content: 'older', updatedAt: 100}), 'sync')).toBe(false)
     expect(cache.getSnapshot('block-1')?.content).toBe('newer')
   })
 
   it('accepts a strictly newer snapshot', () => {
     const cache = new BlockCache()
     cache.setSnapshot(snap({content: 'older', updatedAt: 100}))
-    expect(cache.applySyncSnapshot(snap({content: 'newer', updatedAt: 200}))).toBe(true)
+    expect(cache.applyIfNewer(snap({content: 'newer', updatedAt: 200}), 'sync')).toBe(true)
     expect(cache.getSnapshot('block-1')?.content).toBe('newer')
   })
 
@@ -185,7 +187,7 @@ describe('BlockCache applySyncSnapshot (LWW)', () => {
     // exists so equal-updatedAt-DIFFERENT-content can't clobber the
     // cache via an in-flight sync read that overlapped a same-ms write
     // — covered by the test below.
-    expect(cache.applySyncSnapshot(snap({content: 'x', updatedAt: 100}))).toBe(false)
+    expect(cache.applyIfNewer(snap({content: 'x', updatedAt: 100}), 'sync')).toBe(false)
     expect(cache.getSnapshot('block-1')?.content).toBe('x')
   })
 
@@ -195,7 +197,7 @@ describe('BlockCache applySyncSnapshot (LWW)', () => {
     // An in-flight sync read that captured content='A' at the same ms
     // arrives later — `<` would let it clobber, `<=` rejects.
     cache.setSnapshot(snap({content: 'B', updatedAt: 100}))
-    expect(cache.applySyncSnapshot(snap({content: 'A', updatedAt: 100}))).toBe(false)
+    expect(cache.applyIfNewer(snap({content: 'A', updatedAt: 100}), 'sync')).toBe(false)
     expect(cache.getSnapshot('block-1')?.content).toBe('B')
   })
 
@@ -204,8 +206,17 @@ describe('BlockCache applySyncSnapshot (LWW)', () => {
     cache.setSnapshot(snap({content: 'newer', updatedAt: 200}))
     const listener = vi.fn()
     cache.subscribe('block-1', listener)
-    cache.applySyncSnapshot(snap({content: 'older', updatedAt: 100}))
+    cache.applyIfNewer(snap({content: 'older', updatedAt: 100}), 'sync')
     expect(listener).not.toHaveBeenCalled()
+  })
+
+  it('shares the LWW gate across sources but routes counters separately', () => {
+    const cache = new BlockCache()
+    cache.setSnapshot(snap({updatedAt: 100}))
+    expect(cache.applyIfNewer(snap({updatedAt: 50}), 'hydrate')).toBe(false)
+    expect(cache.applyIfNewer(snap({updatedAt: 50}), 'sync')).toBe(false)
+    expect(cache.metrics.applyIfNewerHydrateRejected).toBe(1)
+    expect(cache.metrics.applyIfNewerSyncRejected).toBe(1)
   })
 })
 
@@ -367,8 +378,10 @@ describe('BlockCache metrics counters', () => {
       setSnapshotCalls: 0,
       setSnapshotDedupHits: 0,
       setSnapshotDedupMisses: 0,
-      applySyncSnapshotCalls: 0,
-      applySyncSnapshotRejected: 0,
+      applyIfNewerSyncCalls: 0,
+      applyIfNewerSyncRejected: 0,
+      applyIfNewerHydrateCalls: 0,
+      applyIfNewerHydrateRejected: 0,
       notifies: 0,
     })
   })
@@ -386,24 +399,35 @@ describe('BlockCache metrics counters', () => {
     expect(cache.metrics.notifies).toBe(2)
   })
 
-  it('counts applySyncSnapshot rejection (older updatedAt) without recursing into setSnapshot', () => {
+  it('counts applyIfNewer rejection (older updatedAt) without recursing into setSnapshot', () => {
     const cache = new BlockCache()
     cache.setSnapshot(snap({updatedAt: 100}))
-    expect(cache.metrics.applySyncSnapshotCalls).toBe(0)
+    expect(cache.metrics.applyIfNewerSyncCalls).toBe(0)
 
     // Reject path: older updatedAt; should not increment setSnapshotCalls.
     const setBefore = cache.metrics.setSnapshotCalls
-    expect(cache.applySyncSnapshot(snap({updatedAt: 50}))).toBe(false)
-    expect(cache.metrics.applySyncSnapshotCalls).toBe(1)
-    expect(cache.metrics.applySyncSnapshotRejected).toBe(1)
+    expect(cache.applyIfNewer(snap({updatedAt: 50}), 'sync')).toBe(false)
+    expect(cache.metrics.applyIfNewerSyncCalls).toBe(1)
+    expect(cache.metrics.applyIfNewerSyncRejected).toBe(1)
     expect(cache.metrics.setSnapshotCalls).toBe(setBefore)
 
     // Accept path: newer updatedAt; setSnapshotCalls should increment too
-    // (applySyncSnapshot delegates to setSnapshot on accept).
-    expect(cache.applySyncSnapshot(snap({updatedAt: 200, content: 'newer'}))).toBe(true)
-    expect(cache.metrics.applySyncSnapshotCalls).toBe(2)
-    expect(cache.metrics.applySyncSnapshotRejected).toBe(1) // unchanged
+    // (applyIfNewer delegates to setSnapshot on accept).
+    expect(cache.applyIfNewer(snap({updatedAt: 200, content: 'newer'}), 'sync')).toBe(true)
+    expect(cache.metrics.applyIfNewerSyncCalls).toBe(2)
+    expect(cache.metrics.applyIfNewerSyncRejected).toBe(1) // unchanged
     expect(cache.metrics.setSnapshotCalls).toBe(setBefore + 1)
+  })
+
+  it('routes hydrate-source calls into their own counters', () => {
+    const cache = new BlockCache()
+    cache.setSnapshot(snap({updatedAt: 100}))
+    expect(cache.applyIfNewer(snap({updatedAt: 50}), 'hydrate')).toBe(false)
+    expect(cache.applyIfNewer(snap({updatedAt: 200, content: 'fresh'}), 'hydrate')).toBe(true)
+    expect(cache.metrics.applyIfNewerHydrateCalls).toBe(2)
+    expect(cache.metrics.applyIfNewerHydrateRejected).toBe(1)
+    expect(cache.metrics.applyIfNewerSyncCalls).toBe(0)
+    expect(cache.metrics.applyIfNewerSyncRejected).toBe(0)
   })
 
   it('counts notifies on deleteSnapshot / markMissing / clearMissing', () => {
@@ -420,7 +444,7 @@ describe('BlockCache metrics counters', () => {
   it('reset() zeros every counter; snapshot returns frozen plain object', () => {
     const cache = new BlockCache()
     cache.setSnapshot(snap())
-    cache.applySyncSnapshot(snap({content: 'x', updatedAt: 100}))
+    cache.applyIfNewer(snap({content: 'x', updatedAt: 100}), 'sync')
     expect(cache.metrics.setSnapshotCalls).toBeGreaterThan(0)
 
     const before = cache.metrics.snapshot()

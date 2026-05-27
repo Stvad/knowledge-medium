@@ -627,7 +627,7 @@ export class Repo {
     const out: BlockData[] = []
     for (const r of rows) {
       const data = parseBlockRow(r)
-      this.cache.applySyncSnapshot(data)
+      this.cache.applyIfNewer(data, 'hydrate')
       if (ctx && declareRowDeps) ctx.depend({kind: 'row', id: data.id})
       out.push(data)
     }
@@ -858,7 +858,9 @@ export class Repo {
    *      `notifiesFired`, `notifiesSkippedByDiff`).
    *    - `blockCache` — write/notify activity
    *      (`setSnapshotCalls`, `setSnapshotDedupHits/Misses`,
-   *      `applySyncSnapshotCalls`, `applySyncSnapshotRejected`,
+   *      `applyIfNewerSyncCalls`/`Rejected` for row_events-tail
+   *      arrivals, `applyIfNewerHydrateCalls`/`Rejected` for
+   *      kernel-query `hydrateRows` + `repo.load` re-reads,
    *      `notifies`).
    *    - `queries` — per-query-name resolve timings keyed by full
    *      name (e.g. `core.subtree`, `plugin:tasks/dueSoon`). Each
@@ -1001,14 +1003,14 @@ export class Repo {
       return null
     }
     const data = parseBlockRow(row)
-    this.cache.applySyncSnapshot(data)
+    this.cache.applyIfNewer(data, 'hydrate')
 
     if (opts?.children) await this.hydrateChildren(id)
 
     if (opts?.ancestors) {
       // Pass id twice — ANCESTORS_SQL uses it as both start and skip.
       const ancestorRows = await this.db.getAll<BlockRow>(ANCESTORS_SQL, [id, id])
-      for (const r of ancestorRows) this.cache.applySyncSnapshot(parseBlockRow(r))
+      for (const r of ancestorRows) this.cache.applyIfNewer(parseBlockRow(r), 'hydrate')
     }
 
     if (opts?.descendants) {
@@ -1016,7 +1018,7 @@ export class Repo {
       const maxDepth = typeof opts.descendants === 'number' ? opts.descendants : Infinity
       for (const r of subtreeRows) {
         if (r.depth > maxDepth) continue
-        this.cache.applySyncSnapshot(parseBlockRow(r))
+        this.cache.applyIfNewer(parseBlockRow(r), 'hydrate')
       }
     }
 

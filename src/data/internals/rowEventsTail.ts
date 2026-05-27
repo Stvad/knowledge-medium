@@ -184,11 +184,11 @@ export const startRowEventsTail = (args: {
       //
       // Sync writes don't go through commitPipeline's post-commit cache
       // walk; without this, Block.subscribe listeners wouldn't fire on
-      // remote changes. Routed through `applySyncSnapshot` so a stale
-      // `updated_at` (PowerSync delivering server-state-at-time-T while
-      // the local cache has advanced via the fast path) is rejected —
-      // otherwise the editor sees its own older echoes clobber the live
-      // snapshot mid-typing.
+      // remote changes. Routed through `applyIfNewer(_, 'sync')` so a
+      // stale `updated_at` (PowerSync delivering server-state-at-time-T
+      // while the local cache has advanced via the fast path) is
+      // rejected — otherwise the editor sees its own older echoes
+      // clobber the live snapshot mid-typing.
       //
       // LWW-rejected (or fingerprint-deduped) snapshots mean the
       // user-visible cache state did NOT change. Propagating an
@@ -209,7 +209,7 @@ export const startRowEventsTail = (args: {
       // wasn't, no consumer can observe the deletion → skip is correct
       // for the same reason.
       const accepted = after
-        ? cache.applySyncSnapshot(after as BlockData)
+        ? cache.applyIfNewer(after as BlockData, 'sync')
         : cache.deleteSnapshot(r.block_id)
       if (!accepted) continue
 

@@ -67,7 +67,7 @@ export const BlockEditor = ({
   // Highest `updatedAt` we've adopted from blockData. Ratchets forward
   // monotonically so a stale snapshot (older or same-ms with different
   // content) can't clobber the editor — the cache layer has its own LWW
-  // gate via applySyncSnapshot, this is defense-in-depth at the React
+  // gate via applyIfNewer, this is defense-in-depth at the React
   // layer for paths that bypass it (e.g. blockData arriving via React
   // batching after a stale-but-published snapshot).
   const lastAdoptedUpdatedAt = useRef(blockEditData?.updatedAt ?? 0)

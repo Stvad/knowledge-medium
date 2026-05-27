@@ -642,7 +642,7 @@ describe('row_events tail: sync-applied invalidation', () => {
 
     // Sync replays an OLDER `updated_at` than the cache. `updated_at = 1`
     // is well below `Date.now()` used by the local create above, so
-    // `applySyncSnapshot` rejects the snapshot via the LWW gate.
+    // `applyIfNewer` rejects the snapshot via the LWW gate.
     await env.h.db.execute(
       `UPDATE tx_context SET source = NULL, tx_id = NULL, tx_seq = NULL WHERE id = 1`,
     )

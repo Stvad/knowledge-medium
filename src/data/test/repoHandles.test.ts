@@ -9,7 +9,7 @@
  *   - Loader correctness: data shape matches the SQL-backed one-shot APIs
  *     (CHILDREN_SQL / SUBTREE_SQL / ANCESTORS_SQL).
  *   - Side-effects: each loader hydrates its result rows into the
- *     per-row cache via `applySyncSnapshot`.
+ *     per-row cache via `applyIfNewer`.
  *   - Dependencies declared during resolve (verified via the test-only
  *     `__depsForTest` helper on LoaderHandle):
  *       - `children`:  parent-edge on `id` + row on each child.

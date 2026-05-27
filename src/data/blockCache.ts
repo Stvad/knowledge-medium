@@ -14,24 +14,39 @@ const deepFreeze = <T>(value: T): T => {
 const blockFingerprint = (blockData: BlockData | undefined) =>
   blockData ? JSON.stringify(blockData) : ''
 
+/** Caller classification for `applyIfNewer` — separates PowerSync
+ *  sync-tail arrivals from query-path / `repo.load` re-reads. The LWW
+ *  gate is identical in both cases; the split is purely telemetry so
+ *  a rejection-rate snapshot tells you which path it came from. */
+export type ApplyIfNewerSource = 'sync' | 'hydrate'
+
 /** Counter object for BlockCache write/notify activity (perf-baseline
  *  follow-up #4). One instance per BlockCache; increments inline in
  *  the hot path. Snapshot via `snapshot()` for a frozen plain-object
  *  view consumers can diff between samples. */
 export class BlockCacheMetrics {
   /** Total `setSnapshot(...)` calls (every entry, every path). Includes
-   *  calls reached through `applySyncSnapshot`. */
+   *  calls reached through `applyIfNewer`. */
   setSnapshotCalls = 0
   /** `setSnapshot` calls where the incoming fingerprint matched the
    *  cached one — dedup hit, no listeners walked. */
   setSnapshotDedupHits = 0
   /** `setSnapshot` calls that actually wrote and notified. */
   setSnapshotDedupMisses = 0
-  /** Total `applySyncSnapshot(...)` calls (sync-arrival LWW path). */
-  applySyncSnapshotCalls = 0
-  /** `applySyncSnapshot` calls rejected because the incoming
-   *  `updatedAt` was older than what's already cached. */
-  applySyncSnapshotRejected = 0
+  /** `applyIfNewer(_, 'sync')` calls — rows delivered through the
+   *  PowerSync row_events tail. */
+  applyIfNewerSyncCalls = 0
+  /** `applyIfNewer(_, 'sync')` rejections (incoming `updatedAt <=`
+   *  cached). High counts indicate echoes of local writes returning
+   *  via the sync stream or other LWW losers. */
+  applyIfNewerSyncRejected = 0
+  /** `applyIfNewer(_, 'hydrate')` calls — rows re-read from SQL by
+   *  kernel queries (`hydrateRows`) or `repo.load` paths. */
+  applyIfNewerHydrateCalls = 0
+  /** `applyIfNewer(_, 'hydrate')` rejections. High counts are
+   *  expected — every cached row re-read during a query resolves to
+   *  a reject — and are essentially free (Map.get + comparison). */
+  applyIfNewerHydrateRejected = 0
   /** Total internal `notify(id)` invocations across all paths
    *  (setSnapshot writes, deleteSnapshot, markMissing, clearMissing).
    *  Counts the call, not the per-listener fan-out. */
@@ -41,8 +56,10 @@ export class BlockCacheMetrics {
     this.setSnapshotCalls = 0
     this.setSnapshotDedupHits = 0
     this.setSnapshotDedupMisses = 0
-    this.applySyncSnapshotCalls = 0
-    this.applySyncSnapshotRejected = 0
+    this.applyIfNewerSyncCalls = 0
+    this.applyIfNewerSyncRejected = 0
+    this.applyIfNewerHydrateCalls = 0
+    this.applyIfNewerHydrateRejected = 0
     this.notifies = 0
   }
 
@@ -53,8 +70,10 @@ export class BlockCacheMetrics {
       setSnapshotCalls: this.setSnapshotCalls,
       setSnapshotDedupHits: this.setSnapshotDedupHits,
       setSnapshotDedupMisses: this.setSnapshotDedupMisses,
-      applySyncSnapshotCalls: this.applySyncSnapshotCalls,
-      applySyncSnapshotRejected: this.applySyncSnapshotRejected,
+      applyIfNewerSyncCalls: this.applyIfNewerSyncCalls,
+      applyIfNewerSyncRejected: this.applyIfNewerSyncRejected,
+      applyIfNewerHydrateCalls: this.applyIfNewerHydrateCalls,
+      applyIfNewerHydrateRejected: this.applyIfNewerHydrateRejected,
       notifies: this.notifies,
     })
   }
@@ -124,28 +143,41 @@ export class BlockCache {
     return true
   }
 
-  /** LWW-gated snapshot write for sync-arrival paths (row_events tail,
-   *  re-reads from SQL inside `repo.load`, query hydrate-rows). Rejects
-   *  an incoming snapshot whose `updatedAt` is NOT STRICTLY NEWER than
-   *  what's already cached — PowerSync can deliver an older row state
-   *  during the upload window while the local commit pipeline has
-   *  already advanced the cache, and re-reading the SQLite row after a
-   *  sync-clobber would otherwise reintroduce the stale state.
+  /** LWW-gated snapshot write. Used by:
+   *
+   *    - the row_events tail (`source: 'sync'`) for PowerSync-applied
+   *      writes that bypass the local commit pipeline, and
+   *    - `Repo.hydrateRows` / `repo.load` (`source: 'hydrate'`) for
+   *      kernel queries re-reading rows from SQL.
+   *
+   *  Both paths need the same guard: PowerSync can deliver an older
+   *  row state during the upload window while the local commit
+   *  pipeline has already advanced the cache, and re-reading the
+   *  SQLite row after a sync-clobber would otherwise reintroduce the
+   *  stale state. Rejects an incoming snapshot whose `updatedAt` is
+   *  NOT STRICTLY NEWER than what's already cached.
    *
    *  Why `<=` not `<`: under rapid local typing, two writes can share
    *  `Date.now()` ms (and processor writes with `skipMetadata: true`
    *  preserve the prior `updatedAt`, multiplying the collision
    *  surface). An in-flight query that reads SQL between two such
-   *  same-ms writes can fire `applySyncSnapshot` LATER with the
+   *  same-ms writes can fire `applyIfNewer` LATER with the
    *  earlier-but-equal-ms content — `<` would accept it and clobber
    *  the cache with stale content. `<=` rejects equal-ms snapshots;
    *  same-`updatedAt`-same-content rounds to a no-op anyway via
-   *  fingerprint dedup, so this only blocks the harmful clobber. */
-  applySyncSnapshot(snapshot: BlockData): boolean {
-    this.metrics.applySyncSnapshotCalls++
+   *  fingerprint dedup, so this only blocks the harmful clobber.
+   *
+   *  The `source` argument is telemetry-only — it routes the call/
+   *  reject counts into separate metric buckets so a rejection-rate
+   *  snapshot tells you which path drove it. The gate itself is
+   *  identical for both sources. */
+  applyIfNewer(snapshot: BlockData, source: ApplyIfNewerSource): boolean {
+    if (source === 'sync') this.metrics.applyIfNewerSyncCalls++
+    else this.metrics.applyIfNewerHydrateCalls++
     const existing = this.snapshots.get(snapshot.id)
     if (existing && snapshot.updatedAt <= existing.updatedAt) {
-      this.metrics.applySyncSnapshotRejected++
+      if (source === 'sync') this.metrics.applyIfNewerSyncRejected++
+      else this.metrics.applyIfNewerHydrateRejected++
       return false
     }
     return this.setSnapshot(snapshot)

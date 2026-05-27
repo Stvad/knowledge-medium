@@ -281,7 +281,7 @@ describe('Block.load', () => {
       // Phase 2: a snapshot lands in cache (e.g. via sync drain).
       // Hand-write through the cache so we don't go through repo.tx
       // (which would run another SQL round-trip).
-      env.cache.applySyncSnapshot({
+      env.cache.applyIfNewer({
         id: 'flaky',
         workspaceId: 'ws-1',
         parentId: null,
@@ -292,7 +292,7 @@ describe('Block.load', () => {
         createdAt: 1, updatedAt: 1,
         createdBy: 'u', updatedBy: 'u',
         deleted: false,
-      })
+      }, 'sync')
       // Cache fast-path returns the snapshot (no SQL).
       const out = await b.load()
       expect(out?.content).toBe('live')

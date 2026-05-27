@@ -97,7 +97,7 @@ export class Block implements Handle<BlockData | null> {
    *  Cache fast-path: if the row is already in `BlockCache` we return
    *  synchronously without going to SQL. The cache is the source of
    *  truth post-tx (`repo.tx`'s commit pipeline writes it) and post-
-   *  sync (`rowEventsTail`'s `applySyncSnapshot` keeps it current), so
+   *  sync (`rowEventsTail`'s `applyIfNewer` keeps it current), so
    *  a redundant SQL read just costs a connection round-trip that
    *  contends with PowerSync's upload/download work. The hot path
    *  (keyboard navigation through `nextVisibleBlock` /
