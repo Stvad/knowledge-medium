@@ -25,6 +25,7 @@ import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { kernelDataExtension } from '../kernelDataExtension'
 import { queriesFacet } from '../facets'
 import { Repo } from '../repo'
+import { compileBlocksContentSearchQuery } from './kernelQueries'
 
 const WS = 'ws-1'
 const OTHER_WS = 'ws-2'
@@ -95,6 +96,34 @@ const asBlockOrNull = (v: BlockData | null | undefined): BlockData | null => v ?
 // ════════════════════════════════════════════════════════════════════
 // Per-query SQL-behavior coverage
 // ════════════════════════════════════════════════════════════════════
+
+describe('compileBlocksContentSearchQuery', () => {
+  it('compiles plain words into required literal trigram terms', () => {
+    expect(compileBlocksContentSearchQuery('sync foo')?.matchQuery).toBe('"sync" "foo"')
+  })
+
+  it('preserves user-quoted phrases as contiguous substring matches', () => {
+    expect(compileBlocksContentSearchQuery('"sync foo"')).toEqual({
+      matchQuery: '"sync foo"',
+      rankQuery: 'sync foo',
+    })
+  })
+
+  it('supports explicit OR and exclusion operators without exposing raw FTS syntax', () => {
+    expect(compileBlocksContentSearchQuery('sync OR merge -lww')?.matchQuery).toBe('("sync" OR "merge") NOT "lww"')
+    expect(compileBlocksContentSearchQuery('sync NOT lww')?.matchQuery).toBe('"sync" NOT "lww"')
+  })
+
+  it('treats operator words and punctuation as literal text when they are not valid operators', () => {
+    expect(compileBlocksContentSearchQuery('AND')?.matchQuery).toBe('"AND"')
+    expect(compileBlocksContentSearchQuery('2024-01')?.matchQuery).toBe('"2024-01"')
+    expect(compileBlocksContentSearchQuery('quote " token')?.matchQuery).toBe('"quote" "token"')
+  })
+
+  it('returns null below the trigram searchable length', () => {
+    expect(compileBlocksContentSearchQuery('fo')).toBeNull()
+  })
+})
 
 describe('repo.query.subtree', () => {
   it('returns root + descendants in path order', async () => {
@@ -264,6 +293,49 @@ describe('repo.query.searchByContent', () => {
     expect(out.map(r => r.id)).toEqual(['a'])
   })
 
+  it('matches all unquoted terms anywhere in the content', async () => {
+    await create({id: 'exact', content: 'sync foo'})
+    await create({id: 'reverse', content: 'foo sync'})
+    await create({id: 'joined', content: 'syncxxfoo'})
+    await create({id: 'partial', content: 'sync only'})
+
+    const out = asBlocks(await env.repo.query.searchByContent({workspaceId: WS, query: 'sync foo'}).load())
+
+    expect(out.map(r => r.id)).toEqual(['exact', 'joined', 'reverse'])
+  })
+
+  it('treats user-quoted input as a contiguous phrase', async () => {
+    await create({id: 'phrase', content: 'sync foo'})
+    await create({id: 'reverse', content: 'foo sync'})
+    await create({id: 'joined', content: 'syncxxfoo'})
+
+    const out = asBlocks(await env.repo.query.searchByContent({workspaceId: WS, query: '"sync foo"'}).load())
+
+    expect(out.map(r => r.id)).toEqual(['phrase'])
+  })
+
+  it('supports OR and exclusion operators', async () => {
+    await create({id: 'sync', content: 'sync clean'})
+    await create({id: 'sync-lww', content: 'sync lww'})
+    await create({id: 'merge', content: 'merge clean'})
+    await create({id: 'other', content: 'unrelated'})
+
+    const out = asBlocks(await env.repo.query.searchByContent({workspaceId: WS, query: 'sync OR merge -lww'}).load())
+
+    expect(out.map(r => r.id).sort()).toEqual(['merge', 'sync'])
+  })
+
+  it('treats FTS operator words and punctuation as literal user text', async () => {
+    await create({id: 'and', content: 'literal AND token'})
+    await create({id: 'date', content: '2024-01 report'})
+    await create({id: 'quote', content: 'quote " token'})
+
+    await expect(env.repo.query.searchByContent({workspaceId: WS, query: 'AND'}).load()).resolves.toBeDefined()
+    expect(asBlocks(await env.repo.query.searchByContent({workspaceId: WS, query: 'AND'}).load()).map(r => r.id)).toEqual(['and'])
+    expect(asBlocks(await env.repo.query.searchByContent({workspaceId: WS, query: '2024-01'}).load()).map(r => r.id)).toEqual(['date'])
+    expect(asBlocks(await env.repo.query.searchByContent({workspaceId: WS, query: 'quote " token'}).load()).map(r => r.id)).toEqual(['quote'])
+  })
+
   it('respects the limit argument', async () => {
     await create({id: 'a', content: 'foo 1'})
     await create({id: 'b', content: 'foo 2'})
@@ -285,6 +357,11 @@ describe('repo.query.searchByContent', () => {
   it('returns [] on empty query', async () => {
     await create({id: 'a', content: 'hi'})
     expect(asBlocks(await env.repo.query.searchByContent({workspaceId: WS, query: ''}).load())).toEqual([])
+  })
+
+  it('returns [] for queries below the trigram searchable length', async () => {
+    await create({id: 'a', content: 'foo'})
+    expect(asBlocks(await env.repo.query.searchByContent({workspaceId: WS, query: 'fo'}).load())).toEqual([])
   })
 
   it('excludes empty-content + tombstoned rows', async () => {

@@ -194,6 +194,38 @@ export const CREATE_BLOCK_TYPES_TYPE_WORKSPACE_INDEX_SQL = `
   ON block_types (type, workspace_id)
 `
 
+/** Stable integer rowids for `blocks_fts`.
+ *
+ *  FTS5 rows are keyed by integer `rowid`, but `blocks.id` is a string
+ *  UUID. Deleting/updating by an UNINDEXED `block_id` column would scan
+ *  the whole FTS table on every content edit, so this tiny local map
+ *  gives each block a stable integer key that triggers can use for
+ *  O(log n) lookup + rowid-targeted FTS maintenance.
+ *
+ *  Local-only and fully derivable. Soft-deletes keep the mapping so a
+ *  later restore reuses the same FTS rowid; hard-deletes clear it. */
+export const CREATE_BLOCKS_FTS_ROWIDS_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS blocks_fts_rowids (
+    fts_rowid  INTEGER PRIMARY KEY,
+    block_id   TEXT NOT NULL UNIQUE
+  )
+`
+
+/** Trigger-maintained trigram FTS5 index over live `blocks.content`.
+ *
+ *  `trigram` preserves the old substring-search capability of
+ *  `LIKE '%query%'` while moving the search onto an index. The
+ *  workspace/block id columns are stored for filtering and joining but
+ *  are not indexed as text terms. */
+export const CREATE_BLOCKS_FTS_TABLE_SQL = `
+  CREATE VIRTUAL TABLE IF NOT EXISTS blocks_fts USING fts5(
+    content,
+    workspace_id UNINDEXED,
+    block_id UNINDEXED,
+    tokenize = 'trigram case_sensitive 0'
+  )
+`
+
 /** Quarantine for `ps_crud` rows whose upload the server refused with a
  *  permanent error (FK violation, RLS denial, insufficient privilege,
  *  4xx that can't recover on retry). The PowerSync upload handler moves
@@ -738,6 +770,58 @@ export const CREATE_BLOCKS_TYPE_DELETE_TRIGGER_SQL = `
   END
 `
 
+// ============================================================================
+// blocks_fts triggers (3) — same derived-index maintenance shape as
+// block_aliases/block_types, keyed through blocks_fts_rowids so updates
+// can delete by FTS rowid instead of scanning an UNINDEXED UUID column.
+// ============================================================================
+
+const blocksFtsInsertSql = (rowRef: 'NEW') => `
+      INSERT INTO blocks_fts_rowids (block_id)
+      SELECT ${rowRef}.id
+      WHERE NOT EXISTS (
+        SELECT 1 FROM blocks_fts_rowids WHERE block_id = ${rowRef}.id
+      );
+      INSERT INTO blocks_fts (rowid, content, workspace_id, block_id)
+      SELECT fts_rowid, ${rowRef}.content, ${rowRef}.workspace_id, ${rowRef}.id
+      FROM blocks_fts_rowids
+      WHERE block_id = ${rowRef}.id
+        AND ${rowRef}.deleted = 0
+        AND ${rowRef}.content != '';
+`.trim()
+
+export const CREATE_BLOCKS_FTS_INSERT_TRIGGER_SQL = `
+  CREATE TRIGGER IF NOT EXISTS blocks_fts_insert
+  AFTER INSERT ON blocks
+  BEGIN
+    ${blocksFtsInsertSql('NEW')}
+  END
+`
+
+export const CREATE_BLOCKS_FTS_UPDATE_TRIGGER_SQL = `
+  CREATE TRIGGER IF NOT EXISTS blocks_fts_update
+  AFTER UPDATE OF content, deleted, workspace_id ON blocks
+  BEGIN
+    DELETE FROM blocks_fts
+    WHERE rowid = (
+      SELECT fts_rowid FROM blocks_fts_rowids WHERE block_id = OLD.id
+    );
+    ${blocksFtsInsertSql('NEW')}
+  END
+`
+
+export const CREATE_BLOCKS_FTS_DELETE_TRIGGER_SQL = `
+  CREATE TRIGGER IF NOT EXISTS blocks_fts_delete
+  AFTER DELETE ON blocks
+  BEGIN
+    DELETE FROM blocks_fts
+    WHERE rowid = (
+      SELECT fts_rowid FROM blocks_fts_rowids WHERE block_id = OLD.id
+    );
+    DELETE FROM blocks_fts_rowids WHERE block_id = OLD.id;
+  END
+`
+
 /** One-shot backfill from `blocks.properties_json`. Called after the
  *  CLIENT_SCHEMA_STATEMENTS run, gated on a `client_schema_state` row
  *  so existing installations populate the index once on the first
@@ -791,6 +875,36 @@ export const BACKFILL_BLOCK_TYPES_SQL = `
   SELECT b.id, b.workspace_id, je.value
   FROM blocks b, json_each(b.properties_json, '$.types') AS je
   WHERE b.deleted = 0 AND typeof(je.value) = 'text'
+`
+
+export const BLOCKS_FTS_BACKFILL_MARKER_KEY = 'blocks_fts_backfill_v1'
+
+export const SELECT_BLOCKS_FTS_BACKFILL_DONE_SQL = `
+  SELECT 1 FROM client_schema_state WHERE key = '${BLOCKS_FTS_BACKFILL_MARKER_KEY}'
+`
+
+export const RECORD_BLOCKS_FTS_BACKFILL_DONE_SQL = `
+  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
+  VALUES ('${BLOCKS_FTS_BACKFILL_MARKER_KEY}', strftime('%s', 'now') * 1000)
+`
+
+export const BACKFILL_BLOCKS_FTS_ROWIDS_SQL = `
+  INSERT OR IGNORE INTO blocks_fts_rowids (block_id)
+  SELECT id
+  FROM blocks
+  WHERE deleted = 0 AND content != ''
+`
+
+export const BACKFILL_BLOCKS_FTS_SQL = `
+  INSERT INTO blocks_fts (rowid, content, workspace_id, block_id)
+  SELECT r.fts_rowid, b.content, b.workspace_id, b.id
+  FROM blocks b
+  JOIN blocks_fts_rowids r ON r.block_id = b.id
+  WHERE b.deleted = 0
+    AND b.content != ''
+    AND NOT EXISTS (
+      SELECT 1 FROM blocks_fts WHERE rowid = r.fts_rowid
+    )
 `
 
 /** Planner-stats marker. wa-sqlite ships without an automatic
@@ -982,6 +1096,8 @@ export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = [
   CREATE_BLOCK_ALIASES_WS_ALIAS_LOWER_INDEX_SQL,
   CREATE_BLOCK_TYPES_TABLE_SQL,
   CREATE_BLOCK_TYPES_TYPE_WORKSPACE_INDEX_SQL,
+  CREATE_BLOCKS_FTS_ROWIDS_TABLE_SQL,
+  CREATE_BLOCKS_FTS_TABLE_SQL,
   CREATE_CLIENT_SCHEMA_STATE_TABLE_SQL,
   CREATE_PS_CRUD_REJECTED_TABLE_SQL,
   CREATE_PS_CRUD_REJECTED_REJECTED_AT_INDEX_SQL,
@@ -1008,6 +1124,10 @@ export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = [
   CREATE_BLOCKS_TYPE_INSERT_TRIGGER_SQL,
   CREATE_BLOCKS_TYPE_UPDATE_TRIGGER_SQL,
   CREATE_BLOCKS_TYPE_DELETE_TRIGGER_SQL,
+  // 3 blocks_fts-maintenance triggers
+  CREATE_BLOCKS_FTS_INSERT_TRIGGER_SQL,
+  CREATE_BLOCKS_FTS_UPDATE_TRIGGER_SQL,
+  CREATE_BLOCKS_FTS_DELETE_TRIGGER_SQL,
 ] as const
 
 export const CLIENT_SCHEMA_TRIGGER_NAMES = [
@@ -1027,6 +1147,9 @@ export const CLIENT_SCHEMA_TRIGGER_NAMES = [
   'blocks_type_insert',
   'blocks_type_update',
   'blocks_type_delete',
+  'blocks_fts_insert',
+  'blocks_fts_update',
+  'blocks_fts_delete',
 ] as const
 
 interface ClientSchemaBootstrapDb {
@@ -1061,6 +1184,16 @@ export const backfillBlockTypesIfEmpty = async (
   if (done !== null) return
   await db.execute(BACKFILL_BLOCK_TYPES_SQL)
   await db.execute(RECORD_BLOCK_TYPES_BACKFILL_DONE_SQL)
+}
+
+export const backfillBlocksFtsIfEmpty = async (
+  db: ClientSchemaBootstrapDb,
+): Promise<void> => {
+  const done = await db.getOptional<{1: number}>(SELECT_BLOCKS_FTS_BACKFILL_DONE_SQL)
+  if (done !== null) return
+  await db.execute(BACKFILL_BLOCKS_FTS_ROWIDS_SQL)
+  await db.execute(BACKFILL_BLOCKS_FTS_SQL)
+  await db.execute(RECORD_BLOCKS_FTS_BACKFILL_DONE_SQL)
 }
 
 /** Run `ANALYZE` if the marker is missing (first install) or the

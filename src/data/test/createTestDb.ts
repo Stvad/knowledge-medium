@@ -44,6 +44,7 @@ import {
 import {
   CLIENT_SCHEMA_STATEMENTS,
   backfillBlockAliasesIfEmpty,
+  backfillBlocksFtsIfEmpty,
   backfillBlockTypesIfEmpty,
   backfillLocalEphemeralUploadsIfPending,
 } from '@/data/internals/clientSchema'
@@ -126,6 +127,7 @@ const initializeTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
   }
   await backfillBlockAliasesIfEmpty(backfillDb)
   await backfillBlockTypesIfEmpty(backfillDb)
+  await backfillBlocksFtsIfEmpty(backfillDb)
   // Test harness uses a synthetic user-id; tests that exercise the
   // backfill SELECT need to seed `workspace_members` for this id.
   await backfillLocalEphemeralUploadsIfPending(backfillDb, () => Date.now(), TEST_USER_ID)

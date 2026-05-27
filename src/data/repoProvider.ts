@@ -47,6 +47,7 @@ import {
 import {
   CLIENT_SCHEMA_STATEMENTS,
   backfillBlockAliasesIfEmpty,
+  backfillBlocksFtsIfEmpty,
   backfillBlockTypesIfEmpty,
   backfillLocalEphemeralUploadsIfPending,
   runAnalyzeIfDue,
@@ -250,6 +251,7 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase, userId: str
   }
   await backfillBlockAliasesIfEmpty(backfillDb)
   await backfillBlockTypesIfEmpty(backfillDb)
+  await backfillBlocksFtsIfEmpty(backfillDb)
   // tx_seq seeded from wall-clock ms — same scheme the Repo uses for
   // per-tx grouping, so the synthetic backfill batch is distinguishable
   // from any real tx that follows. `userId` scopes the SELECT so we

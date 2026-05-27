@@ -75,21 +75,180 @@ export const SELECT_BLOCKS_BY_TYPE_SQL = `
   ORDER BY b.created_at ASC, b.id ASC
 `
 
-/** Content search — case-insensitive substring match. */
+const BLOCKS_CONTENT_FTS_MIN_QUERY_LENGTH = 3
+
+export interface BlocksContentSearchQuery {
+  matchQuery: string
+  rankQuery: string
+}
+
+type ContentSearchToken =
+  | {kind: 'term'; text: string; excluded: boolean}
+  | {kind: 'operator'; op: 'AND' | 'OR' | 'NOT'}
+
+const quoteFtsPhrase = (text: string): string =>
+  `"${text.replace(/"/g, '""')}"`
+
+const stripOuterQuotePair = (query: string): string => {
+  const trimmed = query.trim()
+  return trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')
+    ? trimmed.slice(1, -1)
+    : trimmed
+}
+
+const tokenizeContentSearchQuery = (query: string): ContentSearchToken[] => {
+  const tokens: ContentSearchToken[] = []
+  let i = 0
+
+  const pushTerm = (text: string, excluded: boolean) => {
+    const trimmed = text.trim()
+    if (!trimmed) return
+    if (!excluded && (trimmed === 'AND' || trimmed === 'OR' || trimmed === 'NOT')) {
+      tokens.push({kind: 'operator', op: trimmed})
+      return
+    }
+    tokens.push({kind: 'term', text: trimmed, excluded})
+  }
+
+  while (i < query.length) {
+    while (i < query.length && /\s/.test(query[i] ?? '')) i++
+    if (i >= query.length) break
+
+    let excluded = false
+    if (query[i] === '-' && i + 1 < query.length && !/\s/.test(query[i + 1] ?? '')) {
+      excluded = true
+      i++
+    }
+
+    if (query[i] === '"') {
+      i++
+      const start = i
+      while (i < query.length && query[i] !== '"') i++
+      pushTerm(query.slice(start, i), excluded)
+      if (query[i] === '"') i++
+      continue
+    }
+
+    const start = i
+    while (i < query.length && !/\s/.test(query[i] ?? '')) i++
+    const text = query.slice(start, i)
+    pushTerm(text, excluded)
+  }
+
+  return tokens
+}
+
+const isTrigramSearchable = (text: string): boolean =>
+  text.trim().length >= BLOCKS_CONTENT_FTS_MIN_QUERY_LENGTH
+
+/** Compile QuickFind user text into safe FTS5 trigram MATCH syntax.
+ *
+ *  Default words become required literal terms (`sync foo` →
+ *  `"sync" "foo"`), so multi-word searches match terms anywhere.
+ *  User quotes preserve contiguous phrase matching. Uppercase OR and
+ *  NOT / -term are the only exposed operators; other punctuation and
+ *  operator-looking words are quoted as user text so MATCH does not
+ *  surface parser errors in QuickFind.
+ */
+export const compileBlocksContentSearchQuery = (
+  query: string,
+): BlocksContentSearchQuery | null => {
+  const trimmed = query.trim()
+  if (!isTrigramSearchable(trimmed)) return null
+
+  const rankQuery = stripOuterQuotePair(trimmed)
+  const clauses: string[][] = [[]]
+  const exclusions: string[] = []
+  let pendingOr = false
+  let pendingNot = false
+  let sawPositive = false
+
+  const currentClause = () => clauses[clauses.length - 1]!
+  const addPositive = (phrase: string) => {
+    if (pendingOr && currentClause().length > 0) {
+      clauses.push([])
+    }
+    currentClause().push(phrase)
+    sawPositive = true
+    pendingOr = false
+    pendingNot = false
+  }
+  const addLiteral = (text: string) => {
+    if (!isTrigramSearchable(text)) return
+    addPositive(quoteFtsPhrase(text))
+  }
+
+  for (const token of tokenizeContentSearchQuery(trimmed)) {
+    if (token.kind === 'operator') {
+      if (token.op === 'OR') {
+        if (sawPositive) pendingOr = true
+        else addLiteral(token.op)
+        continue
+      }
+      if (token.op === 'NOT') {
+        if (sawPositive) pendingNot = true
+        else addLiteral(token.op)
+        continue
+      }
+      if (!sawPositive) addLiteral(token.op)
+      continue
+    }
+
+    if (token.excluded && !sawPositive) {
+      addLiteral(`-${token.text}`)
+      continue
+    }
+    if (!isTrigramSearchable(token.text)) continue
+    const phrase = quoteFtsPhrase(token.text)
+    if (pendingNot) {
+      exclusions.push(phrase)
+      pendingNot = false
+      pendingOr = false
+      continue
+    }
+    if (token.excluded && sawPositive) {
+      exclusions.push(phrase)
+      pendingOr = false
+      continue
+    }
+    addPositive(phrase)
+  }
+
+  const nonEmptyClauses = clauses.filter(clause => clause.length > 0)
+  if (nonEmptyClauses.length === 0) {
+    return {
+      matchQuery: quoteFtsPhrase(rankQuery),
+      rankQuery,
+    }
+  }
+
+  const positiveExpr = nonEmptyClauses.length === 1
+    ? nonEmptyClauses[0]!.join(' ')
+    : `(${nonEmptyClauses.map(clause => clause.join(' ')).join(' OR ')})`
+  const matchQuery = exclusions.length === 0
+    ? positiveExpr
+    : `${positiveExpr} ${exclusions.map(phrase => `NOT ${phrase}`).join(' ')}`
+  return {matchQuery, rankQuery}
+}
+
+/** Content search — case-insensitive trigram FTS substring match. */
 export const SELECT_BLOCKS_BY_CONTENT_SQL = `
-  SELECT ${SELECT_BLOCK_COLUMNS_SQL}
-  FROM blocks
-  WHERE workspace_id = ?
-    AND deleted = 0
-    AND content != ''
-    AND LOWER(content) LIKE '%' || LOWER(?) || '%'
+  SELECT ${buildQualifiedBlockColumnsSql('b')}
+  FROM blocks_fts
+  JOIN blocks b
+    ON b.id = blocks_fts.block_id
+   AND b.workspace_id = blocks_fts.workspace_id
+  WHERE blocks_fts.workspace_id = ?
+    AND blocks_fts MATCH ?
+    AND b.deleted = 0
+    AND b.content != ''
   ORDER BY
     CASE
-      WHEN LOWER(content) = LOWER(?) THEN 0
-      WHEN LOWER(content) LIKE LOWER(?) || '%' THEN 1
+      WHEN LOWER(b.content) = LOWER(?) THEN 0
+      WHEN LOWER(b.content) LIKE LOWER(?) || '%' THEN 1
       ELSE 2
     END,
-    updated_at DESC
+    b.updated_at DESC
   LIMIT ?
 `
 
@@ -776,7 +935,8 @@ export const searchByContentQuery = defineQuery<
   }),
   resultSchema: blockDataArraySchema,
   resolve: async ({workspaceId, query, limit = 50}, ctx) => {
-    if (!query) return []
+    const compiledQuery = compileBlocksContentSearchQuery(query)
+    if (compiledQuery === null) return []
     // Narrow `kernel.content` channel — fires only when content
     // actually changes or live-set membership shifts. UiState property
     // writes (focus / selection) don't move either, so navigation
@@ -787,7 +947,8 @@ export const searchByContentQuery = defineQuery<
       key: kernelContentKey(workspaceId),
     })
     const rows = await ctx.db.getAll<BlockRow>(
-      SELECT_BLOCKS_BY_CONTENT_SQL, [workspaceId, query, query, query, limit],
+      SELECT_BLOCKS_BY_CONTENT_SQL,
+      [workspaceId, compiledQuery.matchQuery, compiledQuery.rankQuery, compiledQuery.rankQuery, limit],
     )
     // Skip per-row deps. The kernel.content channel above covers
     // every axis that can flip a content-substring match: content

@@ -43,11 +43,14 @@ import {
   ANALYZE_MARKER_KEY,
   ANALYZE_REFRESH_INTERVAL_MS,
   BACKFILL_BLOCK_ALIASES_SQL,
+  BACKFILL_BLOCKS_FTS_SQL,
+  BLOCKS_FTS_BACKFILL_MARKER_KEY,
   CLIENT_SCHEMA_STATEMENTS,
   CLIENT_SCHEMA_TRIGGER_NAMES,
   COUNT_LOCAL_EPHEMERAL_BACKFILL_PENDING_SQL,
   LOCAL_EPHEMERAL_BACKFILL_MARKER_KEY,
   backfillBlockAliasesIfEmpty,
+  backfillBlocksFtsIfEmpty,
   backfillLocalEphemeralUploadsIfPending,
   runAnalyzeIfDue,
 } from './clientSchema'
@@ -630,6 +633,137 @@ interface AliasRow {
 
 const aliasRows = (db: DatabaseSync): AliasRow[] =>
   db.prepare('SELECT block_id, workspace_id, alias, alias_lower FROM block_aliases ORDER BY block_id, alias').all() as unknown as AliasRow[]
+
+// ============================================================================
+// blocks_fts trigger maintenance — the FTS5 trigram index backing
+// core.searchByContent. It mirrors live, non-empty blocks.content rows.
+// ============================================================================
+
+interface BlocksFtsRow {
+  block_id: string
+  workspace_id: string
+  content: string
+}
+
+const blocksFtsRows = (db: DatabaseSync): BlocksFtsRow[] =>
+  db.prepare('SELECT block_id, workspace_id, content FROM blocks_fts ORDER BY block_id').all() as unknown as BlocksFtsRow[]
+
+describe('blocks_fts trigger — INSERT', () => {
+  it('indexes live non-empty block content on insert', () => {
+    h.insertBlock({id: 'b1', workspace_id: 'ws1', content: 'Hello World'})
+    expect(blocksFtsRows(h.db)).toEqual([
+      {block_id: 'b1', workspace_id: 'ws1', content: 'Hello World'},
+    ])
+  })
+
+  it('does not index empty-content or soft-deleted blocks', () => {
+    h.insertBlock({id: 'empty', content: ''})
+    h.insertBlock({id: 'deleted', content: 'Hidden', deleted: 1})
+    expect(blocksFtsRows(h.db)).toEqual([])
+  })
+})
+
+describe('blocks_fts trigger — UPDATE', () => {
+  it('replaces the indexed row when content changes', () => {
+    h.insertBlock({id: 'b1', content: 'old content'})
+    h.updateBlock('b1', {content: 'new content'})
+    expect(blocksFtsRows(h.db)).toEqual([
+      {block_id: 'b1', workspace_id: 'ws1', content: 'new content'},
+    ])
+  })
+
+  it('clears the indexed row when content becomes empty', () => {
+    h.insertBlock({id: 'b1', content: 'old content'})
+    h.updateBlock('b1', {content: ''})
+    expect(blocksFtsRows(h.db)).toEqual([])
+  })
+
+  it('clears content on soft-delete and repopulates on restore', () => {
+    h.insertBlock({id: 'b1', content: 'restorable'})
+    h.updateBlock('b1', {deleted: 1})
+    expect(blocksFtsRows(h.db)).toEqual([])
+    h.updateBlock('b1', {deleted: 0})
+    expect(blocksFtsRows(h.db)).toEqual([
+      {block_id: 'b1', workspace_id: 'ws1', content: 'restorable'},
+    ])
+  })
+
+  it('tracks workspace changes without duplicating rows', () => {
+    h.insertBlock({id: 'b1', workspace_id: 'ws1', content: 'portable'})
+    h.updateBlock('b1', {workspace_id: 'ws2'})
+    expect(blocksFtsRows(h.db)).toEqual([
+      {block_id: 'b1', workspace_id: 'ws2', content: 'portable'},
+    ])
+  })
+})
+
+describe('blocks_fts trigger — DELETE', () => {
+  it('clears the indexed row on hard-delete', () => {
+    h.insertBlock({id: 'b1', content: 'soon gone'})
+    h.deleteBlock('b1')
+    expect(blocksFtsRows(h.db)).toEqual([])
+  })
+})
+
+describe('blocks_fts backfill', () => {
+  it('populates the index from pre-existing live non-empty blocks', () => {
+    h.insertBlock({id: 'b1', workspace_id: 'ws1', content: 'Alpha text'})
+    h.insertBlock({id: 'b2', workspace_id: 'ws1', content: 'Deleted text', deleted: 1})
+    h.insertBlock({id: 'b3', workspace_id: 'ws2', content: ''})
+    h.insertBlock({id: 'b4', workspace_id: 'ws2', content: 'Beta text'})
+    h.db.exec('DELETE FROM blocks_fts')
+
+    h.db.exec(BACKFILL_BLOCKS_FTS_SQL)
+
+    expect(blocksFtsRows(h.db)).toEqual([
+      {block_id: 'b1', workspace_id: 'ws1', content: 'Alpha text'},
+      {block_id: 'b4', workspace_id: 'ws2', content: 'Beta text'},
+    ])
+  })
+
+  it('is idempotent when rerun after trigger-populated rows already exist', () => {
+    h.insertBlock({id: 'b1', workspace_id: 'ws1', content: 'Alpha text'})
+    h.db.exec(BACKFILL_BLOCKS_FTS_SQL)
+    expect(blocksFtsRows(h.db)).toEqual([
+      {block_id: 'b1', workspace_id: 'ws1', content: 'Alpha text'},
+    ])
+  })
+
+  describe('backfillBlocksFtsIfEmpty marker gate', () => {
+    const runBackfill = async () => {
+      await backfillBlocksFtsIfEmpty({
+        execute: async (sql) => h.db.exec(sql),
+        getOptional: async <T,>(sql: string) => {
+          const row = h.db.prepare(sql).get() as T | undefined
+          return row ?? null
+        },
+      })
+    }
+    const markerExists = (): boolean =>
+      h.db
+        .prepare(`SELECT 1 FROM client_schema_state WHERE key = '${BLOCKS_FTS_BACKFILL_MARKER_KEY}'`)
+        .get() !== undefined
+
+    it('records completion even when there is no content to backfill', async () => {
+      expect(markerExists()).toBe(false)
+      await runBackfill()
+      expect(markerExists()).toBe(true)
+      expect(blocksFtsRows(h.db)).toHaveLength(0)
+    })
+
+    it('runs the backfill exactly once across multiple invocations', async () => {
+      h.insertBlock({id: 'b1', workspace_id: 'ws1', content: 'Alpha text'})
+      h.db.exec('DELETE FROM blocks_fts')
+
+      await runBackfill()
+      expect(blocksFtsRows(h.db).map(r => r.block_id)).toEqual(['b1'])
+
+      h.db.exec('DELETE FROM blocks_fts')
+      await runBackfill()
+      expect(blocksFtsRows(h.db)).toHaveLength(0)
+    })
+  })
+})
 
 describe('block_aliases trigger — INSERT', () => {
   it('extracts aliases from properties_json into block_aliases on insert', () => {
