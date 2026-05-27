@@ -4,6 +4,7 @@ import react, {reactCompilerPreset} from '@vitejs/plugin-react'
 import babel from '@rolldown/plugin-babel'
 import externalize from "vite-plugin-externalize-dependencies";
 import wasm from "vite-plugin-wasm"
+import {reactImportMapProductionPlugin} from './vite-plugins/reactImportMapMode'
 import {unifySrcJsUrlsPlugin} from './vite-plugins/unifySrcJsUrls'
 // import noBundlePlugin from 'vite-plugin-no-bundle';
 
@@ -58,6 +59,7 @@ export default defineConfig(({command}) => {
                     })
                 },
             },
+            reactImportMapProductionPlugin(),
             // See vite-plugins/unifySrcJsUrls.ts for the full rationale.
             // Tests in vite-plugins/test/unifySrcJsUrls.test.ts.
             isDev && unifySrcJsUrlsPlugin(),
