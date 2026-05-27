@@ -59,9 +59,12 @@ where `blockUploadOldJsonSql` emits `OLD.properties_json` keyed under `$.propert
 
 **Local trigger migration is required, not optional.** `CLIENT_SCHEMA_STATEMENTS` runs every trigger with `CREATE TRIGGER IF NOT EXISTS` (`clientSchema.ts:436`, called at `repoProvider.ts:237-239`), so an existing local DB keeps its pre-change `blocks_upload_update` trigger and never starts emitting `old`. With Layer B treating "no `old.properties_json`" as the overwrite path, an upgraded client would silently keep clobbering. Fix: prepend `DROP TRIGGER IF EXISTS blocks_upload_update;` immediately before the `CREATE TRIGGER` in `CLIENT_SCHEMA_STATEMENTS`. Cheap (DROP is O(1)), idempotent, runs on every bootstrap. The codebase doesn't have prior DROP+CREATE precedent — the existing one-shot migration pattern uses `client_schema_state` markers (e.g., `local_ephemeral_upload_backfill_v4`) — but DROP+CREATE here is simpler than a marker because the trigger definition itself is the source of truth; no separate "have I run this migration" question.
 
-**Existing `ps_crud` entries from the old trigger need stamping.** DROP+CREATE replaces the trigger, but doesn't rewrite rows already sitting in `ps_crud` from before the upgrade. Those rows have `data.properties_json` set (since the old trigger included the column) and no `old` / `metadata.mode` (since the old trigger emitted neither). Without intervention, the upgraded uploader would treat them as ambiguous-envelope and either route them to the overwrite path silently (cross-key clobber, today's failure mode) or quarantine them (user-visible upload errors). Neither is right.
+**Existing `ps_crud` entries from before the upgrade need careful handling — two shapes, two behaviors.** DROP+CREATE replaces the trigger but doesn't rewrite rows already sitting in `ps_crud`. Two kinds of pre-upgrade entries can be in there:
 
-Add a one-shot migration step that runs before the new trigger takes effect: stamp every matching legacy entry with `metadata.mode = 'upsert'` so it takes the explicit upsert path. Same blast radius as today's full-row UPSERT (i.e., no improvement *and* no regression for this finite legacy window), and matches the explicit "local wins" semantics already in use for the backfill path. Use a `client_schema_state` marker (e.g., `legacy_ps_crud_stamp_v1`) so it runs once:
+1. **Backfill PATCHes** (from `BACKFILL_LOCAL_EPHEMERAL_UPLOADS_SQL`, which uses `blockUploadJsonSql` — full row): `data` contains every column including the immutable `created_at`.
+2. **Trigger PATCHes** (from the old `blocks_upload_update`, which uses `blockUploadPatchJsonSql` — only changed columns): `data` contains only the columns that differed in that UPDATE; `created_at` is never present because the column never changes post-INSERT.
+
+The one-shot migration must distinguish them. Stamp only the full-row backfill entries with `metadata.mode = 'upsert'`; leave trigger PATCHes alone. Use `data.data.created_at IS NOT NULL` as the discriminator. `client_schema_state`-gated, runs once:
 
 ```sql
 UPDATE ps_crud
@@ -69,10 +72,11 @@ SET data = json_set(data, '$.metadata', json_object('mode', 'upsert'))
 WHERE json_extract(data, '$.op') = 'PATCH'
   AND json_extract(data, '$.type') = 'blocks'
   AND json_extract(data, '$.metadata.mode') IS NULL
-  AND json_extract(data, '$.old') IS NULL;
+  AND json_extract(data, '$.old') IS NULL
+  AND json_extract(data, '$.data.created_at') IS NOT NULL;
 ```
 
-After this stamp + trigger DROP+CREATE, the only entries the new uploader sees with no `old` and no `metadata.mode` are post-migration trigger PATCHes that didn't touch `properties_json` (i.e., `data.properties_json` is also absent), or genuine envelope drift — both correctly handled by Layer B's invariants.
+Legacy partial trigger PATCHes (no `old`, no `metadata.mode`, no `created_at` in `data`) take a third routing path in Layer B — the existing `applyBlockPatches` "load full local row + ship UPSERT" code. Same blast radius as today (full-blob overwrite, possible cross-key clobber on the unsent-queue window), drains naturally as the queue clears post-upgrade. Documented as a transient compatibility surface; can be removed once telemetry shows zero legacy entries in flight across the deployed fleet.
 
 Scope of columns in `old`: just `properties_json` for v1 — that's the only column needing per-key merge. Adding more later is mechanical (same pattern per column). Keeping the set narrow keeps the envelope small.
 
@@ -101,17 +105,19 @@ WHERE id = $id
 
 `||` is shallow jsonb merge; `-` with a `text[]` removes keys. `properties_json` is a flat `Record<string, unknown>` (`src/data/api/blockData.ts`, `properties.ts:112-116`), so shallow merge is the right semantics — keys don't nest. The `::jsonb` parse and `::text` re-serialize are paid per-write inside the RPC; this is fine — the cost is microseconds, the call is already on a network round-trip path, and keeping the column as `text` avoids the rollout-compat problem of old clients writing stringified JSON to a `jsonb` column (which would be stored as a JSONB string scalar, breaking subsequent merges).
 
-**Two intended paths through the uploader**, distinguished by an explicit envelope discriminator:
+**Three intended paths through the uploader**, distinguished by explicit envelope discriminators:
 
-- **Trigger PATCH (per-column UPDATE with optional per-key merge).** Envelope: `{op:'PATCH', type, id, data:<changed cols>, old?:<prev cols>}`. Uploader calls the new RPC. If `data.properties_json` + `old.properties_json` both present → diff to `{set, unset}`, server does shallow JSONB merge. If `data.properties_json` present, `old.properties_json` absent → server overwrites the column verbatim. If neither present → RPC doesn't touch the column. Server returns rowcount; 0 → orchestrator quarantines (the row should already exist, since the corresponding CREATE was queued first within the same `repo.tx`).
+- **Trigger PATCH (per-column UPDATE with optional per-key merge).** Envelope: `{op:'PATCH', type, id, data:<changed cols>, old?:<prev cols>}`. New trigger only. Uploader calls the new RPC. If `data.properties_json` + `old.properties_json` both present → diff to `{set, unset}`, server does shallow JSONB merge. If neither present → RPC doesn't touch the column. Server returns rowcount; 0 → orchestrator quarantines (the row should already exist, since the corresponding CREATE was queued first within the same `repo.tx`).
 - **Backfill PATCH (full-row INSERT-or-replace).** Envelope: `{op:'PATCH', type, id, data:<full row>, metadata:{mode:'upsert'}}`. Uploader routes via `entry.metadata?.mode === 'upsert'` to the existing full-row UPSERT path (`applyBlockUpserts` via Supabase `.upsert(..., {onConflict:'id'})`) — *not* the new RPC. This preserves v4 backfill's "INSERT if missing, replace if stale" semantic for never-uploaded local-ephemeral rows (`clientSchema.ts:858-861`). Crucially, missing-on-server is the expected case here (the entire point of backfill), so 0-row UPDATEs do *not* quarantine — they fall through to INSERT.
+- **Legacy partial PATCH (transient post-upgrade only).** Envelope: `{op:'PATCH', type, id, data:<partial cols>}` — no `old`, no `metadata.mode`. Pre-upgrade trigger emitted these; the migration intentionally leaves them as-is because their `data` is partial and stamping them as upsert would fail the full-row invariant. Uploader routes via the *existing* `applyBlockPatches` path (load full local row, ship full-row UPSERT). Identical to today's behavior for these entries — same blast radius (cross-field/key clobber possible on this finite legacy window), drains naturally as the queue clears. Documented as a transient compatibility surface; removable once telemetry confirms zero legacy entries deployed-fleet-wide.
 
 Keep the discriminator explicit (`metadata.mode = 'upsert'`) rather than implicit (e.g., "does `data` contain `created_at`?"). PowerSync's `CrudEntry` already exposes `entry.metadata` as a standard slot for upload-side discriminators, so we use it without inventing parallel infrastructure.
 
 **Runtime invariants — fail loudly on envelope drift.** Before routing, the uploader validates the entry shape against the discriminator. Mismatches are a programming error in the trigger/backfill emitters, not a runtime condition to recover from, so the right behavior is to throw (logged + quarantined via the existing rejection orchestrator) rather than silently route to the wrong path. Specifically:
 
 - If `metadata.mode === 'upsert'`: `data` must contain the full row (every column in `BLOCK_UPLOAD_COLUMNS`), and `previousValues` must be absent. A backfill envelope missing columns or carrying `previousValues` is malformed.
-- If `metadata.mode` is unset (trigger PATCH): `data` must not contain `created_at` (immutable post-INSERT — its presence implies an emitter mistakenly used `blockUploadJsonSql` instead of `blockUploadPatchJsonSql`), and the entry must not declare `metadata.mode`.
+- If `previousValues.properties_json` is present: `data.properties_json` must also be present, and `metadata.mode` must be unset. A trigger PATCH that has `old` but no `data` change for the same column, or that also declares `upsert`, is malformed.
+- Otherwise (legacy partial PATCH path): no invariant — this is the catch-all for pre-upgrade entries. Routes to `applyBlockPatches`. After the legacy queue drains, this path becomes vestigial and could be tightened to also quarantine.
 
 These invariants are cheap to check, document the assumption inline, and turn the "future refactor accidentally harmonizes envelopes" hazard into a loud failure at upload time instead of silent data loss.
 
