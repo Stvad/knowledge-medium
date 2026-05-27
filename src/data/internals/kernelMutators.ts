@@ -156,7 +156,7 @@ const softDeleteSubtree = async (tx: Tx, rootId: string): Promise<void> => {
     const id = stack.pop()!
     if (seen.has(id)) continue
     seen.add(id)
-    const children = await tx.childrenOf(id)
+    const children = await tx.childrenOf(id, undefined, {includePropertyChildren: true})
     for (const c of children) stack.push(c.id)
     await tx.delete(id)
   }
@@ -582,6 +582,10 @@ export const merge = defineMutator<MergeArgs, void>({
       for (let i = 0; i < fromChildren.length; i++) {
         await tx.move(fromChildren[i].id, {parentId: intoId, orderKey: keys[i]})
       }
+    }
+    const remainingSourceChildren = await tx.childrenOf(fromId, undefined, {includePropertyChildren: true})
+    for (const child of remainingSourceChildren) {
+      await tx.delete(child.id)
     }
 
     // Soft-delete source BEFORE writing the merged property bag to the

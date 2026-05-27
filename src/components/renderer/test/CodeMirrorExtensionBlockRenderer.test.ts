@@ -23,6 +23,7 @@ const fakeBlock = (id: string, properties: BlockData['properties'] = {}): Block 
     id,
     workspaceId: 'ws-1',
     parentId: null,
+    fieldId: null,
     orderKey: 'a0',
     content: 'export default []',
     properties,

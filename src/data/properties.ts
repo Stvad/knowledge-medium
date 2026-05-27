@@ -18,7 +18,6 @@
 import type { Block } from './block'
 import type { BlockData, ChangedRow } from '@/data/api'
 import { aliasesProp } from '@/data/internals/coreProperties'
-import { propertyFieldIdProp } from '@/data/propertyChildren'
 import {
   ChangeScope,
   codecs,
@@ -400,7 +399,6 @@ export const KERNEL_PROPERTY_SCHEMAS: ReadonlyArray<PropertySchema<unknown>> = [
   createdAtProp,
   sourceBlockIdProp,
   aliasesProp,
-  propertyFieldIdProp,
   // extension block fields
   extensionNameProp,
   extensionDescriptionProp,

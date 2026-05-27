@@ -61,6 +61,7 @@ const block = (id: string, properties: Record<string, unknown>): BlockData => ({
   id,
   workspaceId: WS,
   parentId: null,
+  fieldId: null,
   orderKey: id,
   content: '',
   properties,

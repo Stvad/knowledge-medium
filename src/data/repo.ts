@@ -108,7 +108,6 @@ import {
   getPropertyFieldId,
   propertiesEqual,
   propertyChildContentToEncodedValue,
-  propertyFieldIdProp,
 } from './propertyChildren'
 import { KERNEL_TYPE_CONTRIBUTIONS } from './blockTypes'
 import { propertiesPageBlockId } from './propertiesPage'
@@ -1352,11 +1351,11 @@ export class Repo {
   }
 
   /** Rebuild parent `properties_json` projections for children tagged
-   *  with a user-defined field block id. Used when a field schema is
-   *  renamed/reloaded: child rows keep stable identity, while the parent
-   *  cache key follows the schema's current `name`. */
+   *  with a stable field id. Used when a field schema is renamed/reloaded:
+   *  child rows keep stable identity, while the parent cache key follows
+   *  the schema's current `name`. */
   async reprojectPropertyValueChildren(args: {
-    fieldBlockId: string
+    fieldId: string
     schema: AnyPropertySchema
     oldName?: string
     workspaceId?: string
@@ -1373,9 +1372,9 @@ export class Repo {
           AND parent.workspace_id = child.workspace_id
           AND child.deleted = 0
           AND parent.deleted = 0
-          AND json_extract(child.properties_json, ?) = ?
+          AND child.field_id = ?
       `,
-      [workspaceId, jsonPathForProperty(propertyFieldIdProp.name), args.fieldBlockId],
+      [workspaceId, args.fieldId],
     )
     if (rows.length === 0) return
 
@@ -1383,11 +1382,11 @@ export class Repo {
       for (const row of rows) {
         const parent = await tx.get(row.id)
         if (parent === null || parent.deleted) continue
-        const children = await tx.childrenOf(parent.id)
+        const children = await tx.childrenOf(parent.id, undefined, {includePropertyChildren: true})
         let projected: unknown = undefined
         let hasProjection = false
         for (const child of children) {
-          if (getPropertyFieldId(child) !== args.fieldBlockId) continue
+          if (getPropertyFieldId(child) !== args.fieldId) continue
           try {
             projected = propertyChildContentToEncodedValue(args.schema, child.content)
             hasProjection = true

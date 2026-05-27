@@ -6,10 +6,7 @@ import { ChangeScope, codecs, defineProperty, type AnyPropertySchema } from '@/d
 import { BlockCache } from '@/data/blockCache'
 import { propertySchemasFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
-import {
-  propertyFieldIdProp,
-} from '@/data/propertyChildren'
-import { propertyNameProp } from '@/data/properties'
+import { propertyNameProp, rendererProp } from '@/data/properties'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
@@ -30,7 +27,7 @@ const makeStatusProp = (): AnyPropertySchema =>
     codec: codecs.string,
     defaultValue: '',
     changeScope: ChangeScope.BlockDefault,
-    fieldBlockId: 'field-status',
+    fieldId: 'field-status',
   })
 
 const setup = async (options: {
@@ -72,9 +69,9 @@ const createRoot = async (repo: Repo, id: string): Promise<void> => {
 }
 
 const rawLiveChildren = async (h: TestDb, parentId: string) =>
-  h.db.getAll<{id: string; content: string; properties_json: string}>(
+  h.db.getAll<{id: string; content: string; field_id: string | null; properties_json: string}>(
     `
-      SELECT id, content, properties_json
+      SELECT id, content, field_id, properties_json
       FROM blocks
       WHERE parent_id = ? AND deleted = 0
       ORDER BY order_key, id
@@ -104,10 +101,45 @@ describe('child-backed user properties', () => {
     const children = await rawLiveChildren(env.h, 'parent')
     expect(children).toHaveLength(1)
     expect(children[0]!.content).toBe('Doing')
-    expect(JSON.parse(children[0]!.properties_json)).toMatchObject({
-      [propertyFieldIdProp.name]: 'field-status',
-    })
+    expect(children[0]!.field_id).toBe('field-status')
+    expect(JSON.parse(children[0]!.properties_json)).toEqual({})
     await expect(env.repo.block('parent').childIds.load()).resolves.toEqual([])
+  })
+
+  it('writes kernel and plugin schemas as property children too', async () => {
+    env = await setup()
+    await createRoot(env.repo, 'parent')
+
+    await env.repo.mutate.setProperty({
+      id: 'parent',
+      schema: rendererProp,
+      value: 'markdown',
+    })
+
+    expect(env.repo.cache.getSnapshot('parent')?.properties.renderer).toBe('markdown')
+    const children = await rawLiveChildren(env.h, 'parent')
+    expect(children).toHaveLength(1)
+    expect(children[0]!.content).toBe('markdown')
+    expect(children[0]!.field_id).toBe(rendererProp.fieldId)
+    await expect(env.repo.block('parent').childIds.load()).resolves.toEqual([])
+  })
+
+  it('materializes property children for raw properties writes', async () => {
+    env = await setup()
+    await createRoot(env.repo, 'parent')
+
+    await env.repo.tx(async tx => {
+      await tx.update('parent', {
+        properties: {
+          [env.statusProp.name]: env.statusProp.codec.encode('Doing'),
+        },
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    const children = await rawLiveChildren(env.h, 'parent')
+    expect(children).toHaveLength(1)
+    expect(children[0]!.content).toBe('Doing')
+    expect(children[0]!.field_id).toBe(env.statusProp.fieldId)
   })
 
   it('reprojects the parent cache when the property child content changes', async () => {
@@ -184,9 +216,7 @@ describe('UserSchemasService child-backed field identity', () => {
     })
 
     const child = (await rawLiveChildren(env.h, 'parent'))[0]!
-    expect(JSON.parse(child.properties_json)).toMatchObject({
-      [propertyFieldIdProp.name]: schemaBlockId,
-    })
+    expect(child.field_id).toBe(schemaBlockId)
 
     await env.repo.tx(async tx => {
       await tx.setProperty(schemaBlockId, propertyNameProp, 'state')

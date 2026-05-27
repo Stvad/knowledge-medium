@@ -285,6 +285,7 @@ describe('Block.load', () => {
         id: 'flaky',
         workspaceId: 'ws-1',
         parentId: null,
+        fieldId: null,
         orderKey: 'a0',
         content: 'live',
         properties: {},

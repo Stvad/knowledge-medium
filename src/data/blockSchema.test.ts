@@ -11,6 +11,7 @@ const fixture: BlockData = {
   id: 'b1',
   workspaceId: 'ws1',
   parentId: 'b0',
+  fieldId: null,
   orderKey: 'a0',
   content: 'hello',
   properties: {alias: ['Inbox']},
@@ -26,15 +27,16 @@ const rowFromParams = (params: ReturnType<typeof blockToRowParams>): BlockRow =>
   id: params[0],
   workspace_id: params[1],
   parent_id: params[2],
-  order_key: params[3],
-  content: params[4],
-  properties_json: params[5],
-  references_json: params[6],
-  created_at: params[7],
-  updated_at: params[8],
-  created_by: params[9],
-  updated_by: params[10],
-  deleted: params[11],
+  field_id: params[3],
+  order_key: params[4],
+  content: params[5],
+  properties_json: params[6],
+  references_json: params[7],
+  created_at: params[8],
+  updated_at: params[9],
+  created_by: params[10],
+  updated_by: params[11],
+  deleted: params[12],
 })
 
 describe('BLOCK_STORAGE_COLUMNS', () => {
@@ -44,6 +46,7 @@ describe('BLOCK_STORAGE_COLUMNS', () => {
       'id',
       'workspace_id',
       'parent_id',
+      'field_id',
       'order_key',
       'content',
       'properties_json',
@@ -78,7 +81,7 @@ describe('blockToRowParams / parseBlockRow round-trip', () => {
   it('encodes deleted=true as 1 and decodes back to boolean true', () => {
     const tombstone: BlockData = {...fixture, deleted: true}
     const params = blockToRowParams(tombstone)
-    expect(params[11]).toBe(1)
+    expect(params[12]).toBe(1)
     expect(parseBlockRow(rowFromParams(params)).deleted).toBe(true)
   })
 

@@ -1,45 +1,29 @@
 import {
-  ChangeScope,
   CodecError,
-  codecs,
-  defineProperty,
   type AnyPropertySchema,
   type BlockData,
   type PropertySchema,
 } from '@/data/api'
 
-/** Hidden marker on a property-value child. The value points at the
- *  user-defined property's schema block, not the mutable display name. */
-export const propertyFieldIdProp = defineProperty<string | undefined>('system:propertyFieldId', {
-  codec: codecs.optionalString,
-  defaultValue: undefined,
-  changeScope: ChangeScope.BlockDefault,
-})
+export const isPropertyValueChild = (
+  data: Pick<BlockData, 'fieldId'> | null | undefined,
+): boolean => Boolean(data?.fieldId)
+
+export const getPropertyFieldId = (
+  data: Pick<BlockData, 'fieldId'> | null | undefined,
+): string | undefined => data?.fieldId ?? undefined
 
 export const isChildBackedPropertySchema = (
   schema: AnyPropertySchema,
-): schema is AnyPropertySchema & {readonly fieldBlockId: string} =>
-  typeof schema.fieldBlockId === 'string' && schema.fieldBlockId.length > 0
+): schema is AnyPropertySchema & {readonly fieldId: string} =>
+  typeof schema.fieldId === 'string' && schema.fieldId.length > 0
 
-export const getPropertyFieldId = (
-  data: Pick<BlockData, 'properties'> | null | undefined,
-): string | undefined => {
-  if (!data) return undefined
-  const raw = data.properties[propertyFieldIdProp.name]
-  if (raw === undefined) return undefined
-  try {
-    return propertyFieldIdProp.codec.decode(raw)
-  } catch {
-    return undefined
-  }
-}
-
-export const findSchemaByFieldBlockId = (
+export const findSchemaByFieldId = (
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
-  fieldBlockId: string,
+  fieldId: string,
 ): AnyPropertySchema | undefined => {
   for (const schema of propertySchemas.values()) {
-    if (schema.fieldBlockId === fieldBlockId) return schema
+    if (schema.fieldId === fieldId) return schema
   }
   return undefined
 }
@@ -65,8 +49,18 @@ const jsonFromContent = (content: string): unknown => {
   }
 }
 
+const codecAcceptsNull = (schema: AnyPropertySchema): boolean => {
+  try {
+    schema.codec.decode(null)
+    return true
+  } catch {
+    return false
+  }
+}
+
 const encodedValueToContent = (schema: AnyPropertySchema, encoded: unknown): string => {
-  if (encoded === null || encoded === undefined) return ''
+  if (encoded === undefined) return ''
+  if (encoded === null) return codecAcceptsNull(schema) ? 'null' : ''
   if (
     schema.codec.type === 'string'
     || schema.codec.type === 'url'
@@ -84,6 +78,9 @@ const encodedValueToContent = (schema: AnyPropertySchema, encoded: unknown): str
 }
 
 const contentToEncodedValue = (schema: AnyPropertySchema, content: string): unknown => {
+  if (content.trim() === 'null' && codecAcceptsNull(schema)) {
+    return schema.codec.encode(schema.codec.decode(null))
+  }
   switch (schema.codec.type) {
     case 'string':
     case 'url':
@@ -107,6 +104,11 @@ export const propertyValueToChildContent = <T>(
   schema: PropertySchema<T>,
   value: T,
 ): string => encodedValueToContent(schema, schema.codec.encode(value))
+
+export const encodedPropertyValueToChildContent = (
+  schema: AnyPropertySchema,
+  encoded: unknown,
+): string => encodedValueToContent(schema, encoded)
 
 /** Parse a property-value child back into the canonical encoded value
  *  stored on the parent cache. Throws when the child content cannot be

@@ -272,6 +272,7 @@ const blockJsonObjectSql = (rowRef: 'NEW' | 'OLD') => `
         'id', ${rowRef}.id,
         'workspaceId', ${rowRef}.workspace_id,
         'parentId', ${rowRef}.parent_id,
+        'fieldId', ${rowRef}.field_id,
         'orderKey', ${rowRef}.order_key,
         'content', ${rowRef}.content,
         'properties', json(${rowRef}.properties_json),
@@ -402,6 +403,7 @@ interface UploadColumnSpec {
 const BLOCK_UPLOAD_COLUMNS: readonly UploadColumnSpec[] = [
   {name: 'workspace_id', jsonValue: rowRef => `${rowRef}.workspace_id`},
   {name: 'parent_id', jsonValue: rowRef => `${rowRef}.parent_id`},
+  {name: 'field_id', jsonValue: rowRef => `${rowRef}.field_id`},
   {name: 'order_key', jsonValue: rowRef => `${rowRef}.order_key`},
   {name: 'content', jsonValue: rowRef => `${rowRef}.content`},
   {name: 'properties_json', jsonValue: rowRef => `${rowRef}.properties_json`},

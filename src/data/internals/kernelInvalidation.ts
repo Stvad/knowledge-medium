@@ -211,6 +211,9 @@ const referenceSetChanged = (
   return false
 }
 
+const isPropertyValueSide = (side: ChangeSnapshot['before']): boolean =>
+  side?.fieldId !== null && side?.fieldId !== undefined
+
 /** Diff a single ChangeSnapshot and emit every channel this rule owns
  *  (typedBlocks.* + kernel.aliases + kernel.content). Pure — no side
  *  effects beyond `emit`. */
@@ -219,8 +222,8 @@ export const emitKernelInvalidations = (
   emit: Emit,
   fallbackBlockId?: string,
 ): void => {
-  const beforeLive = !!snapshot.before && !snapshot.before.deleted
-  const afterLive = !!snapshot.after && !snapshot.after.deleted
+  const beforeLive = !!snapshot.before && !snapshot.before.deleted && !isPropertyValueSide(snapshot.before)
+  const afterLive = !!snapshot.after && !snapshot.after.deleted && !isPropertyValueSide(snapshot.after)
   const blockId = snapshot.after?.id ?? snapshot.before?.id ?? fallbackBlockId
 
   const emittedTypes = new Set<string>()

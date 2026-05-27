@@ -24,6 +24,7 @@ const blockData = (overrides: Partial<BlockData>): BlockData => ({
   id: overrides.id ?? 'block',
   workspaceId: overrides.workspaceId ?? 'ws-1',
   parentId: overrides.parentId ?? null,
+  fieldId: overrides.fieldId ?? null,
   orderKey: overrides.orderKey ?? 'a0',
   content: overrides.content ?? '',
   properties: overrides.properties ?? {},

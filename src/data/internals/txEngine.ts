@@ -68,8 +68,6 @@ import type { BlockCache } from '@/data/blockCache'
 import { keyAtStart } from '@/data/orderKey'
 import {
   getPropertyFieldId,
-  isChildBackedPropertySchema,
-  propertyFieldIdProp,
   propertyValueToChildContent,
 } from '@/data/propertyChildren'
 
@@ -170,6 +168,8 @@ const COLUMN_PLACEHOLDERS = COLUMN_NAMES.map(() => '?').join(', ')
 
 const SELECT_BY_ID_SQL = `SELECT ${COLUMN_LIST} FROM blocks WHERE id = ?`
 const SELECT_CHILDREN_SQL =
+  `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id = ? AND deleted = 0 AND field_id IS NULL ORDER BY order_key, id`
+const SELECT_ALL_CHILDREN_SQL =
   `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id`
 /** Root-level siblings (parent_id IS NULL). When a tx has pinned a
  *  workspace, scope to that workspace so `tx.childrenOf(null)` doesn't
@@ -177,6 +177,8 @@ const SELECT_CHILDREN_SQL =
  *  invariants and for sibling-position helpers like createSiblingAbove
  *  on root blocks. */
 const SELECT_ROOT_SIBLINGS_SQL =
+  `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id IS NULL AND deleted = 0 AND field_id IS NULL AND workspace_id = ? ORDER BY order_key, id`
+const SELECT_ALL_ROOT_SIBLINGS_SQL =
   `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id IS NULL AND deleted = 0 AND workspace_id = ? ORDER BY order_key, id`
 const SELECT_NEXT_CHILD_SIBLING_SQL =
   `SELECT ${COLUMN_LIST} FROM blocks
@@ -428,9 +430,7 @@ export class TxImpl implements Tx {
   ): Promise<void> {
     const before = await this.requireExisting(id)
     this.checkWorkspace(before.workspaceId)
-    if (isChildBackedPropertySchema(schema)) {
-      await this.writePropertyValueChild(before, schema, value, opts)
-    }
+    await this.writePropertyValueChild(before, schema, value, opts)
     const encoded = schema.codec.encode(value)
     if (jsonValuesEqual(before.properties[schema.name], encoded)) return
     const properties = {...before.properties, [schema.name]: encoded}
@@ -484,7 +484,12 @@ export class TxImpl implements Tx {
 
   // ──── Within-tx tree primitives ────
 
-  async childrenOf(parentId: string | null, workspaceId?: string): Promise<BlockData[]> {
+  async childrenOf(
+    parentId: string | null,
+    workspaceId?: string,
+    options?: {includePropertyChildren?: boolean},
+  ): Promise<BlockData[]> {
+    const includePropertyChildren = options?.includePropertyChildren === true
     if (parentId === null) {
       // SQL `parent_id = NULL` never matches; use `IS NULL`. Scope to
       // a workspace by one of: explicit arg → pinned meta → throw.
@@ -500,10 +505,16 @@ export class TxImpl implements Tx {
       if (ws === null) {
         throw new WorkspaceNotPinnedError()
       }
-      const rows = await this.ctx.txDb.getAll<BlockRow>(SELECT_ROOT_SIBLINGS_SQL, [ws])
+      const rows = await this.ctx.txDb.getAll<BlockRow>(
+        includePropertyChildren ? SELECT_ALL_ROOT_SIBLINGS_SQL : SELECT_ROOT_SIBLINGS_SQL,
+        [ws],
+      )
       return rows.map(parseBlockRow)
     }
-    const rows = await this.ctx.txDb.getAll<BlockRow>(SELECT_CHILDREN_SQL, [parentId])
+    const rows = await this.ctx.txDb.getAll<BlockRow>(
+      includePropertyChildren ? SELECT_ALL_CHILDREN_SQL : SELECT_CHILDREN_SQL,
+      [parentId],
+    )
     return rows.map(parseBlockRow)
   }
 
@@ -660,9 +671,10 @@ export class TxImpl implements Tx {
       updatedBy: userId,
     }
     await this.ctx.txDb.execute(
-      `UPDATE blocks SET parent_id = ?, order_key = ?, content = ?, properties_json = ?, references_json = ?, deleted = ?, updated_at = ?, updated_by = ? WHERE id = ?`,
+      `UPDATE blocks SET parent_id = ?, field_id = ?, order_key = ?, content = ?, properties_json = ?, references_json = ?, deleted = ?, updated_at = ?, updated_by = ? WHERE id = ?`,
       [
         target.parentId,
+        target.fieldId,
         target.orderKey,
         target.content,
         JSON.stringify(target.properties),
@@ -719,6 +731,7 @@ export class TxImpl implements Tx {
       id,
       workspaceId: data.workspaceId,
       parentId: data.parentId,
+      fieldId: data.fieldId ?? null,
       orderKey: data.orderKey,
       content: data.content ?? '',
       properties: data.properties ?? {},
@@ -747,24 +760,17 @@ export class TxImpl implements Tx {
 
   private async writePropertyValueChild<T>(
     parent: BlockData,
-    schema: PropertySchema<T> & {readonly fieldBlockId: string},
+    schema: PropertySchema<T>,
     value: T,
     opts: TxWriteOpts | undefined,
   ): Promise<void> {
     const content = propertyValueToChildContent(schema, value)
-    const children = await this.childrenOf(parent.id)
-    const existing = children.find(child => getPropertyFieldId(child) === schema.fieldBlockId)
-    const markerProperties = {
-      [propertyFieldIdProp.name]: propertyFieldIdProp.codec.encode(schema.fieldBlockId),
-    }
+    const children = await this.childrenOf(parent.id, undefined, {includePropertyChildren: true})
+    const existing = children.find(child => getPropertyFieldId(child) === schema.fieldId)
 
     if (existing) {
       await this.update(existing.id, {
         content,
-        properties: {
-          ...existing.properties,
-          ...markerProperties,
-        },
       }, opts)
       return
     }
@@ -772,9 +778,9 @@ export class TxImpl implements Tx {
     await this.create({
       workspaceId: parent.workspaceId,
       parentId: parent.id,
-      orderKey: keyAtStart(children[0]?.orderKey ?? null),
+      fieldId: schema.fieldId,
+      orderKey: keyAtStart(null),
       content,
-      properties: markerProperties,
     }, opts)
   }
 
