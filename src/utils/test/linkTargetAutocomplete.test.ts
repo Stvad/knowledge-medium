@@ -176,6 +176,36 @@ describe('link target autocomplete helpers', () => {
     expect(phases).toEqual(['aliases:page', 'blocks:block'])
   })
 
+  it('skips the content scan for short queries (under 3 chars)', async () => {
+    // Short prefixes (1-2 chars) match a huge fraction of any non-trivial
+    // workspace's blocks. The substring LIKE scan that backs
+    // `core.searchByContent` is O(workspace content bytes) regardless of
+    // result count, and the rendered hits aren't useful at this length.
+    // Aliases are index-backed and meaningful at any length, so they
+    // still fire.
+    const searchByContent = vi.fn()
+    const repo = {
+      query: {
+        aliasMatchesFuzzy: vi.fn(() => ({
+          load: () => Promise.resolve([
+            {alias: 'Apples', blockId: 'page', content: 'Apples', updatedAt: 1},
+          ]),
+        })),
+        searchByContent,
+      },
+    } as unknown as Repo
+
+    const result = await searchLinkTargetsProgressively(repo, {
+      workspaceId: WS,
+      query: 'ap',
+      limit: 10,
+    })
+
+    expect(searchByContent).not.toHaveBeenCalled()
+    expect(result.aliases.map(match => match.blockId)).toEqual(['page'])
+    expect(result.blocks).toEqual([])
+  })
+
   it('searches distinct alias labels for CodeMirror page completion', async () => {
     await create({id: 'exact', aliases: ['Dating']})
     await create({id: 'prefix', aliases: ['Dating pool']})

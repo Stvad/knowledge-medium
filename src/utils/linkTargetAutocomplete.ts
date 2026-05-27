@@ -10,6 +10,14 @@ import { buildFilterPrefixes, rankCandidates, tokenize } from '@/utils/fuzzyRank
 const ALIAS_CANDIDATE_MULTIPLIER = 4
 const ALIAS_CANDIDATE_CEILING = 200
 
+/** Minimum trimmed query length before the content substring scan runs.
+ *  Shorter prefixes match a huge fraction of any non-trivial workspace
+ *  and produce no useful ranking signal, while the underlying LIKE scan
+ *  is O(total content bytes) regardless of result count. Aliases are
+ *  index-backed and meaningful at any length, so they still fire below
+ *  this threshold. */
+const MIN_CONTENT_SEARCH_LEN = 3
+
 export interface LinkTargetAliasMatch {
   alias: string
   blockId: string
@@ -286,18 +294,26 @@ export const searchLinkTargetsProgressively = async (
   // Over-fetch content matches so the ranker can re-order them with
   // recency and demote duplicates already covered by alias rows.
   const fetchLimit = Math.min(limit * ALIAS_CANDIDATE_MULTIPLIER, ALIAS_CANDIDATE_CEILING)
-  const blockRowsPromise = repo.query.searchByContent({
-    workspaceId,
-    query: trimmed,
-    limit: fetchLimit,
-  }).load().then(
-    rows => ({ok: true as const, rows}),
-    error => ({ok: false as const, error}),
-  )
+  const blockRowsPromise = trimmed.length >= MIN_CONTENT_SEARCH_LEN
+    ? repo.query.searchByContent({
+        workspaceId,
+        query: trimmed,
+        limit: fetchLimit,
+      }).load().then(
+        rows => ({ok: true as const, rows}),
+        error => ({ok: false as const, error}),
+      )
+    : null
 
   const seenBlockIds = stringSet(excludeBlockIds)
   const aliases = aliasMatchesFromRows(await aliasRowsPromise, seenBlockIds)
   callbacks.onAliases?.(aliases)
+
+  if (blockRowsPromise === null) {
+    const result = {aliases, blocks: []}
+    callbacks.onBlocks?.(result.blocks, result)
+    return result
+  }
 
   const blockRows = await blockRowsPromise
   if (!blockRows.ok) throw blockRows.error
