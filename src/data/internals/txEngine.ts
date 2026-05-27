@@ -26,6 +26,7 @@
 import type {
   AnyMutator,
   AnyPostCommitProcessor,
+  AnyPropertySchema,
   BlockData,
   BlockDataPatch,
   ChangeScope,
@@ -67,7 +68,9 @@ import { SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL } from './kernelQueries'
 import type { BlockCache } from '@/data/blockCache'
 import { keyAtStart } from '@/data/orderKey'
 import {
-  getPropertyFieldId,
+  getPropertyFieldTargetId,
+  isPropertyFieldInstance,
+  propertyFieldContent,
   propertyValueToChildContent,
 } from '@/data/propertyChildren'
 
@@ -158,6 +161,7 @@ export interface TxImplContext {
    *  fails the originating tx (clean rollback) instead of failing
    *  later at fire time. */
   processors: ReadonlyMap<string, AnyPostCommitProcessor>
+  propertySchemas: ReadonlyMap<string, AnyPropertySchema>
   /** UUID generator — injected for testability. */
   newId: () => string
 }
@@ -169,8 +173,6 @@ const COLUMN_PLACEHOLDERS = COLUMN_NAMES.map(() => '?').join(', ')
 const SELECT_BY_ID_SQL = `SELECT ${COLUMN_LIST} FROM blocks WHERE id = ?`
 const SELECT_CHILDREN_SQL =
   `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id`
-const SELECT_CONTENT_CHILDREN_SQL =
-  `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id = ? AND deleted = 0 AND field_id IS NULL ORDER BY order_key, id`
 /** Root-level siblings (parent_id IS NULL). When a tx has pinned a
  *  workspace, scope to that workspace so `tx.childrenOf(null)` doesn't
  *  spill across workspaces — important for single-workspace-per-tx
@@ -203,7 +205,7 @@ const SELECT_PREVIOUS_ROOT_SIBLING_SQL =
    ORDER BY order_key DESC, id DESC
    LIMIT 1`
 const SELECT_CONTENT_ROOT_SIBLINGS_SQL =
-  `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id IS NULL AND deleted = 0 AND field_id IS NULL AND workspace_id = ? ORDER BY order_key, id`
+  `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id IS NULL AND deleted = 0 AND reference_target_id IS NULL AND workspace_id = ? ORDER BY order_key, id`
 const SELECT_PARENT_SQL =
   `SELECT p.* FROM blocks AS c JOIN blocks AS p ON p.id = c.parent_id WHERE c.id = ? AND p.deleted = 0`
 const SELECT_PARENT_WORKSPACE_SQL =
@@ -326,6 +328,7 @@ export class TxImpl implements Tx {
       ...beforeData,
       deleted: false,
       ...(patch?.content !== undefined ? {content: patch.content} : {}),
+      ...(patch?.referenceTargetId !== undefined ? {referenceTargetId: patch.referenceTargetId} : {}),
       // Reference-array canonicalization runs as a same-tx processor
       // (`core.normalizeReferences`) after the user fn returns —
       // see src/data/internals/normalizeReferencesProcessor.ts.
@@ -334,9 +337,10 @@ export class TxImpl implements Tx {
       ...this.metadataPatch(opts?.skipMetadata),
     }
     await this.ctx.txDb.execute(
-      `UPDATE blocks SET deleted = 0, content = ?, references_json = ?, properties_json = ?, updated_at = ?, updated_by = ? WHERE id = ?`,
+      `UPDATE blocks SET deleted = 0, content = ?, reference_target_id = ?, references_json = ?, properties_json = ?, updated_at = ?, updated_by = ? WHERE id = ?`,
       [
         after.content,
+        after.referenceTargetId,
         JSON.stringify(after.references),
         JSON.stringify(after.properties),
         after.updatedAt,
@@ -357,15 +361,17 @@ export class TxImpl implements Tx {
     const after: BlockData = {
       ...before,
       ...(patch.content !== undefined ? {content: patch.content} : {}),
+      ...(patch.referenceTargetId !== undefined ? {referenceTargetId: patch.referenceTargetId} : {}),
       // See note on `restore` above re: same-tx normalization.
       ...(patch.references !== undefined ? {references: patch.references} : {}),
       ...(patch.properties !== undefined ? {properties: patch.properties} : {}),
       ...this.metadataPatch(opts?.skipMetadata),
     }
     await this.ctx.txDb.execute(
-      `UPDATE blocks SET content = ?, references_json = ?, properties_json = ?, updated_at = ?, updated_by = ? WHERE id = ?`,
+      `UPDATE blocks SET content = ?, reference_target_id = ?, references_json = ?, properties_json = ?, updated_at = ?, updated_by = ? WHERE id = ?`,
       [
         after.content,
+        after.referenceTargetId,
         JSON.stringify(after.references),
         JSON.stringify(after.properties),
         after.updatedAt,
@@ -490,6 +496,11 @@ export class TxImpl implements Tx {
     options?: {includePropertyChildren?: boolean},
   ): Promise<BlockData[]> {
     const includePropertyChildren = options?.includePropertyChildren !== false
+    const parseRows = (rows: BlockRow[]): BlockData[] => {
+      const data = rows.map(parseBlockRow)
+      if (includePropertyChildren) return data
+      return data.filter(row => !isPropertyFieldInstance(row, this.ctx.propertySchemas))
+    }
     if (parentId === null) {
       // SQL `parent_id = NULL` never matches; use `IS NULL`. Scope to
       // a workspace by one of: explicit arg → pinned meta → throw.
@@ -506,16 +517,16 @@ export class TxImpl implements Tx {
         throw new WorkspaceNotPinnedError()
       }
       const rows = await this.ctx.txDb.getAll<BlockRow>(
-        includePropertyChildren ? SELECT_ROOT_SIBLINGS_SQL : SELECT_CONTENT_ROOT_SIBLINGS_SQL,
+        SELECT_ROOT_SIBLINGS_SQL,
         [ws],
       )
-      return rows.map(parseBlockRow)
+      return parseRows(rows)
     }
     const rows = await this.ctx.txDb.getAll<BlockRow>(
-      includePropertyChildren ? SELECT_CHILDREN_SQL : SELECT_CONTENT_CHILDREN_SQL,
+      SELECT_CHILDREN_SQL,
       [parentId],
     )
-    return rows.map(parseBlockRow)
+    return parseRows(rows)
   }
 
   async adjacentSibling(
@@ -671,10 +682,10 @@ export class TxImpl implements Tx {
       updatedBy: userId,
     }
     await this.ctx.txDb.execute(
-      `UPDATE blocks SET parent_id = ?, field_id = ?, order_key = ?, content = ?, properties_json = ?, references_json = ?, deleted = ?, updated_at = ?, updated_by = ? WHERE id = ?`,
+      `UPDATE blocks SET parent_id = ?, reference_target_id = ?, order_key = ?, content = ?, properties_json = ?, references_json = ?, deleted = ?, updated_at = ?, updated_by = ? WHERE id = ?`,
       [
         target.parentId,
-        target.fieldId,
+        target.referenceTargetId,
         target.orderKey,
         target.content,
         JSON.stringify(target.properties),
@@ -731,7 +742,7 @@ export class TxImpl implements Tx {
       id,
       workspaceId: data.workspaceId,
       parentId: data.parentId,
-      fieldId: data.fieldId ?? null,
+      referenceTargetId: data.referenceTargetId ?? null,
       orderKey: data.orderKey,
       content: data.content ?? '',
       properties: data.properties ?? {},
@@ -766,19 +777,40 @@ export class TxImpl implements Tx {
   ): Promise<void> {
     const content = propertyValueToChildContent(schema, value)
     const children = await this.childrenOf(parent.id, undefined, {includePropertyChildren: true})
-    const existing = children.find(child => getPropertyFieldId(child) === schema.fieldId)
+    const existing = children.find(child => getPropertyFieldTargetId(child) === schema.fieldId)
 
     if (existing) {
-      await this.update(existing.id, {
-        content,
-      }, opts)
+      if (existing.content !== propertyFieldContent(schema)) {
+        await this.update(existing.id, {content: propertyFieldContent(schema)}, opts)
+      }
+      const values = await this.childrenOf(existing.id, undefined, {includePropertyChildren: true})
+      const [primary, ...duplicates] = values
+      if (primary) {
+        if (primary.content !== content) await this.update(primary.id, {content}, opts)
+      } else {
+        await this.create({
+          workspaceId: parent.workspaceId,
+          parentId: existing.id,
+          orderKey: keyAtStart(null),
+          content,
+        }, opts)
+      }
+      for (const duplicate of duplicates) {
+        await this.delete(duplicate.id)
+      }
       return
     }
 
-    await this.create({
+    const fieldRowId = await this.create({
       workspaceId: parent.workspaceId,
       parentId: parent.id,
-      fieldId: schema.fieldId,
+      referenceTargetId: schema.fieldId,
+      orderKey: keyAtStart(null),
+      content: propertyFieldContent(schema),
+    }, opts)
+    await this.create({
+      workspaceId: parent.workspaceId,
+      parentId: fieldRowId,
       orderKey: keyAtStart(null),
       content,
     }, opts)

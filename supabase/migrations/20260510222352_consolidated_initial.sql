@@ -510,7 +510,7 @@ CREATE TABLE IF NOT EXISTS "public"."blocks" (
     "id" "text" NOT NULL,
     "workspace_id" "text" NOT NULL,
     "parent_id" "text",
-    "field_id" "text",
+    "reference_target_id" "text",
     "order_key" "text" NOT NULL,
     "content" "text" DEFAULT ''::"text" NOT NULL,
     "properties_json" "text" DEFAULT '{}'::"text" NOT NULL,
@@ -577,7 +577,7 @@ CREATE INDEX "idx_blocks_parent_order" ON "public"."blocks" USING "btree" ("pare
 
 
 
-CREATE INDEX "idx_blocks_field_parent" ON "public"."blocks" USING "btree" ("workspace_id", "field_id", "parent_id") WHERE (("deleted" = false) AND ("field_id" IS NOT NULL));
+CREATE INDEX "idx_blocks_reference_target_parent" ON "public"."blocks" USING "btree" ("workspace_id", "reference_target_id", "parent_id") WHERE (("deleted" = false) AND ("reference_target_id" IS NOT NULL));
 
 
 
@@ -1162,8 +1162,6 @@ ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TAB
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES TO "anon";
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES TO "authenticated";
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES TO "service_role";
-
-
 
 
 

@@ -828,13 +828,14 @@ describe('importRoam', () => {
     const wcsPlan = await readBlock(roamBlockId(WORKSPACE, 'pageA'))
     expect(wcsPlan?.content).toBe('wcs/plan')
 
-    // Cross-workspace check: every imported outline block carries
-    // workspace_id = WORKSPACE. OTHER_WS still has just its seed row.
+    // Cross-workspace check: imported root/alias rows carry
+    // workspace_id = WORKSPACE. OTHER_WS still has just its seed root
+    // row; child-backed property rows under that seed are expected.
     const wsCounts = await env.h.db.getAll<{workspace_id: string; n: number}>(
-      'SELECT workspace_id, COUNT(*) AS n FROM blocks WHERE deleted = 0 AND field_id IS NULL GROUP BY workspace_id ORDER BY workspace_id',
+      'SELECT workspace_id, COUNT(*) AS n FROM blocks WHERE deleted = 0 AND parent_id IS NULL GROUP BY workspace_id ORDER BY workspace_id',
     )
     const byWs = new Map(wsCounts.map(r => [r.workspace_id, r.n]))
-    expect(byWs.get(OTHER_WS)).toBe(1) // only the pre-seed
+    expect(byWs.get(OTHER_WS)).toBe(1) // only the pre-seed root
     // WORKSPACE has the import (page + 2 descendants + alias seat) +
     // any daily-note frontmatter materialized for the export's daily.
     expect(byWs.get(WORKSPACE)).toBeGreaterThan(1)

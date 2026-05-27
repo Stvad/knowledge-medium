@@ -256,7 +256,7 @@ export const importRoam = async (
         id: page.blockId,
         workspaceId: options.workspaceId,
         parentId: null,
-        fieldId: null,
+        referenceTargetId: null,
         orderKey: 'a0',
         content: page.title,
         properties: page.promotedFromChildren,

@@ -8,8 +8,9 @@ import { keyAtStart } from '@/data/orderKey'
 import {
   encodedPropertyValueToChildContent,
   findSchemaByFieldId,
-  getPropertyFieldId,
+  getPropertyFieldTargetId,
   propertiesEqual,
+  propertyFieldContent,
   propertyChildContentToEncodedValue,
 } from '@/data/propertyChildren'
 
@@ -24,34 +25,58 @@ interface AffectedProjection {
 const affectedKey = (affected: AffectedProjection): string =>
   `${affected.parentId}\u0000${affected.fieldId}`
 
-const collectAffectedProjection = (
+const addAffectedProjection = (
   out: Map<string, AffectedProjection>,
-  row: BlockData | null,
+  parentId: string | null,
+  fieldId: string | undefined,
+  propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
 ): void => {
-  if (row === null) return
-  if (row.parentId === null) return
-  const fieldId = getPropertyFieldId(row)
+  if (parentId === null) return
   if (fieldId === undefined) return
-  const affected = {parentId: row.parentId, fieldId}
+  if (!findSchemaByFieldId(propertySchemas, fieldId)) return
+  const affected = {parentId, fieldId}
   out.set(affectedKey(affected), affected)
 }
 
-const firstProjectedChildValue = (
+const collectAffectedProjection = async (
+  tx: Tx,
+  out: Map<string, AffectedProjection>,
+  row: BlockData | null,
+  propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
+): Promise<void> => {
+  if (row === null) return
+  addAffectedProjection(out, row.parentId, getPropertyFieldTargetId(row), propertySchemas)
+
+  if (row.parentId === null) return
+  const parent = await tx.get(row.parentId)
+  if (parent === null || parent.parentId === null) return
+  addAffectedProjection(out, parent.parentId, getPropertyFieldTargetId(parent), propertySchemas)
+}
+
+const firstProjectedFieldValue = async (
+  tx: Tx,
   schema: AnyPropertySchema,
-  children: readonly BlockData[],
-): unknown | undefined => {
-  for (const child of children) {
-    if (getPropertyFieldId(child) !== schema.fieldId) continue
-    try {
-      return propertyChildContentToEncodedValue(schema, child.content)
-    } catch {
-      // Invalid child text should not preserve a stale parent cache
-      // projection. Skip it; if no child under this field parses, the
-      // parent property is removed below.
+  fieldRows: readonly BlockData[],
+): Promise<unknown | undefined> => {
+  for (const fieldRow of fieldRows) {
+    const values = await tx.childrenOf(fieldRow.id, undefined, {includePropertyChildren: true})
+    for (const value of values) {
+      try {
+        return propertyChildContentToEncodedValue(schema, value.content)
+      } catch {
+        // Invalid child text should not preserve a stale parent cache
+        // projection. Skip it; if no child under this field parses, the
+        // parent property is removed below.
+      }
     }
   }
   return undefined
 }
+
+const fieldRowsForSchema = (
+  children: readonly BlockData[],
+  schema: AnyPropertySchema,
+): BlockData[] => children.filter(child => getPropertyFieldTargetId(child) === schema.fieldId)
 
 const reprojectParentField = async (
   tx: Tx,
@@ -65,7 +90,7 @@ const reprojectParentField = async (
   if (parent === null || parent.deleted) return
 
   const children = await tx.childrenOf(affected.parentId, undefined, {includePropertyChildren: true})
-  const projected = firstProjectedChildValue(schema, children)
+  const projected = await firstProjectedFieldValue(tx, schema, fieldRowsForSchema(children, schema))
   const nextProperties = {...parent.properties}
   if (projected === undefined) {
     delete nextProperties[schema.name]
@@ -110,12 +135,12 @@ const materializePropertiesForRow = async (
   for (const name of changedNames) {
     const schema = propertySchemas.get(name)
     if (!schema) continue
-    const matchingChildren = children.filter(child => getPropertyFieldId(child) === schema.fieldId)
+    const matchingChildren = fieldRowsForSchema(children, schema)
     const encoded = hasOwn(row.after.properties, name) ? row.after.properties[name] : undefined
 
     if (encoded === undefined) {
       for (const child of matchingChildren) {
-        await tx.delete(child.id)
+        await deleteSubtree(tx, child.id)
       }
       continue
     }
@@ -129,23 +154,55 @@ const materializePropertiesForRow = async (
     const content = encodedPropertyValueToChildContent(schema, encoded)
     const [primary, ...duplicates] = matchingChildren
     if (primary) {
-      if (primary.content !== content) {
-        await tx.update(primary.id, {content})
+      const fieldContent = propertyFieldContent(schema)
+      if (primary.content !== fieldContent) {
+        await tx.update(primary.id, {content: fieldContent})
+      }
+      const values = await tx.childrenOf(primary.id, undefined, {includePropertyChildren: true})
+      const [primaryValue, ...duplicateValues] = values
+      if (primaryValue) {
+        if (primaryValue.content !== content) {
+          await tx.update(primaryValue.id, {content})
+        }
+      } else {
+        await tx.create({
+          workspaceId: row.after.workspaceId,
+          parentId: primary.id,
+          orderKey: keyAtStart(null),
+          content,
+        })
+      }
+      for (const duplicate of duplicateValues) {
+        await deleteSubtree(tx, duplicate.id)
       }
     } else {
-      await tx.create({
+      const fieldRowId = await tx.create({
         workspaceId: row.after.workspaceId,
         parentId: row.after.id,
-        fieldId: schema.fieldId,
+        referenceTargetId: schema.fieldId,
+        orderKey: keyAtStart(null),
+        content: propertyFieldContent(schema),
+      })
+      await tx.create({
+        workspaceId: row.after.workspaceId,
+        parentId: fieldRowId,
         orderKey: keyAtStart(null),
         content,
       })
     }
 
     for (const child of duplicates) {
-      await tx.delete(child.id)
+      await deleteSubtree(tx, child.id)
     }
   }
+}
+
+const deleteSubtree = async (tx: Tx, id: string): Promise<void> => {
+  const children = await tx.childrenOf(id, undefined, {includePropertyChildren: true})
+  for (const child of children) {
+    await deleteSubtree(tx, child.id)
+  }
+  await tx.delete(id)
 }
 
 export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
@@ -160,12 +217,12 @@ export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
 
 export const PROJECT_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
   name: PROJECT_PROPERTY_CHILDREN_PROCESSOR_NAME,
-  watches: {kind: 'field', table: 'blocks', fields: ['content', 'fieldId', 'parentId', 'orderKey', 'deleted']},
+  watches: {kind: 'field', table: 'blocks', fields: ['content', 'referenceTargetId', 'parentId', 'orderKey', 'deleted']},
   apply: async (event, ctx) => {
     const affected = new Map<string, AffectedProjection>()
     for (const row of event.changedRows) {
-      collectAffectedProjection(affected, row.before)
-      collectAffectedProjection(affected, row.after)
+      await collectAffectedProjection(ctx.tx, affected, row.before, ctx.propertySchemas)
+      await collectAffectedProjection(ctx.tx, affected, row.after, ctx.propertySchemas)
     }
     for (const projection of affected.values()) {
       await reprojectParentField(ctx.tx, projection, ctx.propertySchemas)

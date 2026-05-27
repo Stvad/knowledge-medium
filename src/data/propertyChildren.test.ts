@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { resolveFacetRuntimeSync } from '@/extensions/facet'
 import { ChangeScope, codecs, defineProperty, type AnyPropertySchema } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
@@ -69,9 +69,14 @@ const createRoot = async (repo: Repo, id: string): Promise<void> => {
 }
 
 const rawLiveChildren = async (h: TestDb, parentId: string) =>
-  h.db.getAll<{id: string; content: string; field_id: string | null; properties_json: string}>(
+  h.db.getAll<{
+    id: string
+    content: string
+    reference_target_id: string | null
+    properties_json: string
+  }>(
     `
-      SELECT id, content, field_id, properties_json
+      SELECT id, content, reference_target_id, properties_json
       FROM blocks
       WHERE parent_id = ? AND deleted = 0
       ORDER BY order_key, id
@@ -100,9 +105,12 @@ describe('child-backed user properties', () => {
 
     const children = await rawLiveChildren(env.h, 'parent')
     expect(children).toHaveLength(1)
-    expect(children[0]!.content).toBe('Doing')
-    expect(children[0]!.field_id).toBe('field-status')
+    expect(children[0]!.content).toBe('[[status]]')
+    expect(children[0]!.reference_target_id).toBe('field-status')
     expect(JSON.parse(children[0]!.properties_json)).toEqual({})
+    await expect(rawLiveChildren(env.h, children[0]!.id)).resolves.toMatchObject([
+      {content: 'Doing', reference_target_id: null},
+    ])
     await expect(env.repo.block('parent').childIds.load()).resolves.toEqual([children[0]!.id])
   })
 
@@ -119,8 +127,11 @@ describe('child-backed user properties', () => {
     expect(env.repo.cache.getSnapshot('parent')?.properties.renderer).toBe('markdown')
     const children = await rawLiveChildren(env.h, 'parent')
     expect(children).toHaveLength(1)
-    expect(children[0]!.content).toBe('markdown')
-    expect(children[0]!.field_id).toBe(rendererProp.fieldId)
+    expect(children[0]!.content).toBe('[[renderer]]')
+    expect(children[0]!.reference_target_id).toBe(rendererProp.fieldId)
+    await expect(rawLiveChildren(env.h, children[0]!.id)).resolves.toMatchObject([
+      {content: 'markdown', reference_target_id: null},
+    ])
     await expect(env.repo.block('parent').childIds.load()).resolves.toEqual([children[0]!.id])
   })
 
@@ -138,8 +149,11 @@ describe('child-backed user properties', () => {
 
     const children = await rawLiveChildren(env.h, 'parent')
     expect(children).toHaveLength(1)
-    expect(children[0]!.content).toBe('Doing')
-    expect(children[0]!.field_id).toBe(env.statusProp.fieldId)
+    expect(children[0]!.content).toBe('[[status]]')
+    expect(children[0]!.reference_target_id).toBe(env.statusProp.fieldId)
+    await expect(rawLiveChildren(env.h, children[0]!.id)).resolves.toMatchObject([
+      {content: 'Doing'},
+    ])
   })
 
   it('reprojects the parent cache when the property child content changes', async () => {
@@ -150,11 +164,42 @@ describe('child-backed user properties', () => {
       schema: env.statusProp,
       value: 'Doing',
     })
-    const childId = (await rawLiveChildren(env.h, 'parent'))[0]!.id
+    const fieldId = (await rawLiveChildren(env.h, 'parent'))[0]!.id
+    const childId = (await rawLiveChildren(env.h, fieldId))[0]!.id
 
     await env.repo.mutate.setContent({id: childId, content: 'Done'})
 
     expect(env.repo.cache.getSnapshot('parent')?.properties.status).toBe('Done')
+  })
+
+  it('derives a field reference target from exact wikilink content in the same transaction', async () => {
+    env = await setup()
+    await createRoot(env.repo, 'parent')
+
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: 'status-field-row',
+        workspaceId: WS,
+        parentId: 'parent',
+        orderKey: 'a0',
+        content: '[[status]]',
+      })
+      await tx.create({
+        id: 'status-value-row',
+        workspaceId: WS,
+        parentId: 'status-field-row',
+        orderKey: 'a0',
+        content: 'Doing',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    const [field] = await rawLiveChildren(env.h, 'parent')
+    expect(field).toMatchObject({
+      id: 'status-field-row',
+      content: '[[status]]',
+      reference_target_id: env.statusProp.fieldId,
+    })
+    expect(env.repo.cache.getSnapshot('parent')?.properties.status).toBe('Doing')
   })
 
   it('reprojects both parents when a property child is moved', async () => {
@@ -216,14 +261,15 @@ describe('UserSchemasService child-backed field identity', () => {
     })
 
     const child = (await rawLiveChildren(env.h, 'parent'))[0]!
-    expect(child.field_id).toBe(schemaBlockId)
+    expect(child.reference_target_id).toBe(schemaBlockId)
 
     await env.repo.tx(async tx => {
       await tx.setProperty(schemaBlockId, propertyNameProp, 'state')
     }, {scope: ChangeScope.BlockDefault})
 
-    await new Promise(resolve => setTimeout(resolve, 50))
-    expect(env.repo.cache.getSnapshot('parent')?.properties.status).toBeUndefined()
-    expect(env.repo.cache.getSnapshot('parent')?.properties.state).toBe('Doing')
+    await vi.waitFor(() => {
+      expect(env.repo.cache.getSnapshot('parent')?.properties.status).toBeUndefined()
+      expect(env.repo.cache.getSnapshot('parent')?.properties.state).toBe('Doing')
+    })
   })
 })

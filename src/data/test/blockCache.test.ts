@@ -41,7 +41,7 @@ const snap = (overrides: Partial<BlockData> = {}): BlockData => ({
   updatedBy: 'user',
   deleted: false,
   ...overrides,
-  fieldId: overrides.fieldId ?? null,
+  referenceTargetId: overrides.referenceTargetId ?? null,
 })
 
 describe('BlockCache snapshot storage', () => {

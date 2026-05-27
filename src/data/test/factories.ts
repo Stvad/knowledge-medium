@@ -15,7 +15,7 @@ interface BlockDataOverrides extends Partial<BlockData> {
  *  tests, cache tests, and the migration-shape unit tests. */
 export const makeBlockData = (overrides: BlockDataOverrides): BlockData => ({
   parentId: null,
-  fieldId: null,
+  referenceTargetId: null,
   orderKey: 'a0',
   content: '',
   properties: {},

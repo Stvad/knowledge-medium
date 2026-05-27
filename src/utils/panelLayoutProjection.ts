@@ -38,14 +38,17 @@ interface ReconciliationPlan {
 export const isPanelStackRow = (row: Pick<BlockData, 'properties'>): boolean =>
   hasBlockType(row, PANEL_STACK_TYPE)
 
-export const isPanelLayoutStorageRow = (row: Pick<BlockData, 'fieldId'>): boolean =>
-  row.fieldId === null || row.fieldId === undefined
-
-export const panelBlockId = (row: BlockData): string | undefined => {
+export const panelBlockId = (row: Pick<BlockData, 'properties'>): string | undefined => {
   const stored = row.properties[topLevelBlockIdProp.name]
   if (stored === undefined) return undefined
   return topLevelBlockIdProp.codec.decode(stored)
 }
+
+export const isPanelLayoutStorageRow = (
+  row: Pick<BlockData, 'referenceTargetId' | 'properties'>,
+): boolean =>
+  (row.referenceTargetId === null || row.referenceTargetId === undefined) &&
+  (isPanelStackRow(row) || panelBlockId(row) !== undefined)
 
 export const panelBlockIds = (rows: readonly BlockData[]): string[] =>
   rows

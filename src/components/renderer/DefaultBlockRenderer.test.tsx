@@ -276,17 +276,17 @@ describe('DefaultBlockRenderer paste handling', () => {
         id: 'visible-status-field',
         workspaceId: 'ws-1',
         parentId: 'probe-parent',
-        fieldId: statusProp.fieldId,
+        referenceTargetId: statusProp.fieldId,
         orderKey: 'a0',
-        content: 'open',
+        content: '[[test:status]]',
       })
       await tx.create({
         id: 'hidden-show-properties-field',
         workspaceId: 'ws-1',
         parentId: 'probe-parent',
-        fieldId: showPropertiesProp.fieldId,
+        referenceTargetId: showPropertiesProp.fieldId,
         orderKey: 'a1',
-        content: 'true',
+        content: '[[show-properties]]',
       })
     }, {scope: ChangeScope.BlockDefault, description: 'create field child probe'})
 

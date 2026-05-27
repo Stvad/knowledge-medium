@@ -149,7 +149,7 @@ describe('repo.metrics() / resetMetrics()', () => {
 
   it('snapshots are independent across reset (prior snapshot keeps its values)', () => {
     env.repo.cache.setSnapshot({
-      id: 'block-1', workspaceId: 'ws', parentId: null, fieldId: null, orderKey: 'a',
+      id: 'block-1', workspaceId: 'ws', parentId: null, referenceTargetId: null, orderKey: 'a',
       content: '', properties: {}, references: [],
       createdAt: 0, updatedAt: 0, createdBy: 'u', updatedBy: 'u', deleted: false,
     })

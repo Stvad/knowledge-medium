@@ -241,10 +241,12 @@ export const aliasSeatReaderFromDb = (db: ProcessorReadDb): AliasSeatReader =>
     } catch {
       // Malformed properties_json — leave properties empty; predicate fails.
     }
-    // Property-value children are structural projections, not a user
-    // touch signal for alias-seat reuse.
     const childRow = await db.getOptional<{one: 1}>(
-      `SELECT 1 AS one FROM blocks WHERE parent_id = ? AND deleted = 0 AND field_id IS NULL LIMIT 1`,
+      `SELECT 1 AS one
+       FROM blocks
+       WHERE parent_id = ?
+         AND deleted = 0
+       LIMIT 1`,
       [id],
     )
     return {

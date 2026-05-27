@@ -37,10 +37,11 @@ import { join } from 'node:path'
 import { PowerSyncDatabase, Schema } from '@powersync/node'
 import {
   BLOCKS_RAW_TABLE,
-  CREATE_BLOCKS_FIELD_PARENT_INDEX_SQL,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
+  CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
+  DROP_BLOCKS_FIELD_PARENT_INDEX_SQL,
   ensureBlockStorageColumns,
 } from '@/data/blockSchema'
 import {
@@ -101,7 +102,8 @@ const initializeTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
   await db.execute(CREATE_BLOCKS_TABLE_SQL)
   await ensureBlockStorageColumns(db)
   await db.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
-  await db.execute(CREATE_BLOCKS_FIELD_PARENT_INDEX_SQL)
+  await db.execute(DROP_BLOCKS_FIELD_PARENT_INDEX_SQL)
+  await db.execute(CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL)
   await db.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
   await db.execute(CREATE_WORKSPACES_TABLE_SQL)
   await db.execute(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
@@ -144,7 +146,9 @@ const getTemplateFingerprint = (): string => {
   hash.update('\0')
   hash.update(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   hash.update('\0')
-  hash.update(CREATE_BLOCKS_FIELD_PARENT_INDEX_SQL)
+  hash.update(DROP_BLOCKS_FIELD_PARENT_INDEX_SQL)
+  hash.update('\0')
+  hash.update(CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL)
   hash.update('\0')
   hash.update(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
   hash.update('\0')

@@ -71,7 +71,6 @@ export const SELECT_BLOCKS_BY_TYPE_SQL = `
    AND bt.workspace_id = b.workspace_id
   WHERE b.workspace_id = ?
     AND b.deleted = 0
-    AND b.field_id IS NULL
     AND bt.type = ?
   ORDER BY b.created_at ASC, b.id ASC
 `
@@ -258,7 +257,6 @@ export const SELECT_BLOCKS_BY_CONTENT_SQL = `
   WHERE blocks_fts.workspace_id = ?
     AND blocks_fts MATCH ?
     AND b.deleted = 0
-    AND b.field_id IS NULL
     AND b.content != ''
   ORDER BY
     CASE
@@ -276,7 +274,6 @@ export const SELECT_RECENT_BLOCKS_SQL = `
   FROM blocks
   WHERE workspace_id = ?
     AND deleted = 0
-    AND field_id IS NULL
     AND content != ''
   ORDER BY updated_at DESC, id ASC
   LIMIT ?
@@ -296,7 +293,6 @@ export const SELECT_ALIASES_IN_WORKSPACE_SQL = `
   JOIN blocks b ON b.id = ba.block_id
   WHERE ba.workspace_id = ?
     AND b.deleted = 0
-    AND b.field_id IS NULL
     AND (? = '' OR ba.alias_lower LIKE '%' || LOWER(?) || '%')
   GROUP BY ba.alias
   ORDER BY
@@ -321,7 +317,6 @@ export const SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL = `
   WHERE ba.workspace_id = ?
     AND ba.alias = ?
     AND blocks.deleted = 0
-    AND blocks.field_id IS NULL
   ORDER BY blocks.created_at
   LIMIT 1
 `
@@ -343,7 +338,6 @@ export const SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_EXCLUDING_SQL = `
     AND ba.alias = ?
     AND blocks.id != ?
     AND blocks.deleted = 0
-    AND blocks.field_id IS NULL
   ORDER BY blocks.created_at
   LIMIT 1
 `
@@ -373,7 +367,6 @@ export const buildFuzzyAliasMatchesSql = (tokenCount: number): string => {
     JOIN blocks b ON b.id = ba.block_id
     WHERE ba.workspace_id = ?
       AND b.deleted = 0
-      AND b.field_id IS NULL
       AND (${filters})
     LIMIT ?
   `
@@ -391,7 +384,6 @@ export const SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL = `
   JOIN blocks b ON b.id = ba.block_id
   WHERE ba.workspace_id = ?
     AND b.deleted = 0
-    AND b.field_id IS NULL
     AND (? = '' OR ba.alias_lower LIKE '%' || LOWER(?) || '%')
   ORDER BY
     CASE
@@ -412,7 +404,6 @@ export const SELECT_FIRST_CHILD_BY_CONTENT_SQL = `
   FROM blocks AS child
   WHERE child.parent_id = ?
     AND child.deleted = 0
-    AND child.field_id IS NULL
     AND child.content = ?
   ORDER BY child.order_key, child.id
   LIMIT 1

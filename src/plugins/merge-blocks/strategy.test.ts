@@ -18,7 +18,7 @@ const makeBlock = (overrides: Partial<BlockData> = {}): BlockData => ({
   updatedBy: 'u',
   deleted: false,
   ...overrides,
-  fieldId: overrides.fieldId ?? null,
+  referenceTargetId: overrides.referenceTargetId ?? null,
 })
 
 const asPage = (block: BlockData): BlockData => ({
