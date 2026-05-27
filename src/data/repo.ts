@@ -2079,10 +2079,6 @@ export class Repo {
                 rows as unknown as ReadonlyArray<BlockRow>,
                 {ctx, declareRowDeps: opts?.declareRowDeps ?? true},
               ),
-              primeBlocks: (rows) => this.hydrateRows(
-                rows as unknown as ReadonlyArray<BlockRow>,
-                {ctx, declareRowDeps: false},
-              ),
               depend: (dep) => ctx.depend(dep),
             })
             // Result-schema parse at the boundary — symmetry with argsSchema

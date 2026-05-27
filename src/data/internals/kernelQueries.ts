@@ -399,7 +399,11 @@ export const childIdsQuery = defineQuery<{id: string; hydrate?: boolean}, string
       return rows.map(r => r.id)
     }
     const rows = await ctx.db.getAll<BlockRow>(CHILDREN_SQL, [id])
-    return ctx.primeBlocks(asBlockRows(rows)).map(d => d.id)
+    // declareRowDeps:false — result is the id list; per-row deps would
+    // wake the handle on content/property edits that can't change the
+    // id set. Hydration here is pure cache priming for the React hooks
+    // that follow up with per-block reads.
+    return ctx.hydrateBlocks(asBlockRows(rows), {declareRowDeps: false}).map(d => d.id)
   },
 })
 
@@ -849,7 +853,10 @@ export const firstChildByContentQuery = defineQuery<
       SELECT_FIRST_CHILD_BY_CONTENT_SQL, [parentId, content],
     )
     if (row === null) return null
-    return ctx.hydrateBlocks(asBlockRows([row]))[0] ?? null
+    // declareRowDeps:false — the children loop above already declared a
+    // row dep for every candidate (including the matched one), so the
+    // default per-row dep here would just duplicate one of them.
+    return ctx.hydrateBlocks(asBlockRows([row]), {declareRowDeps: false})[0] ?? null
   },
 })
 

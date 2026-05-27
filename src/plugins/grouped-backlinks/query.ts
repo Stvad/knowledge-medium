@@ -157,7 +157,7 @@ const resolveSourceParents = async (
   for (const row of rows) {
     rowsBySourceId.get(row.chain_start_id)?.push(row)
   }
-  const ancestorData = ctx.primeBlocks(asBlockRows(rows))
+  const ancestorData = ctx.hydrateBlocks(asBlockRows(rows), {declareRowDeps: false})
   for (const sourceId of sourceIds) dependOnSourceContextNode(ctx, workspaceId, sourceId)
   for (const ancestor of ancestorData) {
     dependOnSourceContextNode(ctx, ancestor.workspaceId, ancestor.id)
@@ -440,7 +440,7 @@ export const groupedBacklinksForBlockQuery = defineQuery<
     for (const row of attributeCandidateRows) {
       if (!groupRowsById.has(row.id)) groupRowsById.set(row.id, row)
     }
-    const groupData = ctx.primeBlocks(asBlockRows(Array.from(groupRowsById.values())))
+    const groupData = ctx.hydrateBlocks(asBlockRows(Array.from(groupRowsById.values())), {declareRowDeps: false})
     for (const group of groupData) dependOnGroupLabel(ctx, group.workspaceId, group.id)
     const labelByGroupId = new Map(groupData.map(data => [data.id, labelForBlockData(data, data.id)]))
 

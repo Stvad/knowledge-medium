@@ -40,25 +40,22 @@ export interface QueryCtx {
    *  deliberate: `.execute()` / `.writeTransaction()` are absent. */
   db: QueryReadDb
   repo: Repo
-  /** Hydrate full block rows into the cache and declare row deps on
-   *  them. Use when the query result contains those row bodies.
+  /** Hydrate full block rows into the cache and (by default) declare a
+   *  `{kind:'row', id}` dep on each. Use this whenever the resolver has
+   *  block rows in hand.
    *
-   *  `opts.declareRowDeps` (default `true`) controls whether each
-   *  hydrated row contributes a `{kind:'row', id}` dep. Pass `false`
-   *  when a plugin-channel dep already covers every axis the query is
-   *  sensitive to — the per-row deps then add cost (handles with many
-   *  deps are walked on every invalidation) and fan-out on edits that
-   *  can't affect the result (parent moves, unrelated property writes).
-   *  When you skip row deps, results are still cached and returned;
-   *  only invalidation routing changes. */
+   *  `opts.declareRowDeps` (default `true`) toggles the per-row dep
+   *  contribution. Set to `false` for cache-priming-only calls — id-
+   *  list queries whose result depends only on parent edges, or
+   *  hydrating queries whose full sensitivity surface is already
+   *  covered by plugin-channel deps. Per-row deps fan out invalidations
+   *  on edits that can't affect the result (parent moves, unrelated
+   *  property writes) and inflate handle dep count on large result
+   *  sets, so opt out when a narrower dep covers everything. */
   hydrateBlocks(
     rows: ReadonlyArray<Record<string, unknown>>,
     opts?: {declareRowDeps?: boolean},
   ): BlockData[]
-  /** Prime block rows into the cache without declaring row deps. Use
-   *  when rows are fetched only as a cache-warming side effect, such as
-   *  id-list queries whose result depends only on parent edges. */
-  primeBlocks(rows: ReadonlyArray<Record<string, unknown>>): BlockData[]
   /** Declare a dependency; engine uses these to invalidate this handle. */
   depend(dep: Dependency): void
 }

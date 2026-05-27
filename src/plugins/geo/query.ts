@@ -106,7 +106,12 @@ export const placesUnderBlockQuery = defineQuery<{rootBlockId: string}, MapPin[]
     ctx.depend({kind: 'parent-edge', parentId: rootBlockId})
 
     const rows = await ctx.db.getAll<BlockRow & {depth: number}>(SUBTREE_SQL, [rootBlockId])
-    const blocks = ctx.hydrateBlocks(asBlockRows(rows))
+    // declareRowDeps:false — the loop below declares an explicit row
+    // dep for every subtree block (the dep declaration is right next
+    // to the per-block work that depends on its content/properties/
+    // references). Letting hydrateBlocks add row deps too would just
+    // duplicate them.
+    const blocks = ctx.hydrateBlocks(asBlockRows(rows), {declareRowDeps: false})
 
     // Cache resolved Places so a hundred notes pointing at the same
     // Place hit SQL once.
@@ -119,7 +124,9 @@ export const placesUnderBlockQuery = defineQuery<{rootBlockId: string}, MapPin[]
         placeCache.set(id, null)
         return null
       }
-      const [hydrated] = ctx.hydrateBlocks(asBlockRows([row]))
+      // Explicit row dep above already covers this id; skip the
+      // duplicate hydrateBlocks contribution.
+      const [hydrated] = ctx.hydrateBlocks(asBlockRows([row]), {declareRowDeps: false})
       placeCache.set(id, hydrated ?? null)
       return hydrated ?? null
     }
