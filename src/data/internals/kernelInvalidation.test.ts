@@ -331,18 +331,18 @@ describe('emitKernelInvalidations — kernel.content', () => {
     expect(out).toContainEqual([KERNEL_CONTENT_CHANNEL, kernelContentKey(WS)])
   })
 
-  it('does not emit kernel.content for a property-only edit (UiState focus write shape)', () => {
+  it('does not emit kernel.content for a property-only edit (UiState focus-location write shape)', () => {
     // The whole point of this channel: UiState writes (property bag
     // changes only, content unchanged) must not invalidate
     // searchByContent / recentBlocks.
     const out = collect({
       before: side({
         content: 'main',
-        properties: { focusedBlockId: 'a' },
+        properties: { focusedBlockLocation: {blockId: 'a', renderScopeId: 'scope:a'} },
       }),
       after: side({
         content: 'main',
-        properties: { focusedBlockId: 'b' },
+        properties: { focusedBlockLocation: {blockId: 'b', renderScopeId: 'scope:b'} },
       }),
     })
     expect(out.find(([ch]) => ch === KERNEL_CONTENT_CHANNEL)).toBeUndefined()

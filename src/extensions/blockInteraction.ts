@@ -454,6 +454,9 @@ export const enterBlockEditMode = async (
   selection?: EditorActivationSelection,
 ) => {
   const {block, uiStateBlock} = context
+  const renderScopeId = typeof context.blockContext?.renderScopeId === 'string'
+    ? context.blockContext.renderScopeId
+    : undefined
 
   // Read-only workspace: clicks/keyboard shouldn't drop into edit mode, but
   // we still want the click target to register as focused so navigation
@@ -461,12 +464,12 @@ export const enterBlockEditMode = async (
   // the read-only gate internally — `{edit: true}` here becomes a noop on
   // the edit flag in read-only mode.
   if (uiStateBlock.repo.isReadOnly) {
-    void focusBlock(uiStateBlock, block.id)
+    void focusBlock(uiStateBlock, block.id, {renderScopeId})
     return
   }
 
   await resetBlockSelection(uiStateBlock)
-  await focusBlock(uiStateBlock, block.id, {edit: true})
+  await focusBlock(uiStateBlock, block.id, {edit: true, renderScopeId})
 
   if (selection) {
     void uiStateBlock.set(editorSelection, {
@@ -485,6 +488,9 @@ export const handleBlockSelectionClick = async (
   if (isInteractiveContentEvent(event)) return
 
   const {block, repo, uiStateBlock} = context
+  const renderScopeId = typeof context.blockContext?.renderScopeId === 'string'
+    ? context.blockContext.renderScopeId
+    : undefined
 
   event.preventDefault()
   event.stopPropagation()
@@ -510,7 +516,7 @@ export const handleBlockSelectionClick = async (
     await resetBlockSelection(uiStateBlock)
   }
 
-  void focusBlock(uiStateBlock, block.id)
+  void focusBlock(uiStateBlock, block.id, {renderScopeId})
 }
 
 export const isSelectionClick = (event: MouseEvent) =>

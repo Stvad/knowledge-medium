@@ -1,6 +1,14 @@
 import { Block } from '../data/block'
 import type { Repo } from '../data/repo'
-import { selectionStateProp, topLevelBlockIdProp, focusedBlockIdProp, isCollapsedProp } from '@/data/properties'
+import {
+  focusedBlockLocationProp,
+  isCollapsedProp,
+  peekFocusedBlockId,
+  peekFocusedBlockLocation,
+  selectionStateProp,
+  topLevelBlockIdProp,
+} from '@/data/properties'
+import { outlineRenderScopeId } from '@/utils/renderScope'
 
 /** True if `block` is collapsed *and* the caller cares (i.e. it isn't
  *  the panel's top-level block — the top always exposes children even
@@ -303,7 +311,7 @@ export async function extendSelection(
   repo: Repo,
 ): Promise<void> {
   const currentState = uiStateBlock.peekProperty(selectionStateProp)
-  const focusedBlockId = uiStateBlock.peekProperty(focusedBlockIdProp)
+  const focusedBlockId = peekFocusedBlockId(uiStateBlock)
   const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
 
   if (!topLevelBlockId) return
@@ -317,5 +325,9 @@ export async function extendSelection(
     selectedBlockIds: rangeIds,
     anchorBlockId: currentAnchor,
   })
-  await uiStateBlock.set(focusedBlockIdProp, targetBlockId)
+  const currentLocation = peekFocusedBlockLocation(uiStateBlock)
+  await uiStateBlock.set(focusedBlockLocationProp, {
+    blockId: targetBlockId,
+    renderScopeId: currentLocation?.renderScopeId ?? outlineRenderScopeId(topLevelBlockId),
+  })
 }

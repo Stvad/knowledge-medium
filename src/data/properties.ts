@@ -24,6 +24,7 @@ import {
   defineProperty,
   type PropertySchema,
 } from '@/data/api'
+import { outlineRenderScopeId } from '@/utils/renderScope'
 
 // ──── UI-state schemas (changeScope: UiState) ────
 
@@ -45,14 +46,21 @@ export const topLevelBlockIdProp = defineProperty<string | undefined>('topLevelB
   changeScope: ChangeScope.UiState,
 })
 
+// Legacy persisted focus shape. Kept only so older ui-state rows can be
+// decoded into `focusedBlockLocationProp`; production writes clear it.
 export const focusedBlockIdProp = defineProperty<string | undefined>('focusedBlockId', {
   codec: codecs.optionalString,
   defaultValue: undefined,
   changeScope: ChangeScope.UiState,
 })
 
-export const focusedVisualTargetKeyProp = defineProperty<string | undefined>('focusedVisualTargetKey', {
-  codec: codecs.optionalString,
+export interface FocusedBlockLocation {
+  blockId: string
+  renderScopeId: string
+}
+
+export const focusedBlockLocationProp = defineProperty<FocusedBlockLocation | undefined>('focusedBlockLocation', {
+  codec: codecs.optionalIdentity<FocusedBlockLocation>(),
   defaultValue: undefined,
   changeScope: ChangeScope.UiState,
 })
@@ -276,48 +284,83 @@ export const setIsEditing = (uiStateBlock: Block, editing: boolean): void => {
   void uiStateBlock.set(isEditingProp, editing)
 }
 
+const decodeFocusedBlockLocation = (raw: unknown): FocusedBlockLocation | undefined => {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const maybe = raw as Record<string, unknown>
+  return typeof maybe.blockId === 'string' && typeof maybe.renderScopeId === 'string'
+    ? {blockId: maybe.blockId, renderScopeId: maybe.renderScopeId}
+    : undefined
+}
+
+export const focusedBlockLocationFromProperties = (
+  properties: Record<string, unknown> | undefined,
+): FocusedBlockLocation | undefined => {
+  if (!properties) return undefined
+
+  const location = decodeFocusedBlockLocation(properties[focusedBlockLocationProp.name])
+  if (location) return location
+
+  const legacyBlockId = properties[focusedBlockIdProp.name]
+  if (typeof legacyBlockId !== 'string' || !legacyBlockId) return undefined
+  const topLevelBlockId = properties[topLevelBlockIdProp.name]
+  return {
+    blockId: legacyBlockId,
+    renderScopeId: outlineRenderScopeId(
+      typeof topLevelBlockId === 'string' && topLevelBlockId
+        ? topLevelBlockId
+        : legacyBlockId,
+    ),
+  }
+}
+
+export const peekFocusedBlockLocation = (uiStateBlock: Block): FocusedBlockLocation | undefined =>
+  focusedBlockLocationFromProperties(uiStateBlock.peek()?.properties)
+
+export const peekFocusedBlockId = (uiStateBlock: Block): string | undefined =>
+  peekFocusedBlockLocation(uiStateBlock)?.blockId
+
+export const isFocusedBlock = (
+  uiStateBlock: Block,
+  blockId: string,
+  renderScopeId?: string,
+): boolean => {
+  const location = peekFocusedBlockLocation(uiStateBlock)
+  if (!location || location.blockId !== blockId) return false
+  return renderScopeId ? location.renderScopeId === renderScopeId : true
+}
+
 /** Atomically move focus to `blockId` and set the edit flag in one tx.
  *
- *  `useInEditMode(blockId)` is `focusedBlockId === blockId && isEditing`,
- *  so the pair behaves as one state — writing focus alone makes the
- *  newly-focused block inherit the previous holder's editing flag, and
- *  `vimNormalModeActivation` declines to put a block into NORMAL_MODE
- *  while its `inEditMode` is true. This is the single primitive for
- *  changing what block has focus: callers pass `{edit: true}` when they
- *  want the new block in edit mode (cm navigation, vim's `o`, etc.)
- *  and omit it (default `false`) to land on the block out of edit mode.
+ *  Focus is a rendered location, not just a logical block id: the
+ *  same block can appear in the outline, backlinks, and any number of
+ *  embeds at once. The render scope disambiguates those copies while
+ *  keeping selection state separately keyed by block id.
  *
  *  Returns the tx-commit promise so callers that need to observe
  *  focus-derived state next can `await` instead of racing propagation. */
 export const focusBlock = async (
   uiStateBlock: Block,
   blockId: string,
-  options: {edit?: boolean} = {},
+  options: {edit?: boolean; renderScopeId?: string} = {},
 ): Promise<void> => {
-  const {edit = false} = options
+  const {edit = false, renderScopeId} = options
   // Match the legacy `setIsEditing` read-only gate: a viewer can't
   // transition into edit mode, but it can still mark focus (highlight,
   // nav anchor).
   const targetEdit = edit && !uiStateBlock.repo.isReadOnly ? true : false
+  const currentLocation = peekFocusedBlockLocation(uiStateBlock)
+  const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
+  const location: FocusedBlockLocation = {
+    blockId,
+    renderScopeId: renderScopeId
+      ?? currentLocation?.renderScopeId
+      ?? outlineRenderScopeId(topLevelBlockId ?? blockId),
+  }
   await uiStateBlock.repo.tx(async tx => {
-    await tx.setProperty(uiStateBlock.id, focusedBlockIdProp, blockId)
+    await tx.setProperty(uiStateBlock.id, focusedBlockLocationProp, location)
+    await tx.setProperty(uiStateBlock.id, focusedBlockIdProp, undefined)
     await tx.setProperty(uiStateBlock.id, isEditingProp, targetEdit)
   }, {scope: ChangeScope.UiState, description: 'focus block'})
-}
-
-export const focusVisualTarget = async (
-  uiStateBlock: Block,
-  blockId: string,
-  visualTargetKey: string,
-  options: {edit?: boolean} = {},
-): Promise<void> => {
-  const {edit = false} = options
-  const targetEdit = edit && !uiStateBlock.repo.isReadOnly ? true : false
-  await uiStateBlock.repo.tx(async tx => {
-    await tx.setProperty(uiStateBlock.id, focusedBlockIdProp, blockId)
-    await tx.setProperty(uiStateBlock.id, focusedVisualTargetKeyProp, visualTargetKey)
-    await tx.setProperty(uiStateBlock.id, isEditingProp, targetEdit)
-  }, {scope: ChangeScope.UiState, description: 'focus visual target'})
 }
 
 export const requestEditorFocus = (uiStateBlock: Block): void => {
@@ -345,8 +388,8 @@ export const KERNEL_PROPERTY_SCHEMAS: ReadonlyArray<PropertySchema<unknown>> = [
   showPropertiesProp,
   isEditingProp,
   topLevelBlockIdProp,
+  focusedBlockLocationProp,
   focusedBlockIdProp,
-  focusedVisualTargetKeyProp,
   activePanelIdProp,
   scrollTopProp,
   editorSelection,

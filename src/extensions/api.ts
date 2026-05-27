@@ -157,11 +157,12 @@ export {
   isCollapsedProp,
   showPropertiesProp,
   topLevelBlockIdProp,
-  focusedBlockIdProp,
+  focusedBlockLocationProp,
   // Atomic focus + edit transition (single primitive — `setFocusedBlockId`
   // and `setIsEditing` were removed in favor of this).
   focusBlock,
 } from '@/data/properties.js'
+export type { FocusedBlockLocation } from '@/data/properties.js'
 export type {
   BlockRenderer,
   BlockRendererProps,

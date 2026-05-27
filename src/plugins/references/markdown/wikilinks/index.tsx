@@ -10,6 +10,7 @@ interface WikilinkNode {
     alias?: unknown
     blockId?: unknown
     hasCustomDisplay?: unknown
+    occurrenceId?: unknown
   }
 }
 
@@ -57,7 +58,14 @@ export const wikilinkMarkdownExtension: MarkdownExtension = ({block}) => {
       pageembed: ({node}: WikilinkComponentProps) => {
         const blockId = node?.properties?.blockId
         if (typeof blockId !== 'string' || !blockId) return null
-        return <BlockEmbed blockId={blockId}/>
+        const occurrenceId = node?.properties?.occurrenceId
+        return (
+          <BlockEmbed
+            blockId={blockId}
+            sourceBlockId={block.id}
+            occurrenceId={typeof occurrenceId === 'string' && occurrenceId ? occurrenceId : 'unknown'}
+          />
+        )
       },
     } as unknown as Components,
   }

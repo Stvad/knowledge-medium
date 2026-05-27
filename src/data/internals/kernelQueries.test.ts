@@ -783,7 +783,7 @@ describe('invalidation', () => {
       await env.repo.tx(async tx => {
         const block = env.repo.block('panel')
         await block.load()
-        await tx.update('panel', {properties: {focusedBlockId: 'something'}})
+        await tx.update('panel', {properties: {focusedBlockLocation: {blockId: 'something', renderScopeId: 'scope:something'}}})
       }, {scope: ChangeScope.UiState})
       // Give the handle plenty of opportunity to (incorrectly) re-resolve.
       await new Promise(r => setTimeout(r, 30))
@@ -872,7 +872,7 @@ describe('invalidation', () => {
     const unsub = handle.subscribe(() => { fired.push(1) })
     try {
       await env.repo.tx(
-        tx => tx.update('panel', {properties: {focusedBlockId: 'x'}}),
+        tx => tx.update('panel', {properties: {focusedBlockLocation: {blockId: 'x', renderScopeId: 'scope:x'}}}),
         {scope: ChangeScope.UiState},
       )
       await new Promise(r => setTimeout(r, 30))
@@ -1071,7 +1071,7 @@ describe('invalidation', () => {
     const unsub = handle.subscribe(() => { fired.push(1) })
     try {
       await env.repo.tx(
-        tx => tx.update('panel', {properties: {focusedBlockId: 'x'}}),
+        tx => tx.update('panel', {properties: {focusedBlockLocation: {blockId: 'x', renderScopeId: 'scope:x'}}}),
         {scope: ChangeScope.UiState},
       )
       await new Promise(r => setTimeout(r, 30))
@@ -1093,7 +1093,7 @@ describe('invalidation', () => {
       // UiState writes must not wake the handle — recent-picker tolerates
       // lightly stale `updated_at` ordering between content events.
       await env.repo.tx(
-        tx => tx.update('panel', {properties: {focusedBlockId: 'x'}}),
+        tx => tx.update('panel', {properties: {focusedBlockLocation: {blockId: 'x', renderScopeId: 'scope:x'}}}),
         {scope: ChangeScope.UiState},
       )
       await new Promise(r => setTimeout(r, 30))
@@ -1202,7 +1202,7 @@ describe('invalidation', () => {
     const unsub = handle.subscribe(() => { fired.push(1) })
     try {
       await env.repo.tx(
-        tx => tx.update('panel', {properties: {focusedBlockId: 'x'}}),
+        tx => tx.update('panel', {properties: {focusedBlockLocation: {blockId: 'x', renderScopeId: 'scope:x'}}}),
         {scope: ChangeScope.UiState},
       )
       await new Promise(r => setTimeout(r, 30))

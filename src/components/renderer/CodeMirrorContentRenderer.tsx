@@ -3,8 +3,8 @@ import { useMemo, ClipboardEvent } from 'react'
 import { EditorView } from '@codemirror/view'
 import { createMinimalMarkdownConfig } from '@/utils/codemirror.js'
 import { BlockEditor } from '@/components/BlockEditor.js'
-import { useUIStateProperty } from '@/data/globalState.js'
-import { focusedBlockIdProp } from '@/data/properties.js'
+import { useUIStateBlock } from '@/data/globalState.js'
+import { focusBlock } from '@/data/properties.js'
 import { pasteMultilineText } from '@/utils/paste.js'
 import { useRepo } from '@/context/repo.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
@@ -14,6 +14,7 @@ import { convertEmptyChildBlockToProperty } from '@/utils/propertyCreation.js'
 export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   const repo = useRepo()
   const runtime = useAppRuntime()
+  const uiStateBlock = useUIStateBlock()
 
   const extensions = useMemo(() => {
     const fieldCreationExtension = EditorView.domEventHandlers({
@@ -49,15 +50,13 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     return createMinimalMarkdownConfig([...pluginExtensions, fieldCreationExtension])
   }, [block, repo, runtime])
 
-  const [, setFocusedBlockId] = useUIStateProperty(focusedBlockIdProp)
-
   const handlePaste = async (e: ClipboardEvent<HTMLDivElement>) => {
     e.stopPropagation()
     const text = e.clipboardData?.getData('text/plain')
     if (text?.includes('\n')) {
       e.preventDefault()
       const pasted = await pasteMultilineText(text, block, repo)
-      if (pasted[0]) setFocusedBlockId(pasted[0].id)
+      if (pasted[0]) void focusBlock(uiStateBlock, pasted[0].id)
     }
   }
 

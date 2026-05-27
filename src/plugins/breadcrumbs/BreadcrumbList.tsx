@@ -2,9 +2,10 @@ import { MouseEvent } from 'react'
 import { Block } from '@/data/block'
 import { BlockContextType } from '@/types.js'
 import { BlockComponent } from '@/components/BlockComponent.js'
-import { NestedBlockContextProvider } from '@/context/block.js'
+import { NestedBlockContextProvider, useBlockContext } from '@/context/block.js'
 import { buildAppHash } from '@/utils/routing.js'
 import { cn } from '@/lib/utils.js'
+import { breadcrumbRenderScopeId } from '@/utils/renderScope.js'
 
 interface BreadcrumbListProps {
   parents: readonly Block[]
@@ -34,11 +35,16 @@ export const BreadcrumbList = ({
   itemClassName,
   separatorClassName,
 }: BreadcrumbListProps) => {
+  const blockContext = useBlockContext()
+  const parentRenderScopeId = typeof blockContext.renderScopeId === 'string'
+    ? blockContext.renderScopeId
+    : 'breadcrumb-root'
+
   if (parents.length === 0) return null
 
   return (
     <div className={className}>
-      {parents.map((parent) => (
+      {parents.map((parent, index) => (
         <span key={parent.id} className="flex items-center min-w-0">
           <a
             href={buildAppHash(workspaceId, parent.id)}
@@ -66,7 +72,16 @@ export const BreadcrumbList = ({
             }}
           >
             <span className={INNER_CLASS}>
-              <NestedBlockContextProvider overrides={overrides}>
+              <NestedBlockContextProvider
+                overrides={{
+                  ...overrides,
+                  renderScopeId: breadcrumbRenderScopeId(
+                    parentRenderScopeId,
+                    parent.id,
+                    String(index),
+                  ),
+                }}
+              >
                 <BlockComponent blockId={parent.id}/>
               </NestedBlockContextProvider>
             </span>

@@ -129,6 +129,7 @@ function LinkedReferencesInner({
                   <LazyBacklinkItem
                     key={backlinkBlock.id}
                     block={backlinkBlock}
+                    scopeId={`flat:${backlinkBlock.id}`}
                     initialParents={initialParentsByBacklinkId.get(backlinkBlock.id)}
                   />
                 ))}

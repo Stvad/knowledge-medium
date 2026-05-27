@@ -32,7 +32,7 @@ export function BlockFocusShellDecorator({
   // Gate the highlight on "this surface owns keystrokes": when the
   // user crosses panels (j/l in spatial-nav, or a click), only the
   // focused block in the *active* panel shows the bg-accent/40
-  // class. The inactive panel still has its `focusedBlockId` set —
+  // class. The inactive panel still has its `focusedBlockLocation` set —
   // which we need so the highlight reappears when the user comes
   // back via h/k/j/l — but suppressing the visual until then makes
   // "where am I right now" unambiguous, and reading the per-panel

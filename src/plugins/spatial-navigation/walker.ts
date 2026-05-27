@@ -1,20 +1,21 @@
 import { isElementProperlyVisible } from '@/utils/dom.js'
+import type { FocusedBlockLocation } from '@/data/properties.js'
 
 /**
  * Spatial-navigation walker — pure DOM queries, no in-memory registry.
  *
  * The DOM is the source of truth. At keypress time we query the relevant
- * subtree for tagged instances and walk in document order. This avoids
+ * subtree for tagged nav items and walk in document order. This avoids
  * registry-churn, re-render invisibility, and stale-ref problems.
  *
  * Tagging contract (set by the shell decorator + layout renderer):
  *
  *   Layout column wrapper: `data-layout-column-id="..."`
  *   Panel wrapper:         `data-panel-id="..."`
- *   Block shell:           `data-block-instance="<unique-per-mount key>"`
+ *   Block shell:           `data-block-nav-item="true"`
  *                          `data-block-id="<block.id>"`
+ *                          `data-render-scope-id="<render scope>"`
  *                          `data-block-surface="outline|backlink|breadcrumb|embedded"`
- *                          `data-backlink-entry-id="..."` (when surface=backlink)
  *
  * Direction model:
  *
@@ -33,12 +34,12 @@ import { isElementProperlyVisible } from '@/utils/dom.js'
  *   collapsed parent becomes the natural recovery target when every
  *   child of the focused block's parent unmounts together), then
  *   positional clamp as a final fallback. Both gate the positional
- *   tier on a blockId-match against the stored hint — a stale hint
+ *   tier on a focus-location match against the stored hint — a stale hint
  *   for some unrelated previous focus is ignored, so panels the user
  *   has never sat in won't get a misfired recovery jump.
  */
 
-const INSTANCE_SELECTOR = '[data-block-instance]'
+const NAV_ITEM_SELECTOR = '[data-block-nav-item="true"]'
 const PANEL_SELECTOR = '[data-panel-id]'
 const COLUMN_SELECTOR = '[data-layout-column-id]'
 
@@ -48,11 +49,11 @@ const NON_NAVIGABLE_SURFACES = new Set(['breadcrumb'])
  * Session-only per-panel hint about the focused block's neighborhood.
  * Stored on every confirmed sighting (`rememberInstancePosition`):
  *
- *   - `blockId` + `index` for the positional fallback + the
- *     stale-hint blockId-match guard
- *   - `prevBlockId` / `nextBlockId` for the sibling-walk recovery
+ *   - focused location + `index` for the positional fallback + the
+ *     stale-hint location-match guard
+ *   - `prevLocation` / `nextLocation` for the sibling-walk recovery
  *     ("block previously below/above")
- *   - `ancestorBlockIds` (closest first) for the collapse-detection
+ *   - `ancestorLocations` (closest first) for the collapse-detection
  *     recovery — when both sibling links no longer resolve, the
  *     focused block's ancestors are the only nearby reference frame
  *     still standing, and the closest surviving one is the natural
@@ -62,11 +63,11 @@ const NON_NAVIGABLE_SURFACES = new Set(['breadcrumb'])
  * these meaning is gone after a reload, so persisting would mislead.
  */
 interface PanelPositionHint {
-  blockId: string
+  location: FocusedBlockLocation
   index: number
-  prevBlockId: string | undefined
-  nextBlockId: string | undefined
-  ancestorBlockIds: readonly string[]
+  prevLocation: FocusedBlockLocation | undefined
+  nextLocation: FocusedBlockLocation | undefined
+  ancestorLocations: readonly FocusedBlockLocation[]
 }
 
 const pickViewportFallback = (
@@ -80,6 +81,17 @@ const pickViewportFallback = (
 
 const lastPositionByPanel = new Map<string, PanelPositionHint>()
 
+export const locationOf = (el: HTMLElement): FocusedBlockLocation | null => {
+  const {blockId, renderScopeId} = el.dataset
+  return blockId && renderScopeId ? {blockId, renderScopeId} : null
+}
+
+const sameLocation = (
+  a: FocusedBlockLocation | undefined,
+  b: FocusedBlockLocation | undefined,
+): boolean =>
+  Boolean(a && b && a.blockId === b.blockId && a.renderScopeId === b.renderScopeId)
+
 const isNavigable = (el: HTMLElement): boolean => {
   const surface = el.dataset.blockSurface
   if (surface && NON_NAVIGABLE_SURFACES.has(surface)) return false
@@ -87,13 +99,14 @@ const isNavigable = (el: HTMLElement): boolean => {
 }
 
 export const panelInstances = (panel: HTMLElement): HTMLElement[] => {
-  const all = Array.from(panel.querySelectorAll<HTMLElement>(INSTANCE_SELECTOR))
+  const all = Array.from(panel.querySelectorAll<HTMLElement>(NAV_ITEM_SELECTOR))
   // Filter to instances actually inside this panel (not inside a nested
   // panel that might appear in the DOM tree — defensive; layout doesn't
   // currently nest panels, but the selector match alone wouldn't catch
   // it).
   return all.filter(el => {
     if (!isNavigable(el)) return false
+    if (!locationOf(el)) return false
     const ownPanel = el.closest<HTMLElement>(PANEL_SELECTOR)
     return ownPanel === panel
   })
@@ -120,9 +133,9 @@ const clamp = (n: number, lo: number, hi: number): number =>
   Math.max(lo, Math.min(hi, n))
 
 /**
- * Walk up from `instanceEl` to find the closest [data-block-instance]
+ * Walk up from `instanceEl` to find the closest block nav item
  * ancestor inside `panel`. Returns null when `instanceEl` is a
- * top-level instance in the panel (no block-instance ancestor above it).
+ * top-level instance in the panel (no block nav item ancestor above it).
  *
  * Used by the sibling-lookup logic: two instances are "same-depth
  * siblings" iff they share a `closestBlockAncestor`. That matches the
@@ -137,20 +150,21 @@ const closestBlockAncestor = (
 ): HTMLElement | null => {
   let el: HTMLElement | null = instanceEl.parentElement
   while (el && el !== panel) {
-    if (el.dataset.blockInstance && el.dataset.blockId) return el
+    if (el.dataset.blockNavItem === 'true' && el.dataset.blockId) return el
     el = el.parentElement
   }
   return null
 }
 
-const collectAncestorBlockIds = (
+const collectAncestorLocations = (
   instanceEl: HTMLElement,
   panel: HTMLElement,
-): string[] => {
-  const ancestors: string[] = []
+): FocusedBlockLocation[] => {
+  const ancestors: FocusedBlockLocation[] = []
   let el = closestBlockAncestor(instanceEl, panel)
   while (el) {
-    if (el.dataset.blockId) ancestors.push(el.dataset.blockId)
+    const location = locationOf(el)
+    if (location) ancestors.push(location)
     el = closestBlockAncestor(el, panel)
   }
   return ancestors
@@ -159,7 +173,7 @@ const collectAncestorBlockIds = (
 /**
  * Find the previous or next data-tree-sibling of `instanceEl` inside
  * `panel` — i.e. the nearest panel-instance in DOM order that shares
- * the same closest [data-block-instance] ancestor.
+ * the same closest block nav item ancestor.
  *
  * This is what makes recovery match the user's mental model in the
  * tricky cases:
@@ -177,20 +191,20 @@ const findSameDepthSibling = (
   instances: readonly HTMLElement[],
   panel: HTMLElement,
   direction: 'prev' | 'next',
-): string | undefined => {
+): FocusedBlockLocation | undefined => {
   const idx = instances.indexOf(instanceEl)
   if (idx < 0) return undefined
   const own = closestBlockAncestor(instanceEl, panel)
   if (direction === 'prev') {
     for (let i = idx - 1; i >= 0; i--) {
       if (closestBlockAncestor(instances[i], panel) === own) {
-        return instances[i].dataset.blockId
+        return locationOf(instances[i]) ?? undefined
       }
     }
   } else {
     for (let i = idx + 1; i < instances.length; i++) {
       if (closestBlockAncestor(instances[i], panel) === own) {
-        return instances[i].dataset.blockId
+        return locationOf(instances[i]) ?? undefined
       }
     }
   }
@@ -214,19 +228,19 @@ export const rememberInstancePosition = (
   const instances = panelInstances(panel)
   const idx = instances.indexOf(instanceEl)
   if (idx < 0) return
-  const blockId = instanceEl.dataset.blockId
-  if (!blockId) return
+  const location = locationOf(instanceEl)
+  if (!location) return
   lastPositionByPanel.set(panelId, {
-    blockId,
+    location,
     index: idx,
-    prevBlockId: findSameDepthSibling(instanceEl, instances, panel, 'prev'),
-    nextBlockId: findSameDepthSibling(instanceEl, instances, panel, 'next'),
-    ancestorBlockIds: collectAncestorBlockIds(instanceEl, panel),
+    prevLocation: findSameDepthSibling(instanceEl, instances, panel, 'prev'),
+    nextLocation: findSameDepthSibling(instanceEl, instances, panel, 'next'),
+    ancestorLocations: collectAncestorLocations(instanceEl, panel),
   })
 }
 
 /**
- * Resolve a recovery target for `forBlockId` when its instance is no
+ * Resolve a recovery target for `forLocation` when its instance is no
  * longer in the panel DOM. Walks the stored neighbor map in this order:
  *
  *   1. The block that was immediately AFTER it ("block previously
@@ -255,7 +269,7 @@ export const rememberInstancePosition = (
  *      all the way up. Picking any visible block instead keeps the
  *      pointer alive without disturbing the viewport.
  *
- * Returns null when there's no stored hint about this block, or when
+ * Returns null when there's no stored hint about this rendered location, or when
  * the panel has no instances at all. The caller (proactive recovery)
  * MUST be gated on a non-null return: an absent hint usually means
  * the focused block has never been visible in this panel (initial
@@ -264,7 +278,7 @@ export const rememberInstancePosition = (
  */
 export const findRecoveryAnchor = (
   panelId: string,
-  forBlockId: string,
+  forLocation: FocusedBlockLocation,
 ): HTMLElement | null => {
   const panel = panelById(panelId)
   if (!panel) return null
@@ -272,19 +286,21 @@ export const findRecoveryAnchor = (
   if (instances.length === 0) return null
 
   const hint = lastPositionByPanel.get(panelId)
-  if (!hint || hint.blockId !== forBlockId) return null
+  if (!hint || !sameLocation(hint.location, forLocation)) return null
 
-  const findByBlockId = (id: string | undefined): HTMLElement | undefined =>
-    id ? instances.find(el => el.dataset.blockId === id) : undefined
+  const findByLocation = (location: FocusedBlockLocation | undefined): HTMLElement | undefined =>
+    location
+      ? instances.find(el => sameLocation(locationOf(el) ?? undefined, location))
+      : undefined
 
-  const next = findByBlockId(hint.nextBlockId)
+  const next = findByLocation(hint.nextLocation)
   if (next) return next
 
-  const prev = findByBlockId(hint.prevBlockId)
+  const prev = findByLocation(hint.prevLocation)
   if (prev) return prev
 
-  for (const ancestorId of hint.ancestorBlockIds) {
-    const ancestor = findByBlockId(ancestorId)
+  for (const ancestorLocation of hint.ancestorLocations) {
+    const ancestor = findByLocation(ancestorLocation)
     if (ancestor) return ancestor
   }
 
@@ -294,7 +310,7 @@ export const findRecoveryAnchor = (
 
 /**
  * Anchor lookup used by spatial-nav keystroke handlers. Returns the
- * live DOM instance for `focusedBlockId` when it's still mounted in
+ * live DOM instance for `focusedLocation` when it's still mounted in
  * the panel; otherwise falls back to `findRecoveryAnchor` so vertical
  * movement can walk from a sensible position even while the proactive recovery
  * timer is still in its debounce window. Without this fallback, a
@@ -304,31 +320,30 @@ export const findRecoveryAnchor = (
  */
 export const resolveCurrentAnchor = (
   panelId: string,
-  focusedBlockId: string | undefined,
+  focusedLocation: FocusedBlockLocation | undefined,
 ): HTMLElement | null => {
-  if (!focusedBlockId) return null
+  if (!focusedLocation) return null
   const panel = panelById(panelId)
   if (!panel) return null
   const instances = panelInstances(panel)
   if (instances.length === 0) return null
-  const live = instances.find(el => el.dataset.blockId === focusedBlockId)
+  const live = instances.find(el => sameLocation(locationOf(el) ?? undefined, focusedLocation))
   if (live) return live
-  return findRecoveryAnchor(panelId, focusedBlockId)
+  return findRecoveryAnchor(panelId, focusedLocation)
 }
 
 /**
  * Resolve which instance inside `panelId` should hold focus, given the
  * persisted hints from the panel block. Falls back through tiers:
  *
- *   1. exact match on `focusedVisualTargetKey` (`data-block-instance`)
- *   2. any visible instance of `focusedBlockId` inside the panel
- *   3. positional clamp into the current list — pulls "the block that
+ *   1. exact match on focused location (`data-block-id` + `data-render-scope-id`)
+ *   2. positional clamp into the current list — pulls "the block that
  *      now occupies the index where the focused one used to sit", i.e.
  *      "block previously below" once the list shifts up to fill the
- *      gap. Only fires when the stored hint is actually about
- *      `focusedBlockId`; a stale hint for some unrelated previously-
- *      focused block is ignored.
- *   4. first instance in the panel (last-resort default).
+ *      gap. Only fires when the stored hint is actually about the same
+ *      focused location; a stale hint for some unrelated previously-
+ *      focused location is ignored.
+ *   3. first instance in the panel (last-resort default).
  *
  * For the proactive disappear-handler, prefer `findRecoveryAnchor` —
  * it shares the same neighbor map but adds sibling- and ancestor-
@@ -338,8 +353,7 @@ export const resolveCurrentAnchor = (
 export const locateInstance = (
   panelId: string,
   hints: {
-    focusedBlockId?: string
-    focusedVisualTargetKey?: string
+    focusedLocation?: FocusedBlockLocation
   },
   root: ParentNode = document,
 ): HTMLElement | null => {
@@ -348,18 +362,13 @@ export const locateInstance = (
   const instances = panelInstances(panel)
   if (instances.length === 0) return null
 
-  if (hints.focusedVisualTargetKey) {
-    const exact = instances.find(el => el.dataset.blockInstance === hints.focusedVisualTargetKey)
+  if (hints.focusedLocation) {
+    const exact = instances.find(el => sameLocation(locationOf(el) ?? undefined, hints.focusedLocation))
     if (exact) return exact
   }
 
-  if (hints.focusedBlockId) {
-    const byBlock = instances.find(el => el.dataset.blockId === hints.focusedBlockId)
-    if (byBlock) return byBlock
-  }
-
   const stored = lastPositionByPanel.get(panelId)
-  if (stored && (!hints.focusedBlockId || stored.blockId === hints.focusedBlockId)) {
+  if (stored && (!hints.focusedLocation || sameLocation(stored.location, hints.focusedLocation))) {
     return instances[clamp(stored.index, 0, instances.length - 1)] ?? null
   }
 

@@ -4,6 +4,7 @@ import {
   editorFocusRequestProp,
   editorSelection,
   focusedBlockIdProp,
+  focusedBlockLocationProp,
   isEditingProp,
 } from '@/data/properties.js'
 import { enterVideoNotesView } from '../notes.ts'
@@ -19,10 +20,25 @@ const makeBlocks = ({
   const createChild = vi.fn(async () => 'note-1')
   const loadChildIds = vi.fn(async () => childIds)
   const setVideoProperty = vi.fn(async () => undefined)
-  const setUiProperty = vi.fn(async () => undefined)
+  const setUiProperty = vi.fn(async (...args: [unknown, unknown]) => {
+    void args
+  })
   const peekUiProperty = vi.fn((prop: unknown) =>
     prop === editorFocusRequestProp ? 0 : undefined,
   )
+  const peekUi = vi.fn(() => ({properties: {}}))
+  const tx = vi.fn(async (...args: [
+    (tx: {setProperty: (id: string, prop: unknown, value: unknown) => Promise<void>}) => Promise<void>,
+    unknown?,
+  ]) => {
+    const [fn] = args
+    await fn({
+      setProperty: async (...setArgs: [string, unknown, unknown]) => {
+        const [, prop, value] = setArgs
+        await setUiProperty(prop, value)
+      },
+    })
+  })
 
   const videoBlock = {
     id: 'video-1',
@@ -36,8 +52,9 @@ const makeBlocks = ({
 
   const uiStateBlock = {
     id: 'ui-state',
+    peek: peekUi,
     peekProperty: peekUiProperty,
-    repo: {isReadOnly: readOnly},
+    repo: {isReadOnly: readOnly, tx},
     set: setUiProperty,
   } as unknown as Block
 
@@ -62,7 +79,11 @@ describe('video notes view', () => {
       parentId: 'video-1',
       position: {kind: 'first'},
     })
-    expect(setUiProperty).toHaveBeenCalledWith(focusedBlockIdProp, 'note-1')
+    expect(setUiProperty).toHaveBeenCalledWith(focusedBlockLocationProp, {
+      blockId: 'note-1',
+      renderScopeId: 'outline:note-1',
+    })
+    expect(setUiProperty).toHaveBeenCalledWith(focusedBlockIdProp, undefined)
     expect(setUiProperty).toHaveBeenCalledWith(editorSelection, {
       blockId: 'note-1',
       start: 0,

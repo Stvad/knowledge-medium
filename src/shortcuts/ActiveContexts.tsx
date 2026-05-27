@@ -37,6 +37,23 @@ export interface ActiveContextsDispatch {
 const ActiveContextsStateCtx = createContext<ActiveContextsMap | null>(null)
 const ActiveContextsDispatchCtx = createContext<ActiveContextsDispatch | null>(null)
 
+const shallowEqualDependencies = (
+  a: BaseShortcutDependencies | undefined,
+  b: BaseShortcutDependencies,
+): boolean => {
+  if (!a) return false
+  if (Object.is(a, b)) return true
+  const aRecord = a as unknown as Record<string, unknown>
+  const bRecord = b as unknown as Record<string, unknown>
+  const aKeys = Object.keys(aRecord)
+  const bKeys = Object.keys(bRecord)
+  if (aKeys.length !== bKeys.length) return false
+  for (const key of aKeys) {
+    if (!Object.is(aRecord[key], bRecord[key])) return false
+  }
+  return true
+}
+
 export function ActiveContextsProvider({children}: PropsWithChildren) {
   const runtime = useAppRuntime()
   // We want `activate` to stay reference-stable so consumers via the
@@ -67,6 +84,10 @@ export function ActiveContextsProvider({children}: PropsWithChildren) {
       }
 
       setActive(prev => {
+        const current = prev.get(context)
+        const lastContext = Array.from(prev.keys()).at(-1)
+        if (lastContext === context && shallowEqualDependencies(current, dependencies)) return prev
+
         const next = new Map(prev)
         // Re-insert at end to keep activation order deterministic for
         // ordered consumers and last-active-wins semantics.

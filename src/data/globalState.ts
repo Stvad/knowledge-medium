@@ -24,9 +24,9 @@ import {
 import type { Block } from './block'
 import {
   activePanelIdProp,
+  focusedBlockLocationFromProperties,
   selectionStateProp,
   type BlockSelectionState,
-  focusedBlockIdProp,
   isEditingProp,
 } from '@/data/properties'
 import { usePropertyValue, useHandle, useChildren } from '@/hooks/block'
@@ -165,10 +165,18 @@ export function useSelectionState(): [
   return [current, setSelectionState]
 }
 
-export const useInFocus = (blockId: string): boolean =>
-  useHandle(useUIStateBlock(), {
-    selector: doc => doc?.properties[focusedBlockIdProp.name] === blockId,
+export const useInFocus = (blockId: string, explicitRenderScopeId?: string): boolean => {
+  const context = useBlockContext()
+  const renderScopeId = explicitRenderScopeId
+    ?? (typeof context.renderScopeId === 'string' ? context.renderScopeId : undefined)
+  return useHandle(useUIStateBlock(), {
+    selector: doc => {
+      const location = focusedBlockLocationFromProperties(doc?.properties)
+      if (!location || location.blockId !== blockId) return false
+      return renderScopeId ? location.renderScopeId === renderScopeId : true
+    },
   })
+}
 
 export const useIsSelected = (blockId: string): boolean =>
   useHandle(useUIStateBlock(), {
@@ -180,19 +188,26 @@ export const useIsSelected = (blockId: string): boolean =>
     },
   })
 
-export const useInEditMode = (blockId: string): boolean =>
+export const useInEditMode = (blockId: string, explicitRenderScopeId?: string): boolean => {
+  const context = useBlockContext()
+  const renderScopeId = explicitRenderScopeId
+    ?? (typeof context.renderScopeId === 'string' ? context.renderScopeId : undefined)
   // Combined into a single selector returning a per-block boolean so
   // unaffected DefaultBlockRenderer instances bail out via
   // useSyncExternalStore's Object.is check on focus changes. Splitting
-  // it into two `useHandle` calls (one returning the global focused id,
+  // it into two `useHandle` calls (one returning the global focused location,
   // one returning the editing flag) made every subscriber re-render on
   // every focus change because the focused-id value changed for all
   // subscribers, not just the two whose membership in "is focused" flipped.
-  useHandle(useUIStateBlock(), {
-    selector: doc =>
-      doc?.properties[focusedBlockIdProp.name] === blockId &&
-      Boolean(doc?.properties[isEditingProp.name]),
+  return useHandle(useUIStateBlock(), {
+    selector: doc => {
+      const location = focusedBlockLocationFromProperties(doc?.properties)
+      if (!location || location.blockId !== blockId) return false
+      if (renderScopeId && location.renderScopeId !== renderScopeId) return false
+      return Boolean(doc?.properties[isEditingProp.name])
+    },
   })
+}
 
 /**
  * Whether `panelBlock` is the currently-active panel in its layout

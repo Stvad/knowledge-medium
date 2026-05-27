@@ -27,10 +27,10 @@ const contextDependencyCatalog: Record<string, ContextDependencySchema> = {
     runnableFromCli: true,
   },
   [ActionContextTypes.NORMAL_MODE]: {
-    acceptedKeys: ['uiStateBlock', 'block', 'visualTargetId'],
+    acceptedKeys: ['uiStateBlock', 'block', 'renderScopeId'],
     cliInputKeys: ['uiStateBlockId', 'blockId'],
     runnableFromCli: true,
-    notes: 'visualTargetId is a transient editor concept and is not accepted by the CLI bridge',
+    notes: 'renderScopeId is a rendered UI concept and is not accepted by the CLI bridge',
   },
   [ActionContextTypes.MULTI_SELECT_MODE]: {
     acceptedKeys: ['uiStateBlock', 'selectedBlocks', 'anchorBlock'],

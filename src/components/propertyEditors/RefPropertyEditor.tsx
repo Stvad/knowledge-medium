@@ -155,7 +155,11 @@ function ReferenceEmbed({
     <div className="group/ref relative min-w-0 rounded-md border border-border/40 bg-background/60 pr-8">
       <NestedBlockContextProvider overrides={{panelId}}>
         <BlockRefAncestorsProvider ancestor={owner.id}>
-          <BlockEmbed blockId={blockId} />
+          <BlockEmbed
+            blockId={blockId}
+            sourceBlockId={owner.id}
+            occurrenceId={`property:${owner.id}:${blockId}`}
+          />
         </BlockRefAncestorsProvider>
       </NestedBlockContextProvider>
       {!readOnly && (

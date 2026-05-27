@@ -37,8 +37,8 @@ import {
   releaseBlockGesture,
 } from '@/extensions/blockGestureConflicts.js'
 import {
-  focusedBlockIdProp,
   isEditingProp,
+  isFocusedBlock,
 } from '@/data/properties.js'
 import type { Block } from '@/data/block'
 import type { BlockDateAdapter } from './blockDateAdapter.ts'
@@ -163,8 +163,8 @@ const singleByBlockId = new Map<string, SingleFinger>()
 const multiByBlockId = new Map<string, MultiTouch>()
 let keyboardScrub: KeyboardScrub | null = null
 
-const isBlockEditing = (blockId: string, uiStateBlock: Block): boolean =>
-  uiStateBlock.peekProperty(focusedBlockIdProp) === blockId &&
+const isBlockEditing = (blockId: string, uiStateBlock: Block, renderScopeId?: string): boolean =>
+  isFocusedBlock(uiStateBlock, blockId, renderScopeId) &&
   Boolean(uiStateBlock.peekProperty(isEditingProp))
 
 const isOnInteractiveSurface = (event: { target: EventTarget | null }): boolean => {
@@ -382,6 +382,7 @@ export const installDateScrubAuxListeners = (): (() => void) => {
 
 export const dateScrubContentSurface: BlockContentSurfaceContribution = context => {
   const {block, uiStateBlock} = context
+  const renderScopeId = context.blockContext?.renderScopeId
 
   return {
     onTouchStart: (event: TouchEvent) => {
@@ -394,7 +395,7 @@ export const dateScrubContentSurface: BlockContentSurfaceContribution = context 
         clearAllForBlock(block.id)
         return
       }
-      if (isBlockEditing(block.id, uiStateBlock)) return
+      if (isBlockEditing(block.id, uiStateBlock, renderScopeId)) return
 
       for (let i = 0; i < event.changedTouches.length; i++) {
         const t = event.changedTouches[i]

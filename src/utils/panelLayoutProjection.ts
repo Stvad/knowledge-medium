@@ -6,6 +6,7 @@ import { PANEL_STACK_TYPE, PANEL_TYPE } from '@/data/blockTypes'
 import {
   activePanelIdProp,
   focusedBlockIdProp,
+  focusedBlockLocationProp,
   scrollTopProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
@@ -19,6 +20,7 @@ import {
 } from '@/utils/routing'
 import { panelHistory } from '@/utils/panelHistory'
 import { CallbackSet } from '@/utils/callbackSet'
+import { outlineRenderScopeId } from '@/utils/renderScope'
 
 export interface ApplyLayoutResult {
   kind: 'applied' | 'empty' | 'ignored' | 'noop' | 'normalized'
@@ -214,7 +216,10 @@ export const createPanelRowInTx = async (
     content: args.blockId,
     properties: {
       [topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode(args.blockId),
-      [focusedBlockIdProp.name]: focusedBlockIdProp.codec.encode(args.blockId),
+      [focusedBlockLocationProp.name]: focusedBlockLocationProp.codec.encode({
+        blockId: args.blockId,
+        renderScopeId: outlineRenderScopeId(args.blockId),
+      }),
       [scrollTopProp.name]: scrollTopProp.codec.encode(0),
     },
   })
@@ -466,7 +471,11 @@ export const reconcilePanelRows = async (
             : null
           panelHistory.enqueueRestore(slot.row.id, restored?.state)
           await tx.setProperty(slot.row.id, topLevelBlockIdProp, blockId)
-          await tx.setProperty(slot.row.id, focusedBlockIdProp, restored?.state?.focusedBlockId ?? blockId)
+          await tx.setProperty(slot.row.id, focusedBlockLocationProp, restored?.state?.focusedLocation ?? {
+            blockId,
+            renderScopeId: outlineRenderScopeId(blockId),
+          })
+          await tx.setProperty(slot.row.id, focusedBlockIdProp, undefined)
           await tx.setProperty(slot.row.id, scrollTopProp, restored?.state?.scrollTop ?? 0)
         }
       }

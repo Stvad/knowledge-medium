@@ -24,8 +24,9 @@ import { useShortcutSurfaceActivations } from '@/extensions/useShortcutSurfaceAc
 import { shortcutSurfaceActivationsFacet } from '@/extensions/blockInteraction'
 import {
   activePanelIdProp,
-  focusedBlockIdProp,
+  focusedBlockLocationProp,
 } from '@/data/properties'
+import { outlineRenderScopeId } from '@/utils/renderScope'
 
 const testGlobals = vi.hoisted(() => ({
   repo: undefined as Repo | undefined,
@@ -61,16 +62,27 @@ vi.mock('@/data/globalState.ts', async () => {
       const block = useTestUIStateBlock()
       return usePropertyValue(block, schema)
     },
-    useInFocus: (blockId: string): boolean =>
-      useHandle(useTestUIStateBlock(), {
-        selector: doc => doc?.properties[properties.focusedBlockIdProp.name] === blockId,
-      }),
-    useInEditMode: (blockId: string): boolean =>
-      useHandle(useTestUIStateBlock(), {
-        selector: doc =>
-          doc?.properties[properties.focusedBlockIdProp.name] === blockId &&
-          Boolean(doc?.properties[properties.isEditingProp.name]),
-      }),
+    useInFocus: (blockId: string): boolean => {
+      const context = useBlockContext()
+      return useHandle(useTestUIStateBlock(), {
+        selector: doc => {
+          const location = properties.focusedBlockLocationFromProperties(doc?.properties)
+          return location?.blockId === blockId &&
+            (!context.renderScopeId || location.renderScopeId === context.renderScopeId)
+        },
+      })
+    },
+    useInEditMode: (blockId: string): boolean => {
+      const context = useBlockContext()
+      return useHandle(useTestUIStateBlock(), {
+        selector: doc => {
+          const location = properties.focusedBlockLocationFromProperties(doc?.properties)
+          return location?.blockId === blockId &&
+            (!context.renderScopeId || location.renderScopeId === context.renderScopeId) &&
+            Boolean(doc?.properties[properties.isEditingProp.name])
+        },
+      })
+    },
     useIsSelected: (): boolean => false,
   }
 })
@@ -87,7 +99,9 @@ function PanelBlockSurface({
   panelId: string
 }) {
   return (
-    <BlockContextProvider initialValue={{panelId, layoutSessionBlockId}}>
+    <BlockContextProvider
+      initialValue={{panelId, layoutSessionBlockId, renderScopeId: outlineRenderScopeId(blockId)}}
+    >
       <BlockSurface blockId={blockId}/>
     </BlockContextProvider>
   )
@@ -152,7 +166,10 @@ describe('useShortcutSurfaceActivations', () => {
         orderKey: 'a0',
         content: 'Panel A',
         properties: {
-          [focusedBlockIdProp.name]: focusedBlockIdProp.codec.encode('block-a'),
+          [focusedBlockLocationProp.name]: focusedBlockLocationProp.codec.encode({
+            blockId: 'block-a',
+            renderScopeId: outlineRenderScopeId('block-a'),
+          }),
         },
       })
       await tx.create({
@@ -162,7 +179,10 @@ describe('useShortcutSurfaceActivations', () => {
         orderKey: 'a1',
         content: 'Panel B',
         properties: {
-          [focusedBlockIdProp.name]: focusedBlockIdProp.codec.encode('block-b'),
+          [focusedBlockLocationProp.name]: focusedBlockLocationProp.codec.encode({
+            blockId: 'block-b',
+            renderScopeId: outlineRenderScopeId('block-b'),
+          }),
         },
       })
       await tx.create({
@@ -188,7 +208,7 @@ describe('useShortcutSurfaceActivations', () => {
     await h.cleanup()
   })
 
-  it('moves block shortcut ownership when the active panel changes without changing focusedBlockId', async () => {
+  it('moves block shortcut ownership when the active panel changes without changing focused location', async () => {
     render(
       <AppRuntimeContextProvider value={runtime}>
         <ActiveContextsProvider>

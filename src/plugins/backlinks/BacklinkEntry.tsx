@@ -3,7 +3,7 @@ import { Block } from '@/data/block'
 import { BlockLoadingPlaceholder } from '@/components/BlockLoadingPlaceholder.js'
 import { BlockComponent } from '@/components/BlockComponent.js'
 import { BreadcrumbList } from '@/plugins/breadcrumbs/BreadcrumbList.js'
-import { NestedBlockContextProvider } from '@/context/block.js'
+import { NestedBlockContextProvider, useBlockContext } from '@/context/block.js'
 import { LazyViewportMount } from '@/components/util/LazyViewportMount.js'
 import type { LazyViewportPlaceholderProps } from '@/components/util/LazyViewportMount.js'
 import { useParents } from '@/hooks/block.js'
@@ -15,6 +15,7 @@ import {
   promoteClosestBreadcrumb,
   type BacklinkEntryShortcutController,
 } from './backlinkBreadcrumbShortcuts.ts'
+import { backlinkRenderScopeId } from '@/utils/renderScope.js'
 
 const NESTED_OVERRIDES = {layoutBoundary: false, isNestedSurface: true, isBacklink: true}
 const BREADCRUMB_OVERRIDES = {...NESTED_OVERRIDES, isBreadcrumb: true}
@@ -71,11 +72,13 @@ const BacklinkItemContent = ({
   parents,
   onSelect,
   onShowBlock,
+  renderScopeId,
 }: {
   shownBlock: Block
   parents: readonly Block[]
   onSelect: (parent: Block) => void
   onShowBlock: (blockId: string) => void
+  renderScopeId: string
 }) => {
   const repo = useRepo()
   const workspaceId = repo.activeWorkspaceId
@@ -94,8 +97,9 @@ const BacklinkItemContent = ({
   }), [promoteBreadcrumb, hasBreadcrumb])
   const bodyOverrides = useMemo(() => ({
     ...NESTED_OVERRIDES,
+    renderScopeId,
     ...backlinkEntryShortcutContextOverrides(shortcutController),
-  }), [shortcutController])
+  }), [renderScopeId, shortcutController])
 
   return (
     <>
@@ -113,10 +117,12 @@ const BacklinkDynamicContent = ({
   shownBlock,
   onSelect,
   onShowBlock,
+  renderScopeId,
 }: {
   shownBlock: Block
   onSelect: (parent: Block) => void
   onShowBlock: (blockId: string) => void
+  renderScopeId: string
 }) => {
   const parents = useParents(shownBlock)
   return (
@@ -125,6 +131,7 @@ const BacklinkDynamicContent = ({
       parents={parents}
       onSelect={onSelect}
       onShowBlock={onShowBlock}
+      renderScopeId={renderScopeId}
     />
   )
 }
@@ -132,14 +139,24 @@ const BacklinkDynamicContent = ({
 const BacklinkItem = ({
   block,
   initialParents = EMPTY_PARENTS,
+  scopeId,
 }: {
   block: Block
   initialParents?: readonly Block[]
+  scopeId: string
 }) => {
   const repo = useRepo()
+  const parentContext = useBlockContext()
   const [shownBlockId, setShownBlockId] = useState(block.id)
   const shownBlock = useMemo(() => repo.block(shownBlockId), [repo, shownBlockId])
   const isInitial = shownBlockId === block.id
+  const parentRenderScopeId = typeof parentContext.renderScopeId === 'string'
+    ? parentContext.renderScopeId
+    : 'backlinks-root'
+  const renderScopeId = useMemo(
+    () => backlinkRenderScopeId(parentRenderScopeId, scopeId),
+    [parentRenderScopeId, scopeId],
+  )
 
   // Wrap in withMoveTransition so unfurling the breadcrumb chain gets
   // the same crossfade as panel breadcrumb navigation. The state change
@@ -165,6 +182,7 @@ const BacklinkItem = ({
               parents={initialParents}
               onSelect={handleSelect}
               onShowBlock={handleShowBlock}
+              renderScopeId={renderScopeId}
             />
           )
         : (
@@ -172,6 +190,7 @@ const BacklinkItem = ({
               shownBlock={shownBlock}
               onSelect={handleSelect}
               onShowBlock={handleShowBlock}
+              renderScopeId={renderScopeId}
             />
           )}
     </div>
@@ -196,18 +215,20 @@ const BacklinkItemPlaceholder = ({
 export const LazyBacklinkItem = ({
   block,
   initialParents,
+  scopeId,
 }: {
   block: Block
   initialParents?: readonly Block[]
+  scopeId: string
 }) => {
   return (
     <LazyViewportMount
-      cacheKey={`backlink:${block.id}`}
+      cacheKey={`backlink:${scopeId}:${block.id}`}
       estimatedHeightPx={BACKLINK_ESTIMATED_HEIGHT_PX}
       overscanPx={BACKLINK_OVERSCAN_PX}
       renderPlaceholder={(props) => <BacklinkItemPlaceholder {...props} />}
     >
-      <BacklinkItem block={block} initialParents={initialParents}/>
+      <BacklinkItem block={block} initialParents={initialParents} scopeId={scopeId} />
     </LazyViewportMount>
   )
 }

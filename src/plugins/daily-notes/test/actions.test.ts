@@ -8,8 +8,8 @@ import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
 import {
   activePanelIdProp,
   editorSelection,
-  focusedBlockIdProp,
   isEditingProp,
+  peekFocusedBlockId,
   topLevelBlockIdProp,
 } from '@/data/properties'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -128,7 +128,7 @@ describe('dailyNotesActions', () => {
     await layoutSession.load()
 
     expect(env.repo.block(newPanel!.id).peekProperty(topLevelBlockIdProp)).toBe(newBlockId)
-    expect(env.repo.block(newPanel!.id).peekProperty(focusedBlockIdProp)).toBe(newBlockId)
+    expect(peekFocusedBlockId(env.repo.block(newPanel!.id))).toBe(newBlockId)
     expect(env.repo.block(newPanel!.id).peekProperty(editorSelection)).toEqual({
       blockId: newBlockId,
       start: 0,

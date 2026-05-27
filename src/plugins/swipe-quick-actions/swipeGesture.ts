@@ -7,7 +7,7 @@ import {
   claimBlockGesture,
   releaseBlockGesture,
 } from '@/extensions/blockGestureConflicts.js'
-import { focusedBlockIdProp, isEditingProp } from '@/data/properties.js'
+import { isEditingProp, isFocusedBlock } from '@/data/properties.js'
 import type { Block } from '@/data/block'
 import {
   dispatchSwipeQuickActionMenuEvent,
@@ -99,8 +99,8 @@ const isMobileViewport = (): boolean => {
   return window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches
 }
 
-const isBlockEditing = (blockId: string, uiStateBlock: Block): boolean =>
-  uiStateBlock.peekProperty(focusedBlockIdProp) === blockId &&
+const isBlockEditing = (blockId: string, uiStateBlock: Block, renderScopeId?: string): boolean =>
+  isFocusedBlock(uiStateBlock, blockId, renderScopeId) &&
   Boolean(uiStateBlock.peekProperty(isEditingProp))
 
 const isSwipeGestureSurfaceEvent = (event: { target: EventTarget | null }): boolean => {
@@ -114,6 +114,7 @@ const isSwipeGestureSurfaceEvent = (event: { target: EventTarget | null }): bool
 
 export const swipeQuickActionsContentSurface: BlockContentSurfaceContribution = context => {
   const {block, uiStateBlock} = context
+  const renderScopeId = context.blockContext?.renderScopeId
 
   return {
     onTouchStart: (event: TouchEvent) => {
@@ -133,7 +134,7 @@ export const swipeQuickActionsContentSurface: BlockContentSurfaceContribution = 
       }
       // While a block is being edited, the CodeMirror editor owns the
       // touch surface — selection drags etc. shouldn't trigger a menu.
-      if (isBlockEditing(block.id, uiStateBlock)) return
+      if (isBlockEditing(block.id, uiStateBlock, renderScopeId)) return
 
       // First finger down on this block wins the gesture; later fingers
       // landing on the same block while a gesture is already in flight
@@ -194,7 +195,7 @@ export const swipeQuickActionsContentSurface: BlockContentSurfaceContribution = 
       // leftward (opening) gesture has a preview — right-swipe on the
       // closed block surface runs a semantic action and doesn't need
       // intermediate visual feedback.
-      if (start.decided === 'horizontal' && dx < 0 && !isBlockEditing(block.id, uiStateBlock)) {
+      if (start.decided === 'horizontal' && dx < 0 && !isBlockEditing(block.id, uiStateBlock, renderScopeId)) {
         start.previewed = true
         dispatchSwipeQuickActionProgressEvent(event.currentTarget, block.id, dx, 'active')
       }
@@ -227,7 +228,7 @@ export const swipeQuickActionsContentSurface: BlockContentSurfaceContribution = 
       // swipe directly on the open menu/toolbar is handled inside
       // SwipeActionMenu itself and remains the close gesture.
       if (Math.abs(dx) > Math.abs(dy)) {
-        if (dx <= -SWIPE_TRIGGER_PX && !isBlockEditing(block.id, uiStateBlock)) {
+        if (dx <= -SWIPE_TRIGGER_PX && !isBlockEditing(block.id, uiStateBlock, renderScopeId)) {
           const handled = !dispatchSwipeQuickActionMenuEvent(
             event.currentTarget,
             SWIPE_QUICK_ACTION_OPEN_EVENT,

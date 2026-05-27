@@ -4,7 +4,7 @@ import { NestedBlockContextProvider, useBlockContext } from '@/context/block.js'
 import { Button } from '@/components/ui/button.js'
 import { ChevronLeft, ChevronRight, X } from 'lucide-react'
 import {
-  focusedBlockIdProp,
+  focusedBlockLocationProp,
   scrollTopProp,
   topLevelBlockIdProp,
 } from '@/data/properties.js'
@@ -24,6 +24,7 @@ import {
   usePanelHistory,
 } from '@/utils/panelHistory.js'
 import { deletePanelRow } from '@/utils/panelLayoutProjection.js'
+import { outlineRenderScopeId } from '@/utils/renderScope.js'
 
 const SCROLL_WRITE_DELAY_MS = 200
 const PANEL_ACTION_BUTTON_CLASS =
@@ -93,17 +94,17 @@ export function PanelRenderer({block}: BlockRendererProps) {
 
   // Register a snapshotter so panelHistory can capture (focused block,
   // scroll) before any navigation away from the current top-level. The
-  // panel block holds focusedBlockIdProp; scroll lives in the DOM and
+  // panel block holds focusedBlockLocationProp; scroll lives in the DOM and
   // we read it from the ref.
   useEffect(() => {
     return panelHistory.registerSnapshotter(block.id, () => ({
-      focusedBlockId: block.peekProperty(focusedBlockIdProp),
+      focusedLocation: block.peekProperty(focusedBlockLocationProp),
       scrollTop: scrollRef.current?.scrollTop,
     }))
   }, [block])
 
   // Consume any pending restore queued by goBackInPanel /
-  // goForwardInPanel. focusedBlockIdProp was already restored
+  // goForwardInPanel. focusedBlockLocationProp was already restored
   // synchronously by the helper (so the new render starts with the
   // right cursor); scroll restoration has to wait for the new content
   // to lay out, which is exactly what this post-effect window gives us.
@@ -177,7 +178,12 @@ export function PanelRenderer({block}: BlockRendererProps) {
   )
 
   const panelBody = (
-    <NestedBlockContextProvider overrides={{layoutBoundary: false}}>
+    <NestedBlockContextProvider
+      overrides={{
+        layoutBoundary: false,
+        renderScopeId: outlineRenderScopeId(topLevelBlockId),
+      }}
+    >
       <BlockComponent blockId={topLevelBlockId}/>
     </NestedBlockContextProvider>
   )

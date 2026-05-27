@@ -1,15 +1,34 @@
 import { BlockComponent } from '@/components/BlockComponent'
-import { NestedBlockContextProvider } from '@/context/block.js'
+import { NestedBlockContextProvider, useBlockContext } from '@/context/block.js'
 import { useRepo } from '@/context/repo'
 import { useBlockExists } from '@/hooks/block'
 import { BlockRefAncestorsProvider } from './cycleGuard'
 import { useBlockRefAncestors } from './useBlockRefAncestors'
+import { embedRenderScopeId, outlineRenderScopeId } from '@/utils/renderScope.js'
 
 const EMBED_CONTEXT_OVERRIDES = {isNestedSurface: true, isEmbedded: true}
 
-export function BlockEmbed({blockId}: {blockId: string}) {
+export function BlockEmbed({
+  blockId,
+  sourceBlockId,
+  occurrenceId,
+}: {
+  blockId: string
+  sourceBlockId: string
+  occurrenceId: string
+}) {
   const repo = useRepo()
   const ancestors = useBlockRefAncestors()
+  const blockContext = useBlockContext()
+  const parentRenderScopeId = typeof blockContext.renderScopeId === 'string'
+    ? blockContext.renderScopeId
+    : outlineRenderScopeId(sourceBlockId)
+  const renderScopeId = embedRenderScopeId(
+    parentRenderScopeId,
+    sourceBlockId,
+    occurrenceId,
+    blockId,
+  )
   const target = repo.block(blockId)
   const targetExists = useBlockExists(target)
 
@@ -34,7 +53,7 @@ export function BlockEmbed({blockId}: {blockId: string}) {
   return (
     <BlockRefAncestorsProvider ancestor={blockId}>
       <div className="blockembed border-l-2 border-muted pl-2 my-1 bg-muted/30 rounded-r">
-        <NestedBlockContextProvider overrides={EMBED_CONTEXT_OVERRIDES}>
+        <NestedBlockContextProvider overrides={{...EMBED_CONTEXT_OVERRIDES, renderScopeId}}>
           <BlockComponent blockId={blockId}/>
         </NestedBlockContextProvider>
       </div>

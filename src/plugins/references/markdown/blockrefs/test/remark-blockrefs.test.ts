@@ -11,7 +11,7 @@ interface BlockrefNode {
   children: RootContent[]
   data: {
     hName: string
-    hProperties: { blockId: string; aliased?: boolean }
+    hProperties: { blockId: string; aliased?: boolean; occurrenceId: string }
   }
 }
 
@@ -45,14 +45,14 @@ describe('remarkBlockrefs', () => {
   it('rewrites bare ((uuid)) into a blockref node', () => {
     const refs = collectBlockrefs(transform(`see ((${id}))`))
     expect(refs).toHaveLength(1)
-    expect(refs[0].data.hProperties).toEqual({blockId: id})
+    expect(refs[0].data.hProperties).toEqual({blockId: id, occurrenceId: 'text:4'})
     expect(childText(refs[0].children)).toBe(`((${id}))`)
   })
 
   it('rewrites [label](((uuid))) into an aliased blockref node', () => {
     const refs = collectBlockrefs(transform(`see [shortcut](((${id}))) now`))
     expect(refs).toHaveLength(1)
-    expect(refs[0].data.hProperties).toEqual({blockId: id, aliased: true})
+    expect(refs[0].data.hProperties).toEqual({blockId: id, occurrenceId: 'link:4', aliased: true})
     expect(childText(refs[0].children)).toBe('shortcut')
   })
 

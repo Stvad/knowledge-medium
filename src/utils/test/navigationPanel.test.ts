@@ -5,6 +5,7 @@ import type { Repo } from '@/data/repo'
 import type { Block } from '@/data/block'
 import {
   focusedBlockIdProp,
+  focusedBlockLocationProp,
   scrollTopProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
@@ -70,7 +71,12 @@ describe('navigate explicit panel', () => {
     await vi.waitFor(() => {
       expect(writes).toEqual([
         {blockId: 'panel-a', property: topLevelBlockIdProp.name, value: 'next-block'},
-        {blockId: 'panel-a', property: focusedBlockIdProp.name, value: 'next-block'},
+        {
+          blockId: 'panel-a',
+          property: focusedBlockLocationProp.name,
+          value: {blockId: 'next-block', renderScopeId: 'outline:next-block'},
+        },
+        {blockId: 'panel-a', property: focusedBlockIdProp.name, value: undefined},
         {blockId: 'panel-a', property: scrollTopProp.name, value: 0},
       ])
     })

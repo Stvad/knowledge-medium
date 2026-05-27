@@ -79,8 +79,9 @@ const buildPanel = (spec: PanelSpec): HTMLElement => {
   el.setAttribute('data-panel-id', spec.panelId)
   for (const inst of spec.instances) {
     const block = document.createElement('div')
-    block.setAttribute('data-block-instance', inst.instance)
+    block.setAttribute('data-block-nav-item', 'true')
     block.setAttribute('data-block-id', inst.blockId)
+    block.setAttribute('data-render-scope-id', inst.instance)
     if (inst.surface) block.setAttribute('data-block-surface', inst.surface)
     if (inst.entryId) block.setAttribute('data-backlink-entry-id', inst.entryId)
     el.appendChild(block)
@@ -105,10 +106,18 @@ const buildLayout = (spec: LayoutSpec): HTMLElement => {
 }
 
 const findInstance = (instance: string): HTMLElement => {
-  const el = document.querySelector<HTMLElement>(`[data-block-instance="${instance}"]`)
+  const el = document.querySelector<HTMLElement>(`[data-render-scope-id="${CSS.escape(instance)}"]`)
   if (!el) throw new Error(`instance ${instance} not in DOM`)
   return el
 }
+
+const scopeOf = (el: HTMLElement | null | undefined): string | undefined =>
+  el?.dataset.renderScopeId
+
+const p1Location = (blockId: string, renderScopeId = `p1:${blockId}`) => ({
+  blockId,
+  renderScopeId,
+})
 
 beforeEach(() => {
   __resetSpatialNavigationForTesting()
@@ -130,10 +139,10 @@ describe('vertical neighbor (h/k)', () => {
         ],
       }},
     ])
-    expect(verticalNeighbor(findInstance('p1:A'), 'down')?.dataset.blockInstance).toBe('p1:B')
-    expect(verticalNeighbor(findInstance('p1:B'), 'down')?.dataset.blockInstance).toBe('p1:C')
+    expect(scopeOf(verticalNeighbor(findInstance('p1:A'), 'down'))).toBe('p1:B')
+    expect(scopeOf(verticalNeighbor(findInstance('p1:B'), 'down'))).toBe('p1:C')
     expect(verticalNeighbor(findInstance('p1:C'), 'down')).toBeNull()
-    expect(verticalNeighbor(findInstance('p1:B'), 'up')?.dataset.blockInstance).toBe('p1:A')
+    expect(scopeOf(verticalNeighbor(findInstance('p1:B'), 'up'))).toBe('p1:A')
   })
 
   it('walks into the backlinks surface as just more in-panel instances', () => {
@@ -148,8 +157,8 @@ describe('vertical neighbor (h/k)', () => {
         ],
       }},
     ])
-    expect(verticalNeighbor(findInstance('p1:B'), 'down')?.dataset.blockInstance).toBe('p1:backlink:e1:X')
-    expect(verticalNeighbor(findInstance('p1:backlink:e1:X'), 'down')?.dataset.blockInstance).toBe('p1:backlink:e2:Y')
+    expect(scopeOf(verticalNeighbor(findInstance('p1:B'), 'down'))).toBe('p1:backlink:e1:X')
+    expect(scopeOf(verticalNeighbor(findInstance('p1:backlink:e1:X'), 'down'))).toBe('p1:backlink:e2:Y')
   })
 
   it('skips breadcrumb-surface instances when walking', () => {
@@ -164,7 +173,7 @@ describe('vertical neighbor (h/k)', () => {
       }},
     ])
     expect(verticalNeighbor(findInstance('p1:A'), 'up')).toBeNull()
-    expect(verticalNeighbor(findInstance('p1:A'), 'down')?.dataset.blockInstance).toBe('p1:B')
+    expect(scopeOf(verticalNeighbor(findInstance('p1:A'), 'down'))).toBe('p1:B')
   })
 
   it('does not loop when the same block appears twice in backlinks', () => {
@@ -178,8 +187,8 @@ describe('vertical neighbor (h/k)', () => {
         ],
       }},
     ])
-    // Same block (X) appears twice; distinct instance keys differentiate them.
-    expect(verticalNeighbor(findInstance('p1:backlink:e1:X'), 'down')?.dataset.blockInstance)
+    // Same block (X) appears twice; distinct render scopes differentiate them.
+    expect(scopeOf(verticalNeighbor(findInstance('p1:backlink:e1:X'), 'down')))
       .toBe('p1:backlink:e2:X')
     expect(verticalNeighbor(findInstance('p1:backlink:e2:X'), 'down')).toBeNull()
   })
@@ -198,9 +207,9 @@ describe('vertical neighbor (h/k)', () => {
       ]},
     ])
     // Off the bottom of the top stack panel → first instance of bottom panel.
-    expect(verticalNeighbor(findInstance('p-top:B'), 'down')?.dataset.blockInstance).toBe('p-bot:C')
+    expect(scopeOf(verticalNeighbor(findInstance('p-top:B'), 'down'))).toBe('p-bot:C')
     // Off the top of the bottom stack panel → last instance of top panel.
-    expect(verticalNeighbor(findInstance('p-bot:C'), 'up')?.dataset.blockInstance).toBe('p-top:B')
+    expect(scopeOf(verticalNeighbor(findInstance('p-bot:C'), 'up'))).toBe('p-top:B')
   })
 
   it('does NOT fall through into a horizontally-adjacent column for k', () => {
@@ -279,30 +288,31 @@ describe('stackSiblingPanel', () => {
 })
 
 describe('locateInstance recovery', () => {
-  it('tier 1: exact key match', () => {
+  it('tier 1: exact location match', () => {
     buildLayout([
       {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
         {blockId: 'A', instance: 'p1:A'},
         {blockId: 'B', instance: 'p1:B'},
       ]}},
     ])
-    const result = locateInstance('p1', {focusedBlockId: 'A', focusedVisualTargetKey: 'p1:B'})
-    expect(result?.dataset.blockInstance).toBe('p1:B')
+    const result = locateInstance('p1', {focusedLocation: p1Location('B')})
+    expect(scopeOf(result)).toBe('p1:B')
   })
 
-  it('tier 2: any instance of the focused block (key gone after re-render)', () => {
+  it('tier 1: disambiguates duplicate logical blocks by render scope', () => {
     buildLayout([
       {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
-        {blockId: 'A', instance: 'p1:A-new'},
+        {blockId: 'A', instance: 'p1:outline:A'},
+        {blockId: 'A', instance: 'p1:embed:parent:0:A'},
       ]}},
     ])
-    // The old key (p1:A-old) no longer exists; block A is still present
-    // under a new instance key after re-render.
-    const result = locateInstance('p1', {focusedBlockId: 'A', focusedVisualTargetKey: 'p1:A-old'})
-    expect(result?.dataset.blockInstance).toBe('p1:A-new')
+    const result = locateInstance('p1', {
+      focusedLocation: {blockId: 'A', renderScopeId: 'p1:embed:parent:0:A'},
+    })
+    expect(scopeOf(result)).toBe('p1:embed:parent:0:A')
   })
 
-  it("tier 3: positional clamp picks 'block previously below' after a delete", () => {
+  it("tier 2: positional clamp picks 'block previously below' after a delete", () => {
     buildLayout([
       {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
         {blockId: 'X', instance: 'p1:X'},
@@ -316,11 +326,11 @@ describe('locateInstance recovery', () => {
     findInstance('p1:Y').remove()
     // clamp(1, 0, 1) lands on the block that's now at idx 1 — Z, which
     // was previously immediately below Y.
-    const result = locateInstance('p1', {focusedBlockId: 'Y'})
-    expect(result?.dataset.blockInstance).toBe('p1:Z')
+    const result = locateInstance('p1', {focusedLocation: p1Location('Y')})
+    expect(scopeOf(result)).toBe('p1:Z')
   })
 
-  it('tier 3: ignores a stale hint that points to a different block', () => {
+  it('tier 2: ignores a stale hint that points to a different rendered location', () => {
     buildLayout([
       {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
         {blockId: 'X', instance: 'p1:X'},
@@ -329,10 +339,10 @@ describe('locateInstance recovery', () => {
       ]}},
     ])
     // Hint records Y, but we're recovering for an unrelated 'A' that
-    // never sat in this panel. Falls through to tier 4 (first instance).
+    // never sat in this panel. Falls through to tier 3 (first instance).
     rememberInstancePosition('p1', findInstance('p1:Y'))
-    const result = locateInstance('p1', {focusedBlockId: 'A', focusedVisualTargetKey: 'gone'})
-    expect(result?.dataset.blockInstance).toBe('p1:X')
+    const result = locateInstance('p1', {focusedLocation: {blockId: 'A', renderScopeId: 'gone'}})
+    expect(scopeOf(result)).toBe('p1:X')
   })
 
   it('falls back to the first instance when no hints are stored', () => {
@@ -340,17 +350,17 @@ describe('locateInstance recovery', () => {
       {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
         {blockId: 'X', instance: 'p1:X'},
         {blockId: 'Y', instance: 'p1:Y'},
-      ]}},
+    ]}},
     ])
     const result = locateInstance('p1', {})
-    expect(result?.dataset.blockInstance).toBe('p1:X')
+    expect(scopeOf(result)).toBe('p1:X')
   })
 
   it('returns null when the panel has no instances', () => {
     buildLayout([
       {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: []}},
     ])
-    expect(locateInstance('p1', {focusedBlockId: 'A'})).toBeNull()
+    expect(locateInstance('p1', {focusedLocation: p1Location('A')})).toBeNull()
   })
 
   it('returns null when the panel is not in the DOM', () => {
@@ -372,7 +382,7 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     ])
     rememberInstancePosition('p1', findInstance('p1:Y'))
     findInstance('p1:Y').remove()
-    expect(findRecoveryAnchor('p1', 'Y')?.dataset.blockId).toBe('Z')
+    expect(findRecoveryAnchor('p1', p1Location('Y'))?.dataset.blockId).toBe('Z')
   })
 
   it('falls to "previously above" when the focused block was last in the list', () => {
@@ -385,7 +395,7 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     rememberInstancePosition('p1', findInstance('p1:B'))
     findInstance('p1:B').remove()
     // B was last — no next sibling — so the recovery target is A.
-    expect(findRecoveryAnchor('p1', 'B')?.dataset.blockId).toBe('A')
+    expect(findRecoveryAnchor('p1', p1Location('B'))?.dataset.blockId).toBe('A')
   })
 
   it('walks the ancestor chain when both siblings disappear (collapse case)', () => {
@@ -398,14 +408,16 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
 
     const parent = document.createElement('div')
     parent.setAttribute('data-block-id', 'parent')
-    parent.setAttribute('data-block-instance', 'p1:parent')
+    parent.setAttribute('data-block-nav-item', 'true')
+    parent.setAttribute('data-render-scope-id', 'p1:parent')
     parent.setAttribute('data-block-surface', 'outline')
     panel.appendChild(parent)
 
     for (const blockId of ['c1', 'X', 'c3']) {
       const child = document.createElement('div')
       child.setAttribute('data-block-id', blockId)
-      child.setAttribute('data-block-instance', `p1:${blockId}`)
+      child.setAttribute('data-block-nav-item', 'true')
+      child.setAttribute('data-render-scope-id', `p1:${blockId}`)
       child.setAttribute('data-block-surface', 'outline')
       parent.appendChild(child)
     }
@@ -417,7 +429,7 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     // Collapse: parent stays, every child unmounts.
     for (const c of ['c1', 'X', 'c3']) findInstance(`p1:${c}`).remove()
 
-    expect(findRecoveryAnchor('p1', 'X')?.dataset.blockId).toBe('parent')
+    expect(findRecoveryAnchor('p1', p1Location('X'))?.dataset.blockId).toBe('parent')
   })
 
   it('returns null when there is no hint about the focused block', () => {
@@ -429,7 +441,7 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     ])
     // No prior rememberInstancePosition — proactive recovery should
     // stay quiet rather than steal focus to whatever rendered first.
-    expect(findRecoveryAnchor('p1', 'A')).toBeNull()
+    expect(findRecoveryAnchor('p1', p1Location('A'))).toBeNull()
   })
 
   it('returns null when the hint is for a different block', () => {
@@ -440,7 +452,7 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
       ]}},
     ])
     rememberInstancePosition('p1', findInstance('p1:A'))
-    expect(findRecoveryAnchor('p1', 'never-mounted')).toBeNull()
+    expect(findRecoveryAnchor('p1', p1Location('never-mounted'))).toBeNull()
   })
 
   it('returns null when the panel has no instances left', () => {
@@ -452,7 +464,7 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     rememberInstancePosition('p1', findInstance('p1:A'))
     findInstance('p1:A').remove()
     // Panel is empty after removal — nothing reasonable to recover to.
-    expect(findRecoveryAnchor('p1', 'A')).toBeNull()
+    expect(findRecoveryAnchor('p1', p1Location('A'))).toBeNull()
   })
 
   it("deleting a parent block: sibling walk crosses the subtree to the data-tree next sibling", () => {
@@ -472,7 +484,8 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     const mkInstance = (blockId: string): HTMLElement => {
       const el = document.createElement('div')
       el.setAttribute('data-block-id', blockId)
-      el.setAttribute('data-block-instance', `p1:${blockId}`)
+      el.setAttribute('data-block-nav-item', 'true')
+      el.setAttribute('data-render-scope-id', `p1:${blockId}`)
       el.setAttribute('data-block-surface', 'outline')
       return el
     }
@@ -491,7 +504,7 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     rememberInstancePosition('p1', findInstance('p1:parent'))
     findInstance('p1:parent').remove()
 
-    expect(findRecoveryAnchor('p1', 'parent')?.dataset.blockId).toBe('below')
+    expect(findRecoveryAnchor('p1', p1Location('parent'))?.dataset.blockId).toBe('below')
   })
 
   it("only-child collapse: same-depth siblings are empty so the ancestor wins", () => {
@@ -511,7 +524,8 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     const mkInstance = (blockId: string): HTMLElement => {
       const el = document.createElement('div')
       el.setAttribute('data-block-id', blockId)
-      el.setAttribute('data-block-instance', `p1:${blockId}`)
+      el.setAttribute('data-block-nav-item', 'true')
+      el.setAttribute('data-render-scope-id', `p1:${blockId}`)
       el.setAttribute('data-block-surface', 'outline')
       return el
     }
@@ -529,7 +543,7 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     rememberInstancePosition('p1', findInstance('p1:X'))
     findInstance('p1:X').remove()
 
-    expect(findRecoveryAnchor('p1', 'X')?.dataset.blockId).toBe('parent')
+    expect(findRecoveryAnchor('p1', p1Location('X'))?.dataset.blockId).toBe('parent')
   })
 
   it('falls back to positional clamp when neighbors and ancestors are all gone', () => {
@@ -557,7 +571,7 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     ])
 
     // X was at idx 1; clamp(1, 0, 1) = 1 = fresh-b.
-    expect(findRecoveryAnchor('p1', 'X')?.dataset.blockId).toBe('fresh-b')
+    expect(findRecoveryAnchor('p1', p1Location('X'))?.dataset.blockId).toBe('fresh-b')
   })
 })
 
@@ -584,7 +598,7 @@ describe('findRecoveryAnchor: viewport-aware tier 4', () => {
     setTestVisible(findInstance('p1:fresh-b'), true)
     setTestVisible(findInstance('p1:fresh-a'), false)
 
-    expect(findRecoveryAnchor('p1', 'X')?.dataset.blockId).toBe('fresh-b')
+    expect(findRecoveryAnchor('p1', p1Location('X'))?.dataset.blockId).toBe('fresh-b')
   })
 
   it('switches to the topmost in-viewport instance when the clamp target is off-screen', () => {
@@ -614,7 +628,7 @@ describe('findRecoveryAnchor: viewport-aware tier 4', () => {
     setTestVisible(findInstance('p1:middle-visible'), false)
     setTestVisible(findInstance('p1:bottom-offscreen'), true)
 
-    expect(findRecoveryAnchor('p1', 'X')?.dataset.blockId).toBe('bottom-offscreen')
+    expect(findRecoveryAnchor('p1', p1Location('X'))?.dataset.blockId).toBe('bottom-offscreen')
   })
 
   it('falls back to positional clamp when no instance is in the viewport', () => {
@@ -637,7 +651,7 @@ describe('findRecoveryAnchor: viewport-aware tier 4', () => {
     // No element opted into visibility; default jsdom-zero rects keep
     // them all "not visible". The fallback returns the positional
     // clamp so we don't strand the user with null.
-    expect(findRecoveryAnchor('p1', 'X')?.dataset.blockId).toBe('fresh-b')
+    expect(findRecoveryAnchor('p1', p1Location('X'))?.dataset.blockId).toBe('fresh-b')
   })
 })
 
@@ -649,7 +663,7 @@ describe('resolveCurrentAnchor', () => {
         {blockId: 'B', instance: 'p1:B'},
       ]}},
     ])
-    expect(resolveCurrentAnchor('p1', 'A')?.dataset.blockInstance).toBe('p1:A')
+    expect(scopeOf(resolveCurrentAnchor('p1', p1Location('A')))).toBe('p1:A')
   })
 
   it('falls back to the recovery anchor when the focused block is missing', () => {
@@ -666,7 +680,7 @@ describe('resolveCurrentAnchor', () => {
     rememberInstancePosition('p1', findInstance('p1:B'))
     findInstance('p1:B').remove()
 
-    expect(resolveCurrentAnchor('p1', 'B')?.dataset.blockId).toBe('C')
+    expect(resolveCurrentAnchor('p1', p1Location('B'))?.dataset.blockId).toBe('C')
   })
 
   it('returns null when no live instance and no hint', () => {
@@ -676,11 +690,11 @@ describe('resolveCurrentAnchor', () => {
       ]}},
     ])
     // No hint stored; missing block has nothing to recover to.
-    expect(resolveCurrentAnchor('p1', 'never-seen')).toBeNull()
+    expect(resolveCurrentAnchor('p1', p1Location('never-seen'))).toBeNull()
   })
 
   it('returns null when the panel is not mounted', () => {
-    expect(resolveCurrentAnchor('no-such-panel', 'whatever')).toBeNull()
+    expect(resolveCurrentAnchor('no-such-panel', {blockId: 'whatever', renderScopeId: 'whatever'})).toBeNull()
   })
 
   it('returns null for an undefined focused block id', () => {
@@ -703,7 +717,7 @@ describe('firstInstanceIn / lastInstanceIn', () => {
       ]}},
     ])
     const panel = panelById('p1')!
-    expect(firstInstanceIn(panel)?.dataset.blockInstance).toBe('p1:A')
-    expect(lastInstanceIn(panel)?.dataset.blockInstance).toBe('p1:B')
+    expect(scopeOf(firstInstanceIn(panel))).toBe('p1:A')
+    expect(scopeOf(lastInstanceIn(panel))).toBe('p1:B')
   })
 })

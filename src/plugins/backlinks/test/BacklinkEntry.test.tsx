@@ -44,7 +44,7 @@ describe('BacklinkEntry breadcrumbs', () => {
 
     render(
       <BlockContextProvider initialValue={{panelId: 'panel-a'}}>
-        <LazyBacklinkItem block={source} initialParents={[parent]} />
+        <LazyBacklinkItem block={source} initialParents={[parent]} scopeId="test:source-block" />
       </BlockContextProvider>,
     )
 

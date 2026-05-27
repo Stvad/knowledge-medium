@@ -6,10 +6,10 @@ import { copyBlockToClipboard } from '@/utils/copy.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
 import {
   editorSelection,
-  focusedBlockIdProp,
   isCollapsedProp,
   focusBlock,
   isEditingProp,
+  peekFocusedBlockId,
   requestEditorFocus,
   setIsEditing,
   showPropertiesProp,
@@ -128,7 +128,7 @@ export const extendSelectionDown = async (uiStateBlock: Block, repo: Repo) => {
   const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
   if (!topLevelBlockId) return
 
-  const focusedBlockId = uiStateBlock.peekProperty(focusedBlockIdProp)
+  const focusedBlockId = peekFocusedBlockId(uiStateBlock)
   if (!focusedBlockId) return
 
   const nextBlock = await nextVisibleBlock(repo.block(focusedBlockId), topLevelBlockId)
@@ -141,7 +141,7 @@ export const extendSelectionUp = async (uiStateBlock: Block, repo: Repo) => {
   const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
   if (!topLevelBlockId) return
 
-  const focusedBlockId = uiStateBlock.peekProperty(focusedBlockIdProp)
+  const focusedBlockId = peekFocusedBlockId(uiStateBlock)
   if (!focusedBlockId) return
 
   const prevBlock = await previousVisibleBlock(repo.block(focusedBlockId), topLevelBlockId)

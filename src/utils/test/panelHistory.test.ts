@@ -4,6 +4,8 @@ import { PanelHistoryStore, type HistoryEntry } from '@/utils/panelHistory'
 const e = (blockId: string, state?: HistoryEntry['state']): HistoryEntry =>
   state ? {blockId, state} : {blockId}
 
+const l = (blockId: string) => ({blockId, renderScopeId: `scope:${blockId}`})
+
 describe('PanelHistoryStore', () => {
   let store: PanelHistoryStore
 
@@ -68,8 +70,8 @@ describe('PanelHistoryStore', () => {
 
   describe('VisitState round-trips on history entries', () => {
     it('preserves state attached to push() through back()/forward()', () => {
-      const stateA = {focusedBlockId: 'fa', scrollTop: 100}
-      const stateB = {focusedBlockId: 'fb', scrollTop: 200}
+      const stateA = {focusedLocation: l('fa'), scrollTop: 100}
+      const stateB = {focusedLocation: l('fb'), scrollTop: 200}
       store.push('p1', e('b-a', stateA))
       const back = store.back('p1', e('b-b', stateB))
       expect(back).toEqual({blockId: 'b-a', state: stateA})
@@ -94,39 +96,39 @@ describe('PanelHistoryStore', () => {
     })
 
     it('snapshot() invokes the registered function and returns its result', () => {
-      const state = {focusedBlockId: 'foo', scrollTop: 42}
+      const state = {focusedLocation: l('foo'), scrollTop: 42}
       store.registerSnapshotter('p1', () => state)
       expect(store.snapshot('p1')).toEqual(state)
     })
 
     it('unsubscribe removes the snapshotter', () => {
-      const fn = () => ({focusedBlockId: 'foo'})
+      const fn = () => ({focusedLocation: l('foo')})
       const unsub = store.registerSnapshotter('p1', fn)
-      expect(store.snapshot('p1')).toEqual({focusedBlockId: 'foo'})
+      expect(store.snapshot('p1')).toEqual({focusedLocation: l('foo')})
       unsub()
       expect(store.snapshot('p1')).toBeUndefined()
     })
 
     it('unsubscribe is a no-op if a remount has replaced the snapshotter', () => {
-      const fnA = () => ({focusedBlockId: 'a'})
-      const fnB = () => ({focusedBlockId: 'b'})
+      const fnA = () => ({focusedLocation: l('a')})
+      const fnB = () => ({focusedLocation: l('b')})
       const unsubA = store.registerSnapshotter('p1', fnA)
       store.registerSnapshotter('p1', fnB) // remount replaces fnA
       unsubA() // should NOT clear fnB
-      expect(store.snapshot('p1')).toEqual({focusedBlockId: 'b'})
+      expect(store.snapshot('p1')).toEqual({focusedLocation: l('b')})
     })
 
     it('isolates snapshotters per panel id', () => {
-      store.registerSnapshotter('p1', () => ({focusedBlockId: 'p1-focus'}))
-      store.registerSnapshotter('p2', () => ({focusedBlockId: 'p2-focus'}))
-      expect(store.snapshot('p1')).toEqual({focusedBlockId: 'p1-focus'})
-      expect(store.snapshot('p2')).toEqual({focusedBlockId: 'p2-focus'})
+      store.registerSnapshotter('p1', () => ({focusedLocation: l('p1-focus')}))
+      store.registerSnapshotter('p2', () => ({focusedLocation: l('p2-focus')}))
+      expect(store.snapshot('p1')).toEqual({focusedLocation: l('p1-focus')})
+      expect(store.snapshot('p2')).toEqual({focusedLocation: l('p2-focus')})
     })
   })
 
   describe('pending-restore queue', () => {
     it('enqueueRestore + consumeRestore round-trips a state', () => {
-      const state = {focusedBlockId: 'foo', scrollTop: 99}
+      const state = {focusedLocation: l('foo'), scrollTop: 99}
       store.enqueueRestore('p1', state)
       expect(store.consumeRestore('p1')).toEqual(state)
     })

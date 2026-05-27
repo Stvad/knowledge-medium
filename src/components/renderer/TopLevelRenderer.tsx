@@ -4,12 +4,7 @@ import { BlockRendererProps } from '@/types.js'
 import { NestedBlockContextProvider } from '@/context/block.js'
 import { useActionContext } from '@/shortcuts/useActionContext.js'
 import { ActionContextTypes } from '@/shortcuts/types.js'
-
-/**
- * This is like this to avoid re-rending on context changing bc of new object creation
- * Plausibly over-optimizing, but wanted to keep an example/reminder on this.
- */
-const CONTEXT_OVERRIDE = {layoutBoundary: false}
+import { outlineRenderScopeId } from '@/utils/renderScope.js'
 
 export function TopLevelRenderer({block}: BlockRendererProps) {
   /**
@@ -32,7 +27,12 @@ export function TopLevelRenderer({block}: BlockRendererProps) {
     <div className="min-h-screen h-screen bg-background text-foreground flex flex-col">
       <div className="container mx-0 max-w-full flex flex-col flex-grow overflow-hidden px-0.5 md:px-2">
         <Header/>
-        <NestedBlockContextProvider overrides={CONTEXT_OVERRIDE}>
+        <NestedBlockContextProvider
+          overrides={{
+            layoutBoundary: false,
+            renderScopeId: outlineRenderScopeId(block.id),
+          }}
+        >
           <BlockComponent blockId={block.id}/>
         </NestedBlockContextProvider>
       </div>

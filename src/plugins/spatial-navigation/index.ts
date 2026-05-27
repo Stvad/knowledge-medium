@@ -25,9 +25,9 @@ export const spatialNavigationPlugin: AppExtension = systemToggle({
   blockShellDecoratorsFacet.of(spatialNavigationShellDecorator, {source: 'spatial-navigation'}),
   spatialNavigationActionDecoratorsExtension,
   spatialNavigationActionsExtension,
-  // Per-panel watchdog: when the focused block disappears (backlink
-  // edited out, parent collapsed) we focus "block just above" instead
-  // of leaving the panel with a dead focusedBlockId pointer.
+  // Per-panel watchdog: when the focused rendered location disappears
+  // (backlink edited out, parent collapsed), recover to the nearest
+  // rendered neighbor instead of leaving the panel with a dead focus pointer.
   panelMountsFacet.of(panelFocusRecoveryMount, {source: 'spatial-navigation'}),
 ])
 

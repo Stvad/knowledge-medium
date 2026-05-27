@@ -6,7 +6,10 @@ import { BlockCache } from '@/data/blockCache'
 import { ChangeScope, type User } from '@/data/api'
 import { Repo } from '@/data/repo'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
-import { focusedBlockIdProp } from '@/data/properties'
+import {
+  focusedBlockLocationProp,
+  peekFocusedBlockId,
+} from '@/data/properties'
 import { PanelFocusRecovery } from '../PanelFocusRecovery.tsx'
 import { __resetSpatialNavigationForTesting } from '../walker.ts'
 
@@ -39,13 +42,27 @@ const buildPanelDom = (
   panel.setAttribute('data-panel-id', panelId)
   for (const b of blocks) {
     const inst = document.createElement('div')
-    inst.setAttribute('data-block-instance', b.instance)
-    inst.setAttribute('data-block-id', b.blockId)
-    inst.setAttribute('data-block-surface', 'outline')
+    setNavAttrs(inst, b.blockId, b.instance)
     panel.appendChild(inst)
   }
   document.body.appendChild(panel)
   return panel
+}
+
+const setNavAttrs = (el: HTMLElement, blockId: string, renderScopeId = `i-${blockId}`): void => {
+  el.setAttribute('data-block-nav-item', 'true')
+  el.setAttribute('data-block-id', blockId)
+  el.setAttribute('data-render-scope-id', renderScopeId)
+  el.setAttribute('data-block-surface', 'outline')
+}
+
+const focusedLocation = (blockId: string, renderScopeId = `i-${blockId}`) => ({
+  blockId,
+  renderScopeId,
+})
+
+const setFocused = async (blockId: string, renderScopeId = `i-${blockId}`): Promise<void> => {
+  await env.repo.block(PANEL_ID).set(focusedBlockLocationProp, focusedLocation(blockId, renderScopeId))
 }
 
 let env: Harness
@@ -61,7 +78,7 @@ beforeEach(async () => {
       parentId: null,
       orderKey: 'a0',
       properties: {
-        [focusedBlockIdProp.name]: focusedBlockIdProp.codec.encode('middle'),
+        [focusedBlockLocationProp.name]: focusedBlockLocationProp.codec.encode(focusedLocation('middle')),
       },
     })
     await tx.create({id: 'first', workspaceId: WS, parentId: null, orderKey: 'b0', content: 'first'})
@@ -89,7 +106,7 @@ describe('PanelFocusRecovery', () => {
     render(<PanelFocusRecovery block={panelBlock}/>)
 
     // Sanity: focus is already on 'middle' and the instance is present.
-    expect(panelBlock.peekProperty(focusedBlockIdProp)).toBe('middle')
+    expect(peekFocusedBlockId(panelBlock)).toBe('middle')
 
     // Simulate a backlink edited out so the entry no longer matches.
     panel.querySelector('[data-block-id="middle"]')!.remove()
@@ -97,12 +114,12 @@ describe('PanelFocusRecovery', () => {
     // Watchdog walks the sibling map — `last` was previously below
     // `middle`, so focus lands there.
     await waitFor(() => {
-      expect(panelBlock.peekProperty(focusedBlockIdProp)).toBe('last')
+      expect(peekFocusedBlockId(panelBlock)).toBe('last')
     })
   })
 
   it("falls to 'previously above' when the disappeared block was first in the panel", async () => {
-    await env.repo.block(PANEL_ID).set(focusedBlockIdProp, 'first')
+    await setFocused('first')
 
     const panel = buildPanelDom(PANEL_ID, [
       {blockId: 'first', instance: 'i-first'},
@@ -118,7 +135,7 @@ describe('PanelFocusRecovery', () => {
     panel.querySelector('[data-block-id="first"]')!.remove()
 
     await waitFor(() => {
-      expect(panelBlock.peekProperty(focusedBlockIdProp)).toBe('middle')
+      expect(peekFocusedBlockId(panelBlock)).toBe('middle')
     })
   })
 
@@ -131,20 +148,16 @@ describe('PanelFocusRecovery', () => {
       await tx.create({id: 'c1', workspaceId: WS, parentId: 'parent', orderKey: 'd0', content: 'c1'})
       await tx.create({id: 'c3', workspaceId: WS, parentId: 'parent', orderKey: 'd2', content: 'c3'})
     }, {scope: ChangeScope.UiState})
-    await env.repo.block(PANEL_ID).set(focusedBlockIdProp, 'middle')
+    await setFocused('middle')
 
     const panel = document.createElement('div')
     panel.setAttribute('data-panel-id', PANEL_ID)
     const parent = document.createElement('div')
-    parent.setAttribute('data-block-id', 'parent')
-    parent.setAttribute('data-block-instance', 'i-parent')
-    parent.setAttribute('data-block-surface', 'outline')
+    setNavAttrs(parent, 'parent')
     panel.appendChild(parent)
     for (const blockId of ['c1', 'middle', 'c3']) {
       const child = document.createElement('div')
-      child.setAttribute('data-block-id', blockId)
-      child.setAttribute('data-block-instance', `i-${blockId}`)
-      child.setAttribute('data-block-surface', 'outline')
+      setNavAttrs(child, blockId)
       parent.appendChild(child)
     }
     document.body.appendChild(panel)
@@ -158,14 +171,14 @@ describe('PanelFocusRecovery', () => {
     }
 
     await waitFor(() => {
-      expect(panelBlock.peekProperty(focusedBlockIdProp)).toBe('parent')
+      expect(peekFocusedBlockId(panelBlock)).toBe('parent')
     })
   })
 
   it('does not misfire when the focused block was never mounted in this panel', async () => {
     // Focus points to a block id we've never seen in the panel. No
-    // hint stored, blockId-match guard rejects tier 3, so no recovery.
-    await env.repo.block(PANEL_ID).set(focusedBlockIdProp, 'never-mounted')
+    // hint stored, location-match guard rejects fallback recovery, so no recovery.
+    await setFocused('never-mounted')
 
     buildPanelDom(PANEL_ID, [
       {blockId: 'first', instance: 'i-first'},
@@ -176,10 +189,10 @@ describe('PanelFocusRecovery', () => {
     render(<PanelFocusRecovery block={panelBlock}/>)
 
     // Give the layout effect + microtask + observer + debounce a tick
-    // to settle. RECOVERY_DEBOUNCE_MS is 80; 150 covers it comfortably.
-    await new Promise(resolve => setTimeout(resolve, 150))
+    // to settle.
+    await new Promise(resolve => setTimeout(resolve, 350))
 
-    expect(panelBlock.peekProperty(focusedBlockIdProp)).toBe('never-mounted')
+    expect(peekFocusedBlockId(panelBlock)).toBe('never-mounted')
   })
 
   it("deleting a parent block lands focus on the same-depth next sibling, not on the parent's first child or the previous block", async () => {
@@ -197,39 +210,29 @@ describe('PanelFocusRecovery', () => {
       await tx.create({id: 'above', workspaceId: WS, parentId: 'topLevel', orderKey: 'd0', content: 'above'})
       await tx.create({id: 'below', workspaceId: WS, parentId: 'topLevel', orderKey: 'd9', content: 'below'})
     }, {scope: ChangeScope.UiState})
-    await env.repo.block(PANEL_ID).set(focusedBlockIdProp, 'parent')
+    await setFocused('parent')
 
     const panel = document.createElement('div')
     panel.setAttribute('data-panel-id', PANEL_ID)
     const top = document.createElement('div')
-    top.setAttribute('data-block-id', 'topLevel')
-    top.setAttribute('data-block-instance', 'i-top')
-    top.setAttribute('data-block-surface', 'outline')
+    setNavAttrs(top, 'topLevel', 'i-top')
     panel.appendChild(top)
 
     const above = document.createElement('div')
-    above.setAttribute('data-block-id', 'above')
-    above.setAttribute('data-block-instance', 'i-above')
-    above.setAttribute('data-block-surface', 'outline')
+    setNavAttrs(above, 'above')
     top.appendChild(above)
 
     const parent = document.createElement('div')
-    parent.setAttribute('data-block-id', 'parent')
-    parent.setAttribute('data-block-instance', 'i-parent')
-    parent.setAttribute('data-block-surface', 'outline')
+    setNavAttrs(parent, 'parent')
     top.appendChild(parent)
     for (const blockId of ['child', 'c2']) {
       const child = document.createElement('div')
-      child.setAttribute('data-block-id', blockId)
-      child.setAttribute('data-block-instance', `i-${blockId}`)
-      child.setAttribute('data-block-surface', 'outline')
+      setNavAttrs(child, blockId)
       parent.appendChild(child)
     }
 
     const below = document.createElement('div')
-    below.setAttribute('data-block-id', 'below')
-    below.setAttribute('data-block-instance', 'i-below')
-    below.setAttribute('data-block-surface', 'outline')
+    setNavAttrs(below, 'below')
     top.appendChild(below)
 
     document.body.appendChild(panel)
@@ -241,7 +244,7 @@ describe('PanelFocusRecovery', () => {
     panel.querySelector('[data-block-id="parent"]')!.remove()
 
     await waitFor(() => {
-      expect(panelBlock.peekProperty(focusedBlockIdProp)).toBe('below')
+      expect(peekFocusedBlockId(panelBlock)).toBe('below')
     })
   })
 
@@ -257,16 +260,14 @@ describe('PanelFocusRecovery', () => {
       await tx.create({id: 'X', workspaceId: WS, parentId: 'parent', orderKey: 'e0', content: 'X'})
       await tx.create({id: 'below', workspaceId: WS, parentId: 'topLevel', orderKey: 'd9', content: 'below'})
     }, {scope: ChangeScope.UiState})
-    await env.repo.block(PANEL_ID).set(focusedBlockIdProp, 'X')
+    await setFocused('X')
 
     const panel = document.createElement('div')
     panel.setAttribute('data-panel-id', PANEL_ID)
 
     const mkInstance = (blockId: string): HTMLElement => {
       const el = document.createElement('div')
-      el.setAttribute('data-block-id', blockId)
-      el.setAttribute('data-block-instance', `i-${blockId}`)
-      el.setAttribute('data-block-surface', 'outline')
+      setNavAttrs(el, blockId)
       return el
     }
 
@@ -287,7 +288,7 @@ describe('PanelFocusRecovery', () => {
     panel.querySelector('[data-block-id="X"]')!.remove()
 
     await waitFor(() => {
-      expect(panelBlock.peekProperty(focusedBlockIdProp)).toBe('parent')
+      expect(peekFocusedBlockId(panelBlock)).toBe('parent')
     })
   })
 
@@ -300,23 +301,21 @@ describe('PanelFocusRecovery', () => {
 
     const panelBlock = env.repo.block(PANEL_ID)
     render(<PanelFocusRecovery block={panelBlock}/>)
-    expect(panelBlock.peekProperty(focusedBlockIdProp)).toBe('middle')
+    expect(peekFocusedBlockId(panelBlock)).toBe('middle')
 
     // Simulate a tab move: the block briefly unmounts and remounts
-    // (under a new instance id) well inside the debounce window.
+    // under the same render scope well inside the debounce window.
     panel.querySelector('[data-block-id="middle"]')!.remove()
     await new Promise(resolve => setTimeout(resolve, 20))
 
     const replacement = document.createElement('div')
-    replacement.setAttribute('data-block-id', 'middle')
-    replacement.setAttribute('data-block-instance', 'i-middle-remount')
-    replacement.setAttribute('data-block-surface', 'outline')
+    setNavAttrs(replacement, 'middle')
     panel.appendChild(replacement)
 
     // Wait past the debounce window and verify no recovery write fired.
-    await new Promise(resolve => setTimeout(resolve, 150))
+    await new Promise(resolve => setTimeout(resolve, 350))
 
-    expect(panelBlock.peekProperty(focusedBlockIdProp)).toBe('middle')
+    expect(peekFocusedBlockId(panelBlock)).toBe('middle')
   })
 
   it('refreshes the positional hint as the user navigates between blocks', async () => {
@@ -331,7 +330,7 @@ describe('PanelFocusRecovery', () => {
 
     // Move focus to `last` — the watchdog should now consider `last`
     // the "current" block for recovery purposes.
-    await panelBlock.set(focusedBlockIdProp, 'last')
+    await panelBlock.set(focusedBlockLocationProp, focusedLocation('last'))
 
     // Yank `last`. Expected recovery target: `middle` (block above).
     await waitFor(() => {
@@ -339,7 +338,7 @@ describe('PanelFocusRecovery', () => {
     })
 
     await waitFor(() => {
-      expect(panelBlock.peekProperty(focusedBlockIdProp)).toBe('middle')
+      expect(peekFocusedBlockId(panelBlock)).toBe('middle')
     })
   })
 })

@@ -91,6 +91,11 @@ export interface BlockContextType {
     }
     panelId?: string
     layoutSessionBlockId?: string
+    /** Stable semantic identity for the rendered outline-like scope that
+     *  contains this block. A logical block id plus this scope identifies
+     *  one rendered occurrence of that block, even when the same block is
+     *  visible in the main outline and one or more embeds/backlink rows. */
+    renderScopeId?: string
     /** Single visible panel mode: widen the panel's scroll target to the
      *  whole layout surface while constraining its document content inside
      *  the panel renderer. */

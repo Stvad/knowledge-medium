@@ -1,19 +1,16 @@
 import type { Block } from '@/data/block'
 import {
   editorSelection,
-  focusedBlockIdProp,
-  isEditingProp,
+  focusBlock,
   requestEditorFocus,
 } from '@/data/properties.js'
 import { videoPlayerViewProp } from './view.ts'
 
 const focusNewVideoNote = async (noteId: string, uiStateBlock: Block): Promise<void> => {
-  await uiStateBlock.set(focusedBlockIdProp, noteId)
+  await focusBlock(uiStateBlock, noteId, {edit: !uiStateBlock.repo.isReadOnly})
   await uiStateBlock.set(editorSelection, {blockId: noteId, start: 0})
 
   if (uiStateBlock.repo.isReadOnly) return
-
-  await uiStateBlock.set(isEditingProp, true)
 
   // Ensure a newly mounted editor receives focus even if edit mode was
   // already active before notes view opened.

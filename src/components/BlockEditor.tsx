@@ -2,12 +2,12 @@ import CodeMirror, { ReactCodeMirrorRef, ReactCodeMirrorProps } from '@uiw/react
 import { Block } from '../data/block'
 import {
   editorSelection,
-  focusedBlockIdProp,
   editorFocusRequestProp,
+  isFocusedBlock,
   type EditorSelectionState,
 } from '@/data/properties.js'
 import { useRef, useEffect, useCallback, useMemo, useState, type Ref } from 'react'
-import { useIsEditing, useUIStateBlock } from '@/data/globalState'
+import { useInEditMode, useIsEditing, useUIStateBlock } from '@/data/globalState'
 import { debounce } from 'lodash'
 import { placeCursorAtX, placeCursorAtCoords } from '@/utils/codemirror.js'
 import { useContentRevision, usePropertyValue } from '@/hooks/block.js'
@@ -15,6 +15,7 @@ import { shouldExitEditModeAfterBlur } from '@/utils/dom.js'
 import { EditorView } from '@codemirror/view'
 import { EditorSelection } from '@codemirror/state'
 import { useShortcutSurfaceActivations } from '@/extensions/useShortcutSurfaceActivations.js'
+import { useBlockContext } from '@/context/block.js'
 
 interface BlockEditorProps extends Omit<ReactCodeMirrorProps, 'value' | 'onChange' | 'onUpdate' | 'onBlur' | 'ref'> {
   block: Block
@@ -56,6 +57,11 @@ export const BlockEditor = ({
   const [editorView, setEditorView] = useState<EditorView | null>(null)
 
   const [isEditing, setIsEditing] = useIsEditing()
+  const inEditMode = useInEditMode(block.id)
+  const blockContext = useBlockContext()
+  const renderScopeId = typeof blockContext.renderScopeId === 'string'
+    ? blockContext.renderScopeId
+    : undefined
   const initialContent = useRef(blockEditData?.content ?? '')
   // Last value we handed to `block.setContent` (or adopted from an
   // external change). Decides whether a `blockData` update is (a) our
@@ -72,7 +78,6 @@ export const BlockEditor = ({
   // batching after a stale-but-published snapshot).
   const lastAdoptedUpdatedAt = useRef(blockEditData?.updatedAt ?? 0)
   const uiStateBlock = useUIStateBlock()
-  const [focusedBlockId] = usePropertyValue(uiStateBlock, focusedBlockIdProp)
   const [focusRequestId] = usePropertyValue(uiStateBlock, editorFocusRequestProp)
 
   // useRef-wrapped debounce is the per-component-instance idiom; its
@@ -100,14 +105,14 @@ export const BlockEditor = ({
     debounce((selection: EditorSelectionState) => {
       // Skip if focus has already moved to another block. Cross-block
       // navigation actions (Up/Down/Backspace-merge) write the target
-      // block's `editorSelection` and then change `focusedBlockId`; this
+      // block's `editorSelection` and then change `focusedBlockLocation`; this
       // BlockEditor unmounts and `flushDebouncers` fires a pending
       // pushSelection synchronously. Without this guard that fire would
       // overwrite the navigation's selection with a stale entry pointing
       // back at this (now unfocused) block, so the new editor's focus
       // effect bails on `selection.blockId !== block.id` and the cursor
       // lands at position 0 instead of the column the user came from.
-      if (uiStateBlock.peekProperty(focusedBlockIdProp) !== selection.blockId) return
+      if (!isFocusedBlock(uiStateBlock, selection.blockId, renderScopeId)) return
       void uiStateBlock.set(editorSelection, selection)
     }, 150),
   ).current
@@ -191,7 +196,7 @@ export const BlockEditor = ({
   }, [blockEditData, editorView, block.id])
 
   useEffect(() => {
-    if (!isEditing || focusedBlockId !== block.id || !editorView) return
+    if (!isEditing || !inEditMode || !editorView) return
 
     let cancelled = false
     const frameId = requestAnimationFrame(() => {
@@ -216,7 +221,7 @@ export const BlockEditor = ({
       cancelled = true
       cancelAnimationFrame(frameId)
     }
-  }, [block.id, editorView, focusedBlockId, focusRequestId, isEditing, uiStateBlock])
+  }, [block.id, editorView, focusRequestId, inEditMode, isEditing, uiStateBlock])
 
   // Activate the EDIT_MODE_CM shortcut surface so actions bound to that
   // context (Escape, Tab, etc.) fire via hotkeys-js whenever this editor is

@@ -13,14 +13,19 @@ import type { BlockAction } from '@/shortcuts/blockActions.js'
 import { bindBlockActionContext } from '@/shortcuts/blockActions.js'
 import {
   activePanelIdProp,
-  focusBlock,
   focusedBlockIdProp,
+  focusedBlockLocationProp,
+  focusBlock,
   isEditingProp,
+  peekFocusedBlockLocation,
+  type FocusedBlockLocation,
 } from '@/data/properties'
 import { ChangeScope } from '@/data/api'
 import type { Block } from '@/data/block'
 import {
   horizontalNeighborPanel,
+  locationOf,
+  panelInstances,
   resolveCurrentAnchor,
   verticalNeighbor,
 } from './walker.ts'
@@ -41,7 +46,10 @@ const currentInstance = (
   const {block, uiStateBlock} = deps
   if (!block || !uiStateBlock) return null
   if (typeof document === 'undefined') return null
-  return resolveCurrentAnchor(uiStateBlock.id, block.id)
+  const focusedLocation = deps.renderScopeId
+    ? {blockId: block.id, renderScopeId: deps.renderScopeId}
+    : peekFocusedBlockLocation(uiStateBlock)
+  return resolveCurrentAnchor(uiStateBlock.id, focusedLocation)
 }
 
 /**
@@ -64,7 +72,7 @@ const currentInstance = (
  *     the data-model parent chain of the source block, which for a
  *     backlink entry lives in some other page entirely. Following
  *     that chain returns a block from elsewhere in the workspace,
- *     and writing it as the panel's `focusedBlockId` leaves
+ *     and writing it as the panel's `focusedBlockLocation` leaves
  *     `useInFocus(<anyone in this panel>)` returning false →
  *     normal-mode deactivates → all shortcuts go dead until the
  *     user clicks back into a block.
@@ -84,10 +92,20 @@ const moveVertical = async (
   // on that target as if recovery had already run; further vertical
   // movement walks normally from there on the next keystroke. Walking past
   // it here would feel like one key press moved two blocks.
-  if (current.dataset.blockId !== block.id) {
-    const anchorBlockId = current.dataset.blockId
-    if (!anchorBlockId) return false
-    void focusBlock(uiStateBlock, anchorBlockId)
+  const currentLocation = locationOf(current)
+  if (!currentLocation) return false
+
+  const expectedLocation = deps.renderScopeId
+    ? {blockId: block.id, renderScopeId: deps.renderScopeId}
+    : peekFocusedBlockLocation(uiStateBlock)
+  if (
+    expectedLocation &&
+    (
+      currentLocation.blockId !== expectedLocation.blockId ||
+      currentLocation.renderScopeId !== expectedLocation.renderScopeId
+    )
+  ) {
+    void focusBlock(uiStateBlock, currentLocation.blockId, {renderScopeId: currentLocation.renderScopeId})
     return true
   }
 
@@ -96,12 +114,12 @@ const moveVertical = async (
   const destPanel = next.closest<HTMLElement>('[data-panel-id]')
   if (!destPanel) return true
   const destPanelId = destPanel.dataset.panelId
-  const destBlockId = next.dataset.blockId
-  if (!destPanelId || !destBlockId) return true
+  const destLocation = locationOf(next)
+  if (!destPanelId || !destLocation) return true
 
   if (destPanelId === uiStateBlock.id) {
     // Same-panel step — identical to vim's `focusBlock` write.
-    void focusBlock(uiStateBlock, destBlockId)
+    void focusBlock(uiStateBlock, destLocation.blockId, {renderScopeId: destLocation.renderScopeId})
     return true
   }
 
@@ -109,7 +127,7 @@ const moveVertical = async (
   // panel atomically with the focus write so `useShortcutSurfaceActivations`
   // doesn't see a window where source panel is inactive AND
   // destination's focused block hasn't moved yet.
-  await crossPanelFocus(uiStateBlock, destPanelId, destBlockId)
+  await crossPanelFocus(uiStateBlock, destPanelId, destLocation)
   return true
 }
 
@@ -129,22 +147,25 @@ const moveHorizontal = async (
   // Sticky-return: read the panel's stored focus, fall back to its
   // top-level (the panel's `topLevelBlockIdProp` aligned to its
   // outline root).
-  const destBlockId = destPanelBlock.peekProperty(focusedBlockIdProp)
-    ?? findFirstInstanceBlockId(destPanel)
-  if (!destBlockId) return false
-  await crossPanelFocus(uiStateBlock, destPanelId, destBlockId)
+  const destLocation = peekFocusedBlockLocation(destPanelBlock)
+    ?? findFirstInstanceLocation(destPanel)
+  if (!destLocation) return false
+  await crossPanelFocus(uiStateBlock, destPanelId, destLocation)
   return true
 }
 
-const findFirstInstanceBlockId = (panel: HTMLElement): string | undefined => {
-  const first = panel.querySelector<HTMLElement>('[data-block-instance]')
-  return first?.dataset.blockId
+const findFirstInstanceLocation = (panel: HTMLElement): FocusedBlockLocation | undefined => {
+  for (const instance of panelInstances(panel)) {
+    const location = locationOf(instance)
+    if (location) return location
+  }
+  return undefined
 }
 
 const crossPanelFocus = async (
   sourcePanelBlock: Block,
   destPanelId: string,
-  destBlockId: string,
+  destLocation: FocusedBlockLocation,
 ): Promise<void> => {
   const repo = sourcePanelBlock.repo
   const destPanelBlock = repo.block(destPanelId)
@@ -162,7 +183,8 @@ const crossPanelFocus = async (
     if (layoutSessionId) {
       await tx.setProperty(layoutSessionId, activePanelIdProp, destPanelId)
     }
-    await tx.setProperty(destPanelBlock.id, focusedBlockIdProp, destBlockId)
+    await tx.setProperty(destPanelBlock.id, focusedBlockLocationProp, destLocation)
+    await tx.setProperty(destPanelBlock.id, focusedBlockIdProp, undefined)
     if (destPanelBlock.peekProperty(isEditingProp) === true) {
       await tx.setProperty(destPanelBlock.id, isEditingProp, false)
     }

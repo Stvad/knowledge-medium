@@ -9,8 +9,9 @@ import { Repo } from '@/data/repo'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import {
   editorSelection,
+  focusBlock,
   isEditingProp,
-  focusedBlockIdProp,
+  peekFocusedBlockId,
   topLevelBlockIdProp,
 } from '@/data/properties'
 import { getLayoutSessionBlock, getUIStateBlock, getUserPrefsBlock } from '@/data/stateBlocks'
@@ -287,7 +288,7 @@ describe('default CodeMirror shortcuts', () => {
 
     const panelBlock = env.repo.block(panelId)
     await panelBlock.load()
-    expect(panelBlock.peekProperty(focusedBlockIdProp)).toBe(newNodeId)
+    expect(peekFocusedBlockId(panelBlock)).toBe(newNodeId)
     expect(panelBlock.peekProperty(isEditingProp)).toBe(true)
   })
 
@@ -301,7 +302,7 @@ describe('default CodeMirror shortcuts', () => {
 
     const uiStateBlock = env.repo.block('ui')
     await uiStateBlock.set(topLevelBlockIdProp, 'root')
-    await uiStateBlock.set(focusedBlockIdProp, 'current')
+    await focusBlock(uiStateBlock, 'current')
 
     const action = findEditModeAction(env.repo, 'move_right_from_cm_end')
     const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
@@ -313,7 +314,7 @@ describe('default CodeMirror shortcuts', () => {
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
     expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
-    expect(uiStateBlock.peekProperty(focusedBlockIdProp)).toBe('next')
+    expect(peekFocusedBlockId(uiStateBlock)).toBe('next')
     expect(uiStateBlock.peekProperty(editorSelection)).toEqual({
       blockId: 'next',
       start: 0,
@@ -330,7 +331,7 @@ describe('default CodeMirror shortcuts', () => {
 
     const uiStateBlock = env.repo.block('ui')
     await uiStateBlock.set(topLevelBlockIdProp, 'root')
-    await uiStateBlock.set(focusedBlockIdProp, 'current')
+    await focusBlock(uiStateBlock, 'current')
 
     const action = findEditModeAction(env.repo, 'move_left_from_cm_start')
     const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
@@ -342,7 +343,7 @@ describe('default CodeMirror shortcuts', () => {
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
     expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
-    expect(uiStateBlock.peekProperty(focusedBlockIdProp)).toBe('prev')
+    expect(peekFocusedBlockId(uiStateBlock)).toBe('prev')
     expect(uiStateBlock.peekProperty(editorSelection)).toEqual({
       blockId: 'prev',
       start: 'previous'.length,
@@ -359,7 +360,7 @@ describe('default CodeMirror shortcuts', () => {
 
     const uiStateBlock = env.repo.block('ui')
     await uiStateBlock.set(topLevelBlockIdProp, 'root')
-    await uiStateBlock.set(focusedBlockIdProp, 'empty')
+    await focusBlock(uiStateBlock, 'empty')
 
     const action = findEditModeAction(env.repo, 'delete_empty_block_cm')
     const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
@@ -372,7 +373,7 @@ describe('default CodeMirror shortcuts', () => {
 
     expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
     expect(env.repo.block('empty').peek()?.deleted).toBe(true)
-    expect(uiStateBlock.peekProperty(focusedBlockIdProp)).toBe('prev')
+    expect(peekFocusedBlockId(uiStateBlock)).toBe('prev')
     expect(uiStateBlock.peekProperty(editorSelection)).toEqual({
       blockId: 'prev',
       start: 'previous'.length,
@@ -390,7 +391,7 @@ describe('default CodeMirror shortcuts', () => {
 
     const uiStateBlock = env.repo.block('ui')
     await uiStateBlock.set(topLevelBlockIdProp, 'root')
-    await uiStateBlock.set(focusedBlockIdProp, 'current')
+    await focusBlock(uiStateBlock, 'current')
 
     const action = findEditModeAction(env.repo, 'delete_empty_block_cm')
     const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
@@ -406,7 +407,7 @@ describe('default CodeMirror shortcuts', () => {
     expect(env.repo.block('current').peek()?.deleted).toBe(true)
     expect(await childIds('parent')).toEqual(['child'])
     expect(env.repo.block('child').peek()?.deleted).toBe(false)
-    expect(uiStateBlock.peekProperty(focusedBlockIdProp)).toBe('parent')
+    expect(peekFocusedBlockId(uiStateBlock)).toBe('parent')
     expect(uiStateBlock.peekProperty(editorSelection)).toEqual({
       blockId: 'parent',
       start: 'parent '.length,
@@ -425,7 +426,7 @@ describe('default CodeMirror shortcuts', () => {
 
     const uiStateBlock = env.repo.block('ui')
     await uiStateBlock.set(topLevelBlockIdProp, 'root')
-    await uiStateBlock.set(focusedBlockIdProp, 'current')
+    await focusBlock(uiStateBlock, 'current')
 
     const action = findEditModeAction(env.repo, 'delete_empty_block_cm')
     const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
@@ -453,7 +454,7 @@ describe('default CodeMirror shortcuts', () => {
 
     const uiStateBlock = env.repo.block('ui')
     await uiStateBlock.set(topLevelBlockIdProp, 'root')
-    await uiStateBlock.set(focusedBlockIdProp, 'current')
+    await focusBlock(uiStateBlock, 'current')
 
     const editorView = codeMirrorEditorView('left right', 'left '.length)
     const action = findEditModeAction(env.repo, 'split_block_cm')
@@ -474,7 +475,7 @@ describe('default CodeMirror shortcuts', () => {
     expect(await childIds('current')).toEqual(['child'])
     expect(editorView.state.doc.toString()).toBe('right')
     expect(editorView.state.selection.main.head).toBe(0)
-    expect(uiStateBlock.peekProperty(focusedBlockIdProp)).toBe('current')
+    expect(peekFocusedBlockId(uiStateBlock)).toBe('current')
     expect(uiStateBlock.peekProperty(editorSelection)).toEqual({
       blockId: 'current',
       start: 0,

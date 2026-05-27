@@ -12,7 +12,8 @@ import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { propertySchemasFacet } from '@/data/facets'
-import { focusedBlockIdProp, showPropertiesProp, topLevelBlockIdProp } from '@/data/properties'
+import { focusedBlockLocationProp, showPropertiesProp, topLevelBlockIdProp } from '@/data/properties'
+import { outlineRenderScopeId } from '@/utils/renderScope'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
@@ -59,9 +60,9 @@ vi.mock('@/data/globalState.ts', async () => {
       ]
     },
     useInFocus: (blockId: string): boolean =>
-      uiStateBlock().peekProperty(properties.focusedBlockIdProp) === blockId,
+      properties.isFocusedBlock(uiStateBlock(), blockId),
     useInEditMode: (blockId: string): boolean =>
-      uiStateBlock().peekProperty(properties.focusedBlockIdProp) === blockId &&
+      properties.isFocusedBlock(uiStateBlock(), blockId) &&
       Boolean(uiStateBlock().peekProperty(properties.isEditingProp)),
     useIsSelected: (): boolean => false,
   }
@@ -159,7 +160,10 @@ describe('DefaultBlockRenderer paste handling', () => {
         parentId: null,
         orderKey: 'a1',
         properties: {
-          [focusedBlockIdProp.name]: focusedBlockIdProp.codec.encode('block-1'),
+          [focusedBlockLocationProp.name]: focusedBlockLocationProp.codec.encode({
+            blockId: 'block-1',
+            renderScopeId: outlineRenderScopeId('root'),
+          }),
           [topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('root'),
         },
       })

@@ -1,4 +1,4 @@
-import { useCallback, useId, useMemo } from 'react'
+import { useCallback, useMemo } from 'react'
 import type { Ref, FocusEvent, PointerEvent } from 'react'
 import type {
   BlockShellDecoratorProps,
@@ -15,12 +15,10 @@ const applyRef = (ref: Ref<HTMLDivElement> | undefined, el: HTMLDivElement | nul
 /**
  * Shell-decorator contract for spatial navigation:
  *   - tag the shell element with data attributes the walker queries.
- *   - expose the instance id to the shortcut surface so action
- *     handlers can locate the source DOM element.
  *
  * What this decorator deliberately does NOT do:
- *   - subscribe to per-panel focused props. Reading focusedBlockId /
- *     focusedVisualTargetKey via usePropertyValue here would attach
+ *   - subscribe to per-panel focused props. Reading focused location
+ *     via usePropertyValue here would attach
  *     a hook subscription per block in the panel; every focus change
  *     then re-renders every block in the panel. That's the
  *     performance pitfall the user hit with the previous plugin.
@@ -32,11 +30,6 @@ const applyRef = (ref: Ref<HTMLDivElement> | undefined, el: HTMLDivElement | nul
  *     the browser's native focus on the shell element (the shell has
  *     tabIndex=0 and we call .focus() on navigation). CSS targets
  *     `:focus-visible` for the highlight.
- *
- * Instance identity comes from React `useId()` — stable across
- * re-renders of the same React position, distinct across positions
- * (so two backlink entries that pull the same block under different
- * groups get distinct instance ids and the walker won't loop on them).
  *
  * Tagging is done via a callback ref wrapped around the original
  * shellRef. That way the data attributes are set synchronously the
@@ -51,8 +44,10 @@ export function SpatialNavigationShellDecorator({
 }: BlockShellDecoratorProps) {
   const blockContext = resolveContext.blockContext ?? {}
   const surface = surfaceFromContext(blockContext)
-  const instanceId = useId()
   const panelId = typeof blockContext.panelId === 'string' ? blockContext.panelId : undefined
+  const renderScopeId = typeof blockContext.renderScopeId === 'string'
+    ? blockContext.renderScopeId
+    : undefined
 
   const upstreamRef = state.shellProps.ref
   // Callback ref runs synchronously the instant React attaches the
@@ -63,11 +58,14 @@ export function SpatialNavigationShellDecorator({
   const wrappedRef = useCallback((el: HTMLDivElement | null) => {
     applyRef(upstreamRef, el)
     if (el) {
-      el.dataset.blockInstance = instanceId
+      el.dataset.blockNavItem = 'true'
       el.dataset.blockSurface = surface
+      if (renderScopeId) el.dataset.renderScopeId = renderScopeId
+      else delete el.dataset.renderScopeId
       if (panelId) el.dataset.panelIdHint = panelId
+      else delete el.dataset.panelIdHint
     }
-  }, [instanceId, panelId, surface, upstreamRef])
+  }, [panelId, renderScopeId, surface, upstreamRef])
 
   const nextState = useMemo<BlockShellState>(() => ({
     shellProps: {
@@ -80,11 +78,8 @@ export function SpatialNavigationShellDecorator({
         state.shellProps.onPointerDownCapture?.(event)
       },
     },
-    shortcutSurfaceOptions: {
-      ...state.shortcutSurfaceOptions,
-      visualTargetId: instanceId,
-    },
-  }), [instanceId, state.shellProps, state.shortcutSurfaceOptions, wrappedRef])
+    shortcutSurfaceOptions: state.shortcutSurfaceOptions,
+  }), [state.shellProps, state.shortcutSurfaceOptions, wrappedRef])
 
   return <>{children(nextState)}</>
 }

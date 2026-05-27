@@ -151,6 +151,7 @@ const touchEvent = (
 const makeFakeUiStateBlock = (): Block => {
   const props = new Map<string, unknown>()
   return {
+    peek: vi.fn(() => ({properties: Object.fromEntries(props)})),
     peekProperty: vi.fn((schema: PropertySchema<unknown>) => props.get(schema.name)),
     set: vi.fn(async (schema: PropertySchema<unknown>, value: unknown) => {
       if (value === undefined) props.delete(schema.name)

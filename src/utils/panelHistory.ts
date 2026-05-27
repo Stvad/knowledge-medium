@@ -24,9 +24,12 @@ import type { Block } from '@/data/block'
 import { ChangeScope } from '@/data/api'
 import {
   focusedBlockIdProp,
+  focusedBlockLocationProp,
+  type FocusedBlockLocation,
   scrollTopProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
+import { outlineRenderScopeId } from '@/utils/renderScope'
 import { CallbackSet } from '@/utils/callbackSet'
 import { withMoveTransition } from '@/utils/viewTransition'
 
@@ -34,7 +37,7 @@ import { withMoveTransition } from '@/utils/viewTransition'
  *  and replayed on back/forward. New fields can be added freely; consumers
  *  read them defensively (snapshot may be undefined or partial). */
 export interface VisitState {
-  focusedBlockId?: string
+  focusedLocation?: FocusedBlockLocation
   scrollTop?: number
 }
 
@@ -228,7 +231,11 @@ export const navigateInPanel = async (
   await withMoveTransition(async () => {
     await panelBlock.repo.tx(async tx => {
       await tx.setProperty(panelBlock.id, topLevelBlockIdProp, blockId)
-      await tx.setProperty(panelBlock.id, focusedBlockIdProp, blockId)
+      await tx.setProperty(panelBlock.id, focusedBlockLocationProp, {
+        blockId,
+        renderScopeId: outlineRenderScopeId(blockId),
+      })
+      await tx.setProperty(panelBlock.id, focusedBlockIdProp, undefined)
       await tx.setProperty(panelBlock.id, scrollTopProp, 0)
     }, {scope: ChangeScope.UiState, description: 'navigate in panel'})
   })
@@ -253,7 +260,11 @@ export const goBackInPanel = async (panelBlock: Block): Promise<boolean> => {
   await withMoveTransition(async () => {
     await panelBlock.repo.tx(async tx => {
       await tx.setProperty(panelBlock.id, topLevelBlockIdProp, dest.blockId)
-      await tx.setProperty(panelBlock.id, focusedBlockIdProp, dest.state?.focusedBlockId ?? dest.blockId)
+      await tx.setProperty(panelBlock.id, focusedBlockLocationProp, dest.state?.focusedLocation ?? {
+        blockId: dest.blockId,
+        renderScopeId: outlineRenderScopeId(dest.blockId),
+      })
+      await tx.setProperty(panelBlock.id, focusedBlockIdProp, undefined)
       await tx.setProperty(panelBlock.id, scrollTopProp, dest.state?.scrollTop ?? 0)
     }, {scope: ChangeScope.UiState, description: 'panel history back'})
   })
@@ -272,7 +283,11 @@ export const goForwardInPanel = async (panelBlock: Block): Promise<boolean> => {
   await withMoveTransition(async () => {
     await panelBlock.repo.tx(async tx => {
       await tx.setProperty(panelBlock.id, topLevelBlockIdProp, dest.blockId)
-      await tx.setProperty(panelBlock.id, focusedBlockIdProp, dest.state?.focusedBlockId ?? dest.blockId)
+      await tx.setProperty(panelBlock.id, focusedBlockLocationProp, dest.state?.focusedLocation ?? {
+        blockId: dest.blockId,
+        renderScopeId: outlineRenderScopeId(dest.blockId),
+      })
+      await tx.setProperty(panelBlock.id, focusedBlockIdProp, undefined)
       await tx.setProperty(panelBlock.id, scrollTopProp, dest.state?.scrollTop ?? 0)
     }, {scope: ChangeScope.UiState, description: 'panel history forward'})
   })

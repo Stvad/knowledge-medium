@@ -9,6 +9,7 @@ interface BlockrefNode {
   properties?: {
     blockId?: unknown
     aliased?: unknown
+    occurrenceId?: unknown
   }
 }
 
@@ -22,9 +23,14 @@ const getBlockId = (node?: BlockrefNode) => {
   return typeof id === 'string' ? id : ''
 }
 
+const getOccurrenceId = (node?: BlockrefNode) => {
+  const occurrenceId = node?.properties?.occurrenceId
+  return typeof occurrenceId === 'string' && occurrenceId ? occurrenceId : 'unknown'
+}
+
 const isAliased = (node?: BlockrefNode) => node?.properties?.aliased === true
 
-export const blockrefMarkdownExtension: MarkdownExtension = () => ({
+export const blockrefMarkdownExtension: MarkdownExtension = ({block}) => ({
   remarkPlugins: [remarkBlockrefs],
   components: {
     blockref: ({node, children}: BlockrefComponentProps) => {
@@ -35,7 +41,13 @@ export const blockrefMarkdownExtension: MarkdownExtension = () => ({
     blockembed: ({node}: BlockrefComponentProps) => {
       const blockId = getBlockId(node)
       if (!blockId) return null
-      return <BlockEmbed blockId={blockId}/>
+      return (
+        <BlockEmbed
+          blockId={blockId}
+          sourceBlockId={block.id}
+          occurrenceId={getOccurrenceId(node)}
+        />
+      )
     },
   } as unknown as Components,
 })

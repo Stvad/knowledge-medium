@@ -72,7 +72,11 @@ function RecentRow({data, now}: RecentRowProps) {
     >
       <div className="flex items-start justify-between gap-3 py-1">
         <div className="min-w-0 flex-1">
-          <BlockEmbed blockId={data.id}/>
+          <BlockEmbed
+            blockId={data.id}
+            sourceBlockId="recents"
+            occurrenceId={`row:${data.id}`}
+          />
         </div>
         <span className="shrink-0 pt-1 text-xs text-muted-foreground tabular-nums">
           {formatRelative(data.updatedAt, now)}

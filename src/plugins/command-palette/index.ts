@@ -56,7 +56,7 @@ export const commandPaletteAction: ActionConfig<typeof ActionContextTypes.GLOBAL
  *  palette. The palette renders against the live `useActiveContextsState`,
  *  so making this block the focused-and-not-editing one ensures
  *  NORMAL_MODE for it is active and the palette lists block-context
- *  actions for it. `focusBlock` writes both `focusedBlockId` and
+ *  actions for it. `focusBlock` writes both `focusedBlockLocation` and
  *  `isEditing=false` in one tx and returns the promise we await — if we
  *  fired the toggle before that resolved, the palette would render
  *  against the previously-focused block's NORMAL_MODE deps and any
@@ -66,8 +66,8 @@ export const commandPaletteForBlockAction: ActionConfig<typeof ActionContextType
   description: 'Open command palette',
   context: ActionContextTypes.NORMAL_MODE,
   icon: Command,
-  handler: async ({block, uiStateBlock}) => {
-    await focusBlock(uiStateBlock, block.id)
+  handler: async ({block, uiStateBlock, renderScopeId}) => {
+    await focusBlock(uiStateBlock, block.id, {renderScopeId})
     window.dispatchEvent(new CustomEvent(toggleCommandPaletteEvent))
   },
 }

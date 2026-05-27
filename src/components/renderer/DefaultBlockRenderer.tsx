@@ -60,7 +60,7 @@ import {
   type BlockShellProps,
 } from '@/extensions/blockInteraction.js'
 import { useShortcutSurfaceActivations } from '@/extensions/useShortcutSurfaceActivations.js'
-import { focusedBlockIdProp } from '@/data/properties.js'
+import { isFocusedBlock } from '@/data/properties.js'
 
 interface DefaultBlockRendererProps extends BlockRendererProps {
   ContentRenderer?: BlockRenderer;
@@ -454,7 +454,10 @@ export function DefaultBlockRenderer(
   const handlePaste = useMemo(
     () => async (e: ClipboardEvent<HTMLElement>) => {
       if (e.defaultPrevented || isInteractiveContentEvent(e)) return
-      if (uiStateBlock.peekProperty(focusedBlockIdProp) !== block.id) return
+      const renderScopeId = typeof blockContext.renderScopeId === 'string'
+        ? blockContext.renderScopeId
+        : undefined
+      if (!isFocusedBlock(uiStateBlock, block.id, renderScopeId)) return
 
       e.preventDefault()
       const pastedText = e.clipboardData.getData('text/plain')
@@ -464,7 +467,7 @@ export function DefaultBlockRenderer(
         void focusBlock(uiStateBlock, pasted[0].id)
       }
     },
-    [block, repo, uiStateBlock],
+    [block, blockContext.renderScopeId, repo, uiStateBlock],
   )
 
   // Content slot: the content surface div + its surface props + the

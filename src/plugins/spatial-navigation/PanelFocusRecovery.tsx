@@ -1,9 +1,15 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
 import { usePropertyValue } from '@/hooks/block.js'
-import { focusBlock, focusedBlockIdProp } from '@/data/properties'
+import {
+  focusBlock,
+  focusedBlockLocationProp,
+  peekFocusedBlockLocation,
+  type FocusedBlockLocation,
+} from '@/data/properties'
 import type { Block } from '@/data/block'
 import {
   findRecoveryAnchor,
+  locationOf,
   panelById,
   panelInstances,
   rememberInstancePosition,
@@ -41,12 +47,13 @@ import {
 const RECOVERY_DEBOUNCE_MS = 250
 
 /**
- * Per-panel watchdog that keeps `focusedBlockId` pointed at a block
- * that actually exists in the panel DOM. Two cases motivate this:
+ * Per-panel watchdog that keeps `focusedBlockLocation` pointed at a
+ * rendered block location that actually exists in the panel DOM. Two
+ * cases motivate this:
  *
  *   1. The user edits a block in the backlinks section so it stops
- *      matching the backlink query. The block unmounts but its id is
- *      still written on the panel's `focusedBlockId`. Movement actions
+ *      matching the backlink query. The block unmounts but its location
+ *      is still written on the panel's focus state. Movement actions
  *      would have no anchor to walk from and the highlight goes dark.
  *   2. The user collapses the parent of the focused block. The child
  *      unmounts; same problem.
@@ -59,7 +66,7 @@ const RECOVERY_DEBOUNCE_MS = 250
  * whole subtree, neither sibling survives but the parent itself
  * does, so we land on it). The neighbor map is populated by this
  * component itself on every render where the focused block IS
- * mounted, via `rememberInstancePosition`. The blockId-match guard
+ * mounted, via `rememberInstancePosition`. The location-match guard
  * inside `findRecoveryAnchor` prevents misfires for panels the user
  * has never visited.
  *
@@ -77,7 +84,7 @@ export function PanelFocusRecovery({block}: {block: Block}) {
   // Re-render whenever the focused block changes. Cheap: this
   // component renders null, so a re-render is just running the
   // layout-effect's check.
-  const [focusedBlockId] = usePropertyValue(block, focusedBlockIdProp)
+  const [focusedLocation] = usePropertyValue(block, focusedBlockLocationProp)
 
   // Pending-recovery timer. Lives on the component so it's per-panel
   // (a separate panel could be debouncing its own recovery in parallel
@@ -88,11 +95,11 @@ export function PanelFocusRecovery({block}: {block: Block}) {
   // rendered for some other reason). `useLayoutEffect` so any sibling-
   // remember work happens before paint.
   useLayoutEffect(() => {
-    runRecoveryCheck(block, focusedBlockId, pendingTimerRef)
-  }, [block, focusedBlockId])
+    runRecoveryCheck(block, focusedLocation ?? peekFocusedBlockLocation(block), pendingTimerRef)
+  }, [block, focusedLocation])
 
   // Watch the panel's DOM for childList changes — the focused block
-  // can disappear without `focusedBlockId` itself changing (a backlink
+  // can disappear without `focusedBlockLocation` itself changing (a backlink
   // list re-renders internally, a parent collapse unmounts a subtree).
   // MutationObserver coalesces bursts via the microtask scheduling
   // below.
@@ -106,7 +113,7 @@ export function PanelFocusRecovery({block}: {block: Block}) {
       scheduled = true
       queueMicrotask(() => {
         scheduled = false
-        const currentFocused = block.peekProperty(focusedBlockIdProp)
+        const currentFocused = peekFocusedBlockLocation(block)
         runRecoveryCheck(block, currentFocused, pendingTimerRef)
       })
     }
@@ -127,7 +134,7 @@ export function PanelFocusRecovery({block}: {block: Block}) {
 
 const runRecoveryCheck = (
   block: Block,
-  focusedBlockId: string | undefined,
+  focusedLocation: FocusedBlockLocation | undefined,
   pendingTimerRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>,
 ): void => {
   // Every entry cancels any pending recovery and re-evaluates from
@@ -141,7 +148,7 @@ const runRecoveryCheck = (
     pendingTimerRef.current = null
   }
 
-  if (!focusedBlockId) return
+  if (!focusedLocation) return
 
   const panelEl = panelById(block.id)
   if (!panelEl) return
@@ -149,7 +156,11 @@ const runRecoveryCheck = (
   const instances = panelInstances(panelEl)
   if (instances.length === 0) return
 
-  const focusedInstance = instances.find(el => el.dataset.blockId === focusedBlockId)
+  const focusedInstance = instances.find(el => {
+    const location = locationOf(el)
+    return location?.blockId === focusedLocation.blockId
+      && location.renderScopeId === focusedLocation.renderScopeId
+  })
 
   if (focusedInstance) {
     // Block is alive in the panel — refresh the sibling/ancestor hint
@@ -161,25 +172,39 @@ const runRecoveryCheck = (
   // Block is gone, but we may be mid-burst (tab move, Enter split,
   // etc.). Schedule the recovery write for `RECOVERY_DEBOUNCE_MS`
   // and let any subsequent check cancel it if the block reappears.
-  // We early-exit if there's no stored hint matching `focusedBlockId`
+  // We early-exit if there's no stored hint matching `focusedLocation`
   // (which `findRecoveryAnchor` enforces) — that quietly leaves the
   // panel alone during initial mounts where the focused block's data
   // hasn't loaded yet.
-  if (!findRecoveryAnchor(block.id, focusedBlockId)) return
+  if (!findRecoveryAnchor(block.id, focusedLocation)) return
 
   pendingTimerRef.current = setTimeout(() => {
     pendingTimerRef.current = null
     // Re-verify at the moment of write — anything could have changed
     // during the debounce window.
-    const stillFocused = block.peekProperty(focusedBlockIdProp)
-    if (stillFocused !== focusedBlockId) return
+    const stillFocused = peekFocusedBlockLocation(block)
+    if (
+      !stillFocused ||
+      stillFocused.blockId !== focusedLocation.blockId ||
+      stillFocused.renderScopeId !== focusedLocation.renderScopeId
+    ) return
     const panel = panelById(block.id)
     if (!panel) return
     const refreshed = panelInstances(panel)
-    if (refreshed.find(el => el.dataset.blockId === focusedBlockId)) return
-    const anchor = findRecoveryAnchor(block.id, focusedBlockId)
-    const recoveryBlockId = anchor?.dataset.blockId
-    if (!recoveryBlockId || recoveryBlockId === focusedBlockId) return
-    void focusBlock(block, recoveryBlockId)
+    if (refreshed.find(el => {
+      const location = locationOf(el)
+      return location?.blockId === focusedLocation.blockId
+        && location.renderScopeId === focusedLocation.renderScopeId
+    })) return
+    const anchor = findRecoveryAnchor(block.id, focusedLocation)
+    const recoveryLocation = anchor ? locationOf(anchor) : null
+    if (
+      !recoveryLocation ||
+      (
+        recoveryLocation.blockId === focusedLocation.blockId &&
+        recoveryLocation.renderScopeId === focusedLocation.renderScopeId
+      )
+    ) return
+    void focusBlock(block, recoveryLocation.blockId, {renderScopeId: recoveryLocation.renderScopeId})
   }, RECOVERY_DEBOUNCE_MS)
 }

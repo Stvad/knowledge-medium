@@ -126,6 +126,7 @@ const GroupItems = ({
             <LazyBacklinkItem
               key={source.id}
               block={source}
+              scopeId={`group:${group.groupId}:${source.id}`}
               initialParents={parentsBySourceId.get(source.id)}
             />
           ))}

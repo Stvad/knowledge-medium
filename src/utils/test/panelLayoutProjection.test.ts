@@ -7,9 +7,10 @@ import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import { keysBetween } from '@/data/orderKey'
 import {
-  focusedBlockIdProp,
+  focusedBlockLocationProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
+import { outlineRenderScopeId } from '@/utils/renderScope'
 import {
   PanelLayoutProjection,
   applyCurrentLayoutUrl,
@@ -144,7 +145,10 @@ describe('applyCurrentLayoutUrl', () => {
 
     panelHistory.push(rowB, {
       blockId: 'x',
-      state: {focusedBlockId: 'x-child', scrollTop: 42},
+      state: {
+        focusedLocation: {blockId: 'x-child', renderScopeId: outlineRenderScopeId('x')},
+        scrollTop: 42,
+      },
     })
 
     await applyCurrentLayoutUrl({
@@ -156,8 +160,14 @@ describe('applyCurrentLayoutUrl', () => {
 
     const after = await rowIdsByBlock()
     expect(after.get('x')).toBe(rowB)
-    expect(env.repo.block(rowB).peekProperty(focusedBlockIdProp)).toBe('x-child')
-    expect(panelHistory.consumeRestore(rowB)).toEqual({focusedBlockId: 'x-child', scrollTop: 42})
+    expect(env.repo.block(rowB).peekProperty(focusedBlockLocationProp)).toEqual({
+      blockId: 'x-child',
+      renderScopeId: outlineRenderScopeId('x'),
+    })
+    expect(panelHistory.consumeRestore(rowB)).toEqual({
+      focusedLocation: {blockId: 'x-child', renderScopeId: outlineRenderScopeId('x')},
+      scrollTop: 42,
+    })
     expect(panelHistory.getSnapshot(rowB).forward.map(entry => entry.blockId)).toEqual(['b'])
   })
 
