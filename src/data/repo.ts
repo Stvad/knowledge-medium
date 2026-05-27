@@ -55,6 +55,7 @@ import { buildQualifiedBlockColumnsSql, parseBlockRow, type BlockRow } from '@/d
 import { KERNEL_MUTATORS } from './internals/kernelMutators'
 import { KERNEL_PROCESSORS } from './internals/kernelProcessors'
 import { KERNEL_SAME_TX_PROCESSORS } from './internals/normalizeReferencesProcessor'
+import { materializePropertyChildrenForExistingRow } from './internals/propertyChildrenProcessor'
 import { KERNEL_QUERIES } from './internals/kernelQueries'
 import { kernelInvalidationRule } from './internals/kernelInvalidation'
 import {
@@ -86,6 +87,7 @@ import {
 import {
   startRowEventsTail,
   type RowEventsTail,
+  type RowEventsTailAcceptedEvent,
   type RowEventsTailOptions,
 } from './internals/rowEventsTail'
 import {
@@ -225,6 +227,20 @@ const changedRefSchemaNames = (
   return Array.from(names)
     .filter(name => refCodecKind(before.get(name)) !== refCodecKind(after.get(name)))
     .sort()
+}
+
+const PROPERTY_CHILDREN_BACKFILL_BATCH_SIZE = 200
+
+const schemasByScope = (
+  schemas: Iterable<AnyPropertySchema>,
+): Map<ChangeScope, AnyPropertySchema[]> => {
+  const out = new Map<ChangeScope, AnyPropertySchema[]>()
+  for (const schema of schemas) {
+    const bucket = out.get(schema.changeScope) ?? []
+    bucket.push(schema)
+    out.set(schema.changeScope, bucket)
+  }
+  return out
 }
 
 const appendRefProjection = (
@@ -610,6 +626,11 @@ export class Repo {
    *  start, replaced on subsequent starts. Tests can `dispose()` and
    *  re-`start` for deterministic flushing. */
   private rowEventsTail: RowEventsTail | null = null
+  /** Serializes schema-aware `properties_json` → field/value child
+   *  backfills. Startup, runtime schema refresh, and sync arrivals can
+   *  all request catch-up; a single chain prevents duplicate write
+   *  transactions from racing each other. */
+  private propertyChildrenBackfillChain: Promise<void> = Promise.resolve()
   /** Backing field for `activeWorkspaceId` (see getter/setter below). */
   private _activeWorkspaceId: string | null = null
   /** Instance discriminator for memoization keys that need to vary
@@ -826,12 +847,23 @@ export class Repo {
    *  manual flushing. */
   startRowEventsTail(options?: RowEventsTailOptions): RowEventsTail {
     if (this.rowEventsTail) this.rowEventsTail.dispose()
+    const userOnRowsAccepted = options?.onRowsAccepted
+    const wrappedOptions: RowEventsTailOptions = {
+      ...options,
+      onRowsAccepted: event => {
+        try {
+          userOnRowsAccepted?.(event)
+        } finally {
+          this.handleRowsAcceptedForPropertyBackfill(event)
+        }
+      },
+    }
     this.rowEventsTail = startRowEventsTail({
       db: this.db,
       cache: this.cache,
       handleStore: this.handleStore,
       getInvalidationRules: () => this.invalidationRules,
-      options,
+      options: wrappedOptions,
     })
     return this.rowEventsTail
   }
@@ -1054,6 +1086,7 @@ export class Repo {
 
   setActiveWorkspaceId(workspaceId: string | null): void {
     this._activeWorkspaceId = workspaceId
+    if (workspaceId !== null) this.schedulePropertyChildrenBackfill(workspaceId)
   }
 
   /** Toggle read-only mode. Wrapping the field write in a method
@@ -1347,6 +1380,98 @@ export class Repo {
       [wsId, jsonPathForProperty(name)],
     )
     return row?.count ?? 0
+  }
+
+  private async propertyChildrenBackfillCandidates(
+    workspaceId: string,
+    schemas: readonly AnyPropertySchema[],
+    afterId: string,
+    limit: number,
+  ): Promise<BlockData[]> {
+    if (schemas.length === 0) return []
+    const clauses = schemas.map(() => `
+      (
+        prop.key = ?
+        AND NOT EXISTS (
+          SELECT 1
+          FROM blocks field
+          WHERE field.workspace_id = b.workspace_id
+            AND field.parent_id = b.id
+            AND field.deleted = 0
+            AND field.reference_target_id = ?
+            AND EXISTS (
+              SELECT 1
+              FROM blocks value
+              WHERE value.workspace_id = field.workspace_id
+                AND value.parent_id = field.id
+                AND value.deleted = 0
+            )
+        )
+      )
+    `)
+    const params = schemas.flatMap(schema => [schema.name, schema.fieldId])
+    const rows = await this.db.getAll<BlockRow>(
+      `
+        SELECT DISTINCT ${buildQualifiedBlockColumnsSql('b')}
+        FROM blocks b, json_each(b.properties_json) prop
+        WHERE b.workspace_id = ?
+          AND b.deleted = 0
+          AND b.id > ?
+          AND (${clauses.join(' OR ')})
+        ORDER BY b.id
+        LIMIT ?
+      `,
+      [workspaceId, afterId, ...params, limit],
+    )
+    return rows.map(parseBlockRow)
+  }
+
+  /** Materialize field/value child rows for historical rows that still
+   *  only have registered values in `properties_json`. This is the
+   *  migration path for data from before Tana-style fields: the JSON
+   *  projection remains intact, and the child-backed source rows are
+   *  added using the same codec-aware materializer that raw property
+   *  writes use inside normal transactions. */
+  async backfillPropertyChildrenFromProperties(args: {
+    workspaceId?: string
+    propertySchemas?: ReadonlyMap<string, AnyPropertySchema>
+    batchSize?: number
+  } = {}): Promise<number> {
+    if (this.isReadOnly) return 0
+    const workspaceId = args.workspaceId ?? this.activeWorkspaceId
+    if (!workspaceId) return 0
+    const propertySchemas = args.propertySchemas ?? this._propertySchemas
+    const batchSize = Math.max(1, args.batchSize ?? PROPERTY_CHILDREN_BACKFILL_BATCH_SIZE)
+    let processed = 0
+
+    for (const [scope, scopeSchemas] of schemasByScope(propertySchemas.values())) {
+      const scopeSchemaMap = new Map(scopeSchemas.map(schema => [schema.name, schema]))
+      let afterId = ''
+      for (;;) {
+        const candidates = await this.propertyChildrenBackfillCandidates(
+          workspaceId,
+          scopeSchemas,
+          afterId,
+          batchSize,
+        )
+        if (candidates.length === 0) break
+        afterId = candidates[candidates.length - 1]!.id
+        processed += candidates.length
+
+        await this.tx(async tx => {
+          for (const candidate of candidates) {
+            const live = await tx.get(candidate.id)
+            if (live === null || live.deleted) continue
+            const names = Object.keys(live.properties).filter(name => scopeSchemaMap.has(name))
+            await materializePropertyChildrenForExistingRow(tx, live, scopeSchemaMap, names)
+          }
+        }, {
+          scope,
+          description: 'backfill property children from properties_json',
+        })
+      }
+    }
+    return processed
   }
 
   /** Rebuild parent `properties_json` projections for children tagged
@@ -1742,6 +1867,37 @@ export class Repo {
     }
   }
 
+  private schedulePropertyChildrenBackfill(workspaceId: string): void {
+    if (this.isReadOnly || this._propertySchemas.size === 0) return
+    const propertySchemas = this._propertySchemas
+    const run = () => {
+      const next = this.propertyChildrenBackfillChain
+        .catch(() => {})
+        .then(async () => {
+          await this.backfillPropertyChildrenFromProperties({
+            workspaceId,
+            propertySchemas,
+          })
+        })
+      this.propertyChildrenBackfillChain = next.catch(err => {
+        const reason = err instanceof Error ? err.message : String(err)
+        console.warn(`[Repo] property children backfill failed: ${reason}`)
+      })
+    }
+    const idle = (globalThis as {requestIdleCallback?: (cb: () => void, opts?: {timeout: number}) => void}).requestIdleCallback
+    if (typeof idle === 'function') {
+      idle(run, {timeout: 2000})
+    } else {
+      setTimeout(run, 0)
+    }
+  }
+
+  private handleRowsAcceptedForPropertyBackfill(event: RowEventsTailAcceptedEvent): void {
+    for (const workspaceId of event.workspaceIds) {
+      this.schedulePropertyChildrenBackfill(workspaceId)
+    }
+  }
+
   /** Lazy load the per-name marker set on first call, then keep it
    *  in-memory. One SQL round-trip per Repo lifetime. */
   private async loadReprojectionMarkers(): Promise<Set<string>> {
@@ -2004,6 +2160,9 @@ export class Repo {
           const refSchemaChanges = changedRefSchemaNames(previousPropertySchemas, this._propertySchemas)
           if (refSchemaChanges.length > 0) {
             this.scheduleReprojection(refSchemaChanges, this._propertySchemas)
+          }
+          if (this._activeWorkspaceId !== null) {
+            this.schedulePropertyChildrenBackfill(this._activeWorkspaceId)
           }
           // Notify React subscribers (usePropertySchemas) so panels
           // re-render against the new merged map.

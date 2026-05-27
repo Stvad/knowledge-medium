@@ -156,6 +156,45 @@ describe('child-backed user properties', () => {
     ])
   })
 
+  it('backfills pre-child properties_json rows into field/value children', async () => {
+    env = await setup()
+    await env.h.db.execute(
+      `
+        INSERT INTO blocks (
+          id, workspace_id, parent_id, reference_target_id, order_key,
+          content, properties_json, references_json, created_at, updated_at,
+          created_by, updated_by, deleted
+        ) VALUES (?, ?, NULL, NULL, ?, ?, ?, '[]', ?, ?, ?, ?, 0)
+      `,
+      [
+        'legacy-parent',
+        WS,
+        'a0',
+        'Legacy parent',
+        JSON.stringify({[env.statusProp.name]: env.statusProp.codec.encode('Doing')}),
+        1,
+        1,
+        'user-1',
+        'user-1',
+      ],
+    )
+
+    await env.repo.backfillPropertyChildrenFromProperties({
+      workspaceId: WS,
+      batchSize: 1,
+    })
+
+    const children = await rawLiveChildren(env.h, 'legacy-parent')
+    expect(children).toHaveLength(1)
+    expect(children[0]!).toMatchObject({
+      content: '[[status]]',
+      reference_target_id: env.statusProp.fieldId,
+    })
+    await expect(rawLiveChildren(env.h, children[0]!.id)).resolves.toMatchObject([
+      {content: 'Doing', reference_target_id: null},
+    ])
+  })
+
   it('reprojects the parent cache when the property child content changes', async () => {
     env = await setup()
     await createRoot(env.repo, 'parent')

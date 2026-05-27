@@ -61,12 +61,22 @@ export interface RowEventsTailOptions {
    *  this to start the tail from id=0 (consume historical rows too). */
   initialLastId?: number
   onError?: (err: unknown) => void
+  /** Fired once per drain pass with the sync rows whose snapshots were
+   *  accepted into BlockCache. Consumers use this for derived local
+   *  catch-up work that needs to run after remote rows land. */
+  onRowsAccepted?: (event: RowEventsTailAcceptedEvent) => void
   /** Fired once per drain pass when the bounded cycle scan finds at
    *  least one affected id closing back on itself. One event per
    *  workspace involved (single-workspace per cycle by construction
    *  — server FK + invariant trigger keep parent_id mutations within
    *  a workspace). Spec §4.7. */
   onCycleDetected?: (event: CycleDetectedEvent) => void
+}
+
+export interface RowEventsTailAcceptedEvent {
+  readonly rowIds: ReadonlySet<string>
+  readonly parentIds: ReadonlySet<string>
+  readonly workspaceIds: ReadonlySet<string>
 }
 
 export interface RowEventsTail {
@@ -94,6 +104,7 @@ export const startRowEventsTail = (args: {
   const onError = options?.onError ?? ((err) => {
     console.warn('[Repo] row_events tail error:', err)
   })
+  const onRowsAccepted = options?.onRowsAccepted
   const onCycleDetected = options?.onCycleDetected
 
   let lastId = 0
@@ -330,6 +341,13 @@ export const startRowEventsTail = (args: {
       plugin: pluginInvalidations.size > 0 ? pluginInvalidations : undefined,
     }
     handleStore.invalidate(notification)
+    if (onRowsAccepted) {
+      try {
+        onRowsAccepted({rowIds, parentIds, workspaceIds})
+      } catch (err) {
+        reportError(err)
+      }
+    }
     lastId = maxId
   }
 

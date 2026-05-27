@@ -121,22 +121,22 @@ const changedPropertyNames = (
   return changed
 }
 
-const materializePropertiesForRow = async (
+export const materializePropertyChildrenForExistingRow = async (
   tx: Tx,
-  row: {before: BlockData | null; after: BlockData | null},
+  row: BlockData,
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
+  names: readonly string[] = Object.keys(row.properties),
 ): Promise<void> => {
-  if (row.after === null || row.after.deleted) return
-  const changedNames = changedPropertyNames(row.before?.properties ?? {}, row.after.properties)
-  if (changedNames.length === 0) return
+  if (row.deleted) return
+  if (names.length === 0) return
 
-  const children = await tx.childrenOf(row.after.id, undefined, {includePropertyChildren: true})
+  const children = await tx.childrenOf(row.id, undefined, {includePropertyChildren: true})
 
-  for (const name of changedNames) {
+  for (const name of names) {
     const schema = propertySchemas.get(name)
     if (!schema) continue
     const matchingChildren = fieldRowsForSchema(children, schema)
-    const encoded = hasOwn(row.after.properties, name) ? row.after.properties[name] : undefined
+    const encoded = hasOwn(row.properties, name) ? row.properties[name] : undefined
 
     if (encoded === undefined) {
       for (const child of matchingChildren) {
@@ -166,7 +166,7 @@ const materializePropertiesForRow = async (
         }
       } else {
         await tx.create({
-          workspaceId: row.after.workspaceId,
+          workspaceId: row.workspaceId,
           parentId: primary.id,
           orderKey: keyAtStart(null),
           content,
@@ -177,14 +177,14 @@ const materializePropertiesForRow = async (
       }
     } else {
       const fieldRowId = await tx.create({
-        workspaceId: row.after.workspaceId,
-        parentId: row.after.id,
+        workspaceId: row.workspaceId,
+        parentId: row.id,
         referenceTargetId: schema.fieldId,
         orderKey: keyAtStart(null),
         content: propertyFieldContent(schema),
       })
       await tx.create({
-        workspaceId: row.after.workspaceId,
+        workspaceId: row.workspaceId,
         parentId: fieldRowId,
         orderKey: keyAtStart(null),
         content,
@@ -195,6 +195,16 @@ const materializePropertiesForRow = async (
       await deleteSubtree(tx, child.id)
     }
   }
+}
+
+const materializePropertiesForChangedRow = async (
+  tx: Tx,
+  row: {before: BlockData | null; after: BlockData | null},
+  propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
+): Promise<void> => {
+  if (row.after === null || row.after.deleted) return
+  const changedNames = changedPropertyNames(row.before?.properties ?? {}, row.after.properties)
+  await materializePropertyChildrenForExistingRow(tx, row.after, propertySchemas, changedNames)
 }
 
 const deleteSubtree = async (tx: Tx, id: string): Promise<void> => {
@@ -210,7 +220,7 @@ export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
   watches: {kind: 'field', table: 'blocks', fields: ['properties']},
   apply: async (event, ctx) => {
     for (const row of event.changedRows) {
-      await materializePropertiesForRow(ctx.tx, row, ctx.propertySchemas)
+      await materializePropertiesForChangedRow(ctx.tx, row, ctx.propertySchemas)
     }
   },
 })

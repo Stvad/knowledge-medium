@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import {
   ChangeScope,
   codecs,
@@ -25,6 +25,7 @@ import type { BlockRendererProps } from '@/types'
 import { pasteMultilineText } from '@/utils/paste'
 import { useChildIds } from '@/hooks/block'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer'
+import { PropertyValueBlockRenderer } from './PropertyValueBlockRenderer'
 
 const repoRef = vi.hoisted(() => ({
   current: undefined as Repo | undefined,
@@ -79,9 +80,21 @@ const statusProp = defineProperty<string>('test:status', {
   changeScope: ChangeScope.BlockDefault,
 })
 
+const priorityProp = defineProperty<number>('test:priority', {
+  codec: codecs.number,
+  defaultValue: 0,
+  changeScope: ChangeScope.BlockDefault,
+})
+
 const propertyOnlyLayout: BlockLayout = ({Properties, shellProps}) => (
   <div {...shellProps}>
     {Properties && <Properties />}
+  </div>
+)
+
+const contentOnlyLayout: BlockLayout = ({Content, shellProps}) => (
+  <div {...shellProps}>
+    <Content />
   </div>
 )
 
@@ -131,6 +144,7 @@ describe('DefaultBlockRenderer paste handling', () => {
       kernelValuePresetsExtension,
       defaultEditorInteractionExtension,
       propertySchemasFacet.of(statusProp, {source: 'test'}),
+      propertySchemasFacet.of(priorityProp, {source: 'test'}),
       blockLayoutFacet.of(
         () => ({id: 'property-only', label: 'Property only', render: propertyOnlyLayout}),
         {source: 'test'},
@@ -294,5 +308,62 @@ describe('DefaultBlockRenderer paste handling', () => {
     await waitFor(() => {
       expect(screen.getByTestId('child-ids').textContent).toBe('visible-status-field')
     })
+  })
+
+  it('renders property value rows through the schema editor and projects edits', async () => {
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'priority-field',
+        workspaceId: 'ws-1',
+        parentId: 'block-1',
+        referenceTargetId: priorityProp.fieldId,
+        orderKey: 'c0',
+        content: '[[test:priority]]',
+      })
+      await tx.create({
+        id: 'priority-value',
+        workspaceId: 'ws-1',
+        parentId: 'priority-field',
+        orderKey: 'a0',
+        content: '3',
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'create property value renderer fixture'})
+
+    expect(PropertyValueBlockRenderer.canRender?.({block: repo.block('priority-value')})).toBe(true)
+    expect(PropertyValueBlockRenderer.canRender?.({block: repo.block('priority-field')})).toBe(false)
+
+    const valueRuntime = resolveFacetRuntimeSync([
+      kernelDataExtension,
+      kernelPropertyUiExtension,
+      kernelValuePresetsExtension,
+      defaultEditorInteractionExtension,
+      propertySchemasFacet.of(statusProp, {source: 'test'}),
+      propertySchemasFacet.of(priorityProp, {source: 'test'}),
+      blockLayoutFacet.of(
+        () => ({id: 'content-only', label: 'Content only', render: contentOnlyLayout}),
+        {source: 'test'},
+      ),
+    ])
+
+    render(
+      <AppRuntimeContextProvider value={valueRuntime}>
+        <ActiveContextsProvider>
+          <PropertyValueBlockRenderer block={repo.block('priority-value')} />
+        </ActiveContextsProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+    const input = screen.getByDisplayValue('3')
+    expect(input).toHaveAttribute('type', 'number')
+
+    fireEvent.change(input, {target: {value: '5'}})
+
+    await waitFor(() => {
+      expect(repo.cache.getSnapshot('block-1')?.properties[priorityProp.name]).toBe(5)
+    })
+    await expect(h.db.getOptional<{content: string}>(
+      `SELECT content FROM blocks WHERE id = ?`,
+      ['priority-value'],
+    )).resolves.toEqual({content: '5'})
   })
 })
