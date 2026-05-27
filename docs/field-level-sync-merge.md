@@ -84,12 +84,16 @@ Ship `{set, unset}` to the RPC. Server applies:
 UPDATE blocks
 SET properties_json = (
   (COALESCE(properties_json, '{}')::jsonb || $set::jsonb) - $unset_array
-)::text
+)::text,
+    updated_at = greatest(blocks.updated_at, $client_updated_at) + 1,
+    updated_by = $client_updated_by
 WHERE id = $id
 RETURNING id;
 ```
 
 `||` is shallow jsonb merge; `-` with a `text[]` removes keys. `properties_json` is a flat `Record<string, unknown>` (`src/data/api/blockData.ts`, `properties.ts:112-116`), so shallow merge is correct semantics. The `::jsonb` parse and `::text` re-serialize are paid per-write inside the RPC; the cost is microseconds.
+
+**Server bumps `updated_at` to preserve cache-acceptance monotonicity.** `BlockCache.applySyncSnapshot` (`blockCache.ts:144-152`) rejects snapshots whose `updatedAt <= existing.updatedAt` — an LWW-flavored guard that assumes a snapshot with a non-newer `updated_at` is stale content. That assumption holds for column-LWW but breaks the moment the server can merge: client B's diff applied after client A's local edit can produce a server row whose content is a strict superset of A's view but whose client-supplied `updated_at` is equal to or older than A's local clock. Without server-side bump, A's cache would reject the merged sync arrival as stale; Layer C's gate (gate-on-accept) would suppress the parseReferences dispatch; A's derived refs would stay stale indefinitely. Bumping `updated_at = greatest(existing, client_supplied) + 1` makes every merged version strictly newer than any client's pre-merge view, restoring monotonicity per row. Cost: post-upload sync arrivals always have a strictly-newer `updated_at`, so the local writer's own cache also re-accepts its own merged row (an extra parseReferences dispatch that's a no-op via `planNeedsWrite`'s equality check — negligible). `updated_by` reflects the client whose upload triggered the merge, same attribution semantics as today. Same bump rule applies to writes that don't carry `properties_json` (content/refs edits) so the RPC is uniform: any write that lands at the server bumps `updated_at` by at least 1 above whatever was there.
 
 Server returns rowcount per id; 0 → orchestrator quarantines (the row should already exist, since the corresponding CREATE was queued first within the same `repo.tx`).
 
@@ -107,7 +111,7 @@ Fix: hook the tail to invoke `parseReferences` on sync-arrived `properties_json`
 
 Implementation shape:
 - In `rowEventsTail` (`src/data/internals/rowEventsTail.ts`), when processing a sync-arrived row where `properties_json` differs between `before_json` and `after_json`, enqueue a `parseReferences` invocation for that block id.
-- **Gate on cache acceptance.** `BlockCache.applySyncSnapshot` (`blockCache.ts:144`) returns `false` when `snapshot.updatedAt <= existing.updatedAt` — i.e., when PowerSync delivers a stale sync row while the cache has already advanced via a newer local edit or a newer sync arrival. The tail (`rowEventsTail.ts:260-261`) already routes sync writes through this guard. Layer C dispatches *only when `applySyncSnapshot` returns `true`*; if the snapshot was rejected as stale, the `after_json` is older than current state and reparsing from it would compute refs for old properties — potentially uploading those stale refs and clobbering the current local derived view. Stale rejections are already counted in `metrics.applySyncSnapshotRejected`; suppressing the dispatch on rejection is one extra read of that boolean.
+- **Gate on cache acceptance, made correct by Layer B's `updated_at` bump.** `BlockCache.applySyncSnapshot` (`blockCache.ts:144`) returns `false` when `snapshot.updatedAt <= existing.updatedAt`. This is correct when `updated_at` is server-monotonic per row — which Layer B's RPC ensures via `greatest(existing, client_supplied) + 1` on every write. Without that bump, server-merged rows could be content-newer but `updated_at`-equal-or-older, and the gate would suppress dispatch for genuinely merged state — leaving `references_json` indefinitely stale. With the bump, every merged sync arrival is strictly-newer; cache acceptance and content freshness coincide. Layer C dispatches only when `applySyncSnapshot` returns `true`; rejections (real staleness — clock-skew echoes, in-flight query replay) are already counted in `metrics.applySyncSnapshotRejected`, suppressing dispatch on rejection is one extra read of that boolean.
 - Dispatch is per-block-id with within-tick coalescing — cold sync of a workspace doesn't dispatch one per arrival; throttle on the tail's existing `throttleMs` coalescing window so a batch of arrivals becomes one parseReferences dispatch per affected block.
 - `parseReferences` runs via its existing entry point (`PARSE_REFERENCES_PROCESSOR.apply`), opens its own `repo.tx` for the write phase as today, and reads the current row at write time — so even if a stale arrival slipped past the acceptance gate (it shouldn't), the processor's `repo.tx` read sees current local state, not the stale `after_json`. The acceptance gate is the primary defense; the read-current-row at write time is a defense-in-depth backstop. Idempotency: `planNeedsWrite` returns false when the recomputed refs equal what's already stored, so non-merge-induced property changes (or already-converged states) are cheap no-ops.
 
