@@ -63,7 +63,7 @@ const FieldContentRenderer: BlockRenderer = ({block}: BlockRendererProps) => {
 
   return (
     <div
-      className="tm-field-child grid min-w-0 grid-cols-[1.25rem_minmax(7rem,0.45fr)_minmax(10rem,1fr)] items-center gap-2 py-0.5 text-sm"
+      className="tm-field-child grid min-w-0 grid-cols-[1.25rem_minmax(7rem,1fr)] items-center gap-2 py-0.5 text-sm"
       data-property-field-row="true"
       data-property-name={schema.name}
       data-field-id={fieldId}
@@ -76,9 +76,6 @@ const FieldContentRenderer: BlockRenderer = ({block}: BlockRendererProps) => {
       </span>
       <span className="min-w-0 truncate text-muted-foreground" title={schema.name}>
         {label}
-      </span>
-      <span className="min-w-0 truncate py-1 text-sm text-muted-foreground" title={fieldId}>
-        {data?.content ?? ''}
       </span>
     </div>
   )
