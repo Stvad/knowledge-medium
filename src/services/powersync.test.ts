@@ -545,7 +545,7 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
     // {id, ...payload} entry in the patches array. The server-side
     // function destructures `id` for the WHERE clause and treats every
     // other key as a column to write.
-    supabaseRef.rpc.mockResolvedValueOnce({data: {missing: []}, error: null})
+    supabaseRef.rpc.mockResolvedValueOnce({data: null, error: null})
 
     await __applyBlockPatchesRpcForTest([
       {id: 'block-a', payload: {content: 'new', updated_at: 7, updated_by: 'u1'}},
@@ -560,7 +560,7 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
   it('packs a multi-patch batch into a single RPC call with N items', async () => {
     // The whole point of the RPC: N patches → one HTTP. Pre-batching,
     // this was N PostgREST round trips.
-    supabaseRef.rpc.mockResolvedValueOnce({data: {missing: []}, error: null})
+    supabaseRef.rpc.mockResolvedValueOnce({data: null, error: null})
 
     await __applyBlockPatchesRpcForTest([
       {id: 'block-a', payload: {content: 'A2'}},
@@ -578,17 +578,18 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
     })
   })
 
-  it('throws a PGRST116-coded error listing every missing id', async () => {
-    // A patch whose id no longer exists server-side comes back in the
-    // RPC's `missing` array (the function returns it as data, not as a
-    // Postgres error). We surface it as a permanent-classified
-    // PGRST116 so the orchestrator quarantines the tx instead of
-    // silently completing it — that's the silent-divergence guard the
-    // pre-batched per-row path also enforced.
-    supabaseRef.rpc.mockResolvedValueOnce({
-      data: {missing: ['block-a', 'block-c']},
-      error: null,
-    })
+  it('propagates a P0002 SQLSTATE from the RPC for missing rows', async () => {
+    // A patch whose id no longer exists server-side causes the RPC to
+    // `RAISE EXCEPTION ... USING ERRCODE = 'P0002'` so the function's
+    // transaction rolls back and partial sibling UPDATEs do NOT commit.
+    // PostgREST surfaces the SQLSTATE on the JS error's `code` field;
+    // `uploadErrorClassifier.isPermanentSqlState` recognises P0002 as
+    // permanent so the orchestrator quarantines the tx.
+    const missingRowError = Object.assign(
+      new Error('apply_block_patches: missing block ids: block-a,block-c'),
+      {code: 'P0002'},
+    )
+    supabaseRef.rpc.mockResolvedValueOnce({data: null, error: missingRowError})
 
     await expect(
       __applyBlockPatchesRpcForTest([
@@ -597,7 +598,7 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
         {id: 'block-c', payload: {content: 'C2'}},
       ]),
     ).rejects.toMatchObject({
-      code: 'PGRST116',
+      code: 'P0002',
       message: expect.stringContaining('block-a'),
     })
   })

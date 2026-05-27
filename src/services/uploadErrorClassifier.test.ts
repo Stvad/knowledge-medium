@@ -39,6 +39,13 @@ describe('classifyUploadError', () => {
     it('classifies PostgREST RLS denials (PGRST301) as permanent', () => {
       expect(classifyUploadError(postgrestError('PGRST301'))).toBe('permanent')
     })
+
+    it('classifies P0002 (no_data_found) as permanent', () => {
+      // Raised by apply_block_patches when a patch's target row is
+      // missing — the RPC rolls back via this exception, and the
+      // missing row will not reappear on retry.
+      expect(classifyUploadError(postgrestError('P0002'))).toBe('permanent')
+    })
   })
 
   describe('HTTP status codes', () => {

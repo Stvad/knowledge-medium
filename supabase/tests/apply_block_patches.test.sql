@@ -76,15 +76,10 @@ FROM apply_block_patches_test_ctx;
 -- Single-id patch: only the keys present in the patch are written.
 -- properties_json must stay untouched (no full-row overwrite).
 -------------------------------------------------------------------------
-SELECT is(
-  public.apply_block_patches(
-    jsonb_build_array(
-      jsonb_build_object('id', (SELECT block_a_id FROM apply_block_patches_test_ctx),
-                         'content', 'A-new')
-    )
-  ),
-  jsonb_build_object('missing', '[]'::jsonb),
-  'single-id patch returns empty missing array'
+SELECT lives_ok(
+  format($q$SELECT public.apply_block_patches(jsonb_build_array(jsonb_build_object('id', %L, 'content', 'A-new')))$q$,
+    (SELECT block_a_id FROM apply_block_patches_test_ctx)),
+  'single-id patch does not raise'
 );
 
 SELECT is(
@@ -113,17 +108,14 @@ SELECT is(
 -- respective row id. Different rows can be touched with different keys
 -- inside one RPC call.
 -------------------------------------------------------------------------
-SELECT is(
-  public.apply_block_patches(
-    jsonb_build_array(
-      jsonb_build_object('id', (SELECT block_b_id FROM apply_block_patches_test_ctx),
-                         'content', 'B-new'),
-      jsonb_build_object('id', (SELECT block_c_id FROM apply_block_patches_test_ctx),
-                         'properties_json', '{"types":["page"]}')
-    )
-  ),
-  jsonb_build_object('missing', '[]'::jsonb),
-  'multi-id batch returns empty missing array'
+SELECT lives_ok(
+  format($q$SELECT public.apply_block_patches(jsonb_build_array(
+    jsonb_build_object('id', %L, 'content', 'B-new'),
+    jsonb_build_object('id', %L, 'properties_json', '{"types":["page"]}')
+  ))$q$,
+    (SELECT block_b_id FROM apply_block_patches_test_ctx),
+    (SELECT block_c_id FROM apply_block_patches_test_ctx)),
+  'multi-id batch does not raise'
 );
 
 SELECT is(
@@ -148,41 +140,36 @@ SELECT is(
 );
 
 -------------------------------------------------------------------------
--- Missing id: a patch whose id matches no row is appended to `missing`;
--- other ids in the same batch still apply.
+-- Missing id: the RPC raises SQLSTATE P0002 (`no_data_found`), which
+-- rolls back the function's transaction so sibling UPDATEs in the same
+-- batch never commit. Without that, partial writes would persist while
+-- the client and orchestrator both think the tx was rejected.
 -------------------------------------------------------------------------
-SELECT is(
-  public.apply_block_patches(
-    jsonb_build_array(
-      jsonb_build_object('id', 'does-not-exist-xyz', 'content', 'ignored'),
-      jsonb_build_object('id', (SELECT block_a_id FROM apply_block_patches_test_ctx),
-                         'content', 'A-newer')
-    )
-  ),
-  jsonb_build_object('missing', jsonb_build_array('does-not-exist-xyz')),
-  'missing id is collected; sibling patch still applies'
+SELECT throws_ok(
+  format($q$SELECT public.apply_block_patches(jsonb_build_array(
+    jsonb_build_object('id', 'does-not-exist-xyz', 'content', 'ignored'),
+    jsonb_build_object('id', %L, 'content', 'A-newer')
+  ))$q$, (SELECT block_a_id FROM apply_block_patches_test_ctx)),
+  'P0002',
+  NULL,
+  'missing id raises P0002 to abort the function transaction'
 );
 
 SELECT is(
   (SELECT content FROM public.blocks
      WHERE id = (SELECT block_a_id FROM apply_block_patches_test_ctx)),
-  'A-newer'::text,
-  'sibling patch wrote despite missing id elsewhere in batch'
+  'A-new'::text,
+  'sibling patch did not commit (function tx rolled back on missing id)'
 );
 
 -------------------------------------------------------------------------
 -- parent_id null write (nullable column, CASE-WHEN-? branch).
 -- block_b started with parent_id set; patch with explicit null clears it.
 -------------------------------------------------------------------------
-SELECT is(
-  public.apply_block_patches(
-    jsonb_build_array(
-      jsonb_build_object('id', (SELECT block_b_id FROM apply_block_patches_test_ctx),
-                         'parent_id', NULL)
-    )
-  ),
-  jsonb_build_object('missing', '[]'::jsonb),
-  'parent_id:null patch returns empty missing array'
+SELECT lives_ok(
+  format($q$SELECT public.apply_block_patches(jsonb_build_array(jsonb_build_object('id', %L, 'parent_id', NULL)))$q$,
+    (SELECT block_b_id FROM apply_block_patches_test_ctx)),
+  'parent_id:null patch does not raise'
 );
 
 SELECT is(
@@ -195,15 +182,11 @@ SELECT is(
 -------------------------------------------------------------------------
 -- parent_id positive case: writing a non-null parent_id works.
 -------------------------------------------------------------------------
-SELECT is(
-  public.apply_block_patches(
-    jsonb_build_array(
-      jsonb_build_object('id', (SELECT block_a_id FROM apply_block_patches_test_ctx),
-                         'parent_id', (SELECT parent_id FROM apply_block_patches_test_ctx))
-    )
-  ),
-  jsonb_build_object('missing', '[]'::jsonb),
-  'parent_id positive patch returns empty missing array'
+SELECT lives_ok(
+  format($q$SELECT public.apply_block_patches(jsonb_build_array(jsonb_build_object('id', %L, 'parent_id', %L)))$q$,
+    (SELECT block_a_id FROM apply_block_patches_test_ctx),
+    (SELECT parent_id FROM apply_block_patches_test_ctx)),
+  'parent_id positive patch does not raise'
 );
 
 SELECT is(
@@ -214,12 +197,11 @@ SELECT is(
 );
 
 -------------------------------------------------------------------------
--- Empty patches array: no-op, returns {"missing": []}.
+-- Empty patches array: no-op, no raise.
 -------------------------------------------------------------------------
-SELECT is(
-  public.apply_block_patches('[]'::jsonb),
-  jsonb_build_object('missing', '[]'::jsonb),
-  'empty patches array returns {"missing": []} and is a no-op'
+SELECT lives_ok(
+  $q$SELECT public.apply_block_patches('[]'::jsonb)$q$,
+  'empty patches array does not raise'
 );
 
 SELECT * FROM finish();

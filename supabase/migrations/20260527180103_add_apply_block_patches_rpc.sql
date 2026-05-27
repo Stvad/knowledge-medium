@@ -8,9 +8,19 @@
 -- the separate plan in #51). The `blocks_clamp_updated_at` BEFORE trigger
 -- still fires on every UPDATE, so wall-clock clamping is preserved without
 -- any work in this function.
+--
+-- Atomicity: if any patch targets a row that doesn't exist (or is
+-- RLS-hidden), `RAISE EXCEPTION` aborts the function's implicit
+-- transaction so none of the sibling UPDATEs commit. Without that, the
+-- client wrapper would observe a `missing` array, throw a permanent
+-- error, and the orchestrator would quarantine the tx — but the
+-- already-committed sibling updates couldn't be undone. SQLSTATE
+-- `P0002` (`no_data_found`) is the closest standard PL/pgSQL exception
+-- for "the rows you asked for don't exist"; the client classifier
+-- recognises it as permanent.
 
 CREATE OR REPLACE FUNCTION public.apply_block_patches(patches jsonb)
-RETURNS jsonb
+RETURNS void
 LANGUAGE plpgsql
 SECURITY INVOKER
 SET search_path = public
@@ -50,7 +60,10 @@ BEGIN
     END IF;
   END LOOP;
 
-  RETURN jsonb_build_object('missing', to_jsonb(missing));
+  IF array_length(missing, 1) IS NOT NULL THEN
+    RAISE EXCEPTION 'apply_block_patches: missing block ids: %', array_to_string(missing, ',')
+      USING ERRCODE = 'P0002';
+  END IF;
 END;
 $$;
 

@@ -21,9 +21,15 @@ const isObjectWith = <K extends string>(
 
 /** Postgres integrity-constraint class (`23xxx`) and access/syntax class
  *  (`42xxx`) are permanent — retrying with the same payload cannot succeed.
- *  PostgREST surfaces these on the JS error's `code` field verbatim. */
+ *  PostgREST surfaces these on the JS error's `code` field verbatim.
+ *
+ *  `P0002` (`no_data_found`) is raised by `apply_block_patches` when a
+ *  patch's target row is missing — retrying the same batch cannot make
+ *  the missing row reappear, so it belongs in the permanent bucket. */
+const PERMANENT_PLPGSQL_SQLSTATES = new Set(['P0002'])
+
 const isPermanentSqlState = (code: string): boolean =>
-  code.startsWith('23') || code.startsWith('42')
+  code.startsWith('23') || code.startsWith('42') || PERMANENT_PLPGSQL_SQLSTATES.has(code)
 
 /** PostgREST-specific codes (prefixed `PGRST`) for situations the underlying
  *  Postgres call never reached, e.g. RLS denial expressed as a 4xx response.

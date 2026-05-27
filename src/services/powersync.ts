@@ -227,14 +227,12 @@ const chunked = <T,>(items: readonly T[], size: number): T[][] => {
  *  out of scope here (see #51); each patch in the array writes its
  *  specified columns to its specified row id.
  *
- *  A server-missing id no longer returns 0-rows silently: the RPC
- *  collects every patch whose UPDATE affected zero rows into a `missing`
- *  array, which we surface as a permanent PGRST116-coded error so the
- *  rejection-tolerant orchestrator quarantines the whole tx instead of
- *  silently completing it. The whole batch is quarantined together
- *  because we can't isolate individual patches inside one RPC call —
- *  the per-tx fallback in `uploadTransactionsWithFallback` re-runs each
- *  tx alone, narrowing the blast radius. */
+ *  Server-missing rows raise SQLSTATE `P0002` inside the RPC, which
+ *  rolls back the function's transaction so partial sibling UPDATEs do
+ *  not commit. PostgREST surfaces the SQLSTATE on the error's `code`
+ *  field; `uploadErrorClassifier` classifies it as permanent and the
+ *  orchestrator's per-tx fallback (`uploadTransactionsWithFallback`)
+ *  quarantines that single tx. */
 const applyBlockPatchesRpc = async (
   patches: ReadonlyArray<{id: string; payload: Record<string, unknown>}>,
 ) => {
@@ -243,18 +241,10 @@ const applyBlockPatchesRpc = async (
 
   console.debug('[powersync] PATCH batch', patches.length)
   const payload = patches.map(patch => ({id: patch.id, ...patch.payload}))
-  const {data, error} = await client.rpc('apply_block_patches', {patches: payload})
+  const {error} = await client.rpc('apply_block_patches', {patches: payload})
 
   if (error) {
     throw error
-  }
-
-  const missing = (data as {missing?: string[]} | null)?.missing ?? []
-  if (missing.length > 0) {
-    throw Object.assign(
-      new Error(`PATCH affected 0 rows for id(s)=${missing.join(',')}`),
-      {code: 'PGRST116'},
-    )
   }
 }
 
