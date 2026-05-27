@@ -527,8 +527,12 @@ describe('backlinksDataExtension query', () => {
     handle.subscribe((value) => { fired.push(value) })
     await vi.waitFor(() => expect(fired.map(items => items.length)).toEqual([0]))
 
+    // Bump updated_at so the sync snapshot wins the LWW gate at the
+    // cache layer — real server-applied writes always carry a newer
+    // updated_at than what the cache already has, and the rowEventsTail
+    // only emits invalidations for sync rows the cache accepts.
     await env.h.db.execute(
-      `UPDATE blocks SET references_json = ? WHERE id = ?`,
+      `UPDATE blocks SET references_json = ?, updated_at = updated_at + 1 WHERE id = ?`,
       [JSON.stringify([{id: 'target', alias: 'T'}]), 'src'],
     )
     await env.repo.flushRowEventsTail()

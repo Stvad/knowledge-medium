@@ -473,8 +473,11 @@ describe('row_events tail: sync-applied invalidation', () => {
     await env.h.db.execute(
       `UPDATE tx_context SET source = NULL, tx_id = NULL, tx_seq = NULL WHERE id = 1`,
     )
+    // Bump updated_at so the sync snapshot wins the LWW gate at the
+    // cache layer — real server-applied writes always carry a newer
+    // updated_at than what the cache already has.
     await env.h.db.execute(
-      `UPDATE blocks SET order_key = '0' WHERE id = ?`,
+      `UPDATE blocks SET order_key = '0', updated_at = updated_at + 1 WHERE id = ?`,
       ['c2'],
     )
 
@@ -495,12 +498,14 @@ describe('row_events tail: sync-applied invalidation', () => {
     env.repo.startRowEventsTail({initialLastId: 0, throttleMs: 0})
 
     // Sync-applied UPDATE that touches content only — same parent_id,
-    // not deleted. Membership of p's children unchanged.
+    // not deleted. Membership of p's children unchanged. Bump
+    // updated_at so the snapshot passes the cache LWW gate (real
+    // server-applied content edits always carry a newer updated_at).
     await env.h.db.execute(
       `UPDATE tx_context SET source = NULL, tx_id = NULL, tx_seq = NULL WHERE id = 1`,
     )
     await env.h.db.execute(
-      `UPDATE blocks SET content = 'remote-edit' WHERE id = ?`,
+      `UPDATE blocks SET content = 'remote-edit', updated_at = updated_at + 1 WHERE id = ?`,
       ['c1'],
     )
 
@@ -595,6 +600,70 @@ describe('row_events tail: sync-applied invalidation', () => {
     // The local row was considered for watermark purposes but not
     // processed by the sync invalidation path, so no duplicate fire.
     expect(fired).toEqual([0, 1])
+  })
+
+  it('LWW-rejected sync delivery does not invalidate handles', async () => {
+    // Scenario: PowerSync upload-window replay. A local write has
+    // already advanced the cache (and SQL) for block A. Sync then
+    // delivers an older `updated_at` for A — typically the server-side
+    // state-at-time-T before the local write was uploaded. The cache's
+    // LWW gate rejects it. The SQL row briefly flickers to the older
+    // state before PowerSync reconverges, but the cache (and any
+    // consumers reading via it) never observed the flicker.
+    //
+    // The invalidation pipeline must NOT propagate the flicker. If it
+    // did, every cache-rejected sync row would wake handles to re-read
+    // SQL, which is exactly the freeze pattern observed in QuickFind
+    // (`core.searchByContent` getting kicked off mid-load by replay
+    // bursts).
+    await create('A', {parentId: null, orderKey: 'a0', content: 'local-new'})
+
+    // Track a handle with a per-row dep on A. After the initial load
+    // it should only fire again for real changes to A.
+    let v = 0
+    const handle = env.repo.handleStore.getOrCreate('test:row-dep-A', () =>
+      new LoaderHandle<number>({
+        store: env.repo.handleStore,
+        key: 'test:row-dep-A',
+        loader: async (ctx) => {
+          ctx.depend({kind: 'row', id: 'A'})
+          return ++v
+        },
+      }),
+    )
+    const fired: number[] = []
+    handle.subscribe((x) => fired.push(x))
+    await vi.waitFor(() => expect(fired).toEqual([1]))
+
+    env.repo.startRowEventsTail({initialLastId: 0, throttleMs: 0})
+    await env.repo.flushRowEventsTail()
+
+    const invalidationsBefore = env.repo.handleStore.metrics.snapshot().invalidations
+
+    // Sync replays an OLDER `updated_at` than the cache. `updated_at = 1`
+    // is well below `Date.now()` used by the local create above, so
+    // `applySyncSnapshot` rejects the snapshot via the LWW gate.
+    await env.h.db.execute(
+      `UPDATE tx_context SET source = NULL, tx_id = NULL, tx_seq = NULL WHERE id = 1`,
+    )
+    await env.h.db.execute(
+      `UPDATE blocks SET content = 'server-stale', updated_at = 1 WHERE id = ?`,
+      ['A'],
+    )
+
+    await env.repo.flushRowEventsTail()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    // The row_event has before='local-new', after='server-stale' —
+    // without the LWW skip, this would fire kernel.content AND the
+    // per-row dep on A. With the skip, neither contributes to the
+    // notification, so no handle is woken and the metric is unchanged.
+    expect(env.repo.handleStore.metrics.snapshot().invalidations)
+      .toBe(invalidationsBefore)
+    expect(fired).toEqual([1])
+    // Cache retained the local-new state (LWW rejected the stale write).
+    expect(env.cache.getSnapshot('A')?.content).toBe('local-new')
   })
 
 })

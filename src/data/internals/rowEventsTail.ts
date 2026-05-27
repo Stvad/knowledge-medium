@@ -173,14 +173,47 @@ export const startRowEventsTail = (args: {
     const cycleTxIdsByWs = new Map<string, Set<string>>()
 
     for (const r of rows) {
-      rowIds.add(r.block_id)
-
       const before = r.before_json
         ? safeParseBlockData(r.before_json)
         : null
       const after = r.after_json
         ? safeParseBlockData(r.after_json)
         : null
+
+      // Cache update FIRST — the return value gates everything below.
+      //
+      // Sync writes don't go through commitPipeline's post-commit cache
+      // walk; without this, Block.subscribe listeners wouldn't fire on
+      // remote changes. Routed through `applySyncSnapshot` so a stale
+      // `updated_at` (PowerSync delivering server-state-at-time-T while
+      // the local cache has advanced via the fast path) is rejected —
+      // otherwise the editor sees its own older echoes clobber the live
+      // snapshot mid-typing.
+      //
+      // LWW-rejected (or fingerprint-deduped) snapshots mean the
+      // user-visible cache state did NOT change. Propagating an
+      // invalidation in that case would wake handles to re-read SQL
+      // that briefly flickered to the older state before PowerSync
+      // reconverges — exactly the freeze pattern that hit
+      // `core.searchByContent` during QuickFind, where each replayed
+      // upload-window row kicked the in-flight scan off mid-load.
+      // Skipping invalidation contributions for rejected rows lets the
+      // LWW gate at the cache layer actually do its job for consumers
+      // too: queries keep their pre-flicker result (consistent with
+      // cache) and the eventual reconvergence write — which DOES change
+      // cache state — fires the right invalidations.
+      //
+      // For the delete branch (rare safety net; soft-deletes arrive as
+      // UPDATEs with deleted=1 in `after`): `deleteSnapshot` returns
+      // true only if the cache was actually tracking the row. If it
+      // wasn't, no consumer can observe the deletion → skip is correct
+      // for the same reason.
+      const accepted = after
+        ? cache.applySyncSnapshot(after as BlockData)
+        : cache.deleteSnapshot(r.block_id)
+      if (!accepted) continue
+
+      rowIds.add(r.block_id)
 
       if (before?.workspaceId) workspaceIds.add(before.workspaceId)
       if (after?.workspaceId) workspaceIds.add(after.workspaceId)
@@ -248,24 +281,6 @@ export const startRowEventsTail = (args: {
           }
           txBucket.add(r.tx_id)
         }
-      }
-
-      // Cache update: sync writes don't go through commitPipeline's
-      // post-commit cache walk. Without this, Block.subscribe listeners
-      // wouldn't fire on remote changes. Routed through
-      // `applySyncSnapshot` so a stale `updated_at` (PowerSync delivering
-      // server-state-at-time-T while the local cache has advanced via the
-      // fast path) is rejected — otherwise the editor sees its own older
-      // echoes clobber the live snapshot mid-typing.
-      if (after) {
-        cache.applySyncSnapshot(after as BlockData)
-      } else {
-        // No after_json (hard delete via row_events kind='delete'?).
-        // SQLite blocks rows are soft-deleted (the column is `deleted=1`)
-        // so `after` is normally non-null with `deleted: true` — this
-        // branch is the safety net for any edge case where the trigger
-        // fires without an after row.
-        cache.deleteSnapshot(r.block_id)
       }
     }
 
