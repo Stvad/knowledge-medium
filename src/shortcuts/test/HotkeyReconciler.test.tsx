@@ -3,6 +3,7 @@ import { act, render, cleanup } from '@testing-library/react'
 import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler.js'
 import {
   ActiveContextsProvider,
+  useActiveContextsState,
   useActiveContextsDispatch,
 } from '@/shortcuts/ActiveContexts.js'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.js'
@@ -14,7 +15,7 @@ import {
   ActionContextType,
   BaseShortcutDependencies,
 } from '@/shortcuts/types.js'
-import { useEffect, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react'
 
 const TEST_CONTEXT = 'test-mode' as ActionContextType
 const GLOBAL_CONTEXT = 'global' as ActionContextType
@@ -103,6 +104,26 @@ const SequentialActivator = ({contexts}: {contexts: readonly ActionContextType[]
       for (const context of contexts) dispatch.deactivate(context)
     }
   }, [dispatch, contexts])
+  return null
+}
+
+const LayoutKeydownWhenActive = ({
+  context,
+  keyName,
+}: {
+  context: ActionContextType
+  keyName: string
+}) => {
+  const active = useActiveContextsState()
+  const dispatchedRef = useRef(false)
+
+  useLayoutEffect(() => {
+    if (dispatchedRef.current) return
+    if (!active.has(context)) return
+    dispatchedRef.current = true
+    dispatchKeydown(keyName)
+  }, [active, context, keyName])
+
   return null
 }
 
@@ -822,6 +843,55 @@ describe('HotkeyReconciler', () => {
           act(() => dispatchKeydown('s'))
           act(() => vi.advanceTimersByTime(100))
 
+          act(() => dispatchKeydown('h'))
+          expect(baseHandler).not.toHaveBeenCalled()
+          expect(modalHandler).toHaveBeenCalledTimes(1)
+        } finally {
+          vi.useRealTimers()
+        }
+      })
+
+      it('ignores stale underlying listeners during modal activation before passive reconciliation', () => {
+        vi.useFakeTimers()
+        try {
+          const baseHandler = vi.fn()
+          const modalHandler = vi.fn()
+          const enterAction = buildAction({
+            id: 'test.hold-shadow-stale-enter',
+            handler: (_deps, _trigger, dispatch) => {
+              dispatch?.activate(MODAL_CONTEXT, mockDeps)
+            },
+            defaultBinding: {keys: 's', phase: 'hold', holdMs: 100},
+          })
+          const baseAction = buildAction({
+            id: 'test.stale-base-h',
+            context: TEST_CONTEXT,
+            handler: baseHandler,
+            defaultBinding: {keys: 'h'},
+          })
+          const modalAction = buildAction({
+            id: 'test.stale-modal-h',
+            context: MODAL_CONTEXT,
+            handler: modalHandler,
+            defaultBinding: {keys: 'h'},
+          })
+
+          render(
+            <Harness
+              actions={[enterAction, baseAction, modalAction]}
+              contexts={[testContextConfig, modalContextConfig]}
+            >
+              <Activator context={TEST_CONTEXT}/>
+              <LayoutKeydownWhenActive context={MODAL_CONTEXT} keyName="h"/>
+            </Harness>,
+          )
+
+          act(() => dispatchKeydown('s'))
+          act(() => vi.advanceTimersByTime(100))
+
+          expect(baseHandler).not.toHaveBeenCalled()
+
+          modalHandler.mockClear()
           act(() => dispatchKeydown('h'))
           expect(baseHandler).not.toHaveBeenCalled()
           expect(modalHandler).toHaveBeenCalledTimes(1)

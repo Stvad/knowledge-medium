@@ -65,6 +65,17 @@ const computeInstallableContexts = (
   return new Set([ActionContextTypes.GLOBAL, latestModal])
 }
 
+const getInstallableContextDeps = (
+  context: ActionContextType,
+  active: ActiveContextsMap,
+  contextConfigsByType: ReadonlyMap<ActionContextType, ActionContextConfig>,
+) => {
+  const deps = active.get(context)
+  if (!deps) return null
+  if (!computeInstallableContexts(active, contextConfigsByType).has(context)) return null
+  return deps
+}
+
 /**
  * Run the same event-filter cascade tinykeys' default `ignore` would do,
  * but extended with per-context eventFilter overrides. An active context's
@@ -348,7 +359,11 @@ const installHoldBinding = (config: HoldBindingInstall): (() => void) => {
   }
 
   const fire = (originalEvent: KeyboardEvent): void => {
-    const deps = activeRef.current.get(action.context)
+    const deps = getInstallableContextDeps(
+      action.context,
+      activeRef.current,
+      contextConfigsByTypeRef.current,
+    )
     if (!deps) return
 
     try {
@@ -373,10 +388,12 @@ const installHoldBinding = (config: HoldBindingInstall): (() => void) => {
     )
     if (!matched) return
 
-    if (!shouldHandleEvent(event, activeRef.current, contextConfigsByTypeRef.current)) return
-    if (!activeRef.current.has(action.context)) return
+    const active = activeRef.current
+    const contextConfigsByType = contextConfigsByTypeRef.current
+    if (!getInstallableContextDeps(action.context, active, contextConfigsByType)) return
+    if (!shouldHandleEvent(event, active, contextConfigsByType)) return
 
-    applyEventOptions(event, action, binding, contextConfigsByTypeRef.current)
+    applyEventOptions(event, action, binding, contextConfigsByType)
 
     pending = {
       timer: setTimeout(() => {
@@ -439,13 +456,15 @@ const makeHandler = (
   dispatchRef: { current: ActionDispatch },
 ) => {
   return (event: KeyboardEvent) => {
-    if (!shouldHandleEvent(event, activeRef.current, contextConfigsByTypeRef.current)) return
+    const active = activeRef.current
+    const contextConfigsByType = contextConfigsByTypeRef.current
+    if (!shouldHandleEvent(event, active, contextConfigsByType)) return
 
-    const deps = activeRef.current.get(action.context)
-    // Context may have deactivated between the key event and this callback.
+    const deps = getInstallableContextDeps(action.context, active, contextConfigsByType)
+    // Context may have deactivated or become shadowed between install and callback.
     if (!deps) return
 
-    const contextConfig = contextConfigsByTypeRef.current.get(action.context)
+    const contextConfig = contextConfigsByType.get(action.context)
     const options: EventOptions = {
       preventDefault: true,
       stopPropagation: false,
