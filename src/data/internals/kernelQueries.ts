@@ -80,6 +80,7 @@ const BLOCKS_CONTENT_FTS_MIN_QUERY_LENGTH = 3
 export interface BlocksContentSearchQuery {
   matchQuery: string
   rankQuery: string
+  literalFilters: string[]
 }
 
 type ContentSearchToken =
@@ -156,9 +157,14 @@ export const compileBlocksContentSearchQuery = (
   const trimmed = query.trim()
   if (!isTrigramSearchable(trimmed)) return null
 
+  const tokens = tokenizeContentSearchQuery(trimmed)
+  const hasPositiveFtsTerm = tokens.some(token =>
+    token.kind === 'term' && !token.excluded && isTrigramSearchable(token.text),
+  )
   const rankQuery = stripOuterQuotePair(trimmed)
   const clauses: string[][] = [[]]
   const exclusions: string[] = []
+  const literalFilters: string[] = []
   let pendingOr = false
   let pendingNot = false
   let sawPositive = false
@@ -173,54 +179,67 @@ export const compileBlocksContentSearchQuery = (
     pendingOr = false
     pendingNot = false
   }
-  const addLiteral = (text: string) => {
-    if (!isTrigramSearchable(text)) return
-    addPositive(quoteFtsPhrase(text))
+  const addRequiredLiteral = (text: string) => {
+    if (isTrigramSearchable(text)) {
+      addPositive(quoteFtsPhrase(text))
+    } else {
+      literalFilters.push(text)
+      pendingOr = false
+      pendingNot = false
+    }
   }
 
-  for (const token of tokenizeContentSearchQuery(trimmed)) {
+  for (const token of tokens) {
     if (token.kind === 'operator') {
       if (token.op === 'OR') {
         if (sawPositive) pendingOr = true
-        else addLiteral(token.op)
+        else addRequiredLiteral(token.op)
         continue
       }
       if (token.op === 'NOT') {
-        if (sawPositive) pendingNot = true
-        else addLiteral(token.op)
+        if (sawPositive || hasPositiveFtsTerm) pendingNot = true
+        else addRequiredLiteral(token.op)
         continue
       }
-      if (!sawPositive) addLiteral(token.op)
+      if (!sawPositive) addRequiredLiteral(token.op)
       continue
     }
 
-    if (token.excluded && !sawPositive) {
-      addLiteral(`-${token.text}`)
+    if (token.excluded && !hasPositiveFtsTerm) {
+      addRequiredLiteral(`-${token.text}`)
       continue
     }
-    if (!isTrigramSearchable(token.text)) continue
-    const phrase = quoteFtsPhrase(token.text)
     if (pendingNot) {
-      exclusions.push(phrase)
+      if (isTrigramSearchable(token.text)) {
+        exclusions.push(quoteFtsPhrase(token.text))
+      } else {
+        literalFilters.push(token.text)
+      }
       pendingNot = false
       pendingOr = false
       continue
     }
-    if (token.excluded && sawPositive) {
-      exclusions.push(phrase)
+    if (token.excluded && hasPositiveFtsTerm) {
+      if (isTrigramSearchable(token.text)) {
+        exclusions.push(quoteFtsPhrase(token.text))
+      } else {
+        literalFilters.push(`-${token.text}`)
+      }
       pendingOr = false
       continue
     }
-    addPositive(phrase)
+    addRequiredLiteral(token.text)
   }
 
   const nonEmptyClauses = clauses.filter(clause => clause.length > 0)
-  if (nonEmptyClauses.length === 0) {
+  if (nonEmptyClauses.length === 0 && isTrigramSearchable(rankQuery)) {
     return {
       matchQuery: quoteFtsPhrase(rankQuery),
       rankQuery,
+      literalFilters,
     }
   }
+  if (nonEmptyClauses.length === 0) return null
 
   const positiveExpr = nonEmptyClauses.length === 1
     ? nonEmptyClauses[0]!.join(' ')
@@ -228,11 +247,16 @@ export const compileBlocksContentSearchQuery = (
   const matchQuery = exclusions.length === 0
     ? positiveExpr
     : `${positiveExpr} ${exclusions.map(phrase => `NOT ${phrase}`).join(' ')}`
-  return {matchQuery, rankQuery}
+  return {matchQuery, rankQuery, literalFilters}
 }
 
-/** Content search — case-insensitive trigram FTS substring match. */
-export const SELECT_BLOCKS_BY_CONTENT_SQL = `
+const buildContentLiteralFiltersSql = (count: number): string =>
+  Array.from({length: count}, () => "    AND LOWER(b.content) LIKE '%' || LOWER(?) || '%'")
+    .join('\n')
+
+export const buildSelectBlocksByContentSql = (literalFilterCount = 0): string => {
+  const literalFiltersSql = buildContentLiteralFiltersSql(literalFilterCount)
+  return `
   SELECT ${buildQualifiedBlockColumnsSql('b')}
   FROM blocks_fts
   JOIN blocks b
@@ -242,7 +266,7 @@ export const SELECT_BLOCKS_BY_CONTENT_SQL = `
     AND blocks_fts MATCH ?
     AND b.deleted = 0
     AND b.content != ''
-  ORDER BY
+${literalFiltersSql ? `${literalFiltersSql}\n` : ''}  ORDER BY
     CASE
       WHEN LOWER(b.content) = LOWER(?) THEN 0
       WHEN LOWER(b.content) LIKE LOWER(?) || '%' THEN 1
@@ -251,6 +275,10 @@ export const SELECT_BLOCKS_BY_CONTENT_SQL = `
     b.updated_at DESC
   LIMIT ?
 `
+}
+
+/** Content search — case-insensitive trigram FTS substring match. */
+export const SELECT_BLOCKS_BY_CONTENT_SQL = buildSelectBlocksByContentSql()
 
 /** Recent non-empty blocks in a workspace, used by empty-query pickers. */
 export const SELECT_RECENT_BLOCKS_SQL = `
@@ -947,8 +975,15 @@ export const searchByContentQuery = defineQuery<
       key: kernelContentKey(workspaceId),
     })
     const rows = await ctx.db.getAll<BlockRow>(
-      SELECT_BLOCKS_BY_CONTENT_SQL,
-      [workspaceId, compiledQuery.matchQuery, compiledQuery.rankQuery, compiledQuery.rankQuery, limit],
+      buildSelectBlocksByContentSql(compiledQuery.literalFilters.length),
+      [
+        workspaceId,
+        compiledQuery.matchQuery,
+        ...compiledQuery.literalFilters,
+        compiledQuery.rankQuery,
+        compiledQuery.rankQuery,
+        limit,
+      ],
     )
     // Skip per-row deps. The kernel.content channel above covers
     // every axis that can flip a content-substring match: content

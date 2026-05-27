@@ -106,12 +106,27 @@ describe('compileBlocksContentSearchQuery', () => {
     expect(compileBlocksContentSearchQuery('"sync foo"')).toEqual({
       matchQuery: '"sync foo"',
       rankQuery: 'sync foo',
+      literalFilters: [],
     })
   })
 
   it('supports explicit OR and exclusion operators without exposing raw FTS syntax', () => {
     expect(compileBlocksContentSearchQuery('sync OR merge -lww')?.matchQuery).toBe('("sync" OR "merge") NOT "lww"')
     expect(compileBlocksContentSearchQuery('sync NOT lww')?.matchQuery).toBe('"sync" NOT "lww"')
+    expect(compileBlocksContentSearchQuery('-lww sync')?.matchQuery).toBe('"sync" NOT "lww"')
+  })
+
+  it('treats leading hyphen terms as literal when there are no positives', () => {
+    expect(compileBlocksContentSearchQuery('-foo')?.matchQuery).toBe('"-foo"')
+    expect(compileBlocksContentSearchQuery('-foo -bar')?.matchQuery).toBe('"-foo" "-bar"')
+  })
+
+  it('falls short hyphen terms back to literal filters instead of dropping them', () => {
+    expect(compileBlocksContentSearchQuery('react -1')).toEqual({
+      matchQuery: '"react"',
+      rankQuery: 'react -1',
+      literalFilters: ['-1'],
+    })
   })
 
   it('treats operator words and punctuation as literal text when they are not valid operators', () => {
@@ -323,6 +338,25 @@ describe('repo.query.searchByContent', () => {
     const out = asBlocks(await env.repo.query.searchByContent({workspaceId: WS, query: 'sync OR merge -lww'}).load())
 
     expect(out.map(r => r.id).sort()).toEqual(['merge', 'sync'])
+  })
+
+  it('supports exclusions before positive terms', async () => {
+    await create({id: 'keep', content: 'react hooks'})
+    await create({id: 'drop', content: 'react classes'})
+
+    const out = asBlocks(await env.repo.query.searchByContent({workspaceId: WS, query: '-classes react'}).load())
+
+    expect(out.map(r => r.id)).toEqual(['keep'])
+  })
+
+  it('uses short hyphen terms as literal filters when an FTS term anchors the query', async () => {
+    await create({id: 'literal', content: 'react -1'})
+    await create({id: 'without-hyphen', content: 'react 1'})
+    await create({id: 'without-number', content: 'react notes'})
+
+    const out = asBlocks(await env.repo.query.searchByContent({workspaceId: WS, query: 'react -1'}).load())
+
+    expect(out.map(r => r.id)).toEqual(['literal'])
   })
 
   it('treats FTS operator words and punctuation as literal user text', async () => {
