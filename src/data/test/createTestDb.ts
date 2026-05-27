@@ -46,7 +46,6 @@ import {
   backfillBlockAliasesIfEmpty,
   backfillBlocksFtsIfEmpty,
   backfillBlockTypesIfEmpty,
-  backfillLocalEphemeralUploadsIfPending,
 } from '@/data/internals/clientSchema'
 import {
   applyLocalSchemaContributions,
@@ -60,15 +59,6 @@ import {
   WORKSPACE_MEMBERS_RAW_TABLE,
 } from '@/data/workspaceSchema'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
-
-// Synthetic user id used when running the local-ephemeral backfill in
-// the test template. The backfill is a no-op against the empty
-// template DB (it only runs once and finds nothing to enqueue), so
-// this value matters only as a stable identifier — tests don't depend
-// on it being any particular shape. Tests that exercise the backfill
-// directly (clientSchema.test.ts) use their own DatabaseSync harness
-// and don't go through createTestDb.
-export const TEST_USER_ID = 'test-user'
 
 export interface TestDb {
   /** The real PowerSync database — same type as production. */
@@ -128,9 +118,6 @@ const initializeTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
   await backfillBlockAliasesIfEmpty(backfillDb)
   await backfillBlockTypesIfEmpty(backfillDb)
   await backfillBlocksFtsIfEmpty(backfillDb)
-  // Test harness uses a synthetic user-id; tests that exercise the
-  // backfill SELECT need to seed `workspace_members` for this id.
-  await backfillLocalEphemeralUploadsIfPending(backfillDb, () => Date.now(), TEST_USER_ID)
   await applyLocalSchemaContributions(
     backfillDb,
     localSchemaContributions,
