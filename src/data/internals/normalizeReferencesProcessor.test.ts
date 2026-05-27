@@ -93,12 +93,10 @@ describe('core.normalizeReferences (same-tx processor)', () => {
     ])
   })
 
-  it('skips the amend when input is already canonical (no-op processor)', async () => {
-    // Insert a row, then snapshot its updatedAt. Then write the SAME
-    // (already-canonical) references with skipMetadata:false. If the
-    // processor were to amend a no-op, that amendment would also need
-    // to NOT bump updatedAt — but more importantly, the explicit
-    // skip should prevent the redundant SQL UPDATE entirely.
+  it('leaves an already-canonical reference rewrite as a full no-op', async () => {
+    // Insert a row, then snapshot its updatedAt. Rewriting the same
+    // canonical references should be suppressed by tx.update before
+    // row_events/same-tx processor dispatch exist for this row.
     await env.repo.tx(async tx => {
       await tx.create({
         id: 'a', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'foo',
@@ -110,9 +108,9 @@ describe('core.normalizeReferences (same-tx processor)', () => {
       'SELECT updated_at FROM blocks WHERE id = ?', ['a'],
     )
 
-    // Re-write the same canonical references. The processor should see
-    // the row in changedRows (references field touched), notice the
-    // value is already canonical, and skip the amend.
+    // Re-write the same canonical references. This used to produce a
+    // user-fn UPDATE and rely on the processor to skip its own amend;
+    // the Layer 0 guard now prevents the UPDATE entirely.
     await env.repo.tx(async tx => {
       await tx.update('a', {references: [{id: 'x', alias: 'x'}]})
     }, {scope: ChangeScope.BlockDefault})
@@ -120,13 +118,9 @@ describe('core.normalizeReferences (same-tx processor)', () => {
     const after = await env.h.db.get<{updated_at: number}>(
       'SELECT updated_at FROM blocks WHERE id = ?', ['a'],
     )
-    // The user-fn tx.update did bump updatedAt; that's normal. The
-    // assertion we care about is that the references column still
-    // holds the same canonical form (no spurious re-write through the
-    // normalizer path).
     const refs = await readReferences(env.h.db, 'a')
     expect(refs).toEqual([{id: 'x', alias: 'x'}])
-    expect(after.updated_at).toBeGreaterThan(before.updated_at)
+    expect(after.updated_at).toBe(before.updated_at)
   })
 
   it('handles a tx that writes multiple blocks (one amendment per block)', async () => {

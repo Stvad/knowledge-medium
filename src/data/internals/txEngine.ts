@@ -51,6 +51,7 @@ import {
   ProcessorNotRegisteredError,
   WorkspaceMismatchError,
   WorkspaceNotPinnedError,
+  normalizeReferences,
 } from '@/data/api'
 import {
   BLOCK_STORAGE_COLUMNS,
@@ -71,6 +72,39 @@ export interface TxDb {
   getAll<T>(sql: string, params?: unknown[]): Promise<T[]>
   getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
   get<T>(sql: string, params?: unknown[]): Promise<T>
+}
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  Object.prototype.toString.call(value) === '[object Object]'
+
+const stableJsonValue = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(stableJsonValue)
+  if (!isPlainObject(value)) return value
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(value).sort()) {
+    out[key] = stableJsonValue(value[key])
+  }
+  return out
+}
+
+const jsonValuesEqual = (a: unknown, b: unknown): boolean =>
+  JSON.stringify(stableJsonValue(a)) === JSON.stringify(stableJsonValue(b))
+
+const updatePatchChangesBlock = (before: BlockData, patch: BlockDataPatch): boolean => {
+  if (patch.content !== undefined && patch.content !== before.content) return true
+  if (
+    patch.references !== undefined &&
+    !jsonValuesEqual(before.references, normalizeReferences(patch.references))
+  ) {
+    return true
+  }
+  if (
+    patch.properties !== undefined &&
+    !jsonValuesEqual(before.properties, patch.properties)
+  ) {
+    return true
+  }
+  return false
 }
 
 /** Per-tx scheduling record produced by `tx.afterCommit`. The commit
@@ -284,6 +318,7 @@ export class TxImpl implements Tx {
   async update(id: string, patch: BlockDataPatch, opts?: TxWriteOpts): Promise<void> {
     const before = await this.requireExisting(id)
     this.checkWorkspace(before.workspaceId)
+    if (!updatePatchChangesBlock(before, patch)) return
     const after: BlockData = {
       ...before,
       ...(patch.content !== undefined ? {content: patch.content} : {}),
@@ -335,6 +370,8 @@ export class TxImpl implements Tx {
       throw new CycleError(id, id)
     }
 
+    if (target.parentId === before.parentId && target.orderKey === before.orderKey) return
+
     const after: BlockData = {
       ...before,
       parentId: target.parentId,
@@ -360,6 +397,7 @@ export class TxImpl implements Tx {
     const before = await this.requireExisting(id)
     this.checkWorkspace(before.workspaceId)
     const encoded = schema.codec.encode(value)
+    if (jsonValuesEqual(before.properties[schema.name], encoded)) return
     const properties = {...before.properties, [schema.name]: encoded}
     const after: BlockData = {
       ...before,

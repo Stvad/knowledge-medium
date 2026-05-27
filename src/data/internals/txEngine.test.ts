@@ -315,6 +315,37 @@ describe('tx.update (data-fields-only)', () => {
     expect(env.cache.getSnapshot(id)!.content).toBe('after')
   })
 
+  it('skips SQL, row_events, and upload routing when the patch is a semantic no-op', async () => {
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'upd-noop',
+        workspaceId: 'ws-1',
+        parentId: null,
+        orderKey: 'a0',
+        content: 'same',
+        references: [{id: 'ref-a', alias: 'A'}, {id: 'ref-b', alias: 'B'}],
+        properties: {title: 'Inbox'},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    const beforeEvents = await env.rowEventsFor('upd-noop')
+    const beforeCrud = await env.psCrud()
+    const beforeUpdatedAt = env.cache.getSnapshot('upd-noop')!.updatedAt
+
+    await env.repo.tx(
+      tx => tx.update('upd-noop', {
+        content: 'same',
+        references: [{id: 'ref-b', alias: 'B'}, {id: 'ref-a', alias: 'A'}],
+        properties: {title: 'Inbox'},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    expect(await env.rowEventsFor('upd-noop')).toEqual(beforeEvents)
+    expect(await env.psCrud()).toHaveLength(beforeCrud.length)
+    expect(env.cache.getSnapshot('upd-noop')!.updatedAt).toBe(beforeUpdatedAt)
+  })
+
   it('bumps updatedAt + updatedBy unless skipMetadata', async () => {
     const id = await env.repo.tx(
       tx => tx.create({workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
@@ -393,6 +424,21 @@ describe('tx.move (cycle validation, §4.7 Layer 1)', () => {
     expect(env.cache.getSnapshot('mv-C')).toMatchObject({parentId: 'mv-root', orderKey: 'b0'})
   })
 
+  it('skips SQL, row_events, and upload routing when target parent/order are unchanged', async () => {
+    const beforeEvents = await env.rowEventsFor('mv-C')
+    const beforeCrud = await env.psCrud()
+    const beforeUpdatedAt = env.cache.getSnapshot('mv-C')!.updatedAt
+
+    await env.repo.tx(
+      tx => tx.move('mv-C', {parentId: 'mv-B', orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    expect(await env.rowEventsFor('mv-C')).toEqual(beforeEvents)
+    expect(await env.psCrud()).toHaveLength(beforeCrud.length)
+    expect(env.cache.getSnapshot('mv-C')!.updatedAt).toBe(beforeUpdatedAt)
+  })
+
   it('re-roots to null without cycle check', async () => {
     await env.repo.tx(
       tx => tx.move('mv-C', {parentId: null, orderKey: 'a1'}),
@@ -450,6 +496,52 @@ describe('tx.setProperty / tx.getProperty (codec boundary)', () => {
     await env.repo.tx(tx => tx.setProperty(id, titleProp, 'Inbox'), {scope: ChangeScope.BlockDefault})
     const got = await env.repo.tx(tx => tx.getProperty(id, titleProp), {scope: ChangeScope.BlockDefault})
     expect(got).toBe('Inbox')
+  })
+
+  it('skips SQL, row_events, and upload routing when the encoded value is already stored', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'prop-noop', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+      await tx.setProperty('prop-noop', titleProp, 'Inbox')
+    }, {scope: ChangeScope.BlockDefault})
+    const beforeEvents = await env.rowEventsFor('prop-noop')
+    const beforeCrud = await env.psCrud()
+    const beforeUpdatedAt = env.cache.getSnapshot('prop-noop')!.updatedAt
+
+    await env.repo.tx(
+      tx => tx.setProperty('prop-noop', titleProp, 'Inbox'),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    expect(await env.rowEventsFor('prop-noop')).toEqual(beforeEvents)
+    expect(await env.psCrud()).toHaveLength(beforeCrud.length)
+    expect(env.cache.getSnapshot('prop-noop')!.updatedAt).toBe(beforeUpdatedAt)
+  })
+
+  it('does not pin a workspace for a no-op-only tx', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'pin-noop', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+      await tx.setProperty('pin-noop', titleProp, 'Inbox')
+    }, {scope: ChangeScope.BlockDefault})
+
+    await env.repo.tx(
+      tx => tx.setProperty('pin-noop', titleProp, 'Inbox'),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    const cmds = await env.commandEvents()
+    expect(cmds.at(-1)!.workspace_id).toBeNull()
+  })
+
+  it('still throws WorkspaceNotPinnedError when afterCommit follows only a no-op write', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'ac-noop', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+      await tx.setProperty('ac-noop', titleProp, 'Inbox')
+    }, {scope: ChangeScope.BlockDefault})
+
+    await expect(env.repo.tx(async tx => {
+      await tx.setProperty('ac-noop', titleProp, 'Inbox')
+      tx.afterCommit('test.afterCommitProbe', {fromBlockId: 'ac-noop'})
+    }, {scope: ChangeScope.BlockDefault})).rejects.toThrow(WorkspaceNotPinnedError)
   })
 
   it('encodes Date via codec; storage holds the ISO string', async () => {
