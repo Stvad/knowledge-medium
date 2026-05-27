@@ -65,6 +65,13 @@ import { recordWrite, type SnapshotsMap, peekSnapshot } from './txSnapshots'
 import { IS_DESCENDANT_OF_SQL } from './treeQueries'
 import { SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL } from './kernelQueries'
 import type { BlockCache } from '@/data/blockCache'
+import { keyAtStart } from '@/data/orderKey'
+import {
+  getPropertyFieldId,
+  isChildBackedPropertySchema,
+  propertyFieldIdProp,
+  propertyValueToChildContent,
+} from '@/data/propertyChildren'
 
 /** Minimal subset of `@powersync/common`'s `LockContext` we actually use.
  *  Production passes the real type; the test harness's
@@ -421,6 +428,9 @@ export class TxImpl implements Tx {
   ): Promise<void> {
     const before = await this.requireExisting(id)
     this.checkWorkspace(before.workspaceId)
+    if (isChildBackedPropertySchema(schema)) {
+      await this.writePropertyValueChild(before, schema, value, opts)
+    }
     const encoded = schema.codec.encode(value)
     if (jsonValuesEqual(before.properties[schema.name], encoded)) return
     const properties = {...before.properties, [schema.name]: encoded}
@@ -733,6 +743,39 @@ export class TxImpl implements Tx {
     const row = await this.ctx.txDb.getOptional<BlockRow>(SELECT_BY_ID_SQL, [id])
     if (row === null) throw new BlockNotFoundError(id)
     return parseBlockRow(row)
+  }
+
+  private async writePropertyValueChild<T>(
+    parent: BlockData,
+    schema: PropertySchema<T> & {readonly fieldBlockId: string},
+    value: T,
+    opts: TxWriteOpts | undefined,
+  ): Promise<void> {
+    const content = propertyValueToChildContent(schema, value)
+    const children = await this.childrenOf(parent.id)
+    const existing = children.find(child => getPropertyFieldId(child) === schema.fieldBlockId)
+    const markerProperties = {
+      [propertyFieldIdProp.name]: propertyFieldIdProp.codec.encode(schema.fieldBlockId),
+    }
+
+    if (existing) {
+      await this.update(existing.id, {
+        content,
+        properties: {
+          ...existing.properties,
+          ...markerProperties,
+        },
+      }, opts)
+      return
+    }
+
+    await this.create({
+      workspaceId: parent.workspaceId,
+      parentId: parent.id,
+      orderKey: keyAtStart(children[0]?.orderKey ?? null),
+      content,
+      properties: markerProperties,
+    }, opts)
   }
 
   private async requireParentInWorkspace(

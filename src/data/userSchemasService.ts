@@ -102,9 +102,14 @@ export class UserSchemasService {
       const next: AnyPropertySchema[] = []
       const nextNameToBlockId = new Map<string, string>()
       const nextBlockIdToSchema = new Map<string, AnyPropertySchema>()
+      const reprojects: Array<{fieldBlockId: string; oldName: string; schema: AnyPropertySchema}> = []
       for (const block of blocks) {
         const built = this.tryBuildSchema(block, presets)
         if (built) {
+          const previous = this.blockIdToSchema.get(block.id)
+          if (previous && (previous.name !== built.name || previous.codec.type !== built.codec.type)) {
+            reprojects.push({fieldBlockId: block.id, oldName: previous.name, schema: built})
+          }
           next.push(built)
           nextNameToBlockId.set(built.name, block.id)
           nextBlockIdToSchema.set(block.id, built)
@@ -114,6 +119,12 @@ export class UserSchemasService {
       this.nameToBlockId = nextNameToBlockId
       this.blockIdToSchema = nextBlockIdToSchema
       this.repo.setRuntimeContributions(propertySchemasFacet, USER_DATA_SOURCE_ID, this.contributions)
+      for (const reproject of reprojects) {
+        void this.repo.reprojectPropertyValueChildren({
+          ...reproject,
+          workspaceId,
+        })
+      }
     }
 
     this.subscriptionDisposer = this.repo.subscribeBlocks(
@@ -183,6 +194,7 @@ export class UserSchemasService {
     }
     return {
       name,
+      fieldBlockId: block.id,
       codec: preset.build(config as never),
       defaultValue: preset.defaultValue,
       changeScope: ChangeScope.BlockDefault,
@@ -234,13 +246,6 @@ export class UserSchemasService {
       parsedConfig = undefined
     }
 
-    const newSchema: AnyPropertySchema = {
-      name,
-      codec: preset.build(parsedConfig as never),
-      defaultValue: preset.defaultValue,
-      changeScope: ChangeScope.BlockDefault,
-    }
-
     // Persist the *re-encoded* parsed config — round-trips through
     // configCodec to normalize and ensure the subscription's later
     // decode reproduces parsedConfig.
@@ -257,6 +262,14 @@ export class UserSchemasService {
       parentId: propertiesPageId,
       position: {kind: 'last'},
     })
+
+    const newSchema: AnyPropertySchema = {
+      name,
+      fieldBlockId: childId,
+      codec: preset.build(parsedConfig as never),
+      defaultValue: preset.defaultValue,
+      changeScope: ChangeScope.BlockDefault,
+    }
 
     await this.repo.tx(async tx => {
       // Lift property-schema type membership through Repo.addTypeInTx
