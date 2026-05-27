@@ -1,7 +1,7 @@
 import type { BlockData } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { aliasesProp } from '@/data/properties.js'
-import { buildFilterPrefixes, rankCandidates, tokenize } from '@/utils/fuzzyRank.js'
+import { buildFilterPrefixes, rankCandidates } from '@/utils/fuzzyRank.js'
 
 /** How many candidate rows to pull from SQL before JS ranking. The pre-
  *  filter is permissive (token-prefix LIKE), so over-fetching gives the
@@ -245,27 +245,50 @@ export const searchLinkTargets = async (
   })
 }
 
-const rankBlockRows = (
+const SCORE_BLOCK_FULL_EXACT = 300
+const SCORE_BLOCK_FULL_PREFIX = 200
+const SCORE_BLOCK_FULL_SUBSTRING = 100
+const SCORE_BLOCK_RECENT_MRU_HEAD = 80
+const SCORE_BLOCK_RECENT_MRU_STEP = 6
+
+const blockSearchRecencyBoost = (
+  blockId: string,
+  recentBlockIds: ReadonlyArray<string> | undefined,
+): number => {
+  if (!recentBlockIds) return 0
+  const idx = recentBlockIds.indexOf(blockId)
+  if (idx === -1) return 0
+  return Math.max(SCORE_BLOCK_RECENT_MRU_HEAD - idx * SCORE_BLOCK_RECENT_MRU_STEP, 0)
+}
+
+const blockSearchTextScore = (content: string, query: string): number => {
+  const lowerContent = content.toLowerCase()
+  const lowerQuery = query.toLowerCase().trim()
+  if (!lowerQuery) return 0
+  if (lowerContent === lowerQuery) return SCORE_BLOCK_FULL_EXACT
+  if (lowerContent.startsWith(lowerQuery)) return SCORE_BLOCK_FULL_PREFIX
+  const idx = lowerContent.indexOf(lowerQuery)
+  if (idx === -1) return 0
+  return SCORE_BLOCK_FULL_SUBSTRING - Math.min(idx, SCORE_BLOCK_FULL_SUBSTRING)
+}
+
+const orderBlockSearchRows = (
   rows: BlockData[],
   query: string,
   recentBlockIds: ReadonlyArray<string> | undefined,
   limit: number,
 ): BlockData[] => {
-  if (tokenize(query).length === 0) return rows.slice(0, limit)
-  const ranked = rankCandidates({
-    candidates: rows.map(block => ({
-      blockId: block.id,
-      label: block.content,
-      updatedAt: block.updatedAt,
-      block,
-    })),
-    query,
-    recentBlockIds,
+  const scored = rows.map((row, index) => ({
+    row,
+    index,
+    score: blockSearchTextScore(row.content, query) +
+      blockSearchRecencyBoost(row.id, recentBlockIds),
+  }))
+  scored.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score
+    return a.index - b.index
   })
-  const rankedRows = ranked.map(item => (item.candidate as {block: BlockData}).block)
-  const rankedIds = new Set(rankedRows.map(row => row.id))
-  const unrankedRows = rows.filter(row => !rankedIds.has(row.id))
-  return [...rankedRows, ...unrankedRows].slice(0, limit)
+  return scored.slice(0, limit).map(item => item.row)
 }
 
 export const searchLinkTargetsProgressively = async (
@@ -294,8 +317,8 @@ export const searchLinkTargetsProgressively = async (
     limit,
     recentBlockIds,
   })
-  // Over-fetch content matches so the ranker can re-order them with
-  // recency and demote duplicates already covered by alias rows.
+  // Over-fetch content matches so the block orderer has room to promote
+  // MRU / raw-text wins before the final display limit is applied.
   const fetchLimit = Math.min(limit * ALIAS_CANDIDATE_MULTIPLIER, ALIAS_CANDIDATE_CEILING)
   const blockRowsPromise = trimmed.length >= MIN_CONTENT_SEARCH_LEN
     ? repo.query.searchByContent({
@@ -321,8 +344,8 @@ export const searchLinkTargetsProgressively = async (
   const blockRows = await blockRowsPromise
   if (!blockRows.ok) throw blockRows.error
 
-  const rankedBlockRows = rankBlockRows(blockRows.rows, trimmed, recentBlockIds, limit)
-  const blocks = blockMatchesFromRows(rankedBlockRows, seenBlockIds)
+  const orderedBlockRows = orderBlockSearchRows(blockRows.rows, trimmed, recentBlockIds, limit)
+  const blocks = blockMatchesFromRows(orderedBlockRows, seenBlockIds)
   const result = {aliases, blocks}
   callbacks.onBlocks?.(blocks, result)
   return result

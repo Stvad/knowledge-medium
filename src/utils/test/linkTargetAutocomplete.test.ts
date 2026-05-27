@@ -146,6 +146,20 @@ describe('link target autocomplete helpers', () => {
     expect(out.blocks.map(match => match.blockId)).toEqual(['keep'])
   })
 
+  it('boosts recent block content matches without filtering FTS rows through fuzzy rank', async () => {
+    await create({id: 'older', content: 'sync alpha'})
+    await create({id: 'newer', content: 'sync beta'})
+
+    const out = await searchLinkTargets(env.repo, {
+      workspaceId: WS,
+      query: 'sync',
+      limit: 10,
+      recentBlockIds: ['older'],
+    })
+
+    expect(out.blocks.map(match => match.blockId)).toEqual(['older', 'newer'])
+  })
+
   it('can publish alias matches before slower content matches', async () => {
     const blockRows = deferred<BlockData[]>()
     const repo = {
