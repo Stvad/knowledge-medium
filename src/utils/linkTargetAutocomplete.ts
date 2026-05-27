@@ -1,7 +1,6 @@
 import type { BlockData } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { aliasesProp } from '@/data/properties.js'
-import { isPropertyFieldInstance } from '@/data/propertyChildren'
 import { buildFilterPrefixes, rankCandidates } from '@/utils/fuzzyRank.js'
 
 /** How many candidate rows to pull from SQL before JS ranking. The pre-
@@ -292,32 +291,6 @@ const orderBlockSearchRows = (
   return scored.slice(0, limit).map(item => item.row)
 }
 
-const isPropertyValueRow = async (
-  repo: Repo,
-  row: BlockData,
-): Promise<boolean> => {
-  if (!row.parentId) return false
-  const parent = repo.cache.getSnapshot(row.parentId) ?? await repo.block(row.parentId).load()
-  return isPropertyFieldInstance(parent, repo.propertySchemas)
-}
-
-export const isLinkTargetCandidateBlock = async (
-  repo: Repo,
-  row: BlockData,
-): Promise<boolean> => !(await isPropertyValueRow(repo, row))
-
-const filterLinkTargetBlockRows = async (
-  repo: Repo,
-  rows: readonly BlockData[],
-): Promise<BlockData[]> => {
-  const out: BlockData[] = []
-  for (const row of rows) {
-    if (!(await isLinkTargetCandidateBlock(repo, row))) continue
-    out.push(row)
-  }
-  return out
-}
-
 export const searchLinkTargetsProgressively = async (
   repo: Repo,
   {
@@ -371,8 +344,7 @@ export const searchLinkTargetsProgressively = async (
   const blockRows = await blockRowsPromise
   if (!blockRows.ok) throw blockRows.error
 
-  const targetRows = await filterLinkTargetBlockRows(repo, blockRows.rows)
-  const orderedBlockRows = orderBlockSearchRows(targetRows, trimmed, recentBlockIds, limit)
+  const orderedBlockRows = orderBlockSearchRows(blockRows.rows, trimmed, recentBlockIds, limit)
   const blocks = blockMatchesFromRows(orderedBlockRows, seenBlockIds)
   const result = {aliases, blocks}
   callbacks.onBlocks?.(blocks, result)
