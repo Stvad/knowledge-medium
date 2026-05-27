@@ -132,7 +132,10 @@ export interface Tx {
   // ──── Within-tx tree primitives ────
 
   /** Children of `parentId`, ordered `(order_key, id)`, filtered
-   *  `deleted = 0`. Reads SQL via the writeTransaction.
+   *  `deleted = 0`. Property-value children are hidden by default;
+   *  callers that maintain structural ownership/projection can opt
+   *  into them with `includePropertyChildren`. Reads SQL via the
+   *  writeTransaction.
    *  Pass `null` to enumerate workspace-root rows (rows with
    *  `parent_id IS NULL`); the result is scoped to a workspace by
    *  one of three sources, in priority order:
@@ -145,7 +148,11 @@ export interface Tx {
    *       computation.
    *  When `parentId !== null`, `workspaceId` is ignored — the parent
    *  row already constrains the query. */
-  childrenOf(parentId: string | null, workspaceId?: string): Promise<BlockData[]>
+  childrenOf(
+    parentId: string | null,
+    workspaceId?: string,
+    options?: {includePropertyChildren?: boolean},
+  ): Promise<BlockData[]>
 
   /** Parent of `childId`, or null if `childId` has no parent or doesn't
    *  exist. Reads SQL via the writeTransaction. */

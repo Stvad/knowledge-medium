@@ -11,11 +11,11 @@ import type { ChangeScope } from './changeScope'
  *  `PropertyEditorOverride<T>` (joined to schemas by `name`). See spec §5.6. */
 export interface PropertySchema<T> {
   readonly name: string
-  /** Present for user-defined schemas backed by a `'property-schema'`
-   *  block. The block id is the stable field identity; `name` remains
-   *  the current cache/display key and may change when the field block
-   *  is renamed. Kernel/plugin schemas omit this and stay cache-only. */
-  readonly fieldBlockId?: string
+  /** Stable identity for the property-value child row. User-defined
+   *  schemas use their `'property-schema'` block id; kernel/plugin
+   *  schemas default to a deterministic id derived from `name`. The
+   *  parent `properties` map remains keyed by `name` as a projection. */
+  readonly fieldId: string
   /** Storage codec; runs at the four boundary call sites only. */
   readonly codec: Codec<T>
   readonly defaultValue: T
@@ -78,12 +78,26 @@ export interface PropertySchemaRegistry { /* augmented per plugin */ }
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface PropertyEditorOverrideRegistry { /* augmented per plugin */ }
 
+export const fieldIdForPropertyName = (name: string): string => `property:${name}`
+
+type PropertySchemaDefinition<T> =
+  Omit<PropertySchema<T>, 'name' | 'fieldId'> & {
+    readonly fieldId?: string
+  }
+
 /** Helper for plugin authors to define a schema with full type inference
  *  on `defaultValue`. */
 export const defineProperty = <T>(
   name: string,
-  schema: Omit<PropertySchema<T>, 'name'>,
-): PropertySchema<T> => ({ name, ...schema })
+  schema: PropertySchemaDefinition<T>,
+): PropertySchema<T> => {
+  const {fieldId, ...rest} = schema
+  return {
+    name,
+    fieldId: fieldId ?? fieldIdForPropertyName(name),
+    ...rest,
+  }
+}
 
 /** Helper for the rare property that needs a per-name editor override.
  *  Most plugins should NOT reach for this — registering an override is

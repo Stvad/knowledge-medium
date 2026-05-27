@@ -9,6 +9,7 @@ export interface BlockRow {
   id: string
   workspace_id: string
   parent_id: string | null
+  field_id: string | null
   order_key: string
   content: string
   properties_json: string
@@ -38,6 +39,7 @@ export const BLOCK_STORAGE_COLUMNS = [
   {name: 'id', definition: 'id TEXT PRIMARY KEY NOT NULL'},
   {name: 'workspace_id', definition: 'workspace_id TEXT NOT NULL'},
   {name: 'parent_id', definition: 'parent_id TEXT'},
+  {name: 'field_id', definition: 'field_id TEXT'},
   {name: 'order_key', definition: 'order_key TEXT NOT NULL'},
   {name: 'content', definition: "content TEXT NOT NULL DEFAULT ''"},
   {name: 'properties_json', definition: "properties_json TEXT NOT NULL DEFAULT '{}'"},
@@ -94,11 +96,31 @@ export const CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL = `
   WHERE deleted = 0
 `
 
+export const CREATE_BLOCKS_FIELD_PARENT_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_blocks_field_parent
+  ON blocks (workspace_id, field_id, parent_id)
+  WHERE deleted = 0 AND field_id IS NOT NULL
+`
+
 export const CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL = `
   CREATE INDEX IF NOT EXISTS idx_blocks_workspace_active
   ON blocks (workspace_id)
   WHERE deleted = 0
 `
+
+export interface BlockSchemaDb {
+  execute(sql: string): Promise<unknown>
+  getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
+}
+
+export const ensureBlockStorageColumns = async (db: BlockSchemaDb): Promise<void> => {
+  const fieldIdColumn = await db.getOptional<{name: string}>(
+    `SELECT name FROM pragma_table_info('blocks') WHERE name = 'field_id'`,
+  )
+  if (!fieldIdColumn) {
+    await db.execute(`ALTER TABLE blocks ADD COLUMN field_id TEXT`)
+  }
+}
 
 export const UPSERT_BLOCK_SQL = `
   INSERT INTO blocks (
@@ -158,6 +180,7 @@ const BLOCK_SNAPSHOT_JSON_FIELDS = [
   {key: 'id', sqlExpression: rowRef => `${rowRef}.id`},
   {key: 'workspaceId', sqlExpression: rowRef => `${rowRef}.workspace_id`},
   {key: 'parentId', sqlExpression: rowRef => `${rowRef}.parent_id`},
+  {key: 'fieldId', sqlExpression: rowRef => `${rowRef}.field_id`},
   {key: 'orderKey', sqlExpression: rowRef => `${rowRef}.order_key`},
   {key: 'content', sqlExpression: rowRef => `${rowRef}.content`},
   {key: 'properties', sqlExpression: rowRef => `json(${rowRef}.properties_json)`},
@@ -193,6 +216,7 @@ export const parseBlockRow = (row: BlockRow): BlockData => ({
   id: row.id,
   workspaceId: row.workspace_id,
   parentId: row.parent_id,
+  fieldId: row.field_id ?? null,
   orderKey: row.order_key,
   content: row.content,
   properties: safeJsonParse<Record<string, unknown>>(row.properties_json, {}),
@@ -208,6 +232,7 @@ type BlockRowParams = [
   id: string,
   workspaceId: string,
   parentId: string | null,
+  fieldId: string | null,
   orderKey: string,
   content: string,
   propertiesJson: string,
@@ -223,6 +248,7 @@ export const blockToRowParams = (blockData: BlockData): BlockRowParams => [
   blockData.id,
   blockData.workspaceId,
   blockData.parentId,
+  blockData.fieldId ?? null,
   blockData.orderKey,
   blockData.content,
   JSON.stringify(blockData.properties ?? {}),

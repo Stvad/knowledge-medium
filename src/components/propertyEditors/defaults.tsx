@@ -16,6 +16,7 @@ import { Plus, X } from 'lucide-react'
 import {
   ChangeScope,
   codecs,
+  defineProperty,
   type AnyPropertyEditorOverride,
   type AnyPropertySchema,
   type AnyValuePreset,
@@ -274,8 +275,7 @@ export const inferTypeFromValue = (value: unknown): string => {
  *  encoded JSON through a codec and pick an editor. The resulting
  *  schema is intentionally type-loose (`unsafeIdentity`) and never
  *  persisted — it exists only to keep the read path rendering. */
-export const degradedFallbackSchema = (name: string, type: string): PropertySchema<unknown> => ({
-  name,
+export const degradedFallbackSchema = (name: string, type: string): PropertySchema<unknown> => defineProperty(name, {
   codec: type === 'list'
     ? codecs.list(codecs.unsafeIdentity<unknown>()) as PropertySchema<unknown>['codec']
     : codecs.unsafeIdentity<unknown>(type),

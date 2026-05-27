@@ -29,7 +29,7 @@
  */
 
 const PROPERTY_VALUE_CHILD_FILTER_SQL =
-  `json_extract(properties_json, '$."system:propertyFieldId"') IS NULL`
+  `field_id IS NULL`
 
 /** Returns the rooted subtree, ordered by path (i.e. depth-first, with
  *  siblings sorted by `(order_key, id)` via the path encoding). Filters
@@ -48,7 +48,7 @@ export const SUBTREE_SQL = `
       FROM subtree
       JOIN blocks AS child ON child.parent_id = subtree.id
      WHERE child.deleted = 0
-       AND json_extract(child.properties_json, '$."system:propertyFieldId"') IS NULL
+       AND child.field_id IS NULL
        AND subtree.depth < 100
        AND INSTR(subtree.path, '!' || hex(child.id) || '/') = 0
   )

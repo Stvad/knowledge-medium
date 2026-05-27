@@ -207,6 +207,7 @@ describe('PowerSync upload compaction', () => {
       id: 'block-a',
       workspace_id: 'workspace-a',
       parent_id: null,
+      field_id: null,
       order_key: 'a0',
       content: 'A',
       properties_json: '{}',

@@ -102,13 +102,13 @@ export class UserSchemasService {
       const next: AnyPropertySchema[] = []
       const nextNameToBlockId = new Map<string, string>()
       const nextBlockIdToSchema = new Map<string, AnyPropertySchema>()
-      const reprojects: Array<{fieldBlockId: string; oldName: string; schema: AnyPropertySchema}> = []
+      const reprojects: Array<{fieldId: string; oldName: string; schema: AnyPropertySchema}> = []
       for (const block of blocks) {
         const built = this.tryBuildSchema(block, presets)
         if (built) {
           const previous = this.blockIdToSchema.get(block.id)
           if (previous && (previous.name !== built.name || previous.codec.type !== built.codec.type)) {
-            reprojects.push({fieldBlockId: block.id, oldName: previous.name, schema: built})
+            reprojects.push({fieldId: block.id, oldName: previous.name, schema: built})
           }
           next.push(built)
           nextNameToBlockId.set(built.name, block.id)
@@ -194,7 +194,7 @@ export class UserSchemasService {
     }
     return {
       name,
-      fieldBlockId: block.id,
+      fieldId: block.id,
       codec: preset.build(config as never),
       defaultValue: preset.defaultValue,
       changeScope: ChangeScope.BlockDefault,
@@ -265,7 +265,7 @@ export class UserSchemasService {
 
     const newSchema: AnyPropertySchema = {
       name,
-      fieldBlockId: childId,
+      fieldId: childId,
       codec: preset.build(parsedConfig as never),
       defaultValue: preset.defaultValue,
       changeScope: ChangeScope.BlockDefault,

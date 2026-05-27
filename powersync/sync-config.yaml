@@ -54,6 +54,7 @@ streams:
           blocks.id,
           blocks.workspace_id,
           blocks.parent_id,
+          blocks.field_id,
           blocks.order_key,
           blocks.content,
           blocks.properties_json,

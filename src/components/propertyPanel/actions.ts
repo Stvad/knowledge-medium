@@ -4,10 +4,6 @@ import {
   type AnyPropertySchema,
 } from '@/data/api'
 import type { Block } from '@/data/block'
-import {
-  getPropertyFieldId,
-  isChildBackedPropertySchema,
-} from '@/data/propertyChildren'
 import { typesProp } from '@/data/properties.js'
 import { isPropertyPanelHiddenProperty } from './visibility'
 import type { AddPropertyArgs } from './AddPropertyForm'
@@ -103,26 +99,6 @@ export const deleteProperty = async (args: {
   const next = {...args.properties}
   delete next[args.name]
   const schema = args.schemas.get(args.name)
-
-  if (schema && isChildBackedPropertySchema(schema)) {
-    await args.block.repo.tx(async tx => {
-      const children = await tx.childrenOf(args.block.id)
-      for (const child of children) {
-        if (getPropertyFieldId(child) === schema.fieldBlockId) {
-          await tx.delete(child.id)
-        }
-      }
-      const live = await tx.get(args.block.id)
-      if (live === null) return
-      const liveNext = {...live.properties}
-      delete liveNext[args.name]
-      await tx.update(args.block.id, {properties: liveNext})
-    }, {
-      scope: schema.changeScope,
-      description: `delete property ${args.name}`,
-    })
-    return
-  }
 
   await args.block.repo.tx(async tx => {
     await tx.update(args.block.id, {properties: next})

@@ -99,6 +99,7 @@ interface BlockInsert {
   id: string
   workspace_id: string
   parent_id: string | null
+  field_id: string | null
   order_key: string
   content: string
   properties_json: string
@@ -114,6 +115,7 @@ const defaultBlock: BlockInsert = {
   id: 'b1',
   workspace_id: 'ws1',
   parent_id: null,
+  field_id: null,
   order_key: 'a0',
   content: '',
   properties_json: '{}',

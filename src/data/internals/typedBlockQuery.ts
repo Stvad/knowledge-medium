@@ -167,7 +167,7 @@ const compileTargetTraversal = (
       sql:
         `EXISTS (SELECT 1 FROM blocks ${alias} ` +
         `WHERE ${alias}.id = ${refExtract} ` +
-        `AND ${alias}.deleted = 0${inWhere})`,
+        `AND ${alias}.deleted = 0 AND ${alias}.field_id IS NULL${inWhere})`,
       params: innerParams,
     }
   }
@@ -176,7 +176,7 @@ const compileTargetTraversal = (
     sql:
       `EXISTS (SELECT 1 FROM json_each(${refExtract}) AS je ` +
       `JOIN blocks ${alias} ON ${alias}.id = je.value ` +
-      `WHERE ${alias}.deleted = 0${inWhere})`,
+      `WHERE ${alias}.deleted = 0 AND ${alias}.field_id IS NULL${inWhere})`,
     params: innerParams,
   }
 }
@@ -444,7 +444,7 @@ export const buildCandidatesCte = (
       FROM block_references br
       JOIN blocks b ON b.id = br.source_id
     `.trim()
-    clauses.push('br.workspace_id = ?', 'br.target_id = ?', 'b.deleted = 0')
+    clauses.push('br.workspace_id = ?', 'br.target_id = ?', 'b.deleted = 0', 'b.field_id IS NULL')
     params.push(normalized.workspaceId, normalized.referencedBy.id)
     if (normalized.referencedBy.sourceField !== undefined) {
       clauses.push('br.source_field = ?')
@@ -452,7 +452,7 @@ export const buildCandidatesCte = (
     }
   } else {
     from = 'FROM blocks b'
-    clauses.push('b.workspace_id = ?', 'b.deleted = 0')
+    clauses.push('b.workspace_id = ?', 'b.deleted = 0', 'b.field_id IS NULL')
     params.push(normalized.workspaceId)
   }
 

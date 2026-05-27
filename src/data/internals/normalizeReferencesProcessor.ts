@@ -27,7 +27,10 @@ import {
   normalizeReferences,
   type AnySameTxProcessor,
 } from '@/data/api'
-import { PROJECT_PROPERTY_CHILDREN_PROCESSOR } from './propertyChildrenProcessor'
+import {
+  MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR,
+  PROJECT_PROPERTY_CHILDREN_PROCESSOR,
+} from './propertyChildrenProcessor'
 
 const referencesEqual = (
   a: ReturnType<typeof normalizeReferences>,
@@ -58,6 +61,7 @@ export const NORMALIZE_REFERENCES_PROCESSOR = defineSameTxProcessor({
 })
 
 export const KERNEL_SAME_TX_PROCESSORS: ReadonlyArray<AnySameTxProcessor> = [
+  MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR,
   PROJECT_PROPERTY_CHILDREN_PROCESSOR,
   NORMALIZE_REFERENCES_PROCESSOR,
 ]
