@@ -65,6 +65,7 @@ import { isFocusedBlock } from '@/data/properties.js'
 interface DefaultBlockRendererProps extends BlockRendererProps {
   ContentRenderer?: BlockRenderer;
   EditContentRenderer?: BlockRenderer;
+  LayoutRenderer?: BlockLayout;
 }
 
 /** Todo plausibly the following 2 things should be "actions" too
@@ -344,6 +345,7 @@ export function DefaultBlockRenderer(
     block,
     ContentRenderer: DefaultContentRenderer = MarkdownContentRenderer,
     EditContentRenderer = CodeMirrorContentRenderer,
+    LayoutRenderer,
   }: DefaultBlockRendererProps,
 ) {
   const repo = useRepo()
@@ -436,8 +438,8 @@ export function DefaultBlockRenderer(
   // Last-wins on the variant facet — same migration shape as content
   // renderer above. `DefaultBlockLayout` is the no-contribution fallback.
   const Layout = useMemo(
-    () => resolveBlockLayout(resolveContext).last?.render ?? DefaultBlockLayout,
-    [resolveContext, resolveBlockLayout],
+    () => LayoutRenderer ?? resolveBlockLayout(resolveContext).last?.render ?? DefaultBlockLayout,
+    [resolveContext, resolveBlockLayout, LayoutRenderer],
   )
   const resolveBlockShellDecorators = runtime.read(blockShellDecoratorsFacet)
   const shellDecorators = useMemo(

@@ -3,9 +3,17 @@ import { useHandle } from '@/hooks/block'
 import { usePropertySchemas } from '@/hooks/propertySchemas'
 import { propertyEditorOverridesFacet, valuePresetsFacet } from '@/data/facets'
 import { findSchemaByFieldId, getPropertyFieldTargetId } from '@/data/propertyChildren'
+import { isCollapsedProp } from '@/data/properties'
 import { useAppRuntime } from '@/extensions/runtimeContext'
+import type { BlockLayout } from '@/extensions/blockInteraction'
 import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults'
 import { PropertyShapeGlyph } from '@/components/propertyPanel/shapeUi'
+import { usePropertyValue } from '@/hooks/block'
+import { useIsSelected } from '@/data/globalState'
+import { useIsFocalRender } from '@/hooks/useIsFocalRender'
+import { buildAppHash } from '@/utils/routing'
+import { useOpenBlock } from '@/utils/navigation'
+import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer'
 import { CodeMirrorContentRenderer } from './CodeMirrorContentRenderer'
 
@@ -35,6 +43,7 @@ const FieldContentRenderer: BlockRenderer = ({block}: BlockRendererProps) => {
         referenceTargetId: row.referenceTargetId,
         content: row.content,
         parentId: row.parentId,
+        workspaceId: row.workspaceId,
       }
       : undefined,
   })
@@ -43,6 +52,8 @@ const FieldContentRenderer: BlockRenderer = ({block}: BlockRendererProps) => {
   const uis = runtime.read(propertyEditorOverridesFacet)
   const presets = runtime.read(valuePresetsFacet)
   const fieldId = getPropertyFieldTargetId(data)
+  const workspaceId = data?.workspaceId ?? block.repo.activeWorkspaceId ?? ''
+  const openDefinition = useOpenBlock({blockId: fieldId ?? '', workspaceId})
   const schema = fieldId
     ? findSchemaByFieldId(schemas, fieldId)
     : undefined
@@ -74,9 +85,60 @@ const FieldContentRenderer: BlockRenderer = ({block}: BlockRendererProps) => {
       >
         <PropertyShapeGlyph shape={display.shape} Glyph={display.Glyph} />
       </span>
-      <span className="min-w-0 truncate text-muted-foreground" title={schema.name}>
+      <a
+        href={workspaceId ? buildAppHash(workspaceId, fieldId) : '#'}
+        className="min-w-0 truncate rounded-sm text-muted-foreground no-underline hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        data-property-definition-link="true"
+        title={`Open ${label} definition`}
+        onClick={workspaceId ? openDefinition : undefined}
+      >
         {label}
-      </span>
+      </a>
+    </div>
+  )
+}
+
+const FieldBlockLayout: BlockLayout = ({
+  block,
+  Content,
+  Properties,
+  Children,
+  Footer,
+  Controls,
+  Header,
+  shellProps,
+}) => {
+  const isSelected = useIsSelected(block.id)
+  const isTopLevel = useIsFocalRender(block)
+  const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
+  const {className: shellClassName, ...collapsibleProps} = shellProps
+
+  return (
+    <div>
+      <Header/>
+
+      <Collapsible
+        {...collapsibleProps}
+        open={!isCollapsed || isTopLevel}
+        data-property-field-table-row="true"
+        className={`tm-block tm-field-table-row group/block relative flex items-start gap-1 outline-none focus:outline-none focus-visible:outline-none ${isTopLevel ? 'top-level-block' : ''} ${isSelected ? 'bg-accent/80' : ''} ${shellClassName ?? ''}`}
+      >
+        <Controls/>
+
+        <div className="block-body relative min-w-0 flex-grow">
+          <div className="tm-field-table-grid grid min-w-0 grid-cols-[minmax(9rem,13rem)_minmax(0,1fr)] items-start gap-3 rounded-sm border-b border-transparent py-0.5 hover:border-border/50">
+            <div className="tm-field-name-cell min-w-0">
+              <Content/>
+            </div>
+            <CollapsibleContent className="tm-field-value-cell min-w-0">
+              <Children/>
+            </CollapsibleContent>
+          </div>
+
+          {Properties && <Properties/>}
+          <Footer/>
+        </div>
+      </Collapsible>
     </div>
   )
 }
@@ -86,6 +148,7 @@ export const FieldBlockRenderer: BlockRenderer = (props) => (
     {...props}
     ContentRenderer={FieldContentRenderer}
     EditContentRenderer={CodeMirrorContentRenderer}
+    LayoutRenderer={FieldBlockLayout}
   />
 )
 

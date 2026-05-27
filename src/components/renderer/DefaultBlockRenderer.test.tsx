@@ -21,6 +21,7 @@ import { blockLayoutFacet, type BlockLayout } from '@/extensions/blockInteractio
 import { defaultEditorInteractionExtension } from '@/extensions/defaultEditorInteractions'
 import { resolveFacetRuntimeSync, type FacetRuntime } from '@/extensions/facet'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
+import { blockRenderersFacet } from '@/extensions/core'
 import type { Block } from '@/data/block'
 import type { BlockRendererProps } from '@/types'
 import { pasteMultilineText } from '@/utils/paste'
@@ -127,6 +128,19 @@ describe('DefaultBlockRenderer paste handling', () => {
 
   beforeEach(async () => {
     vi.mocked(pasteMultilineText).mockClear()
+    Object.defineProperty(window, 'matchMedia', {
+      writable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: false,
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    })
 
     h = await createTestDb()
     let now = 1700_000_000_000
@@ -326,6 +340,13 @@ describe('DefaultBlockRenderer paste handling', () => {
         orderKey: 'c0',
         content: '[[test:status]]',
       })
+      await tx.create({
+        id: 'status-value-display',
+        workspaceId: 'ws-1',
+        parentId: 'status-field-display',
+        orderKey: 'a0',
+        content: 'open',
+      })
     }, {scope: ChangeScope.BlockDefault, description: 'create property field renderer fixture'})
 
     const valueRuntime = resolveFacetRuntimeSync([
@@ -335,6 +356,9 @@ describe('DefaultBlockRenderer paste handling', () => {
       defaultEditorInteractionExtension,
       propertySchemasFacet.of(statusProp, {source: 'test'}),
       propertySchemasFacet.of(priorityProp, {source: 'test'}),
+      blockRenderersFacet.of({id: 'default', renderer: DefaultBlockRenderer}, {source: 'test'}),
+      blockRenderersFacet.of({id: 'field', renderer: FieldBlockRenderer}, {source: 'test'}),
+      blockRenderersFacet.of({id: 'propertyValue', renderer: PropertyValueBlockRenderer}, {source: 'test'}),
       blockLayoutFacet.of(
         () => ({id: 'content-only', label: 'Content only', render: contentOnlyLayout}),
         {source: 'test'},
@@ -349,8 +373,15 @@ describe('DefaultBlockRenderer paste handling', () => {
       </AppRuntimeContextProvider>,
     )
 
-    expect(screen.getByText('test:status')).toBeTruthy()
+    const definitionLink = screen.getByRole('link', {name: 'test:status'})
+    expect(definitionLink).toHaveAttribute('data-property-definition-link', 'true')
+    expect(definitionLink).toHaveAttribute(
+      'href',
+      expect.stringContaining(statusProp.fieldId),
+    )
     expect(screen.queryByText('[[test:status]]')).toBeNull()
+    expect(document.querySelector('[data-property-field-table-row="true"]')).toBeTruthy()
+    await waitFor(() => expect(screen.getByDisplayValue('open')).toBeTruthy())
   })
 
   it('renders property value rows through the schema editor and projects edits', async () => {
