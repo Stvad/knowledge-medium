@@ -494,34 +494,4 @@ describe('UserSchemasService child-backed field identity', () => {
     expect(env.repo.cache.getSnapshot('parent')?.properties['custom-checkbox']).toBe(true)
   })
 
-  it('resolves exact refs to a schema name value row as the schema field definition', async () => {
-    env = await setup({registerStatusProp: false})
-    await getOrCreatePropertiesPage(env.repo, WS)
-    env.dispose = env.repo.userSchemas.start()
-    const schema = await env.repo.userSchemas.addSchema({name: 'custom-checkbox', presetId: 'boolean'})
-    const schemaBlockId = env.repo.userSchemas.getSchemaBlockId(schema.name)!
-    const schemaChildren = await rawLiveChildren(env.h, schemaBlockId)
-    const nameField = schemaChildren.find(row => row.reference_target_id === propertyNameProp.fieldId)!
-    const [nameValue] = await rawLiveChildren(env.h, nameField.id)
-    await createRoot(env.repo, 'parent')
-
-    await env.repo.mutate.createChild({
-      id: 'custom-field-row',
-      parentId: 'parent',
-      content: `((${nameValue!.id}))`,
-    })
-    await env.repo.mutate.createChild({
-      id: 'custom-value-row',
-      parentId: 'custom-field-row',
-      content: 'true',
-    })
-
-    const [field] = await rawLiveChildren(env.h, 'parent')
-    expect(field).toMatchObject({
-      id: 'custom-field-row',
-      content: `((${nameValue!.id}))`,
-      reference_target_id: schemaBlockId,
-    })
-    expect(env.repo.cache.getSnapshot('parent')?.properties['custom-checkbox']).toBe(true)
-  })
 })

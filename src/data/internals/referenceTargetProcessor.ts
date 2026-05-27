@@ -4,8 +4,6 @@ import {
   type BlockData,
   type Tx,
 } from '@/data/api'
-import { propertyNameProp } from '@/data/properties'
-import { findSchemaByFieldId } from '@/data/propertyChildren'
 import { parseExactReferenceBlockContent } from '@/data/referenceBlock'
 
 export const DERIVE_REFERENCE_TARGET_PROCESSOR_NAME = 'core.deriveReferenceTarget'
@@ -15,29 +13,6 @@ const fieldTargetForAlias = (
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
 ): string | null => propertySchemas.get(alias)?.fieldId ?? null
 
-const fieldTargetForBlockRef = async (
-  tx: Tx,
-  id: string,
-  propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
-): Promise<string | null> => {
-  if (findSchemaByFieldId(propertySchemas, id)) return id
-
-  const target = await tx.get(id)
-  if (target === null || target.parentId === null) return null
-
-  if (target.referenceTargetId === propertyNameProp.fieldId) {
-    return target.parentId !== null && findSchemaByFieldId(propertySchemas, target.parentId)
-      ? target.parentId
-      : null
-  }
-
-  const parent = await tx.get(target.parentId)
-  if (parent === null || parent.parentId === null) return null
-  if (parent.referenceTargetId !== propertyNameProp.fieldId) return null
-
-  return findSchemaByFieldId(propertySchemas, parent.parentId) ? parent.parentId : null
-}
-
 const deriveReferenceTargetId = async (
   tx: Tx,
   row: BlockData,
@@ -45,9 +20,7 @@ const deriveReferenceTargetId = async (
 ): Promise<string | null | undefined> => {
   const exact = parseExactReferenceBlockContent(row.content)
   if (!exact) return null
-  if (exact.kind === 'blockRef') {
-    return await fieldTargetForBlockRef(tx, exact.id, propertySchemas) ?? exact.id
-  }
+  if (exact.kind === 'blockRef') return exact.id
 
   const fieldTargetId = fieldTargetForAlias(exact.alias, propertySchemas)
   if (fieldTargetId !== null) return fieldTargetId
