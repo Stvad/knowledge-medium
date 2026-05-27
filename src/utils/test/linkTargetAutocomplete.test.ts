@@ -133,6 +133,19 @@ describe('link target autocomplete helpers', () => {
     expect(out.blocks.map(match => match.blockId)).toEqual(['block'])
   })
 
+  it('keeps FTS exclusion matches even when fuzzy ranking cannot score the raw query', async () => {
+    await create({id: 'keep', content: 'sync token'})
+    await create({id: 'drop', content: 'sync wallet'})
+
+    const out = await searchLinkTargets(env.repo, {
+      workspaceId: WS,
+      query: 'sync -wallet',
+      limit: 10,
+    })
+
+    expect(out.blocks.map(match => match.blockId)).toEqual(['keep'])
+  })
+
   it('can publish alias matches before slower content matches', async () => {
     const blockRows = deferred<BlockData[]>()
     const repo = {

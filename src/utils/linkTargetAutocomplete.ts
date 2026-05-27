@@ -262,7 +262,10 @@ const rankBlockRows = (
     query,
     recentBlockIds,
   })
-  return ranked.slice(0, limit).map(item => (item.candidate as {block: BlockData}).block)
+  const rankedRows = ranked.map(item => (item.candidate as {block: BlockData}).block)
+  const rankedIds = new Set(rankedRows.map(row => row.id))
+  const unrankedRows = rows.filter(row => !rankedIds.has(row.id))
+  return [...rankedRows, ...unrankedRows].slice(0, limit)
 }
 
 export const searchLinkTargetsProgressively = async (
