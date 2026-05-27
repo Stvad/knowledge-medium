@@ -9,15 +9,27 @@
 -- still fires on every UPDATE, so wall-clock clamping is preserved without
 -- any work in this function.
 --
--- Atomicity: if any patch targets a row that doesn't exist (or is
--- RLS-hidden), `RAISE EXCEPTION` aborts the function's implicit
--- transaction so none of the sibling UPDATEs commit. Without that, the
--- client wrapper would observe a `missing` array, throw a permanent
--- error, and the orchestrator would quarantine the tx — but the
--- already-committed sibling updates couldn't be undone. SQLSTATE
--- `P0002` (`no_data_found`) is the closest standard PL/pgSQL exception
--- for "the rows you asked for don't exist"; the client classifier
--- recognises it as permanent.
+-- Atomicity: if any patch's UPDATE affects zero rows, `RAISE EXCEPTION`
+-- aborts the function's implicit transaction so none of the sibling
+-- UPDATEs commit. Without that, the client wrapper would surface a
+-- "missing" outcome to the orchestrator and the tx would be quarantined
+-- — but the already-committed sibling updates couldn't be undone.
+-- SQLSTATE `P0002` (`no_data_found`) is the closest standard PL/pgSQL
+-- exception for "the rows you asked for don't exist"; the client
+-- classifier (`uploadErrorClassifier.isPermanentSqlState`) recognises
+-- it as permanent.
+--
+-- Zero rows can come from two causes that we deliberately collapse:
+--   (a) the row was truly deleted or was never inserted, or
+--   (b) the row exists but the UPDATE policy's USING clause hides it
+--       from the caller (typical when the user lost workspace
+--       membership between queueing the write and uploading it).
+-- Both are permanent — neither recovers on retry. Distinguishing them
+-- would require a SECURITY DEFINER probe to bypass RLS, which would
+-- let callers enumerate the existence of rows they can't read via the
+-- error message (textbook info disclosure). The RLS-loss case (b) is
+-- better fixed at write-queue time (drain pending `ps_crud` entries
+-- when membership changes) than by special-casing it inside this RPC.
 
 CREATE OR REPLACE FUNCTION public.apply_block_patches(patches jsonb)
 RETURNS void
