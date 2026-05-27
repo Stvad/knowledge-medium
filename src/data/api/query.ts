@@ -41,8 +41,20 @@ export interface QueryCtx {
   db: QueryReadDb
   repo: Repo
   /** Hydrate full block rows into the cache and declare row deps on
-   *  them. Use when the query result contains those row bodies. */
-  hydrateBlocks(rows: ReadonlyArray<Record<string, unknown>>): BlockData[]
+   *  them. Use when the query result contains those row bodies.
+   *
+   *  `opts.declareRowDeps` (default `true`) controls whether each
+   *  hydrated row contributes a `{kind:'row', id}` dep. Pass `false`
+   *  when a plugin-channel dep already covers every axis the query is
+   *  sensitive to — the per-row deps then add cost (handles with many
+   *  deps are walked on every invalidation) and fan-out on edits that
+   *  can't affect the result (parent moves, unrelated property writes).
+   *  When you skip row deps, results are still cached and returned;
+   *  only invalidation routing changes. */
+  hydrateBlocks(
+    rows: ReadonlyArray<Record<string, unknown>>,
+    opts?: {declareRowDeps?: boolean},
+  ): BlockData[]
   /** Prime block rows into the cache without declaring row deps. Use
    *  when rows are fetched only as a cache-warming side effect, such as
    *  id-list queries whose result depends only on parent edges. */

@@ -2073,9 +2073,9 @@ export class Repo {
             const raw = await q.resolve(validated, {
               db: this.db,
               repo: this,
-              hydrateBlocks: (rows) => this.hydrateRows(
+              hydrateBlocks: (rows, opts) => this.hydrateRows(
                 rows as unknown as ReadonlyArray<BlockRow>,
-                {ctx, declareRowDeps: true},
+                {ctx, declareRowDeps: opts?.declareRowDeps ?? true},
               ),
               primeBlocks: (rows) => this.hydrateRows(
                 rows as unknown as ReadonlyArray<BlockRow>,

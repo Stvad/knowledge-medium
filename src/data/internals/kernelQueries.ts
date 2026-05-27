@@ -785,7 +785,14 @@ export const searchByContentQuery = defineQuery<
     const rows = await ctx.db.getAll<BlockRow>(
       SELECT_BLOCKS_BY_CONTENT_SQL, [workspaceId, query, query, query, limit],
     )
-    return ctx.hydrateBlocks(asBlockRows(rows))
+    // Skip per-row deps. The kernel.content channel above covers
+    // every axis that can flip a content-substring match: content
+    // edits and live-set membership shifts. Property edits, parent
+    // moves, and reference changes on a currently-matched row don't
+    // affect whether the row matches — declaring per-row deps would
+    // fan out invalidations for free, and on result sets of 50–100
+    // rows it materially inflates handle dep count.
+    return ctx.hydrateBlocks(asBlockRows(rows), {declareRowDeps: false})
   },
 })
 
@@ -816,7 +823,13 @@ export const recentBlocksQuery = defineQuery<
     const rows = await ctx.db.getAll<BlockRow>(
       SELECT_RECENT_BLOCKS_SQL, [workspaceId, limit],
     )
-    return ctx.hydrateBlocks(asBlockRows(rows))
+    // Skip per-row deps for the same reason as searchByContent:
+    // the kernel.content channel covers content edits + live-set
+    // membership, and we explicitly tolerate stale recency ordering
+    // between content events. Property/parent edits on a returned
+    // row don't change membership or content — leaving them out of
+    // the dep set keeps the picker from churning on UiState writes.
+    return ctx.hydrateBlocks(asBlockRows(rows), {declareRowDeps: false})
   },
 })
 

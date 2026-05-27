@@ -989,6 +989,63 @@ describe('invalidation', () => {
     }
   })
 
+  it('searchByContent / recentBlocks: parent move on a result row does NOT invalidate', async () => {
+    // Both queries declare only the `kernel.content` plugin channel —
+    // that covers content edits + live-set membership, which is the
+    // full sensitivity surface of a content-substring scan / recency
+    // pick. Per-row deps would fire on parent moves of currently-
+    // returned rows for nothing; passing declareRowDeps:false on the
+    // hydrateBlocks call keeps the dep set narrow.
+    await create({id: 'p1'})
+    await create({id: 'p2'})
+    await create({id: 'a', parentId: 'p1', content: 'hello world'})
+    const searchHandle = env.repo.query.searchByContent({workspaceId: WS, query: 'hello'})
+    const recentHandle = env.repo.query.recentBlocks({workspaceId: WS, limit: 10})
+    expect(asBlocks(await searchHandle.load()).map(b => b.id)).toEqual(['a'])
+    expect(asBlocks(await recentHandle.load()).map(b => b.id).sort()).toEqual(['a'])
+
+    const fired: string[] = []
+    const u1 = searchHandle.subscribe(() => { fired.push('search') })
+    const u2 = recentHandle.subscribe(() => { fired.push('recent') })
+    try {
+      await env.repo.tx(
+        tx => tx.move('a', {parentId: 'p2', orderKey: 'a0'}),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await new Promise(r => setTimeout(r, 30))
+      expect(fired).toEqual([])
+    } finally {
+      u1(); u2()
+    }
+  })
+
+  it('searchByContent / recentBlocks: non-content property edit on a result row does NOT invalidate', async () => {
+    // Same rationale as the parent-move case: editing an unrelated
+    // property on a currently-returned row leaves content + liveness
+    // unchanged, so the kernel.content channel doesn't fire and the
+    // handle should stay quiet. Pre-fix per-row deps fired here for
+    // every result row on every property write.
+    await create({id: 'a', content: 'hello world'})
+    const searchHandle = env.repo.query.searchByContent({workspaceId: WS, query: 'hello'})
+    const recentHandle = env.repo.query.recentBlocks({workspaceId: WS, limit: 10})
+    expect(asBlocks(await searchHandle.load()).map(b => b.id)).toEqual(['a'])
+    expect(asBlocks(await recentHandle.load()).map(b => b.id)).toEqual(['a'])
+
+    const fired: string[] = []
+    const u1 = searchHandle.subscribe(() => { fired.push('search') })
+    const u2 = recentHandle.subscribe(() => { fired.push('recent') })
+    try {
+      await env.repo.tx(
+        tx => tx.update('a', {properties: {renderer: 'markdown'}}),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await new Promise(r => setTimeout(r, 30))
+      expect(fired).toEqual([])
+    } finally {
+      u1(); u2()
+    }
+  })
+
   it('aliasLookup / aliasMatches / aliasesInWorkspace: alias changes invalidate', async () => {
     await create({id: 'a', aliases: ['greeting']})
     const lookupHandle = env.repo.query.aliasLookup({workspaceId: WS, alias: 'greeting'})
