@@ -27,7 +27,7 @@ Written 2026-05-27. Scope: `src/data/internals/clientSchema.ts` (trigger envelop
 
 - **Server-side merge as an extension of `apply_block_patches`, not a new RPC.** The function exists; add a branch that recognises `properties_set` / `properties_unset` keys in a patch and applies `(properties_json::jsonb || $set - $unset_array)::text`. Other columns keep their existing column-LWW behavior. Patches that don't touch properties hit the same code path as today.
 - **Trigger emits `old.properties_json` so the client can compute the diff.** PowerSync's `Table.trackPrevious` schema flag doesn't apply — we use `RawTable` and our own `blocks_upload_update` trigger (`clientSchema.ts:435-453`). Extend the trigger's JSON envelope to also emit `old.properties_json` when `properties_json` actually changed. `CrudEntry.fromRow` parses this into `entry.previousValues.properties_json`; the uploader diffs new vs prev to produce set/unset.
-- **RPC bumps `updated_at` and bypasses the clamp trigger for the merge path.** Merged sync arrivals must be strictly-newer than any client's pre-merge view, or the cache rejection gate suppresses Layer C dispatch. The existing `blocks_clamp_updated_at` BEFORE trigger (`20260510222352_consolidated_initial.sql:168`) clamps `NEW.updated_at` down to `server_now_ms`, which collapses the +1 bump for back-to-back same-ms writes. The merge RPC sets a session-local GUC (`set_config('app.skip_blocks_clamp', 'true', true)`) before its UPDATE; the clamp trigger gains a `current_setting(..., true) = 'true'` fast path. Scope of the bypass is the RPC's merge UPDATEs only — direct PostgREST writes and non-merge `apply_block_patches` rows still get clamped.
+- **RPC bumps `updated_at` and bypasses the clamp trigger for the merge path.** Merged sync arrivals must be strictly-newer than any client's pre-merge view, or the cache rejection gate suppresses Layer C dispatch. The existing `blocks_clamp_updated_at` BEFORE trigger (`20260510222352_consolidated_initial.sql:168`) clamps `NEW.updated_at` down to `server_now_ms`, which collapses the +1 bump for back-to-back same-ms writes. The merge UPDATE sets a transaction-local GUC (`set_config('app.skip_blocks_clamp', 'true', true)`) immediately before its write and resets it immediately after; the clamp trigger gains a `current_setting(..., true) = 'true'` fast path. Per-UPDATE set/reset is load-bearing because `set_config(..., true)` persists for the rest of the function transaction — without the reset, a merge patch earlier in an `apply_block_patches` batch would bypass the clamp for every later patch in the same call. Scope of the bypass is exactly the merge UPDATE that supplied a bumped `updated_at` — direct PostgREST writes, non-merge `apply_block_patches` rows, and skipMetadata writes all still get clamped.
 - **`skipMetadata` writes preserve metadata columns unchanged.** `parseReferences` writes `references_json` with `skipMetadata: true`, so `metadataPatch()` returns `{}` and the SQL preserves `OLD.updated_at`/`OLD.updated_by`. The trigger's column-diff predicate then strips both from the envelope (they didn't change). The RPC's `COALESCE(patch->>'updated_by', updated_by)` pattern from #52 already preserves the existing value on missing keys. The new `updated_at` bump applies only when the patch carries `updated_at`; absent the key, neither bump nor clamp-bypass runs — same as #52.
 - **Layer C closes the derived references staleness.** Tail-side narrow `parseReferences` dispatch on sync-arrived `properties_json` changes; gated on `applySyncSnapshot` acceptance (which is meaningful exactly because Layer B's `updated_at` bump guarantees merged arrivals are strictly-newer). Convergence is automatic: `core.normalizeReferences` (`normalizeReferencesProcessor.ts`) canonicalises the refs output, so all clients computing parseReferences from the same merged properties produce identical canonical refs — no ping-pong, idempotent across reapplies.
 - **`blocks_history` needs no changes.** It already records per-column diffs and skips no-op UPDATEs (`20260522062437_add_blocks_history.sql:115-125`). Merged writes produce one history row per server-side UPDATE just like today.
@@ -76,13 +76,20 @@ properties_json = (
 
 If a patch carries neither `properties_set` nor `properties_unset`, the RPC's existing column-LWW path runs unchanged. The literal `properties_json` patch key is no longer used for UPDATEs (the trigger emits set/unset for properties); CREATEs go through `applyBlockCreates` (PostgREST `.upsert()`), unrelated to this RPC.
 
-**`updated_at` bump and clamp bypass.** When the patch carries `updated_at`:
+**`updated_at` bump and clamp bypass.** A merge UPDATE sets the GUC immediately before its write and resets it immediately after, scoping the bypass to exactly that one UPDATE:
 
 ```sql
-PERFORM set_config('app.skip_blocks_clamp', 'true', true);  -- local to function tx
--- ... UPDATE ...
-updated_at = greatest(blocks.updated_at, (patch->>'updated_at')::bigint) + 1
+-- inside the per-patch loop, merge branch:
+PERFORM set_config('app.skip_blocks_clamp', 'true', true);
+UPDATE blocks
+SET properties_json = ...,
+    updated_at = greatest(blocks.updated_at, (patch->>'updated_at')::bigint) + 1,
+    ...
+WHERE id = patch_id;
+PERFORM set_config('app.skip_blocks_clamp', 'false', true);
 ```
+
+`set_config(..., true)` is transaction-local: without the explicit reset, a merge patch earlier in the batch would silently bypass the clamp for every later patch in the same RPC call (including non-merge content/move patches with future client `updated_at`). The set/reset pair keeps the bypass scoped to the merge UPDATE that actually needs it.
 
 The clamp trigger gains a fast path:
 
@@ -93,7 +100,7 @@ END IF;
 -- existing server_now_ms clamp logic
 ```
 
-When the patch lacks `updated_at` (skipMetadata write), neither bump nor clamp-bypass applies — `updated_at = blocks.updated_at`, same preservation behavior as #52.
+When the patch lacks `updated_at` (skipMetadata write), neither bump nor clamp-bypass applies — `updated_at = blocks.updated_at`, same preservation behavior as #52. Non-merge column-LWW patches (content, parent_id, etc.) also run with the clamp active, unchanged from today.
 
 **Client uploader.** In `applyBlockPatchesRpc` (`powersync.ts:238-259`), when an entry has `entry.opData.properties_json` AND `entry.previousValues?.properties_json`, parse both and compute:
 
