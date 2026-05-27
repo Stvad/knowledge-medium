@@ -25,7 +25,7 @@ import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { kernelDataExtension } from '../kernelDataExtension'
 import { queriesFacet } from '../facets'
 import { Repo } from '../repo'
-import { compileBlocksContentSearchQuery } from './kernelQueries'
+import { SELECT_BLOCKS_BY_CONTENT_SQL, compileBlocksContentSearchQuery } from './kernelQueries'
 
 const WS = 'ws-1'
 const OTHER_WS = 'ws-2'
@@ -106,7 +106,6 @@ describe('compileBlocksContentSearchQuery', () => {
     expect(compileBlocksContentSearchQuery('"sync foo"')).toEqual({
       matchQuery: '"sync foo"',
       rankQuery: 'sync foo',
-      literalFilters: [],
     })
   })
 
@@ -121,12 +120,9 @@ describe('compileBlocksContentSearchQuery', () => {
     expect(compileBlocksContentSearchQuery('-foo -bar')?.matchQuery).toBe('"-foo" "-bar"')
   })
 
-  it('falls short hyphen terms back to literal filters instead of dropping them', () => {
-    expect(compileBlocksContentSearchQuery('react -1')).toEqual({
-      matchQuery: '"react"',
-      rankQuery: 'react -1',
-      literalFilters: ['-1'],
-    })
+  it('falls short hyphen terms back to whole-query phrases instead of LIKE post-filters', () => {
+    expect(compileBlocksContentSearchQuery('react -')?.matchQuery).toBe('"react -"')
+    expect(compileBlocksContentSearchQuery('react -1')?.matchQuery).toBe('"react -1"')
   })
 
   it('treats operator words and punctuation as literal text when they are not valid operators', () => {
@@ -137,6 +133,10 @@ describe('compileBlocksContentSearchQuery', () => {
 
   it('returns null below the trigram searchable length', () => {
     expect(compileBlocksContentSearchQuery('fo')).toBeNull()
+  })
+
+  it('does not generate LIKE post-filters on top of MATCH', () => {
+    expect(SELECT_BLOCKS_BY_CONTENT_SQL).not.toContain("LIKE '%' || LOWER(?) || '%'")
   })
 })
 
@@ -349,12 +349,21 @@ describe('repo.query.searchByContent', () => {
     expect(out.map(r => r.id)).toEqual(['keep'])
   })
 
-  it('uses short hyphen terms as literal filters when an FTS term anchors the query', async () => {
+  it('uses a whole-query phrase for short hyphen terms instead of broadening to the FTS term', async () => {
     await create({id: 'literal', content: 'react -1'})
     await create({id: 'without-hyphen', content: 'react 1'})
     await create({id: 'without-number', content: 'react notes'})
 
     const out = asBlocks(await env.repo.query.searchByContent({workspaceId: WS, query: 'react -1'}).load())
+
+    expect(out.map(r => r.id)).toEqual(['literal'])
+  })
+
+  it('keeps a trailing hyphen literal without scanning MATCH results via LIKE', async () => {
+    await create({id: 'literal', content: 'sync -'})
+    await create({id: 'plain', content: 'sync'})
+
+    const out = asBlocks(await env.repo.query.searchByContent({workspaceId: WS, query: 'sync -'}).load())
 
     expect(out.map(r => r.id)).toEqual(['literal'])
   })

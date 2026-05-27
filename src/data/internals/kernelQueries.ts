@@ -80,7 +80,6 @@ const BLOCKS_CONTENT_FTS_MIN_QUERY_LENGTH = 3
 export interface BlocksContentSearchQuery {
   matchQuery: string
   rankQuery: string
-  literalFilters: string[]
 }
 
 type ContentSearchToken =
@@ -142,6 +141,15 @@ const tokenizeContentSearchQuery = (query: string): ContentSearchToken[] => {
 const isTrigramSearchable = (text: string): boolean =>
   text.trim().length >= BLOCKS_CONTENT_FTS_MIN_QUERY_LENGTH
 
+const compilePhraseContentSearchQuery = (query: string): BlocksContentSearchQuery | null => {
+  const rankQuery = stripOuterQuotePair(query.trim())
+  if (!isTrigramSearchable(rankQuery)) return null
+  return {
+    matchQuery: quoteFtsPhrase(rankQuery),
+    rankQuery,
+  }
+}
+
 /** Compile QuickFind user text into safe FTS5 trigram MATCH syntax.
  *
  *  Default words become required literal terms (`sync foo` →
@@ -164,7 +172,6 @@ export const compileBlocksContentSearchQuery = (
   const rankQuery = stripOuterQuotePair(trimmed)
   const clauses: string[][] = [[]]
   const exclusions: string[] = []
-  const literalFilters: string[] = []
   let pendingOr = false
   let pendingNot = false
   let sawPositive = false
@@ -180,40 +187,36 @@ export const compileBlocksContentSearchQuery = (
     pendingNot = false
   }
   const addRequiredLiteral = (text: string) => {
-    if (isTrigramSearchable(text)) {
-      addPositive(quoteFtsPhrase(text))
-    } else {
-      literalFilters.push(text)
-      pendingOr = false
-      pendingNot = false
-    }
+    if (!isTrigramSearchable(text)) return false
+    addPositive(quoteFtsPhrase(text))
+    return true
   }
 
   for (const token of tokens) {
     if (token.kind === 'operator') {
       if (token.op === 'OR') {
         if (sawPositive) pendingOr = true
-        else addRequiredLiteral(token.op)
+        else if (!addRequiredLiteral(token.op)) return compilePhraseContentSearchQuery(trimmed)
         continue
       }
       if (token.op === 'NOT') {
         if (sawPositive || hasPositiveFtsTerm) pendingNot = true
-        else addRequiredLiteral(token.op)
+        else if (!addRequiredLiteral(token.op)) return compilePhraseContentSearchQuery(trimmed)
         continue
       }
-      if (!sawPositive) addRequiredLiteral(token.op)
+      if (!sawPositive && !addRequiredLiteral(token.op)) return compilePhraseContentSearchQuery(trimmed)
       continue
     }
 
     if (token.excluded && !hasPositiveFtsTerm) {
-      addRequiredLiteral(`-${token.text}`)
+      if (!addRequiredLiteral(`-${token.text}`)) return compilePhraseContentSearchQuery(trimmed)
       continue
     }
     if (pendingNot) {
       if (isTrigramSearchable(token.text)) {
         exclusions.push(quoteFtsPhrase(token.text))
       } else {
-        literalFilters.push(token.text)
+        return compilePhraseContentSearchQuery(trimmed)
       }
       pendingNot = false
       pendingOr = false
@@ -223,22 +226,16 @@ export const compileBlocksContentSearchQuery = (
       if (isTrigramSearchable(token.text)) {
         exclusions.push(quoteFtsPhrase(token.text))
       } else {
-        literalFilters.push(`-${token.text}`)
+        return compilePhraseContentSearchQuery(trimmed)
       }
       pendingOr = false
       continue
     }
-    addRequiredLiteral(token.text)
+    if (!addRequiredLiteral(token.text)) return compilePhraseContentSearchQuery(trimmed)
   }
 
   const nonEmptyClauses = clauses.filter(clause => clause.length > 0)
-  if (nonEmptyClauses.length === 0 && isTrigramSearchable(rankQuery)) {
-    return {
-      matchQuery: quoteFtsPhrase(rankQuery),
-      rankQuery,
-      literalFilters,
-    }
-  }
+  if (nonEmptyClauses.length === 0 && isTrigramSearchable(rankQuery)) return compilePhraseContentSearchQuery(trimmed)
   if (nonEmptyClauses.length === 0) return null
 
   const positiveExpr = nonEmptyClauses.length === 1
@@ -247,16 +244,11 @@ export const compileBlocksContentSearchQuery = (
   const matchQuery = exclusions.length === 0
     ? positiveExpr
     : `${positiveExpr} ${exclusions.map(phrase => `NOT ${phrase}`).join(' ')}`
-  return {matchQuery, rankQuery, literalFilters}
+  return {matchQuery, rankQuery}
 }
 
-const buildContentLiteralFiltersSql = (count: number): string =>
-  Array.from({length: count}, () => "    AND LOWER(b.content) LIKE '%' || LOWER(?) || '%'")
-    .join('\n')
-
-export const buildSelectBlocksByContentSql = (literalFilterCount = 0): string => {
-  const literalFiltersSql = buildContentLiteralFiltersSql(literalFilterCount)
-  return `
+/** Content search — case-insensitive trigram FTS substring match. */
+export const SELECT_BLOCKS_BY_CONTENT_SQL = `
   SELECT ${buildQualifiedBlockColumnsSql('b')}
   FROM blocks_fts
   JOIN blocks b
@@ -266,7 +258,7 @@ export const buildSelectBlocksByContentSql = (literalFilterCount = 0): string =>
     AND blocks_fts MATCH ?
     AND b.deleted = 0
     AND b.content != ''
-${literalFiltersSql ? `${literalFiltersSql}\n` : ''}  ORDER BY
+  ORDER BY
     CASE
       WHEN LOWER(b.content) = LOWER(?) THEN 0
       WHEN LOWER(b.content) LIKE LOWER(?) || '%' THEN 1
@@ -275,10 +267,6 @@ ${literalFiltersSql ? `${literalFiltersSql}\n` : ''}  ORDER BY
     b.updated_at DESC
   LIMIT ?
 `
-}
-
-/** Content search — case-insensitive trigram FTS substring match. */
-export const SELECT_BLOCKS_BY_CONTENT_SQL = buildSelectBlocksByContentSql()
 
 /** Recent non-empty blocks in a workspace, used by empty-query pickers. */
 export const SELECT_RECENT_BLOCKS_SQL = `
@@ -975,15 +963,8 @@ export const searchByContentQuery = defineQuery<
       key: kernelContentKey(workspaceId),
     })
     const rows = await ctx.db.getAll<BlockRow>(
-      buildSelectBlocksByContentSql(compiledQuery.literalFilters.length),
-      [
-        workspaceId,
-        compiledQuery.matchQuery,
-        ...compiledQuery.literalFilters,
-        compiledQuery.rankQuery,
-        compiledQuery.rankQuery,
-        limit,
-      ],
+      SELECT_BLOCKS_BY_CONTENT_SQL,
+      [workspaceId, compiledQuery.matchQuery, compiledQuery.rankQuery, compiledQuery.rankQuery, limit],
     )
     // Skip per-row deps. The kernel.content channel above covers
     // every axis that can flip a content-substring match: content
