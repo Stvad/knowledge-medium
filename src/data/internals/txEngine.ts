@@ -352,6 +352,7 @@ export class TxImpl implements Tx {
     const before = await this.requireExisting(id)
     this.checkWorkspace(before.workspaceId)
     await this.requireParentInWorkspace(target.parentId, before.workspaceId)
+    if (target.parentId === before.parentId && target.orderKey === before.orderKey) return
 
     // §4.7 Layer 1: FK and triggers can't structurally catch cycles, so
     // this engine check is load-bearing. Skipped when the target parent is
@@ -369,8 +370,6 @@ export class TxImpl implements Tx {
     } else if (target.parentId === id) {
       throw new CycleError(id, id)
     }
-
-    if (target.parentId === before.parentId && target.orderKey === before.orderKey) return
 
     const after: BlockData = {
       ...before,
