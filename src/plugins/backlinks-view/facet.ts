@@ -12,9 +12,9 @@ export type BacklinksViewRenderer = ComponentType<BacklinksViewRendererProps>
 /**
  * Variant facet for the "Linked References" footer section. The
  * `backlinks-view` coordinator plugin reads this, picks one variant
- * per the user's `backlinks:viewId` preference, and renders that
- * variant's component above a small picker that switches between
- * registered variants.
+ * per the block's optional `backlinks:viewId` override or derived
+ * default, and renders that variant's component above a small picker
+ * that switches between registered variants.
  *
  * Because only the *selected* variant ever mounts, the unselected
  * view's queries (`useBacklinks`, `useGroupedBacklinks`, …) never

@@ -9,16 +9,26 @@ import type { BlockResolveContext } from '@/extensions/blockInteraction.js'
 import { backlinksViewFacet, type BacklinksViewRendererProps } from '../facet.ts'
 import { BacklinksViewSection } from '../BacklinksViewSection.tsx'
 
-const savedViewRef = vi.hoisted(() => ({
-  current: 'empty',
+const hookState = vi.hoisted(() => ({
+  blockData: {
+    current: {properties: {}} as {properties: Record<string, unknown>},
+  },
+  viewOverride: {
+    current: undefined as string | undefined,
+  },
+  setViewOverride: vi.fn(),
 }))
 
-vi.mock('@/data/globalState.ts', () => ({
-  usePluginPrefsProperty: () => [savedViewRef.current, vi.fn()],
+vi.mock('@/hooks/block.ts', () => ({
+  useHandle: (_block: unknown, options: {selector: (data: unknown) => unknown}) =>
+    options.selector(hookState.blockData.current),
+  usePropertyValue: () => [hookState.viewOverride.current, hookState.setViewOverride],
 }))
 
 afterEach(() => {
-  savedViewRef.current = 'empty'
+  hookState.blockData.current = {properties: {}}
+  hookState.viewOverride.current = undefined
+  hookState.setViewOverride.mockReset()
   cleanup()
 })
 
@@ -27,6 +37,7 @@ const resolveContext = {block} as BlockResolveContext
 
 describe('BacklinksViewSection', () => {
   it('passes picker controls to the selected variant so it can render its empty state', () => {
+    hookState.viewOverride.current = 'empty'
     const EmptyVariant = ({controls}: BacklinksViewRendererProps) => (
       <div>
         {controls}
@@ -52,7 +63,7 @@ describe('BacklinksViewSection', () => {
     expect(screen.getByRole('group', {name: 'Backlinks view'})).toBeInTheDocument()
     expect(screen.getByText('No backlinks.')).toBeInTheDocument()
 
-    savedViewRef.current = 'visible'
+    hookState.viewOverride.current = 'visible'
     view.rerender(
       <AppRuntimeContextProvider value={runtime}>
         <BacklinksViewSection block={block} resolveContext={resolveContext}/>
@@ -61,6 +72,112 @@ describe('BacklinksViewSection', () => {
 
     expect(screen.getByRole('group', {name: 'Backlinks view'})).toBeInTheDocument()
     expect(screen.getByText('visible backlinks')).toBeInTheDocument()
+  })
+
+  it('defaults daily note pages to grouped backlinks and other pages to flat backlinks', () => {
+    const FlatVariant = () => <div>flat backlinks</div>
+    const GroupedVariant = () => <div>grouped backlinks</div>
+    const runtime = resolveFacetRuntimeSync([
+      backlinksViewFacet.of(() => defineVariant('flat', 'Flat', FlatVariant), {source: 'test'}),
+      backlinksViewFacet.of(() => defineVariant('grouped', 'Grouped', GroupedVariant), {source: 'test'}),
+    ])
+
+    hookState.blockData.current = {properties: {types: ['daily-note']}}
+    const view = render(
+      <AppRuntimeContextProvider value={runtime}>
+        <BacklinksViewSection block={block} resolveContext={resolveContext}/>
+      </AppRuntimeContextProvider>,
+    )
+
+    expect(screen.getByText('grouped backlinks')).toBeInTheDocument()
+
+    hookState.blockData.current = {properties: {}}
+    view.rerender(
+      <AppRuntimeContextProvider value={runtime}>
+        <BacklinksViewSection block={block} resolveContext={resolveContext}/>
+      </AppRuntimeContextProvider>,
+    )
+
+    expect(screen.getByText('flat backlinks')).toBeInTheDocument()
+  })
+
+  it('uses a block view override before the derived default', () => {
+    hookState.blockData.current = {properties: {types: ['daily-note']}}
+    hookState.viewOverride.current = 'flat'
+    const FlatVariant = () => <div>flat backlinks</div>
+    const GroupedVariant = () => <div>grouped backlinks</div>
+    const runtime = resolveFacetRuntimeSync([
+      backlinksViewFacet.of(() => defineVariant('flat', 'Flat', FlatVariant), {source: 'test'}),
+      backlinksViewFacet.of(() => defineVariant('grouped', 'Grouped', GroupedVariant), {source: 'test'}),
+    ])
+
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <BacklinksViewSection block={block} resolveContext={resolveContext}/>
+      </AppRuntimeContextProvider>,
+    )
+
+    expect(screen.getByText('flat backlinks')).toBeInTheDocument()
+  })
+
+  it('writes picker changes to the target block override', () => {
+    const FlatVariant = ({controls}: BacklinksViewRendererProps) => (
+      <div>
+        {controls}
+        <div>flat backlinks</div>
+      </div>
+    )
+    const GroupedVariant = ({controls}: BacklinksViewRendererProps) => (
+      <div>
+        {controls}
+        <div>grouped backlinks</div>
+      </div>
+    )
+    const runtime = resolveFacetRuntimeSync([
+      backlinksViewFacet.of(() => defineVariant('flat', 'Flat', FlatVariant), {source: 'test'}),
+      backlinksViewFacet.of(() => defineVariant('grouped', 'Grouped', GroupedVariant), {source: 'test'}),
+    ])
+
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <BacklinksViewSection block={block} resolveContext={resolveContext}/>
+      </AppRuntimeContextProvider>,
+    )
+
+    fireEvent.click(screen.getByRole('button', {name: 'Grouped'}))
+
+    expect(hookState.setViewOverride).toHaveBeenCalledWith('grouped')
+  })
+
+  it('clears the block override when choosing the derived default', () => {
+    hookState.blockData.current = {properties: {types: ['daily-note']}}
+    hookState.viewOverride.current = 'flat'
+    const FlatVariant = ({controls}: BacklinksViewRendererProps) => (
+      <div>
+        {controls}
+        <div>flat backlinks</div>
+      </div>
+    )
+    const GroupedVariant = ({controls}: BacklinksViewRendererProps) => (
+      <div>
+        {controls}
+        <div>grouped backlinks</div>
+      </div>
+    )
+    const runtime = resolveFacetRuntimeSync([
+      backlinksViewFacet.of(() => defineVariant('flat', 'Flat', FlatVariant), {source: 'test'}),
+      backlinksViewFacet.of(() => defineVariant('grouped', 'Grouped', GroupedVariant), {source: 'test'}),
+    ])
+
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <BacklinksViewSection block={block} resolveContext={resolveContext}/>
+      </AppRuntimeContextProvider>,
+    )
+
+    fireEvent.click(screen.getByRole('button', {name: 'Grouped'}))
+
+    expect(hookState.setViewOverride).toHaveBeenCalledWith(undefined)
   })
 
   it('does not bubble backlink surface clicks to the parent block shell', () => {

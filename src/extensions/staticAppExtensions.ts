@@ -107,7 +107,8 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   // The backlinks-view coordinator reads variants registered by
   // `backlinksPlugin` and `groupedBacklinksPlugin`. Order matters only
   // for the picker UI (variants render in registration order); the
-  // selection itself is driven by `backlinksViewProp`.
+  // selection itself is driven by each block's `backlinksViewProp`
+  // override, falling back to a block-derived default.
   backlinksPlugin,
   groupedBacklinksPlugin,
   backlinksViewPlugin,

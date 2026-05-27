@@ -5,9 +5,9 @@ import type {
   BlockResolveContext,
 } from '@/extensions/blockInteraction.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
-import { usePluginPrefsProperty } from '@/data/globalState.js'
+import { useHandle, usePropertyValue } from '@/hooks/block.js'
 import { backlinksViewFacet } from './facet.ts'
-import { backlinksViewPrefsType, backlinksViewProp } from './prop.ts'
+import { backlinksViewProp, defaultBacklinksViewIdForBlock } from './prop.ts'
 
 interface Props extends BlockRendererProps {
   /** Captured at contribution time so we can resolve variants without
@@ -18,7 +18,8 @@ interface Props extends BlockRendererProps {
 /**
  * Footer section that drives the variant pick:
  * - reads registered variants from `backlinksViewFacet`
- * - reads the user's saved choice from `backlinksViewProp` (UserPrefs)
+ * - reads the current block's optional saved choice from `backlinksViewProp`
+ * - otherwise derives the default view from the block (daily notes use grouped)
  * - mounts only the selected variant — unselected variants never run
  *   their queries, since their hooks live inside their components and
  *   only mount when rendered
@@ -36,8 +37,13 @@ export function BacklinksViewSection({block, resolveContext}: Props) {
     [runtime, resolveContext],
   )
 
-  const [savedId, setSavedId] = usePluginPrefsProperty(backlinksViewPrefsType, backlinksViewProp)
-  const selected = variants.find(v => v.id === savedId) ?? variants[0]
+  const defaultId = useHandle(block, {selector: defaultBacklinksViewIdForBlock})
+  const [overrideId, setOverrideId] = usePropertyValue(block, backlinksViewProp)
+  const selectedId = overrideId ?? defaultId
+  const selected =
+    variants.find(v => v.id === selectedId) ??
+    variants.find(v => v.id === defaultId) ??
+    variants[0]
 
   if (!selected) return null
 
@@ -54,7 +60,7 @@ export function BacklinksViewSection({block, resolveContext}: Props) {
           <button
             key={variant.id}
             type="button"
-            onClick={() => setSavedId(variant.id)}
+            onClick={() => setOverrideId(variant.id === defaultId ? undefined : variant.id)}
             className={`rounded-sm px-1.5 py-0.5 leading-4 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
               active
                 ? 'bg-accent text-foreground'
