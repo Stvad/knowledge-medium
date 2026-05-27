@@ -9,6 +9,7 @@ import type { Block } from '@/data/block.js'
 import { activePanelIdProp } from '@/data/properties.js'
 import {
   isPanelStackRow,
+  isPanelLayoutStorageRow,
   panelRowsInLayoutOrder,
 } from '@/utils/panelLayoutProjection.js'
 
@@ -28,6 +29,7 @@ const STACK_CHILD_CLASS =
 const buildRenderSlots = (rootId: string, rows: readonly BlockData[]): RenderSlot[] => {
   const childrenByParent = new Map<string, BlockData[]>()
   for (const row of rows) {
+    if (!isPanelLayoutStorageRow(row)) continue
     if (!row.parentId) continue
     const children = childrenByParent.get(row.parentId) ?? []
     children.push(row)

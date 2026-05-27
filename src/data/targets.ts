@@ -214,7 +214,7 @@ export const aliasSeatReaderFromTx = (tx: Tx): AliasSeatReader =>
     // we just loaded gives us workspaceId, so the lookup is well-scoped
     // even for workspace-root seats (parentId === null is the typical
     // alias-seat shape).
-    const children = await tx.childrenOf(id, block.workspaceId)
+    const children = await tx.childrenOf(id, block.workspaceId, {includePropertyChildren: false})
     return {
       deleted: block.deleted,
       content: block.content,

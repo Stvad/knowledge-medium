@@ -1,6 +1,7 @@
 import { BlockTypeBlockRenderer } from '@/components/renderer/BlockTypeBlockRenderer.js'
 import { CodeMirrorExtensionBlockRenderer } from '@/components/renderer/CodeMirrorExtensionBlockRenderer.js'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
+import { FieldBlockRenderer } from '@/components/renderer/FieldBlockRenderer.js'
 import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.js'
 import { MissingDataRenderer } from '@/components/renderer/MissingDataRenderer.js'
 import { PanelRenderer } from '@/components/renderer/PanelRenderer.js'
@@ -14,6 +15,7 @@ import { gfmMarkdownExtension } from '@/markdown/defaultMarkdownExtension.js'
 
 export const defaultRendererContributions: RendererContribution[] = [
   {id: 'default', renderer: DefaultBlockRenderer},
+  {id: 'field', renderer: FieldBlockRenderer},
   {id: 'extension', renderer: CodeMirrorExtensionBlockRenderer},
   {id: 'propertySchema', renderer: PropertySchemaBlockRenderer},
   {id: 'blockType', renderer: BlockTypeBlockRenderer},

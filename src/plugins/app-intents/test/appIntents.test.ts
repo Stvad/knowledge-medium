@@ -94,6 +94,11 @@ const seedLandingLayout = async () => {
   return {daily, layoutSession}
 }
 
+const contentChildIds = async (parentId: string): Promise<string[]> =>
+  (await env.repo.block(parentId).children.load())
+    .filter(row => !row.fieldId)
+    .map(row => row.id)
+
 describe('formatSharedContent', () => {
   it('joins distinct fields with newlines', () => {
     expect(formatSharedContent('Title', 'Body', 'https://x/y'))
@@ -115,7 +120,7 @@ describe('consumeAppIntent', () => {
   it('does nothing when no intent params are present', async () => {
     const {daily, layoutSession} = await seedLandingLayout()
     await consumeAppIntent(env.repo, layoutSession)
-    const dailyChildren = await env.repo.block(daily.id).childIds.load()
+    const dailyChildren = await contentChildIds(daily.id)
     expect(dailyChildren).toHaveLength(0)
   })
 
@@ -125,7 +130,7 @@ describe('consumeAppIntent', () => {
 
     await consumeAppIntent(env.repo, layoutSession)
 
-    const dailyChildren = await env.repo.block(daily.id).childIds.load()
+    const dailyChildren = await contentChildIds(daily.id)
     expect(dailyChildren).toHaveLength(1)
     expect(env.repo.block(dailyChildren[0]).peek()?.content).toBe('')
     expect(window.location.search).toBe('')
@@ -137,7 +142,7 @@ describe('consumeAppIntent', () => {
 
     await consumeAppIntent(env.repo, layoutSession)
 
-    const dailyChildren = await env.repo.block(daily.id).childIds.load()
+    const dailyChildren = await contentChildIds(daily.id)
     expect(dailyChildren).toHaveLength(1)
     const expectedContent = 'Hello\nhttps://x/y'
     const newBlockId = dailyChildren[0]
@@ -160,7 +165,7 @@ describe('consumeAppIntent', () => {
 
     await consumeAppIntent(env.repo, layoutSession)
 
-    const dailyChildren = await env.repo.block(daily.id).childIds.load()
+    const dailyChildren = await contentChildIds(daily.id)
     expect(dailyChildren).toHaveLength(1)
     expect(env.repo.block(dailyChildren[0]).peek()?.content).toBe('Just a note')
   })
@@ -175,7 +180,7 @@ describe('consumeAppIntent', () => {
     setLocationSearch('?intent=new-daily-block')
     await consumeAppIntent(env.repo, layoutSession)
 
-    const dailyChildren = await env.repo.block(daily.id).childIds.load()
+    const dailyChildren = await contentChildIds(daily.id)
     expect(dailyChildren).toHaveLength(1)
   })
 
@@ -190,7 +195,7 @@ describe('consumeAppIntent', () => {
     expect(handler).toHaveBeenCalledTimes(1)
     expect(window.location.search).toBe('')
     // Picker is a UI-only intent — must not create a block.
-    const dailyChildren = await env.repo.block(daily.id).childIds.load()
+    const dailyChildren = await contentChildIds(daily.id)
     expect(dailyChildren).toHaveLength(0)
 
     window.removeEventListener(openDailyNotePickerEvent, handler)
@@ -206,7 +211,7 @@ describe('consumeAppIntent', () => {
 
     expect(handler).toHaveBeenCalledTimes(1)
     expect(window.location.search).toBe('')
-    const dailyChildren = await env.repo.block(daily.id).childIds.load()
+    const dailyChildren = await contentChildIds(daily.id)
     expect(dailyChildren).toHaveLength(0)
 
     window.removeEventListener(toggleQuickFindEvent, handler)
@@ -223,7 +228,7 @@ describe('consumeAppIntent', () => {
     // No block created — appendTodayDailyBlockInStack early-returns
     // when read-only — and the URL still carries the share payload
     // so a reload (after read-only is lifted) can retry.
-    const dailyChildren = await env.repo.block(daily.id).childIds.load()
+    const dailyChildren = await contentChildIds(daily.id)
     expect(dailyChildren).toHaveLength(0)
     expect(window.location.search).toBe(sharedQuery)
   })

@@ -20,6 +20,7 @@ import {
 } from '@/utils/layoutSessionId'
 import {
   insertPanelRow,
+  isPanelLayoutStorageRow,
   layoutBlockIdsFromRows,
   layoutSlotsFromRows,
   panelBlockIds,
@@ -64,7 +65,10 @@ const layoutSessionBlock = async () => {
   return getLayoutSessionBlock(uiState, getLayoutSessionId())
 }
 
-const currentPanelRows = async () => (await layoutSessionBlock()).children.load()
+const currentPanelRows = async () => {
+  const layoutSession = await layoutSessionBlock()
+  return (await layoutSession.children.load()).filter(isPanelLayoutStorageRow)
+}
 
 const currentPanelBlockIds = async () => panelBlockIds(await currentPanelRows())
 const currentActivePanelId = async () => {

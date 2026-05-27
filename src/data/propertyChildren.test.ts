@@ -86,7 +86,7 @@ afterEach(async () => {
 })
 
 describe('child-backed user properties', () => {
-  it('writes user-defined properties as hidden child blocks while keeping the parent cache hot', async () => {
+  it('writes user-defined properties as field child blocks while keeping the parent cache hot', async () => {
     env = await setup({registerStatusProp: false})
     await createRoot(env.repo, 'parent')
 
@@ -103,7 +103,7 @@ describe('child-backed user properties', () => {
     expect(children[0]!.content).toBe('Doing')
     expect(children[0]!.field_id).toBe('field-status')
     expect(JSON.parse(children[0]!.properties_json)).toEqual({})
-    await expect(env.repo.block('parent').childIds.load()).resolves.toEqual([])
+    await expect(env.repo.block('parent').childIds.load()).resolves.toEqual([children[0]!.id])
   })
 
   it('writes kernel and plugin schemas as property children too', async () => {
@@ -121,7 +121,7 @@ describe('child-backed user properties', () => {
     expect(children).toHaveLength(1)
     expect(children[0]!.content).toBe('markdown')
     expect(children[0]!.field_id).toBe(rendererProp.fieldId)
-    await expect(env.repo.block('parent').childIds.load()).resolves.toEqual([])
+    await expect(env.repo.block('parent').childIds.load()).resolves.toEqual([children[0]!.id])
   })
 
   it('materializes property children for raw properties writes', async () => {

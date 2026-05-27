@@ -73,6 +73,11 @@ afterEach(async () => {
   await env.h.cleanup()
 })
 
+const contentChildIds = async (parentId: string): Promise<string[]> =>
+  (await env.repo.block(parentId).children.load())
+    .filter(row => !row.fieldId)
+    .map(row => row.id)
+
 describe('dailyNotesActions', () => {
   it('appends an empty block to today and opens it in an editing stacked panel', async () => {
     const daily = await getOrCreateDailyNote(env.repo, WS, '2026-05-13')
@@ -104,7 +109,7 @@ describe('dailyNotesActions', () => {
       {preventDefault: vi.fn()} as unknown as KeyboardEvent,
     )
 
-    const dailyChildren = await env.repo.block(daily.id).childIds.load()
+    const dailyChildren = await contentChildIds(daily.id)
     expect(dailyChildren[0]).toBe('existing-daily-child')
     expect(dailyChildren).toHaveLength(2)
     const newBlockId = dailyChildren[1]
