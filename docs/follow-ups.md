@@ -48,6 +48,14 @@ Fix shape: thread an optional `Tx` parameter through `getOrCreateDailyNote` / `g
 
 ## P2
 
+### JSONB across the data layer (Postgres column + local SQLite)
+
+`properties_json` and `references_json` are stored as `text` everywhere — Postgres column, PowerSync sync stream, local SQLite. We have ~29 `json_extract` / `json_each` callsites over these columns (including per-write triggers in `src/data/internals/clientSchema.ts` on `$.alias` and `$.types`) that re-parse the whole text blob on every call. Moving to JSONB would walk the binary structure directly — bigger blobs and hotter paths get the bigger win.
+
+Out of scope for the field-level sync merge work (`docs/field-level-sync-merge.md`) because (a) the LWW correctness fix doesn't need it — server-side `text::jsonb || $set::text` cast costs microseconds per write and is fine — and (b) the migration has a real rollout-compat problem worth handling in isolation: old in-the-wild clients call `JSON.stringify(properties)` in `blockToRowParams` (`blockSchema.ts:222-228`) and the uploader forwards that string to PostgREST; a string body landing in a `jsonb` column is stored as a JSONB *string scalar*, not as the object, and subsequent jsonb operations either fail or return the wrong shape.
+
+Fix shape, when triggered: bundle Postgres column migration with the client uploader change that sends objects/arrays instead of strings, and a defensive server-side normalization for inflight stringified writes during the rollout window (`CASE WHEN jsonb_typeof(properties_json) = 'string' THEN properties_json #>> '{}' ELSE properties_json END`). Re-create `idx_blocks_workspace_with_references` with the jsonb predicate (`references_json <> '[]'::jsonb`). On the local side: confirm wa-sqlite (PowerSync's bundled SQLite) supports SQLite 3.45+ JSONB; wrap each `SELECT properties_json` in `json(properties_json)` so the JS driver still gets text (cheap unwrap, no re-parse); change pull-down `put` SQL in `BLOCKS_RAW_TABLE` to `jsonb(?)` for the JSON columns; verify the shape of `CrudEntry.previousValues.properties_json` when the column is JSONB (likely needs a `json()` decode somewhere). Benchmark on a representative block count (the import-heavy DB is a good baseline) before committing — the win has to be measured, not assumed.
+
 ### Reduce per-block flicker on lazy hierarchical loads
 
 `useChildIds` is backed by `repo.childIds` which hydrates the whole children list per parent on first read. That keeps the per-parent expand path fast, but as the user scrolls into deeper levels their grandchildren still load on `LazyBlockComponent` mount and visibly pop in. Standard fixes worth considering when this becomes noticeable:
