@@ -11,6 +11,11 @@ import type { ChangeScope } from './changeScope'
  *  `PropertyEditorOverride<T>` (joined to schemas by `name`). See spec §5.6. */
 export interface PropertySchema<T> {
   readonly name: string
+  /** Present for user-defined schemas backed by a `'property-schema'`
+   *  block. The block id is the stable field identity; `name` remains
+   *  the current cache/display key and may change when the field block
+   *  is renamed. Kernel/plugin schemas omit this and stay cache-only. */
+  readonly fieldBlockId?: string
   /** Storage codec; runs at the four boundary call sites only. */
   readonly codec: Codec<T>
   readonly defaultValue: T

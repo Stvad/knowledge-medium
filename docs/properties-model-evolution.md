@@ -64,7 +64,7 @@ The "immutability" assumption is load-bearing. Future you will be tempted to reu
 
 ---
 
-## Thread 2 — Properties as block children (deferred, larger)
+## Thread 2 — Properties as block children
 
 ### Motivation
 
@@ -94,6 +94,19 @@ Tana-style "properties are children of their parent" gives you, conceptually:
 | E. SQL-side property-index table | A separate `block_properties` table maintained by triggers/mutators. | Possible later optimization, not needed in v1. |
 
 **Chosen direction: A + D.** Cache stays on the parent; user-defined fields project their scalar value into the cache; system fields live cache-only. Reads are always sync; cross-block queries don't change.
+
+### Implementation update — 2026-05-27
+
+The current codebase now has the first A + D slice:
+
+- User-defined schemas produced by `'property-schema'` blocks carry `PropertySchema.fieldBlockId`. That block id is the stable field identity; `PropertySchema.name` remains the current display/cache key and can change on rename.
+- A property-value child is a normal `blocks` row under the value owner, tagged with the hidden `system:propertyFieldId` property whose value is the schema block id.
+- `tx.setProperty` / `block.set` still look uniform to call sites. For child-backed user schemas they create or update the tagged child and also write the parent `properties_json` projection in the same transaction. Kernel/plugin schemas without `fieldBlockId` remain cache-only.
+- `core.projectPropertyChildren` is a same-transaction processor. If a tagged child is edited, deleted, moved, retagged, or reordered, it recomputes the affected parent field from the child rows before commit. That keeps manual child edits and higher-level property writes convergent.
+- User schema rebuilds reproject parent caches when a schema block is renamed or its codec type changes. The old cache key is removed and the new name is populated from the same field-id-tagged children.
+- Normal tree queries (`children`, `childIds`, `subtree`) hide property-value children so the outline does not duplicate rows already shown in the property panel. Transactional tree primitives (`tx.childrenOf`) still see them, so subtree delete, move, and merge operations keep structural ownership correct.
+
+This is intentionally not the full Tana model yet. The first slice keeps one property-value child per field for direct `setProperty` writes, and that child's `content` encodes the scalar value (plain text for strings/refs/URLs/dates, JSON for structured values). Multi-value-as-many-children and block-valued fields are still deferred. The important foundation is now in place: child rows can be the source for user-field values while hot reads and query predicates continue to use the parent projection.
 
 ### Dev UX of A + D
 
@@ -150,7 +163,7 @@ This rule is load-bearing: **mutations deep in a subtree don't invalidate the ca
 7. Tagged child re-parented (drop from old parent, add to new)
 8. Remote sync apply (handled by atomic local write at origin)
 
-All eight reduce to: *any mutation to a row where `field_id IS NOT NULL` (before or after) must also patch the relevant parent's `properties_json` in the same transaction.* Implementable as a single helper invoked from the tail of each mutator. The kernel is already the only path to writes, so there's no back-door SQL write to worry about.
+All eight reduce to: *any mutation to a row where the field marker is present (before or after) must also patch the relevant parent's `properties_json` in the same transaction.* Implemented as the `core.projectPropertyChildren` same-tx processor watching child `content`, `properties`, `parentId`, `orderKey`, and `deleted`. The kernel is already the only path to local writes, so there is no local back-door SQL write to worry about.
 
 A SQLite trigger as a safety net is possible — preferably **invalidate-only** (set a `properties_dirty` flag, recompute in TS) rather than encoding projection logic in SQL twice. Skip in v1; add if drift is observed.
 
@@ -172,10 +185,11 @@ If thread 1 ever needs case 2 and thread 2 ever ships, they share a reverse-deps
 ## Decisions
 
 ### Now
-- Build `codecs.dateRef` (or whichever name) along the case-1.5 design above. Self-contained, useful, no architecture lock-in.
+- User-defined fields are child-backed with parent-cache projection. This implements the A + D direction without a synced-column migration: `system:propertyFieldId` is a hidden property marker on the child, and `fieldBlockId` on `PropertySchema` identifies the field.
+- `codecs.dateRef` remains a separate near-term follow-up if a concrete daily-note-date UX needs it; it is no longer the only "now" item from this note.
 
 ### Defer
-- The full properties-as-children migration. Honest estimate is ~1–2 weeks when we do it later vs. ~1.5–3 weeks all-at-once now — the alpha posture and the existing codec abstraction make this an additive change rather than a rewrite. The expensive part is the design thinking, which this doc captures.
+- Block-valued fields, multi-value-as-many-children, and a dedicated synced `field_id`/property-value column remain deferred. The hidden-property marker keeps the first slice low-blast-radius and reversible while preserving the parent-cache read/query contract.
 
 ### Lock-in risks to actively avoid in the meantime
 

@@ -104,6 +104,12 @@ import {
 } from './internals/kernelQueries'
 import type { InvalidationRule } from './invalidation'
 import { KERNEL_PROPERTY_SCHEMAS, getBlockTypes, typesProp } from './properties'
+import {
+  getPropertyFieldId,
+  propertiesEqual,
+  propertyChildContentToEncodedValue,
+  propertyFieldIdProp,
+} from './propertyChildren'
 import { KERNEL_TYPE_CONTRIBUTIONS } from './blockTypes'
 import { propertiesPageBlockId } from './propertiesPage'
 import { typesPageBlockId } from './typesPage'
@@ -1343,6 +1349,72 @@ export class Repo {
       [wsId, jsonPathForProperty(name)],
     )
     return row?.count ?? 0
+  }
+
+  /** Rebuild parent `properties_json` projections for children tagged
+   *  with a user-defined field block id. Used when a field schema is
+   *  renamed/reloaded: child rows keep stable identity, while the parent
+   *  cache key follows the schema's current `name`. */
+  async reprojectPropertyValueChildren(args: {
+    fieldBlockId: string
+    schema: AnyPropertySchema
+    oldName?: string
+    workspaceId?: string
+  }): Promise<void> {
+    if (this.isReadOnly) return
+    const workspaceId = args.workspaceId ?? this.activeWorkspaceId
+    if (!workspaceId) return
+    const rows = await this.db.getAll<{id: string}>(
+      `
+        SELECT DISTINCT parent.id AS id
+        FROM blocks child
+        JOIN blocks parent ON parent.id = child.parent_id
+        WHERE child.workspace_id = ?
+          AND parent.workspace_id = child.workspace_id
+          AND child.deleted = 0
+          AND parent.deleted = 0
+          AND json_extract(child.properties_json, ?) = ?
+      `,
+      [workspaceId, jsonPathForProperty(propertyFieldIdProp.name), args.fieldBlockId],
+    )
+    if (rows.length === 0) return
+
+    await this.tx(async tx => {
+      for (const row of rows) {
+        const parent = await tx.get(row.id)
+        if (parent === null || parent.deleted) continue
+        const children = await tx.childrenOf(parent.id)
+        let projected: unknown = undefined
+        let hasProjection = false
+        for (const child of children) {
+          if (getPropertyFieldId(child) !== args.fieldBlockId) continue
+          try {
+            projected = propertyChildContentToEncodedValue(args.schema, child.content)
+            hasProjection = true
+            break
+          } catch {
+            // If all children for this field are currently invalid, the
+            // cache projection below is removed instead of leaving stale
+            // data under the old field name.
+          }
+        }
+
+        const nextProperties = {...parent.properties}
+        if (args.oldName && args.oldName !== args.schema.name) {
+          delete nextProperties[args.oldName]
+        }
+        if (hasProjection) {
+          nextProperties[args.schema.name] = projected
+        } else {
+          delete nextProperties[args.schema.name]
+        }
+        if (propertiesEqual(parent.properties, nextProperties)) continue
+        await tx.update(parent.id, {properties: nextProperties}, {skipMetadata: true})
+      }
+    }, {
+      scope: ChangeScope.BlockDefault,
+      description: `reproject property children for ${args.schema.name}`,
+    })
   }
 
   /** Update the data-layer registries from a FacetRuntime. Spec §8.
