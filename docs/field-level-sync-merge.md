@@ -2,7 +2,7 @@
 
 Plan for ending row-level last-write-wins on `blocks`. Currently every block edit ships as a full-row upsert, so a collapse-only edit on one client clobbers any concurrent content/property/refs edit from another. And because `properties_json` is a single JSON blob, two edits to *different* property keys on the same block also clobber each other. This doc plans the fix.
 
-Written 2026-05-27. Scope: `src/data/internals/clientSchema.ts` (custom upload trigger; also drops v4 backfill machinery), `src/services/powersync.ts` (uploader), `src/data/internals/txEngine.ts` (semantic-no-op guard), one Supabase migration adding an RPC. No schema reset; no on-disk data migration; no Postgres column-type changes. **Rollout assumption: all clients upgrade in one go (no long-lived mixed-version state).** **Cleanup assumption: the v4 local-ephemeral backfill (`clientSchema.ts:844-935`) has already run on every active client and is deleted in this work.**
+Written 2026-05-27. Scope: `src/data/internals/clientSchema.ts` (custom upload trigger), `src/services/powersync.ts` (uploader), `src/data/internals/txEngine.ts` (semantic-no-op guard), one Supabase migration adding an RPC. No schema reset; no on-disk data migration; no Postgres column-type changes. **Rollout assumption: all clients upgrade in one go (no long-lived mixed-version state).** **Prerequisite: the v4 local-ephemeral backfill (`clientSchema.ts:822-935`) is removed in a separate cleanup PR before this lands** — the v4 marker on every active client confirms the backfill is done. Removing it keeps this doc focused on the merge fix and avoids having to plan for a second "full-row PATCH" emitter shape that would need to coexist with the new trigger.
 
 ## Why today is broken
 
@@ -28,7 +28,6 @@ The user-visible failures this produces:
 - **`blocks_history` trigger needs no changes.** It already records per-column diffs and skips no-op UPDATEs (`supabase/migrations/20260522062437_add_blocks_history.sql:115-125`). Narrower writes just produce narrower history rows.
 - **Pull-down replay unchanged.** Server still pushes full rows back; local `BLOCKS_RAW_TABLE.put` continues to do `ON CONFLICT(id) DO UPDATE SET <all columns>`. That's correct because the server holds the merged truth.
 - **Postgres column type stays `text` for this work.** Migrating `properties_json` / `references_json` to `jsonb` would let the RPC use native `||`/`-` without per-write casts, but its rollout-compat (old clients sending stringified JSON to a `jsonb` column → string scalar, breaks merges) is a separate problem worth handling in isolation. The RPC parses `text` to `jsonb`, merges, and casts back to `text` on assignment; microseconds per write, fine. JSONB across the data layer is a P2 follow-up — see `docs/follow-ups.md`.
-- **Delete the v4 local-ephemeral backfill.** `BACKFILL_LOCAL_EPHEMERAL_UPLOADS_SQL`, `LOCAL_EPHEMERAL_BACKFILL_MARKER_KEY`, `COUNT_LOCAL_EPHEMERAL_BACKFILL_PENDING_SQL`, and their bootstrap call sites (`clientSchema.ts:822-935`) can come out. The cleanup avoids carrying a second "full-row PATCH" emitter shape that would need plumbing through every new layer — and the per-client v4 marker means we know it's done.
 
 ## The layers
 
@@ -40,7 +39,7 @@ For `tx.setProperty` the comparison is value-only on the single key (encoded via
 
 Subtle: the guard must run before `metadataPatch` is applied, so it sees the pre-metadata `after`. The current code merges `metadataPatch` into `after` unconditionally; reorder.
 
-### Layer A — trigger: emit `old`, drop v4 backfill
+### Layer A — trigger: emit `old`
 
 Extend `CREATE_BLOCKS_UPLOAD_UPDATE_TRIGGER_SQL` (`clientSchema.ts:435-453`) to add an `old` field alongside `data` in the envelope. Mirror the existing `__noop`-strip pattern used in `blockUploadPatchJsonSql`:
 
@@ -62,8 +61,6 @@ INSERT INTO ps_crud (tx_id, data) VALUES (
 Result: PowerSync's `CrudEntry.fromRow` parses the envelope and exposes the old value as `entry.previousValues.properties_json` (or `undefined` if properties_json didn't change). `entry.previousValues` itself is always defined for entries from the new trigger.
 
 **Trigger migration via DROP+CREATE.** `CLIENT_SCHEMA_STATEMENTS` runs `CREATE TRIGGER IF NOT EXISTS` (`repoProvider.ts:237-239`), so an upgraded local DB keeps its pre-change `blocks_upload_update` trigger unless we explicitly drop it. Prepend `DROP TRIGGER IF EXISTS blocks_upload_update;` immediately before the `CREATE TRIGGER` in `CLIENT_SCHEMA_STATEMENTS`. Cheap, idempotent, runs every bootstrap.
-
-**Delete v4 backfill code.** Remove `BACKFILL_LOCAL_EPHEMERAL_UPLOADS_SQL`, `LOCAL_EPHEMERAL_BACKFILL_MARKER_KEY`, `COUNT_LOCAL_EPHEMERAL_BACKFILL_PENDING_SQL`, `RECORD_LOCAL_EPHEMERAL_BACKFILL_DONE_SQL`, `SELECT_LOCAL_EPHEMERAL_BACKFILL_DONE_SQL`, and the bootstrap calls that invoke them (`clientSchema.ts:822-935` and any callers in `repoProvider.ts`). The v4 marker on every active client confirms this is safe.
 
 Scope of columns in `old`: just `properties_json` for v1 — that's the only column needing per-key merge. Adding more later is mechanical (same pattern per column). Keeping the set narrow keeps the envelope small.
 
@@ -145,7 +142,7 @@ After this work:
 ## Phasing
 
 1. **Layer 0: semantic-no-op guard** (small, orthogonal). Add early-return in `tx.update`, `tx.setProperty`, `tx.move`. Test: `setProperty` to the current value produces no `ps_crud` row. Land independently.
-2. **Layer A: trigger emits `old`, v4 backfill deleted** (small). Extend the trigger envelope with the `old` field (always present, populated when `properties_json` changed). DROP+CREATE in `CLIENT_SCHEMA_STATEMENTS`. Delete the v4 backfill SQL / markers / bootstrap calls. Unit-test the envelope shape (introspect `ps_crud.data` after a `tx.update({properties})`). Uploader still ships full-row UPSERTs at this point — `entry.previousValues` is populated but unused. Strict no-op for end users; lands as plumbing.
+2. **Layer A: trigger emits `old`** (small). Extend the trigger envelope with the `old` field (always present, populated when `properties_json` changed). DROP+CREATE in `CLIENT_SCHEMA_STATEMENTS`. Unit-test the envelope shape (introspect `ps_crud.data` after a `tx.update({properties})`). Uploader still ships full-row UPSERTs at this point — `entry.previousValues` is populated but unused. Strict no-op for end users; lands as plumbing. **Prereq:** the v4 backfill cleanup PR has landed.
 3. **Layer B: uploader diff + RPC** (medium). Write `apply_block_patches(patches jsonb)` — parses `properties_json` text as jsonb in-flight, merges, casts back to text. Switch `applyBlockPatches` to call it for new-shape entries (`entry.previousValues` defined). Keep the existing `loadCurrentBlockUploadRows` + `applyBlockUpserts` path as the legacy fallback for `entry.previousValues === undefined`. Integration test: two-client conflict on different property keys converges to both keys present. Same-tx fusion test: two property writes in the same tx on different keys both land.
 4. **Remove the legacy fallback** once telemetry confirms no PATCH entries for `blocks` arrive with undefined `previousValues`. Drop the rehydrate/UPSERT branch and the unused helpers.
 
