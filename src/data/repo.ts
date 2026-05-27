@@ -55,7 +55,10 @@ import { buildQualifiedBlockColumnsSql, parseBlockRow, type BlockRow } from '@/d
 import { KERNEL_MUTATORS } from './internals/kernelMutators'
 import { KERNEL_PROCESSORS } from './internals/kernelProcessors'
 import { KERNEL_SAME_TX_PROCESSORS } from './internals/normalizeReferencesProcessor'
-import { materializePropertyChildrenForExistingRow } from './internals/propertyChildrenProcessor'
+import {
+  materializePropertyChildrenForExistingRow,
+  materializePropertyFieldSlotsForExistingRow,
+} from './internals/propertyChildrenProcessor'
 import { KERNEL_QUERIES } from './internals/kernelQueries'
 import { kernelInvalidationRule } from './internals/kernelInvalidation'
 import {
@@ -2095,6 +2098,15 @@ export class Repo {
 
     if (propsChanged) {
       await tx.update(blockId, {properties: next})
+    }
+
+    if (wasNew) {
+      await materializePropertyFieldSlotsForExistingRow(
+        tx,
+        {...block, properties: next},
+        propertySchemas,
+        (contribution.properties ?? []).map(schema => schema.name),
+      )
     }
   }
 

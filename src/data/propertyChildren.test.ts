@@ -6,7 +6,8 @@ import { ChangeScope, codecs, defineProperty, type AnyPropertySchema } from '@/d
 import { BlockCache } from '@/data/blockCache'
 import { propertySchemasFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
-import { propertyNameProp, rendererProp } from '@/data/properties'
+import { aliasesProp, propertyNameProp, rendererProp } from '@/data/properties'
+import { PAGE_TYPE } from '@/data/blockTypes'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { PROPERTY_CHILDREN_BACKFILL_MARKER_PREFIX } from '@/data/internals/clientSchema'
@@ -297,6 +298,61 @@ describe('child-backed user properties', () => {
       reference_target_id: env.statusProp.fieldId,
     })
     expect(env.repo.cache.getSnapshot('parent')?.properties.status).toBe('Doing')
+  })
+
+  it('derives a field reference target from an exact block-ref field definition', async () => {
+    const schemaBlockId = '63a14fa0-2f07-4793-a8e1-151f3775cb2c'
+    const customProp = defineProperty<string>('custom', {
+      codec: codecs.string,
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+      fieldId: schemaBlockId,
+    })
+    env = await setup({extraSchemas: [customProp]})
+    await createRoot(env.repo, 'parent')
+
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: 'custom-field-row',
+        workspaceId: WS,
+        parentId: 'parent',
+        orderKey: 'a0',
+        content: `((63a14fa0-2f07-4793-a8e1-151f3775cb2c))`,
+      })
+      await tx.create({
+        id: 'custom-value-row',
+        workspaceId: WS,
+        parentId: 'custom-field-row',
+        orderKey: 'a0',
+        content: 'Filled',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    const [field] = await rawLiveChildren(env.h, 'parent')
+    expect(field).toMatchObject({
+      id: 'custom-field-row',
+      content: '((63a14fa0-2f07-4793-a8e1-151f3775cb2c))',
+      reference_target_id: schemaBlockId,
+    })
+    await expect(env.repo.block('parent').childIds.load()).resolves.toEqual(['custom-field-row'])
+    expect(env.repo.cache.getSnapshot('parent')?.properties.custom).toBe('Filled')
+  })
+
+  it('materializes default child rows for properties declared by a newly added type', async () => {
+    env = await setup()
+    await createRoot(env.repo, 'parent')
+
+    await env.repo.addType('parent', PAGE_TYPE)
+
+    expect(env.repo.cache.getSnapshot('parent')?.properties.alias).toBeUndefined()
+
+    const children = await rawLiveChildren(env.h, 'parent')
+    const aliasField = children.find(child => child.reference_target_id === aliasesProp.fieldId)
+    expect(aliasField).toMatchObject({
+      content: '[[alias]]',
+      reference_target_id: aliasesProp.fieldId,
+    })
+    await expect(rawLiveChildren(env.h, aliasField!.id)).resolves.toEqual([])
   })
 
   it('reprojects both parents when a property child is moved', async () => {
