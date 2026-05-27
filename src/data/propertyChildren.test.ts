@@ -9,6 +9,7 @@ import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { propertyNameProp, rendererProp } from '@/data/properties'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { PROPERTY_CHILDREN_BACKFILL_MARKER_PREFIX } from '@/data/internals/clientSchema'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import { deleteProperty } from '@/components/propertyPanel/actions'
 import { Repo } from './repo'
@@ -33,10 +34,12 @@ const makeStatusProp = (): AnyPropertySchema =>
 const setup = async (options: {
   registerStatusProp?: boolean
   extraSchemas?: readonly AnyPropertySchema[]
+  activateWorkspace?: boolean
 } = {}): Promise<Harness> => {
   const {
     registerStatusProp = true,
     extraSchemas = [],
+    activateWorkspace = true,
   } = options
   const h = await createTestDb()
   const cache = new BlockCache()
@@ -51,7 +54,7 @@ const setup = async (options: {
     startRowEventsTail: false,
   })
   const statusProp = makeStatusProp()
-  repo.setActiveWorkspaceId(WS)
+  if (activateWorkspace) repo.setActiveWorkspaceId(WS)
   const schemas = registerStatusProp ? [statusProp, ...extraSchemas] : extraSchemas
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
@@ -83,6 +86,34 @@ const rawLiveChildren = async (h: TestDb, parentId: string) =>
     `,
     [parentId],
   )
+
+const seedLegacyPropertiesRow = async (
+  h: TestDb,
+  id: string,
+  orderKey: string,
+  properties: Record<string, unknown>,
+): Promise<void> => {
+  await h.db.execute(
+    `
+      INSERT INTO blocks (
+        id, workspace_id, parent_id, reference_target_id, order_key,
+        content, properties_json, references_json, created_at, updated_at,
+        created_by, updated_by, deleted
+      ) VALUES (?, ?, NULL, NULL, ?, ?, ?, '[]', ?, ?, ?, ?, 0)
+    `,
+    [
+      id,
+      WS,
+      orderKey,
+      'Legacy parent',
+      JSON.stringify(properties),
+      1,
+      1,
+      'user-1',
+      'user-1',
+    ],
+  )
+}
 
 let env: Harness
 afterEach(async () => {
@@ -158,30 +189,14 @@ describe('child-backed user properties', () => {
 
   it('backfills pre-child properties_json rows into field/value children', async () => {
     env = await setup()
-    await env.h.db.execute(
-      `
-        INSERT INTO blocks (
-          id, workspace_id, parent_id, reference_target_id, order_key,
-          content, properties_json, references_json, created_at, updated_at,
-          created_by, updated_by, deleted
-        ) VALUES (?, ?, NULL, NULL, ?, ?, ?, '[]', ?, ?, ?, ?, 0)
-      `,
-      [
-        'legacy-parent',
-        WS,
-        'a0',
-        'Legacy parent',
-        JSON.stringify({[env.statusProp.name]: env.statusProp.codec.encode('Doing')}),
-        1,
-        1,
-        'user-1',
-        'user-1',
-      ],
-    )
+    await seedLegacyPropertiesRow(env.h, 'legacy-parent', 'a0', {
+      [env.statusProp.name]: env.statusProp.codec.encode('Doing'),
+    })
 
     await env.repo.backfillPropertyChildrenFromProperties({
       workspaceId: WS,
       batchSize: 1,
+      respectCompletionMarkers: false,
     })
 
     const children = await rawLiveChildren(env.h, 'legacy-parent')
@@ -192,6 +207,49 @@ describe('child-backed user properties', () => {
     })
     await expect(rawLiveChildren(env.h, children[0]!.id)).resolves.toMatchObject([
       {content: 'Doing', reference_target_id: null},
+    ])
+  })
+
+  it('marks full backfills complete while row-targeted sync catch-up bypasses the marker', async () => {
+    env = await setup({activateWorkspace: false})
+    await seedLegacyPropertiesRow(env.h, 'legacy-parent', 'a0', {
+      [env.statusProp.name]: env.statusProp.codec.encode('Doing'),
+    })
+
+    await expect(env.repo.backfillPropertyChildrenFromProperties({
+      workspaceId: WS,
+      batchSize: 1,
+    })).resolves.toBe(1)
+
+    const markerKey = `${PROPERTY_CHILDREN_BACKFILL_MARKER_PREFIX}${WS}:${env.statusProp.fieldId}:${env.statusProp.name}`
+    await expect(env.h.db.getOptional<{key: string}>(
+      'SELECT key FROM client_schema_state WHERE key = ?',
+      [markerKey],
+    )).resolves.toEqual({key: markerKey})
+
+    await seedLegacyPropertiesRow(env.h, 'late-parent', 'b0', {
+      [env.statusProp.name]: env.statusProp.codec.encode('Later'),
+    })
+
+    await expect(env.repo.backfillPropertyChildrenFromProperties({
+      workspaceId: WS,
+      batchSize: 1,
+    })).resolves.toBe(0)
+    await expect(rawLiveChildren(env.h, 'late-parent')).resolves.toEqual([])
+
+    await expect(env.repo.backfillPropertyChildrenFromProperties({
+      workspaceId: WS,
+      blockIds: ['late-parent'],
+    })).resolves.toBe(1)
+
+    const children = await rawLiveChildren(env.h, 'late-parent')
+    expect(children).toHaveLength(1)
+    expect(children[0]!).toMatchObject({
+      content: '[[status]]',
+      reference_target_id: env.statusProp.fieldId,
+    })
+    await expect(rawLiveChildren(env.h, children[0]!.id)).resolves.toMatchObject([
+      {content: 'Later', reference_target_id: null},
     ])
   })
 

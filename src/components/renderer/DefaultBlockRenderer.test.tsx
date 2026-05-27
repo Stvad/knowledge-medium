@@ -26,6 +26,7 @@ import type { BlockRendererProps } from '@/types'
 import { pasteMultilineText } from '@/utils/paste'
 import { useChildIds } from '@/hooks/block'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer'
+import { FieldBlockRenderer } from './FieldBlockRenderer'
 import { PropertyValueBlockRenderer } from './PropertyValueBlockRenderer'
 
 const repoRef = vi.hoisted(() => ({
@@ -313,6 +314,43 @@ describe('DefaultBlockRenderer paste handling', () => {
     await waitFor(() => {
       expect(screen.getByTestId('child-ids').textContent).toBe('visible-status-field')
     })
+  })
+
+  it('renders property field rows without echoing their definition reference content', async () => {
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'status-field-display',
+        workspaceId: 'ws-1',
+        parentId: 'block-1',
+        referenceTargetId: statusProp.fieldId,
+        orderKey: 'c0',
+        content: '[[test:status]]',
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'create property field renderer fixture'})
+
+    const valueRuntime = resolveFacetRuntimeSync([
+      kernelDataExtension,
+      kernelPropertyUiExtension,
+      kernelValuePresetsExtension,
+      defaultEditorInteractionExtension,
+      propertySchemasFacet.of(statusProp, {source: 'test'}),
+      propertySchemasFacet.of(priorityProp, {source: 'test'}),
+      blockLayoutFacet.of(
+        () => ({id: 'content-only', label: 'Content only', render: contentOnlyLayout}),
+        {source: 'test'},
+      ),
+    ])
+
+    render(
+      <AppRuntimeContextProvider value={valueRuntime}>
+        <ActiveContextsProvider>
+          <FieldBlockRenderer block={repo.block('status-field-display')} />
+        </ActiveContextsProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+    expect(screen.getByText('test:status')).toBeTruthy()
+    expect(screen.queryByText('[[test:status]]')).toBeNull()
   })
 
   it('renders property value rows through the schema editor and projects edits', async () => {

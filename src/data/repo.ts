@@ -92,8 +92,11 @@ import {
 } from './internals/rowEventsTail'
 import {
   CLEAR_REPROJECT_REF_MARKER_SQL,
+  PROPERTY_CHILDREN_BACKFILL_MARKER_PREFIX,
   RECORD_REPROJECT_REF_MARKER_SQL,
+  RECORD_PROPERTY_CHILDREN_BACKFILL_MARKER_SQL,
   REPROJECT_REF_MARKER_PREFIX,
+  SELECT_PROPERTY_CHILDREN_BACKFILL_MARKERS_SQL,
   SELECT_REPROJECT_REF_MARKERS_SQL,
 } from './internals/clientSchema'
 import { UndoManager, type UndoEntry } from './internals/undoManager'
@@ -242,6 +245,12 @@ const schemasByScope = (
   }
   return out
 }
+
+const propertyChildrenBackfillMarkerKey = (
+  workspaceId: string,
+  schema: AnyPropertySchema,
+): string =>
+  `${PROPERTY_CHILDREN_BACKFILL_MARKER_PREFIX}${workspaceId}:${schema.fieldId}:${schema.name}`
 
 const appendRefProjection = (
   refs: BlockReference[],
@@ -611,6 +620,11 @@ export class Repo {
    *  this set without further SQL. Tests / migrations that wipe the
    *  table can call `__resetReprojectionMarkerCache` to force a reload. */
   private reprojectionMarkers: Set<string> | null = null
+  /** Local completion markers for full `properties_json` ->
+   *  field/value child backfills. Kept separate from sync catch-up:
+   *  accepted sync rows are rechecked by id even when a schema's full
+   *  workspace scan is marked complete. */
+  private propertyChildrenBackfillMarkers: Set<string> | null = null
   /** Slowest writeTransaction observed since the last reset, by
    *  description (`opts.description` passed to `repo.tx`). Updated only
    *  when a tx exceeds the previous high-water mark, so the field is
@@ -1436,21 +1450,35 @@ export class Repo {
     workspaceId?: string
     propertySchemas?: ReadonlyMap<string, AnyPropertySchema>
     batchSize?: number
+    blockIds?: Iterable<string>
+    respectCompletionMarkers?: boolean
   } = {}): Promise<number> {
     if (this.isReadOnly) return 0
     const workspaceId = args.workspaceId ?? this.activeWorkspaceId
     if (!workspaceId) return 0
     const propertySchemas = args.propertySchemas ?? this._propertySchemas
+    const blockIds = args.blockIds === undefined
+      ? null
+      : Array.from(new Set(args.blockIds)).filter(id => id.length > 0)
+    if (blockIds !== null) {
+      return this.backfillPropertyChildrenForRows({workspaceId, propertySchemas, blockIds})
+    }
     const batchSize = Math.max(1, args.batchSize ?? PROPERTY_CHILDREN_BACKFILL_BATCH_SIZE)
+    const respectCompletionMarkers = args.respectCompletionMarkers ?? true
     let processed = 0
 
     for (const [scope, scopeSchemas] of schemasByScope(propertySchemas.values())) {
-      const scopeSchemaMap = new Map(scopeSchemas.map(schema => [schema.name, schema]))
+      const schemasToScan = respectCompletionMarkers
+        ? await this.schemasPendingPropertyChildrenBackfill(workspaceId, scopeSchemas)
+        : scopeSchemas
+      if (schemasToScan.length === 0) continue
+
+      const scopeSchemaMap = new Map(schemasToScan.map(schema => [schema.name, schema]))
       let afterId = ''
       for (;;) {
         const candidates = await this.propertyChildrenBackfillCandidates(
           workspaceId,
-          scopeSchemas,
+          schemasToScan,
           afterId,
           batchSize,
         )
@@ -1470,6 +1498,35 @@ export class Repo {
           description: 'backfill property children from properties_json',
         })
       }
+      if (respectCompletionMarkers) {
+        await this.markCompletedPropertyChildrenBackfills(workspaceId, schemasToScan)
+      }
+    }
+    return processed
+  }
+
+  private async backfillPropertyChildrenForRows(args: {
+    workspaceId: string
+    propertySchemas: ReadonlyMap<string, AnyPropertySchema>
+    blockIds: readonly string[]
+  }): Promise<number> {
+    if (args.blockIds.length === 0) return 0
+    let processed = 0
+    for (const [scope, scopeSchemas] of schemasByScope(args.propertySchemas.values())) {
+      const scopeSchemaMap = new Map(scopeSchemas.map(schema => [schema.name, schema]))
+      await this.tx(async tx => {
+        for (const id of args.blockIds) {
+          const live = await tx.get(id)
+          if (live === null || live.deleted || live.workspaceId !== args.workspaceId) continue
+          const names = Object.keys(live.properties).filter(name => scopeSchemaMap.has(name))
+          if (names.length === 0) continue
+          await materializePropertyChildrenForExistingRow(tx, live, scopeSchemaMap, names)
+          processed += 1
+        }
+      }, {
+        scope,
+        description: 'backfill property children for synced rows',
+      })
     }
     return processed
   }
@@ -1892,9 +1949,65 @@ export class Repo {
     }
   }
 
+  private schedulePropertyChildrenBackfillForRows(
+    workspaceId: string,
+    rowIds: readonly string[],
+  ): void {
+    if (this.isReadOnly || this._propertySchemas.size === 0 || rowIds.length === 0) return
+    const propertySchemas = this._propertySchemas
+    const next = this.propertyChildrenBackfillChain
+      .catch(() => {})
+      .then(async () => {
+        await this.backfillPropertyChildrenFromProperties({
+          workspaceId,
+          propertySchemas,
+          blockIds: rowIds,
+        })
+      })
+    this.propertyChildrenBackfillChain = next.catch(err => {
+      const reason = err instanceof Error ? err.message : String(err)
+      console.warn(`[Repo] property children sync backfill failed: ${reason}`)
+    })
+  }
+
   private handleRowsAcceptedForPropertyBackfill(event: RowEventsTailAcceptedEvent): void {
+    const rowIds = Array.from(event.rowIds)
     for (const workspaceId of event.workspaceIds) {
-      this.schedulePropertyChildrenBackfill(workspaceId)
+      this.schedulePropertyChildrenBackfillForRows(workspaceId, rowIds)
+    }
+  }
+
+  private async loadPropertyChildrenBackfillMarkers(): Promise<Set<string>> {
+    if (this.propertyChildrenBackfillMarkers !== null) {
+      return this.propertyChildrenBackfillMarkers
+    }
+    const rows = await this.db.getAll<{key: string}>(SELECT_PROPERTY_CHILDREN_BACKFILL_MARKERS_SQL)
+    const set = new Set(rows.map(row => row.key))
+    this.propertyChildrenBackfillMarkers = set
+    return set
+  }
+
+  private async schemasPendingPropertyChildrenBackfill(
+    workspaceId: string,
+    schemas: readonly AnyPropertySchema[],
+  ): Promise<AnyPropertySchema[]> {
+    const markers = await this.loadPropertyChildrenBackfillMarkers()
+    return schemas.filter(schema => !markers.has(propertyChildrenBackfillMarkerKey(workspaceId, schema)))
+  }
+
+  private async setPropertyChildrenBackfillMarker(key: string): Promise<void> {
+    await this.db.execute(RECORD_PROPERTY_CHILDREN_BACKFILL_MARKER_SQL, [key])
+    this.propertyChildrenBackfillMarkers?.add(key)
+  }
+
+  private async markCompletedPropertyChildrenBackfills(
+    workspaceId: string,
+    schemas: readonly AnyPropertySchema[],
+  ): Promise<void> {
+    for (const schema of schemas) {
+      const [candidate] = await this.propertyChildrenBackfillCandidates(workspaceId, [schema], '', 1)
+      if (candidate !== undefined) continue
+      await this.setPropertyChildrenBackfillMarker(propertyChildrenBackfillMarkerKey(workspaceId, schema))
     }
   }
 

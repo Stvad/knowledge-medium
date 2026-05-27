@@ -963,6 +963,21 @@ export const CLEAR_REPROJECT_REF_MARKER_SQL = `
   DELETE FROM client_schema_state WHERE key = ?
 `
 
+/** Per-workspace/schema markers for the one-time local migration from
+ *  parent `properties_json` into Tana-style field/value children. Sync
+ *  arrivals still run row-targeted catch-up; these markers only stop
+ *  repeated full workspace scans once the local DB is caught up. */
+export const PROPERTY_CHILDREN_BACKFILL_MARKER_PREFIX = 'property_children_backfill:v1:'
+
+export const SELECT_PROPERTY_CHILDREN_BACKFILL_MARKERS_SQL = `
+  SELECT key FROM client_schema_state WHERE key LIKE '${PROPERTY_CHILDREN_BACKFILL_MARKER_PREFIX}%'
+`
+
+export const RECORD_PROPERTY_CHILDREN_BACKFILL_MARKER_SQL = `
+  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
+  VALUES (?, strftime('%s', 'now') * 1000)
+`
+
 // ============================================================================
 // Bulk-apply ordered list. Run after `blocks` exists (PowerSync's schema
 // initialization creates it). Idempotent (`IF NOT EXISTS` plus targeted
