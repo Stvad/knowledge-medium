@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createElement, type JSX } from 'react'
 import { resolveFacetRuntimeSync } from '@/extensions/facet'
 import { ChangeScope, codecs, definePreset, defineProperty, type AnyValuePreset } from '@/data/api'
@@ -9,7 +9,8 @@ import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import { propertySchemasFacet, valuePresetsFacet } from '@/data/facets'
-import { propertyNameProp } from '@/data/properties'
+import { presetIdProp, propertyNameProp } from '@/data/properties'
+import { PAGE_TYPE, PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import type { UserSchemasService } from './userSchemasService'
 import { Repo } from './repo'
@@ -158,6 +159,31 @@ describe('UserSchemasService subscription', () => {
     // Encoding through the registered schema works (the preset's codec
     // is the URL codec — passes string through).
     expect(schema.codec.encode('https://example.com')).toBe('https://example.com')
+  })
+
+  it('registers schema blocks whose defining properties are authored as child fields', async () => {
+    env = await setup()
+    const propertiesPageId = env.repo.propertiesPageId!
+    const schemaBlockId = await env.repo.mutate.createChild({parentId: propertiesPageId})
+    await env.repo.addType(schemaBlockId, PROPERTY_SCHEMA_TYPE)
+    await env.repo.addType(schemaBlockId, PAGE_TYPE)
+
+    const childRows = await env.repo.block(schemaBlockId).children.load()
+    const nameField = childRows.find(row => row.referenceTargetId === propertyNameProp.fieldId)!
+    const presetField = childRows.find(row => row.referenceTargetId === presetIdProp.fieldId)!
+    await env.repo.mutate.createChild({
+      parentId: nameField.id,
+      content: 'child-authored',
+    })
+    await env.repo.mutate.createChild({
+      parentId: presetField.id,
+      content: 'boolean',
+    })
+
+    await vi.waitFor(() => {
+      expect(env.repo.propertySchemas.get('child-authored')?.fieldId).toBe(schemaBlockId)
+      expect(env.service.getSchemaForBlockId(schemaBlockId)?.codec.type).toBe('boolean')
+    })
   })
 
   it('rejects ref config that breaks configCodec.decode contract (null targetTypes element)', async () => {
