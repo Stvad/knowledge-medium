@@ -1,52 +1,44 @@
-# Field-level sync merge for blocks
+# Per-key merge for `properties_json`
 
-Plan for ending row-level last-write-wins on `blocks`. Currently every block edit ships as a full-row upsert, so a collapse-only edit on one client clobbers any concurrent content/property/refs edit from another. And because `properties_json` is a single JSON blob, two edits to *different* property keys on the same block also clobber each other. This doc plans the fix.
+Plan for closing the per-key last-write-wins gap on `blocks.properties_json`. After #52, the upload pipeline is column-narrow via `apply_block_patches` — a content edit no longer wipes a concurrent property edit. The remaining LWW failure mode lives *inside* `properties_json` itself: two clients editing different keys (A sets `foo`, B sets `bar`) both PATCH the same column under column-LWW, so one key silently disappears.
 
-Written 2026-05-27. Scope: `src/data/internals/clientSchema.ts` (custom upload trigger), `src/services/powersync.ts` (uploader), `src/data/internals/txEngine.ts` (semantic-no-op guard), one Supabase migration adding an RPC. No schema reset; no on-disk data migration; no Postgres column-type changes.
+Fix: extend `apply_block_patches` with a per-key merge branch for `properties_json`, plumb the upload trigger to carry `old.properties_json` so the client can compute the diff, and close the derived `references_json` staleness window that server-side merge introduces.
 
-**Rollout assumption: coordinated upgrade with queue drain.** Fleet is small (2 users, 5 devices). We hold each device on the old code until its local `ps_crud` queue is empty, then swap to the new bundle. No mixed-version state; no legacy `ps_crud` entries to handle post-upgrade.
+Written 2026-05-27. Scope: `src/data/internals/clientSchema.ts` (trigger envelope), `src/services/powersync.ts` (uploader diff), `src/data/internals/rowEventsTail.ts` (sync-side parseReferences dispatch), one Supabase migration extending the existing RPC. No schema reset; no on-disk data migration; no Postgres column-type changes.
 
-**Cleanup assumption: the v4 local-ephemeral backfill (`clientSchema.ts:822-935`) has run on every active client; it gets deleted in phase 0 of this sequence before any other change lands.**
+**Rollout assumption: coordinated upgrade with queue drain.** Fleet is small (2 users, 5 devices). Hold each device on the old code until `ps_crud` is empty, then swap. No mixed-version queue entries; no legacy envelope shapes to support post-upgrade.
 
-## Why today is broken
+## What's already in place (#52)
 
-The CRUD pipeline is custom-built (this repo uses `RawTable`, not the standard `Table` PowerSync triggers — see `src/data/blockSchema.ts:144` and `src/data/internals/clientSchema.ts:435`). The local trigger already emits a per-column-diffed patch envelope into `ps_crud` (`blockUploadPatchJsonSql` at `clientSchema.ts:399` strips unchanged columns via a `$.__noop` sentinel). But the uploader throws that away: `applyBlockPatches` (`src/services/powersync.ts:330`) re-loads the full current local row and ships a full-row UPSERT to Supabase. The server's PostgREST `.update()` does a straight column overwrite. Net result: whichever client's row reaches the server last wins all columns, not just the columns it semantically changed.
+- `applyBlockPatches` ships `entry.opData` straight through the `apply_block_patches(patches jsonb)` RPC — no full-row re-load, no cross-column clobber.
+- The RPC iterates the patches array in order (`WITH ORDINALITY ORDER BY ordinality`) and does column-LWW per row.
+- Batching: N PATCHes ship as one HTTP call.
+- Atomicity: any 0-rows-affected patch raises `P0002` (`no_data_found`), which rolls back the function's transaction so partial sibling UPDATEs never commit. The classifier (`uploadErrorClassifier.isPermanentSqlState`) recognises `P0002` as permanent → orchestrator quarantines.
+- v4 local-ephemeral upload backfill deleted.
 
-The user-visible failures this produces:
+## What's left
 
-- **Cross-field clobber:** A toggles `system:collapsed`; B edits the block's content. Whichever lands second silently reverts the other's column.
-- **Cross-key clobber:** A sets property `foo`; B sets property `bar`. Same row, same column (`properties_json`), so whichever lands second silently strips the other's key.
-- **No-op writes upload anyway:** Toggling collapse to its current value still emits a full-row UPSERT.
+- **Per-key clobber within `properties_json`.** A sets `foo`, B sets `bar`. Both PATCH the `properties_json` column under column-LWW. Whichever lands second silently strips the other's key. This is the motivating failure mode.
+- **Derived `references_json` will go stale once merge lands.** `parseReferences` is a post-commit processor that runs only on local `repo.tx` outcomes. After Layer B merges `properties_json` server-side across clients, the loser's locally-computed `references_json` survives in its (still column-LWW) column — backlinks and typed-ref queries lag indefinitely on cold blocks until the user re-edits.
+- **Cache-acceptance invariant breaks under merge.** `BlockCache.applySyncSnapshot` (`blockCache.ts:144`) rejects on `updatedAt <= existing.updatedAt`. That's correct under pure column-LWW — a snapshot with non-newer `updated_at` is strictly older content. Once the server merges, a row can be content-newer (contains keys from concurrent clients) without a newer client-supplied `updated_at` — the cache would reject genuinely-new merged state.
+- **No-op writes still upload.** `block.set(key, sameValue)` produces a metadata-only PATCH. Independent cheap win; not blocked on the merge work.
 
-`docs/data-layer-redesign.md:210` acknowledged row-LWW as a deliberate v1 trade-off; the cross-key case is the part that's stopped being tolerable.
+## Architecture decisions
 
-## Architecture decisions worth pinning
-
-- **Four layers.** Three load-bearing for correctness — (A) extend the custom upload trigger to emit `old.properties_json` so the uploader has the previous value, (B) update the uploader to ship a partial patch + per-key property diff to a Supabase RPC instead of re-fattening into a full-row UPSERT, and (C) hook the row_events tail to invoke `parseReferences` on sync-arrived property changes so derived `references_json` doesn't lag indefinitely after concurrent ref-property merges. Plus one small contained change in the tx engine — (0) early-return on semantic no-ops before bumping metadata, so `block.set(prop, sameValue)` doesn't generate a PATCH.
-- **Extend the custom upload trigger to carry `old`, not the `trackPrevious` raw-table option.** PowerSync's `Table.trackPrevious` schema option only works when PowerSync's auto-generated CRUD trigger is in play. We use `RawTable` and define our own `blocks_upload_update` trigger (`clientSchema.ts:435-453`) — so the `trackPrevious` flag doesn't reach the trigger, and `CrudEntry.previousValues` reads from `data.old`, which our trigger doesn't emit today. The fix is to extend the trigger's JSON envelope to also emit `'old', json_object(...)` carrying the previous value of `properties_json` when it changed. Same pattern as the existing `__noop`-strip in the data branch.
-- **The trigger is the right choke point for writes that *do* upload.** The upload trigger gates on `tx_context.source IS NOT NULL` (`clientSchema.ts:438`), so it only fires for writes made through `repo.tx`. Raw out-of-band writes leave `source = NULL` and bypass the trigger entirely — they don't enqueue, so they don't upload at all (same as today; raw writes are forbidden by §4.2's discipline rule). For the writes that *do* upload, putting `old` in the envelope catches every property mutation automatically — including ad-hoc `tx.update({properties: ...})` calls, future code, and refactors that forget the original choke point. Compared to a staging table that requires every property writer to opt in even within `repo.tx`, this is harder to get wrong by omission.
-- **Add a semantic-no-op guard in the tx engine.** The trigger's `WHEN` clause only filters SQL-level no-ops. But `tx.update`, `tx.setProperty`, and `tx.move` all call `metadataPatch` and always bump `updated_at`/`updated_by` — both columns are in `BLOCK_UPLOAD_COLUMNS` / `blockUploadDiffPredicateSql`, so the trigger fires on any metadata bump. Consequence: `block.set(prop, sameValue)` still produces a metadata-only PATCH and uploads. Fix: in `tx.update` / `tx.setProperty` / `tx.move`, compare against `before` *before* applying `metadataPatch`; if no user-meaningful field would change, return early without writing.
-- **Coordinated rollout means no legacy-queue handling in code.** With every device on the new bundle and a drained `ps_crud` at swap time, the uploader can assume every PATCH carries the new envelope shape (`old` field present when `properties_json` changed). One path through Layer B, no fallback, no envelope-shape discriminators, no mixed-fusion rules.
-- **Content and references stay column-LWW for now.** With the uploader sending a partial patch, a property write no longer drags `content` or `references_json` along the wire, so the remaining failure mode is "two clients edit the same column concurrently." For `content` that means character-level conflicts (needs a text CRDT — bigger project, out of scope). For `references_json` it means concurrent array edits (separate question; out of scope). Both are *strictly* improved by this work even without further changes.
-- **Server-side merge via a Postgres RPC, not PostgREST PATCH.** PostgREST `.update()` silently returns 0-rows-affected when the row is missing — the original footgun `applyBlockPatches` papered over with a full-row UPSERT. An RPC `apply_block_patches(patches jsonb)` does the merge in SQL, returns rowcount per id, and centralizes the conflict rules in one auditable place.
-- **`blocks_history` trigger needs no changes.** It already records per-column diffs and skips no-op UPDATEs (`supabase/migrations/20260522062437_add_blocks_history.sql:115-125`). Narrower writes just produce narrower history rows.
-- **Pull-down replay unchanged.** Server still pushes full rows back; local `BLOCKS_RAW_TABLE.put` continues to do `ON CONFLICT(id) DO UPDATE SET <all columns>`. That's correct because the server holds the merged truth.
-- **Postgres column type stays `text` for this work.** Migrating `properties_json` / `references_json` to `jsonb` would let the RPC use native `||`/`-` without per-write casts, but its rollout-compat (old clients sending stringified JSON to a `jsonb` column → string scalar, breaks merges) is a separate problem worth handling in isolation. The RPC parses `text` to `jsonb`, merges, and casts back to `text` on assignment; microseconds per write, fine. JSONB across the data layer is a P2 follow-up — see `docs/follow-ups.md`.
-- **Delete the v4 local-ephemeral backfill as phase 0.** `BACKFILL_LOCAL_EPHEMERAL_UPLOADS_SQL`, `LOCAL_EPHEMERAL_BACKFILL_MARKER_KEY`, `COUNT_LOCAL_EPHEMERAL_BACKFILL_PENDING_SQL`, and their bootstrap call sites (`clientSchema.ts:822-935`) come out in their own commit/PR ahead of the merge work. Lands first so later phases never have to plan for a second "full-row PATCH" emitter shape.
+- **Server-side merge as an extension of `apply_block_patches`, not a new RPC.** The function exists; add a branch that recognises `properties_set` / `properties_unset` keys in a patch and applies `(properties_json::jsonb || $set - $unset_array)::text`. Other columns keep their existing column-LWW behavior. Patches that don't touch properties hit the same code path as today.
+- **Trigger emits `old.properties_json` so the client can compute the diff.** PowerSync's `Table.trackPrevious` schema flag doesn't apply — we use `RawTable` and our own `blocks_upload_update` trigger (`clientSchema.ts:435-453`). Extend the trigger's JSON envelope to also emit `old.properties_json` when `properties_json` actually changed. `CrudEntry.fromRow` parses this into `entry.previousValues.properties_json`; the uploader diffs new vs prev to produce set/unset.
+- **RPC bumps `updated_at` and bypasses the clamp trigger for the merge path.** Merged sync arrivals must be strictly-newer than any client's pre-merge view, or the cache rejection gate suppresses Layer C dispatch. The existing `blocks_clamp_updated_at` BEFORE trigger (`20260510222352_consolidated_initial.sql:168`) clamps `NEW.updated_at` down to `server_now_ms`, which collapses the +1 bump for back-to-back same-ms writes. The merge RPC sets a session-local GUC (`set_config('app.skip_blocks_clamp', 'true', true)`) before its UPDATE; the clamp trigger gains a `current_setting(..., true) = 'true'` fast path. Scope of the bypass is the RPC's merge UPDATEs only — direct PostgREST writes and non-merge `apply_block_patches` rows still get clamped.
+- **`skipMetadata` writes preserve metadata columns unchanged.** `parseReferences` writes `references_json` with `skipMetadata: true`, so `metadataPatch()` returns `{}` and the SQL preserves `OLD.updated_at`/`OLD.updated_by`. The trigger's column-diff predicate then strips both from the envelope (they didn't change). The RPC's `COALESCE(patch->>'updated_by', updated_by)` pattern from #52 already preserves the existing value on missing keys. The new `updated_at` bump applies only when the patch carries `updated_at`; absent the key, neither bump nor clamp-bypass runs — same as #52.
+- **Layer C closes the derived references staleness.** Tail-side narrow `parseReferences` dispatch on sync-arrived `properties_json` changes; gated on `applySyncSnapshot` acceptance (which is meaningful exactly because Layer B's `updated_at` bump guarantees merged arrivals are strictly-newer). Convergence is automatic: `core.normalizeReferences` (`normalizeReferencesProcessor.ts`) canonicalises the refs output, so all clients computing parseReferences from the same merged properties produce identical canonical refs — no ping-pong, idempotent across reapplies.
+- **`blocks_history` needs no changes.** It already records per-column diffs and skips no-op UPDATEs (`20260522062437_add_blocks_history.sql:115-125`). Merged writes produce one history row per server-side UPDATE just like today.
+- **Pull-down replay unchanged.** Server pushes full rows back; local `BLOCKS_RAW_TABLE.put` continues `ON CONFLICT(id) DO UPDATE SET <all columns>`. Server holds the merged truth.
+- **Postgres column stays `text`.** Migrating `properties_json` / `references_json` to `jsonb` is a separate problem with its own rollout-compat surface (old clients send `JSON.stringify(...)` strings that land as JSONB string scalars, not objects). The merge RPC parses `text` to `jsonb` per-write — microseconds. See `docs/follow-ups.md` for the JSONB migration plan.
 
 ## The layers
 
-### Layer 0 — tx engine: semantic-no-op guard
+### Layer A — trigger emits `old.properties_json`
 
-`tx.update` (`txEngine.ts:284`), `tx.setProperty` (`txEngine.ts:354`), and `tx.move` (`txEngine.ts:312`) should compare the proposed `after` shape against `before` (excluding metadata) and early-return if nothing user-meaningful changed. Drops the SQL UPDATE entirely; the trigger never fires; no `ps_crud` row queued; no upload.
-
-For `tx.setProperty` the comparison is value-only on the single key (encoded via the codec, then JSON-stringified for stable equality). For `tx.update`, compare `content`, `references` (deep), and `properties` (deep). For `tx.move`, compare `parent_id` and `order_key`. References and properties are flat enough that a `JSON.stringify` equality check is fine; if it gets hot, switch to a structural comparison.
-
-Subtle: the guard must run before `metadataPatch` is applied, so it sees the pre-metadata `after`. The current code merges `metadataPatch` into `after` unconditionally; reorder.
-
-### Layer A — trigger: emit `old`
-
-Extend `CREATE_BLOCKS_UPLOAD_UPDATE_TRIGGER_SQL` (`clientSchema.ts:435-453`) to add an `old` field alongside `data` in the envelope, but only when `properties_json` actually changed. Mirror the existing `__noop`-strip pattern used in `blockUploadPatchJsonSql`:
+Extend `CREATE_BLOCKS_UPLOAD_UPDATE_TRIGGER_SQL` (`clientSchema.ts:435-453`) to add an `old` field alongside `data`, populated only when `properties_json` actually changed. Mirror the `__noop`-strip pattern in `blockUploadPatchJsonSql`:
 
 ```sql
 INSERT INTO ps_crud (tx_id, data) VALUES (
@@ -61,75 +53,95 @@ INSERT INTO ps_crud (tx_id, data) VALUES (
 );
 ```
 
-`blockUploadOldJsonSql` emits `OLD.properties_json` keyed under `$.properties_json` only when `OLD.properties_json IS NOT NEW.properties_json`, and the whole `old` field is stripped via `__noop` when no tracked columns changed.
+`blockUploadOldJsonSql` emits `OLD.properties_json` keyed under `$.properties_json` only when `OLD.properties_json IS NOT NEW.properties_json`, and the whole `old` field is stripped via `__noop` when nothing in the tracked set changed.
 
-Result: PowerSync's `CrudEntry.fromRow` parses the envelope. `entry.previousValues.properties_json` is present iff `properties_json` actually changed; `entry.previousValues` itself is undefined for PATCHes that didn't touch any tracked column.
+Result: `CrudEntry.fromRow` parses the envelope. `entry.previousValues.properties_json` is present iff `properties_json` actually changed; `entry.previousValues` itself is undefined for PATCHes that didn't touch any tracked column.
 
-**Trigger migration via DROP+CREATE.** `CLIENT_SCHEMA_STATEMENTS` runs `CREATE TRIGGER IF NOT EXISTS` (`repoProvider.ts:237-239`), so an upgraded local DB keeps its pre-change `blocks_upload_update` trigger unless we explicitly drop it. Prepend `DROP TRIGGER IF EXISTS blocks_upload_update;` immediately before the `CREATE TRIGGER` in `CLIENT_SCHEMA_STATEMENTS`. Cheap, idempotent, runs every bootstrap.
+**Trigger migration via DROP+CREATE.** `CLIENT_SCHEMA_STATEMENTS` runs `CREATE TRIGGER IF NOT EXISTS` (`repoProvider.ts:237-239`), so an upgraded local DB keeps its pre-change trigger unless dropped. Prepend `DROP TRIGGER IF EXISTS blocks_upload_update;` immediately before the `CREATE TRIGGER`. Cheap, idempotent, runs every bootstrap.
 
-Scope of columns in `old`: just `properties_json` for v1 — that's the only column needing per-key merge. Adding more later is mechanical (same pattern per column). Keeping the set narrow keeps the envelope small.
+Scope of columns in `old`: just `properties_json` for v1. Adding more later is mechanical (same pattern per column).
 
-### Layer B — uploader: ship a partial patch + property diff to an RPC
+### Layer B — RPC merge branch for `properties_json`
 
-Replace the "load full row, ship UPSERT" path in `applyBlockPatches` (`powersync.ts:330-354`) with a single Supabase RPC call. Each entry carries `id` plus only the columns from `entry.opData` (already narrow — the trigger stripped unchanged columns), plus per-key property diff when applicable. Metadata columns (`updated_at`/`updated_by`) are ordinary optional `opData` columns: `metadataPatch()` returns `{}` when callers pass `{skipMetadata: true}` (e.g. `parseReferences` writing `tx.update(..., {references}, {skipMetadata: true})`), so the trigger envelope can validly omit them. Pass through whatever the entry has, don't fabricate missing ones. CREATEs (`applyBlockCreates`) stay as they are — PUT envelopes carry full rows by definition and use `ignoreDuplicates: true` for deterministic-id bootstrap collisions.
-
-When a PATCH entry has `entry.opData.properties_json`, expect `entry.previousValues.properties_json` to also be set (the trigger always emits both or neither — if not, that's a programming bug; assert and throw). Parse both and compute:
-
-- `set`: keys whose value differs in `new` vs `prev`, mapped to the new value.
-- `unset`: keys present in `prev` but absent in `new`.
-
-Ship `{set, unset}` to the RPC. Server applies:
+Extend `apply_block_patches`. When a patch carries `properties_set` (a jsonb object of keys to set) or `properties_unset` (a jsonb array of keys to remove), apply:
 
 ```sql
-UPDATE blocks
-SET properties_json = (
-  (COALESCE(properties_json, '{}')::jsonb || $set::jsonb) - $unset_array
-)::text,
-    updated_at = greatest(blocks.updated_at, $client_updated_at) + 1,
-    updated_by = $client_updated_by
-WHERE id = $id
-RETURNING id;
+properties_json = (
+  (COALESCE(properties_json, '{}')::jsonb || COALESCE(patch->'properties_set', '{}'::jsonb))
+  - COALESCE(ARRAY(SELECT jsonb_array_elements_text(patch->'properties_unset')), '{}'::text[])
+)::text
 ```
 
-`||` is shallow jsonb merge; `-` with a `text[]` removes keys. `properties_json` is a flat `Record<string, unknown>` (`src/data/api/blockData.ts`, `properties.ts:112-116`), so shallow merge is correct semantics. The `::jsonb` parse and `::text` re-serialize are paid per-write inside the RPC; the cost is microseconds.
+`||` is shallow jsonb merge; `-` with a `text[]` removes keys. `properties_json` is a flat `Record<string, unknown>` (`src/data/api/blockData.ts`, `properties.ts:112-116`), so shallow merge is the right semantic. The `text::jsonb` parse and re-cast happen per-write inside the RPC — microseconds.
 
-**Server bumps `updated_at` to preserve cache-acceptance monotonicity.** `BlockCache.applySyncSnapshot` (`blockCache.ts:144-152`) rejects snapshots whose `updatedAt <= existing.updatedAt` — an LWW-flavored guard that assumes a snapshot with a non-newer `updated_at` is stale content. That assumption holds for column-LWW but breaks the moment the server can merge: client B's diff applied after client A's local edit can produce a server row whose content is a strict superset of A's view but whose client-supplied `updated_at` is equal to or older than A's local clock. Without server-side bump, A's cache would reject the merged sync arrival as stale; Layer C's gate (gate-on-accept) would suppress the parseReferences dispatch; A's derived refs would stay stale indefinitely. Bumping `updated_at = greatest(existing, client_supplied) + 1` makes every merged version strictly newer than any client's pre-merge view, restoring monotonicity per row. Cost: post-upload sync arrivals always have a strictly-newer `updated_at`, so the local writer's own cache also re-accepts its own merged row (an extra parseReferences dispatch that's a no-op via `planNeedsWrite`'s equality check — negligible). `updated_by` reflects the client whose upload triggered the merge, same attribution semantics as today. Same bump rule applies to writes that don't carry `properties_json` (content/refs edits) so the RPC is uniform: any write that lands at the server bumps `updated_at` by at least 1 above whatever was there.
+If a patch carries neither `properties_set` nor `properties_unset`, the RPC's existing column-LWW path runs unchanged. The literal `properties_json` patch key is no longer used for UPDATEs (the trigger emits set/unset for properties); CREATEs go through `applyBlockCreates` (PostgREST `.upsert()`), unrelated to this RPC.
 
-Server returns rowcount per id; 0 → orchestrator quarantines (the row should already exist, since the corresponding CREATE was queued first within the same `repo.tx`).
+**`updated_at` bump and clamp bypass.** When the patch carries `updated_at`:
 
-If `entry.opData.properties_json` is absent, the RPC just applies the other columns; no property work needed.
+```sql
+PERFORM set_config('app.skip_blocks_clamp', 'true', true);  -- local to function tx
+-- ... UPDATE ...
+updated_at = greatest(blocks.updated_at, (patch->>'updated_at')::bigint) + 1
+```
 
-**Patches are processed in array order.** With PATCH+PATCH fusion disabled for entries carrying `previousValues`, the same block can ship N PATCHes in one batch — and each diff is computed client-side against its own local `prev`. For keys touched by only one PATCH the diffs commute, but a key changed across multiple PATCHes (e.g. `setProperty(foo, 1)` then `setProperty(foo, 2)` in two separate txs queued before drain) depends on apply order: the second `set` must overwrite the first. The RPC iterates via `WITH ORDINALITY ORDER BY ordinality` (or a PL/pgSQL `FOR rec IN SELECT ... ORDER BY ordinality LOOP`) — *not* a set-wise `jsonb_array_elements` join, which has no order guarantee.
+The clamp trigger gains a fast path:
 
-**Compaction.** `compactBlockCrudEntries` (`powersync.ts:112`) keeps fusing same-tx PUT+PATCH (still safe — PUT carries the full row, PATCH overlays). **PATCH+PATCH fusion is disabled when either side carries `previousValues`** — emit them as separate compacted operations instead. Avoids the cross-PATCH diff-base reconciliation problem (the second PATCH's `old` is the first's `new`; fusing would silently drop intermediate keys). Same-tx multi-property writes ship as N RPC entries instead of 1; wire cost is a few hundred bytes per extra entry, negligible. **`CompactedBlockOperation` (`powersync.ts:25-42`) extends with `previousValues?: { properties_json?: string }`** so the trigger's `old.properties_json` survives into the uploader; the slot just passes through from the source `CrudEntry`, no fusion logic.
+```sql
+IF current_setting('app.skip_blocks_clamp', true) = 'true' THEN
+  RETURN NEW;
+END IF;
+-- existing server_now_ms clamp logic
+```
 
-### Layer C — sync-side reparse for derived references
+When the patch lacks `updated_at` (skipMetadata write), neither bump nor clamp-bypass applies — `updated_at = blocks.updated_at`, same preservation behavior as #52.
 
-After Layer B, the server correctly merges `properties_json` across concurrent clients, but `references_json` remains column-LWW (the loser's per-client computed view sticks). `parseReferences` is a post-commit processor — it only runs on local `repo.tx` outcomes, never on sync arrivals (`rowEventsTail` is explicitly an invalidation/cache-update path, not a tx-outcome path). So without Layer C, after a concurrent ref-property merge, the local `references_json` stays stale until the user happens to edit the block again locally — potentially **indefinite** for cold blocks. Backlinks and typed-ref queries reflect that staleness.
+**Client uploader.** In `applyBlockPatchesRpc` (`powersync.ts:238-259`), when an entry has `entry.opData.properties_json` AND `entry.previousValues?.properties_json`, parse both and compute:
 
-Fix: hook the tail to invoke `parseReferences` on sync-arrived `properties_json` changes.
+- `set`: keys whose value differs between new and prev, mapped to the new value.
+- `unset`: keys present in prev but absent in new.
+
+Replace the literal `properties_json` in the outgoing patch payload with `properties_set` and `properties_unset` (omit unset if empty to keep envelopes small). Entries that don't touch `properties_json` are unchanged. Assert that whenever `properties_json` is in `opData`, `previousValues.properties_json` is also defined — the trigger emits both or neither, so missing prev is a programming bug.
+
+**Compaction.** `compactBlockCrudEntries` (`powersync.ts:112`) keeps fusing same-tx PUT+PATCH (PUT carries the full row; PATCH overlays — still correct). **PATCH+PATCH fusion is disabled when either side carries `previousValues`** — emit them as separate compacted operations instead. Same-tx multi-property writes ship as N RPC entries instead of 1; wire cost is negligible. Avoids the cross-PATCH diff-base reconciliation problem (the second PATCH's `old` is the first's `new`; fusing would silently drop intermediate keys). `CompactedBlockOperation` (`powersync.ts:25-42`) extends with `previousValues?: { properties_json?: string }` — passes through from the source `CrudEntry`, no fusion logic.
+
+**Patches still apply in array order.** Already true from #52 (`WITH ORDINALITY ORDER BY ordinality`). A key edited across multiple PATCHes in the same batch applies the second `set` last.
+
+### Layer C — sync-side `parseReferences` dispatch
+
+After Layer B, `properties_json` merges correctly across clients, but `references_json` is still column-LWW. `parseReferences` is a post-commit processor — it runs only on local `repo.tx` outcomes, never on sync arrivals (`rowEventsTail` is explicitly an invalidation/cache-update path). So without Layer C, after a concurrent ref-property merge, the local `references_json` lags **indefinitely** for cold blocks until the user re-edits.
+
+Fix: hook `rowEventsTail` to invoke `parseReferences` on sync-arrived `properties_json` changes.
 
 Implementation shape:
+
 - In `rowEventsTail` (`src/data/internals/rowEventsTail.ts`), when processing a sync-arrived row where `properties_json` differs between `before_json` and `after_json`, enqueue a `parseReferences` invocation for that block id.
-- **Gate on cache acceptance, made correct by Layer B's `updated_at` bump.** `BlockCache.applySyncSnapshot` (`blockCache.ts:144`) returns `false` when `snapshot.updatedAt <= existing.updatedAt`. This is correct when `updated_at` is server-monotonic per row — which Layer B's RPC ensures via `greatest(existing, client_supplied) + 1` on every write. Without that bump, server-merged rows could be content-newer but `updated_at`-equal-or-older, and the gate would suppress dispatch for genuinely merged state — leaving `references_json` indefinitely stale. With the bump, every merged sync arrival is strictly-newer; cache acceptance and content freshness coincide. Layer C dispatches only when `applySyncSnapshot` returns `true`; rejections (real staleness — clock-skew echoes, in-flight query replay) are already counted in `metrics.applySyncSnapshotRejected`, suppressing dispatch on rejection is one extra read of that boolean.
-- Dispatch is per-block-id with within-tick coalescing — cold sync of a workspace doesn't dispatch one per arrival; throttle on the tail's existing `throttleMs` coalescing window so a batch of arrivals becomes one parseReferences dispatch per affected block.
-- `parseReferences` runs via its existing entry point (`PARSE_REFERENCES_PROCESSOR.apply`), opens its own `repo.tx` for the write phase as today, and reads the current row at write time — so even if a stale arrival slipped past the acceptance gate (it shouldn't), the processor's `repo.tx` read sees current local state, not the stale `after_json`. The acceptance gate is the primary defense; the read-current-row at write time is a defense-in-depth backstop. Idempotency: `planNeedsWrite` returns false when the recomputed refs equal what's already stored, so non-merge-induced property changes (or already-converged states) are cheap no-ops.
+- **Gate on cache acceptance.** Dispatch only when `BlockCache.applySyncSnapshot` returns `true` for the snapshot. Stale rejections (clock-skew echoes, in-flight query replay) are already counted in `metrics.applySyncSnapshotRejected`; suppressing dispatch on rejection is one extra read of that boolean. The gate is meaningful **because** Layer B's `updated_at` bump guarantees merged sync arrivals are strictly-newer than any client's pre-merge view — cache acceptance and content freshness coincide.
+- **Throttle.** Within-tick coalescing using the tail's existing window so a workspace cold-sync becomes one dispatch per affected block, not one per arrival.
+- `parseReferences` opens its own `repo.tx`, reads the current local row at write time, computes refs from current `properties_json`, and writes only if `planNeedsWrite` says the refs differ from what's stored. Already idempotent.
 
-**Why this doesn't ping-pong:** `core.normalizeReferences` (same-tx, `normalizeReferencesProcessor.ts`) canonicalizes the refs output. All clients computing parseReferences from the same merged properties produce the same canonical refs. After one client uploads its recompute, other clients' sync-side dispatch sees `parseReferences(merged_props) === currently_stored_refs` and skips the write. Convergence in one round-trip.
+**Why this doesn't ping-pong.** `core.normalizeReferences` (same-tx, `normalizeReferencesProcessor.ts`) canonicalises the refs output. All clients computing parseReferences from identical merged properties produce identical canonical refs. After one client uploads its recompute, other clients' sync-side dispatch sees `parseReferences(merged_props) === currently_stored_refs` and skips the write. Convergence in one round trip.
 
-**Scope intentionally narrow.** This is "tail invokes one specific processor on one specific column change," not "tail dispatches the general post-commit processor framework based on watcher metadata." The narrow form is ~50-100 lines in `rowEventsTail.ts` plus a tail-side hook the references plugin registers. If a second use case emerges (some other derived column that needs re-derivation on sync), we generalize then.
+**Scope intentionally narrow.** This is "tail invokes one specific processor on one specific column change," not "tail dispatches the general post-commit processor framework based on watcher metadata." ~50-100 lines in `rowEventsTail.ts` plus a hook the references plugin registers. Generalize if a second use case shows up.
 
-**Spec note.** `rowEventsTail`'s header comment will need to gain a paragraph: "in addition to invalidation, the tail dispatches `parseReferences` on sync-arrived property changes because the canonical refs are derived from properties; without this, the server's merged properties leave clients with stale derived refs." That's a real change to the tail's contract — minor but worth being explicit about.
+**Spec note.** `rowEventsTail`'s header comment will need a paragraph: "in addition to invalidation, the tail dispatches `parseReferences` on sync-arrived property changes because the canonical refs are derived from properties; without this, the server's merged properties leave clients with stale derived refs." Real change to the tail's contract — minor but worth being explicit.
 
-### What gets sent over the wire (example)
+### Layer 0 (optional, independent) — semantic-no-op guard
 
-Today, after `block.set(isCollapsedProp, true)`:
+Independent of the merge work, shippable on its own. `tx.update` (`txEngine.ts:284`), `tx.setProperty` (`txEngine.ts:354`), and `tx.move` (`txEngine.ts:312`) all call `metadataPatch` and bump `updated_at`/`updated_by` even when the user-visible payload is identical to before. Result: `block.set(key, sameValue)` produces a metadata-only PATCH that uploads.
+
+Fix: in each entry point, compare the proposed `after` shape against `before` (excluding metadata) and early-return if nothing user-meaningful changed. Drops the SQL UPDATE; the trigger doesn't fire; no `ps_crud` row queued; no upload.
+
+Subtle: the guard must run before `metadataPatch` is merged into `after`. Current code merges unconditionally — reorder.
+
+For `tx.setProperty`, the comparison is value-only on the single key (encoded via the codec, then JSON-stringified for stable equality). For `tx.update`, compare `content`, `references` (deep), and `properties` (deep). For `tx.move`, compare `parent_id` and `order_key`.
+
+## What gets sent over the wire (example)
+
+Today (after #52), `block.set(isCollapsedProp, true)` ships:
 
 ```json
 {
   "id": "abc",
-  "content": "...whole block content...",
-  "references_json": "[...whole refs array...]",
   "properties_json": "{...whole properties object with collapsed:true...}",
   "updated_at": 1, "updated_by": "u"
 }
@@ -140,55 +152,50 @@ After this work:
 ```json
 {
   "id": "abc",
-  "properties": { "set": { "system:collapsed": true }, "unset": [] },
+  "properties_set": { "system:collapsed": true },
   "updated_at": 1, "updated_by": "u"
 }
 ```
 
+(`properties_unset` omitted when empty.)
+
 ## Edge cases
 
-- **Soft delete vs property edit.** A delete and a concurrent property edit race: the delete wins (`deleted = 1`, column-LWW). A property edit that lands after merges into a tombstoned row; subsequent restore preserves the merged values.
-- **CREATE in the same batch as a property PATCH.** Same-tx PUT+PATCH fusion still applies: a fused CREATE-with-property-patch ships as a full-row CREATE with the merged `properties_json` — no diff needed, the create defines the full state. The PATCH path with `previousValues` only matters for PATCHes against existing server rows.
-- **First-ever PATCH to a row.** The very first PATCH after the CREATE has `OLD.properties_json` populated with the post-CREATE state (SQLite triggers always see OLD = current row). `old.properties_json` is always defined for a trigger-fired PATCH that changed `properties_json`.
-- **Schema migration.** Client: DROP+CREATE the trigger in `CLIENT_SCHEMA_STATEMENTS` (idempotent). Server: add the `apply_block_patches` RPC. The coordinated rollout (Rollout section) ensures no client is in a half-upgraded state with mixed envelope shapes in its queue.
-- **Derived `references_json` stays consistent via Layer C.** `parseReferences` (post-commit processor in `src/plugins/references/`) watches property changes and writes the derived `references_json` column via its own `tx.update`. Each client's `references_json` write reflects only that client's local properties at the time. After Layer B merges properties_json across clients but leaves `references_json` as column-LWW, the server's references_json reflects only the last writer's view — backlinks/typed-ref queries for refs that didn't win the column race would be missing. Without Layer C this could be indefinite for cold blocks (`rowEventsTail` doesn't dispatch post-commit processors today, so sync-arrived merged properties don't trigger a local reparse). Layer C fixes this by hooking the tail to invoke `parseReferences` when sync delivers a property change. See Layer C below.
+- **CREATE + property PATCH in the same tx.** Same-tx PUT+PATCH fusion still applies: a fused CREATE-with-property-patch ships as a full-row CREATE with the merged `properties_json` — no diff needed, the create defines the full state. The diff path applies only to PATCHes against existing server rows.
+- **First-ever PATCH to a row.** `OLD.properties_json` is populated with the post-CREATE state by the SQLite trigger (OLD = current row state). The diff is well-defined.
+- **Soft delete vs property edit.** Delete is column-LWW (`deleted = 1`); a concurrent property edit that lands after the delete merges into the tombstoned row. Subsequent restore preserves the merged values.
+- **Patch with no property change.** Neither `properties_set` nor `properties_unset` present — the RPC's existing column-LWW path runs unchanged. Same wire as today for content-only or move-only edits.
+- **Schema migration.** Client: DROP+CREATE trigger in `CLIENT_SCHEMA_STATEMENTS`. Server: a new Supabase migration extending `apply_block_patches`. Coordinated rollout ensures no client is in a half-upgraded state with mixed envelope shapes in its queue.
 
 ## Phasing
 
-0. **Phase 0: delete v4 local-ephemeral backfill** (small, mechanical). Remove `BACKFILL_LOCAL_EPHEMERAL_UPLOADS_SQL`, `LOCAL_EPHEMERAL_BACKFILL_MARKER_KEY`, `COUNT_LOCAL_EPHEMERAL_BACKFILL_PENDING_SQL`, `RECORD_LOCAL_EPHEMERAL_BACKFILL_DONE_SQL`, `SELECT_LOCAL_EPHEMERAL_BACKFILL_DONE_SQL`, and the bootstrap callers in `repoProvider.ts`. The per-client v4 marker confirms it ran. Lands first so later phases never have to plan for a second "full-row PATCH" emitter shape.
-1. **Layer 0: semantic-no-op guard** (small, orthogonal). Add early-return in `tx.update`, `tx.setProperty`, `tx.move`. Test: `setProperty` to the current value produces no `ps_crud` row. Land independently.
-2. **Layer A: trigger emits `old`** (small). Extend the trigger envelope with the `old` field (populated when `properties_json` changed; field stripped otherwise). DROP+CREATE in `CLIENT_SCHEMA_STATEMENTS`. Unit-test the envelope shape (introspect `ps_crud.data` after a `tx.update({properties})` and a content-only update). Uploader still ships full-row UPSERTs at this point — `entry.previousValues` is populated but unused. Strict no-op for end users; lands as plumbing.
-3. **Layer B: uploader diff + RPC** (medium). Write `apply_block_patches(patches jsonb)` — parses `properties_json` text as jsonb in-flight, merges, casts back to text. Switch `applyBlockPatches` to call it. Disable PATCH+PATCH fusion in the compactor for entries carrying `previousValues`. Integration test: two-client conflict on different property keys converges to both keys present.
-4. **Layer C: sync-side reparse for derived references** (small-medium). In `rowEventsTail`, when a sync-arrived row's `properties_json` changed, dispatch a coalesced `parseReferences` invocation for that block id. Lands as the final step of this work; without it, concurrent ref-property merges leave `references_json` indefinitely stale on cold blocks. Test: two clients concurrently set different ref-typed properties → both clients eventually have `references_json` containing both refs without anyone editing the block again locally.
+1. **Layer A: trigger emits `old.properties_json`** (small). DROP+CREATE in `CLIENT_SCHEMA_STATEMENTS`. Test the envelope shape against a `tx.update({properties})` and a content-only update. Uploader doesn't read `previousValues` yet — strict no-op for end users; lands as plumbing.
+2. **Layer B: RPC merge branch + uploader diff** (medium). New Supabase migration extending `apply_block_patches` with the `properties_set`/`properties_unset` branch, the clamp-bypass GUC, and the `updated_at` bump. Update `applyBlockPatchesRpc` to compute the diff from `previousValues` when present. Disable PATCH+PATCH fusion in the compactor for entries carrying `previousValues`. pgTAP coverage for the merge SQL; Vitest coverage for the diff-compute path. Integration test: two-client conflict on different property keys converges to both keys present.
+3. **Layer C: sync-side `parseReferences` dispatch** (small-medium). Tail-side narrow dispatch on sync-arrived property changes. Test: two clients concurrently set different ref-typed properties → both clients eventually have `references_json` containing both refs without re-editing.
 
-Phases 0–2 are no-op for users. Phase 3 is the one that fixes the cross-field and cross-key clobbers. Phase 4 closes the derived-state gap.
+Layer 0 (no-op guard) is independent and can land before, between, or after — no ordering dependency on the merge work.
 
 ## Rollout
 
-The work has two deployable artifacts: a Supabase migration (new RPC) and the client bundle (new trigger, new uploader). With a coordinated fleet (2 users, 5 devices), the legacy-queue compatibility surface is avoided entirely by draining each device's `ps_crud` before the swap.
+Two artifacts: the Supabase migration (extending the RPC) and the client bundle (new trigger envelope, new uploader diff path).
 
-1. **Deploy the Supabase migration.** Adds `apply_block_patches`. Old clients don't call it, so this is invisible to them. Deploy any time before the client bundle.
-2. **Prepare each device for upgrade.** For every device:
-   - Open the app on the old bundle, online.
-   - Confirm `ps_crud` is empty (`SELECT count(*) FROM ps_crud` returns 0). The app already drains continuously when online; a fresh tab or a manual page reload after a moment online is usually enough.
-   - At this point the device is safe to upgrade — no in-flight PATCHes that would carry the old envelope shape.
-3. **Ship the client bundle.** Service worker promotes new versions on next navigation via `SKIP_WAITING` (`src/registerServiceWorker.ts:15-30`). With the queue drained on every device, every PATCH the new uploader sees has the new envelope.
-4. **Operational gating** (optional but cheap): a tiny one-shot pre-upgrade check in the new bundle's bootstrap — if `ps_crud` is non-empty and contains any pre-upgrade `op='PATCH'` rows for `blocks`, refuse to enable the new uploader path on that session and surface a "Finish sync to upgrade" toast on the *old* tab if you have telemetry visibility. For a 5-device fleet this is overkill; the manual confirmation in step 2 covers it.
-5. **Mixed-version window during rollout** (typically minutes, bounded by how quickly tabs reload):
-   - Old tabs keep using PostgREST `.update()` against the unchanged `text` columns — exact today behavior. No regression.
-   - New tabs use the RPC with per-key merge.
-   - If an old tab and a new tab edit the same block concurrently, the old tab's full-row UPSERT can clobber the new tab's merged state. Blast radius equals today's, not worse.
+1. **Deploy the Supabase migration.** The extension adds `properties_set`/`properties_unset` recognition while leaving the existing column-LWW path untouched. Old client patches (no `properties_set` key) go through the old path. Invisible to old clients; safe to ship any time before the client bundle.
+2. **Prepare each device for upgrade.** For every device: open the app on the old bundle online, confirm `ps_crud` is empty. The app drains continuously when online; a moment on a fresh tab is usually enough.
+3. **Ship the client bundle.** Service worker promotes new versions on next navigation via `SKIP_WAITING` (`registerServiceWorker.ts:15-30`). With queues drained, every PATCH the new uploader sees has the new envelope (`previousValues` populated when properties changed).
+4. **Mixed-version window** (minutes, bounded by reload speed):
+   - Old tabs still send literal `properties_json` patches through the RPC's column-LWW path. Exact today behavior — no regression.
+   - New tabs use the merge path.
+   - Concurrent edits between old and new tabs: the old tab's literal-column-write can clobber the new tab's merge in the column-LWW direction. Blast radius equals today's, not worse.
 
-## Open questions to settle before phase 3
+## Open questions
 
-- **Delete-key encoding.** Sentinel-in-`set` (`{key: __DELETED}`) vs separate `unset: string[]`. Voting for separate field — cleaner types, server can validate independently.
-- **RPC error shape.** Per-id success/failure array, or first-error-aborts-batch. Match whatever the existing orchestrator's quarantine path expects.
-- **What other "fields" are device-local hiding in `properties_json`?** Even with per-key merge, anything that's truly UI-only (scroll position, focus, transient zoom) should still come out of synced properties. Quick audit while we're in there is cheap insurance.
+- **Delete-key encoding.** Going with separate `properties_set` + `properties_unset` rather than a sentinel-in-set form. Cleaner types; server can validate independently.
+- **Audit of UI-only state still in `properties_json`.** Even with per-key merge, anything truly device-local (scroll position, focus, transient zoom) shouldn't be in synced properties. Quick audit while in the area is cheap insurance.
 
 ## Out of scope (intentionally)
 
-- **Character-level content CRDT** (Yjs / Automerge / Loro). Separate project; column-LWW on `content` is acceptable for now.
+- **Character-level content CRDT** (Yjs / Automerge / Loro). Separate project; column-LWW on `content` is fine for now.
 - **Array-CRDT for `references_json`.** Same reasoning.
 - **Per-property `updated_at` for true per-key LWW with causal ordering.** Today we get "server transaction order is the tiebreak," which is fine for the conflicts that actually occur. Revisit if telemetry shows simultaneous-key conflicts becoming common.
-- **Schema split (`block_properties` table, row per key — possibly Tana-style "properties are child blocks").** The clean architectural answer to per-key merge: each property is its own row, per-row LWW is free, no JSON-merge plumbing. Larger project; this design buys most of the value without it. Worth a serious look once this work ships.
-- **JSONB across the data layer** (both Postgres column type and SQLite local storage). Real perf project — the 29 `json_extract` / `json_each` callsites and per-write triggers in `clientSchema.ts` would benefit, plus Postgres GIN indexability. Deferred to its own scoped PR — see `docs/follow-ups.md`.
+- **Schema split** (`block_properties` table, row per key — possibly Tana-style "properties are child blocks"). The clean architectural answer: each property is its own row, per-row LWW is free, no JSON-merge plumbing. Larger project; this design buys most of the value without it. Worth a serious look once this work ships.
+- **JSONB across the data layer** (Postgres column + local SQLite). Real perf project — deferred to its own scoped PR, see `docs/follow-ups.md`.
