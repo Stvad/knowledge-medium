@@ -1,0 +1,644 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Properties as child blocks — sync-merge angle</title>
+<style>
+  :root {
+    --bg: #fafaf9;
+    --fg: #1c1917;
+    --muted: #57534e;
+    --border: #d6d3d1;
+    --ok: #16a34a;
+    --warn: #d97706;
+    --bad: #dc2626;
+    --code-bg: #f5f5f4;
+    --accent: #2563eb;
+    --accent-soft: #dbeafe;
+    --arrow: #78716c;
+    --strike: #a8a29e;
+  }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    max-width: 920px;
+    margin: 2rem auto;
+    padding: 0 1.5rem 4rem;
+    line-height: 1.5;
+  }
+  h1 { font-size: 1.5rem; margin-bottom: 0.25rem; }
+  h2 {
+    font-size: 1.1rem;
+    margin-top: 2.5rem;
+    margin-bottom: 0.4rem;
+    padding-bottom: 0.25rem;
+    border-bottom: 1px solid var(--border);
+  }
+  h3 {
+    font-size: 0.98rem;
+    margin-top: 1.5rem;
+    margin-bottom: 0.4rem;
+    color: var(--fg);
+  }
+  .lede {
+    color: var(--muted);
+    margin-bottom: 1.5rem;
+    font-style: italic;
+  }
+  .status {
+    display: inline-block;
+    background: var(--accent-soft);
+    color: var(--accent);
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    margin-bottom: 0.4rem;
+  }
+  code, pre {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.86rem;
+  }
+  code {
+    background: var(--code-bg);
+    padding: 0.05rem 0.3rem;
+    border-radius: 3px;
+  }
+  pre {
+    background: var(--code-bg);
+    padding: 0.75rem 1rem;
+    border-radius: 5px;
+    overflow-x: auto;
+    line-height: 1.4;
+  }
+  pre code { background: transparent; padding: 0; }
+  .diagram {
+    margin: 1rem 0;
+    padding: 1rem;
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+  .diagram-caption {
+    color: var(--muted);
+    font-size: 0.85rem;
+    margin-top: 0.5rem;
+    text-align: center;
+  }
+  .side-by-side {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin: 1rem 0;
+  }
+  .side-by-side > div {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: white;
+    padding: 1rem;
+  }
+  .side-by-side h4 {
+    margin: 0 0 0.5rem 0;
+    font-size: 0.95rem;
+  }
+  .before h4 { color: var(--bad); }
+  .after  h4 { color: var(--ok); }
+  ul.dissolves li.gone {
+    color: var(--strike);
+    text-decoration: line-through;
+  }
+  ul.dissolves li.gone code {
+    color: var(--strike);
+    text-decoration: line-through;
+  }
+  .file-ref {
+    color: var(--muted);
+    font-size: 0.82rem;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+    font-size: 0.9rem;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 0.4rem 0.6rem;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: var(--code-bg); font-weight: 600; }
+  .callout {
+    border-left: 3px solid var(--accent);
+    background: var(--accent-soft);
+    padding: 0.6rem 0.9rem;
+    margin: 1rem 0;
+    border-radius: 0 4px 4px 0;
+  }
+  .callout.warn { border-color: var(--warn); background: #fef3c7; }
+  .callout strong { font-weight: 600; }
+  .links {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin: 0.75rem 0 1.5rem 0;
+    font-size: 0.88rem;
+  }
+  .links a {
+    color: var(--accent);
+    text-decoration: none;
+    border: 1px solid var(--border);
+    padding: 0.25rem 0.6rem;
+    border-radius: 4px;
+    background: white;
+  }
+  .links a:hover { background: var(--code-bg); }
+  /* SVG label conventions */
+  svg .row-box   { fill: white; stroke: var(--border); stroke-width: 1.5; }
+  svg .row-label { font: 600 13px ui-monospace, monospace; fill: var(--fg); }
+  svg .col-label { font: 11px ui-monospace, monospace; fill: var(--muted); }
+  svg .val       { font: 12px ui-monospace, monospace; fill: var(--fg); }
+  svg .conflict  { fill: #fef2f2; stroke: var(--bad); stroke-width: 2; }
+  svg .ok-fill   { fill: #f0fdf4; stroke: var(--ok); stroke-width: 1.5; }
+  svg .arrow     { stroke: var(--arrow); fill: none; stroke-width: 1.5; }
+  svg .arrow-head { fill: var(--arrow); }
+  svg .annotation { font: italic 11px -apple-system, sans-serif; fill: var(--muted); }
+  svg .bad-text  { fill: var(--bad); font-weight: 600; }
+  svg .ok-text   { fill: var(--ok); font-weight: 600; }
+</style>
+</head>
+<body>
+
+<span class="status">SKETCH</span>
+<h1>Properties as child blocks — sync-merge angle</h1>
+<p class="lede">
+  Visualizes how the deferred "properties are children" model dissolves the per-key
+  <code>properties_json</code> merge problem that drove <code>docs/field-level-sync-merge.md</code>.
+  Not a new architecture proposal — the structural design already lives in
+  <code>docs/properties-model-evolution.md</code> (Thread 2, "Option A + D"). This doc
+  is the visual sketch + sync-side framing now that #52 has landed and the merge plan
+  is on hold. Written 2026-05-27.
+</p>
+
+<div class="links">
+  <a href="./properties-model-evolution.md">→ properties-model-evolution.md (full design, 2026-05-08)</a>
+  <a href="./field-level-sync-merge.md">→ field-level-sync-merge.md (parked merge plan)</a>
+  <a href="./follow-ups.md">→ follow-ups.md</a>
+</div>
+
+<h2>1. The problem this dissolves</h2>
+
+<p>
+  Post-#52, uploads are column-narrow: a <code>content</code> edit no longer wipes a concurrent
+  <code>properties_json</code> edit. The remaining LWW failure mode lives <em>inside</em>
+  <code>properties_json</code> itself — two clients writing different <em>keys</em> still PATCH
+  the same column, and the later write strips the earlier key. Today's data model
+  (<code>src/data/blockSchema.ts:43</code>: <code>properties_json TEXT NOT NULL DEFAULT '{}'</code>)
+  has no per-key grain, so no amount of envelope plumbing makes this a true per-key write.
+</p>
+
+<div class="diagram">
+<svg viewBox="0 0 880 280" width="100%" xmlns="http://www.w3.org/2000/svg">
+  <!-- Two clients on top -->
+  <text x="120" y="22" class="row-label">Client A</text>
+  <text x="600" y="22" class="row-label">Client B</text>
+  <text x="120" y="42" class="col-label">set('alias', ['Foo'])</text>
+  <text x="600" y="42" class="col-label">set('isCollapsed', true)</text>
+
+  <!-- Client A box -->
+  <rect class="row-box" x="40" y="60" width="280" height="60" rx="5"/>
+  <text x="55" y="80" class="col-label">PATCH blocks/abc</text>
+  <text x="55" y="100" class="val">properties_json = '{"alias":["Foo"]}'</text>
+
+  <!-- Client B box -->
+  <rect class="row-box" x="520" y="60" width="320" height="60" rx="5"/>
+  <text x="535" y="80" class="col-label">PATCH blocks/abc</text>
+  <text x="535" y="100" class="val">properties_json = '{"isCollapsed":true}'</text>
+
+  <!-- Arrows down to server -->
+  <path class="arrow" d="M 180 125 L 340 170"/>
+  <polygon class="arrow-head" points="340,170 332,162 334,172"/>
+  <path class="arrow" d="M 680 125 L 540 170"/>
+  <polygon class="arrow-head" points="540,170 548,162 546,172"/>
+
+  <!-- Server row, after both writes -->
+  <text x="380" y="190" class="row-label">Server row (after B wins LWW):</text>
+  <rect class="conflict" x="240" y="200" width="400" height="60" rx="5"/>
+  <text x="255" y="220" class="col-label">blocks.properties_json (TEXT)</text>
+  <text x="255" y="245" class="val">'{"isCollapsed":true}'</text>
+  <text x="450" y="245" class="bad-text">← alias lost</text>
+</svg>
+<div class="diagram-caption">Per-key clobber under column-LWW on <code>properties_json</code>.</div>
+</div>
+
+<h2>2. The structural move</h2>
+
+<p>
+  Every property becomes a child block of its owner. There is no shared
+  <code>properties_json</code> column being concurrently written — there are N separate
+  rows, one per property, each its own LWW grain. The merge problem doesn't get
+  solved; it stops existing.
+</p>
+
+<div class="side-by-side">
+  <div class="before">
+    <h4>Today: properties as JSON blob</h4>
+<svg viewBox="0 0 380 220" width="100%" xmlns="http://www.w3.org/2000/svg">
+  <!-- Block row -->
+  <rect class="row-box" x="20" y="20" width="340" height="180" rx="5"/>
+  <text x="35" y="40" class="row-label">block: "abc"</text>
+  <text x="35" y="62" class="col-label">id, content, parent_id, order_key, ...</text>
+  <!-- properties_json blob -->
+  <rect x="35" y="80" width="310" height="105" fill="#fef9c3" stroke="#ca8a04" rx="3"/>
+  <text x="45" y="98" class="col-label">properties_json TEXT</text>
+  <text x="45" y="118" class="val">{</text>
+  <text x="60" y="135" class="val">"alias": ["Foo"],</text>
+  <text x="60" y="152" class="val">"isCollapsed": true,</text>
+  <text x="60" y="169" class="val">"types": ["page"]</text>
+  <text x="45" y="180" class="val">}</text>
+</svg>
+    <p class="file-ref" style="margin: 0.5rem 0 0 0;">One row. One column. Concurrent
+    key writes share LWW grain.</p>
+  </div>
+
+  <div class="after">
+    <h4>After: properties as children</h4>
+<svg viewBox="0 0 380 240" width="100%" xmlns="http://www.w3.org/2000/svg">
+  <!-- Parent block -->
+  <rect class="row-box" x="20" y="20" width="340" height="50" rx="5"/>
+  <text x="35" y="40" class="row-label">block: "abc"</text>
+  <text x="35" y="58" class="col-label">id, content, parent_id, order_key, ...</text>
+
+  <!-- 3 child property blocks -->
+  <rect class="ok-fill" x="60" y="95" width="280" height="35" rx="3"/>
+  <text x="72" y="116" class="val">property "alias" → ["Foo"]</text>
+
+  <rect class="ok-fill" x="60" y="140" width="280" height="35" rx="3"/>
+  <text x="72" y="161" class="val">property "isCollapsed" → true</text>
+
+  <rect class="ok-fill" x="60" y="185" width="280" height="35" rx="3"/>
+  <text x="72" y="206" class="val">property "types" → ["page"]</text>
+
+  <!-- Tree lines -->
+  <path class="arrow" d="M 50 70 L 50 113 L 60 113"/>
+  <path class="arrow" d="M 50 70 L 50 158 L 60 158"/>
+  <path class="arrow" d="M 50 70 L 50 203 L 60 203"/>
+</svg>
+    <p class="file-ref" style="margin: 0.5rem 0 0 0;">Three rows. Each property has
+    its own <code>updated_at</code>. No shared grain.</p>
+  </div>
+</div>
+
+<h2>3. The same scenario, after</h2>
+
+<div class="diagram">
+<svg viewBox="0 0 880 320" width="100%" xmlns="http://www.w3.org/2000/svg">
+  <!-- Two clients -->
+  <text x="120" y="22" class="row-label">Client A</text>
+  <text x="600" y="22" class="row-label">Client B</text>
+  <text x="120" y="42" class="col-label">set('alias', ['Foo'])</text>
+  <text x="600" y="42" class="col-label">set('isCollapsed', true)</text>
+
+  <!-- Client A box: UPSERT the alias property child -->
+  <rect class="row-box" x="40" y="60" width="280" height="80" rx="5"/>
+  <text x="55" y="80" class="col-label">UPSERT property child</text>
+  <text x="55" y="98" class="val">id = "abc:alias"</text>
+  <text x="55" y="116" class="val">parent_id = "abc"</text>
+  <text x="55" y="133" class="val">value = ["Foo"]</text>
+
+  <!-- Client B box: UPSERT the isCollapsed property child -->
+  <rect class="row-box" x="520" y="60" width="320" height="80" rx="5"/>
+  <text x="535" y="80" class="col-label">UPSERT property child</text>
+  <text x="535" y="98" class="val">id = "abc:isCollapsed"</text>
+  <text x="535" y="116" class="val">parent_id = "abc"</text>
+  <text x="535" y="133" class="val">value = true</text>
+
+  <!-- Arrows down to server -->
+  <path class="arrow" d="M 180 145 L 280 200"/>
+  <polygon class="arrow-head" points="280,200 270,196 274,206"/>
+  <path class="arrow" d="M 680 145 L 600 200"/>
+  <polygon class="arrow-head" points="600,200 610,196 606,206"/>
+
+  <!-- Server: two separate rows -->
+  <text x="350" y="220" class="row-label">Server rows (no conflict — different ids):</text>
+
+  <rect class="ok-fill" x="180" y="235" width="220" height="55" rx="5"/>
+  <text x="195" y="253" class="col-label">id = "abc:alias"</text>
+  <text x="195" y="275" class="val">value = ["Foo"]</text>
+
+  <rect class="ok-fill" x="480" y="235" width="240" height="55" rx="5"/>
+  <text x="495" y="253" class="col-label">id = "abc:isCollapsed"</text>
+  <text x="495" y="275" class="val">value = true</text>
+
+  <text x="395" y="310" class="ok-text" text-anchor="middle">Both values present. No LWW grain shared.</text>
+</svg>
+<div class="diagram-caption">Two-client concurrent edit on different properties. Different rows ⇒ no merge needed.</div>
+</div>
+
+<p>
+  Note the <em>id derivation</em>. The child id has to be a function of
+  <code>(parent_id, property_name)</code> — typically <code>uuidv5(parent_id, name)</code> — so
+  the same property writen from two clients converges to the same row. Otherwise we'd
+  get duplicates per client rather than a conflict on one row, which is worse.
+</p>
+
+<h2>4. What dissolves from the parked merge plan</h2>
+
+<p>Reading down the list from <code>field-level-sync-merge.md</code>:</p>
+
+<ul class="dissolves">
+  <li class="gone"><strong>Layer A</strong> — trigger emitting <code>old.properties_json</code> so the client can diff</li>
+  <li class="gone"><strong>Layer B</strong> — RPC merge branch with <code>properties_set</code> / <code>properties_unset</code></li>
+  <li class="gone"><strong>The clamp-bypass GUC</strong> — <code>app.skip_blocks_clamp</code> + the per-UPDATE set/reset dance + the codex P2 about scoping it to opt-in patches</li>
+  <li class="gone"><strong>Layer C</strong> — sync-side <code>parseReferences</code> dispatch from <code>rowEventsTail</code></li>
+  <li class="gone"><strong>The <code>reparseReferencesFromSync</code> entry point</strong> that was needed because the post-commit processor hard-codes <code>skipMetadata: true</code></li>
+  <li class="gone"><strong>PATCH+PATCH fusion guards</strong> in <code>compactBlockCrudEntries</code> when entries carry <code>previousValues</code></li>
+  <li class="gone"><strong>The discriminator-on-envelope routing</strong> for upsert vs trigger PATCH paths</li>
+  <li><strong>Stays:</strong> #52's narrow PATCH path + <code>apply_block_patches</code> RPC — now used to ship property-child writes, which are just normal blocks.</li>
+  <li><strong>Stays:</strong> Layer 0 no-op guard (already on master) — applies to property-child writes for free.</li>
+  <li><strong>Stays:</strong> <code>BlockCache.applyIfNewer</code>, <code>blocks_clamp_updated_at</code>, the row-LWW pipeline — works unchanged because we never broke the row-grain assumption.</li>
+</ul>
+
+<h2>5. What the model actually looks like</h2>
+
+<p>
+  The structural decision is already made in <code>properties-model-evolution.md</code> §Thread 2:
+  <strong>Option A + D</strong>. Brief refresher (full reasoning in that doc):
+</p>
+
+<ul>
+  <li><strong>Option A — cache on parent.</strong> <code>properties_json</code> on the parent
+  block becomes a <em>derived projection</em> of the field-tagged children. Children are
+  source of truth; the cache exists so reads stay sync and free, and so cross-block queries
+  (<code>json_extract(properties_json, '$.foo')</code>, <code>block_aliases</code> index at
+  <code>src/data/internals/clientSchema.ts:134-142</code>) don't change shape.</li>
+  <li><strong>Option D — hybrid system fields.</strong> A small set of well-known fields
+  (<code>system:collapsed</code>, <code>types</code>, <code>title</code>, maybe
+  <code>content</code>) stays as cache-only system fields — no child block exists. Honest
+  about which fields actually want first-class renamable/refable identity vs. which are
+  just well-known per-block flags.</li>
+</ul>
+
+<p>Call-site shape stays uniform — the asymmetry only surfaces at schema-definition time:</p>
+
+<pre><code>// System field — value lives in the parent's properties_json cache only.
+const collapsed = defineSystemField({ id: 'system:collapsed', codec: codecs.boolean })
+
+// User field — backed by a property-definition block in the propertiesPage
+// (already exists today, see src/data/propertiesPage.ts).
+const status = defineUserField({
+  fieldBlockId: 'status-field-id',
+  shape: 'scalar',
+  codec: codecs.string,
+})
+
+// Reads — uniform, always sync, always from the cached projection:
+block.get(collapsed)  // boolean
+block.get(status)     // string</code></pre>
+
+<p>
+  Notable: user-defined property <em>schemas</em> already live on property-definition
+  blocks (children of <code>propertiesPage</code>; see <code>src/data/propertiesPage.ts</code> +
+  <code>src/data/repo.ts:169-197</code> <code>propertySchemasFacet</code>). The model is half-built
+  today — what we'd add is property <em>values</em> living on per-(owner, field) child blocks,
+  with the parent's <code>properties_json</code> as a cache.
+</p>
+
+<h2>6. Reads &amp; writes — what changes at the seams</h2>
+
+<table>
+  <thead>
+    <tr><th>Seam</th><th>Today</th><th>Under properties-as-children</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>block.get(schema)</code><br><span class="file-ref">block.ts:191-220</span></td>
+      <td>Read <code>data.properties[name]</code>, codec-decode</td>
+      <td>Unchanged — reads from the cached projection on the parent</td>
+    </tr>
+    <tr>
+      <td><code>tx.setProperty</code><br><span class="file-ref">tx.ts:114-118</span></td>
+      <td>Merge into parent's <code>properties_json</code></td>
+      <td>UPSERT the field-value child block (id = uuidv5(parent, name)); cache projection follows in same tx</td>
+    </tr>
+    <tr>
+      <td>Typed queries with property filters<br><span class="file-ref">kernelQueries.ts</span></td>
+      <td><code>json_extract(properties_json, '$.foo')</code></td>
+      <td>Unchanged — reads the cached projection</td>
+    </tr>
+    <tr>
+      <td><code>block_aliases</code> trigger-index<br><span class="file-ref">clientSchema.ts:134-142</span></td>
+      <td>Maintained from <code>properties_json.alias</code></td>
+      <td>Unchanged — the cache projection still carries <code>alias</code></td>
+    </tr>
+    <tr>
+      <td><code>parseReferencesProcessor</code><br><span class="file-ref">referencesProcessor.ts:106-150</span></td>
+      <td>Scans <code>properties_json</code> for ref-typed properties</td>
+      <td>Scans the cached projection — same shape, same code path</td>
+    </tr>
+    <tr>
+      <td>Sync on property write</td>
+      <td>Single PATCH on the parent's <code>properties_json</code> column</td>
+      <td>Two writes per same-tx setProperty: UPSERT on the property child + PATCH on the parent's cache. Both ship via existing <code>apply_block_patches</code>.</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+  The cache projection is what makes the read story <em>not</em> regress. Every existing
+  reader continues to read <code>properties_json</code> on the parent — they don't learn
+  that there's a child block underneath. The only code that knows the difference is the
+  mutator-tail projector and (eventually) the property panel UI for user fields.
+</p>
+
+<h2>7. The sync echo, walked through</h2>
+
+<div class="callout">
+<strong>Scenario:</strong> Client A sets <code>alias = ['Foo']</code>; Client B sets
+<code>isCollapsed = true</code> on the same parent block. Both txes commit locally,
+both upload concurrently.
+</div>
+
+<ol>
+  <li>Client A's tx writes two rows in one transaction:
+    <ul>
+      <li>UPSERT child <code>"abc:alias"</code> with value <code>["Foo"]</code></li>
+      <li>PATCH parent <code>"abc"</code>'s <code>properties_json</code> to project the new <code>alias</code> key</li>
+    </ul>
+  </li>
+  <li>Client B's tx writes two rows in one transaction:
+    <ul>
+      <li>UPSERT child <code>"abc:isCollapsed"</code> with value <code>true</code></li>
+      <li>PATCH parent <code>"abc"</code>'s <code>properties_json</code> to project the new <code>isCollapsed</code> key</li>
+    </ul>
+  </li>
+  <li>On the server:
+    <ul>
+      <li>The two child UPSERTs touch different rows — both land cleanly.</li>
+      <li>The two parent PATCHes <em>do</em> collide on <code>properties_json</code>. Same column-LWW failure mode as today's
+      property writes — <strong>and that's OK</strong>, because the cache is now derived.</li>
+    </ul>
+  </li>
+  <li>Sync arrives on each peer. The peer sees the two child rows it didn't have. A
+  cache-recompute hook (same one the local mutator-tail uses) reprojects the parent's
+  <code>properties_json</code> from <em>all</em> field-tagged children of that parent —
+  both keys present. The collided parent PATCH is overwritten by the locally-recomputed
+  projection.</li>
+</ol>
+
+<p>
+  This is the key invariant: <strong>parent.properties_json is never the source of
+  truth — only a cache.</strong> A collision on the cache is recoverable by recomputing
+  from the child rows. A collision on the children doesn't happen because the children
+  are per-property rows.
+</p>
+
+<div class="callout warn">
+<strong>One subtle thing.</strong> The peer-side recompute has to fire on sync-arrived
+property-child changes (insert, update, delete, re-parent), not just local edits.
+That's a smaller version of Layer C from the merge plan — but pleasantly bounded:
+the input is "list of field-tagged children of parent P", the output is the projected
+<code>properties_json</code>, and the entire recompute is deterministic given the
+inputs. No <code>skipMetadata</code> shenanigans, no clamp-bypass needed: the cache
+write echoes back to the original sender, which recomputes again and gets the same
+answer. Idempotent.
+</div>
+
+<h2>8. The 8 consistency cases (from the existing design)</h2>
+
+<p>From <code>properties-model-evolution.md</code> §Thread 2:</p>
+
+<ol>
+  <li>Direct property write</li>
+  <li>Child created already-tagged</li>
+  <li>Untagged child → tagged (user converts a regular child into a field-value)</li>
+  <li>Tagged child → untagged</li>
+  <li>Tagged child's content edited</li>
+  <li>Tagged child deleted</li>
+  <li>Tagged child re-parented (drop from old parent, add to new)</li>
+  <li>Remote sync apply</li>
+</ol>
+
+<p>
+  All eight reduce to a single rule: <em>any mutation to a row where
+  <code>field_id IS NOT NULL</code> (before or after) must also patch the relevant
+  parent's <code>properties_json</code> cache in the same transaction.</em>
+  Implementable as one helper invoked from the tail of each kernel mutator. Case 8 (sync apply)
+  is the case the merge plan was specifically struggling with — it falls out of the
+  recompute-on-sync-arrival hook.
+</p>
+
+<h2>9. What's new since 2026-05-08 (when the design doc was written)</h2>
+
+<table>
+  <thead>
+    <tr><th>Change</th><th>Effect on this direction</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>#52 landed: narrow PATCH + <code>apply_block_patches</code> RPC</td>
+      <td>The wire for property-child writes is already shaped right. Each child UPSERT
+      + the parent's cache PATCH ship as one batched RPC. Nothing new on the upload side.</td>
+    </tr>
+    <tr>
+      <td>Layer 0 no-op guard landed (<code>c0c8a63</code> on master)</td>
+      <td>Already suppresses redundant property writes — applies to property-child
+      writes too. <code>tx.setProperty(id, schema, sameValue)</code> against a property
+      child becomes a no-op UPDATE locally and never ships.</td>
+    </tr>
+    <tr>
+      <td>The merge plan's reviewer trail</td>
+      <td>Concrete evidence that bolting per-key merge onto a column-LWW row model
+      accumulates correctness traps (each layer added another). Properties-as-children
+      stops being "the conceptually nice answer" and becomes "the answer that doesn't
+      pay interest on a model mismatch."</td>
+    </tr>
+    <tr>
+      <td>Property-definition blocks already exist</td>
+      <td><code>UserSchemasService</code> + <code>propertiesPage</code> already store
+      user-defined property schemas as child blocks. Half the model exists. What we'd
+      add is property <em>values</em> per (owner, field) as additional child blocks.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>10. Open questions for a "do it now" version</h2>
+
+<ol>
+  <li><strong>Property-child schema indicator.</strong> Three options:
+    <ul>
+      <li>New <code>kind</code> column on <code>blocks</code> (<code>'normal' | 'property'</code>)
+      — explicit, indexable, schema change</li>
+      <li>Reserved key on the child's own <code>properties_json</code>
+      (<code>{ "_field_id": "status-field-id" }</code>) — zero schema change, slightly recursive</li>
+      <li>Derived from <code>parent_id</code> + a deterministic id-derivation
+      (<code>id === uuidv5(parent_id, field_name)</code>) — no marker, but every read has
+      to do the derivation to recognize a property child as such</li>
+    </ul>
+    Leaning toward the reserved-key option for minimum migration cost; revisit if the
+    "every property-child query needs a marker filter" overhead bites.
+  </li>
+  <li><strong>Backfill shape.</strong> For each block with non-empty <code>properties_json</code>,
+    create child blocks for the field-tagged values, leave the cache in place. Idempotent
+    helper; runnable as a one-off migration over <code>repo.allBlocks</code>. Order of
+    operations: backfill children first (cache already matches), <em>then</em> switch the
+    setProperty mutator to write children, <em>then</em> the cache becomes derived rather
+    than authoritative.
+  </li>
+  <li><strong>System-fields list (Option D).</strong> The hard call: which fields are
+    "system" (cache-only, no child) vs "user" (backed by a child block)? Conservative starter:
+    only <code>system:*</code> ids are system; everything else is user. Aggressive starter:
+    also <code>types</code>, <code>alias</code>, <code>renderer</code>, <code>createdAt</code>
+    are system because they're per-block flags with no first-class renamable/refable
+    identity. The aggressive version means fewer child blocks but loses some of the model's
+    appeal for those fields specifically.
+  </li>
+  <li><strong>Sync envelope for the cache PATCH.</strong> Do we ship it explicitly
+    (parent block's <code>properties_json</code> column gets a PATCH on every property
+    change), or rely on the peer-side recompute and skip uploading the cache entirely?
+    Skipping is tempting (less wire traffic, no cache-collision concerns) but it means
+    every peer pays the recompute cost on every property-child arrival. Probably ship
+    the cache PATCH for the local sender's bandwidth/latency, recompute on peer for
+    correctness — i.e., both, with peer recompute as the tiebreak.
+  </li>
+  <li><strong>Property panel rendering.</strong> Property panel today reads the parent's
+    <code>data.properties</code> dict. Unchanged for the cache-based reads. The
+    "convert this child block into a field-value" interaction (case 3 above) is new
+    UI — defer until the model lands.
+  </li>
+  <li><strong>Migration: dual-write or one-shot?</strong> The cache projection makes
+    dual-write nearly free — the cache is already what readers see. Probably:
+    backfill children → flip setProperty → keep the cache updated from children
+    forevermore. No flag, no transition window.
+  </li>
+</ol>
+
+<h2>11. What this isn't</h2>
+
+<ul>
+  <li>An implementation plan. Sizing and sequencing are in
+    <code>properties-model-evolution.md</code> §Defer ("~1–2 weeks when we do it later").</li>
+  <li>A commitment to do this now. It's the alternative being weighed against
+    finishing the parked merge plan in <code>field-level-sync-merge.md</code>.</li>
+  <li>A claim about Tana's actual storage internals. "Tana-style" is a surface-model
+    reference — fields as first-class, properties as children. The design above is
+    justified by <em>our</em> read/write/sync workload, not by appeals to what Tana does.</li>
+</ul>
+
+<h2>12. Decision asked for</h2>
+
+<p>
+  Two questions to resolve before sizing further:
+</p>
+
+<ol>
+  <li>Do we ship A+D as designed in <code>properties-model-evolution.md</code>, scoped
+    to "fix the sync-merge problem" (so the property-panel/UI scope creep is bounded
+    to what's needed for correctness)?</li>
+  <li>If so, do we close <code>field-level-sync-merge.md</code> as superseded, or
+    leave it parked as a fallback in case A+D hits an unexpected blocker?</li>
+</ol>
+
+</body>
+</html>
