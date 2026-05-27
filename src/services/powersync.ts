@@ -5,7 +5,6 @@ import {
   UpdateType,
   type CrudTransaction,
 } from '@powersync/common'
-import { BLOCK_STORAGE_COLUMNS, type BlockRow } from '@/data/blockSchema.js'
 import { supabase, hasSupabaseAuthConfig } from '@/services/supabase.js'
 import { classifyUploadError } from '@/services/uploadErrorClassifier.js'
 
@@ -13,9 +12,7 @@ const powerSyncUrl = import.meta.env.VITE_POWERSYNC_URL?.trim()
 
 const MAX_CRUD_ENTRIES_PER_UPLOAD_BATCH = 10_000
 const MAX_TRANSACTIONS_PER_UPLOAD_BATCH = 25
-const MAX_BLOCKS_PER_LOCAL_SELECT = 500
 const MAX_BLOCKS_PER_SUPABASE_UPSERT = 500
-const BLOCK_UPLOAD_COLUMNS_SQL = BLOCK_STORAGE_COLUMNS.map(column => column.name).join(', ')
 
 export const hasPowerSyncServiceConfig = Boolean(powerSyncUrl)
 export const hasRemoteSyncConfig = hasSupabaseAuthConfig && hasPowerSyncServiceConfig
@@ -59,12 +56,9 @@ export interface UploadDeps {
 
 /** Per-row apply primitives that `applyCompactedBlockOperations` dispatches
  *  to. Factored out so tests can substitute a controllable sink and assert
- *  which path each operation took — particularly important for the patch
- *  routing, where the old single-PATCH `updateRow` path had a silent-no-op
- *  hazard on server-missing rows. The default sink wires to Supabase. */
+ *  which path each operation took. The default sink wires to Supabase. */
 export interface BlockUploadSink {
   createRows: (rows: readonly BlockUploadPayload[]) => Promise<void>
-  upsertRows: (rows: readonly BlockUploadPayload[]) => Promise<void>
   updateRow: (id: string, payload: Record<string, unknown>) => Promise<void>
   deleteRow: (id: string) => Promise<void>
 }
@@ -102,11 +96,6 @@ const assertSupabase = () => {
 const blockPayloadFromPut = (entry: CrudEntry): BlockUploadPayload => ({
   ...(entry.opData ?? {}),
   id: entry.id,
-})
-
-const normalizeLocalBlockUploadRow = (row: BlockRow): BlockUploadPayload => ({
-  ...row,
-  deleted: Boolean(row.deleted),
 })
 
 const compactBlockCrudEntries = (entries: readonly CrudEntry[]): CompactedBlockOperation[] => {
@@ -228,17 +217,33 @@ const chunked = <T,>(items: readonly T[], size: number): T[][] => {
   return chunks
 }
 
+/** PostgREST `UPDATE blocks WHERE id=?` against a server-missing row
+ *  returns 0 rows affected with NO error — silent sync divergence. We
+ *  ask for an exact rowcount and surface 0-rows as a permanent error so
+ *  the rejection-tolerant orchestrator quarantines the tx instead of
+ *  silently completing it. Code is one of the permanent set in
+ *  `uploadErrorClassifier` so the per-tx fallback recognises it.
+ *
+ *  In our pipeline CREATEs (`applyBlockCreates`) are dispatched before
+ *  PATCHes within the same `repo.tx`, so a within-tx new row + edit
+ *  pair lands the CREATE first and the PATCH finds its row. The 0-row
+ *  case fires only when the server lost the row out-of-band — which is
+ *  the same residual hazard the prior implementation accepted. */
 const applyBlockPatch = async (id: string, payload: Record<string, unknown>) => {
   const client = assertSupabase()
 
   console.debug('[powersync] PATCH', id, Object.keys(payload))
-  const {error} = await client
+  const {error, count} = await client
     .from('blocks')
-    .update(payload)
+    .update(payload, {count: 'exact'})
     .eq('id', id)
 
   if (error) {
     throw error
+  }
+
+  if (count === 0) {
+    throw Object.assign(new Error(`PATCH affected 0 rows for id=${id}`), {code: 'PGRST116'})
   }
 }
 
@@ -277,84 +282,30 @@ const applyBlockCreates = async (rows: readonly BlockUploadPayload[]) => {
   }
 }
 
-// Full-row replace by id. Only safe when the caller has the authoritative
-// current row state — used by `applyBlockPatches` below for the bulk-patch
-// fallback (which has just read the full local rows out of SQLite).
-const applyBlockUpserts = async (rows: readonly BlockUploadPayload[]) => {
-  if (rows.length === 0) return
-  const client = assertSupabase()
-
-  for (const chunk of chunked(orderedBlockUpserts(rows), MAX_BLOCKS_PER_SUPABASE_UPSERT)) {
-    console.debug('[powersync] UPSERT batch', chunk.length)
-    const {error} = await client
-      .from('blocks')
-      .upsert(chunk, {onConflict: 'id'})
-
-    if (error) {
-      throw error
-    }
-  }
-}
-
-const loadCurrentBlockUploadRows = async (
-  database: AbstractPowerSyncDatabase,
-  ids: readonly string[],
-): Promise<BlockUploadPayload[]> => {
-  const rows: BlockUploadPayload[] = []
-
-  for (const chunk of chunked(ids, MAX_BLOCKS_PER_LOCAL_SELECT)) {
-    const placeholders = chunk.map(() => '?').join(', ')
-    const result = await database.getAll<BlockRow>(
-      `SELECT ${BLOCK_UPLOAD_COLUMNS_SQL} FROM blocks WHERE id IN (${placeholders})`,
-      chunk,
-    )
-    rows.push(...result.map(normalizeLocalBlockUploadRow))
-  }
-
-  return rows
-}
-
-/** Patch dispatcher. Loads the current local row state for every patched
- *  id and emits a full-row UPSERT through the sink, regardless of patch
- *  count. The previous "single PATCH skips the load and uses bare UPDATE"
- *  shortcut had a footgun: PostgREST `UPDATE blocks WHERE id=?` against
- *  a server-side-missing row returns 0 rows affected with NO error, so
- *  the patch silently succeeded and the user's edit never reached the
- *  server. UPSERT semantics fire the FK trigger on missing-parent, which
- *  the rejection-tolerant orchestrator then quarantines.
+/** Patch dispatcher. Ships each PATCH's `entry.opData` straight through
+ *  as a column-narrow PostgREST `UPDATE`, preserving the per-column
+ *  narrowing the upload-routing trigger (clientSchema.ts
+ *  `CREATE_BLOCKS_UPLOAD_UPDATE_TRIGGER_SQL`) already emitted into
+ *  ps_crud.
  *
- *  The local-row-missing edge falls back to `updateRow` because we don't
- *  have full state to upsert with. This is rare — entries in `ps_crud`
- *  always reference rows that existed locally at queue time — and the
- *  residual silent-no-op risk is acceptable for the edge. */
+ *  Why narrow matters: the prior implementation re-loaded the full
+ *  current local row and shipped a full-row UPSERT, which on a
+ *  multi-device edit cross-clobbered columns that another client had
+ *  just changed (a content edit here overwrote a peer's
+ *  properties_json, and vice versa). Sending only the columns that
+ *  actually changed in this tx leaves untouched columns untouched
+ *  server-side. */
 const applyBlockPatches = async (
-  database: AbstractPowerSyncDatabase,
   patches: readonly {id: string; payload: Record<string, unknown>}[],
   sink: BlockUploadSink,
 ) => {
-  if (patches.length === 0) return
-
-  const currentRows = await loadCurrentBlockUploadRows(
-    database,
-    patches.map(patch => patch.id),
-  )
-  const rowsById = new Map(currentRows.map(row => [row.id, row]))
-  const upserts = patches
-    .map(patch => rowsById.get(patch.id))
-    .filter((row): row is BlockUploadPayload => Boolean(row))
-
-  console.debug('[powersync] PATCH backlog as UPSERT batch', upserts.length)
-  await sink.upsertRows(upserts)
-
   for (const patch of patches) {
-    if (!rowsById.has(patch.id)) {
-      await sink.updateRow(patch.id, patch.payload)
-    }
+    await sink.updateRow(patch.id, patch.payload)
   }
 }
 
 const applyCompactedBlockOperations = async (
-  database: AbstractPowerSyncDatabase,
+  _database: AbstractPowerSyncDatabase,
   operations: readonly CompactedBlockOperation[],
   sink: BlockUploadSink = defaultBlockUploadSink,
 ) => {
@@ -377,7 +328,7 @@ const applyCompactedBlockOperations = async (
   // this safe when the row already exists.
   await sink.createRows(creates)
 
-  await applyBlockPatches(database, patches, sink)
+  await applyBlockPatches(patches, sink)
 
   for (const id of deletes) {
     await sink.deleteRow(id)
@@ -386,11 +337,9 @@ const applyCompactedBlockOperations = async (
 
 /** Production sink — Supabase under the hood. Tests pass a mock sink to
  *  `applyCompactedBlockOperations` so they can assert which path each
- *  operation took (critical for the patch routing's silent-no-op
- *  regression test). */
+ *  operation took. */
 const defaultBlockUploadSink: BlockUploadSink = {
   createRows: applyBlockCreates,
-  upsertRows: applyBlockUpserts,
   updateRow: applyBlockPatch,
   deleteRow: applyBlockDelete,
 }
@@ -586,6 +535,5 @@ export const createPowerSyncConnector = (): PowerSyncBackendConnector => ({
 
 export const __compactBlockCrudEntriesForTest = compactBlockCrudEntries
 export const __orderedBlockUpsertsForTest = orderedBlockUpserts
-export const __normalizeLocalBlockUploadRowForTest = normalizeLocalBlockUploadRow
 export const __uploadTransactionsWithFallbackForTest = uploadTransactionsWithFallback
 export const __applyCompactedBlockOperationsForTest = applyCompactedBlockOperations

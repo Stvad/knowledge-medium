@@ -968,11 +968,15 @@ export const RECORD_ANALYZE_DONE_SQL = `
 // kicked in and the divergent local state was silently dropped.
 //
 // v4 emits PATCH. The orchestrator routes PATCH through
-// `applyBlockPatches`, which reads the full current local row and
-// upserts with `{onConflict:'id'}` (no ignoreDuplicates). For a missing
-// server row that's an INSERT; for an existing-but-stale row it's a
-// full replace — local wins, which is the correct semantic for a
-// recovery flow that says "local is canonical for these rows."
+// `applyBlockPatches`, which forwards the envelope's `data` straight
+// to PostgREST `UPDATE`. The backfill envelope carries the full row
+// (built from the local row via blockUploadJsonSql) so for an
+// existing-but-stale server row every column is overwritten — local
+// wins, the correct recovery semantic. A row truly missing
+// server-side will surface as 0 rows affected and land in
+// `ps_crud_rejected` for manual inspection rather than auto-INSERT;
+// that's the same residual-hazard trade the cross-column-clobber fix
+// accepted for trigger PATCHes.
 //
 // IMPORTANT: the upload-routing TRIGGER stays on PUT. Trigger PUTs
 // fire on local INSERT — including the bootstrap pattern where a

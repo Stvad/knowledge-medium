@@ -1051,11 +1051,13 @@ describe('backfillLocalEphemeralUploadsIfPending', () => {
     // landed). Re-emitting them as PUT becomes a no-op against the
     // existing-but-stale server row; the divergence is preserved.
     //
-    // PATCH routes through `applyBlockPatches` which loads the full
-    // current local row and upserts it with `{onConflict:'id'}` (no
-    // ignoreDuplicates). For a missing server row that's an INSERT; for
-    // an existing-but-stale row it's a full replace — local wins, which
-    // is the right semantic for recovery.
+    // PATCH routes through `applyBlockPatches` which forwards the
+    // envelope's `data` straight to PostgREST `UPDATE`. The backfill
+    // intentionally emits a complete-row payload so every column in
+    // the local row overwrites the stale server-side row — local wins,
+    // which is the right semantic for recovery. (Trigger-emitted
+    // PATCHes carry only the columns that changed in their tx, so
+    // those leave untouched columns untouched server-side.)
     h.insertWorkspaceMember()
     simulateOldLocalEphemeralInsert({id: 'stale-1', workspace_id: 'ws1'})
 
@@ -1069,9 +1071,8 @@ describe('backfillLocalEphemeralUploadsIfPending', () => {
     const backfillEnvelope = JSON.parse(h.psCrud().find(r => JSON.parse(r.data).id === 'stale-1')!.data)
     expect(triggerEnvelope.op).toBe('PUT')
     expect(backfillEnvelope.op).toBe('PATCH')
-    // Backfill envelope still carries the full row payload — `applyBlockPatches`
-    // re-reads local state regardless, but a complete payload keeps the
-    // rejection-quarantine log readable (the row's full state at queue time).
+    // Backfill envelope carries the full row payload so `.update()`
+    // overwrites every column on the divergent server row.
     expect(Object.keys(triggerEnvelope.data).sort()).toEqual(Object.keys(backfillEnvelope.data).sort())
   })
 

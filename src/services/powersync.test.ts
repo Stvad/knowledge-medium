@@ -1,10 +1,8 @@
 import { CrudEntry, UpdateType, type CrudTransaction, type AbstractPowerSyncDatabase } from '@powersync/common'
-import type { BlockRow } from '@/data/blockSchema'
 import { describe, expect, it, vi } from 'vitest'
 import {
   __applyCompactedBlockOperationsForTest,
   __compactBlockCrudEntriesForTest,
-  __normalizeLocalBlockUploadRowForTest,
   __orderedBlockUpsertsForTest,
   __uploadTransactionsWithFallbackForTest,
   type BlockUploadSink,
@@ -200,25 +198,6 @@ describe('PowerSync upload compaction', () => {
     ])
 
     expect(ordered.map(row => row.id)).toEqual(['parent', 'child', 'sibling'])
-  })
-
-  it('normalizes local SQLite block rows before remote upsert', () => {
-    const payload = __normalizeLocalBlockUploadRowForTest({
-      id: 'block-a',
-      workspace_id: 'workspace-a',
-      parent_id: null,
-      order_key: 'a0',
-      content: 'A',
-      properties_json: '{}',
-      references_json: '[]',
-      created_at: 1,
-      updated_at: 2,
-      created_by: 'user-a',
-      updated_by: 'user-a',
-      deleted: 0,
-    } satisfies BlockRow)
-
-    expect(payload.deleted).toBe(false)
   })
 })
 
@@ -421,108 +400,82 @@ describe('uploadTransactionsWithFallback', () => {
 // ===========================================================================
 // applyCompactedBlockOperations — patch routing.
 //
-// Critical asymmetry to prevent: a single PATCH used to go through
-// `updateRow` (PostgREST `UPDATE blocks WHERE id=?`), which returns 0
-// rows affected and NO error when the row is missing server-side. That's
-// silent sync divergence: the user's edit stays local, never quarantined,
-// never surfaced. The fix uses the load-and-upsert path for ALL patches
-// so the FK trigger fires on missing-server-row (which the rejection
-// machinery then quarantines).
+// The upload-routing trigger (clientSchema.ts) already strips unchanged
+// columns from each PATCH envelope via the __noop sentinel pattern. The
+// uploader must preserve that narrowing: shipping a full-row upsert
+// would cross-clobber columns another client had just changed (a
+// content-only edit overwriting a peer's properties_json, and vice
+// versa). These tests pin the "PATCH opData reaches Supabase verbatim"
+// contract — the heart of the cross-column-clobber fix.
 // ===========================================================================
 
 const stubSink = (overrides: Partial<BlockUploadSink> = {}): BlockUploadSink => ({
   createRows: vi.fn().mockResolvedValue(undefined),
-  upsertRows: vi.fn().mockResolvedValue(undefined),
   updateRow: vi.fn().mockResolvedValue(undefined),
   deleteRow: vi.fn().mockResolvedValue(undefined),
   ...overrides,
 })
 
-const localRowsDb = (rows: readonly Partial<BlockRow>[]): AbstractPowerSyncDatabase => ({
-  getAll: vi.fn().mockResolvedValue(rows),
-} as unknown as AbstractPowerSyncDatabase)
+const fakeDatabase = {} as AbstractPowerSyncDatabase
 
 describe('applyCompactedBlockOperations — patch routing', () => {
-  it('sends a single PATCH through upsertRows (not updateRow) when the local row is present', async () => {
-    // Pre-fix this would have called updateRow, producing the silent
-    // no-op on missing-server-row. Post-fix it always upserts, so a
-    // server FK violation actually fires and is caught by the
-    // rejection-tolerance fallback above.
+  it('forwards each narrow PATCH payload verbatim — no re-load, no full-row upsert', async () => {
+    // The cross-column-clobber regression test. The trigger
+    // (clientSchema.ts CREATE_BLOCKS_UPLOAD_UPDATE_TRIGGER_SQL) emits
+    // only the columns that changed in the tx. The uploader's job
+    // is to ship exactly those columns to PostgREST — anything wider
+    // overwrites a peer's concurrent edit on untouched columns.
+    //
+    // Two scenarios from the fix brief's verification trace:
+    //   • content-only edit: payload has content/updated_at/updated_by;
+    //     properties_json absent → server-side properties_json
+    //     unaffected.
+    //   • property-only edit: payload has properties_json/updated_at/
+    //     updated_by; content absent → server-side content unaffected.
     const sink = stubSink()
-    const db = localRowsDb([{
-      id: 'block-a',
-      workspace_id: 'w1',
-      parent_id: null,
-      order_key: 'a0',
-      content: 'A',
-      properties_json: '{}',
-      references_json: '[]',
-      created_at: 1,
-      updated_at: 2,
-      created_by: 'u1',
-      updated_by: 'u1',
-      deleted: 0,
-    }])
 
     await __applyCompactedBlockOperationsForTest(
-      db,
-      [{kind: 'patch', id: 'block-a', payload: {content: 'B', updated_at: 3}, order: 0}],
+      fakeDatabase,
+      [
+        {
+          kind: 'patch',
+          id: 'block-a',
+          payload: {content: 'new', updated_at: 7, updated_by: 'u1'},
+          order: 0,
+        },
+        {
+          kind: 'patch',
+          id: 'block-b',
+          payload: {properties_json: '{"foo":1}', updated_at: 8, updated_by: 'u1'},
+          order: 1,
+        },
+      ],
       sink,
     )
 
-    expect(sink.upsertRows).toHaveBeenCalledTimes(1)
-    expect(sink.upsertRows).toHaveBeenCalledWith([
-      expect.objectContaining({id: 'block-a', content: 'A'}),
-    ])
-    expect(sink.updateRow).not.toHaveBeenCalled()
+    expect(sink.updateRow).toHaveBeenCalledTimes(2)
+    expect(sink.updateRow).toHaveBeenNthCalledWith(1, 'block-a', {
+      content: 'new', updated_at: 7, updated_by: 'u1',
+    })
+    expect(sink.updateRow).toHaveBeenNthCalledWith(2, 'block-b', {
+      properties_json: '{"foo":1}', updated_at: 8, updated_by: 'u1',
+    })
   })
 
-  it('propagates an FK error from upsertRows (so the rejection-tolerance fallback can quarantine)', async () => {
-    // Pre-fix: silent success. Post-fix: error surfaces and the
-    // orchestrator above quarantines on permanent codes.
+  it('propagates an updateRow error so the orchestrator can quarantine', async () => {
+    // The orchestrator's per-tx fallback only fires on thrown errors;
+    // the patch path must not swallow them. Covers the 0-rows-affected
+    // case too — `applyBlockPatch` throws a permanent-classified
+    // PGRST116 there.
     const fk = Object.assign(new Error('fk'), {code: '23503'})
-    const sink = stubSink({upsertRows: vi.fn().mockRejectedValue(fk)})
-    const db = localRowsDb([{
-      id: 'block-a',
-      workspace_id: 'w1',
-      parent_id: 'missing-server-side',
-      order_key: 'a0',
-      content: 'A',
-      properties_json: '{}',
-      references_json: '[]',
-      created_at: 1,
-      updated_at: 2,
-      created_by: 'u1',
-      updated_by: 'u1',
-      deleted: 0,
-    }])
+    const sink = stubSink({updateRow: vi.fn().mockRejectedValue(fk)})
 
     await expect(
       __applyCompactedBlockOperationsForTest(
-        db,
+        fakeDatabase,
         [{kind: 'patch', id: 'block-a', payload: {content: 'B'}, order: 0}],
         sink,
       ),
     ).rejects.toMatchObject({code: '23503'})
-  })
-
-  it('falls back to updateRow only when the local row genuinely vanished', async () => {
-    // Residual hazard documented: if the local row is also missing,
-    // we have nothing to upsert with, so vanilla update is the only
-    // option. Rare in practice (queue entries reference rows that
-    // existed at queue time), so accept the residual silent-no-op
-    // risk for this edge.
-    const sink = stubSink()
-    const db = localRowsDb([])
-
-    await __applyCompactedBlockOperationsForTest(
-      db,
-      [{kind: 'patch', id: 'block-a', payload: {content: 'B'}, order: 0}],
-      sink,
-    )
-
-    expect(sink.upsertRows).toHaveBeenCalledWith([])
-    expect(sink.updateRow).toHaveBeenCalledTimes(1)
-    expect(sink.updateRow).toHaveBeenCalledWith('block-a', {content: 'B'})
   })
 })
