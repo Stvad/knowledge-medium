@@ -338,6 +338,41 @@ describe('child-backed user properties', () => {
     expect(env.repo.cache.getSnapshot('parent')?.properties.custom).toBe('Filled')
   })
 
+  it('derives a field reference target when an existing child is edited to an exact block-ref field definition', async () => {
+    const schemaBlockId = '63a14fa0-2f07-4793-a8e1-151f3775cb2c'
+    const customProp = defineProperty<string>('custom', {
+      codec: codecs.string,
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+      fieldId: schemaBlockId,
+    })
+    env = await setup({extraSchemas: [customProp]})
+    await createRoot(env.repo, 'parent')
+
+    await env.repo.mutate.createChild({
+      id: 'custom-field-row',
+      parentId: 'parent',
+      content: '',
+    })
+    await env.repo.mutate.setContent({
+      id: 'custom-field-row',
+      content: '((63a14fa0-2f07-4793-a8e1-151f3775cb2c))',
+    })
+    await env.repo.mutate.createChild({
+      id: 'custom-value-row',
+      parentId: 'custom-field-row',
+      content: 'Filled',
+    })
+
+    const [field] = await rawLiveChildren(env.h, 'parent')
+    expect(field).toMatchObject({
+      id: 'custom-field-row',
+      content: '((63a14fa0-2f07-4793-a8e1-151f3775cb2c))',
+      reference_target_id: schemaBlockId,
+    })
+    expect(env.repo.cache.getSnapshot('parent')?.properties.custom).toBe('Filled')
+  })
+
   it('materializes default child rows for properties declared by a newly added type', async () => {
     env = await setup()
     await createRoot(env.repo, 'parent')
@@ -424,5 +459,69 @@ describe('UserSchemasService child-backed field identity', () => {
       expect(env.repo.cache.getSnapshot('parent')?.properties.status).toBeUndefined()
       expect(env.repo.cache.getSnapshot('parent')?.properties.state).toBe('Doing')
     })
+  })
+
+  it('renders user-schema block-ref field definitions created by editing an existing child', async () => {
+    env = await setup({registerStatusProp: false})
+    await getOrCreatePropertiesPage(env.repo, WS)
+    env.dispose = env.repo.userSchemas.start()
+    const schema = await env.repo.userSchemas.addSchema({name: 'custom-checkbox', presetId: 'boolean'})
+    const schemaBlockId = env.repo.userSchemas.getSchemaBlockId(schema.name)!
+    await createRoot(env.repo, 'parent')
+
+    await env.repo.mutate.createChild({
+      id: 'custom-field-row',
+      parentId: 'parent',
+      content: '',
+    })
+    await env.repo.mutate.setContent({
+      id: 'custom-field-row',
+      content: `((${schemaBlockId}))`,
+    })
+    await env.repo.mutate.createChild({
+      id: 'custom-value-row',
+      parentId: 'custom-field-row',
+      content: 'true',
+    })
+
+    const [field] = await rawLiveChildren(env.h, 'parent')
+    expect(field).toMatchObject({
+      id: 'custom-field-row',
+      content: `((${schemaBlockId}))`,
+      reference_target_id: schemaBlockId,
+    })
+    expect(env.repo.userSchemas.getSchemaForBlockId(schemaBlockId)?.name).toBe('custom-checkbox')
+    expect(env.repo.cache.getSnapshot('parent')?.properties['custom-checkbox']).toBe(true)
+  })
+
+  it('resolves exact refs to a schema name value row as the schema field definition', async () => {
+    env = await setup({registerStatusProp: false})
+    await getOrCreatePropertiesPage(env.repo, WS)
+    env.dispose = env.repo.userSchemas.start()
+    const schema = await env.repo.userSchemas.addSchema({name: 'custom-checkbox', presetId: 'boolean'})
+    const schemaBlockId = env.repo.userSchemas.getSchemaBlockId(schema.name)!
+    const schemaChildren = await rawLiveChildren(env.h, schemaBlockId)
+    const nameField = schemaChildren.find(row => row.reference_target_id === propertyNameProp.fieldId)!
+    const [nameValue] = await rawLiveChildren(env.h, nameField.id)
+    await createRoot(env.repo, 'parent')
+
+    await env.repo.mutate.createChild({
+      id: 'custom-field-row',
+      parentId: 'parent',
+      content: `((${nameValue!.id}))`,
+    })
+    await env.repo.mutate.createChild({
+      id: 'custom-value-row',
+      parentId: 'custom-field-row',
+      content: 'true',
+    })
+
+    const [field] = await rawLiveChildren(env.h, 'parent')
+    expect(field).toMatchObject({
+      id: 'custom-field-row',
+      content: `((${nameValue!.id}))`,
+      reference_target_id: schemaBlockId,
+    })
+    expect(env.repo.cache.getSnapshot('parent')?.properties['custom-checkbox']).toBe(true)
   })
 })
