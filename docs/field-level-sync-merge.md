@@ -67,7 +67,7 @@ Scope of columns in `old`: just `properties_json` for v1 — that's the only col
 
 ### Layer B — uploader: ship a partial patch + property diff to an RPC
 
-Replace the "load full row, ship UPSERT" path in `applyBlockPatches` (`powersync.ts:330-354`) with a single Supabase RPC call. Each entry carries only the columns from `entry.opData` (already narrow — the trigger stripped unchanged columns), plus per-key property diff when applicable, plus `id`, `updated_at`, `updated_by`. CREATEs (`applyBlockCreates`) stay as they are — PUT envelopes carry full rows by definition and use `ignoreDuplicates: true` for deterministic-id bootstrap collisions.
+Replace the "load full row, ship UPSERT" path in `applyBlockPatches` (`powersync.ts:330-354`) with a single Supabase RPC call. Each entry carries `id` plus only the columns from `entry.opData` (already narrow — the trigger stripped unchanged columns), plus per-key property diff when applicable. **Metadata columns (`updated_at`/`updated_by`) are optional**: `metadataPatch()` returns `{}` when callers pass `{skipMetadata: true}` (e.g. `parseReferences` writing `tx.update(..., {references}, {skipMetadata: true})`), so the trigger envelope can validly omit them. Treat them as ordinary optional `opData` columns — pass through whatever the entry has, don't fabricate missing ones. CREATEs (`applyBlockCreates`) stay as they are — PUT envelopes carry full rows by definition and use `ignoreDuplicates: true` for deterministic-id bootstrap collisions.
 
 When a PATCH entry has both `entry.opData.properties_json` (the new value) and `entry.previousValues?.properties_json` (the old value), parse both and compute:
 
