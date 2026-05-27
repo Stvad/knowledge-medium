@@ -4,12 +4,10 @@ import { describe, expect, it } from 'vitest'
 import {
   BLOCK_STORAGE_COLUMNS,
   blockToRowParams,
-  ensureBlockStorageColumns,
   parseBlockRow,
   type BlockRow,
 } from './blockSchema'
 import type { BlockData } from '@/data/api'
-import { createTestDb } from '@/data/test/createTestDb'
 
 const fixture: BlockData = {
   id: 'b1',
@@ -65,83 +63,6 @@ describe('BLOCK_STORAGE_COLUMNS', () => {
     expect(names).not.toContain('child_ids_json')
     expect(names).not.toContain('create_time')
     expect(names).not.toContain('update_time')
-  })
-})
-
-describe('ensureBlockStorageColumns', () => {
-  it('migrates legacy field_id value rows to reference field rows before dropping the column', async () => {
-    const h = await createTestDb()
-    try {
-      await h.db.execute(`ALTER TABLE blocks ADD COLUMN field_id TEXT`)
-      await h.db.execute(`
-        CREATE INDEX idx_blocks_field_parent
-        ON blocks (workspace_id, field_id, parent_id)
-        WHERE deleted = 0 AND field_id IS NOT NULL
-      `)
-      await h.db.execute(
-        `
-          INSERT INTO blocks (
-            id, workspace_id, parent_id, reference_target_id, field_id, order_key,
-            content, properties_json, references_json, created_at, updated_at,
-            created_by, updated_by, deleted
-          ) VALUES
-            (?, ?, NULL, NULL, NULL, ?, ?, '{}', '[]', ?, ?, ?, ?, 0),
-            (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-        `,
-        [
-          'parent', 'ws', 'a0', 'Parent', 1, 1, 'user', 'user',
-          'legacy-prop', 'ws', 'parent', 'property:status', 'a1', 'Doing',
-          '{"note":true}', '[{"id":"target","alias":"Target"}]', 2, 2, 'user', 'user',
-        ],
-      )
-
-      await ensureBlockStorageColumns(h.db)
-
-      const fieldIdColumn = await h.db.getOptional<{name: string}>(
-        `SELECT name FROM pragma_table_info('blocks') WHERE name = 'field_id'`,
-      )
-      expect(fieldIdColumn).toBeNull()
-
-      await expect(h.db.getOptional<{
-        content: string
-        reference_target_id: string | null
-        properties_json: string
-        references_json: string
-      }>(
-        `
-          SELECT content, reference_target_id, properties_json, references_json
-          FROM blocks
-          WHERE id = ?
-        `,
-        ['legacy-prop'],
-      )).resolves.toEqual({
-        content: '[[status]]',
-        reference_target_id: 'property:status',
-        properties_json: '{}',
-        references_json: '[{"id":"property:status","alias":"status"}]',
-      })
-
-      await expect(h.db.getOptional<{
-        parent_id: string | null
-        content: string
-        properties_json: string
-        references_json: string
-      }>(
-        `
-          SELECT parent_id, content, properties_json, references_json
-          FROM blocks
-          WHERE id = ?
-        `,
-        ['legacy-prop:value'],
-      )).resolves.toEqual({
-        parent_id: 'legacy-prop',
-        content: 'Doing',
-        properties_json: '{"note":true}',
-        references_json: '[{"id":"target","alias":"Target"}]',
-      })
-    } finally {
-      await h.cleanup()
-    }
   })
 })
 

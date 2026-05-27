@@ -96,10 +96,6 @@ export const CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL = `
   WHERE deleted = 0
 `
 
-export const DROP_BLOCKS_FIELD_PARENT_INDEX_SQL = `
-  DROP INDEX IF EXISTS idx_blocks_field_parent
-`
-
 export const CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL = `
   CREATE INDEX IF NOT EXISTS idx_blocks_reference_target_parent
   ON blocks (workspace_id, reference_target_id, parent_id)
@@ -117,89 +113,6 @@ export interface BlockSchemaDb {
   getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
 }
 
-const LEGACY_BLOCKS_FIELD_TRIGGER_NAMES = [
-  'blocks_row_event_insert',
-  'blocks_row_event_update',
-  'blocks_row_event_delete',
-  'blocks_upload_insert',
-  'blocks_upload_update',
-] as const
-
-const legacyFieldLabelSql = (rowRef: string): string => `
-  COALESCE(
-    (
-      SELECT json_extract(schema_block.properties_json, '$."property-schema:name"')
-      FROM blocks schema_block
-      WHERE schema_block.id = ${rowRef}.field_id
-    ),
-    CASE
-      WHEN ${rowRef}.field_id LIKE 'property:%' THEN substr(${rowRef}.field_id, length('property:') + 1)
-      ELSE ${rowRef}.field_id
-    END
-  )
-`
-
-const migrateLegacyFieldIdRows = async (db: BlockSchemaDb): Promise<void> => {
-  const fieldIdColumn = await db.getOptional<{name: string}>(
-    `SELECT name FROM pragma_table_info('blocks') WHERE name = 'field_id'`,
-  )
-  if (!fieldIdColumn) return
-
-  await db.execute(DROP_BLOCKS_FIELD_PARENT_INDEX_SQL)
-  for (const triggerName of LEGACY_BLOCKS_FIELD_TRIGGER_NAMES) {
-    await db.execute(`DROP TRIGGER IF EXISTS ${triggerName}`)
-  }
-
-  await db.execute(`
-    INSERT OR IGNORE INTO blocks (
-      id,
-      workspace_id,
-      parent_id,
-      reference_target_id,
-      order_key,
-      content,
-      properties_json,
-      references_json,
-      created_at,
-      updated_at,
-      created_by,
-      updated_by,
-      deleted
-    )
-    SELECT
-      legacy.id || ':value',
-      legacy.workspace_id,
-      legacy.id,
-      NULL,
-      'a0',
-      legacy.content,
-      legacy.properties_json,
-      legacy.references_json,
-      legacy.created_at,
-      legacy.updated_at,
-      legacy.created_by,
-      legacy.updated_by,
-      legacy.deleted
-    FROM blocks legacy
-    WHERE legacy.field_id IS NOT NULL
-      AND legacy.reference_target_id IS NULL
-  `)
-
-  const label = legacyFieldLabelSql('blocks')
-  await db.execute(`
-    UPDATE blocks
-    SET
-      reference_target_id = field_id,
-      content = '[[' || replace(${label}, ']]', '] ]') || ']]',
-      properties_json = '{}',
-      references_json = json_array(json_object('id', field_id, 'alias', ${label}))
-    WHERE field_id IS NOT NULL
-      AND reference_target_id IS NULL
-  `)
-
-  await db.execute(`ALTER TABLE blocks DROP COLUMN field_id`)
-}
-
 export const ensureBlockStorageColumns = async (db: BlockSchemaDb): Promise<void> => {
   const referenceTargetIdColumn = await db.getOptional<{name: string}>(
     `SELECT name FROM pragma_table_info('blocks') WHERE name = 'reference_target_id'`,
@@ -207,7 +120,6 @@ export const ensureBlockStorageColumns = async (db: BlockSchemaDb): Promise<void
   if (!referenceTargetIdColumn) {
     await db.execute(`ALTER TABLE blocks ADD COLUMN reference_target_id TEXT`)
   }
-  await migrateLegacyFieldIdRows(db)
 }
 
 export const UPSERT_BLOCK_SQL = `
