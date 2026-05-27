@@ -59,7 +59,9 @@ export interface UploadDeps {
  *  which path each operation took. The default sink wires to Supabase. */
 export interface BlockUploadSink {
   createRows: (rows: readonly BlockUploadPayload[]) => Promise<void>
-  updateRow: (id: string, payload: Record<string, unknown>) => Promise<void>
+  applyPatches: (
+    patches: ReadonlyArray<{id: string; payload: Record<string, unknown>}>,
+  ) => Promise<void>
   deleteRow: (id: string) => Promise<void>
 }
 
@@ -217,33 +219,42 @@ const chunked = <T,>(items: readonly T[], size: number): T[][] => {
   return chunks
 }
 
-/** PostgREST `UPDATE blocks WHERE id=?` against a server-missing row
- *  returns 0 rows affected with NO error — silent sync divergence. We
- *  ask for an exact rowcount and surface 0-rows as a permanent error so
- *  the rejection-tolerant orchestrator quarantines the tx instead of
- *  silently completing it. Code is one of the permanent set in
- *  `uploadErrorClassifier` so the per-tx fallback recognises it.
+/** Ships every PATCH in the compacted batch as a single
+ *  `apply_block_patches` RPC call. The server-side function loops the
+ *  patches array and runs one column-narrow UPDATE per element, with the
+ *  same semantics PostgREST `.update()` gave us before — just packed into
+ *  one HTTP round trip instead of N. Per-key `properties_json` merge is
+ *  out of scope here (see #51); each patch in the array writes its
+ *  specified columns to its specified row id.
  *
- *  In our pipeline CREATEs (`applyBlockCreates`) are dispatched before
- *  PATCHes within the same `repo.tx`, so a within-tx new row + edit
- *  pair lands the CREATE first and the PATCH finds its row. The 0-row
- *  case fires only when the server lost the row out-of-band — which is
- *  the same residual hazard the prior implementation accepted. */
-const applyBlockPatch = async (id: string, payload: Record<string, unknown>) => {
+ *  A server-missing id no longer returns 0-rows silently: the RPC
+ *  collects every patch whose UPDATE affected zero rows into a `missing`
+ *  array, which we surface as a permanent PGRST116-coded error so the
+ *  rejection-tolerant orchestrator quarantines the whole tx instead of
+ *  silently completing it. The whole batch is quarantined together
+ *  because we can't isolate individual patches inside one RPC call —
+ *  the per-tx fallback in `uploadTransactionsWithFallback` re-runs each
+ *  tx alone, narrowing the blast radius. */
+const applyBlockPatchesRpc = async (
+  patches: ReadonlyArray<{id: string; payload: Record<string, unknown>}>,
+) => {
+  if (patches.length === 0) return
   const client = assertSupabase()
 
-  console.debug('[powersync] PATCH', id, Object.keys(payload))
-  const {error, count} = await client
-    .from('blocks')
-    .update(payload, {count: 'exact'})
-    .eq('id', id)
+  console.debug('[powersync] PATCH batch', patches.length)
+  const payload = patches.map(patch => ({id: patch.id, ...patch.payload}))
+  const {data, error} = await client.rpc('apply_block_patches', {patches: payload})
 
   if (error) {
     throw error
   }
 
-  if (count === 0) {
-    throw Object.assign(new Error(`PATCH affected 0 rows for id=${id}`), {code: 'PGRST116'})
+  const missing = (data as {missing?: string[]} | null)?.missing ?? []
+  if (missing.length > 0) {
+    throw Object.assign(
+      new Error(`PATCH affected 0 rows for id(s)=${missing.join(',')}`),
+      {code: 'PGRST116'},
+    )
   }
 }
 
@@ -282,28 +293,6 @@ const applyBlockCreates = async (rows: readonly BlockUploadPayload[]) => {
   }
 }
 
-/** Patch dispatcher. Ships each PATCH's `entry.opData` straight through
- *  as a column-narrow PostgREST `UPDATE`, preserving the per-column
- *  narrowing the upload-routing trigger (clientSchema.ts
- *  `CREATE_BLOCKS_UPLOAD_UPDATE_TRIGGER_SQL`) already emitted into
- *  ps_crud.
- *
- *  Why narrow matters: the prior implementation re-loaded the full
- *  current local row and shipped a full-row UPSERT, which on a
- *  multi-device edit cross-clobbered columns that another client had
- *  just changed (a content edit here overwrote a peer's
- *  properties_json, and vice versa). Sending only the columns that
- *  actually changed in this tx leaves untouched columns untouched
- *  server-side. */
-const applyBlockPatches = async (
-  patches: readonly {id: string; payload: Record<string, unknown>}[],
-  sink: BlockUploadSink,
-) => {
-  for (const patch of patches) {
-    await sink.updateRow(patch.id, patch.payload)
-  }
-}
-
 const applyCompactedBlockOperations = async (
   _database: AbstractPowerSyncDatabase,
   operations: readonly CompactedBlockOperation[],
@@ -328,7 +317,9 @@ const applyCompactedBlockOperations = async (
   // this safe when the row already exists.
   await sink.createRows(creates)
 
-  await applyBlockPatches(patches, sink)
+  if (patches.length > 0) {
+    await sink.applyPatches(patches)
+  }
 
   for (const id of deletes) {
     await sink.deleteRow(id)
@@ -340,7 +331,7 @@ const applyCompactedBlockOperations = async (
  *  operation took. */
 const defaultBlockUploadSink: BlockUploadSink = {
   createRows: applyBlockCreates,
-  updateRow: applyBlockPatch,
+  applyPatches: applyBlockPatchesRpc,
   deleteRow: applyBlockDelete,
 }
 
@@ -537,3 +528,4 @@ export const __compactBlockCrudEntriesForTest = compactBlockCrudEntries
 export const __orderedBlockUpsertsForTest = orderedBlockUpserts
 export const __uploadTransactionsWithFallbackForTest = uploadTransactionsWithFallback
 export const __applyCompactedBlockOperationsForTest = applyCompactedBlockOperations
+export const __applyBlockPatchesRpcForTest = applyBlockPatchesRpc

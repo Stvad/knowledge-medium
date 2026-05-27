@@ -1,6 +1,17 @@
 import { CrudEntry, UpdateType, type CrudTransaction, type AbstractPowerSyncDatabase } from '@powersync/common'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+const supabaseRef = vi.hoisted(() => ({
+  rpc: vi.fn(),
+}))
+
+vi.mock('@/services/supabase.js', () => ({
+  supabase: supabaseRef,
+  hasSupabaseAuthConfig: true,
+}))
+
 import {
+  __applyBlockPatchesRpcForTest,
   __applyCompactedBlockOperationsForTest,
   __compactBlockCrudEntriesForTest,
   __orderedBlockUpsertsForTest,
@@ -411,7 +422,7 @@ describe('uploadTransactionsWithFallback', () => {
 
 const stubSink = (overrides: Partial<BlockUploadSink> = {}): BlockUploadSink => ({
   createRows: vi.fn().mockResolvedValue(undefined),
-  updateRow: vi.fn().mockResolvedValue(undefined),
+  applyPatches: vi.fn().mockResolvedValue(undefined),
   deleteRow: vi.fn().mockResolvedValue(undefined),
   ...overrides,
 })
@@ -419,19 +430,23 @@ const stubSink = (overrides: Partial<BlockUploadSink> = {}): BlockUploadSink => 
 const fakeDatabase = {} as AbstractPowerSyncDatabase
 
 describe('applyCompactedBlockOperations — patch routing', () => {
-  it('forwards each narrow PATCH payload verbatim — no re-load, no full-row upsert', async () => {
+  it('ships every compacted PATCH as a single applyPatches call with verbatim payloads', async () => {
     // The cross-column-clobber regression test. The trigger
     // (clientSchema.ts CREATE_BLOCKS_UPLOAD_UPDATE_TRIGGER_SQL) emits
-    // only the columns that changed in the tx. The uploader's job
-    // is to ship exactly those columns to PostgREST — anything wider
-    // overwrites a peer's concurrent edit on untouched columns.
+    // only the columns that changed in the tx; the RPC server-side
+    // re-applies that narrowing via COALESCE on absent keys. The
+    // uploader's job is to ship exactly those columns to the RPC.
     //
-    // Two scenarios from the fix brief's verification trace:
+    // Two scenarios from the original fix brief carried over to the
+    // batched RPC contract:
     //   • content-only edit: payload has content/updated_at/updated_by;
     //     properties_json absent → server-side properties_json
     //     unaffected.
     //   • property-only edit: payload has properties_json/updated_at/
     //     updated_by; content absent → server-side content unaffected.
+    //
+    // Batching matters: both patches collapse into one HTTP round trip,
+    // not two. Pre-batching this was the throughput regression.
     const sink = stubSink()
 
     await __applyCompactedBlockOperationsForTest(
@@ -453,22 +468,52 @@ describe('applyCompactedBlockOperations — patch routing', () => {
       sink,
     )
 
-    expect(sink.updateRow).toHaveBeenCalledTimes(2)
-    expect(sink.updateRow).toHaveBeenNthCalledWith(1, 'block-a', {
-      content: 'new', updated_at: 7, updated_by: 'u1',
-    })
-    expect(sink.updateRow).toHaveBeenNthCalledWith(2, 'block-b', {
-      properties_json: '{"foo":1}', updated_at: 8, updated_by: 'u1',
-    })
+    expect(sink.applyPatches).toHaveBeenCalledTimes(1)
+    expect(sink.applyPatches).toHaveBeenCalledWith([
+      {id: 'block-a', payload: {content: 'new', updated_at: 7, updated_by: 'u1'}},
+      {id: 'block-b', payload: {properties_json: '{"foo":1}', updated_at: 8, updated_by: 'u1'}},
+    ])
   })
 
-  it('propagates an updateRow error so the orchestrator can quarantine', async () => {
+  it('ships a single-patch batch as one applyPatches call', async () => {
+    // Even when only one patch is compacted, the wire shape is still a
+    // batch RPC call — confirms we don't have a "fast path" that
+    // bypasses the RPC for single patches.
+    const sink = stubSink()
+
+    await __applyCompactedBlockOperationsForTest(
+      fakeDatabase,
+      [{kind: 'patch', id: 'block-a', payload: {content: 'edited'}, order: 0}],
+      sink,
+    )
+
+    expect(sink.applyPatches).toHaveBeenCalledTimes(1)
+    expect(sink.applyPatches).toHaveBeenCalledWith([
+      {id: 'block-a', payload: {content: 'edited'}},
+    ])
+  })
+
+  it('skips applyPatches entirely when the batch has no patch ops', async () => {
+    // Creates-and-deletes-only batch must not hit the RPC at all —
+    // an empty patches array is a wasted round trip.
+    const sink = stubSink()
+
+    await __applyCompactedBlockOperationsForTest(
+      fakeDatabase,
+      [{kind: 'create', id: 'block-a', payload: {id: 'block-a', content: 'A'}, order: 0}],
+      sink,
+    )
+
+    expect(sink.applyPatches).not.toHaveBeenCalled()
+  })
+
+  it('propagates an applyPatches error so the orchestrator can quarantine', async () => {
     // The orchestrator's per-tx fallback only fires on thrown errors;
-    // the patch path must not swallow them. Covers the 0-rows-affected
-    // case too — `applyBlockPatch` throws a permanent-classified
-    // PGRST116 there.
+    // the patch path must not swallow them. Covers both the Supabase
+    // error path and the missing-id path — the sink throws a
+    // PGRST116-coded error there too.
     const fk = Object.assign(new Error('fk'), {code: '23503'})
-    const sink = stubSink({updateRow: vi.fn().mockRejectedValue(fk)})
+    const sink = stubSink({applyPatches: vi.fn().mockRejectedValue(fk)})
 
     await expect(
       __applyCompactedBlockOperationsForTest(
@@ -477,5 +522,103 @@ describe('applyCompactedBlockOperations — patch routing', () => {
         sink,
       ),
     ).rejects.toMatchObject({code: '23503'})
+  })
+})
+
+// ===========================================================================
+// defaultBlockUploadSink.applyPatches — Supabase RPC contract.
+//
+// The default sink wraps the per-row UPDATEs in a single
+// `apply_block_patches` RPC call, so a 1-tx batch of N patches ships as
+// one HTTP round trip instead of N. These tests pin the wire shape and
+// the missing-id → PGRST116 mapping the orchestrator's permanent-error
+// classifier relies on.
+// ===========================================================================
+
+describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
+  beforeEach(() => {
+    supabaseRef.rpc.mockReset()
+  })
+
+  it('flattens id + payload into one rpc("apply_block_patches", …) call', async () => {
+    // Wire shape pin: each {id, payload} pair becomes one
+    // {id, ...payload} entry in the patches array. The server-side
+    // function destructures `id` for the WHERE clause and treats every
+    // other key as a column to write.
+    supabaseRef.rpc.mockResolvedValueOnce({data: {missing: []}, error: null})
+
+    await __applyBlockPatchesRpcForTest([
+      {id: 'block-a', payload: {content: 'new', updated_at: 7, updated_by: 'u1'}},
+    ])
+
+    expect(supabaseRef.rpc).toHaveBeenCalledTimes(1)
+    expect(supabaseRef.rpc).toHaveBeenCalledWith('apply_block_patches', {
+      patches: [{id: 'block-a', content: 'new', updated_at: 7, updated_by: 'u1'}],
+    })
+  })
+
+  it('packs a multi-patch batch into a single RPC call with N items', async () => {
+    // The whole point of the RPC: N patches → one HTTP. Pre-batching,
+    // this was N PostgREST round trips.
+    supabaseRef.rpc.mockResolvedValueOnce({data: {missing: []}, error: null})
+
+    await __applyBlockPatchesRpcForTest([
+      {id: 'block-a', payload: {content: 'A2'}},
+      {id: 'block-b', payload: {properties_json: '{"foo":1}'}},
+      {id: 'block-c', payload: {deleted: true}},
+    ])
+
+    expect(supabaseRef.rpc).toHaveBeenCalledTimes(1)
+    expect(supabaseRef.rpc).toHaveBeenCalledWith('apply_block_patches', {
+      patches: [
+        {id: 'block-a', content: 'A2'},
+        {id: 'block-b', properties_json: '{"foo":1}'},
+        {id: 'block-c', deleted: true},
+      ],
+    })
+  })
+
+  it('throws a PGRST116-coded error listing every missing id', async () => {
+    // A patch whose id no longer exists server-side comes back in the
+    // RPC's `missing` array (the function returns it as data, not as a
+    // Postgres error). We surface it as a permanent-classified
+    // PGRST116 so the orchestrator quarantines the tx instead of
+    // silently completing it — that's the silent-divergence guard the
+    // pre-batched per-row path also enforced.
+    supabaseRef.rpc.mockResolvedValueOnce({
+      data: {missing: ['block-a', 'block-c']},
+      error: null,
+    })
+
+    await expect(
+      __applyBlockPatchesRpcForTest([
+        {id: 'block-a', payload: {content: 'A2'}},
+        {id: 'block-b', payload: {content: 'B2'}},
+        {id: 'block-c', payload: {content: 'C2'}},
+      ]),
+    ).rejects.toMatchObject({
+      code: 'PGRST116',
+      message: expect.stringContaining('block-a'),
+    })
+  })
+
+  it('propagates a Supabase error verbatim so classifyUploadError can route it', async () => {
+    // A real PostgrestError (RLS denial, FK violation, transport blip)
+    // must reach the orchestrator with its `code`/`message` intact —
+    // those are the inputs classifyUploadError keys off.
+    const rlsError = Object.assign(new Error('row-level security'), {code: '42501'})
+    supabaseRef.rpc.mockResolvedValueOnce({data: null, error: rlsError})
+
+    await expect(
+      __applyBlockPatchesRpcForTest([{id: 'block-a', payload: {content: 'A2'}}]),
+    ).rejects.toMatchObject({code: '42501'})
+  })
+
+  it('is a no-op when given an empty patches array', async () => {
+    // Defence in depth: applyCompactedBlockOperations already guards
+    // the empty-patches case, but the sink itself must also skip the
+    // round trip when handed an empty array (e.g. a future caller).
+    await __applyBlockPatchesRpcForTest([])
+    expect(supabaseRef.rpc).not.toHaveBeenCalled()
   })
 })
