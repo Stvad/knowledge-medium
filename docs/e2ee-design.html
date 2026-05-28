@@ -846,6 +846,19 @@ CREATE OR REPLACE FUNCTION create_workspace(
       is NULL, so the upload triggers skip them while the side-index triggers
       (row_events, aliases, types, FTS) still fire normally.
     </p>
+
+    <p>
+      <strong>Observer must propagate deletes and tombstones, not just inserts/updates.</strong>
+      PowerSync drops rows from the synced stream when membership is revoked or a workspace is
+      deleted &mdash; the row simply leaves <code>blocks_synced</code>, no insert/update fires.
+      Since PowerSync no longer manages the app-visible <code>blocks</code> table under Layout B,
+      the observer is also responsible for removing the corresponding row from <code>blocks</code>
+      (and triggering the existing delete-side maintenance: row_events, alias/type/FTS index
+      cleanup). Concretely: subscribe to PowerSync's deletion events on
+      <code>blocks_synced</code> in addition to insert/update; on delete, run
+      <code>DELETE FROM blocks WHERE id = ?</code> with <code>source = NULL</code> so the
+      side-index triggers fire and the upload triggers don't.
+    </p>
     <p>
       Upload is symmetric. App writes plaintext to <code>blocks</code> as today; the existing
       upload-routing trigger captures plaintext into <code>ps_crud</code>; PowerSync's
@@ -1208,11 +1221,12 @@ WHERE typeof(je.value) = 'text';</code></pre>
       </tr>
       <tr>
         <td>PowerSync sync rules</td>
-        <td>Unchanged.</td>
-        <td>Depends on layout. <strong>Layout B</strong>: the blocks stream's row_type is
-          retargeted (via <code>gen-sync-config.ts</code>) so downloads hydrate
-          <code>blocks_synced</code> instead of <code>blocks</code> &mdash; load-bearing for the
-          observer to receive rows. <strong>Layout C</strong>: unchanged.</td>
+        <td><strong>Layout B</strong>: changed too. The blocks stream's row_type retarget to
+          <code>blocks_synced</code> is global, not E2EE-only &mdash; the universal observer
+          (§9.2) routes both plaintext and encrypted workspace rows from staging to
+          <code>blocks</code>. <strong>Layout C</strong>: unchanged.</td>
+        <td><strong>Layout B</strong>: same as the plaintext column &mdash; one global retarget
+          via <code>gen-sync-config.ts</code>. <strong>Layout C</strong>: unchanged.</td>
       </tr>
       <tr>
         <td>Invite RPC chain</td>
