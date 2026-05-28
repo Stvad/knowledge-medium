@@ -558,34 +558,27 @@ ALTER TABLE workspaces
   ADD CONSTRAINT workspaces_wk_canary_matches_mode
   CHECK ((encryption_mode = 'e2ee') = (wk_canary IS NOT NULL));
 
--- Immutable after create, parallel to encryption_mode: an editor with
--- write access to the workspaces row could otherwise replace the canary
--- and brick WK validation for other members.
--- Bypass for the rotate_workspace_wk RPC (§14): the trigger checks a
--- session-local setting that only that RPC sets via SET LOCAL inside
--- its body. Any other write path leaves the setting unset and the
--- trigger raises as normal. current_setting(..., true) returns NULL
--- when the setting is absent, which the IS DISTINCT FROM treats as
--- "not in rotation."
-CREATE OR REPLACE FUNCTION workspaces_prevent_wk_canary_change()
-  RETURNS trigger
-  LANGUAGE plpgsql AS $$
-begin
-  if OLD.wk_canary is distinct from NEW.wk_canary
-     and current_setting('kmp.rotating_wk', true) is distinct from 'on' then
-    raise exception 'workspaces.wk_canary is immutable';
-  end if;
-  return NEW;
-end;
-$$;
-
-CREATE TRIGGER workspaces_prevent_wk_canary_change_trg
-  BEFORE UPDATE ON workspaces
-  FOR EACH ROW
-  EXECUTE FUNCTION workspaces_prevent_wk_canary_change();
--- rotate_workspace_wk(...) opens with: SET LOCAL kmp.rotating_wk = 'on';
--- The setting is per-transaction and reverts on COMMIT/ROLLBACK, so
--- the exception is scoped to that single RPC invocation.
+-- Immutable after create: an editor with write access to the workspaces row
+-- could otherwise replace the canary and brick WK validation for other
+-- members. Enforce this with COLUMN-LEVEL PRIVILEGE, not a trigger bypass.
+-- A session GUC (an earlier SET LOCAL kmp.rotating_wk approach) is forgeable:
+-- any caller who can run SQL as the authenticated role can set it to 'on'
+-- before updating wk_canary, so it cannot scope a bypass to a single RPC.
+-- Instead make wk_canary (and encryption_mode) unwritable by client roles:
+REVOKE UPDATE ON workspaces FROM anon, authenticated;
+GRANT  UPDATE (name) ON workspaces TO anon, authenticated;  -- client-mutable
+                                                            -- columns only
+-- Grant UPDATE only on the columns clients may change (e.g. name); omit
+-- wk_canary and encryption_mode. Any client UPDATE that sets wk_canary now
+-- fails with "permission denied for column wk_canary" — direct updates
+-- outside the RPC are impossible, enforced by the privilege system rather
+-- than a forgeable session flag. The sole writer of wk_canary is the
+-- dedicated rotate_workspace_wk RPC (§14): SECURITY DEFINER, running as the
+-- table owner, so it retains column UPDATE while ordinary callers do not.
+-- (This also makes encryption_mode immutable to clients, demoting the
+-- prevent-encryption_mode-change trigger above to defense-in-depth. Client
+-- upload paths must not include wk_canary/encryption_mode in their PATCH
+-- column set, or PostgREST/PowerSync writes will be rejected.)
 
 -- Postgres function signatures include parameter count/types, so a new
 -- create_workspace with extra defaulted params would *overload* the
@@ -1282,11 +1275,12 @@ GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
         would fail for anyone unlocking after rotation &mdash; the canary would still be encrypted
         under the old WK), uploads the lot; distributes the new WK to current collaborators
         out-of-band. The "re-encrypt all blocks" cost is real for large workspaces; worth thinking
-        through the UX (progress bar, atomic rotation token to detect mid-rotation states). Note
-        that <code>wk_canary</code> immutability needs a one-shot exception for the rotation path
-        &mdash; either a dedicated <code>rotate_workspace_wk</code> RPC that updates the canary in
-        the same transaction as the rotation token, or a temporary suspension of the immutability
-        trigger inside the RPC. Cleanest is the dedicated RPC.</li>
+        through the UX (progress bar, atomic rotation token to detect mid-rotation states). The
+        canary is unwritable by client roles (§7 enforces this with column-level privilege), so the
+        rotation path is the dedicated <code>rotate_workspace_wk</code> RPC &mdash; SECURITY DEFINER,
+        running as the table owner, the only principal with UPDATE on <code>wk_canary</code>. No
+        forgeable bypass flag is involved: clients simply lack the privilege, and the RPC updates
+        the canary in the same transaction as the re-encrypt rotation token.</li>
 
       <li><strong>Backfill behavior on first WK paste.</strong> The first time a device gets a
         WK for a workspace, the local plaintext-derived indexes need populating. Under Layout B
