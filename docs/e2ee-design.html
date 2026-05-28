@@ -812,16 +812,17 @@ WHERE typeof(je.value) = 'text';</code></pre>
 
     <p><strong>What's already structured for Layout C:</strong></p>
     <ul>
-      <li><strong>Reads are centralized.</strong> All read paths route through
+      <li><strong>Most reads are centralized.</strong> The dominant read path routes through
         <code>txEngine.ts</code>'s <code>SELECT ${COLUMN_LIST} FROM blocks</code> →
         <code>parseBlockRow</code> in <code>repo.ts</code> →
-        <code>getBlockDataById</code>. Add one decrypt call in <code>parseBlockRow</code>; the
-        entire app-read surface is covered. No scattered raw-SQL reads elsewhere.</li>
-      <li><strong>No content-shaped query filters in app code.</strong> No
-        <code>WHERE content LIKE '%foo%'</code>; no
-        <code>WHERE json_extract(properties_json, ...) = ?</code>. Substring search rides FTS;
-        property-shaped filters ride <code>block_aliases</code>/<code>block_types</code>
-        side tables maintained by triggers. Same pattern Layout C uses for new derived state.</li>
+        <code>getBlockDataById</code>. One decrypt call in <code>parseBlockRow</code> covers it.
+        Caveat: the survey didn't catch every raw-SQL site &mdash; see "What the survey did
+        surface" below for the two that bypass <code>parseBlockRow</code>.</li>
+      <li><strong>No <code>WHERE content LIKE '%foo%'</code> or
+        <code>WHERE json_extract(properties_json, ...) = ?</code> in app code.</strong>
+        Property-shaped filters ride <code>block_aliases</code>/<code>block_types</code> side
+        tables maintained by triggers. But two raw queries do operate on these columns directly
+        and need Layout C handling &mdash; covered below.</li>
       <li><strong>No generated columns or CHECK constraints</strong> over these columns.</li>
       <li><strong>PowerSync is content-blind internally.</strong> Conflict resolution is metadata-
         driven; the apply path runs the same triggers as local writes.</li>
@@ -837,6 +838,27 @@ WHERE typeof(je.value) = 'text';</code></pre>
         <code>src/plugins/daily-notes/localSchema.ts</code> reading
         <code>properties_json</code>. The pattern propagates &mdash; any future plugin that maintains a
         derived index over these columns needs the same UDF wrap.</li>
+      <li><strong>Two raw-SQL queries bypass <code>parseBlockRow</code> and operate on the
+        content columns directly.</strong> Both are Layout C touch points that the initial
+        survey claim missed:
+        <ul>
+          <li><code>src/data/repo.ts:1553-1559</code> &mdash; the property-reprojection scan
+            does <code>FROM blocks b, json_each(b.properties_json) prop WHERE prop.key IN (?)</code>.
+            Under Layout C the <code>json_each</code> runs against ciphertext and fails (or
+            returns nothing). Fix: UDF-wrap the <code>json_each</code> argument
+            (<code>json_each(e2ee_decrypt_json(b.workspace_id, b.properties_json))</code>), or
+            skip E2EE rows in this scan and rely on the per-workspace backfill on WK paste to
+            cover reprojection for those workspaces.</li>
+          <li><code>src/plugins/find-replace/dataExtension.ts:80-89</code> &mdash;
+            <code>instr(content, ?)</code> / <code>instr(LOWER(content), LOWER(?))</code>
+            literal-substring search. Under Layout C this searches ciphertext bytes and returns
+            no usable matches. Fix: route find/replace through FTS for E2EE workspaces
+            (<code>blocks_fts.content</code> already holds plaintext via the UDF-wrapped FTS
+            trigger), or accept that find/replace doesn't work on E2EE workspaces and degrade
+            gracefully. FTS routing is the better option since the data is already there.</li>
+        </ul>
+        Both flips are mechanical, but they widen the "places to audit" surface and the second
+        one is the closest thing to a real product feature gap if not handled.</li>
       <li><strong>One expression index needs converting to a side table.</strong>
         <code>src/plugins/daily-notes/localSchema.ts:105</code> has
         <code>CREATE INDEX idx_blocks_daily_note_date ON blocks (json_extract(properties_json, '$.dailyNoteDate'))</code>
@@ -869,7 +891,9 @@ WHERE typeof(je.value) = 'text';</code></pre>
         (<code>repoProvider.ts</code>); decrypt in <code>parseBlockRow</code>; UDF-wrap the
         triggers in three locations
         (<code>clientSchema.ts</code>, <code>plugins/references/localSchema.ts</code>,
-        <code>plugins/daily-notes/localSchema.ts</code>); convert the daily-notes expression index
+        <code>plugins/daily-notes/localSchema.ts</code>); UDF-wrap the reprojection scan in
+        <code>repo.ts:1553-1559</code>; reroute <code>find-replace/dataExtension.ts</code>'s
+        content search through FTS for E2EE workspaces; convert the daily-notes expression index
         to a side table; encrypt-on-upload at the sync boundary; per-workspace backfill on WK
         paste. No new top-level tables for the encryption itself (the daily-notes side table is a
         local schema change, not an E2EE-specific one).</li>
