@@ -832,6 +832,20 @@ CREATE OR REPLACE FUNCTION create_workspace(
       the upload echo reconcile when it returns. This is the load-bearing complexity of Layout B
       that the original "just decrypt and copy" framing understated.
     </p>
+
+    <p>
+      <strong>Observer writes must leave <code>tx_context.source</code> NULL.</strong> The
+      upload-routing triggers in <code>clientSchema.ts</code> enqueue any
+      <code>blocks</code> write whose <code>tx_context.source</code> is non-NULL into
+      <code>ps_crud</code> for upload. If the observer wrote through the normal repo/tx path,
+      every downloaded row would be queued back as a local edit &mdash; echo-upload loop.
+      PowerSync's existing apply path already handles this for the tables it directly manages by
+      leaving <code>source = NULL</code> (the upload triggers' <code>WHEN</code> clause checks
+      for non-NULL source). The Layout B observer must follow the same convention: bracket its
+      writes to <code>blocks</code> in a <code>tx_context</code> state where <code>source</code>
+      is NULL, so the upload triggers skip them while the side-index triggers
+      (row_events, aliases, types, FTS) still fire normally.
+    </p>
     <p>
       Upload is symmetric. App writes plaintext to <code>blocks</code> as today; the existing
       upload-routing trigger captures plaintext into <code>ps_crud</code>; PowerSync's
@@ -1042,7 +1056,18 @@ WHERE typeof(je.value) = 'text';</code></pre>
         rows exist (new device's first sync of an existing E2EE workspace), they either throw
         on <code>enc:v1:</code> text or build indexes from ciphertext. Fix: UDF-wrap each
         backfill, or mode-skip E2EE rows and rely on the per-workspace WK-paste backfill to
-        cover them.</li>
+        cover them.
+        <br><br>
+        <strong>And one backfill is worse than the others &mdash;
+        <code>BACKFILL_DAILY_NOTE_DATE_SQL</code> in
+        <code>src/plugins/daily-notes/localSchema.ts:41-93</code>.</strong> It reads
+        <code>properties_json</code> via <code>json_extract</code>/<code>json_each</code>
+        <em>and</em> writes back via <code>UPDATE blocks SET properties_json = json_set(...)</code>.
+        Under Layout C the read side would fail on ciphertext; the write side would write
+        plaintext-shaped JSON into the ciphertext-at-rest column, breaking the invariant
+        directly. Fix: mode-skip E2EE rows entirely in this backfill (the daily-note date
+        attachment logic for E2EE workspaces needs to be done at the app level, post-decrypt,
+        not via a blind SQL UPDATE on the storage table).</li>
       <li><strong>One expression index needs converting to a side table.</strong>
         <code>src/plugins/daily-notes/localSchema.ts:105</code> has
         <code>CREATE INDEX idx_blocks_daily_note_date ON blocks (json_extract(properties_json, '$.dailyNoteDate'))</code>
