@@ -618,13 +618,21 @@ ALTER TABLE public.workspaces ADD COLUMN wk_canary TEXT;
 -- former leaves the workspace unrecoverable (§8.2 can never validate a WK
 -- against it), the latter leaves the server storing readable plaintext. The
 -- server can't prove the bytes are real ciphertext (it has no key), but it can
--- require the envelope SHAPE: enc:v1: + a base64url payload of at least
--- nonce(12B)+tag(16B) = 28B, i.e. >= 38 base64url chars. One shared IMMUTABLE
+-- require the envelope SHAPE: enc:v1: + a *decodable* base64url payload of at
+-- least nonce(12B)+tag(16B) = 28B. A bare {38,} length floor isn't enough: it
+-- still admits payloads that can't decode -- a data-char count of len%4==1
+-- (e.g. 41 chars) is impossible in base64, and stray padding (40 data chars
+-- then '==') is malformed -- so §8.2 clients would fail to decrypt and the
+-- workspace/block would be just as unrecoverable as a missing canary. So
+-- enforce the base64url group grammar: every 4 chars -> 3 bytes, with only a
+-- 2-char (->1B, optional '==') or 3-char (->2B, optional '=') final group
+-- legal. The 28B floor is then >= 9 full groups plus one of those terminals
+-- (>= 38 data chars; data-char count mod 4 is never 1). One shared IMMUTABLE
 -- helper keeps the canary CHECK and the blocks trigger in lockstep.
 CREATE OR REPLACE FUNCTION public.is_enc_v1_envelope(v text)
   RETURNS boolean
   LANGUAGE sql IMMUTABLE AS $$
-  SELECT v ~ '^enc:v1:[A-Za-z0-9_-]{38,}={0,2}$'
+  SELECT v ~ '^enc:v1:([A-Za-z0-9_-]{4}){9,}([A-Za-z0-9_-]{4}|[A-Za-z0-9_-]{2}(==)?|[A-Za-z0-9_-]{3}=?)$'
 $$;
 
 ALTER TABLE public.workspaces
