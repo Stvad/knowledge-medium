@@ -1092,7 +1092,10 @@ CREATE TRIGGER blocks_require_ciphertext_for_e2ee_trg
       entries are allowed to go stale, cleared by the next explicit Lock &amp; wipe (§6). This is
       safe to defer: a revoked member already held the WK and the data they had synced, so revoke
       can't retroactively protect any of it &mdash; cleanup is local hygiene, not a confidentiality
-      boundary. Two rules hold regardless: revoke stays <strong>per-workspace</strong> and must
+      boundary. The one functional wrinkle of deferring &mdash; a member who is later re-invited could
+      see a pre-revoke queued edit replay when its upload retries &mdash; is a known, low-severity
+      cost we accept for v1: it's the user's own edit landing in a workspace they again belong to,
+      not a leak. Two rules hold regardless: revoke stays <strong>per-workspace</strong> and must
       <em>never</em> escalate to §6's coarse all-workspaces wipe; and if a partial-workspace wipe is
       ever added for another reason, we can revisit whether to adopt it for removed-row handling
       here.
