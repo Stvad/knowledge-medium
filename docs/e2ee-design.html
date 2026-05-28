@@ -362,14 +362,20 @@
         61-character paste-friendly string (52 unpadded base32 chars + 9-char prefix). The
         <code>1</code> reserves a clean upgrade path.</td></tr>
       <tr><td>Where it lives</td><td>(a) the user's password manager / backup of their choice;
-        (b) localStorage on each device the user has pasted it on, keyed by
-        <code>(user_id, workspace_id)</code> (e.g. <code>wk:&lt;user_id&gt;:&lt;workspace_id&gt;</code>).
-        localStorage rather than the local SQLite DB so the WK store has its own lifecycle &mdash;
-        a future "lock the app" or "clear my keys" action can drop WKs without touching the
-        PowerSync-managed sync state. Reuses the codebase's existing localStorage adapter rather
-        than introducing IndexedDB as a new storage surface. Raw 32 bytes encode to ~44 chars
-        base64; the cross-tab <code>storage</code> event is a useful side effect (paste-once
-        propagates to other tabs). Never the server, in any form.</td></tr>
+        (b) on each device the user has pasted it on, as a <strong>non-extractable WebCrypto
+        <code>CryptoKey</code> in IndexedDB</strong>, keyed by <code>(user_id, workspace_id)</code>.
+        Non-extractable means JS can <em>use</em> the key
+        (<code>crypto.subtle.encrypt</code>/<code>decrypt</code>) but <code>exportKey</code> throws,
+        so a script that gets onto the origin (XSS, a hostile extension) can't read the key bytes
+        out and exfiltrate them &mdash; the worst it can do is use the key while the page is open
+        (decrypt-and-leak plaintext), not steal it for offline, forever decryption. The raw bytes
+        therefore exist only transiently: once at generation (shown for backup) and once at paste
+        (imported, then discarded). IndexedDB rather than localStorage because localStorage holds
+        strings only &mdash; it can't store a non-extractable <code>CryptoKey</code>, and raw key
+        bytes in localStorage are readable by any origin script. Cross-tab propagation uses
+        <code>BroadcastChannel</code> instead of the <code>storage</code> event; IndexedDB can be
+        evicted under storage pressure, which is fine because the model already requires the user to
+        keep a backup. Never the server, in any form.</td></tr>
       <tr><td>Validation on paste</td><td>Decrypt <code>workspaces.wk_canary</code> and verify
         the plaintext equals the workspace id. Works on empty workspaces (no blocks needed).
         AEAD failure or plaintext mismatch &rarr; reject with "that key doesn't decrypt this
@@ -431,34 +437,30 @@
       <br><br>
       <strong>1. The authority is a durable local mode pin &mdash; separate from the WK, which is
       only decrypt material.</strong> The client keeps a per-<code>(user, workspace)</code> <em>mode
-      pin</em> in localStorage (<code>e2ee</code> | <code>plaintext</code>), in a namespace separate
-      from the WKs and <strong>not</strong> wiped by "clear my keys." The pin is set once and is
+      pin</em> in localStorage (<code>e2ee</code> | <code>plaintext</code>) &mdash; separate from the
+      WK store (§5, now IndexedDB) and <strong>not</strong> wiped by the Lock &amp; wipe action
+      (below). The pin is set once and is
       locally immutable thereafter (mirroring §7's server-side immutability): a workspace pins to
       <code>e2ee</code> the moment a WK first validates against its canary &mdash; at create (§8.1)
       or first paste (§8.2) &mdash; and pins to <code>plaintext</code> on a plaintext create or
       explicit confirmation. The WK is <em>decrypt material only</em>: transient, stored separately,
-      and never the record of mode. Clearing key material (a future "lock / clear my keys" action,
-      §5) drops the WK but leaves the pin intact &mdash; an <code>e2ee</code>-pinned workspace stays
-      <code>e2ee</code>, just without decrypt material. <strong>Locking must actually remove the
-      plaintext, not merely flip a read-only flag.</strong> Under Layout B the decrypted rows live
-      in the app-visible <code>blocks</code> table plus the derived indexes
-      (<code>block_aliases</code>/<code>block_types</code>/<code>blocks_fts</code>) and the
-      <code>BlockCache</code> &mdash; so clearing the WK must also evict that workspace's rows from
-      <code>blocks</code>, its derived-index entries, and its <code>BlockCache</code> snapshots, or
-      the normal local read paths keep serving the plaintext and "locked" locks nothing. Pending
-      local edits need the same care: not-yet-uploaded edits sit in <code>ps_crud</code> as
-      <em>plaintext</em> envelopes (the upload trigger captures plaintext; <code>uploadData</code>
-      encrypts only at send, §9.2). So the lock flow must first <strong>flush that workspace's
-      <code>ps_crud</code> entries</strong> &mdash; encrypt-and-upload them while the WK is still
-      loaded &mdash; then drop the WK and purge. That both removes the plaintext-in-<code>ps_crud</code>
-      leak and avoids stranding rows on re-paste: the observer's reconciliation skips any staged row
-      that still has a pending CRUD entry (§9.2), so a non-empty queue would block re-hydration. If
-      the flush can't complete (offline), defer the lock rather than leave plaintext queued or
-      silently drop the user's unsynced edits. The
-      ciphertext is untouched in <code>blocks_synced</code>, so re-pasting the WK simply re-runs the
-      §9.2 staging&rarr;<code>blocks</code> drain and the workspace re-hydrates. Clearing keys
-      re-locks; it never downgrades, and the plaintext-confirmation path (rule 3) is
-      <strong>not</strong> offered for a pinned workspace.
+      and never the record of mode. <strong>Locking is a deliberate, coarse action in v1.</strong>
+      "Lock &amp; wipe local data" is an explicit user action &mdash; distinct from sign-out (it
+      keeps you signed in; it isn't a logout) &mdash; that flushes the upload queue first so unsynced
+      edits aren't lost, drops <em>all</em> WKs, and wipes the entire local store: the plaintext
+      <code>blocks</code> table, the derived indexes
+      (<code>block_aliases</code>/<code>block_types</code>/<code>blocks_fts</code>),
+      <code>BlockCache</code>, the <code>ps_crud</code> queue (whose envelopes hold plaintext, §9.2),
+      and the <code>blocks_synced</code> staging. The <strong>durable pins survive</strong> &mdash;
+      they live in a separate, non-secret store and keep each workspace's mode known. On next use,
+      plaintext workspaces re-sync and render as usual; an <code>e2ee</code>-pinned workspace
+      re-enters the quarantine (rule 3) read-only until its WK is re-pasted &mdash; so the wipe never
+      downgrades, and the plaintext-confirmation path is still <strong>not</strong> offered for a
+      pinned workspace. v1 deliberately does <em>not</em> support clearing one workspace's WK while
+      you keep using others: that per-workspace selectivity is what forces chasing scattered
+      plaintext across every local surface, and the coarse wipe sidesteps it. A
+      <em>non-destructive</em> lock (drop the key, data stays sealed rather than wiped) is a post-v1
+      option via at-rest encryption &mdash; §14.
       The pin is local and earned by decrypting the canary, so the server's
       <code>encryption_mode</code> still carries zero authority &mdash; the authority is the durable
       pin, not the server flag and not the ephemeral key.
@@ -708,11 +710,12 @@ GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
         <code>workspace_id || "canary" || schema_version</code>) to produce the
         <code>wk_canary</code>. The canary is a known-plaintext AEAD blob that any future device
         can decrypt to validate a pasted WK, even on a workspace that has no blocks yet.</li>
-      <li>Client validates the WK against the canary it just minted, then stores it in localStorage
-        at <code>(user_id, workspace_id) &rarr; raw bytes</code> and sets the durable mode pin for
-        this workspace to <code>e2ee</code> (§6 rule 1). The pin is a separate, WK-independent record,
-        so future loads never trust a server-supplied <code>encryption_mode = 'none'</code> and
-        clearing the WK can't downgrade the workspace.</li>
+      <li>Client validates the WK against the canary it just minted, then imports it as a
+        non-extractable <code>CryptoKey</code> in IndexedDB keyed by
+        <code>(user_id, workspace_id)</code> (§5) and sets the durable mode pin for this workspace to
+        <code>e2ee</code> (§6 rule 1). The pin is a separate, WK-independent record, so future loads
+        never trust a server-supplied <code>encryption_mode = 'none'</code> and a Lock &amp; wipe
+        can't downgrade the workspace.</li>
       <li>Client calls <code>create_workspace(p_name, p_encryption_mode='e2ee', p_workspace_id, p_wk_canary)</code>
         with the client-chosen id so the canary's plaintext and AAD line up with the server's
         stored row. Server inserts <code>workspaces</code> with the canary and the owner's
@@ -727,7 +730,7 @@ GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
     <ol>
       <li>User signs in on device 2. PowerSync syncs encrypted block rows for workspaces they're
         a member of.</li>
-      <li>Client checks localStorage at <code>(user_id, workspace_id)</code> &mdash; no WK present.</li>
+      <li>Client checks the IndexedDB WK store at <code>(user_id, workspace_id)</code> &mdash; no WK present.</li>
       <li>UI surfaces a "this workspace needs its key" prompt instead of rendering ciphertext.</li>
       <li>User pastes their stored WK.</li>
       <li>Client validates by decrypting <code>workspaces.wk_canary</code> with the candidate WK
@@ -735,9 +738,10 @@ GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
         mismatch (right key, wrong workspace) both reject. Works for freshly invited / empty
         workspaces because the canary is created at workspace-create time, not derived from
         blocks.</li>
-      <li>On success: store the WK in localStorage and set the durable mode pin to <code>e2ee</code>
-        (§6 rule 1; the pin is separate from the WK and survives key clearing), then render normally.
-        On failure: surface "that key doesn't decrypt this workspace's data," let the user retry.</li>
+      <li>On success: import the WK as a non-extractable <code>CryptoKey</code> in IndexedDB (§5) and
+        set the durable mode pin to <code>e2ee</code> (§6 rule 1; the pin is in a separate store and
+        survives a Lock &amp; wipe), then render normally. On failure: surface "that key doesn't
+        decrypt this workspace's data," let the user retry.</li>
     </ol>
 
     <h3>8.3 Share an E2EE workspace with another user</h3>
@@ -836,11 +840,12 @@ GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
 
     <div class="decision">
       <strong>Pluggable key lookup.</strong> The seam takes <code>getCek(workspaceId)</code> as a
-      callback rather than reading any global. In the simple model, the implementation is
-      "localStorage lookup at <code>(user_id, workspace_id)</code>." If the hierarchy is added later
-      (§13), the implementation becomes "look up in the in-memory unwrapped-CEK map populated at
-      vault unlock." Same call site, two implementations. This is the single most important seam
-      to get right for keeping the hierarchy migration cheap.
+      callback rather than reading any global. It returns a usable <code>CryptoKey</code> handle, not
+      raw bytes &mdash; in the simple model the implementation is "fetch the non-extractable
+      <code>CryptoKey</code> from IndexedDB at <code>(user_id, workspace_id)</code>" (§5). If the
+      hierarchy is added later (§13), the implementation becomes "look up in the in-memory
+      unwrapped-CEK map populated at vault unlock." Same call site, two implementations. This is the
+      single most important seam to get right for keeping the hierarchy migration cheap.
     </div>
 
     <h3 id="cols">9.1 What "per-column" actually means on the wire</h3>
@@ -1274,8 +1279,10 @@ GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
       <li><strong>Replacing server-side <code>blocks_history</code> with a client-uploaded edit
         log.</strong> Would degrade plaintext workspaces to slightly simplify the E2EE path; keep
         the trigger (it records ciphertext diffs for E2EE workspaces &mdash; still PITR-useful).</li>
-      <li><strong>Full at-rest encryption of the local OPFS SQLite.</strong> Out of scope &mdash;
-        wrong threat model (device theft, not server). Revisit if that model is added.</li>
+      <li><strong>Full at-rest encryption of the local OPFS SQLite, for v1.</strong> v1's lock is a
+        coarse wipe (§6), so at-rest encryption isn't required to land E2EE. But it's the mechanism
+        for a non-destructive lock and for device-theft protection &mdash; tracked as a post-v1
+        option in §14, not flatly rejected.</li>
     </ul>
 
     <h2 id="hierarchy">13. Adding the hierarchy later (if needed)</h2>
@@ -1296,9 +1303,10 @@ GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
       <li><strong>Per-user opt-in flow.</strong> User enters a new passphrase &rarr; derive MK
         via Argon2id &rarr; generate UVK &rarr; generate X25519 keypair &rarr; wrap UVK with MK
         &rarr; wrap private key with UVK &rarr; insert their <code>user_vault</code> row.</li>
-      <li><strong>Wrap existing WKs.</strong> For every WK already in the user's device localStorage,
-        wrap it with the new UVK and write to <code>workspace_members.wrapped_cek</code>. Local
-        paste flow remains as a backup unlock path.</li>
+      <li><strong>Wrap existing WKs.</strong> Wrap each WK with the new UVK and write to
+        <code>workspace_members.wrapped_cek</code>. Note the non-extractable IndexedDB copy (§5)
+        can't be exported, so the bytes come from the user re-pasting each WK from their backup at
+        opt-in time; the local paste flow remains as a backup unlock path regardless.</li>
       <li><strong>Future workspaces.</strong> The create flow now also wraps the new WK with UVK
         and stores it. Sharing can use the pubkey-mediated handoff (with whatever TOFU /
         key-transparency story the hierarchy migration brings).</li>
@@ -1322,8 +1330,8 @@ GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
     <ul>
       <li><code>schema_version</code> in the AAD (already in §6).</li>
       <li>The sync boundary's <code>getCek(workspaceId)</code> callback signature (§9). Simple
-        model implements it as an localStorage lookup; hierarchy implements it as an in-memory
-        unwrapped-CEK-map read. Same call site, two implementations.</li>
+        model implements it as an IndexedDB <code>CryptoKey</code> lookup; hierarchy implements it as
+        an in-memory unwrapped-CEK-map read. Same call site, two implementations.</li>
       <li>No "user has a passphrase" assumption baked anywhere upstream of the sync boundary. The
         simple model has no user-level secrets; the hierarchy adds them. Keep the upstream layer
         ignorant.</li>
@@ -1367,6 +1375,22 @@ GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
         param. The current design keeps it as an explicit, server-maintained column because the
         duality thesis (§10) has server code gating on mode &mdash; but nothing in the security
         model depends on it. Revisit if a third mode never materializes.</li>
+
+      <li><strong>Non-destructive lock via at-rest encryption (post-v1).</strong> v1's "Lock &amp;
+        wipe local data" (§6) is destructive on purpose &mdash; it wipes the local store and
+        re-syncs on unlock &mdash; which keeps the implementation a single coarse operation. The
+        nicer property ("drop the key, the data stays but is unreadable") needs the local store
+        encrypted at rest, which PowerSync's web SDK supports (wa-sqlite Multiple Ciphers /
+        <code>WebEncryptionOptions.encryptionKey</code>, per §9.2's transport box). Two decisions
+        gate it: (a) <strong>granularity</strong> &mdash; whole-DB at-rest is one key, so it gives
+        an <em>app-level</em> lock, not per-workspace; a per-workspace non-destructive lock keyed by
+        the WK would need one ATTACH'd encrypted DB file per workspace, which fights PowerSync's
+        single-DB model, caps at <code>SQLITE_MAX_ATTACHED</code> (~10), and makes cross-workspace
+        references harder; (b) <strong>key source</strong> &mdash; for the lock to be meaningful the
+        at-rest key must not be silently re-derivable (an app passphrase gives a real lock but
+        reintroduces passphrase management; a device-stored key only defends against offline device
+        theft). It is additive to, not a replacement for, Layout B's server-side per-column
+        encryption.</li>
     </ol>
 
     <h2 id="tradeoffs">15. Tradeoffs we're accepting</h2>
@@ -1392,7 +1416,9 @@ GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
         is the app-visible <code>blocks</code> table itself under Layout B (only PowerSync's
         <code>blocks_synced</code> staging holds ciphertext locally). Irrelevant for threat model A
         (server can't read content); relevant only if the threat model is later broadened to
-        local-disk attackers, in which case OS disk encryption is the right answer.</li>
+        local-disk attackers, in which case OS disk encryption or the app-level at-rest encryption
+        tracked in §14 is the answer (OS encryption alone doesn't give the "drop the key to lock"
+        property, since its key is always present while the user is logged in).</li>
       <li><strong>Client-trust required.</strong> A backdoored build can exfiltrate keys.
         Subresource integrity, reproducible builds, and audit are mitigations, not solutions.</li>
     </ul>
