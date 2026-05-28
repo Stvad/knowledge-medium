@@ -15,7 +15,7 @@ import {
   type PropertySchema,
 } from '@/extensions/api.js'
 import type { Block } from '@/data/block.js'
-import { PAGE_TYPE } from '@/data/blockTypes.js'
+import { BLOCK_TYPE_TYPE, PAGE_TYPE } from '@/data/blockTypes.js'
 import { aliasesProp, getBlockTypes } from '@/data/properties.js'
 import { createOrRestoreTargetBlock, ensureAliasTarget } from '@/data/targets.js'
 import { addDaysIso, getOrCreateDailyNote, todayIso } from '@/plugins/daily-notes/dailyNotes.js'
@@ -107,6 +107,11 @@ const highlightTemplateProp = defineProperty<string>('readwise:highlightTemplate
 const autoSyncIntervalProp = defineProperty<number>('readwise:autoSyncIntervalMin', {
   codec: codecs.number,
   defaultValue: 0,
+  changeScope: ChangeScope.BlockDefault,
+})
+const authorPageTypesProp = defineProperty<readonly string[]>('readwise:authorPageTypes', {
+  codec: codecs.refList({ targetTypes: [BLOCK_TYPE_TYPE] }),
+  defaultValue: [],
   changeScope: ChangeScope.BlockDefault,
 })
 // purely a UI hint — the source of truth is localStorage. We mirror it so the
@@ -239,7 +244,7 @@ const readwisePrefsType = defineBlockType({
   properties: [
     lastSyncedAtProp, syncSinceProp,
     pageTitleTemplateProp, bookTemplateProp, highlightTemplateProp,
-    autoSyncIntervalProp, connectedHintProp,
+    autoSyncIntervalProp, authorPageTypesProp, connectedHintProp,
   ],
 })
 const readwiseLibraryType = defineBlockType({
@@ -873,6 +878,7 @@ const lookupOrCreateAuthorPage = async (
   repo: any,
   workspaceId: string,
   author: string | undefined,
+  authorPageTypeIds: readonly string[],
   typeSnapshot: any,
 ): Promise<string | undefined> => {
   const name = nonEmptyString(author)
@@ -882,6 +888,13 @@ const lookupOrCreateAuthorPage = async (
   if (existing && !existing.deleted) return existing.id
 
   const ensured = await ensureAliasTarget(tx, repo, name, workspaceId, typeSnapshot)
+  if (ensured.inserted) {
+    const uniqueTypeIds = new Set(authorPageTypeIds.map(cleanText).filter((id): id is string => Boolean(id)))
+    for (const typeId of uniqueTypeIds) {
+      if (!typeSnapshot.types.has(typeId)) continue
+      await repo.addTypeInTx(tx, ensured.id, typeId, {}, typeSnapshot)
+    }
+  }
   return ensured.id
 }
 
@@ -1112,6 +1125,7 @@ const syncBookToBlocks = async (
   pageTitleTemplate: string,
   bookTemplate: string,
   highlightTemplate: string,
+  authorPageTypeIds: readonly string[],
   reviewDateIso: string,
 ) => {
   const bookId = pluginBlockId(workspaceId, READWISE_NS, `book:${book.user_book_id}`)
@@ -1145,7 +1159,14 @@ const syncBookToBlocks = async (
     await repo.addTypeInTx(tx, bookId, PAGE_TYPE, { [aliasesProp.name]: [title] }, typeSnapshot)
     await repo.addTypeInTx(tx, bookId, READWISE_DOCUMENT_TYPE, {}, typeSnapshot)
     await mergeSourceOwnedAlias(tx, bookId, existing?.content, title)
-    const authorPageId = await lookupOrCreateAuthorPage(tx, repo, workspaceId, book.author, typeSnapshot)
+    const authorPageId = await lookupOrCreateAuthorPage(
+      tx,
+      repo,
+      workspaceId,
+      book.author,
+      authorPageTypeIds,
+      typeSnapshot,
+    )
     await applyManagedProperties(tx, bookId, DOCUMENT_PROPERTY_SCHEMAS, documentPropertyEntries(book, authorPageId))
 
     // 2. supplemental template children. Property-backed template lines are
@@ -1266,6 +1287,7 @@ const runSync = async (repo: any, { silent = false } = {}) => {
   const pageTitleTemplate = prefs.get(pageTitleTemplateProp)
   const bookTemplate = prefs.get(bookTemplateProp)
   const highlightTemplate = prefs.get(highlightTemplateProp)
+  const authorPageTypeIds = prefs.get(authorPageTypesProp)
   const reviewDateIso = reviewDateIsoForSync(new Date())
 
   let progress = silent ? null : showProgress('Readwise: fetching…')
@@ -1284,7 +1306,7 @@ const runSync = async (repo: any, { silent = false } = {}) => {
         progress.update(`Readwise: ${bookCount} books, ${highlightCount} highlights…`)
         await syncBookToBlocks(
           repo, workspaceId, rootId, book,
-          pageTitleTemplate, bookTemplate, highlightTemplate, reviewDateIso,
+          pageTitleTemplate, bookTemplate, highlightTemplate, authorPageTypeIds, reviewDateIso,
         )
       }
     } while (pageCursor)
@@ -1553,6 +1575,10 @@ const autoSyncEditor = definePropertyEditorOverride<number>({
   label: 'Auto-sync interval (minutes; 0 = off)',
   Editor: NumberEditor,
 })
+const authorPageTypesEditor = definePropertyEditorOverride<readonly string[]>({
+  name: authorPageTypesProp.name,
+  label: 'New author page types',
+})
 
 // ---------------------------------------------------------------------------
 // wiring
@@ -1572,6 +1598,7 @@ export default [
   propertySchemasFacet.of(bookTemplateProp, { source }),
   propertySchemasFacet.of(highlightTemplateProp, { source }),
   propertySchemasFacet.of(autoSyncIntervalProp, { source }),
+  propertySchemasFacet.of(authorPageTypesProp, { source }),
   propertySchemasFacet.of(connectedHintProp, { source }),
   ...IMPORTED_PROPERTY_SCHEMAS.map(schema => propertySchemasFacet.of(schema, { source })),
 
@@ -1582,6 +1609,7 @@ export default [
   propertyEditorOverridesFacet.of(bookTemplateEditor, { source }),
   propertyEditorOverridesFacet.of(highlightTemplateEditor, { source }),
   propertyEditorOverridesFacet.of(autoSyncEditor, { source }),
+  propertyEditorOverridesFacet.of(authorPageTypesEditor, { source }),
 
   appMountsFacet.of({ id: 'readwise.setup-dialog', component: ReadwiseSetupDialog }, { source }),
   appEffectsFacet.of(autoSyncEffect, { source }),
