@@ -532,11 +532,18 @@ ALTER TABLE workspaces
 -- Immutable after create, parallel to encryption_mode: an editor with
 -- write access to the workspaces row could otherwise replace the canary
 -- and brick WK validation for other members.
+-- Bypass for the rotate_workspace_wk RPC (§14): the trigger checks a
+-- session-local setting that only that RPC sets via SET LOCAL inside
+-- its body. Any other write path leaves the setting unset and the
+-- trigger raises as normal. current_setting(..., true) returns NULL
+-- when the setting is absent, which the IS DISTINCT FROM treats as
+-- "not in rotation."
 CREATE OR REPLACE FUNCTION workspaces_prevent_wk_canary_change()
   RETURNS trigger
   LANGUAGE plpgsql AS $$
 begin
-  if OLD.wk_canary is distinct from NEW.wk_canary then
+  if OLD.wk_canary is distinct from NEW.wk_canary
+     and current_setting('kmp.rotating_wk', true) is distinct from 'on' then
     raise exception 'workspaces.wk_canary is immutable';
   end if;
   return NEW;
@@ -547,8 +554,16 @@ CREATE TRIGGER workspaces_prevent_wk_canary_change_trg
   BEFORE UPDATE ON workspaces
   FOR EACH ROW
   EXECUTE FUNCTION workspaces_prevent_wk_canary_change();
--- One-shot exception for the rotate_workspace_wk RPC (§14) which
--- updates the canary alongside re-encrypted blocks.
+-- rotate_workspace_wk(...) opens with: SET LOCAL kmp.rotating_wk = 'on';
+-- The setting is per-transaction and reverts on COMMIT/ROLLBACK, so
+-- the exception is scoped to that single RPC invocation.
+
+-- Postgres function signatures include parameter count/types, so a new
+-- create_workspace with extra defaulted params would *overload* the
+-- existing create_workspace(p_name text) rather than replace it — and
+-- create_workspace('foo') would then be ambiguous. Drop the old signature
+-- explicitly, then create the new one and grant it.
+DROP FUNCTION IF EXISTS create_workspace(text);
 
 CREATE OR REPLACE FUNCTION create_workspace(
     p_name             text,
@@ -558,7 +573,10 @@ CREATE OR REPLACE FUNCTION create_workspace(
                                              -- NULL falls back to server-generated
                                              -- UUID for plaintext (current behavior)
     p_wk_canary        text DEFAULT NULL     -- required iff p_encryption_mode = 'e2ee'
-  ) RETURNS jsonb ...;</code></pre>
+  ) RETURNS jsonb ...;
+
+GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
+  TO anon, authenticated, service_role;</code></pre>
 
     <p>
       That's the entire server-side schema change. Notably <em>not</em> added (saved for the
