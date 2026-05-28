@@ -836,7 +836,7 @@ GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
       another and have it still decrypt as valid.
     </p>
 
-    <h3 id="triggers">9.2 Where local plaintext lives: Layouts B and C</h3>
+    <h3 id="triggers">9.2 Where local plaintext lives: Layout B (staging table + observer)</h3>
 
     <p>
       The codebase leans heavily on SQL-side processing of content. Triggers in
@@ -847,18 +847,19 @@ GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
       <code>parseReferences</code>, alias autocomplete, type filters, local FTS.
     </p>
 
-    <p>
-      An earlier draft considered <strong>Layout A</strong>: store ciphertext locally, let the
-      indexes silently not populate for E2EE rows, add a "decrypt-then-populate" pass at WK paste.
-      <em>Not viable.</em> Alias search is a core Roam-style UX; degrading it in E2EE workspaces is
-      a non-starter. Layout A is documented here only to explain why it was rejected.
-    </p>
-
-    <p>
-      Two real candidates remain. Both produce server-side ciphertext and a fully-functional local
-      query surface; they differ on where the plaintext lives in the local DB and how it gets
-      there.
-    </p>
+    <div class="decision">
+      <strong>Decision: Layout B</strong> &mdash; the app-visible <code>blocks</code> table stays
+      plaintext, fed by a JS observer that decrypts a synced ciphertext mirror. Two alternatives
+      were considered and rejected. <strong>Layout A</strong> (keep ciphertext in the local
+      <code>blocks</code> table and let the derived indexes lapse) degrades alias search and local
+      FTS &mdash; core UX &mdash; so it's a non-starter. <strong>Layout C</strong> (ciphertext at
+      rest with async-UDF-decorated triggers) scatters encryption-awareness across every raw-SQL
+      site that touches a content column, an unbounded surface one author away from silently
+      breaking E2EE. Full mechanics of both, and the codebase survey that killed C, are in
+      <a href="./e2ee-rejected-alternatives.html">e2ee-rejected-alternatives.html</a>. The
+      transport-investigation box below explains why a simpler "decrypt-on-download" hook isn't
+      available &mdash; which is what forces the mirror-table shape in the first place.
+    </div>
 
     <h4>Layout B &mdash; local plaintext via staging table + JS observer</h4>
 
@@ -916,8 +917,8 @@ GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
       in <code>blocks_synced</code> untouched. When the user pastes a WK that validates,
       run a drain pass that re-processes every staging row for that workspace through the
       observer (now with a WK available, decryption succeeds and the rows land in
-      <code>blocks</code>). Mirrors the per-workspace backfill in Layout C, but with the source
-      being the staging table rather than ciphertext-at-rest.
+      <code>blocks</code>). The backfill is a per-workspace drain of the staging table on WK
+      paste.
     </p>
 
     <p>
@@ -1003,358 +1004,13 @@ GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
         shouldn't &mdash; raw tables are a documented pattern).</li>
     </ul>
 
-    <h4>Layout C &mdash; ciphertext at rest, UDF-decorated triggers</h4>
-
-    <p>
-      The local <code>blocks</code> table holds ciphertext at rest, exactly matching the server.
-      A new async user-defined function &mdash; <code>e2ee_decrypt_json(workspace_id, value)
-      &rarr; text</code> &mdash; is registered against the local SQLite via
-      <code>sqlite3.create_function</code>. The UDF needs to know whether the workspace is E2EE
-      (and whether its WK is currently loaded) to dispatch correctly. It must source this from the
-      <strong>durable local mode pin and the WK store (§6 rule 1)</strong>, <strong>not</strong>
-      from the synced <code>workspaces.encryption_mode</code> &mdash; that column is a zero-authority
-      server hint, and dispatching on it would let a hostile sync source present a pinned E2EE
-      workspace as <code>'none'</code> and pass attacker plaintext straight through the UDF into
-      aliases/FTS/row_events before any app-level guard runs. Cache the pin (and locked/WK state)
-      JS-side at session start &mdash; the pin is locally immutable (§6 rule 1) &mdash; so each call
-      is a Map lookup, not a SQL subquery. Four behaviors based on (pin/WK state, input):
-    </p>
-    <ul>
-      <li><strong>Plaintext workspace, any input</strong>: pass-through unchanged. The UDF only
-        ever runs on the three content columns; for plaintext workspaces those are already
-        plaintext.</li>
-      <li><strong>E2EE workspace, encrypted input (<code>enc:v1:</code> prefix), WK available</strong>:
-        look up the WK, call <code>crypto.subtle.decrypt</code>, return plaintext JSON text.</li>
-      <li><strong>E2EE workspace, encrypted input, WK absent (locked workspace)</strong>: return
-        <code>NULL</code>. Sync apply can land encrypted rows before the user has pasted the WK;
-        the UDF returning NULL makes <code>json_each(NULL, '$.alias')</code> yield zero rows,
-        <code>json(NULL)</code> yield NULL, and the indexes/audit log skip the row. Sync apply
-        succeeds. Per-workspace backfill on WK paste repopulates.
-        <br><br>
-        <strong>But the row_event snapshot trigger fires anyway with NULL content,
-        <code>rowEventsTail</code> parses it, and <code>BlockCache.applyIfNewer</code> caches a
-        snapshot with content/properties/references as NULL placeholders</strong> keyed to the
-        current <code>updated_at</code>. The WK-paste drain pass typically runs as a no-op
-        UPDATE that preserves the same <code>updated_at</code>, so the cache's <code>&le;</code>
-        LWW guard rejects the real decrypted snapshot &mdash; the workspace stays stuck with NULL
-        placeholders. Fix: on WK paste, before the drain pass, the client explicitly evicts every
-        <code>BlockCache</code> entry for that workspace. The drain then repopulates from
-        decrypted data without fighting LWW. Cleaner than gating the row_event trigger on the
-        UDF's non-NULL output (which would need per-column conditional logic in the trigger).</li>
-      <li><strong>E2EE workspace, <em>unprefixed</em> input</strong>: return <code>NULL</code> and
-        record a tamper signal. This is the downgrade-attack defense at the UDF layer. A hostile
-        server could strip the <code>enc:v1:</code> prefix and serve attacker-controlled plaintext
-        for an E2EE row; under Layout C's decrypt-at-read model the §6 prefix check would sit at
-        <code>parseBlockRow</code> for app reads (Layout B instead enforces it at the wire boundary,
-        §6 rule 2), but trigger-driven side tables and the row-event/<code>BlockCache</code> path
-        fire <em>before</em> that guard. Without this UDF-level check, attacker plaintext would
-        seed FTS, aliases, references, and the row-event cache as trusted content. Treat
-        unprefixed-in-E2EE the same as locked: trigger maintenance no-ops, surface a tamper warning
-        in the UI.</li>
-    </ul>
-    <p>
-      The row_event snapshot triggers in <code>clientSchema.ts</code> need the UDF wrap too &mdash;
-      otherwise <code>after_json</code> would contain <code>enc:v1:</code> ciphertext, which
-      <code>rowEventsTail.ts</code> would pass to <code>BlockCache.applyIfNewer</code> as if it
-      were plaintext, and the cache would emit ciphertext to anyone listening. UDF-wrapping
-      ensures the cache only sees plaintext for E2EE rows (or NULL placeholders when locked).
-    </p>
-    <p>
-      Triggers wrap column references in the UDF before passing into <code>json_each</code>,
-      <code>json_extract</code>, etc:
-    </p>
-    <pre><code>-- Before:
-INSERT OR IGNORE INTO block_aliases (block_id, workspace_id, alias, alias_lower)
-SELECT NEW.id, NEW.workspace_id, je.value, LOWER(je.value)
-FROM json_each(NEW.properties_json, '$.alias') AS je
-WHERE typeof(je.value) = 'text';
-
--- After:
-INSERT OR IGNORE INTO block_aliases (block_id, workspace_id, alias, alias_lower)
-SELECT NEW.id, NEW.workspace_id, je.value, LOWER(je.value)
-FROM json_each(e2ee_decrypt_json(NEW.workspace_id, NEW.properties_json), '$.alias') AS je
-WHERE typeof(je.value) = 'text';</code></pre>
-
-    <div class="decision">
-      <strong>Critical: under Layout C, encrypt happens at write time, not upload time.</strong>
-      Every <code>TxImpl</code> path that writes content columns must hit the sync boundary's
-      <code>encodeForWire</code> step <em>before</em> the <code>INSERT</code>/<code>UPDATE</code>
-      reaches the <code>blocks</code> table; otherwise the row sits as plaintext locally until a
-      sync echo overwrites it &mdash; breaking the ciphertext-at-rest invariant and tripping the
-      §6 downgrade guard on the user's own freshly-written content. "Every path" matters:
-      <code>TxImpl</code> has at least <code>create</code>, <code>createOrGet</code>
-      (<code>txEngine.ts:226</code>), <code>update</code>, <code>restore</code>
-      (<code>:284</code>), <code>setProperty</code> (<code>:390</code>), and
-      <code>applyRaw</code> / undo replay (<code>:554</code>) &mdash; all of which write
-      <code>content</code>, <code>properties_json</code>, or <code>references_json</code>. The
-      cleanest shape is to route every TxImpl SQL write through a shared helper that calls
-      <code>encodeForWire</code> on the row's content columns first; itemized per-method wiring
-      is footgun-shaped &mdash; one missed path silently leaks plaintext into <code>blocks</code>
-      and onto the upload queue.
-      <br><br>
-      The upload-routing trigger then captures whatever's already in the row (ciphertext for E2EE
-      workspaces) and forwards it unchanged. This is the asymmetry with Layout B: B encrypts at
-      upload and decrypts at download; C encrypts at write and decrypts at read (via UDF for
-      triggers, via <code>parseBlockRow</code> for app reads). The transform module's
-      <code>encodeForWire</code> seam is load-bearing under both layouts; the difference is where
-      in the lifecycle it fires.
-    </div>
-
-    <h5>Codebase survey: where Layout C touches</h5>
-
-    <p>
-      A focused survey of every place that reads
-      <code>blocks.content</code>/<code>properties_json</code>/<code>references_json</code>
-      came back with a more contained surface than I expected, with one specific schema refactor
-      load-bearing for correctness.
-    </p>
-
-    <p><strong>What's already structured for Layout C:</strong></p>
-    <ul>
-      <li><strong>Most reads are centralized.</strong> The dominant read path routes through
-        <code>txEngine.ts</code>'s <code>SELECT ${COLUMN_LIST} FROM blocks</code> →
-        <code>parseBlockRow</code> in <code>repo.ts</code> →
-        <code>getBlockDataById</code>. One decrypt call in <code>parseBlockRow</code> covers it.
-        Caveat: the survey didn't catch every raw-SQL site &mdash; see "What the survey did
-        surface" below for the two that bypass <code>parseBlockRow</code>.</li>
-      <li><strong>No <code>WHERE content LIKE '%foo%'</code> or
-        <code>WHERE json_extract(properties_json, ...) = ?</code> in app code.</strong>
-        Property-shaped filters ride <code>block_aliases</code>/<code>block_types</code> side
-        tables maintained by triggers. But two raw queries do operate on these columns directly
-        and need Layout C handling &mdash; covered below.</li>
-      <li><strong>No generated columns or CHECK constraints</strong> over these columns.</li>
-      <li><strong>PowerSync is content-blind internally.</strong> Conflict resolution is metadata-
-        driven; the apply path runs the same triggers as local writes.</li>
-    </ul>
-
-    <p><strong>What the survey did surface:</strong></p>
-    <ul>
-      <li><strong>Trigger surface is wider than just <code>clientSchema.ts</code>.</strong>
-        Confirmed UDF-wrap targets: row-event, alias, type, and FTS triggers in
-        <code>src/data/internals/clientSchema.ts</code>; the three triggers in
-        <code>src/plugins/references/localSchema.ts</code> (references-graph maintenance); the
-        daily-notes trigger in <code>src/plugins/daily-notes/localSchema.ts</code> reading
-        <code>properties_json</code>. The pattern propagates &mdash; any future plugin that
-        maintains a derived index over these columns needs the same UDF wrap.
-        <br><br>
-        <strong>Explicit exception: the upload-routing triggers in
-        <code>clientSchema.ts</code> (<code>blocks_upload_insert</code> /
-        <code>blocks_upload_update</code>) must NOT be UDF-wrapped.</strong> Their job is to
-        capture <code>NEW.content</code>/<code>NEW.properties_json</code>/<code>NEW.references_json</code>
-        into <code>ps_crud</code> for PowerSync to upload to Supabase. Under Layout C those
-        columns already hold ciphertext (per the encrypt-at-write callout above), and the upload
-        must forward ciphertext unchanged. Wrapping these in the decrypt UDF would queue plaintext
-        for upload &mdash; the exact opposite of what we want.</li>
-      <li><strong>Raw-SQL queries that bypass <code>parseBlockRow</code> and operate on the
-        content columns directly.</strong> The initial survey claim ("reads are centralized") was
-        wrong. Subsequent review rounds have found progressively more sites; the list below is
-        what's confirmed but should not be treated as exhaustive:
-        <ul>
-          <li><code>src/data/repo.ts:1553-1559</code> &mdash; property-reprojection scan,
-            <code>FROM blocks b, json_each(b.properties_json) prop WHERE prop.key IN (?)</code>.
-            UDF-wrap the <code>json_each</code> argument, or skip E2EE rows and rely on the
-            per-workspace backfill on WK paste.</li>
-          <li><code>src/data/repo.ts:1338-1343</code> &mdash; property-deletion warning count,
-            <code>json_extract(b.properties_json, ?) IS NOT NULL</code>. UDF-wrap or count via
-            the trigger-maintained side tables.</li>
-          <li><code>src/extensions/extensionLookup.ts:40-49</code> &mdash; reads
-            <code>b.properties_json</code> raw and <code>JSON.parse</code>s it client-side to
-            find extension labels. Decrypt before parse; or join through <code>block_aliases</code>
-            (which would be plaintext via the UDF-wrapped alias trigger).</li>
-          <li><code>src/data/targets.ts:234-251</code> &mdash; alias-seat reader,
-            <code>SELECT deleted, properties_json, content FROM blocks WHERE id = ?</code>,
-            client-side <code>JSON.parse</code>. Decrypt before parse, or route this through the
-            centralized read path.</li>
-          <li><code>src/plugins/references/renameProcessor.ts:60-66</code> &mdash; backlink rename
-            reads <code>source.content</code> directly. Decrypt at the call site or route through
-            <code>parseBlockRow</code>.</li>
-          <li><code>src/plugins/find-replace/dataExtension.ts:80-89</code> &mdash;
-            <code>instr(content, ?)</code> literal-substring search. Route through FTS for
-            E2EE workspaces (<code>blocks_fts.content</code> already holds plaintext via the
-            UDF-wrapped FTS trigger).</li>
-          <li><code>src/data/internals/typedBlockQuery.ts</code> lines 198 and 472-475 &mdash;
-            the typed-query compiler builds <code>FROM blocks b</code> and emits every
-            <code>where</code> predicate as <code>json_extract(b.properties_json, ?)</code>. This
-            backs <code>repo.queryBlocks</code> / <code>subscribeBlocks</code>, which are
-            centralized query APIs used throughout the data layer. Under Layout C the
-            <code>json_extract</code> runs against ciphertext and fails or skips. Fix: parameterize
-            the compiler so the JSON-text expression is pluggable, and emit
-            <code>e2ee_decrypt_json(b.workspace_id, b.properties_json)</code> for E2EE-scoped
-            queries (or unconditionally, accepting the UDF passthrough cost for plaintext
-            workspaces). The compiler change is small but the consumer surface is large &mdash;
-            anywhere <code>repo.queryBlocks</code> runs across an E2EE workspace.</li>
-          <li><code>src/data/internals/kernelQueries.ts</code> &mdash; multiple kernel-query
-            sites touch raw <code>b.content</code>:
-            <ul>
-              <li><code>buildFuzzyAliasMatchesSql</code> (line 356) and
-                <code>SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL</code> (line 378) select
-                <code>b.content</code> into custom row shapes that bypass <code>parseBlockRow</code>.
-                Drive alias autocomplete previews. Fix: UDF-wrap the content column.</li>
-              <li><code>SELECT_FIRST_CHILD_BY_CONTENT_SQL</code> (line 402) is
-                <code>WHERE child.content = ?</code>, a literal equality filter (would compare
-                user plaintext to ciphertext bytes &mdash; never matches under Layout C). Can't
-                UDF-wrap the column in <code>WHERE x = ?</code> without defeating any index on
-                <code>content</code>, so for E2EE workspaces this needs an in-memory
-                scan-after-decrypt or a side-table reshape.</li>
-              <li><code>SELECT_BLOCKS_BY_CONTENT_SQL</code> (line 251) filters
-                <code>WHERE b.content != ''</code> and ranks via
-                <code>LOWER(b.content) = LOWER(?)</code> / <code>LIKE LOWER(?) || '%'</code>.
-                Under Layout C the filter is meaningless (ciphertext is always non-empty), and
-                rank predicates never match user queries. Search degrades silently &mdash;
-                returns rows (the FTS MATCH still works through the UDF-wrapped FTS trigger) but
-                with broken ranking, since every match ends up in the lowest priority bucket.
-                Fix: UDF-wrap the rank expressions and the content filter.</li>
-              <li><code>SELECT_RECENT_BLOCKS_SQL</code> (line 272) filters
-                <code>WHERE content != ''</code>. Same degradation as above &mdash; "recent
-                non-empty blocks" pickers would include blocks the user considers empty (whose
-                ciphertext is non-empty because AEAD pads). Fix: UDF-wrap the content filter.</li>
-            </ul>
-            The last two are silent-degradation rather than crash, which makes them easier to
-            miss in testing &mdash; another reason for the lean toward Layout B.</li>
-        </ul>
-        Each is mechanical once identified, but the list keeps growing under review and almost
-        certainly isn't complete. <strong>This is a real cost of Layout C: it scatters
-        encryption-awareness across the codebase wherever raw SQL touches a content column.</strong>
-        Worth weighting in the B-vs-C tradeoff (see working decision below).</li>
-      <li><strong>Backfill SQL statements also scan encrypted columns directly.</strong>
-        Marker-gated one-shot scans run on schema bootstrap:
-        <code>BACKFILL_BLOCK_ALIASES_SQL</code>, <code>BACKFILL_BLOCK_TYPES_SQL</code>,
-        <code>BACKFILL_BLOCKS_FTS_SQL</code> in
-        <code>src/data/internals/clientSchema.ts</code>, and
-        <code>BACKFILL_BLOCK_REFERENCES_SQL</code> in
-        <code>src/plugins/references/localSchema.ts</code>. They use
-        <code>json_each(b.properties_json, ...)</code>, raw <code>b.content</code>, or
-        <code>json_each(b.references_json)</code> directly. If any of these runs after encrypted
-        rows exist (new device's first sync of an existing E2EE workspace), they either throw
-        on <code>enc:v1:</code> text or build indexes from ciphertext. Fix: UDF-wrap each
-        backfill, or mode-skip E2EE rows and rely on the per-workspace WK-paste backfill to
-        cover them.
-        <br><br>
-        <strong>And one backfill is worse than the others &mdash;
-        <code>BACKFILL_DAILY_NOTE_DATE_SQL</code> in
-        <code>src/plugins/daily-notes/localSchema.ts:41-93</code>.</strong> It reads
-        <code>properties_json</code> via <code>json_extract</code>/<code>json_each</code>
-        <em>and</em> writes back via <code>UPDATE blocks SET properties_json = json_set(...)</code>.
-        Under Layout C the read side would fail on ciphertext; the write side would write
-        plaintext-shaped JSON into the ciphertext-at-rest column, breaking the invariant
-        directly. Fix: mode-skip E2EE rows entirely in this backfill (the daily-note date
-        attachment logic for E2EE workspaces needs to be done at the app level, post-decrypt,
-        not via a blind SQL UPDATE on the storage table).</li>
-      <li><strong>One expression index needs converting to a side table.</strong>
-        <code>src/plugins/daily-notes/localSchema.ts:105</code> has
-        <code>CREATE INDEX idx_blocks_daily_note_date ON blocks (json_extract(properties_json, '$.dailyNoteDate'))</code>
-        &mdash; an expression index directly over the encrypted column. We can't use the UDF
-        inside the expression because the UDF's output depends on external state (the WK store);
-        marking it <code>SQLITE_DETERMINISTIC</code> would lie, and the index would contain
-        pre-WK NULLs that don't get rebuilt when the WK lands. The fix is to convert this to a
-        trigger-maintained <code>block_daily_notes</code> side table following the same pattern
-        as <code>block_aliases</code>/<code>block_types</code>. One file's worth of change, follows
-        an existing pattern, but it has to land alongside the encryption work or calendar
-        date-range queries break for E2EE workspaces.</li>
-      <li><strong>Backfill on WK paste.</strong> When a workspace's WK becomes available, the
-        trigger-maintained side tables for blocks that arrived encrypted need re-populating.
-        Either re-fire the maintenance triggers via a no-op write
-        (<code>UPDATE blocks SET id = id WHERE workspace_id = ? AND deleted = 0</code>), or run
-        a per-workspace variant of <code>BACKFILL_BLOCK_ALIASES_SQL</code>/<code>_TYPES_SQL</code>/
-        <code>_FTS</code> scoped by <code>workspace_id</code>. Marker rows in
-        <code>client_schema_state</code> already track first-time backfills; add per-(workspace,
-        index) markers so the rebuild is idempotent.</li>
-      <li><strong>UDF determinism flag.</strong> Not marked
-        <code>SQLITE_DETERMINISTIC</code> &mdash; the WK store is external state, and lying about
-        determinism causes the expression-index problem above. SQLite won't memoize calls within
-        a query, so the same encrypted value read by N triggers gets decrypted N times. A
-        per-row JS-side decrypt cache keyed by <code>(workspace_id, ciphertext)</code> can claw
-        that back if profiling shows it matters; not load-bearing for v1.</li>
-    </ul>
-
-    <ul>
-      <li><strong>What changes in code:</strong> register the async UDF at DB open
-        (<code>repoProvider.ts</code>); decrypt in <code>parseBlockRow</code>; UDF-wrap the
-        non-upload triggers in <code>clientSchema.ts</code> (row-events, alias, type, FTS) plus
-        the triggers in <code>plugins/references/localSchema.ts</code> and
-        <code>plugins/daily-notes/localSchema.ts</code> &mdash; the
-        <code>blocks_upload_insert</code>/<code>_update</code> triggers stay un-wrapped per the
-        exception noted above; UDF-wrap or mode-skip the four backfill statements
-        (<code>BACKFILL_BLOCK_ALIASES_SQL</code>, <code>BACKFILL_BLOCK_TYPES_SQL</code>,
-        <code>BACKFILL_BLOCKS_FTS_SQL</code> in <code>clientSchema.ts</code>,
-        <code>BACKFILL_BLOCK_REFERENCES_SQL</code> in <code>plugins/references/localSchema.ts</code>);
-        fix the known raw-SQL readers across ~10 SQL statements
-        (<code>repo.ts:1553-1559</code> reprojection scan;
-        <code>repo.ts:1338-1343</code> property-count; <code>extensions/extensionLookup.ts:40-49</code>;
-        <code>data/targets.ts:234-251</code>; <code>plugins/references/renameProcessor.ts:60-66</code>;
-        <code>plugins/find-replace/dataExtension.ts:80-89</code> via FTS reroute;
-        <code>data/internals/typedBlockQuery.ts:198,472-475</code> typed-query compiler &mdash;
-        parameterize its JSON-text expression so E2EE-scoped queries emit the UDF-wrapped form;
-        <code>data/internals/kernelQueries.ts</code>
-        <code>buildFuzzyAliasMatchesSql</code>/<code>SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL</code>/
-        <code>SELECT_BLOCKS_BY_CONTENT_SQL</code>/<code>SELECT_RECENT_BLOCKS_SQL</code>
-        UDF-wrap; <code>SELECT_FIRST_CHILD_BY_CONTENT_SQL</code> needs an in-memory or side-table
-        rework since the equality filter can't index on a UDF-wrapped column);
-        convert the
-        daily-notes expression index to a side table; wire <code>encodeForWire</code> into
-        every <code>TxImpl</code> content-writing path via a shared helper
-        (<code>create</code>, <code>createOrGet</code>, <code>update</code>, <code>restore</code>,
-        <code>setProperty</code>, <code>applyRaw</code> / undo replay) so local writes hit the
-        encrypt step before INSERT/UPDATE reaches <code>blocks</code> (not at upload &mdash; see
-        the encrypt-at-write callout above); per-workspace backfill on WK paste. No new top-level
-        tables for the encryption itself (the daily-notes side table is a local schema change,
-        not an E2EE-specific one). <strong>Note: the list of raw-SQL readers above keeps growing
-        under review; treat this as a non-exhaustive checklist rather than a complete one.</strong></li>
-      <li><strong>Plus:</strong> local DB mirrors the server (mental-model parity); reads keep
-        going through the existing centralized path; existing index machinery stays in SQL.</li>
-      <li><strong>Minus:</strong> every trigger fire on an encrypted row pays a WebCrypto decrypt
-        cost. Bulk operations (per-workspace backfill on first WK paste, large imports) pay it
-        N times.</li>
-      <li><strong>Risk &mdash; needs empirical verification before committing:</strong>
-        wa-sqlite supports async UDFs at the API level
-        (<code>sqlite3.create_function</code>; see the "should return asynchronously" test in
-        <code>node_modules/@journeyapps/wa-sqlite/test/callbacks.test.js</code>), and PowerSync
-        uses the Asyncify build that enables them
-        (<code>mc-wa-sqlite-async.mjs</code>). What I have not verified is whether PowerSync's
-        full query/trigger execution pipeline correctly awaits async UDFs through every code
-        path. PoC scope: register a trivial async UDF, invoke from a trigger via sync apply,
-        confirm the await happens. An afternoon's work; gates the choice between B and C.</li>
-      <li><strong>Note:</strong> local index side-tables (<code>block_aliases</code>, etc.) end up
-        containing plaintext-derived data even though <code>blocks.*</code> columns are
-        ciphertext. Irrelevant for threat model A; flagged for any future broadening to
-        local-disk attackers.</li>
-    </ul>
-
-    <div class="decision">
-      <strong>Decision: Layout B.</strong> Resolved by investigating PowerSync's capabilities
-      directly (see the "PowerSync transport investigation" box below). The earlier framing
-      treated B and C as a coin toss pending an async-UDF PoC and leaned C for "less
-      infrastructure." Two facts settled it for B:
-      <ol>
-        <li><strong>Layout B is PowerSync's officially-recommended E2EE pattern, with a reference
-          implementation.</strong> It is not a workaround that fights the framework &mdash; the
-          PowerSync team's own flagship E2EE demo
-          (<code>powersync-community/react-supabase-chat-e2ee</code>) does exactly this:
-          synced ciphertext table + a plaintext mirror table + a
-          <code>differentialWatch().onDiff({added, updated, removed})</code> observer that
-          decrypts in JS and writes the mirror inside a <code>writeTransaction</code>. The
-          <code>onDiff</code> API is purpose-built for this projection and hands you removals
-          directly &mdash; so the delete/tombstone propagation concern (above) is native to the
-          API, not something to hand-build.</li>
-        <li><strong>Layout C's decisive cost is real and Layout B's is bounded.</strong> The
-          Layout C touch surface kept widening across review rounds (7+ distinct app-code sites
-          across ~10 SQL statements, plus 5 backfills, plus all TxImpl write paths, almost
-          certainly incomplete); each is a forever-discipline rule one author away from silently
-          breaking E2EE. Layout B's complexity is concentrated in one named observer with a
-          framework API and a reference impl to copy.</li>
-      </ol>
-      The async-UDF PoC that previously gated the choice is moot: PowerSync's sync-apply runs in
-      the Rust/SQLite core, not a JS path you can interpose a UDF into, so Layout C's
-      decrypt-on-apply was never cleanly reachable anyway (see the investigation box). Layout C
-      is now formally rejected alongside A.
-    </div>
-
     <div class="warn">
-      <strong>PowerSync transport investigation (settles the layout question).</strong> The whole
-      B-vs-C tension came from wanting a per-row <em>download transform</em> &mdash; decrypt as
-      rows land locally, so the local DB is plaintext and nothing else changes. Direct
-      investigation of <code>@powersync/web@1.38.1</code> / <code>@powersync/common@1.53.1</code>
-      and the PowerSync team's own statements:
+      <strong>Why a mirror + observer, and not a simpler download transform.</strong> The obvious
+      question is why decryption needs a staging table and a JS observer at all &mdash; why not just
+      decrypt each row <em>as it lands locally</em>, so the local DB is plaintext and nothing else
+      changes. That per-row download transform is exactly what doesn't exist. Direct investigation
+      of <code>@powersync/web@1.38.1</code> / <code>@powersync/common@1.53.1</code> and the
+      PowerSync team's own statements:
       <ul>
         <li><strong>No download-side hook exists, natively or as a supported extension point.</strong>
           <code>PowerSyncBackendConnector</code> has only <code>fetchCredentials</code> +
@@ -1383,8 +1039,8 @@ WHERE typeof(je.value) = 'text';</code></pre>
     </div>
 
     <p>
-      JSONB migration is no longer load-bearing for E2EE under either layout (it was only relevant
-      for Layout A's no-op trick). It remains an independently motivated perf improvement
+      JSONB migration is no longer load-bearing for E2EE (it was only relevant for the rejected
+      Layout A's no-op trick). It remains an independently motivated perf improvement
       (<code>docs/follow-ups.md</code>); E2EE doesn't gate on it and it doesn't gate on E2EE.
     </p>
 
@@ -1408,12 +1064,11 @@ WHERE typeof(je.value) = 'text';</code></pre>
       </tr>
       <tr>
         <td>PowerSync sync rules</td>
-        <td><strong>Layout B</strong>: changed too. The blocks stream's row_type retarget to
-          <code>blocks_synced</code> is global, not E2EE-only &mdash; the universal observer
-          (§9.2) routes both plaintext and encrypted workspace rows from staging to
-          <code>blocks</code>. <strong>Layout C</strong>: unchanged.</td>
-        <td><strong>Layout B</strong>: same as the plaintext column &mdash; one global retarget
-          via <code>gen-sync-config.ts</code>. <strong>Layout C</strong>: unchanged.</td>
+        <td>Changed. The blocks stream's row_type retarget to <code>blocks_synced</code> is
+          global, not E2EE-only &mdash; the universal observer (§9.2) routes both plaintext and
+          encrypted workspace rows from staging to <code>blocks</code>.</td>
+        <td>Same as the plaintext column &mdash; one global retarget via
+          <code>gen-sync-config.ts</code>.</td>
       </tr>
       <tr>
         <td>Invite RPC chain</td>
@@ -1434,7 +1089,7 @@ WHERE typeof(je.value) = 'text';</code></pre>
       <tr>
         <td>Local derived indexes (<code>block_aliases</code>, <code>block_types</code>, <code>blocks_fts</code>)</td>
         <td>Maintained automatically by triggers as today.</td>
-        <td>Fully populated, matching plaintext-workspace behavior. Layout B fills them via plaintext writes through the JS observer; Layout C fills them via UDF-decrypted reads in the existing triggers (see §9.2).</td>
+        <td>Fully populated, matching plaintext-workspace behavior &mdash; Layout B fills them via plaintext writes through the JS observer, so the existing triggers fire as today (§9.2).</td>
       </tr>
       <tr>
         <td>Sharing / collaboration</td>
@@ -1467,10 +1122,7 @@ WHERE typeof(je.value) = 'text';</code></pre>
       <code>getCek(workspaceId)</code> pluggable callback signature in place from day one.
       Under Layout B the seam hosts the JS observer that watches PowerSync changes and decrypts
       staging-table rows into <code>blocks</code>, plus the upload-side encrypt in the
-      <code>uploadData</code> connector hook. Under Layout C the seam hosts the
-      <em>write-time</em> encrypt that every <code>TxImpl</code> content-writing path calls
-      before INSERT/UPDATE reaches <code>blocks</code> (not upload-side &mdash; see the §9.2
-      encrypt-at-write callout); download decrypt happens in-SQL via the UDF. Either way, the
+      <code>uploadData</code> connector hook. The
       boundary is one named module rather than behavior scattered across <code>repo.ts</code>
       and <code>services/powersync.ts</code>. Pure no-op refactor today; the eventual E2EE PR is a
       focused crypto change rather than a cross-cutting refactor.
@@ -1519,86 +1171,29 @@ WHERE typeof(je.value) = 'text';</code></pre>
 
     <h2 id="rejected">12. Considered &amp; rejected</h2>
 
-    <div class="reject">
-      <strong>Rejected: consolidate <code>content</code>/<code>properties_json</code>/<code>references_json</code> into a single opaque <code>payload</code> column.</strong>
-      <p>
-        Initially attractive because it makes the encryption layer trivial: one sealed blob.
-        Rejected for two compounding reasons:
-      </p>
-      <ul>
-        <li><strong>Sync granularity.</strong> PowerSync's CRUD upload PATCHes individual columns.
-          Collapsing to one column makes every edit rewrite the entire payload.</li>
-        <li><strong>Server-side features for plaintext workspaces.</strong> The whole point of
-          opt-in is that unencrypted workspaces stay first-class. Making content opaque for
-          everyone forecloses future server-side search, AI, indexed properties, etc. &mdash;
-          even for users who never opted into E2EE.</li>
-      </ul>
-    </div>
-
-    <div class="reject">
-      <strong>Rejected: passphrase-derived key hierarchy for v1.</strong>
-      <p>
-        A passphrase &rarr; MK &rarr; UVK &rarr; per-workspace CEK hierarchy (with per-user X25519
-        keypair for server-mediated invite delivery) is what most multi-user E2EE products ship.
-        The earlier iteration of this sketch went deep on that design. It buys: one passphrase for
-        N workspaces, multi-device unlock without re-pasting per workspace, server-brokered key
-        delivery during invite, passphrase rotation without re-encrypting blocks, and CEK rotation
-        for member removal.
-      </p>
-      <p>
-        Not the right v1 for this product:
-      </p>
-      <ul>
-        <li><strong>Over-budgeted.</strong> For a personal-leaning knowledge tool, N is usually
-          1&ndash;5, not 50. A password manager covers the multi-key UX entirely.</li>
-        <li><strong>The headline sharing benefit isn't actually delivered in v1.</strong>
-          Server-brokered key delivery requires the server to be trusted for that exchange. Closing
-          the active-attacker gap (a malicious server substituting its own pubkey) needs TOFU +
-          safety numbers or a key-transparency log &mdash; real engineering and UX. Without that,
-          the hierarchy's "no out-of-band" advantage is illusory; the simple model's deliberate
-          out-of-band step is more honest.</li>
-        <li><strong>Adds a class of bugs the simple model doesn't have.</strong> Iterating on the
-          hierarchy sketch surfaced findings across pubkey distribution, email enumeration,
-          envelope confusion, cross-table NOT NULL invariants, RPC signature widening, and
-          lifecycle bundling. The simple model has none of these because there is no per-user
-          identity material on the server.</li>
-        <li><strong>Strictly upgradable later</strong> (see §13). The encryption shape is
-          identical; the hierarchy just adds a wrapping layer on top of the WK. Nothing about the
-          simple model forecloses it.</li>
-      </ul>
-    </div>
-
-    <div class="reject">
-      <strong>Rejected: application-layer compression at the sync boundary.</strong>
-      <p>
-        HTTP transport already does gzip/br for any response over ~1KB. Postgres TOAST already
-        compresses large TEXT/JSONB on disk. Per-row gzip on typical block sizes (often well
-        under 1KB) frequently <em>grows</em> the payload due to framing overhead. Application-layer
-        compression only starts to win with shared dictionaries trained on the corpus, which is
-        real engineering effort for marginal gains. The sync boundary keeps the option open; we
-        just don't exercise it.
-      </p>
-    </div>
-
-    <div class="reject">
-      <strong>Rejected: replace server-side <code>blocks_history</code> with a client-uploaded edit log.</strong>
-      <p>
-        Tempting because the client-side edit log already exists. But for plaintext workspaces,
-        server-side history earns its keep &mdash; server-computed diffs, queryable, no client
-        round-trip. Ripping it out to make the E2EE path slightly cleaner would degrade the
-        plaintext workspace experience. Keep the trigger; accept that for E2EE workspaces it
-        records ciphertext diffs (still useful for PITR, audit-of-when).
-      </p>
-    </div>
-
-    <div class="reject">
-      <strong>Rejected: full at-rest encryption of the local OPFS SQLite.</strong>
-      <p>
-        Out of scope. OPFS already gives per-origin and per-user isolation via
-        <code>kmp-v6-&lt;user_id&gt;.db</code>. Device-level protection is OS disk encryption's
-        job. We can revisit if a device-theft threat model is later added.
-      </p>
-    </div>
+    <p>
+      A one-line index of what was weighed and dropped. Full rationale for each &mdash; along with
+      the rejected storage layouts A and C (§9.2) &mdash; lives in
+      <a href="./e2ee-rejected-alternatives.html">e2ee-rejected-alternatives.html</a>.
+    </p>
+    <ul>
+      <li><strong>Storage layouts A and C</strong> (ciphertext at rest, either letting indexes
+        lapse or UDF-decorating triggers). Rejected in favor of Layout B; see §9.2 and the
+        companion doc.</li>
+      <li><strong>Single opaque <code>payload</code> column.</strong> Kills PowerSync's per-column
+        PATCH granularity and forecloses server-side features for plaintext workspaces.</li>
+      <li><strong>Passphrase-derived key hierarchy for v1.</strong> Over-budgeted for a
+        personal-leaning tool; its headline sharing benefit needs TOFU/key-transparency it doesn't
+        ship; adds a class of bugs the simple model avoids. Strictly upgradable later (§13).</li>
+      <li><strong>Application-layer compression at the sync boundary.</strong> HTTP + TOAST already
+        compress; per-row gzip on sub-1KB blocks usually grows them. The seam keeps the option open
+        but we don't exercise it.</li>
+      <li><strong>Replacing server-side <code>blocks_history</code> with a client-uploaded edit
+        log.</strong> Would degrade plaintext workspaces to slightly simplify the E2EE path; keep
+        the trigger (it records ciphertext diffs for E2EE workspaces &mdash; still PITR-useful).</li>
+      <li><strong>Full at-rest encryption of the local OPFS SQLite.</strong> Out of scope &mdash;
+        wrong threat model (device theft, not server). Revisit if that model is added.</li>
+    </ul>
 
     <h2 id="hierarchy">13. Adding the hierarchy later (if needed)</h2>
 
@@ -1669,31 +1264,11 @@ WHERE typeof(je.value) = 'text';</code></pre>
         the same transaction as the rotation token, or a temporary suspension of the immutability
         trigger inside the RPC. Cleanest is the dedicated RPC.</li>
 
-      <li><strong>Layout B vs Layout C for local plaintext &mdash; RESOLVED: Layout B.</strong>
-        Settled by investigating PowerSync directly (see §9.2's working-decision and transport-
-        investigation boxes). There's no download-transform hook, the async-UDF route for C
-        isn't cleanly reachable (sync-apply is in the Rust core), and Layout B's mirror-table +
-        <code>differentialWatch().onDiff()</code> observer is PowerSync's officially-recommended
-        E2EE pattern with a reference implementation
-        (<code>powersync-community/react-supabase-chat-e2ee</code>). The remaining open work for
-        Layout B is implementation detail (reconciliation with pending local edits, source=NULL
-        on observer writes, locked-row staging, BlockCache eviction on WK paste) rather than a
-        layout choice &mdash; all covered in §9.2.</li>
-
       <li><strong>Backfill behavior on first WK paste.</strong> The first time a device gets a
         WK for a workspace, the local plaintext-derived indexes need populating. Under Layout B
-        this means draining the staging table for that workspace through the observer. Under
-        Layout C this means triggering a re-evaluation of the maintenance triggers (e.g.
-        <code>UPDATE blocks SET id = id WHERE workspace_id = ?</code> as a no-op-write trick, or
-        a dedicated rebuild SQL). Either way, the backfill is N-block work; UX needs a progress
-        indicator for large workspaces.</li>
-
-      <li><strong>UDF decrypt-cache strategy under Layout C.</strong> The UDF can't be marked
-        <code>SQLITE_DETERMINISTIC</code> (WK availability is external state), so SQLite won't
-        memoize calls and the same encrypted value gets decrypted multiple times per row when
-        multiple triggers touch it. A per-row JS-side decrypt cache keyed by
-        <code>(workspace_id, ciphertext)</code> claws this back at the cost of a Map in the UDF
-        closure. Probably not load-bearing for v1; worth profiling once the PoC runs.</li>
+        this means draining that workspace's rows from the <code>blocks_synced</code> staging
+        table through the observer. The backfill is N-block work; UX needs a progress indicator
+        for large workspaces.</li>
 
       <li><strong>Are settings or user preferences in scope?</strong> Survey didn't surface a
         settings table. If preferences are stored server-side and contain user content, they may
@@ -1728,12 +1303,12 @@ WHERE typeof(je.value) = 'text';</code></pre>
         Tolerable for small N; if N grows past ~5 per user, that's the signal to add the
         hierarchy (§13).</li>
       <li><strong>Ciphertext-diff history</strong> for E2EE workspaces.</li>
-      <li><strong>Local index side-tables contain plaintext-derived data</strong> under either
-        Layout B or C. <code>block_aliases.alias</code>, FTS trigrams, etc. are plaintext on
-        local disk even though <code>blocks.*</code> may be ciphertext (Layout C) or PowerSync's
-        staging is (Layout B). Irrelevant for threat model A (server can't read content);
-        relevant only if the threat model is later broadened to local-disk attackers, in which
-        case OS disk encryption is the right answer.</li>
+      <li><strong>Local index side-tables contain plaintext-derived data.</strong>
+        <code>block_aliases.alias</code>, FTS trigrams, etc. are plaintext on local disk &mdash; as
+        is the app-visible <code>blocks</code> table itself under Layout B (only PowerSync's
+        <code>blocks_synced</code> staging holds ciphertext locally). Irrelevant for threat model A
+        (server can't read content); relevant only if the threat model is later broadened to
+        local-disk attackers, in which case OS disk encryption is the right answer.</li>
       <li><strong>Client-trust required.</strong> A backdoored build can exfiltrate keys.
         Subresource integrity, reproducible builds, and audit are mitigations, not solutions.</li>
     </ul>
