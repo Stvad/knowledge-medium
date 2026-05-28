@@ -14,6 +14,7 @@ import {
 } from '@/extensions/api.js'
 import { PAGE_TYPE } from '@/data/blockTypes.js'
 import { aliasesProp, getBlockTypes } from '@/data/properties.js'
+import { createOrRestoreTargetBlock } from '@/data/targets.js'
 import { addDaysIso, getOrCreateDailyNote, todayIso } from '@/plugins/daily-notes/dailyNotes.js'
 import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.js'
 import { SWIPE_RIGHT_BLOCK_ACTION_ID } from '@/plugins/swipe-quick-actions/actions.js'
@@ -671,16 +672,15 @@ const ensureRoot = async (repo: any, workspaceId: string) => {
   const typeSnapshot = repo.snapshotTypeRegistries()
   await repo.tx(async (tx: any) => {
     const existing = await tx.get(rootId)
-    if (!existing) {
+    if (!existing || existing.deleted) {
       const roots = await tx.childrenOf(null, workspaceId)
       const lastKey = roots.length ? roots[roots.length - 1].orderKey : null
-      await tx.create({
+      await createOrRestoreTargetBlock(tx, {
         id: rootId,
         workspaceId,
         parentId: null,
         orderKey: keyBetween(lastKey, null),
-        content: 'Readwise Library',
-        properties: {},
+        freshContent: 'Readwise Library',
       })
     }
     await repo.addTypeInTx(tx, rootId, PAGE_TYPE, { [aliasesProp.name]: ['Readwise Library'] }, typeSnapshot)
@@ -708,14 +708,13 @@ const ensureHighlightsSection = async (
     (lower === null || child.orderKey > lower))?.orderKey ?? null
   const targetOrderKey = keyBetween(lower, upper)
 
-  if (!section) {
-    await tx.create({
+  if (!section || section.deleted) {
+    await createOrRestoreTargetBlock(tx, {
       id: sectionId,
       workspaceId,
       parentId: bookId,
       orderKey: targetOrderKey,
-      content: HIGHLIGHTS_SECTION_CONTENT,
-      properties: {},
+      freshContent: HIGHLIGHTS_SECTION_CONTENT,
     })
     return sectionId
   }
@@ -759,16 +758,15 @@ const syncBookToBlocks = async (
   await repo.tx(async (tx: any) => {
     // 1. document page
     const existing = await tx.get(bookId)
-    if (!existing) {
+    if (!existing || existing.deleted) {
       const siblings = await tx.childrenOf(rootId)
       const firstKey = siblings.length ? siblings[0].orderKey : null
-      await tx.create({
+      await createOrRestoreTargetBlock(tx, {
         id: bookId,
         workspaceId,
         parentId: rootId,
         orderKey: keyBetween(null, firstKey),
-        content: title,
-        properties: {},
+        freshContent: title,
       })
     } else if (existing.content !== title) {
       await tx.update(bookId, { content: title })
@@ -794,9 +792,9 @@ const syncBookToBlocks = async (
       const content = supplementalLines[i]
       const orderKey = metaKeys[i]
       const existingMetaBlock = await tx.get(id)
-      if (!existingMetaBlock) {
-        await tx.create({
-          id, workspaceId, parentId: bookId, orderKey, content,
+      if (!existingMetaBlock || existingMetaBlock.deleted) {
+        await createOrRestoreTargetBlock(tx, {
+          id, workspaceId, parentId: bookId, orderKey, freshContent: content,
         })
       } else {
         if (existingMetaBlock.content !== content) {
@@ -829,14 +827,13 @@ const syncBookToBlocks = async (
       const noteText = nonEmptyString(h.note)
 
       const existingH = await tx.get(hId)
-      if (!existingH) {
-        await tx.create({
+      if (!existingH || existingH.deleted) {
+        await createOrRestoreTargetBlock(tx, {
           id: hId,
           workspaceId,
           parentId: highlightsSectionId,
           orderKey: newHighlightKeys[nextNewHighlightKey++],
-          content: hContent,
-          properties: {},
+          freshContent: hContent,
         })
       } else {
         if (existingH.content !== hContent) {
@@ -857,14 +854,13 @@ const syncBookToBlocks = async (
         if (noteBlock) await tx.delete(noteId)
       } else {
         const noteContent = extraLines.join('\n')
-        if (!noteBlock) {
+        if (!noteBlock || noteBlock.deleted) {
           const hKids = await tx.childrenOf(hId)
           const lastHKid = hKids.length ? hKids[hKids.length - 1].orderKey : null
-          await tx.create({
+          await createOrRestoreTargetBlock(tx, {
             id: noteId, workspaceId, parentId: hId,
             orderKey: keyBetween(lastHKid, null),
-            content: noteContent,
-            properties: {},
+            freshContent: noteContent,
           })
         } else if (noteBlock.content !== noteContent) {
           await tx.update(noteId, { content: noteContent })
