@@ -411,7 +411,7 @@
       <tr>
         <td>Ciphertext format</td>
         <td><code>"enc:v1:" + base64url(nonce &Vert; ciphertext)</code></td>
-        <td>Self-identifying prefix lets the decode layer detect E2EE rows without a workspace lookup. The <code>v1</code> reserves a clean upgrade path.</td>
+        <td>The prefix identifies the envelope <em>format</em> (version dispatch for the decrypt routine), <em>not</em> whether to decrypt &mdash; per §6 only the durable local mode pin decides that. Within a pinned-E2EE workspace every wire value must already be an <code>enc:v1:</code> envelope (§7 enforces it server-side), so here the prefix is a format tag and tamper/sanity check, never a trigger that routes a row into decrypt/error handling on its own. A plaintext-workspace value that happens to start with <code>enc:v1:</code> is therefore left untouched, and the server can't influence first-encounter behavior by adding or stripping the prefix. The <code>v1</code> reserves a clean upgrade path.</td>
       </tr>
       <tr>
         <td>WK display/paste format</td>
