@@ -439,9 +439,17 @@
       explicit confirmation. The WK is <em>decrypt material only</em>: transient, stored separately,
       and never the record of mode. Clearing key material (a future "lock / clear my keys" action,
       §5) drops the WK but leaves the pin intact &mdash; an <code>e2ee</code>-pinned workspace stays
-      <code>e2ee</code>, just without decrypt material, so it renders read-only ("locked") until the
-      WK is pasted again. Clearing keys re-locks; it never downgrades, and the
-      plaintext-confirmation path (rule 3) is <strong>not</strong> offered for a pinned workspace.
+      <code>e2ee</code>, just without decrypt material. <strong>Locking must actually remove the
+      plaintext, not merely flip a read-only flag.</strong> Under Layout B the decrypted rows live
+      in the app-visible <code>blocks</code> table plus the derived indexes
+      (<code>block_aliases</code>/<code>block_types</code>/<code>blocks_fts</code>) and the
+      <code>BlockCache</code> &mdash; so clearing the WK must also evict that workspace's rows from
+      <code>blocks</code>, its derived-index entries, and its <code>BlockCache</code> snapshots, or
+      the normal local read paths keep serving the plaintext and "locked" locks nothing. The
+      ciphertext is untouched in <code>blocks_synced</code>, so re-pasting the WK simply re-runs the
+      §9.2 staging&rarr;<code>blocks</code> drain and the workspace re-hydrates. Clearing keys
+      re-locks; it never downgrades, and the plaintext-confirmation path (rule 3) is
+      <strong>not</strong> offered for a pinned workspace.
       The pin is local and earned by decrypting the canary, so the server's
       <code>encryption_mode</code> still carries zero authority &mdash; the authority is the durable
       pin, not the server flag and not the ephemeral key.
