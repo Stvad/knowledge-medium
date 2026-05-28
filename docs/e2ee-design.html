@@ -446,15 +446,21 @@
       explicit confirmation. The WK is <em>decrypt material only</em>: transient, stored separately,
       and never the record of mode. <strong>Locking is a deliberate, coarse action in v1.</strong>
       "Lock &amp; wipe local data" is an explicit user action &mdash; distinct from sign-out (it
-      keeps you signed in; it isn't a logout) &mdash; that flushes the upload queue first so unsynced
-      edits aren't lost, drops <em>all</em> WKs, and wipes the entire local store: the plaintext
-      <code>blocks</code> table, the derived indexes
-      (<code>block_aliases</code>/<code>block_types</code>/<code>blocks_fts</code>),
-      <code>BlockCache</code>, the <code>ps_crud</code> <em>and</em> <code>ps_crud_rejected</code>
-      queues (both hold plaintext envelopes captured before the upload hook's encryption step, §9.2
-      &mdash; a rejected envelope left behind would leave plaintext readable on a "locked" device),
-      and the <code>blocks_synced</code> staging. The <strong>durable pins survive</strong> &mdash;
-      they live in a separate, non-secret store and keep each workspace's mode known. On next use,
+      keeps you signed in; it isn't a logout). It flushes the upload queue first so unsynced edits
+      aren't lost (or defers if offline), drops <em>all</em> WKs, and then <strong>wipes the whole
+      local SQLite DB file</strong> rather than enumerating tables. The file holds every
+      plaintext-bearing surface &mdash; the <code>blocks</code> table, the derived indexes
+      (<code>block_aliases</code>/<code>block_types</code>/<code>blocks_fts</code>), the
+      <code>blocks_synced</code> staging, and PowerSync's <code>ps_crud</code> /
+      <code>ps_crud_rejected</code> queues (whose envelopes hold pre-encryption plaintext, §9.2)
+      &mdash; so deleting the file is <strong>exhaustive by construction</strong>: there's no
+      per-surface checklist to keep complete, which is the right shape given how many times that
+      checklist grew under review. (This maps onto PowerSync's supported clear-and-resync path, not
+      a hack.) Two things live <em>outside</em> the file and are handled separately: the in-memory
+      <code>BlockCache</code> (torn down with the data layer), and the durable pins (in localStorage,
+      deliberately preserved so each workspace's mode stays known). Note this coarse file-wipe is the
+      <em>lock</em> action only; the per-workspace revoke/delete teardown (§9.2) can't wipe the whole
+      file and still needs per-<code>workspace_id</code> surface removal. On next use,
       plaintext workspaces re-sync and render as usual; an <code>e2ee</code>-pinned workspace
       re-enters the quarantine (rule 3) read-only until its WK is re-pasted &mdash; so the wipe never
       downgrades, and the plaintext-confirmation path is still <strong>not</strong> offered for a
