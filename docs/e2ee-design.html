@@ -892,6 +892,23 @@ GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
     </p>
 
     <p>
+      <strong>Observer applies must reuse the guarded-UPSERT shape, not a naive write.</strong>
+      The existing <code>BLOCKS_RAW_TABLE.put</code> in <code>src/data/blockSchema.ts</code> is
+      deliberately <code>INSERT ... ON CONFLICT(id) DO UPDATE SET ... WHERE &lt;diff&gt;</code>,
+      not <code>INSERT OR REPLACE</code>. The comment there (lines 116-126) explains why, and it
+      applies directly to the observer since the observer becomes the writer that mirrors remote
+      rows into <code>blocks</code>: (1) <code>INSERT OR REPLACE</code> fires SQLite's
+      DELETE+INSERT pair on an update, so the <code>row_events</code> trigger logs
+      <code>kind='insert'</code> with <code>before_json=NULL</code> and <code>rowEventsTail</code>
+      misclassifies a plain content edit as a child-membership change &mdash; clearing the
+      parent's child-loaded marker; (2) the <code>WHERE</code> diff guard stops re-delivered
+      identical rows from firing UPDATE triggers at all. A naive observer write reintroduces both
+      bugs (spurious invalidations, echo churn). The observer should reuse the same guarded-UPSERT
+      SQL (decrypting into the bound values first), with <code>source = NULL</code> per the next
+      point.
+    </p>
+
+    <p>
       <strong>Observer writes must leave <code>tx_context.source</code> NULL.</strong> The
       upload-routing triggers in <code>clientSchema.ts</code> enqueue any
       <code>blocks</code> write whose <code>tx_context.source</code> is non-NULL into
