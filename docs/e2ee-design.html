@@ -867,6 +867,19 @@ GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
     </p>
 
     <p>
+      <strong>Locked-workspace rows stay in staging.</strong> On a new device, sync delivers
+      E2EE block rows to <code>blocks_synced</code> before the user has pasted the WK. The
+      observer can't decrypt without the key, so it must not apply E2EE rows to <code>blocks</code>
+      while the workspace is unpinned (per §6's quarantine rule). Concrete behavior: for each
+      staging row whose workspace is encryption-uncertain or known-E2EE-without-WK, leave it in
+      <code>blocks_synced</code> untouched. When the user pastes a WK and the workspace pins,
+      run a drain pass that re-processes every staging row for that workspace through the
+      observer (now with a WK available, decryption succeeds and the rows land in
+      <code>blocks</code>). Mirrors the per-workspace backfill in Layout C, but with the source
+      being the staging table rather than ciphertext-at-rest.
+    </p>
+
+    <p>
       <strong>Observer writes must leave <code>tx_context.source</code> NULL.</strong> The
       upload-routing triggers in <code>clientSchema.ts</code> enqueue any
       <code>blocks</code> write whose <code>tx_context.source</code> is non-NULL into
@@ -989,17 +1002,27 @@ WHERE typeof(je.value) = 'text';</code></pre>
 
     <div class="decision">
       <strong>Critical: under Layout C, encrypt happens at write time, not upload time.</strong>
-      Local writes from <code>TxImpl.create</code> / <code>TxImpl.update</code> must hit the sync
-      boundary's <code>encodeForWire</code> step <em>before</em> the
-      <code>INSERT</code>/<code>UPDATE</code> reaches the <code>blocks</code> table; otherwise
-      the row sits as plaintext locally until a sync echo overwrites it &mdash; breaking the
-      ciphertext-at-rest invariant and tripping the §6 downgrade guard on the user's own
-      freshly-written content. The upload-routing trigger then captures whatever's already in the
-      row (ciphertext for E2EE workspaces) and forwards it unchanged. This is the asymmetry with
-      Layout B: B encrypts at upload and decrypts at download; C encrypts at write and decrypts
-      at read (via UDF for triggers, via <code>parseBlockRow</code> for app reads). The transform
-      module's <code>encodeForWire</code> seam is load-bearing under both layouts; the difference
-      is where in the lifecycle it fires.
+      Every <code>TxImpl</code> path that writes content columns must hit the sync boundary's
+      <code>encodeForWire</code> step <em>before</em> the <code>INSERT</code>/<code>UPDATE</code>
+      reaches the <code>blocks</code> table; otherwise the row sits as plaintext locally until a
+      sync echo overwrites it &mdash; breaking the ciphertext-at-rest invariant and tripping the
+      §6 downgrade guard on the user's own freshly-written content. "Every path" matters:
+      <code>TxImpl</code> has at least <code>create</code>, <code>createOrGet</code>
+      (<code>txEngine.ts:226</code>), <code>update</code>, <code>restore</code>
+      (<code>:284</code>), <code>setProperty</code> (<code>:390</code>), and
+      <code>applyRaw</code> / undo replay (<code>:554</code>) &mdash; all of which write
+      <code>content</code>, <code>properties_json</code>, or <code>references_json</code>. The
+      cleanest shape is to route every TxImpl SQL write through a shared helper that calls
+      <code>encodeForWire</code> on the row's content columns first; itemized per-method wiring
+      is footgun-shaped &mdash; one missed path silently leaks plaintext into <code>blocks</code>
+      and onto the upload queue.
+      <br><br>
+      The upload-routing trigger then captures whatever's already in the row (ciphertext for E2EE
+      workspaces) and forwards it unchanged. This is the asymmetry with Layout B: B encrypts at
+      upload and decrypts at download; C encrypts at write and decrypts at read (via UDF for
+      triggers, via <code>parseBlockRow</code> for app reads). The transform module's
+      <code>encodeForWire</code> seam is load-bearing under both layouts; the difference is where
+      in the lifecycle it fires.
     </div>
 
     <h5>Codebase survey: where Layout C touches</h5>
@@ -1194,9 +1217,11 @@ WHERE typeof(je.value) = 'text';</code></pre>
         rework since the equality filter can't index on a UDF-wrapped column);
         convert the
         daily-notes expression index to a side table; wire <code>encodeForWire</code> into
-        <code>TxImpl.create</code> / <code>TxImpl.update</code> so local writes hit the encrypt
-        step before INSERT/UPDATE reaches <code>blocks</code> (not at upload &mdash; see the
-        encrypt-at-write callout above); per-workspace backfill on WK paste. No new top-level
+        every <code>TxImpl</code> content-writing path via a shared helper
+        (<code>create</code>, <code>createOrGet</code>, <code>update</code>, <code>restore</code>,
+        <code>setProperty</code>, <code>applyRaw</code> / undo replay) so local writes hit the
+        encrypt step before INSERT/UPDATE reaches <code>blocks</code> (not at upload &mdash; see
+        the encrypt-at-write callout above); per-workspace backfill on WK paste. No new top-level
         tables for the encryption itself (the daily-notes side table is a local schema change,
         not an E2EE-specific one). <strong>Note: the list of raw-SQL readers above keeps growing
         under review; treat this as a non-exhaustive checklist rather than a complete one.</strong></li>
