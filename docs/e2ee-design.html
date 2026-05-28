@@ -513,6 +513,18 @@
           the membership row arrives via sync without going through accept_invitation and there's
           no local pin. Same rule &mdash; the user pastes their WK (if E2EE) or confirms plaintext
           before any local writes.</li>
+        <li><strong>Pre-existing memberships on the rollout release (one-shot seed).</strong> The
+          first release that introduces mode pins finds every pre-existing workspace unpinned &mdash;
+          the pin namespace didn't exist when they were created &mdash; so without special handling
+          they would <em>all</em> quarantine, breaking "plaintext workspaces behave as today" for
+          current users. A one-shot local-schema migration (marker-gated in
+          <code>client_schema_state</code>, like the other backfills) seeds a <code>plaintext</code>
+          pin for every membership present at upgrade. This is safe precisely because E2EE doesn't
+          exist before this release: no pre-existing workspace can be E2EE, so blanket-seeding
+          plaintext can't mis-pin one. It must be a <strong>one-shot keyed to the upgrade moment,
+          not a standing "unpinned &rarr; plaintext" rule</strong> &mdash; memberships that appear
+          afterward (new device, new invite) still take the quarantine paths above, which is what
+          keeps the downgrade defense intact.</li>
       </ul>
       The cost is one resolution step per workspace per new device &mdash; not free, but the
       alternative is silently accepting attacker plaintext on a workspace the user has every reason
