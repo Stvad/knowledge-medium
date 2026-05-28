@@ -872,27 +872,51 @@ WHERE typeof(je.value) = 'text';</code></pre>
         columns already hold ciphertext (per the encrypt-at-write callout above), and the upload
         must forward ciphertext unchanged. Wrapping these in the decrypt UDF would queue plaintext
         for upload &mdash; the exact opposite of what we want.</li>
-      <li><strong>Two raw-SQL queries bypass <code>parseBlockRow</code> and operate on the
-        content columns directly.</strong> Both are Layout C touch points that the initial
-        survey claim missed:
+      <li><strong>Raw-SQL queries that bypass <code>parseBlockRow</code> and operate on the
+        content columns directly.</strong> The initial survey claim ("reads are centralized") was
+        wrong. Subsequent review rounds have found progressively more sites; the list below is
+        what's confirmed but should not be treated as exhaustive:
         <ul>
-          <li><code>src/data/repo.ts:1553-1559</code> &mdash; the property-reprojection scan
-            does <code>FROM blocks b, json_each(b.properties_json) prop WHERE prop.key IN (?)</code>.
-            Under Layout C the <code>json_each</code> runs against ciphertext and fails (or
-            returns nothing). Fix: UDF-wrap the <code>json_each</code> argument
-            (<code>json_each(e2ee_decrypt_json(b.workspace_id, b.properties_json))</code>), or
-            skip E2EE rows in this scan and rely on the per-workspace backfill on WK paste to
-            cover reprojection for those workspaces.</li>
+          <li><code>src/data/repo.ts:1553-1559</code> &mdash; property-reprojection scan,
+            <code>FROM blocks b, json_each(b.properties_json) prop WHERE prop.key IN (?)</code>.
+            UDF-wrap the <code>json_each</code> argument, or skip E2EE rows and rely on the
+            per-workspace backfill on WK paste.</li>
+          <li><code>src/data/repo.ts:1338-1343</code> &mdash; property-deletion warning count,
+            <code>json_extract(b.properties_json, ?) IS NOT NULL</code>. UDF-wrap or count via
+            the trigger-maintained side tables.</li>
+          <li><code>src/extensions/extensionLookup.ts:40-49</code> &mdash; reads
+            <code>b.properties_json</code> raw and <code>JSON.parse</code>s it client-side to
+            find extension labels. Decrypt before parse; or join through <code>block_aliases</code>
+            (which would be plaintext via the UDF-wrapped alias trigger).</li>
+          <li><code>src/data/targets.ts:234-251</code> &mdash; alias-seat reader,
+            <code>SELECT deleted, properties_json, content FROM blocks WHERE id = ?</code>,
+            client-side <code>JSON.parse</code>. Decrypt before parse, or route this through the
+            centralized read path.</li>
+          <li><code>src/plugins/references/renameProcessor.ts:60-66</code> &mdash; backlink rename
+            reads <code>source.content</code> directly. Decrypt at the call site or route through
+            <code>parseBlockRow</code>.</li>
           <li><code>src/plugins/find-replace/dataExtension.ts:80-89</code> &mdash;
-            <code>instr(content, ?)</code> / <code>instr(LOWER(content), LOWER(?))</code>
-            literal-substring search. Under Layout C this searches ciphertext bytes and returns
-            no usable matches. Fix: route find/replace through FTS for E2EE workspaces
-            (<code>blocks_fts.content</code> already holds plaintext via the UDF-wrapped FTS
-            trigger), or accept that find/replace doesn't work on E2EE workspaces and degrade
-            gracefully. FTS routing is the better option since the data is already there.</li>
+            <code>instr(content, ?)</code> literal-substring search. Route through FTS for
+            E2EE workspaces (<code>blocks_fts.content</code> already holds plaintext via the
+            UDF-wrapped FTS trigger).</li>
         </ul>
-        Both flips are mechanical, but they widen the "places to audit" surface and the second
-        one is the closest thing to a real product feature gap if not handled.</li>
+        Each is mechanical once identified, but the list keeps growing under review and almost
+        certainly isn't complete. <strong>This is a real cost of Layout C: it scatters
+        encryption-awareness across the codebase wherever raw SQL touches a content column.</strong>
+        Worth weighting in the B-vs-C tradeoff (see working decision below).</li>
+      <li><strong>Backfill SQL statements also scan encrypted columns directly.</strong>
+        Marker-gated one-shot scans run on schema bootstrap:
+        <code>BACKFILL_BLOCK_ALIASES_SQL</code>, <code>BACKFILL_BLOCK_TYPES_SQL</code>,
+        <code>BACKFILL_BLOCKS_FTS_SQL</code> in
+        <code>src/data/internals/clientSchema.ts</code>, and
+        <code>BACKFILL_BLOCK_REFERENCES_SQL</code> in
+        <code>src/plugins/references/localSchema.ts</code>. They use
+        <code>json_each(b.properties_json, ...)</code>, raw <code>b.content</code>, or
+        <code>json_each(b.references_json)</code> directly. If any of these runs after encrypted
+        rows exist (new device's first sync of an existing E2EE workspace), they either throw
+        on <code>enc:v1:</code> text or build indexes from ciphertext. Fix: UDF-wrap each
+        backfill, or mode-skip E2EE rows and rely on the per-workspace WK-paste backfill to
+        cover them.</li>
       <li><strong>One expression index needs converting to a side table.</strong>
         <code>src/plugins/daily-notes/localSchema.ts:105</code> has
         <code>CREATE INDEX idx_blocks_daily_note_date ON blocks (json_extract(properties_json, '$.dailyNoteDate'))</code>
@@ -923,16 +947,25 @@ WHERE typeof(je.value) = 'text';</code></pre>
     <ul>
       <li><strong>What changes in code:</strong> register the async UDF at DB open
         (<code>repoProvider.ts</code>); decrypt in <code>parseBlockRow</code>; UDF-wrap the
-        triggers in three locations
-        (<code>clientSchema.ts</code>, <code>plugins/references/localSchema.ts</code>,
-        <code>plugins/daily-notes/localSchema.ts</code>); UDF-wrap the reprojection scan in
-        <code>repo.ts:1553-1559</code>; reroute <code>find-replace/dataExtension.ts</code>'s
-        content search through FTS for E2EE workspaces; convert the daily-notes expression index
-        to a side table; wire <code>encodeForWire</code> into <code>TxImpl.create</code> /
-        <code>TxImpl.update</code> so local writes hit the encrypt step before INSERT/UPDATE
-        reaches <code>blocks</code> (not at upload &mdash; see the encrypt-at-write callout above);
-        per-workspace backfill on WK paste. No new top-level tables for the encryption itself (the daily-notes side table is a
-        local schema change, not an E2EE-specific one).</li>
+        non-upload triggers in <code>clientSchema.ts</code> (row-events, alias, type, FTS) plus
+        the triggers in <code>plugins/references/localSchema.ts</code> and
+        <code>plugins/daily-notes/localSchema.ts</code> &mdash; the
+        <code>blocks_upload_insert</code>/<code>_update</code> triggers stay un-wrapped per the
+        exception noted above; UDF-wrap or mode-skip the four backfill statements
+        (<code>BACKFILL_BLOCK_ALIASES_SQL</code>, <code>BACKFILL_BLOCK_TYPES_SQL</code>,
+        <code>BACKFILL_BLOCKS_FTS_SQL</code> in <code>clientSchema.ts</code>,
+        <code>BACKFILL_BLOCK_REFERENCES_SQL</code> in <code>plugins/references/localSchema.ts</code>);
+        fix the six known raw-SQL readers (<code>repo.ts:1553-1559</code> reprojection scan;
+        <code>repo.ts:1338-1343</code> property-count; <code>extensions/extensionLookup.ts:40-49</code>;
+        <code>data/targets.ts:234-251</code>; <code>plugins/references/renameProcessor.ts:60-66</code>;
+        <code>plugins/find-replace/dataExtension.ts:80-89</code> via FTS reroute); convert the
+        daily-notes expression index to a side table; wire <code>encodeForWire</code> into
+        <code>TxImpl.create</code> / <code>TxImpl.update</code> so local writes hit the encrypt
+        step before INSERT/UPDATE reaches <code>blocks</code> (not at upload &mdash; see the
+        encrypt-at-write callout above); per-workspace backfill on WK paste. No new top-level
+        tables for the encryption itself (the daily-notes side table is a local schema change,
+        not an E2EE-specific one). <strong>Note: the list of raw-SQL readers above keeps growing
+        under review; treat this as a non-exhaustive checklist rather than a complete one.</strong></li>
       <li><strong>Plus:</strong> local DB mirrors the server (mental-model parity); reads keep
         going through the existing centralized path; existing index machinery stays in SQL.</li>
       <li><strong>Minus:</strong> every trigger fire on an encrypted row pays a WebCrypto decrypt
@@ -955,13 +988,26 @@ WHERE typeof(je.value) = 'text';</code></pre>
 
     <div class="decision">
       <strong>Working decision.</strong> Layout B and Layout C are both viable; Layout A is
-      rejected. The choice hinges on (1) whether the PoC confirms PowerSync awaits async UDFs
-      end-to-end (if not, C is off the table) and (2) which set of risks is easier to live with
-      &mdash; B's two-write download path and observer wiring versus C's per-trigger decrypt
-      cost plus the daily-notes index refactor. Default lean toward C if the PoC passes: less
-      new infrastructure, no parallel table, and the existing trigger logic stays intact (just
-      gets UDF-wrapped). The expression-index refactor is real but follows a pattern already in
-      the codebase.
+      rejected. The choice hinges on:
+      <ol>
+        <li>Whether the PoC confirms PowerSync awaits async UDFs end-to-end (if not, C is off the
+          table).</li>
+        <li>How big the Layout C touch surface actually is. Each review round has found more raw
+          SQL sites that need awareness of the encryption boundary (currently 6 in app code plus
+          4 backfill statements, almost certainly more). Under Layout B this surface is empty
+          &mdash; local writes are plaintext, all existing readers Just Work.</li>
+        <li>Which set of risks is easier to live with &mdash; B's two-write download path and JS
+          observer wiring (a single concentrated mechanism), versus C's encryption-awareness
+          scattered across the codebase wherever raw SQL touches a content column (mechanical
+          per-site, but a discipline rule the codebase has to maintain forever).</li>
+      </ol>
+      The earlier draft leaned toward C on grounds of "less new infrastructure." That lean was
+      based on a survey claim that turned out incomplete in three successive review rounds. The
+      Layout C touch list is now meaningfully wider, and the long-tail concern is real: any
+      future plugin or feature that adds raw SQL against the content columns is one author away
+      from breaking E2EE silently. <strong>Re-lean: I'd default toward Layout B now unless the
+      PoC for C is particularly clean.</strong> B's complexity is concentrated at one named seam;
+      C's is structural and ongoing.
     </div>
 
     <p>
