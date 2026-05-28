@@ -758,8 +758,8 @@ CREATE OR REPLACE FUNCTION create_workspace(
       <code>enc:v1:</code> prefix) the UDF is a no-op pass-through.
     </p>
     <p>
-      Triggers in <code>clientSchema.ts</code> and <code>plugins/references/localSchema.ts</code>
-      get rewritten to wrap column references in the UDF:
+      Triggers wrap column references in the UDF before passing into <code>json_each</code>,
+      <code>json_extract</code>, etc:
     </p>
     <pre><code>-- Before:
 INSERT OR IGNORE INTO block_aliases (block_id, workspace_id, alias, alias_lower)
@@ -772,43 +772,108 @@ INSERT OR IGNORE INTO block_aliases (block_id, workspace_id, alias, alias_lower)
 SELECT NEW.id, NEW.workspace_id, je.value, LOWER(je.value)
 FROM json_each(e2ee_decrypt_json(NEW.workspace_id, NEW.properties_json), '$.alias') AS je
 WHERE typeof(je.value) = 'text';</code></pre>
+
+    <h5>Codebase survey: where Layout C touches</h5>
+
     <p>
-      <code>block_aliases</code>, <code>block_types</code>, <code>blocks_fts</code> populate from
-      UDF-decrypted plaintext. Server upload goes through the sync boundary's encrypt path as
-      today; no staging table needed.
+      A focused survey of every place that reads
+      <code>blocks.content</code>/<code>properties_json</code>/<code>references_json</code>
+      came back with a more contained surface than I expected, with one specific schema refactor
+      load-bearing for correctness.
     </p>
+
+    <p><strong>What's already structured for Layout C:</strong></p>
+    <ul>
+      <li><strong>Reads are centralized.</strong> All read paths route through
+        <code>txEngine.ts</code>'s <code>SELECT ${COLUMN_LIST} FROM blocks</code> →
+        <code>parseBlockRow</code> in <code>repo.ts</code> →
+        <code>getBlockDataById</code>. Add one decrypt call in <code>parseBlockRow</code>; the
+        entire app-read surface is covered. No scattered raw-SQL reads elsewhere.</li>
+      <li><strong>No content-shaped query filters in app code.</strong> No
+        <code>WHERE content LIKE '%foo%'</code>; no
+        <code>WHERE json_extract(properties_json, ...) = ?</code>. Substring search rides FTS;
+        property-shaped filters ride <code>block_aliases</code>/<code>block_types</code>
+        side tables maintained by triggers. Same pattern Layout C uses for new derived state.</li>
+      <li><strong>No generated columns or CHECK constraints</strong> over these columns.</li>
+      <li><strong>PowerSync is content-blind internally.</strong> Conflict resolution is metadata-
+        driven; the apply path runs the same triggers as local writes.</li>
+    </ul>
+
+    <p><strong>What the survey did surface:</strong></p>
+    <ul>
+      <li><strong>Trigger surface is wider than just <code>clientSchema.ts</code>.</strong>
+        Confirmed UDF-wrap targets: 7 triggers in
+        <code>src/data/internals/clientSchema.ts</code> (row-events, alias, type, FTS, plus the
+        upload-routing trigger), 3 in <code>src/plugins/references/localSchema.ts</code>
+        (references-graph maintenance), and the daily-notes trigger in
+        <code>src/plugins/daily-notes/localSchema.ts</code> reading
+        <code>properties_json</code>. The pattern propagates &mdash; any future plugin that maintains a
+        derived index over these columns needs the same UDF wrap.</li>
+      <li><strong>One expression index needs converting to a side table.</strong>
+        <code>src/plugins/daily-notes/localSchema.ts:105</code> has
+        <code>CREATE INDEX idx_blocks_daily_note_date ON blocks (json_extract(properties_json, '$.dailyNoteDate'))</code>
+        &mdash; an expression index directly over the encrypted column. We can't use the UDF
+        inside the expression because the UDF's output depends on external state (the WK store);
+        marking it <code>SQLITE_DETERMINISTIC</code> would lie, and the index would contain
+        pre-WK NULLs that don't get rebuilt when the WK lands. The fix is to convert this to a
+        trigger-maintained <code>block_daily_notes</code> side table following the same pattern
+        as <code>block_aliases</code>/<code>block_types</code>. One file's worth of change, follows
+        an existing pattern, but it has to land alongside the encryption work or calendar
+        date-range queries break for E2EE workspaces.</li>
+      <li><strong>Backfill on WK paste.</strong> When a workspace's WK becomes available, the
+        trigger-maintained side tables for blocks that arrived encrypted need re-populating.
+        Either re-fire the maintenance triggers via a no-op write
+        (<code>UPDATE blocks SET id = id WHERE workspace_id = ? AND deleted = 0</code>), or run
+        a per-workspace variant of <code>BACKFILL_BLOCK_ALIASES_SQL</code>/<code>_TYPES_SQL</code>/
+        <code>_FTS</code> scoped by <code>workspace_id</code>. Marker rows in
+        <code>client_schema_state</code> already track first-time backfills; add per-(workspace,
+        index) markers so the rebuild is idempotent.</li>
+      <li><strong>UDF determinism flag.</strong> Not marked
+        <code>SQLITE_DETERMINISTIC</code> &mdash; the WK store is external state, and lying about
+        determinism causes the expression-index problem above. SQLite won't memoize calls within
+        a query, so the same encrypted value read by N triggers gets decrypted N times. A
+        per-row JS-side decrypt cache keyed by <code>(workspace_id, ciphertext)</code> can claw
+        that back if profiling shows it matters; not load-bearing for v1.</li>
+    </ul>
+
     <ul>
       <li><strong>What changes in code:</strong> register the async UDF at DB open
-        (<code>repoProvider.ts</code>); audit every trigger that touches
-        <code>content</code>/<code>properties_json</code>/<code>references_json</code> and wrap
-        column references in the UDF. No new tables.</li>
-      <li><strong>Plus:</strong> local DB mirrors the server (mental-model parity). Existing
-        index machinery stays in SQL.</li>
+        (<code>repoProvider.ts</code>); decrypt in <code>parseBlockRow</code>; UDF-wrap the
+        triggers in three locations
+        (<code>clientSchema.ts</code>, <code>plugins/references/localSchema.ts</code>,
+        <code>plugins/daily-notes/localSchema.ts</code>); convert the daily-notes expression index
+        to a side table; encrypt-on-upload at the sync boundary; per-workspace backfill on WK
+        paste. No new top-level tables for the encryption itself (the daily-notes side table is a
+        local schema change, not an E2EE-specific one).</li>
+      <li><strong>Plus:</strong> local DB mirrors the server (mental-model parity); reads keep
+        going through the existing centralized path; existing index machinery stays in SQL.</li>
       <li><strong>Minus:</strong> every trigger fire on an encrypted row pays a WebCrypto decrypt
-        cost. Bulk operations (initial backfill on first WK paste, large imports) pay it N times.</li>
+        cost. Bulk operations (per-workspace backfill on first WK paste, large imports) pay it
+        N times.</li>
       <li><strong>Risk &mdash; needs empirical verification before committing:</strong>
         wa-sqlite supports async UDFs at the API level
-        (<code>sqlite3.create_function</code>, see the "should return asynchronously" test in
+        (<code>sqlite3.create_function</code>; see the "should return asynchronously" test in
         <code>node_modules/@journeyapps/wa-sqlite/test/callbacks.test.js</code>), and PowerSync
         uses the Asyncify build that enables them
-        (<code>mc-wa-sqlite-async.mjs</code>). But whether PowerSync's full query/trigger
-        execution pipeline correctly awaits async UDFs through every code path is not something I
-        verified. A small PoC &mdash; register a trivial async UDF and invoke it from a trigger
-        via a sync apply &mdash; would settle this in an afternoon.</li>
+        (<code>mc-wa-sqlite-async.mjs</code>). What I have not verified is whether PowerSync's
+        full query/trigger execution pipeline correctly awaits async UDFs through every code
+        path. PoC scope: register a trivial async UDF, invoke from a trigger via sync apply,
+        confirm the await happens. An afternoon's work; gates the choice between B and C.</li>
       <li><strong>Note:</strong> local index side-tables (<code>block_aliases</code>, etc.) end up
         containing plaintext-derived data even though <code>blocks.*</code> columns are
-        ciphertext. For threat model A (server can't read content) this is irrelevant &mdash;
-        local indexes never reach the server. Worth flagging if the threat model is ever
-        broadened to local-disk attackers.</li>
+        ciphertext. Irrelevant for threat model A; flagged for any future broadening to
+        local-disk attackers.</li>
     </ul>
 
     <div class="decision">
       <strong>Working decision.</strong> Layout B and Layout C are both viable; Layout A is
-      rejected. The choice between B and C hinges on (1) whether the PoC confirms PowerSync
-      awaits async UDFs end-to-end (if not, C is off the table) and (2) which set of risks is
-      easier to live with &mdash; B's two-write download path and observer wiring versus C's
-      per-trigger decrypt cost. Default lean toward Layout C if the PoC passes: less new
-      infrastructure, no parallel table, and the existing trigger logic stays intact.
+      rejected. The choice hinges on (1) whether the PoC confirms PowerSync awaits async UDFs
+      end-to-end (if not, C is off the table) and (2) which set of risks is easier to live with
+      &mdash; B's two-write download path and observer wiring versus C's per-trigger decrypt
+      cost plus the daily-notes index refactor. Default lean toward C if the PoC passes: less
+      new infrastructure, no parallel table, and the existing trigger logic stays intact (just
+      gets UDF-wrapped). The expression-index refactor is real but follows a pattern already in
+      the codebase.
     </div>
 
     <p>
@@ -1098,6 +1163,13 @@ WHERE typeof(je.value) = 'text';</code></pre>
         <code>UPDATE blocks SET id = id WHERE workspace_id = ?</code> as a no-op-write trick, or
         a dedicated rebuild SQL). Either way, the backfill is N-block work; UX needs a progress
         indicator for large workspaces.</li>
+
+      <li><strong>UDF decrypt-cache strategy under Layout C.</strong> The UDF can't be marked
+        <code>SQLITE_DETERMINISTIC</code> (WK availability is external state), so SQLite won't
+        memoize calls and the same encrypted value gets decrypted multiple times per row when
+        multiple triggers touch it. A per-row JS-side decrypt cache keyed by
+        <code>(workspace_id, ciphertext)</code> claws this back at the cost of a Map in the UDF
+        closure. Probably not load-bearing for v1; worth profiling once the PoC runs.</li>
 
       <li><strong>Are settings or user preferences in scope?</strong> Survey didn't surface a
         settings table. If preferences are stored server-side and contain user content, they may
