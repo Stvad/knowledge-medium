@@ -361,11 +361,14 @@
       <tr><td>User-facing format</td><td><code>kmp-wk-1:&lt;base32(32 bytes)&gt;</code> &mdash;
         58-character paste-friendly string. The <code>1</code> reserves a clean upgrade path.</td></tr>
       <tr><td>Where it lives</td><td>(a) the user's password manager / backup of their choice;
-        (b) IndexedDB on each device the user has pasted it on, keyed by
-        <code>(user_id, workspace_id)</code>. IndexedDB rather than the local SQLite DB so the WK
-        store has its own lifecycle &mdash; a future "lock the app" or "clear my keys" action can
-        drop WKs without touching the PowerSync-managed sync state. Binary-safe storage means raw
-        32-byte keys go in directly. Never the server, in any form.</td></tr>
+        (b) localStorage on each device the user has pasted it on, keyed by
+        <code>(user_id, workspace_id)</code> (e.g. <code>wk:&lt;user_id&gt;:&lt;workspace_id&gt;</code>).
+        localStorage rather than the local SQLite DB so the WK store has its own lifecycle &mdash;
+        a future "lock the app" or "clear my keys" action can drop WKs without touching the
+        PowerSync-managed sync state. Reuses the codebase's existing localStorage adapter rather
+        than introducing IndexedDB as a new storage surface. Raw 32 bytes encode to ~44 chars
+        base64; the cross-tab <code>storage</code> event is a useful side effect (paste-once
+        propagates to other tabs). Never the server, in any form.</td></tr>
       <tr><td>Validation on paste</td><td>Decrypt one already-synced ciphertext block (any will
         do). Reject on AEAD failure with "that key doesn't decrypt this workspace's data."</td></tr>
     </table>
@@ -502,7 +505,7 @@ CREATE OR REPLACE FUNCTION create_workspace(
         <code>workspace_id || "canary" || schema_version</code>) to produce the
         <code>wk_canary</code>. The canary is a known-plaintext AEAD blob that any future device
         can decrypt to validate a pasted WK, even on a workspace that has no blocks yet.</li>
-      <li>Client stores the WK in IndexedDB at <code>(user_id, workspace_id) &rarr; raw bytes</code>.</li>
+      <li>Client stores the WK in localStorage at <code>(user_id, workspace_id) &rarr; raw bytes</code>.</li>
       <li>Client calls <code>create_workspace(p_name, p_encryption_mode='e2ee', p_wk_canary=&hellip;)</code>.
         Server inserts <code>workspaces</code> with the canary and the owner's
         <code>workspace_members</code> row, exactly as the plaintext flow does. No WK bytes are
@@ -516,7 +519,7 @@ CREATE OR REPLACE FUNCTION create_workspace(
     <ol>
       <li>User signs in on device 2. PowerSync syncs encrypted block rows for workspaces they're
         a member of.</li>
-      <li>Client checks IndexedDB at <code>(user_id, workspace_id)</code> &mdash; no WK present.</li>
+      <li>Client checks localStorage at <code>(user_id, workspace_id)</code> &mdash; no WK present.</li>
       <li>UI surfaces a "this workspace needs its key" prompt instead of rendering ciphertext.</li>
       <li>User pastes their stored WK.</li>
       <li>Client validates by decrypting <code>workspaces.wk_canary</code> with the candidate WK
@@ -524,7 +527,7 @@ CREATE OR REPLACE FUNCTION create_workspace(
         mismatch (right key, wrong workspace) both reject. Works for freshly invited / empty
         workspaces because the canary is created at workspace-create time, not derived from
         blocks.</li>
-      <li>On success: store in IndexedDB, render normally. On failure: surface "that key
+      <li>On success: store in localStorage, render normally. On failure: surface "that key
         doesn't decrypt this workspace's data," let the user retry.</li>
     </ol>
 
@@ -621,7 +624,7 @@ CREATE OR REPLACE FUNCTION create_workspace(
     <div class="decision">
       <strong>Pluggable key lookup.</strong> The seam takes <code>getCek(workspaceId)</code> as a
       callback rather than reading any global. In the simple model, the implementation is
-      "IndexedDB lookup at <code>(user_id, workspace_id)</code>." If the hierarchy is added later
+      "localStorage lookup at <code>(user_id, workspace_id)</code>." If the hierarchy is added later
       (§13), the implementation becomes "look up in the in-memory unwrapped-CEK map populated at
       vault unlock." Same call site, two implementations. This is the single most important seam
       to get right for keeping the hierarchy migration cheap.
@@ -762,7 +765,7 @@ CREATE OR REPLACE FUNCTION create_workspace(
       don't get populated for encrypted rows. Features that rely on them &mdash; in-workspace
       alias autocomplete, type-filtered queries, local FTS &mdash; therefore don't work for E2EE
       workspaces unless we layer on a separate "decrypt-then-populate" pass triggered when the WK
-      lands in IndexedDB.
+      lands in localStorage.
     </p>
 
     <h2 id="duality">10. Mode-by-mode behavior</h2>
@@ -985,7 +988,7 @@ CREATE OR REPLACE FUNCTION create_workspace(
       <li><strong>Per-user opt-in flow.</strong> User enters a new passphrase &rarr; derive MK
         via Argon2id &rarr; generate UVK &rarr; generate X25519 keypair &rarr; wrap UVK with MK
         &rarr; wrap private key with UVK &rarr; insert their <code>user_vault</code> row.</li>
-      <li><strong>Wrap existing WKs.</strong> For every WK already in the user's device IndexedDB,
+      <li><strong>Wrap existing WKs.</strong> For every WK already in the user's device localStorage,
         wrap it with the new UVK and write to <code>workspace_members.wrapped_cek</code>. Local
         paste flow remains as a backup unlock path.</li>
       <li><strong>Future workspaces.</strong> The create flow now also wraps the new WK with UVK
@@ -1011,7 +1014,7 @@ CREATE OR REPLACE FUNCTION create_workspace(
     <ul>
       <li><code>schema_version</code> in the AAD (already in §6).</li>
       <li>The sync boundary's <code>getCek(workspaceId)</code> callback signature (§9). Simple
-        model implements it as an IndexedDB lookup; hierarchy implements it as an in-memory
+        model implements it as an localStorage lookup; hierarchy implements it as an in-memory
         unwrapped-CEK-map read. Same call site, two implementations.</li>
       <li>No "user has a passphrase" assumption baked anywhere upstream of the sync boundary. The
         simple model has no user-level secrets; the hierarchy adds them. Keep the upstream layer
