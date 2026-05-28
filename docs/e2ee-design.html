@@ -444,8 +444,13 @@
       <code>e2ee</code> the moment a WK first validates against its canary &mdash; at create (§8.1)
       or first paste (§8.2) &mdash; and pins to <code>plaintext</code> on a plaintext create or
       explicit confirmation. The WK is <em>decrypt material only</em>: transient, stored separately,
-      and never the record of mode. <strong>Locking is a deliberate, coarse action in v1.</strong>
-      "Lock &amp; wipe local data" is an explicit user action &mdash; distinct from sign-out (it
+      and never the record of mode. <strong>Locking is a deliberate, coarse, user-only action in
+      v1.</strong> "Lock &amp; wipe local data" is the <em>only</em> thing that performs the
+      destructive whole-DB wipe, and it is gated behind explicit confirmation and clear "this erases
+      all local data on this device &mdash; you'll re-download and re-paste your keys" warnings.
+      <strong>Nothing automatic triggers it</strong> &mdash; not a sync event, not a membership
+      revoke, not sign-out. (Revoke in particular must never escalate to this wipe: it concerns one
+      workspace, and the wipe is all-workspaces &mdash; see §9.2.) It is distinct from sign-out (it
       keeps you signed in; it isn't a logout). It flushes the upload queue first so unsynced edits
       aren't lost; if the flush can't complete (offline, or an edit the server permanently rejects)
       it <strong>warns the user</strong> that locking now would discard unsynced edits and lets them
@@ -1086,16 +1091,20 @@ CREATE TRIGGER blocks_require_ciphertext_for_e2ee_trg
       <code>DELETE FROM blocks WHERE id = ?</code> with <code>source = NULL</code> so the
       side-index triggers fire and the upload triggers don't.
       <br><br>
-      <strong>The delete handler must also drop the matching <code>ps_crud</code> entries.</strong>
-      Deleting the mirror row leaves any pending upload envelopes for that block/workspace
-      untouched &mdash; and those still hold <em>plaintext</em> captured by the upload trigger. On a
-      revoke or workspace-delete the server will reject them (RLS/FK), so they retry and then land
-      in <code>ps_crud_rejected</code>, leaving plaintext queued locally and risking replay of stale
-      edits if access is later restored. So when a row leaves the synced stream because access was
-      revoked or the workspace was deleted, the observer must also delete (or quarantine) that
-      workspace's matching <code>ps_crud</code>/<code>ps_crud_rejected</code> entries &mdash; the
-      same "<code>ps_crud</code> is plaintext, handle it on every teardown path" discipline as the
-      lock flow in §6.
+      <strong>Pending-envelope cleanup on revoke is best-effort, and deliberately not a v1
+      priority.</strong> When access is revoked, any pending upload envelopes for that workspace sit
+      in <code>ps_crud</code>/<code>ps_crud_rejected</code> as plaintext (captured before the upload
+      hook encrypts); the server rejects them (RLS/FK) and they'd linger, risking a stale-edit replay
+      if access were later restored. The observer <em>can</em> tidy this up &mdash; delete or
+      quarantine that workspace's <code>ps_crud</code>/<code>ps_crud_rejected</code> entries &mdash;
+      but two things matter more than the tidy-up itself. First, it must stay strictly
+      <strong>per-workspace</strong>: revoke concerns one workspace, so it must <em>never</em>
+      escalate to the §6 coarse "Lock &amp; wipe" (that is all-workspaces and destructive, and is a
+      user-only action). Second, the security stakes are low: a revoked member already held the WK
+      and the decrypted data they had synced, so revoke can't retroactively protect any of it
+      &mdash; purge-on-revoke is local hygiene, not a confidentiality boundary. So v1 can leave the
+      revoked workspace's local data and queue entries to go stale (cleared on the next explicit
+      Lock &amp; wipe, or simply left), and revisit dedicated revoke cleanup later.
     </p>
     <p>
       Upload is symmetric. App writes plaintext to <code>blocks</code> as today; the existing
