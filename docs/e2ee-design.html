@@ -518,15 +518,32 @@
         <li><strong>Pre-existing memberships on the rollout release (one-shot seed).</strong> The
           first release that introduces mode pins finds every pre-existing workspace unpinned &mdash;
           the pin namespace didn't exist when they were created &mdash; so without special handling
-          they would <em>all</em> quarantine, breaking "plaintext workspaces behave as today" for
-          current users. A one-shot local-schema migration (marker-gated in
-          <code>client_schema_state</code>, like the other backfills) seeds a <code>plaintext</code>
-          pin for every membership present at upgrade. This is safe precisely because E2EE doesn't
-          exist before this release: no pre-existing workspace can be E2EE, so blanket-seeding
-          plaintext can't mis-pin one. It must be a <strong>one-shot keyed to the upgrade moment,
-          not a standing "unpinned &rarr; plaintext" rule</strong> &mdash; memberships that appear
-          afterward (new device, new invite) still take the quarantine paths above, which is what
-          keeps the downgrade defense intact.</li>
+          they would <em>all</em> quarantine, breaking "plaintext workspaces behave as today." A
+          one-shot, marker-gated migration seeds the pins, but the seed is a <strong>UX
+          optimization, not a security decision, so it must be conservative</strong>: pin
+          <code>plaintext</code> only for workspaces the client can <em>locally confirm</em> are
+          plaintext &mdash; no <code>wk_canary</code> and no <code>enc:v1:</code>-prefixed content in
+          their synced blocks &mdash; and let anything else fall through to the normal quarantine.
+          <br><br>
+          An earlier draft seeded "every membership present at upgrade" and argued it was safe
+          because "E2EE can't exist before this release." That's wrong under a <strong>staggered
+          rollout</strong>: an already-upgraded device A can create or accept an E2EE workspace whose
+          (plaintext) membership syncs to a not-yet-upgraded device B; when B finally upgrades and
+          runs the seed, that membership is "present at upgrade" and would get an immutable plaintext
+          pin &mdash; turning a real E2EE workspace into a plaintext one on B (plaintext writes reach
+          the server, downgrade defense broken). The conservative rule blocks it: an E2EE workspace
+          carries a <code>wk_canary</code>, and any content B already synced for it is
+          <code>enc:v1:</code> ciphertext (the keyless old client stored it verbatim and couldn't
+          have produced plaintext), so it fails the "locally confirm plaintext" test and quarantines
+          instead &mdash; the user pastes the WK. The content check is the robust half: a keyless
+          server can't turn an E2EE workspace's ciphertext into plaintext to sneak it past. (The one
+          residual is an <em>empty</em> E2EE workspace whose canary a hostile server also strips
+          &mdash; nothing local distinguishes it; the window is narrow, no content has leaked yet,
+          and the cross-device tamper check on A catches the first plaintext write. A
+          version/created-by-client-version gate on the membership would close it fully if that's
+          worth the rollout plumbing.) The seed stays a <strong>one-shot keyed to the upgrade moment,
+          not a standing "unpinned &rarr; plaintext" rule</strong>; later memberships take the
+          quarantine paths above.</li>
       </ul>
       The cost is one resolution step per workspace per new device &mdash; not free, but the
       alternative is silently accepting attacker plaintext on a workspace the user has every reason
