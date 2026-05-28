@@ -362,7 +362,10 @@
         58-character paste-friendly string. The <code>1</code> reserves a clean upgrade path.</td></tr>
       <tr><td>Where it lives</td><td>(a) the user's password manager / backup of their choice;
         (b) IndexedDB on each device the user has pasted it on, keyed by
-        <code>(user_id, workspace_id)</code>. Never the server, in any form.</td></tr>
+        <code>(user_id, workspace_id)</code>. IndexedDB rather than the local SQLite DB so the WK
+        store has its own lifecycle &mdash; a future "lock the app" or "clear my keys" action can
+        drop WKs without touching the PowerSync-managed sync state. Binary-safe storage means raw
+        32-byte keys go in directly. Never the server, in any form.</td></tr>
       <tr><td>Validation on paste</td><td>Decrypt one already-synced ciphertext block (any will
         do). Reject on AEAD failure with "that key doesn't decrypt this workspace's data."</td></tr>
     </table>
