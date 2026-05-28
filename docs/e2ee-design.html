@@ -450,7 +450,9 @@
       edits aren't lost, drops <em>all</em> WKs, and wipes the entire local store: the plaintext
       <code>blocks</code> table, the derived indexes
       (<code>block_aliases</code>/<code>block_types</code>/<code>blocks_fts</code>),
-      <code>BlockCache</code>, the <code>ps_crud</code> queue (whose envelopes hold plaintext, §9.2),
+      <code>BlockCache</code>, the <code>ps_crud</code> <em>and</em> <code>ps_crud_rejected</code>
+      queues (both hold plaintext envelopes captured before the upload hook's encryption step, §9.2
+      &mdash; a rejected envelope left behind would leave plaintext readable on a "locked" device),
       and the <code>blocks_synced</code> staging. The <strong>durable pins survive</strong> &mdash;
       they live in a separate, non-secret store and keep each workspace's mode known. On next use,
       plaintext workspaces re-sync and render as usual; an <code>e2ee</code>-pinned workspace
