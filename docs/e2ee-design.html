@@ -673,6 +673,16 @@ GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
         <code>WORKSPACE_COLUMNS</code>. Both need to reach clients: the canary for §8.2 WK
         validation on new devices and empty workspaces (the security-critical one), and the mode
         as the §6 UX hint that picks which resolution prompt to show first.</li>
+      <li><strong>Surface the canary through the local read path, not just store it.</strong>
+        Adding the columns to <code>WORKSPACE_COLUMNS</code> only makes PowerSync <em>store</em> them
+        in the raw table. The app's local workspace selectors
+        (<code>SELECT_LOCAL_WORKSPACES_SQL</code> / <code>SELECT_LOCAL_WORKSPACE_BY_ID_SQL</code> in
+        <code>src/data/workspaces.ts</code>) project only
+        <code>id, name, owner_user_id, create_time, update_time</code>, and the
+        <code>WorkspaceRow</code>/parse layer matches. The §8.2 paste flow must read
+        <code>wk_canary</code> (and the mode hint) before unlocking, so extend those selectors, the
+        <code>WorkspaceRow</code> type, and the parse function to carry both &mdash; otherwise the
+        security-critical canary is synced but unreachable.</li>
       <li><strong>Local-schema migration for upgrading clients.</strong> The
         <code>workspaces</code> table is created with <code>CREATE TABLE IF NOT EXISTS</code> in
         <code>repoProvider.ts</code>; that's a no-op on devices where the table already exists
@@ -1037,14 +1047,22 @@ GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
         and <code>execute()</code> the <code>CREATE TABLE</code> in DB-init alongside
         <code>CREATE_BLOCKS_TABLE_SQL</code> (so the client table actually exists). Skip either and
         there is no <code>blocks_synced</code> table for downloaded rows to hydrate, and the observer
-        has nothing to read. Then update
-        <code>powersync/sync-config.yaml</code> (via <code>scripts/gen-sync-config.ts</code>) so
-        the row_type for the blocks stream maps to <code>blocks_synced</code> rather than
-        <code>blocks</code> &mdash; the sync rule's <code>FROM</code>-clause name <em>is</em> the
-        row_type that maps to the client raw table (called out as load-bearing in
-        sync-config.yaml's own header comment), so leaving it pointing at <code>public.blocks</code>
-        means ciphertext lands in the plaintext <code>blocks</code> table and the observer never
-        sees the rows it's meant to decrypt. Add JS observer wiring at the sync boundary
+        has nothing to read. Then retarget the blocks stream's row_type to
+        <code>blocks_synced</code> &mdash; and this is a <code>scripts/gen-sync-config.ts</code>
+        <em>code</em> change, not a YAML tweak. PowerSync derives the row_type (which selects the
+        client raw table) from the sync rule's <code>FROM</code>-clause name, so the rule must read
+        <code>FROM public.blocks AS blocks_synced</code> while still selecting from the real server
+        table. But the generator currently hard-codes a single <code>table: 'public.blocks'</code>
+        that drives <em>both</em> the <code>FROM</code> clause and the column/predicate prefix, and
+        its header comment explicitly forbids aliasing the primary table. So decouple them: add a
+        separate row-type/alias field to the generator's <code>StreamQuery</code> (defaulting to the
+        table short-name for the unchanged workspaces/members streams), set it to
+        <code>blocks_synced</code> for blocks so it emits <code>FROM public.blocks AS
+        blocks_synced</code> with the projection and predicate prefixed by <code>blocks_synced</code>,
+        and update that "do not alias" header note (aliasing is now the intended mechanism for this
+        one stream). Regenerating <em>without</em> the code change keeps row_type=<code>blocks</code>,
+        so ciphertext lands in the plaintext <code>blocks</code> table and the observer never sees
+        it. Add JS observer wiring at the sync boundary
         (universal, with ps_crud / updated_at reconciliation per the callout above);
         encrypt-on-upload in the connector hook. Existing trigger code in
         <code>clientSchema.ts</code> and plugins is untouched (they fire on plaintext writes to
