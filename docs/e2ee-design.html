@@ -280,13 +280,22 @@
       hosting provider read my notes?"</em> Concretely, in v1:
     </p>
     <ul>
-      <li><strong>In scope</strong>: passive or active attacker with full read access to the Supabase
+      <li><strong>In scope</strong>: passive attacker with full read access to the Supabase
         Postgres, the PowerSync replica, network traffic to/from Supabase, and Supabase logs/backups.
         They must not learn the contents of E2EE-workspace blocks.</li>
       <li><strong>Out of scope</strong>: attacker who controls the user's browser at runtime
         (they can read decrypted data and exfiltrate the key); attacker who can compromise the
         client build pipeline (they can ship a backdoored client); attacker who can perform traffic
         analysis on edit patterns (still possible).</li>
+      <li><strong>Out of scope, deliberately, in v1</strong>: <em>active</em> attacker who can
+        substitute server responses. The invite-time public-key delivery (§8.4) is a
+        trust-on-server channel: a malicious server can return its own X25519 key in place of
+        Bob's and read everything in the shared workspace. Closing this gap requires
+        out-of-band verification &mdash; TOFU + safety-number compare, key transparency log, or
+        similar &mdash; which is real engineering and UX. Flagged as a v2 requirement in §13 and
+        §14; v1 honestly degrades to passive-only protection on first-share, full passive
+        protection thereafter (once the CEK is on Bob's device, the server can't read past
+        traffic).</li>
     </ul>
 
     <h2 id="current">3. Why the current architecture is friendly to this</h2>
@@ -525,6 +534,17 @@ CREATE TABLE user_vault (
       themselves. The new columns ride existing streams.
     </p>
 
+    <div class="decision">
+      <strong>Naming convention for envelopes.</strong> Wrapped-key columns are named after the
+      <em>wrapping</em> key, not the <em>wrapped</em> contents, so the unwrap path is obvious from
+      the column name: <code>wrapped_cek</code> (UVK-wrapped, at rest) versus
+      <code>wrapped_cek_for_invitee</code> (pubkey-wrapped, in transit). At the TS layer the two
+      should be branded types &mdash; a <code>WrappedForUvk</code> can't accidentally flow into a
+      function expecting a <code>WrappedForPubkey</code> envelope. One round of review already
+      tripped on a column called just <code>wrapped_cek</code> being asked to do double duty; the
+      convention is the cheap fix.
+    </div>
+
     <h2 id="flows">8. User-visible flows</h2>
 
     <h3>8.1 First-time vault setup</h3>
@@ -640,6 +660,15 @@ CREATE OR REPLACE FUNCTION accept_invitation(
       <code>attach_invite_envelope</code> (attaches the wrap) keeps the second step optional &mdash;
       a plaintext-workspace invite just doesn't call it.
     </p>
+
+    <div class="warn">
+      <strong>Trust-on-server caveat (v1).</strong> Alice receives Bob's public key from the
+      server in <code>invite_member_by_email</code>'s response, and wraps the CEK with whatever she
+      gets back. A malicious server can substitute its own X25519 public key here and read every
+      block in the resulting shared workspace. v1 lives with this against the (re-scoped) passive
+      threat model in §2; v2 closes it with TOFU + safety-number verification, or a key-transparency
+      log. Flagged in §13 and §14.
+    </div>
 
     <figure>
       <div class="diagram">
@@ -1031,6 +1060,56 @@ CREATE OR REPLACE FUNCTION accept_invitation(
       live with the fragility that any future trigger adds another footgun. See §9.2.
     </p>
 
+    <h3>11.6 Discipline rules surfaced from review iteration</h3>
+    <p>
+      The review cycle on this sketch produced repeated findings that fell into a small number of
+      shapes. Each pattern below has a one-liner rule worth carrying into future cross-cutting
+      designs &mdash; encryption-specific only incidentally. They're cheap to follow if named, easy
+      to miss otherwise.
+    </p>
+
+    <ul>
+      <li><strong>Column-add propagation.</strong> Adding a column to a workspace-related table
+        today means touching the migration, <code>workspaceSchema.ts</code>, the regenerated
+        <code>sync-config.yaml</code>, every RPC's <code>RETURNS TABLE</code> projection, every
+        RPC's parameter list (when callers need to supply the new field), TS row interfaces and
+        parse functions, and any <code>clientSchema.ts</code> triggers that reference the column.
+        Three review findings came from missing one of these layers. A separate task is open
+        (<em>"Investigate schema-generator extensions"</em>) to extend the existing generator
+        coverage so this becomes structural rather than discipline.</li>
+
+      <li><strong>Cross-table NOT NULL invariants force atomic RPC parameters.</strong> When a
+        constraint like "<code>workspace_members.wrapped_cek</code> is required iff the workspace
+        is E2EE" is enforced by a trigger (because Postgres can't express it as a single-table
+        CHECK), the RPC that creates the dependent row must accept the required value as a
+        parameter and write it atomically. A "create now, fill in later" two-step flow looks
+        reasonable in the design but trips the trigger at INSERT time. Rule: every cross-table
+        NOT NULL becomes a required RPC parameter, not a follow-up write.</li>
+
+      <li><strong>Lifecycle moments are first-class and not bundleable.</strong> "Signup" and
+        "first vault setup" and "first E2EE workspace" are different events with different
+        preconditions. Bundling them &mdash; e.g. "generate a keypair at signup" when the schema
+        requires a passphrase that doesn't exist yet &mdash; produces impossible flows. Name each
+        moment, its preconditions, and the table rows that come into existence at it. Do not
+        write "at signup" or "at first launch" without specifying which user lifecycle event you
+        actually mean.</li>
+
+      <li><strong>RPC-as-oracle check.</strong> Any new RPC that takes an external identifier
+        (email, phone, username) and returns user-specific data is a potential account-existence
+        oracle. Before adding one, ask: <em>if I pass in an identifier that does not belong to me,
+        what does my ability to call this tell me about that identifier?</em> If the answer is
+        non-trivial, gate the call behind an existing relationship (membership, invitation the
+        caller created, etc.) rather than letting any authenticated user probe. Folds naturally
+        into §11.4's drift-guard pattern.</li>
+
+      <li><strong>Server-mediated key delivery is trust-on-server unless verified.</strong>
+        Anything where the client receives identity material from the server and uses it to
+        encrypt for that identity (the §8.4 invite flow) inherits the server's trustworthiness for
+        that exchange. v1 lives with this against a passive threat model; v2 needs TOFU + safety
+        numbers, a key-transparency log, or out-of-band verification. Carry the assumption
+        explicitly &mdash; don't claim active-attacker protection that isn't there.</li>
+    </ul>
+
     <h2 id="rejected">12. Considered &amp; rejected</h2>
 
     <div class="reject">
@@ -1127,6 +1206,14 @@ CREATE OR REPLACE FUNCTION accept_invitation(
         Worth confirming whether that ordering is acceptable (it bundles two independently
         motivated changes) or whether E2EE should ship with explicit trigger gates and JSONB
         follows separately.</li>
+
+      <li><strong>When to add invite-time public-key verification.</strong> v1 takes the §2
+        scope-down: trust the server's pubkey response during invite. v2 needs some form of
+        out-of-band verification &mdash; TOFU + safety-number compare (cheapest UX, Signal-style),
+        a key-transparency log (best technical answer, real engineering), or in-product
+        fingerprint exchange. The decision is more product than crypto: how much UX friction is
+        acceptable for invite flow, and how loud should the "first share with new contact"
+        warning be?</li>
     </ol>
 
     <h2 id="tradeoffs">14. Tradeoffs we're accepting</h2>
@@ -1144,6 +1231,10 @@ CREATE OR REPLACE FUNCTION accept_invitation(
       <li><strong>Local derived indexes inactive in E2EE workspaces</strong> under Layout A
         (§9.2). Alias autocomplete, type-filtered queries, and local FTS don't work for encrypted
         workspaces until a decrypt-then-populate pass is added.</li>
+      <li><strong>Invite-time pubkey trust-on-server.</strong> The server can substitute its own
+        X25519 key in <code>invite_member_by_email</code>'s response and read everything in the
+        resulting shared workspace. v1 scopes the threat model to passive attackers (§2); active
+        substitution at invite time becomes a real concern only when v2 adds verification.</li>
       <li><strong>Client-trust required.</strong> A backdoored build can exfiltrate keys. Subresource
         integrity, reproducible builds, and audit are mitigations, not solutions.</li>
     </ul>
