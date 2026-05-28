@@ -70,6 +70,7 @@ import { showProgress } from '@/utils/toast.js'
 import { downloadBlob, exportRawSqliteDb, importRawSqliteDb } from '@/utils/exportSqliteDb.js'
 import { focusPropertyRow } from '@/utils/propertyNavigation.js'
 import { reloadInSafeMode } from '@/utils/safeMode.js'
+import { outlineRenderScopeId } from '@/utils/renderScope.js'
 
 const splitCodeMirrorBlockAtCursor = async (
   block: Block,
@@ -130,7 +131,10 @@ const createNodeInActivePanelFromGlobalContext = async (
     parentId: activeTopLevelBlockId,
     position: {kind: 'last'},
   })
-  await focusBlock(repo.block(activePanelRow.id), newId, {edit: true})
+  await focusBlock(repo.block(activePanelRow.id), newId, {
+    edit: true,
+    renderScopeId: outlineRenderScopeId(activeTopLevelBlockId),
+  })
 }
 
 export function getDefaultActionGroups({repo}: { repo: Repo }) {
@@ -248,9 +252,9 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   const insertExampleExtensionsBlock: BlockAction = {
     id: 'insert_example_extensions',
     description: 'Insert example extensions under current block',
-    handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
+    handler: async ({block, uiStateBlock, renderScopeId}: BlockShortcutDependencies) => {
       const created = await insertExampleExtensionsUnder(block)
-      if (created[0]) await focusBlock(uiStateBlock, created[0].id)
+      if (created[0]) await focusBlock(uiStateBlock, created[0].id, {renderScopeId})
     },
   }
 
@@ -522,7 +526,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         const createSiblingBelow = async () => {
           const newId = await repo.mutate.createSiblingBelow({siblingId: block.id})
-          if (newId) await focusBlock(uiStateBlock, newId, {edit: true})
+          if (newId) await focusBlock(uiStateBlock, newId, {edit: true, renderScopeId: deps.renderScopeId})
         }
 
         const blockHasChildren = childIds.length > 0
@@ -534,7 +538,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
             blockId: blockInFocus.id,
             start: 0,
           })
-          await focusBlock(uiStateBlock, blockInFocus.id, {edit: true})
+          await focusBlock(uiStateBlock, blockInFocus.id, {edit: true, renderScopeId: deps.renderScopeId})
         }
         // Case 2: Cursor is at end of text and block has children
         else if (cursorPos === doc.length &&
@@ -543,7 +547,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
             parentId: block.id,
             position: {kind: 'first'},
           })
-          if (newId) await focusBlock(uiStateBlock, newId, {edit: true})
+          if (newId) await focusBlock(uiStateBlock, newId, {edit: true, renderScopeId: deps.renderScopeId})
         }
         // Repeated empty blocks creation - outdents the new block.
         // outdent returns false if the block is at the view boundary
@@ -608,7 +612,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           x: caretX,
         })
 
-        await focusBlock(uiStateBlock, prevVisible.id, {edit: true})
+        await focusBlock(uiStateBlock, prevVisible.id, {edit: true, renderScopeId: deps.renderScopeId})
       },
       defaultBinding: {
         keys: 'ArrowUp',
@@ -651,7 +655,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           x: caretX,
         })
 
-        await focusBlock(uiStateBlock, nextVisible.id, {edit: true})
+        await focusBlock(uiStateBlock, nextVisible.id, {edit: true, renderScopeId: deps.renderScopeId})
       },
       defaultBinding: {
         keys: 'ArrowDown',
@@ -682,7 +686,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           start: prevData?.content.length ?? 0,
         })
 
-        await focusBlock(uiStateBlock, prevVisible.id, {edit: true})
+        await focusBlock(uiStateBlock, prevVisible.id, {edit: true, renderScopeId: deps.renderScopeId})
       },
       defaultBinding: {
         keys: 'ArrowLeft',
@@ -712,7 +716,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           start: 0,
         })
 
-        await focusBlock(uiStateBlock, nextVisible.id, {edit: true})
+        await focusBlock(uiStateBlock, nextVisible.id, {edit: true, renderScopeId: deps.renderScopeId})
       },
       defaultBinding: {
         keys: 'ArrowRight',
@@ -747,7 +751,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
               blockId: prevVisible.id,
               start: prevData?.content.length ?? 0,
             })
-            await focusBlock(uiStateBlock, prevVisible.id, {edit: true})
+            await focusBlock(uiStateBlock, prevVisible.id, {edit: true, renderScopeId: deps.renderScopeId})
           }
           await block.delete()
           return
@@ -789,7 +793,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           blockId: prevId,
           start: joinOffset,
         })
-        await focusBlock(uiStateBlock, prevId, {edit: true})
+        await focusBlock(uiStateBlock, prevId, {edit: true, renderScopeId: deps.renderScopeId})
       },
       defaultBinding: {
         keys: 'Backspace',

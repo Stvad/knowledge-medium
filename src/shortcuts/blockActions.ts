@@ -251,7 +251,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       await withMoveTransition(async () => {
         await block.delete()
       })
-      if (next) void focusBlock(uiStateBlock, next.id)
+      if (next) void focusBlock(uiStateBlock, next.id, {renderScopeId: deps.renderScopeId})
     },
     defaultBinding: {
       keys: 'Delete',

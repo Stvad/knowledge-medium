@@ -172,6 +172,7 @@ export type BlockChildrenFooterResolver =
 // has no need for any of them).
 export interface BlockShellProps {
   'data-block-id': string
+  'data-render-scope-id'?: string
   'data-editing': 'true' | 'false'
   className?: string
   tabIndex: number

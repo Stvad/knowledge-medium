@@ -37,18 +37,19 @@ import { SWIPE_TRIGGER_PX } from './swipeGesture.ts'
  *  another panel can't be picked up here — Codex's panel-disambiguation
  *  guard. The panel-local event listener means each panel's menu only
  *  opens from its own swiped block id, but the scope still matters inside
- *  one panel: if a block is transcluded via embed, querySelector picks the
- *  first match and we accept that as the anchor target. */
+ *  one panel: if a block is transcluded via embed, renderScopeId narrows
+ *  the lookup to the exact rendered occurrence. */
 const useAnchorRect = (
   panelRoot: HTMLElement | null,
   blockId: string | undefined,
+  renderScopeId: string | undefined,
 ): AnchorRect | null => {
   const [rect, setRect] = useState<AnchorRect | null>(null)
 
   // Reset stale rect on id/scope change synchronously during render —
   // the alternative (setRect in an effect body) is the cascading-render
   // anti-pattern that `react-hooks/set-state-in-effect` forbids.
-  const trackedKey = blockId && panelRoot ? `${blockId}` : null
+  const trackedKey = blockId && panelRoot ? `${blockId}\u0000${renderScopeId ?? ''}` : null
   const [tracked, setTracked] = useState<string | null>(trackedKey)
   if (tracked !== trackedKey) {
     setTracked(trackedKey)
@@ -59,10 +60,10 @@ const useAnchorRect = (
     if (!panelRoot || !blockId) return
 
     const find = (): HTMLElement | null =>
-      findSwipeActionAnchorElement(panelRoot, blockId)
+      findSwipeActionAnchorElement(panelRoot, blockId, renderScopeId)
 
     const measure = (): void => {
-      const nextRect = getSwipeActionAnchorRect(panelRoot, blockId)
+      const nextRect = getSwipeActionAnchorRect(panelRoot, blockId, renderScopeId)
       if (!nextRect) {
         setRect(null)
         return
@@ -94,7 +95,7 @@ const useAnchorRect = (
       cancelAnimationFrame(raf)
       observer.disconnect()
     }
-  }, [panelRoot, blockId])
+  }, [panelRoot, blockId, renderScopeId])
 
   return rect
 }
@@ -147,6 +148,20 @@ const resolveActions = (
     label: item.label ?? action?.description ?? item.actionId,
   }
 })
+
+const swipeTargetKey = (
+  blockId: string | null | undefined,
+  renderScopeId: string | undefined,
+): string | null =>
+  blockId ? `${blockId}\u0000${renderScopeId ?? ''}` : null
+
+const sameSwipeTarget = (
+  leftBlockId: string | null | undefined,
+  leftRenderScopeId: string | undefined,
+  rightBlockId: string | null | undefined,
+  rightRenderScopeId: string | undefined,
+): boolean =>
+  leftBlockId === rightBlockId && leftRenderScopeId === rightRenderScopeId
 
 interface MenuTouchStart {
   x: number
@@ -223,6 +238,7 @@ export const SwipeActionMenu = () => {
   const runtime = useAppRuntime()
   const [topLevelBlockId] = usePropertyValue(uiStateBlock, topLevelBlockIdProp)
   const [activeBlockId, setActiveBlockId] = useState<string | undefined>(undefined)
+  const [activeRenderScopeId, setActiveRenderScopeId] = useState<string | undefined>(undefined)
   // Inline anchor placed inside the panel; we walk upward to find the
   // panel root and scope querySelector to it so the same block id in
   // another panel can't be picked up.
@@ -237,6 +253,7 @@ export const SwipeActionMenu = () => {
   // gesture hasn't committed yet. Set independently of activeBlockId so
   // we can anchor and render the toolbar before commit.
   const [previewBlockId, setPreviewBlockId] = useState<string | null>(null)
+  const [previewRenderScopeId, setPreviewRenderScopeId] = useState<string | undefined>(undefined)
   // Live hide percent (0..100). `null` means "use the resting position
   // for the current activeBlockId" — i.e. 0 if open, 100 if not. While
   // a drag is in flight or the menu is settling, this carries the
@@ -256,9 +273,11 @@ export const SwipeActionMenu = () => {
   // up with the row the user is dragging on; fall through to the
   // committed activeBlockId once the gesture lands.
   const anchorBlockId = previewBlockId ?? activeBlockId
+  const anchorRenderScopeId = previewBlockId ? previewRenderScopeId : activeRenderScopeId
   const anchor = useAnchorRect(
     isMobile ? panelRoot : null,
     isMobile ? anchorBlockId : undefined,
+    isMobile ? anchorRenderScopeId : undefined,
   )
   const [showOverflow, setShowOverflow] = useState(false)
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -288,9 +307,11 @@ export const SwipeActionMenu = () => {
       settleTargetRef.current = null
       setIsSettling(false)
       setPreviewBlockId(null)
+      setPreviewRenderScopeId(undefined)
       setDragOffsetPercent(null)
       if (finalTarget === 'closed') {
         setActiveBlockId(undefined)
+        setActiveRenderScopeId(undefined)
       }
     }, SETTLE_DURATION_MS)
   }, [])
@@ -305,7 +326,9 @@ export const SwipeActionMenu = () => {
   const dismiss = useCallback((): void => {
     clearSettleTimer()
     setActiveBlockId(undefined)
+    setActiveRenderScopeId(undefined)
     setPreviewBlockId(null)
+    setPreviewRenderScopeId(undefined)
     setDragOffsetPercent(null)
     setIsSettling(false)
   }, [clearSettleTimer])
@@ -314,14 +337,20 @@ export const SwipeActionMenu = () => {
   // across renders so this is effectively a one-time lookup that lets
   // every render re-use the same icon / label.
   const allActions = useMemo(() => getEffectiveActions(runtime), [runtime])
-  const runBlockAction = useCallback((actionId: string, blockId: string, trigger: CustomEvent): boolean => {
+  const runBlockAction = useCallback((
+    actionId: string,
+    blockId: string,
+    renderScopeId: string | undefined,
+    trigger: CustomEvent,
+  ): boolean => {
     const action = allActions.find(a => a.id === actionId)
     if (!action) return false
 
     const block = repo.block(blockId)
-    if (action.canRun && !action.canRun({block, uiStateBlock})) return false
+    const deps = {block, uiStateBlock, ...(renderScopeId ? {renderScopeId} : {})}
+    if (action.canRun && !action.canRun(deps)) return false
 
-    void Promise.resolve(action.handler({block, uiStateBlock}, trigger)).catch(error => {
+    void Promise.resolve(action.handler(deps, trigger)).catch(error => {
       console.error(`[swipe-quick-actions] Action "${actionId}" failed`, error)
     })
     return true
@@ -336,16 +365,23 @@ export const SwipeActionMenu = () => {
     // Filter against the previewed block too so the buttons that slide
     // in during the drag match the ones that'll be there after commit.
     const blockId = activeBlockId ?? previewBlockId
+    const renderScopeId = activeBlockId ? activeRenderScopeId : previewRenderScopeId
     if (!blockId) return actionItems
     const block = repo.block(blockId)
     if (!block.peek()) return actionItems
+    const deps = {block, uiStateBlock, ...(renderScopeId ? {renderScopeId} : {})}
     return actionItems.filter(item => {
       const action = allActions.find(a => a.id === item.actionId)
       if (!action) return true
       if (!action.canRun) return true
-      return action.canRun({block, uiStateBlock})
+      return action.canRun(deps)
     })
-  }, [actionItems, allActions, activeBlockId, previewBlockId, repo, uiStateBlock])
+  }, [
+    actionItems, allActions,
+    activeBlockId, activeRenderScopeId,
+    previewBlockId, previewRenderScopeId,
+    repo, uiStateBlock,
+  ])
   const [primaryRows, overflowItems] = useMemo(() => {
     const rows = new Map<number, QuickActionItem[]>()
     const overflow: QuickActionItem[] = []
@@ -376,9 +412,10 @@ export const SwipeActionMenu = () => {
   // re-swipe on a different row doesn't carry stale popout state. Done
   // during render rather than in an effect to avoid the cascading-render
   // anti-pattern flagged by `react-hooks/set-state-in-effect`.
-  const [trackedActiveId, setTrackedActiveId] = useState(activeBlockId)
-  if (trackedActiveId !== activeBlockId) {
-    setTrackedActiveId(activeBlockId)
+  const activeTargetKey = swipeTargetKey(activeBlockId, activeRenderScopeId)
+  const [trackedActiveTargetKey, setTrackedActiveTargetKey] = useState(activeTargetKey)
+  if (trackedActiveTargetKey !== activeTargetKey) {
+    setTrackedActiveTargetKey(activeTargetKey)
     if (showOverflow) setShowOverflow(false)
   }
 
@@ -391,7 +428,9 @@ export const SwipeActionMenu = () => {
     // fire but its setState calls are no-ops once everything is
     // already cleared, so we don't reach into the ref from render.
     if (activeBlockId) setActiveBlockId(undefined)
+    if (activeRenderScopeId) setActiveRenderScopeId(undefined)
     if (previewBlockId !== null) setPreviewBlockId(null)
+    if (previewRenderScopeId) setPreviewRenderScopeId(undefined)
     if (dragOffsetPercent !== null) setDragOffsetPercent(null)
     if (isSettling) setIsSettling(false)
   }
@@ -402,18 +441,23 @@ export const SwipeActionMenu = () => {
     const handleOpen = (event: Event): void => {
       if (!isSwipeQuickActionMenuEvent(event)) return
       event.preventDefault()
-      const blockId = event.detail.blockId
+      const {blockId, renderScopeId} = event.detail
       setActiveBlockId(blockId)
+      setActiveRenderScopeId(renderScopeId)
       // If the open came after a preview of the same block, animate
       // the toolbar's remaining offset to fully visible — the
       // "completes appearing" snap. Otherwise no animation is needed:
       // either we weren't previewing or we were previewing a different
       // block (rare), and the menu should just appear at rest.
-      if (previewBlockId === blockId && dragOffsetPercent !== null) {
+      if (
+        sameSwipeTarget(previewBlockId, previewRenderScopeId, blockId, renderScopeId) &&
+        dragOffsetPercent !== null
+      ) {
         startSettle('open')
       } else {
         clearSettleTimer()
         setPreviewBlockId(null)
+        setPreviewRenderScopeId(undefined)
         setDragOffsetPercent(null)
         setIsSettling(false)
       }
@@ -421,28 +465,42 @@ export const SwipeActionMenu = () => {
 
     const handleClose = (event: Event): void => {
       if (!isSwipeQuickActionMenuEvent(event)) return
-      if (event.detail.blockId !== activeBlockId) return
+      if (!sameSwipeTarget(
+        event.detail.blockId,
+        event.detail.renderScopeId,
+        activeBlockId,
+        activeRenderScopeId,
+      )) return
       event.preventDefault()
       startSettle('closed')
     }
 
     const handleRun = (event: Event): void => {
       if (!isSwipeQuickActionRunEvent(event)) return
-      if (!runBlockAction(event.detail.actionId, event.detail.blockId, event)) return
+      if (!runBlockAction(
+        event.detail.actionId,
+        event.detail.blockId,
+        event.detail.renderScopeId,
+        event,
+      )) return
       event.preventDefault()
     }
 
     const handleProgress = (event: Event): void => {
       if (!isSwipeQuickActionProgressEvent(event)) return
-      const {blockId, dx, phase} = event.detail
+      const {blockId, renderScopeId, dx, phase} = event.detail
       if (phase === 'active') {
         // Drag still in flight — follow the finger without animation.
         // Re-grabbing a different block mid-gesture just retargets.
         clearSettleTimer()
         setIsSettling(false)
         setPreviewBlockId(blockId)
+        setPreviewRenderScopeId(renderScopeId)
         setDragOffsetPercent(computeOpenHidePercent(dx))
-      } else if (phase === 'cancel' && previewBlockId === blockId) {
+      } else if (
+        phase === 'cancel' &&
+        sameSwipeTarget(previewBlockId, previewRenderScopeId, blockId, renderScopeId)
+      ) {
         // Released without commit — animate the toolbar back to hidden.
         startSettle('closed')
       }
@@ -458,19 +516,29 @@ export const SwipeActionMenu = () => {
       panelRoot.removeEventListener(SWIPE_QUICK_ACTION_RUN_EVENT, handleRun)
       panelRoot.removeEventListener(SWIPE_QUICK_ACTION_PROGRESS_EVENT, handleProgress)
     }
-  }, [activeBlockId, dragOffsetPercent, panelRoot, previewBlockId, runBlockAction, startSettle, clearSettleTimer])
+  }, [
+    activeBlockId, activeRenderScopeId,
+    dragOffsetPercent,
+    panelRoot,
+    previewBlockId, previewRenderScopeId,
+    runBlockAction, startSettle, clearSettleTimer,
+  ])
 
   useEffect(() => {
     if (!activeBlockId || !isMobile || !panelRoot) return
 
     const id = window.setTimeout(() => {
-      const anchorElement = findSwipeActionBlockElement(panelRoot, activeBlockId)
+      const anchorElement = findSwipeActionBlockElement(
+        panelRoot,
+        activeBlockId,
+        activeRenderScopeId,
+      )
       const block = repo.block(activeBlockId)
       if (!anchorElement || !block.peek()) dismiss()
     }, 0)
 
     return () => window.clearTimeout(id)
-  }, [activeBlockId, dismiss, isMobile, panelRoot, repo])
+  }, [activeBlockId, activeRenderScopeId, dismiss, isMobile, panelRoot, repo])
 
   // Dismiss on tap/click anywhere outside the floating bar. Capture phase
   // beats descendant click handlers so an action elsewhere in the tree
@@ -516,6 +584,7 @@ export const SwipeActionMenu = () => {
   // flight. The preview branch lets the toolbar slide in tracking the
   // finger before commit, matching the Workflowy-style pull-out.
   const renderedBlockId = activeBlockId ?? previewBlockId
+  const renderedRenderScopeId = activeBlockId ? activeRenderScopeId : previewRenderScopeId
   if (!isMobile || !renderedBlockId || !anchor) return inlineAnchor
 
   // The block whose handler we'll dispatch lives in this panel; resolve
@@ -539,9 +608,15 @@ export const SwipeActionMenu = () => {
       return
     }
     const trigger = new CustomEvent('swipe-quick-action', {
-      detail: {actionId: item.actionId},
+      detail: renderedRenderScopeId
+        ? {
+          actionId: item.actionId,
+          blockId: block.id,
+          renderScopeId: renderedRenderScopeId,
+        }
+        : {actionId: item.actionId, blockId: block.id},
     })
-    runBlockAction(item.actionId, block.id, trigger)
+    runBlockAction(item.actionId, block.id, renderedRenderScopeId, trigger)
     dismiss()
   }
 

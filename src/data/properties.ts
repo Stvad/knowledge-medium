@@ -350,11 +350,12 @@ export const focusBlock = async (
   const targetEdit = edit && !uiStateBlock.repo.isReadOnly ? true : false
   const currentLocation = peekFocusedBlockLocation(uiStateBlock)
   const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
+  const fallbackRenderScopeId = currentLocation?.blockId === blockId
+    ? currentLocation.renderScopeId
+    : outlineRenderScopeId(topLevelBlockId ?? blockId)
   const location: FocusedBlockLocation = {
     blockId,
-    renderScopeId: renderScopeId
-      ?? currentLocation?.renderScopeId
-      ?? outlineRenderScopeId(topLevelBlockId ?? blockId),
+    renderScopeId: renderScopeId ?? fallbackRenderScopeId,
   }
   await uiStateBlock.repo.tx(async tx => {
     await tx.setProperty(uiStateBlock.id, focusedBlockLocationProp, location)

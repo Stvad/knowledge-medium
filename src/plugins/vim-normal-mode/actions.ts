@@ -24,6 +24,7 @@ import {
   ActionContextTypes,
   BlockShortcutDependencies,
 } from '@/shortcuts/types.js'
+import { outlineRenderScopeId } from '@/utils/renderScope.js'
 
 const JUMP_BLOCK_COUNT = 8
 
@@ -98,7 +99,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         if (!topLevelBlockId) return
 
         const next = await nextVisibleBlock(block, topLevelBlockId)
-        if (next) void focusBlock(uiStateBlock, next.id)
+        if (next) void focusBlock(uiStateBlock, next.id, {renderScopeId: deps.renderScopeId})
       },
       defaultBinding: {
         keys: ['ArrowDown', 'j'],
@@ -115,7 +116,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         if (!topLevelBlockId) return
 
         const prev = await previousVisibleBlock(block, topLevelBlockId)
-        if (prev) void focusBlock(uiStateBlock, prev.id)
+        if (prev) void focusBlock(uiStateBlock, prev.id, {renderScopeId: deps.renderScopeId})
       },
       defaultBinding: {
         keys: ['ArrowUp', 'k'],
@@ -162,7 +163,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         const newId = hasUncollapsedChildren || isTopLevel
           ? await repo.mutate.createChild({parentId: block.id, position: {kind: 'first'}})
           : await repo.mutate.createSiblingBelow({siblingId: block.id})
-        if (newId) await focusBlock(uiStateBlock, newId, {edit: true})
+        if (newId) await focusBlock(uiStateBlock, newId, {edit: true, renderScopeId: deps.renderScopeId})
       },
       defaultBinding: {
         keys: 'o',
@@ -195,7 +196,9 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
         if (!topLevelBlockId) return
 
-        void focusBlock(uiStateBlock, topLevelBlockId)
+        void focusBlock(uiStateBlock, topLevelBlockId, {
+          renderScopeId: outlineRenderScopeId(topLevelBlockId),
+        })
       },
       defaultBinding: {
         // Two-press sequence — tinykeys dispatches on the second `g`
@@ -215,7 +218,9 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         const lastBlock = await getLastVisibleDescendant(repo.block(topLevelBlockId), topLevelBlockId)
         if (!lastBlock) return
 
-        void focusBlock(uiStateBlock, lastBlock.id)
+        void focusBlock(uiStateBlock, lastBlock.id, {
+          renderScopeId: outlineRenderScopeId(topLevelBlockId),
+        })
       },
       defaultBinding: {
         keys: 'Shift+g',
@@ -224,12 +229,12 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
     bindNormal({
       id: 'jump_many_down',
       description: 'Jump down several blocks',
-      handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
+      handler: async ({block, uiStateBlock, renderScopeId}: BlockShortcutDependencies) => {
         const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
         if (!topLevelBlockId) return
 
         const target = await jumpVisibleBlocks(block, topLevelBlockId, JUMP_BLOCK_COUNT, 'down')
-        if (target) void focusBlock(uiStateBlock, target.id)
+        if (target) void focusBlock(uiStateBlock, target.id, {renderScopeId})
       },
       defaultBinding: {
         keys: 'Control+d',
@@ -238,12 +243,12 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
     bindNormal({
       id: 'jump_many_up',
       description: 'Jump up several blocks',
-      handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
+      handler: async ({block, uiStateBlock, renderScopeId}: BlockShortcutDependencies) => {
         const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
         if (!topLevelBlockId) return
 
         const target = await jumpVisibleBlocks(block, topLevelBlockId, JUMP_BLOCK_COUNT, 'up')
-        if (target) void focusBlock(uiStateBlock, target.id)
+        if (target) void focusBlock(uiStateBlock, target.id, {renderScopeId})
       },
       defaultBinding: {
         keys: 'Control+u',
@@ -252,10 +257,10 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
     bindNormal({
       id: 'create_block_above_and_edit',
       description: 'Create block above and enter edit mode',
-      handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
+      handler: async ({block, uiStateBlock, renderScopeId}: BlockShortcutDependencies) => {
         const newId = await repo.mutate.createSiblingAbove({siblingId: block.id})
         if (!newId) return
-        await focusBlock(uiStateBlock, newId, {edit: true})
+        await focusBlock(uiStateBlock, newId, {edit: true, renderScopeId})
       },
       defaultBinding: {
         keys: 'Shift+o',
@@ -264,9 +269,9 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
     bindNormal({
       id: 'paste_after',
       description: 'Paste from clipboard after current block',
-      handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
+      handler: async ({block, uiStateBlock, renderScopeId}: BlockShortcutDependencies) => {
         const pasted = await pasteFromClipboard(block, repo, {position: 'after'})
-        if (pasted[0]) void focusBlock(uiStateBlock, pasted[0].id)
+        if (pasted[0]) void focusBlock(uiStateBlock, pasted[0].id, {renderScopeId})
       },
       defaultBinding: {
         keys: 'p',
@@ -275,9 +280,9 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
     bindNormal({
       id: 'paste_before',
       description: 'Paste from clipboard before current block',
-      handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
+      handler: async ({block, uiStateBlock, renderScopeId}: BlockShortcutDependencies) => {
         const pasted = await pasteFromClipboard(block, repo, {position: 'before'})
-        if (pasted[0]) void focusBlock(uiStateBlock, pasted[0].id)
+        if (pasted[0]) void focusBlock(uiStateBlock, pasted[0].id, {renderScopeId})
       },
       defaultBinding: {
         keys: 'Shift+p',
@@ -302,7 +307,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
     bindNormal({
       id: 'collapse_into_parent',
       description: 'Collapse current block into its parent and focus parent',
-      handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
+      handler: async ({block, uiStateBlock, renderScopeId}: BlockShortcutDependencies) => {
         const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
         if (!topLevelBlockId || block.id === topLevelBlockId) return
 
@@ -311,7 +316,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         if (!parent || parent.id === topLevelBlockId) return
 
         await parent.set(isCollapsedProp, true)
-        void focusBlock(uiStateBlock, parent.id)
+        void focusBlock(uiStateBlock, parent.id, {renderScopeId})
       },
       defaultBinding: {
         keys: 'Shift+z',

@@ -72,8 +72,7 @@ export interface BlockShortcutDependencies  extends BaseShortcutDependencies {
   renderScopeId?: string;
 }
 
-export interface CodeMirrorEditModeDependencies extends BaseShortcutDependencies {
-  block: Block;
+export interface CodeMirrorEditModeDependencies extends BlockShortcutDependencies {
   editorView: EditorView;
 }
 

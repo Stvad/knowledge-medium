@@ -1,5 +1,6 @@
 export interface SwipeQuickActionMenuEventDetail {
   blockId: string
+  renderScopeId?: string
 }
 
 export interface SwipeQuickActionRunEventDetail extends SwipeQuickActionMenuEventDetail {
@@ -29,11 +30,14 @@ export const SWIPE_QUICK_ACTION_PROGRESS_EVENT = 'swipe-quick-actions:progress'
 
 export const isSwipeQuickActionMenuEvent = (
   event: Event,
-): event is SwipeQuickActionMenuEvent =>
-  event instanceof CustomEvent &&
-  typeof event.detail === 'object' &&
-  event.detail !== null &&
-  typeof (event.detail as {blockId?: unknown}).blockId === 'string'
+): event is SwipeQuickActionMenuEvent => {
+  if (!(event instanceof CustomEvent) || typeof event.detail !== 'object' || event.detail === null) {
+    return false
+  }
+  const detail = event.detail as {blockId?: unknown; renderScopeId?: unknown}
+  return typeof detail.blockId === 'string' &&
+    (detail.renderScopeId === undefined || typeof detail.renderScopeId === 'string')
+}
 
 export const isSwipeQuickActionRunEvent = (
   event: Event,
@@ -52,22 +56,24 @@ export const dispatchSwipeQuickActionMenuEvent = (
   target: EventTarget,
   type: typeof SWIPE_QUICK_ACTION_OPEN_EVENT | typeof SWIPE_QUICK_ACTION_CLOSE_EVENT,
   blockId: string,
+  renderScopeId?: string,
 ): boolean =>
   target.dispatchEvent(new CustomEvent<SwipeQuickActionMenuEventDetail>(type, {
     bubbles: true,
     cancelable: true,
-    detail: {blockId},
+    detail: renderScopeId ? {blockId, renderScopeId} : {blockId},
   }))
 
 export const dispatchSwipeQuickActionRunEvent = (
   target: EventTarget,
   actionId: string,
   blockId: string,
+  renderScopeId?: string,
 ): boolean =>
   target.dispatchEvent(new CustomEvent<SwipeQuickActionRunEventDetail>(SWIPE_QUICK_ACTION_RUN_EVENT, {
     bubbles: true,
     cancelable: true,
-    detail: {blockId, actionId},
+    detail: renderScopeId ? {blockId, renderScopeId, actionId} : {blockId, actionId},
   }))
 
 export const dispatchSwipeQuickActionProgressEvent = (
@@ -75,9 +81,10 @@ export const dispatchSwipeQuickActionProgressEvent = (
   blockId: string,
   dx: number,
   phase: 'active' | 'cancel',
+  renderScopeId?: string,
 ): boolean =>
   target.dispatchEvent(new CustomEvent<SwipeQuickActionProgressEventDetail>(SWIPE_QUICK_ACTION_PROGRESS_EVENT, {
     bubbles: true,
     cancelable: true,
-    detail: {blockId, dx, phase},
+    detail: renderScopeId ? {blockId, renderScopeId, dx, phase} : {blockId, dx, phase},
   }))

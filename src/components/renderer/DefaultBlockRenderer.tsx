@@ -464,7 +464,7 @@ export function DefaultBlockRenderer(
 
       const pasted = await pasteMultilineText(pastedText, block, repo)
       if (pasted[0]) {
-        void focusBlock(uiStateBlock, pasted[0].id)
+        void focusBlock(uiStateBlock, pasted[0].id, {renderScopeId})
       }
     },
     [block, blockContext.renderScopeId, repo, uiStateBlock],
@@ -571,6 +571,9 @@ export function DefaultBlockRenderer(
 
   const shellProps = useMemo<BlockShellProps>(() => ({
     'data-block-id': block.id,
+    'data-render-scope-id': typeof blockContext.renderScopeId === 'string'
+      ? blockContext.renderScopeId
+      : undefined,
     'data-editing': inEditMode ? 'true' : 'false',
     tabIndex: 0,
     ref: shellRef,
@@ -578,7 +581,7 @@ export function DefaultBlockRenderer(
       ? (event) => { void handleBlockClick(event) }
       : undefined,
     onPaste: (event) => { void handlePaste(event) },
-  }), [block.id, inEditMode, handleBlockClick, handlePaste])
+  }), [block.id, blockContext.renderScopeId, inEditMode, handleBlockClick, handlePaste])
 
   const initialShellState = useMemo<BlockShellState>(() => ({
     shellProps,

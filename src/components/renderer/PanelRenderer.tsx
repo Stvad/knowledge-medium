@@ -4,7 +4,7 @@ import { NestedBlockContextProvider, useBlockContext } from '@/context/block.js'
 import { Button } from '@/components/ui/button.js'
 import { ChevronLeft, ChevronRight, X } from 'lucide-react'
 import {
-  focusedBlockLocationProp,
+  peekFocusedBlockLocation,
   scrollTopProp,
   topLevelBlockIdProp,
 } from '@/data/properties.js'
@@ -98,7 +98,7 @@ export function PanelRenderer({block}: BlockRendererProps) {
   // we read it from the ref.
   useEffect(() => {
     return panelHistory.registerSnapshotter(block.id, () => ({
-      focusedLocation: block.peekProperty(focusedBlockLocationProp),
+      focusedLocation: peekFocusedBlockLocation(block),
       scrollTop: scrollRef.current?.scrollTop,
     }))
   }, [block])

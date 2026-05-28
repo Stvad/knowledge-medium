@@ -10,6 +10,7 @@ import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import {
   editorSelection,
   focusBlock,
+  focusedBlockLocationProp,
   isEditingProp,
   peekFocusedBlockId,
   topLevelBlockIdProp,
@@ -30,6 +31,7 @@ import {
   panelBlockId,
   panelRowsInLayoutOrder,
 } from '@/utils/panelLayoutProjection'
+import { outlineRenderScopeId } from '@/utils/renderScope'
 import {
   ActionContextTypes,
   type ActionConfig,
@@ -274,6 +276,10 @@ describe('default CodeMirror shortcuts', () => {
     const rootUiState = await getUIStateBlock(env.repo, WS, USER, {})
     const layoutSession = await getLayoutSessionBlock(rootUiState, getLayoutSessionId())
     const panelId = await insertPanelRow(env.repo, layoutSession, 'root')
+    await env.repo.block(panelId).set(focusedBlockLocationProp, {
+      blockId: 'existing-child',
+      renderScopeId: 'embed:other:existing-child:0',
+    })
     const action = findGlobalAction(env.repo, CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID)
 
     await action.handler(
@@ -289,7 +295,34 @@ describe('default CodeMirror shortcuts', () => {
     const panelBlock = env.repo.block(panelId)
     await panelBlock.load()
     expect(peekFocusedBlockId(panelBlock)).toBe(newNodeId)
+    expect(panelBlock.peekProperty(focusedBlockLocationProp)).toEqual({
+      blockId: newNodeId,
+      renderScopeId: outlineRenderScopeId('root'),
+    })
     expect(panelBlock.peekProperty(isEditingProp)).toBe(true)
+  })
+
+  it('defaults cross-block focus to the panel outline scope instead of preserving stale nested scope', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: 'current'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'next', content: 'next'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await uiStateBlock.set(focusedBlockLocationProp, {
+      blockId: 'current',
+      renderScopeId: 'embed:parent:current:0',
+    })
+
+    await focusBlock(uiStateBlock, 'next')
+
+    expect(uiStateBlock.peekProperty(focusedBlockLocationProp)).toEqual({
+      blockId: 'next',
+      renderScopeId: outlineRenderScopeId('root'),
+    })
   })
 
   it('places the cursor at the beginning of the next block after pressing right at block end', async () => {

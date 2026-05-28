@@ -20,12 +20,16 @@ import { systemToggle } from '@/extensions/togglable.js'
 
 export const codeMirrorEditModeActivation: ShortcutActivationContribution = context => {
   if (context.surface !== 'codemirror' || !context.editorView) return null
+  const renderScopeId = typeof context.blockContext?.renderScopeId === 'string'
+    ? context.blockContext.renderScopeId
+    : undefined
 
   return [{
     context: ActionContextTypes.EDIT_MODE_CM,
     dependencies: {
       block: context.block,
       editorView: context.editorView,
+      ...(renderScopeId ? {renderScopeId} : {}),
     },
   }]
 }

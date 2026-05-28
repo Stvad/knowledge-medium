@@ -10,11 +10,13 @@ import { useRepo } from '@/context/repo.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { codeMirrorExtensionsFacet } from '@/extensions/editor.js'
 import { convertEmptyChildBlockToProperty } from '@/utils/propertyCreation.js'
+import { useBlockContext } from '@/context/block.js'
 
 export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   const repo = useRepo()
   const runtime = useAppRuntime()
   const uiStateBlock = useUIStateBlock()
+  const blockContext = useBlockContext()
 
   const extensions = useMemo(() => {
     const fieldCreationExtension = EditorView.domEventHandlers({
@@ -56,7 +58,10 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     if (text?.includes('\n')) {
       e.preventDefault()
       const pasted = await pasteMultilineText(text, block, repo)
-      if (pasted[0]) void focusBlock(uiStateBlock, pasted[0].id)
+      const renderScopeId = typeof blockContext.renderScopeId === 'string'
+        ? blockContext.renderScopeId
+        : undefined
+      if (pasted[0]) void focusBlock(uiStateBlock, pasted[0].id, {renderScopeId})
     }
   }
 

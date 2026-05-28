@@ -53,6 +53,11 @@ const makeContext = (id = 'block-1', uiStateBlock = makeFakeUiStateBlock()): Blo
   }
 }
 
+const makeScopedContext = (id: string, renderScopeId: string): BlockInteractionContext => ({
+  ...makeContext(id),
+  blockContext: {renderScopeId},
+})
+
 const runtime = () => resolveFacetRuntimeSync([
   blockContentSurfacePropsFacet.of(swipeQuickActionsContentSurface),
 ])
@@ -85,11 +90,11 @@ const touchEvent = (
   stopPropagation: vi.fn(),
 } as unknown as TouchEvent<HTMLDivElement>)
 
-const recordOpenEvents = (target: EventTarget): string[] => {
-  const opened: string[] = []
+const recordOpenEvents = (target: EventTarget): Array<{blockId: string; renderScopeId?: string}> => {
+  const opened: Array<{blockId: string; renderScopeId?: string}> = []
   target.addEventListener(SWIPE_QUICK_ACTION_OPEN_EVENT, event => {
     const menuEvent = event as SwipeQuickActionMenuEvent
-    opened.push(menuEvent.detail.blockId)
+    opened.push(menuEvent.detail)
     event.preventDefault()
   })
   return opened
@@ -98,11 +103,11 @@ const recordOpenEvents = (target: EventTarget): string[] => {
 const recordCloseEvents = (
   target: EventTarget,
   activeBlockId: string | undefined,
-): string[] => {
-  const closed: string[] = []
+): Array<{blockId: string; renderScopeId?: string}> => {
+  const closed: Array<{blockId: string; renderScopeId?: string}> = []
   target.addEventListener(SWIPE_QUICK_ACTION_CLOSE_EVENT, event => {
     const menuEvent = event as SwipeQuickActionMenuEvent
-    closed.push(menuEvent.detail.blockId)
+    closed.push(menuEvent.detail)
     if (menuEvent.detail.blockId === activeBlockId) event.preventDefault()
   })
   return closed
@@ -110,17 +115,22 @@ const recordCloseEvents = (
 
 const recordProgressEvents = (
   target: EventTarget,
-): Array<{blockId: string; dx: number; phase: 'active' | 'cancel'}> => {
-  const progress: Array<{blockId: string; dx: number; phase: 'active' | 'cancel'}> = []
+): Array<{blockId: string; renderScopeId?: string; dx: number; phase: 'active' | 'cancel'}> => {
+  const progress: Array<{blockId: string; renderScopeId?: string; dx: number; phase: 'active' | 'cancel'}> = []
   target.addEventListener(SWIPE_QUICK_ACTION_PROGRESS_EVENT, event => {
     const detail = (event as SwipeQuickActionProgressEvent).detail
-    progress.push({blockId: detail.blockId, dx: detail.dx, phase: detail.phase})
+    progress.push({
+      blockId: detail.blockId,
+      renderScopeId: detail.renderScopeId,
+      dx: detail.dx,
+      phase: detail.phase,
+    })
   })
   return progress
 }
 
-const recordRunEvents = (target: EventTarget): Array<{blockId: string; actionId: string}> => {
-  const run: Array<{blockId: string; actionId: string}> = []
+const recordRunEvents = (target: EventTarget): Array<{blockId: string; renderScopeId?: string; actionId: string}> => {
+  const run: Array<{blockId: string; renderScopeId?: string; actionId: string}> = []
   target.addEventListener(SWIPE_QUICK_ACTION_RUN_EVENT, event => {
     const runEvent = event as SwipeQuickActionRunEvent
     run.push(runEvent.detail)
@@ -173,9 +183,27 @@ describe('swipe-quick-actions gesture', () => {
     props.onTouchMove?.(touchEvent('touches', touch(150, 102), surface))
     const end = touchEvent('changedTouches', touch(120, 102), surface)
     props.onTouchEnd?.(end)
-    expect(opened).toEqual(['b1'])
+    expect(opened).toEqual([{blockId: 'b1'}])
     expect(end.preventDefault).toHaveBeenCalled()
     expect(end.stopPropagation).toHaveBeenCalled()
+  })
+
+  it('includes render scope on swipe events when the block has a scoped render context', () => {
+    const surface = document.createElement('div')
+    const opened = recordOpenEvents(surface)
+    const progress = recordProgressEvents(surface)
+    const props = handlers(makeScopedContext('b-scoped', 'scope-embed'))
+    props.onTouchStart?.(touchEvent('changedTouches', touch(200, 100), surface))
+    props.onTouchMove?.(touchEvent('touches', touch(150, 102), surface))
+    props.onTouchEnd?.(touchEvent('changedTouches', touch(120, 102), surface))
+
+    expect(opened).toEqual([{blockId: 'b-scoped', renderScopeId: 'scope-embed'}])
+    expect(progress).toEqual([{
+      blockId: 'b-scoped',
+      renderScopeId: 'scope-embed',
+      dx: -50,
+      phase: 'active',
+    }])
   })
 
   it('opens the menu when the swipe starts on a rendered link', () => {
@@ -190,7 +218,7 @@ describe('swipe-quick-actions gesture', () => {
     props.onTouchMove?.(touchEvent('touches', touch(150, 102), link, surface))
     props.onTouchEnd?.(touchEvent('changedTouches', touch(120, 102), link, surface))
 
-    expect(opened).toEqual(['b-link-source'])
+    expect(opened).toEqual([{blockId: 'b-link-source'}])
   })
 
   it('opens the menu when the swipe starts on a video element', () => {
@@ -205,7 +233,7 @@ describe('swipe-quick-actions gesture', () => {
     props.onTouchMove?.(touchEvent('touches', touch(150, 102), video, surface))
     props.onTouchEnd?.(touchEvent('changedTouches', touch(120, 102), video, surface))
 
-    expect(opened).toEqual(['b-video-source'])
+    expect(opened).toEqual([{blockId: 'b-video-source'}])
   })
 
   it('keeps non-link interactive controls out of the swipe gesture', () => {
@@ -234,7 +262,7 @@ describe('swipe-quick-actions gesture', () => {
     propsA.onTouchStart?.(touchEvent('changedTouches', touch(200, 100), surfaceA))
     propsA.onTouchEnd?.(touchEvent('changedTouches', touch(120, 100), surfaceA))
 
-    expect(openedA).toEqual(['b-shared'])
+    expect(openedA).toEqual([{blockId: 'b-shared'}])
     expect(openedB).toEqual([])
   })
 
@@ -263,7 +291,7 @@ describe('swipe-quick-actions gesture', () => {
     props.onTouchStart?.(touchEvent('changedTouches', touch(50, 100), surface))
     const end = touchEvent('changedTouches', touch(140, 100), surface)
     props.onTouchEnd?.(end)
-    expect(closed).toEqual(['b4'])
+    expect(closed).toEqual([{blockId: 'b4'}])
     expect(end.preventDefault).toHaveBeenCalled()
     expect(end.stopPropagation).toHaveBeenCalled()
   })
@@ -302,7 +330,7 @@ describe('swipe-quick-actions gesture', () => {
     props.onTouchStart?.(touchEvent('changedTouches', touch(50, 100), surface))
     const end = touchEvent('changedTouches', touch(140, 100), surface)
     props.onTouchEnd?.(end)
-    expect(closed).toEqual(['Y'])
+    expect(closed).toEqual([{blockId: 'Y'}])
     expect(end.preventDefault).not.toHaveBeenCalled()
   })
 
@@ -319,7 +347,7 @@ describe('swipe-quick-actions gesture', () => {
     // changedTouches on end has BOTH leaving; the tracked one is what
     // we want, regardless of order.
     props.onTouchEnd?.(touchEvent('changedTouches', [distractor, tracked(120)], surface))
-    expect(opened).toEqual(['b-multi'])
+    expect(opened).toEqual([{blockId: 'b-multi'}])
   })
 
   it('does not flip on a second finger\'s end event', () => {
@@ -336,7 +364,7 @@ describe('swipe-quick-actions gesture', () => {
     expect(opened).toEqual([])
     // Now the tracked finger lifts after a left swipe — should fire.
     props.onTouchEnd?.(touchEvent('changedTouches', tracked(120), surface))
-    expect(opened).toEqual(['b-multi-end'])
+    expect(opened).toEqual([{blockId: 'b-multi-end'}])
   })
 
   it('locks the gesture to the first finger; later touchstarts are ignored', () => {
@@ -351,7 +379,7 @@ describe('swipe-quick-actions gesture', () => {
     // 800 -> 750 motion below would not look like a leftward swipe.
     props.onTouchStart?.(touchEvent('changedTouches', second, surface))
     props.onTouchEnd?.(touchEvent('changedTouches', touch(120, 100, 1), surface))
-    expect(opened).toEqual(['b-lock'])
+    expect(opened).toEqual([{blockId: 'b-lock'}])
   })
 
   it('streams progress events during a leftward drag and stops on cancel', () => {

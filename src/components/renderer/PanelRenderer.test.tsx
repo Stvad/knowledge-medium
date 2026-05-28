@@ -7,7 +7,10 @@ import { BlockCache } from '@/data/blockCache'
 import type { Block } from '@/data/block'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
-import { topLevelBlockIdProp } from '@/data/properties'
+import {
+  focusedBlockIdProp,
+  topLevelBlockIdProp,
+} from '@/data/properties'
 import { BlockContextProvider } from '@/context/block'
 import { resolveFacetRuntimeSync, type FacetRuntime } from '@/extensions/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
@@ -15,6 +18,8 @@ import { PanelRenderer } from './PanelRenderer'
 import { BlockComponent } from '@/components/BlockComponent.js'
 import { useActionContext } from '@/shortcuts/useActionContext'
 import { ActionContextTypes } from '@/shortcuts/types'
+import { panelHistory } from '@/utils/panelHistory'
+import { outlineRenderScopeId } from '@/utils/renderScope'
 
 const repoRef = vi.hoisted(() => ({
   current: undefined as Repo | undefined,
@@ -195,5 +200,16 @@ describe('PanelRenderer', () => {
       }),
       true,
     )
+  })
+
+  it('captures legacy focused block ids as scoped locations for history snapshots', async () => {
+    await env.panel.set(focusedBlockIdProp, 'legacy-child')
+    renderPanel(false)
+    await screen.findByTestId('panel-top-level-block')
+
+    expect(panelHistory.snapshot(env.panel.id)?.focusedLocation).toEqual({
+      blockId: 'legacy-child',
+      renderScopeId: outlineRenderScopeId('page-a'),
+    })
   })
 })

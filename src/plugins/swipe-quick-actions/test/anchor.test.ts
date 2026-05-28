@@ -49,4 +49,22 @@ describe('swipe action anchor lookup', () => {
     expect(findSwipeActionAnchorElement(panel, 'custom')?.getAttribute('data-anchor'))
       .toBe('custom-shell')
   })
+
+  it('narrows duplicate block anchors by render scope', () => {
+    document.body.innerHTML = `
+      <div id="panel">
+        <div class="tm-block" data-block-id="target" data-render-scope-id="outline:root">
+          <div class="block-content" data-anchor="outline-content">Outline target</div>
+        </div>
+        <div class="tm-block" data-block-id="target" data-render-scope-id="embed:source:target:0">
+          <div class="block-content" data-anchor="embed-content">Embedded target</div>
+        </div>
+      </div>
+    `
+
+    const panel = document.getElementById('panel')!
+
+    expect(findSwipeActionAnchorElement(panel, 'target', 'embed:source:target:0')?.getAttribute('data-anchor'))
+      .toBe('embed-content')
+  })
 })

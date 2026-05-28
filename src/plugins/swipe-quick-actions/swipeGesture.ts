@@ -197,7 +197,7 @@ export const swipeQuickActionsContentSurface: BlockContentSurfaceContribution = 
       // intermediate visual feedback.
       if (start.decided === 'horizontal' && dx < 0 && !isBlockEditing(block.id, uiStateBlock, renderScopeId)) {
         start.previewed = true
-        dispatchSwipeQuickActionProgressEvent(event.currentTarget, block.id, dx, 'active')
+        dispatchSwipeQuickActionProgressEvent(event.currentTarget, block.id, dx, 'active', renderScopeId)
       }
     },
 
@@ -233,6 +233,7 @@ export const swipeQuickActionsContentSurface: BlockContentSurfaceContribution = 
             event.currentTarget,
             SWIPE_QUICK_ACTION_OPEN_EVENT,
             block.id,
+            renderScopeId,
           )
           if (handled) {
             event.preventDefault()
@@ -244,6 +245,7 @@ export const swipeQuickActionsContentSurface: BlockContentSurfaceContribution = 
             event.currentTarget,
             SWIPE_RIGHT_BLOCK_ACTION_ID,
             block.id,
+            renderScopeId,
           )
           if (actionHandled) {
             event.preventDefault()
@@ -253,6 +255,7 @@ export const swipeQuickActionsContentSurface: BlockContentSurfaceContribution = 
               event.currentTarget,
               SWIPE_QUICK_ACTION_CLOSE_EVENT,
               block.id,
+              renderScopeId,
             )
             if (handled) {
               event.preventDefault()
@@ -268,7 +271,7 @@ export const swipeQuickActionsContentSurface: BlockContentSurfaceContribution = 
       // (drag left, then back right) where final dx wouldn't tell us
       // a preview was in flight.
       if (previewed && !openCommitted) {
-        dispatchSwipeQuickActionProgressEvent(event.currentTarget, block.id, dx, 'cancel')
+        dispatchSwipeQuickActionProgressEvent(event.currentTarget, block.id, dx, 'cancel', renderScopeId)
       }
     },
 
@@ -286,7 +289,7 @@ export const swipeQuickActionsContentSurface: BlockContentSurfaceContribution = 
         // recoverable here so we pass 0 — the menu just needs the
         // 'cancel' signal to start its hide animation.
         if (start.previewed) {
-          dispatchSwipeQuickActionProgressEvent(event.currentTarget, block.id, 0, 'cancel')
+          dispatchSwipeQuickActionProgressEvent(event.currentTarget, block.id, 0, 'cancel', renderScopeId)
         }
       }
     },

@@ -52,21 +52,23 @@ class TestResizeObserver {
 const menuEvent = (
   type: typeof SWIPE_QUICK_ACTION_OPEN_EVENT | typeof SWIPE_QUICK_ACTION_CLOSE_EVENT,
   blockId = 'block-1',
+  renderScopeId?: string,
 ): CustomEvent<SwipeQuickActionMenuEventDetail> =>
   new CustomEvent(type, {
     bubbles: true,
     cancelable: true,
-    detail: {blockId},
+    detail: renderScopeId ? {blockId, renderScopeId} : {blockId},
   })
 
 const runEvent = (
   actionId = SWIPE_RIGHT_BLOCK_ACTION_ID,
   blockId = 'block-1',
+  renderScopeId?: string,
 ): CustomEvent<SwipeQuickActionRunEventDetail> =>
   new CustomEvent(SWIPE_QUICK_ACTION_RUN_EVENT, {
     bubbles: true,
     cancelable: true,
-    detail: {blockId, actionId},
+    detail: renderScopeId ? {blockId, renderScopeId, actionId} : {blockId, actionId},
   })
 
 describe('SwipeActionMenu', () => {
@@ -147,6 +149,14 @@ describe('SwipeActionMenu', () => {
   const blockElement = (): HTMLElement => {
     const element = document.querySelector<HTMLElement>('[data-block-id="block-1"]')
     if (!element) throw new Error('missing block element')
+    return element
+  }
+
+  const scopedBlockElement = (renderScopeId: string): HTMLElement => {
+    const element = document.querySelector<HTMLElement>(
+      `[data-block-id="block-1"][data-render-scope-id="${renderScopeId}"]`,
+    )
+    if (!element) throw new Error(`missing scoped block element ${renderScopeId}`)
     return element
   }
 
@@ -267,14 +277,53 @@ describe('SwipeActionMenu', () => {
     expect(screen.queryByRole('button', {name: 'Gated'})).toBeNull()
   })
 
+  it('passes the render scope from swipe menu events into action deps', async () => {
+    const handler = vi.fn((deps: BlockShortcutDependencies) => {
+      expect(deps.block.id).toBe('block-1')
+    })
+    const canRun = vi.fn((deps: BlockShortcutDependencies) => deps.block.id === 'block-1')
+    runtime = resolveFacetRuntimeSync([
+      actionsFacet.of({
+        id: 'scoped_action',
+        description: 'Scoped action',
+        context: ActionContextTypes.NORMAL_MODE,
+        canRun,
+        handler,
+      }, {source: 'test'}),
+      quickActionItemsFacet.of({actionId: 'scoped_action', label: 'Scoped'}, {source: 'test'}),
+    ])
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <div className="panel">
+          <div data-block-id="block-1" data-render-scope-id="scope-a">Outline</div>
+          <div data-block-id="block-1" data-render-scope-id="scope-b">Embed</div>
+          <SwipeActionMenu/>
+        </div>
+      </AppRuntimeContextProvider>,
+    )
+
+    act(() => {
+      scopedBlockElement('scope-b').dispatchEvent(
+        menuEvent(SWIPE_QUICK_ACTION_OPEN_EVENT, 'block-1', 'scope-b'),
+      )
+    })
+    fireEvent.click(await screen.findByRole('button', {name: 'Scoped'}))
+
+    expect(canRun.mock.calls.some(([deps]) => deps.renderScopeId === 'scope-b')).toBe(true)
+    const deps = handler.mock.calls[0]?.[0] as BlockShortcutDependencies | undefined
+    expect(deps?.block.id).toBe('block-1')
+    expect(deps?.uiStateBlock.id).toBe('panel-1')
+    expect(deps?.renderScopeId).toBe('scope-b')
+  })
+
   it('runs swipe-right action events through effective action decorators', async () => {
     const calls: string[] = []
     const baseAction: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
       id: SWIPE_RIGHT_BLOCK_ACTION_ID,
       description: 'Swipe right',
       context: ActionContextTypes.NORMAL_MODE,
-      handler: async ({block}) => {
-        calls.push(`base:${block.id}`)
+      handler: async ({block, renderScopeId}) => {
+        calls.push(`base:${block.id}:${renderScopeId ?? ''}`)
       },
     }
     runtime = resolveFacetRuntimeSync([
@@ -286,7 +335,7 @@ describe('SwipeActionMenu', () => {
           ...current,
           handler: async (deps, trigger) => {
             const blockDeps = deps as BlockShortcutDependencies
-            calls.push(`decorated:${blockDeps.block.id}`)
+            calls.push(`decorated:${blockDeps.block.id}:${blockDeps.renderScopeId ?? ''}`)
             await current.handler(blockDeps, trigger)
           },
         }),
@@ -296,11 +345,11 @@ describe('SwipeActionMenu', () => {
 
     let event: CustomEvent<SwipeQuickActionRunEventDetail> | undefined
     await act(async () => {
-      event = runEvent()
+      event = runEvent(SWIPE_RIGHT_BLOCK_ACTION_ID, 'block-1', 'scope-b')
       blockElement().dispatchEvent(event)
     })
 
     expect(event?.defaultPrevented).toBe(true)
-    expect(calls).toEqual(['decorated:block-1', 'base:block-1'])
+    expect(calls).toEqual(['decorated:block-1:scope-b', 'base:block-1:scope-b'])
   })
 })
