@@ -1269,29 +1269,65 @@ WHERE typeof(je.value) = 'text';</code></pre>
     </ul>
 
     <div class="decision">
-      <strong>Working decision.</strong> Layout B and Layout C are both viable; Layout A is
-      rejected. The choice hinges on:
+      <strong>Decision: Layout B.</strong> Resolved by investigating PowerSync's capabilities
+      directly (see the "PowerSync transport investigation" box below). The earlier framing
+      treated B and C as a coin toss pending an async-UDF PoC and leaned C for "less
+      infrastructure." Two facts settled it for B:
       <ol>
-        <li>Whether the PoC confirms PowerSync awaits async UDFs end-to-end (if not, C is off the
-          table).</li>
-        <li>How big the Layout C touch surface actually is. Each review round has found more raw
-          SQL sites that need awareness of the encryption boundary (currently 7 distinct
-          sites in app code spanning ~10 SQL statements including alias autocomplete and the
-          typed-query compiler, plus 5 backfill statements, almost certainly more). Under
-          Layout B this surface is empty &mdash; local writes are plaintext, all existing
-          readers Just Work.</li>
-        <li>Which set of risks is easier to live with &mdash; B's two-write download path and JS
-          observer wiring (a single concentrated mechanism), versus C's encryption-awareness
-          scattered across the codebase wherever raw SQL touches a content column (mechanical
-          per-site, but a discipline rule the codebase has to maintain forever).</li>
+        <li><strong>Layout B is PowerSync's officially-recommended E2EE pattern, with a reference
+          implementation.</strong> It is not a workaround that fights the framework &mdash; the
+          PowerSync team's own flagship E2EE demo
+          (<code>powersync-community/react-supabase-chat-e2ee</code>) does exactly this:
+          synced ciphertext table + a plaintext mirror table + a
+          <code>differentialWatch().onDiff({added, updated, removed})</code> observer that
+          decrypts in JS and writes the mirror inside a <code>writeTransaction</code>. The
+          <code>onDiff</code> API is purpose-built for this projection and hands you removals
+          directly &mdash; so the delete/tombstone propagation concern (above) is native to the
+          API, not something to hand-build.</li>
+        <li><strong>Layout C's decisive cost is real and Layout B's is bounded.</strong> The
+          Layout C touch surface kept widening across review rounds (7+ distinct app-code sites
+          across ~10 SQL statements, plus 5 backfills, plus all TxImpl write paths, almost
+          certainly incomplete); each is a forever-discipline rule one author away from silently
+          breaking E2EE. Layout B's complexity is concentrated in one named observer with a
+          framework API and a reference impl to copy.</li>
       </ol>
-      The earlier draft leaned toward C on grounds of "less new infrastructure." That lean was
-      based on a survey claim that turned out incomplete in three successive review rounds. The
-      Layout C touch list is now meaningfully wider, and the long-tail concern is real: any
-      future plugin or feature that adds raw SQL against the content columns is one author away
-      from breaking E2EE silently. <strong>Re-lean: I'd default toward Layout B now unless the
-      PoC for C is particularly clean.</strong> B's complexity is concentrated at one named seam;
-      C's is structural and ongoing.
+      The async-UDF PoC that previously gated the choice is moot: PowerSync's sync-apply runs in
+      the Rust/SQLite core, not a JS path you can interpose a UDF into, so Layout C's
+      decrypt-on-apply was never cleanly reachable anyway (see the investigation box). Layout C
+      is now formally rejected alongside A.
+    </div>
+
+    <div class="warn">
+      <strong>PowerSync transport investigation (settles the layout question).</strong> The whole
+      B-vs-C tension came from wanting a per-row <em>download transform</em> &mdash; decrypt as
+      rows land locally, so the local DB is plaintext and nothing else changes. Direct
+      investigation of <code>@powersync/web@1.38.1</code> / <code>@powersync/common@1.53.1</code>
+      and the PowerSync team's own statements:
+      <ul>
+        <li><strong>No download-side hook exists, natively or as a supported extension point.</strong>
+          <code>PowerSyncBackendConnector</code> has only <code>fetchCredentials</code> +
+          <code>uploadData</code> &mdash; no download counterpart. Sync-apply happens in the
+          Rust/SQLite core (<code>ps_oplog</code>/<code>ps_data</code> &rarr; views); there's no
+          JS callback in that path.</li>
+        <li><strong>Raw tables are static SQL only</strong> (<code>put</code>/<code>delete</code>
+          statements with a fixed parameter vocabulary), not a JS transform &mdash; and the JS
+          sync client ignores raw tables anyway
+          (<a href="https://github.com/powersync-ja/powersync-js/issues/672">powersync-js#672</a>),
+          they need the Rust sync client.</li>
+        <li><strong>The PowerSync maintainer confirmed the gap.</strong> Discussion
+          <a href="https://github.com/powersync-ja/powersync-js/discussions/864">powersync-js#864</a>
+          is this exact question; simolus3's response: a sync-internals middleware approach is
+          "hacky," "not an official feature," "probably a direction worth exploring" but
+          unroadmapped. Recommended instead: SQL transforms over JSON views (a registered
+          <code>decrypt()</code> SQL function inside <code>json_replace()</code>), or local
+          tables kept in sync via triggers &mdash; i.e. the mirror pattern.</li>
+        <li><strong>At-rest DB encryption exists</strong> (<code>WebEncryptionOptions.encryptionKey</code>,
+          wa-sqlite Multiple Ciphers) but it's the wrong threat model &mdash; it protects local
+          disk, it does not let the server hold ciphertext while the client holds plaintext.</li>
+      </ul>
+      Verdict: a true download transform is <strong>not obtainable</strong> without depending on
+      unsupported sync internals. Layout B's mirror-table + observer is the sanctioned shape, so
+      it's the design we build on rather than a fallback we settle for.
     </div>
 
     <p>
@@ -1580,16 +1616,16 @@ WHERE typeof(je.value) = 'text';</code></pre>
         the same transaction as the rotation token, or a temporary suspension of the immutability
         trigger inside the RPC. Cleanest is the dedicated RPC.</li>
 
-      <li><strong>Layout B vs Layout C for local plaintext.</strong> §9.2 lays out both. The
-        choice hinges on (a) a small PoC verifying that PowerSync's pipeline correctly awaits
-        async wa-sqlite UDFs through every code path (if not, C is off the table), and (b) which
-        set of risks is easier to live with &mdash; B's universal-observer two-writes-per-download
-        cost concentrated at one named seam, versus C's encryption-awareness scattered across
-        7+ raw-SQL sites and 4 backfill statements (and counting — the survey list has grown each
-        review round). Default lean now <strong>toward B</strong>, reversed from the earlier
-        draft: B's complexity is contained at the sync boundary while C's is structural and
-        ongoing, with future plugins one author away from breaking E2EE silently. Re-evaluate if
-        the PoC for C is particularly clean. See §9.2's working decision for the longer argument.</li>
+      <li><strong>Layout B vs Layout C for local plaintext &mdash; RESOLVED: Layout B.</strong>
+        Settled by investigating PowerSync directly (see §9.2's working-decision and transport-
+        investigation boxes). There's no download-transform hook, the async-UDF route for C
+        isn't cleanly reachable (sync-apply is in the Rust core), and Layout B's mirror-table +
+        <code>differentialWatch().onDiff()</code> observer is PowerSync's officially-recommended
+        E2EE pattern with a reference implementation
+        (<code>powersync-community/react-supabase-chat-e2ee</code>). The remaining open work for
+        Layout B is implementation detail (reconciliation with pending local edits, source=NULL
+        on observer writes, locked-row staging, BlockCache eviction on WK paste) rather than a
+        layout choice &mdash; all covered in §9.2.</li>
 
       <li><strong>Backfill behavior on first WK paste.</strong> The first time a device gets a
         WK for a workspace, the local plaintext-derived indexes need populating. Under Layout B
