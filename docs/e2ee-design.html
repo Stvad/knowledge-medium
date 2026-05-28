@@ -447,15 +447,24 @@ CREATE TRIGGER workspaces_prevent_encryption_mode_change_trg
   FOR EACH ROW
   EXECUTE FUNCTION workspaces_prevent_encryption_mode_change();
 
--- create_workspace must accept the encryption_mode at create time;
--- since there's no INSERT RLS on workspaces, the RPC is the only
--- path and immutability means we can never set it later.
+-- create_workspace accepts encryption_mode and a key-check canary
+-- so we can validate pasted WKs even on workspaces that have no
+-- block rows yet (freshly invited or just-created E2EE workspaces).
+-- The canary is an AEAD-encrypted known plaintext (the workspace id);
+-- decrypting it with the candidate WK both authenticates the key
+-- (AEAD failure = wrong key) and confirms it's bound to this workspace
+-- (right key on the wrong workspace's canary fails the plaintext check).
+ALTER TABLE workspaces ADD COLUMN wk_canary TEXT;
+-- NULL for plaintext workspaces; required for E2EE workspaces.
+-- Format: enc:v1:base64url(nonce || ciphertext) of workspace_id
+-- as the plaintext, with the same AAD shape as block columns
+-- (workspace_id || "canary" || schema_version).
+
 CREATE OR REPLACE FUNCTION create_workspace(
     p_name             text,
-    p_encryption_mode  text DEFAULT 'none'  -- 'none' | 'e2ee'
-  ) RETURNS jsonb ...;
--- Existing TS caller (src/data/workspaces.ts) passes p_encryption_mode
--- when the user clicks "Create encrypted workspace".</code></pre>
+    p_encryption_mode  text DEFAULT 'none',  -- 'none' | 'e2ee'
+    p_wk_canary        text DEFAULT NULL     -- required iff p_encryption_mode = 'e2ee'
+  ) RETURNS jsonb ...;</code></pre>
 
     <p>
       That's the entire server-side schema change. Notably <em>not</em> added (saved for the
@@ -486,11 +495,15 @@ CREATE OR REPLACE FUNCTION create_workspace(
       <li>User clicks "Create encrypted workspace".</li>
       <li>Client generates a 32-byte WK via <code>crypto.getRandomValues</code>; encodes it as
         <code>kmp-wk-1:&lt;base32&gt;</code>.</li>
-      <li>Client stores the WK in IndexedDB at key
-        <code>(user_id, workspace_id) &rarr; raw bytes</code>.</li>
-      <li>Server: insert the <code>workspaces</code> row with
-        <code>encryption_mode = 'e2ee'</code> and the owner's <code>workspace_members</code> row,
-        exactly as the plaintext flow does. No crypto material is sent to the server.</li>
+      <li>Client picks the workspace id, then encrypts the id with the WK (AAD =
+        <code>workspace_id || "canary" || schema_version</code>) to produce the
+        <code>wk_canary</code>. The canary is a known-plaintext AEAD blob that any future device
+        can decrypt to validate a pasted WK, even on a workspace that has no blocks yet.</li>
+      <li>Client stores the WK in IndexedDB at <code>(user_id, workspace_id) &rarr; raw bytes</code>.</li>
+      <li>Client calls <code>create_workspace(p_name, p_encryption_mode='e2ee', p_wk_canary=&hellip;)</code>.
+        Server inserts <code>workspaces</code> with the canary and the owner's
+        <code>workspace_members</code> row, exactly as the plaintext flow does. No WK bytes are
+        sent to the server &mdash; only the canary (which is opaque ciphertext).</li>
       <li>UI: show the WK once with strong "save this securely &mdash; no recovery is possible"
         copy. Recommend pasting into a password manager. Confirm-by-retype on the last 6
         characters before dismissing.</li>
@@ -503,10 +516,12 @@ CREATE OR REPLACE FUNCTION create_workspace(
       <li>Client checks IndexedDB at <code>(user_id, workspace_id)</code> &mdash; no WK present.</li>
       <li>UI surfaces a "this workspace needs its key" prompt instead of rendering ciphertext.</li>
       <li>User pastes their stored WK.</li>
-      <li>Client validates by attempting to decrypt one already-synced ciphertext block (any will
-        do &mdash; the AAD includes <code>block_id</code> and <code>workspace_id</code> so success
-        is unambiguous).</li>
-      <li>On success: store in IndexedDB, render normally. On AEAD failure: surface "that key
+      <li>Client validates by decrypting <code>workspaces.wk_canary</code> with the candidate WK
+        and checking the result equals the workspace id. AEAD failure (wrong key) and plaintext
+        mismatch (right key, wrong workspace) both reject. Works for freshly invited / empty
+        workspaces because the canary is created at workspace-create time, not derived from
+        blocks.</li>
+      <li>On success: store in IndexedDB, render normally. On failure: surface "that key
         doesn't decrypt this workspace's data," let the user retry.</li>
     </ol>
 
@@ -689,21 +704,33 @@ CREATE OR REPLACE FUNCTION create_workspace(
 
     <ol>
       <li>
-        <strong>Adopt JSONB first (recommended).</strong> The follow-up "JSONB across the data
-        layer" (<code>docs/follow-ups.md</code>) migrates <code>properties_json</code> and
-        <code>references_json</code> from <code>text</code> to <code>jsonb</code> end-to-end. With
-        JSONB columns, the natural shape for ciphertext is a JSON <em>string scalar</em> &mdash;
-        <code>"enc:v1:&hellip;"</code> &mdash; which is structurally valid JSONB.
-        <code>json()</code> returns the string, <code>json_each(value, '$.alias')</code>
-        gracefully returns zero rows on a non-object value, and the alias/types/row-event triggers
-        become a no-op on encrypted rows without any explicit branching.
+        <strong>Adopt JSONB first (helps but doesn't cover everything).</strong> The follow-up
+        "JSONB across the data layer" (<code>docs/follow-ups.md</code>) migrates
+        <code>properties_json</code> and <code>references_json</code> from <code>text</code> to
+        <code>jsonb</code> end-to-end. With JSONB columns, ciphertext stored as a JSON <em>string
+        scalar</em> &mdash; <code>"enc:v1:&hellip;"</code> &mdash; is structurally valid JSONB.
+        For triggers that use <strong>path-bound</strong> <code>json_each(value, '$.alias')</code>,
+        the path doesn't resolve on a string scalar, so the trigger returns zero rows and
+        no-ops. Covers most of <code>clientSchema.ts</code> (alias/types/row-event triggers).
       </li>
       <li>
-        <strong>Mode-gate the FTS trigger.</strong> The FTS trigger reads <code>content</code>
-        (plain text, not JSON), so JSONB doesn't help; without a gate it would index ciphertext
-        trigrams that can never match user queries (useless, mildly bloated). Add a
-        <code>WHEN</code> clause that consults <code>workspaces.encryption_mode</code> (or sniffs
-        the <code>enc:v1:</code> prefix) and skips index maintenance for encrypted rows.
+        <strong>Mode-gate the path-less and content-bearing triggers.</strong> JSONB doesn't help
+        all triggers. Two classes still need explicit gates (a <code>WHEN</code> clause consulting
+        <code>workspaces.encryption_mode</code>, or an <code>enc:v1:</code> prefix sniff):
+        <ul>
+          <li><strong>Path-less <code>json_each</code> + <code>json_extract</code>.</strong>
+            The references plugin's <code>src/plugins/references/localSchema.ts</code> does
+            <code>json_each(NEW.references_json)</code> with no path, then drills into each
+            element with <code>json_extract(je.value, '$.id')</code>. On a JSONB string scalar,
+            <code>json_each</code> emits one row and <code>json_extract</code> on a scalar text
+            aborts. JSONB doesn't save this; it needs an explicit gate. Any other trigger that
+            uses pathless iteration + extract on these columns (in current or future plugins)
+            has the same issue.</li>
+          <li><strong>FTS over plain <code>content</code>.</strong> The FTS trigger reads
+            <code>NEW.content</code> directly &mdash; not JSON, so JSONB doesn't apply. Without a
+            gate it would index ciphertext trigrams that never match user queries (useless,
+            mildly bloated).</li>
+        </ul>
       </li>
       <li>
         <strong>Layout B alternative: keep local plaintext, encrypt only at the download/upload
@@ -717,10 +744,13 @@ CREATE OR REPLACE FUNCTION create_workspace(
     </ol>
 
     <div class="decision">
-      <strong>Working decision.</strong> Path #1 + #2 (Layout A). JSONB migration is a strong
-      prerequisite &mdash; not strictly required, but doing E2EE without it means hand-gating ~7
-      triggers and accepting that any future trigger over those columns is one author away from
-      a footgun.
+      <strong>Working decision.</strong> Path #1 + #2 (Layout A). JSONB covers the path-bound
+      <code>json_each</code> triggers cheaply; the references-plugin and FTS triggers (and any
+      similar future ones) still need explicit gates. Audit at implementation time: any trigger
+      on <code>blocks</code> that consumes <code>content</code>, <code>properties_json</code>, or
+      <code>references_json</code> &mdash; in <code>src/data/internals/clientSchema.ts</code>,
+      <code>src/plugins/*/localSchema.ts</code>, or anywhere else &mdash; needs to be checked
+      for whether JSONB-as-string-scalar saves it or a gate is required.
     </div>
 
     <p>
