@@ -580,6 +580,39 @@ CREATE TABLE user_vault (
       since the membership row is created atomically inside <code>accept_invitation</code>.
     </p>
 
+    <p>
+      Two existing RPCs need their signatures widened so the envelope can actually flow. Adding the
+      column to <code>workspace_invitations</code> isn't enough: <code>list_my_pending_invitations</code>
+      enumerates its return columns explicitly, and <code>accept_invitation</code> currently takes
+      only the invitation id.
+    </p>
+
+    <pre><code>-- Surface the in-transit envelope so the invitee's client can read it.
+CREATE OR REPLACE FUNCTION list_my_pending_invitations()
+  RETURNS TABLE(
+    id text,
+    workspace_id text,
+    workspace_name text,
+    email text,
+    role text,
+    invited_by_user_id text,
+    create_time bigint,
+    wrapped_cek_for_invitee bytea   -- new; NULL for plaintext-workspace invites
+  ) ...;
+
+-- Accept the (re-wrapped) at-rest envelope atomically with membership insert.
+CREATE OR REPLACE FUNCTION accept_invitation(
+    p_invitation_id text,
+    p_wrapped_cek   bytea DEFAULT NULL   -- required iff target workspace is E2EE
+  ) RETURNS workspace_members ...;</code></pre>
+
+    <p>
+      <code>p_wrapped_cek</code> defaults to NULL so plaintext-workspace invites still call the RPC
+      with one argument. The cross-table trigger on <code>workspace_members</code> enforces the
+      "required iff E2EE" half &mdash; a NULL parameter on an E2EE invitation aborts the insert
+      with a clear error rather than silently breaking the unlock path later.
+    </p>
+
     <figure>
       <div class="diagram">
         <svg viewBox="0 0 720 440" xmlns="http://www.w3.org/2000/svg" aria-labelledby="invite-title">
