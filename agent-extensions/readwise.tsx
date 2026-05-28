@@ -78,8 +78,8 @@ const lastSyncedAtProp = defineProperty<string | undefined>('readwise:lastSynced
   defaultValue: undefined,
   changeScope: ChangeScope.UserPrefs,
 })
-const syncSinceProp = defineProperty<string | undefined>('readwise:syncSince', {
-  codec: codecs.optionalString,
+const syncSinceProp = defineProperty<Date | undefined>('readwise:syncSince', {
+  codec: codecs.date,
   defaultValue: undefined,
   changeScope: ChangeScope.UserPrefs,
 })
@@ -890,7 +890,7 @@ const runSync = async (repo: any, { silent = false } = {}) => {
   const prefs = await getPluginPrefsBlock(repo, workspaceId, repo.user, readwisePrefsType)
   const lastSynced = prefs.peekProperty(lastSyncedAtProp)
   const syncSince = prefs.peekProperty(syncSinceProp)
-  const updatedAfter = lastSynced ?? syncSince ?? null
+  const updatedAfter = lastSynced ?? syncSince?.toISOString() ?? null
   const pageTitleTemplate = prefs.get(pageTitleTemplateProp)
   const bookTemplate = prefs.get(bookTemplateProp)
   const highlightTemplate = prefs.get(highlightTemplateProp)
@@ -1019,28 +1019,6 @@ const TextareaEditor = ({ value, onChange }: PropertyEditorProps<string>) => (
     style={{ fontFamily: 'monospace', width: '100%' }}
   />
 )
-
-const SingleLineEditor = ({ value, onChange }: PropertyEditorProps<string>) => (
-  <Input
-    value={value}
-    onChange={e => onChange(e.target.value)}
-    style={{ fontFamily: 'monospace', width: '100%' }}
-  />
-)
-
-const DateEditor = ({ value, onChange }: PropertyEditorProps<string | undefined>) => {
-  const dateValue = value ? value.slice(0, 10) : ''
-  return (
-    <Input
-      type='date'
-      value={dateValue}
-      onChange={e => {
-        const v = e.target.value
-        onChange(v ? new Date(v).toISOString() : undefined)
-      }}
-    />
-  )
-}
 
 const NumberEditor = ({ value, onChange }: PropertyEditorProps<number>) => (
   <Input
@@ -1181,20 +1159,17 @@ const lastSyncedEditor = definePropertyEditorOverride<string | undefined>({
   label: 'Last synced',
   Editor: LastSyncedEditor,
 })
-const syncSinceEditor = definePropertyEditorOverride<string | undefined>({
+const syncSinceEditor = definePropertyEditorOverride<Date | undefined>({
   name: syncSinceProp.name,
   label: 'Initial sync start date',
-  Editor: DateEditor,
 })
 const pageTitleEditor = definePropertyEditorOverride<string>({
   name: pageTitleTemplateProp.name,
   label: 'Page title template',
-  Editor: SingleLineEditor,
 })
 const bookTemplateEditor = definePropertyEditorOverride<string>({
   name: bookTemplateProp.name,
   label: 'Document supplemental template',
-  Editor: TextareaEditor,
 })
 const highlightTemplateEditor = definePropertyEditorOverride<string>({
   name: highlightTemplateProp.name,
