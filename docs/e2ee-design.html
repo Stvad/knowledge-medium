@@ -463,10 +463,12 @@
       This rule applies uniformly to every entry point where a workspace membership becomes
       visible locally without a pre-existing pin:
       <ul>
-        <li><strong>Self-create on this device:</strong> the create flow (§8.1) immediately
-          generates the WK, validates against the canary it just produced, and pins as E2EE.
-          The quarantine window is effectively zero &mdash; quarantine on, pin established,
-          quarantine off, all within the create RPC.</li>
+        <li><strong>Self-create on this device:</strong> both create paths pin immediately
+          inside the create RPC, so the quarantine window is effectively zero. The plaintext
+          create flow (existing today) pins as plaintext on success &mdash; otherwise plaintext
+          workspaces would immediately enter the quarantine on creation, contradicting the
+          "behave as today" premise. The E2EE create flow (§8.1) generates the WK, validates
+          against the canary it just produced, and pins as E2EE.</li>
         <li><strong>Accept invitation on this device:</strong> the accept flow (§8.3) marks
           the workspace as encryption-uncertain pending the user's resolution (paste WK or
           confirm plaintext). Brief quarantine while the user acts.</li>
