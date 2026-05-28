@@ -447,10 +447,28 @@
       requires explicit local user action (e.g. "remove this workspace's key"), never server
       initiative. This is TOFU for the mode signal, mirroring how §5's WK store works.
       <br><br>
-      Workspaces <em>not</em> in the local set fall back to trusting <code>encryption_mode</code>
-      on first encounter &mdash; otherwise there's no way to know to prompt for a WK. That first
-      encounter is the only window where a malicious server could lie ("this workspace is
-      plaintext, don't ask for a key"); subsequent loads are pinned.
+      First-encounter handling matters and isn't free. A naive "trust server
+      <code>encryption_mode</code> on first encounter" is exploitable: an active server can
+      present an existing E2EE workspace as plaintext on a collaborator's first sync, accept
+      plaintext writes before the user is ever prompted for a key, and exfiltrate new content
+      that way. To close that window:
+      <ul>
+        <li><strong>Self-created workspaces</strong> pin to E2EE immediately at create
+          time (§8.1), so the creator's own devices never have a first-encounter window.</li>
+        <li><strong>Workspaces arriving via accept_invitation</strong> get quarantined as
+          "encryption-uncertain" locally until the user resolves the mode explicitly. Two
+          resolution paths: (a) paste a WK that validates against the workspace's
+          <code>wk_canary</code> &rarr; pin as E2EE; (b) explicitly confirm "this workspace is
+          plaintext" via a UI affordance &rarr; pin as plaintext. <strong>No local writes are
+          permitted while a workspace is encryption-uncertain</strong>; the workspace renders
+          read-only with a banner asking the user to resolve. Friction in exchange for closing
+          the attack window.</li>
+        <li>Server-claimed <code>encryption_mode</code> is still used as a <em>hint</em> for UX
+          (which prompt to show first), but it's never authoritative.</li>
+      </ul>
+      The cost is one extra confirmation step on first-share-receive. That's a worthwhile trade:
+      the alternative is silently accepting attacker plaintext on a workspace the user has every
+      reason to believe is encrypted.
     </div>
 
     <h2 id="schema">7. Schema additions</h2>
@@ -603,9 +621,13 @@ CREATE OR REPLACE FUNCTION create_workspace(
         themselves</strong> &mdash; Signal, in person, sealed envelope, encrypted email, password
         manager share, whatever they trust for this contact. The app does not transmit the WK
         through its own server channel.</li>
-      <li>Collaborator accepts the invitation server-side as today. In their UI, the workspace
-        appears with the same "needs key" prompt as §8.2. They paste the WK they received
-        out-of-band.</li>
+      <li>Collaborator accepts the invitation server-side as today. The accept flow locally marks
+        the workspace as <em>encryption-uncertain</em> (per §6's first-encounter rule) &mdash;
+        read-only with a banner asking the user to resolve. Two resolution paths in the UI:
+        paste the WK from out-of-band (pins to E2EE), or explicitly confirm "this is a plaintext
+        workspace" (pins to plaintext). No local writes until one of those happens. This is the
+        defense against a hostile server claiming a shared E2EE workspace is plaintext on the
+        collaborator's first sync.</li>
     </ol>
 
     <div class="warn">
@@ -1145,7 +1167,10 @@ WHERE typeof(je.value) = 'text';</code></pre>
       <tr>
         <td>PowerSync sync rules</td>
         <td>Unchanged.</td>
-        <td>Unchanged.</td>
+        <td>Depends on layout. <strong>Layout B</strong>: the blocks stream's row_type is
+          retargeted (via <code>gen-sync-config.ts</code>) so downloads hydrate
+          <code>blocks_synced</code> instead of <code>blocks</code> &mdash; load-bearing for the
+          observer to receive rows. <strong>Layout C</strong>: unchanged.</td>
       </tr>
       <tr>
         <td>Invite RPC chain</td>
