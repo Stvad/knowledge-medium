@@ -449,26 +449,38 @@
       <br><br>
       First-encounter handling matters and isn't free. A naive "trust server
       <code>encryption_mode</code> on first encounter" is exploitable: an active server can
-      present an existing E2EE workspace as plaintext on a collaborator's first sync, accept
-      plaintext writes before the user is ever prompted for a key, and exfiltrate new content
-      that way. To close that window:
+      present an existing E2EE workspace as plaintext on a device that doesn't yet have it
+      pinned, accept plaintext writes before the user is ever prompted for a key, and exfiltrate
+      new content that way. Closing the window requires one general rule:
+      <br><br>
+      <strong>Any workspace membership without a local mode pin is quarantined as
+      encryption-uncertain.</strong> The workspace renders read-only with a banner asking the
+      user to resolve, and <strong>no local writes are permitted</strong> until resolution. Two
+      resolution paths: (a) paste a WK that validates against the workspace's
+      <code>wk_canary</code> &rarr; pin as E2EE; (b) explicitly confirm "this workspace is
+      plaintext" via a UI affordance &rarr; pin as plaintext.
+      <br><br>
+      This rule applies uniformly to every entry point where a workspace membership becomes
+      visible locally without a pre-existing pin:
       <ul>
-        <li><strong>Self-created workspaces</strong> pin to E2EE immediately at create
-          time (§8.1), so the creator's own devices never have a first-encounter window.</li>
-        <li><strong>Workspaces arriving via accept_invitation</strong> get quarantined as
-          "encryption-uncertain" locally until the user resolves the mode explicitly. Two
-          resolution paths: (a) paste a WK that validates against the workspace's
-          <code>wk_canary</code> &rarr; pin as E2EE; (b) explicitly confirm "this workspace is
-          plaintext" via a UI affordance &rarr; pin as plaintext. <strong>No local writes are
-          permitted while a workspace is encryption-uncertain</strong>; the workspace renders
-          read-only with a banner asking the user to resolve. Friction in exchange for closing
-          the attack window.</li>
-        <li>Server-claimed <code>encryption_mode</code> is still used as a <em>hint</em> for UX
-          (which prompt to show first), but it's never authoritative.</li>
+        <li><strong>Self-create on this device:</strong> the create flow (§8.1) immediately
+          generates the WK, validates against the canary it just produced, and pins as E2EE.
+          The quarantine window is effectively zero &mdash; quarantine on, pin established,
+          quarantine off, all within the create RPC.</li>
+        <li><strong>Accept invitation on this device:</strong> the accept flow (§8.3) marks
+          the workspace as encryption-uncertain pending the user's resolution (paste WK or
+          confirm plaintext). Brief quarantine while the user acts.</li>
+        <li><strong>Existing membership encountered on a new device or after reinstall:</strong>
+          the membership row arrives via sync without ever going through accept_invitation, and
+          there's no local pin. Same quarantine rule applies &mdash; the user must paste their
+          WK (if E2EE) or confirm plaintext (if not) before any local writes. This is the case
+          the earlier draft missed.</li>
       </ul>
-      The cost is one extra confirmation step on first-share-receive. That's a worthwhile trade:
-      the alternative is silently accepting attacker plaintext on a workspace the user has every
-      reason to believe is encrypted.
+      Server-claimed <code>encryption_mode</code> is still used as a <em>hint</em> for UX (which
+      prompt to show first &mdash; "do you have a key?" vs "is this a plaintext workspace?"),
+      but it's never authoritative. The cost is one resolution step per workspace per new device
+      &mdash; not free, but worth it: the alternative is silently accepting attacker plaintext
+      on a workspace the user has every reason to believe is encrypted.
     </div>
 
     <h2 id="schema">7. Schema additions</h2>
