@@ -602,7 +602,13 @@ CREATE OR REPLACE FUNCTION create_workspace(
                                              -- UUID for plaintext (current behavior)
     p_wk_canary        text DEFAULT NULL     -- required iff p_encryption_mode = 'e2ee'
   ) RETURNS jsonb
-  LANGUAGE plpgsql AS $$
+  -- Carry over the existing RPC's attributes: SECURITY DEFINER is load-bearing
+  -- (workspaces has no INSERT policy for callers, so a non-definer RPC running
+  -- under the caller's RLS can't insert the workspace/member rows and creation
+  -- fails for both modes). search_path is pinned per the SECURITY DEFINER norm.
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path TO 'public'
+  AS $$
 declare
   v_id text := coalesce(p_workspace_id, gen_random_uuid()::text);
 begin
