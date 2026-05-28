@@ -422,9 +422,33 @@
     <div class="warn">
       <strong>Downgrade-attack guard.</strong> The <code>enc:v1:</code> prefix is convenient but
       not authoritative on its own &mdash; a hostile server could strip it and serve attacker-chosen
-      plaintext. The decode layer must cross-check the row's <code>workspaces.encryption_mode</code>:
-      if the workspace is E2EE and the value lacks the prefix, refuse to render (and surface a
-      tamper warning).
+      plaintext. The decode layer must cross-check the row's encryption mode and refuse to render
+      (with a tamper warning) if an E2EE-claimed row lacks the prefix.
+    </div>
+
+    <div class="warn">
+      <strong>Pin encryption_mode locally; don't trust server metadata.</strong>
+      <code>workspaces.encryption_mode</code> is itself server-supplied state arriving over the
+      same sync path the threat model treats as hostile. A malicious server could serve an
+      existing E2EE workspace's row with <code>encryption_mode = 'none'</code> and a NULL
+      <code>wk_canary</code>; if the client trusted that flip, the UDF would pass attacker
+      plaintext through (no enc:v1: prefix expected for plaintext workspaces), and
+      <code>TxImpl</code> would stop encrypting future edits &mdash; leaking new content to the
+      server.
+      <br><br>
+      Fix: maintain a client-side <em>known-E2EE workspaces</em> set in localStorage alongside
+      the WKs. The set is populated when a user first pastes a WK that decrypts the workspace's
+      <code>wk_canary</code> (the canary is authentically encrypted under the user's WK, so it
+      can't be forged). Once a workspace is in the set, the client treats it as E2EE permanently
+      on this device regardless of any later <code>encryption_mode</code> value from the server.
+      Mode flip from E2EE to plaintext requires explicit local user action (e.g. "remove this
+      workspace's key"), never server initiative. This is TOFU for the mode signal, mirroring how
+      §5's WK store works.
+      <br><br>
+      Workspaces <em>not</em> in the local set fall back to trusting <code>encryption_mode</code>
+      on first encounter &mdash; otherwise there's no way to know to prompt for a WK. That first
+      encounter is the only window where a malicious server could lie ("this workspace is
+      plaintext, don't ask for a key"); subsequent loads are pinned.
     </div>
 
     <h2 id="schema">7. Schema additions</h2>
@@ -746,6 +770,20 @@ CREATE OR REPLACE FUNCTION create_workspace(
       Postgres-side complexity; not pursued in v1 unless profiling shows the universal-observer
       cost matters.
     </p>
+
+    <p>
+      <strong>The observer is a reconciler, not just a copier.</strong> Once PowerSync writes
+      only to <code>blocks_synced</code>, the app-visible <code>blocks</code> table is no longer
+      PowerSync-managed &mdash; the observer is now responsible for the local/remote merge that
+      PowerSync's CRUD machinery normally handles for raw tables. If a user has a pending local
+      edit in <code>blocks</code> (already written by <code>TxImpl</code>, queued in
+      <code>ps_crud</code> awaiting upload) and an older server snapshot arrives in staging, a
+      blind copy would overwrite the local edit. The observer needs to consult <code>ps_crud</code>
+      before each staging-row apply: if there's a pending CRUD entry for that <code>block_id</code>
+      (or the local row's <code>updated_at</code> is newer than staging's), skip the copy and let
+      the upload echo reconcile when it returns. This is the load-bearing complexity of Layout B
+      that the original "just decrypt and copy" framing understated.
+    </p>
     <p>
       Upload is symmetric. App writes plaintext to <code>blocks</code> as today; the existing
       upload-routing trigger captures plaintext into <code>ps_crud</code>; PowerSync's
@@ -761,10 +799,17 @@ CREATE OR REPLACE FUNCTION create_workspace(
         row_type that maps to the client raw table (called out as load-bearing in
         sync-config.yaml's own header comment), so leaving it pointing at <code>public.blocks</code>
         means ciphertext lands in the plaintext <code>blocks</code> table and the observer never
-        sees the rows it's meant to decrypt. Add JS observer wiring at the sync boundary;
+        sees the rows it's meant to decrypt. Add JS observer wiring at the sync boundary
+        (universal, with ps_crud / updated_at reconciliation per the callout above);
         encrypt-on-upload in the connector hook. Existing trigger code in
         <code>clientSchema.ts</code> and plugins is untouched (they fire on plaintext writes to
-        <code>blocks</code> as today).</li>
+        <code>blocks</code> as today). Update <code>blockUploadPatchJsonSql</code> in
+        <code>clientSchema.ts</code> to <em>unconditionally</em> include <code>workspace_id</code>
+        in every PATCH envelope &mdash; the current trigger emits only changed columns, so a
+        content-only edit reaches <code>uploadData</code> without <code>workspace_id</code>, and
+        the encryption hook needs that field to look up the WK and construct AAD. Always-emit is
+        a few bytes of wire overhead per PATCH; the alternative (have the hook read the local row
+        before encrypting) adds a DB round-trip per upload.</li>
       <li><strong>Plus:</strong> queries are direct SQL on plaintext &mdash; no per-row decrypt
         cost at query time, no UDF latency.</li>
       <li><strong>Minus:</strong> two writes per <em>every</em> block download (staging, then
