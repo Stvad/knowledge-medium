@@ -688,94 +688,133 @@ CREATE OR REPLACE FUNCTION create_workspace(
       another and have it still decrypt as valid.
     </p>
 
-    <h3 id="triggers">9.2 Local SQLite triggers and the JSONB connection</h3>
+    <h3 id="triggers">9.2 Where local plaintext lives: Layouts B and C</h3>
 
     <p>
-      Storing ciphertext in the same columns the app already uses sounds clean until you remember
-      that the local SQLite schema (<code>src/data/internals/clientSchema.ts</code>) runs JSON
-      functions over those columns on every write. Concretely:
+      The codebase leans heavily on SQL-side processing of content. Triggers in
+      <code>src/data/internals/clientSchema.ts</code> and
+      <code>src/plugins/references/localSchema.ts</code> maintain plaintext-derived indexes
+      (<code>block_aliases</code>, <code>block_types</code>, <code>blocks_fts</code>,
+      references-graph tables) on every write. Queries against those indexes drive core UX:
+      <code>parseReferences</code>, alias autocomplete, type filters, local FTS.
     </p>
 
+    <p>
+      An earlier draft considered <strong>Layout A</strong>: store ciphertext locally, let the
+      indexes silently not populate for E2EE rows, add a "decrypt-then-populate" pass at WK paste.
+      <em>Not viable.</em> Alias search is a core Roam-style UX; degrading it in E2EE workspaces is
+      a non-starter. Layout A is documented here only to explain why it was rejected.
+    </p>
+
+    <p>
+      Two real candidates remain. Both produce server-side ciphertext and a fully-functional local
+      query surface; they differ on where the plaintext lives in the local DB and how it gets
+      there.
+    </p>
+
+    <h4>Layout B &mdash; local plaintext via staging table + JS observer</h4>
+
+    <p>
+      The local <code>blocks</code> table holds plaintext for everything (encrypted and plaintext
+      workspaces alike). PowerSync's sync apply lands ciphertext rows in a parallel
+      <code>blocks_synced</code> staging table (the row shape that matches the server). A
+      JS observer on PowerSync's change events reads each new E2EE row from staging, decrypts the
+      content columns with the WK, and writes the plaintext row into <code>blocks</code>. Triggers
+      fire on the plaintext write &mdash; everything in <code>clientSchema.ts</code> and the
+      plugin schemas runs unchanged.
+    </p>
+    <p>
+      Upload is symmetric. App writes plaintext to <code>blocks</code> as today; the existing
+      upload-routing trigger captures plaintext into <code>ps_crud</code>; PowerSync's
+      <code>uploadData</code> connector hook intercepts the CRUD batch and encrypts the content
+      columns before sending to the server. The server only ever sees ciphertext.
+    </p>
     <ul>
-      <li><code>blocks_row_event_insert</code>/<code>_update</code> call
-        <code>json(NEW.properties_json)</code> and <code>json(NEW.references_json)</code> to
-        snapshot the row into the local edit log.</li>
-      <li><code>blocks_alias_insert</code>/<code>_update</code> walk
-        <code>json_each(NEW.properties_json, '$.alias')</code> to maintain the
-        <code>block_aliases</code> index.</li>
-      <li><code>blocks_type_insert</code>/<code>_update</code> walk
-        <code>json_each(NEW.properties_json, '$.types')</code> for <code>block_types</code>.</li>
-      <li>The startup backfills (<code>BACKFILL_BLOCK_ALIASES_SQL</code>,
-        <code>BACKFILL_BLOCK_TYPES_SQL</code>) do the same against historical rows.</li>
-      <li><code>blocks_fts_insert</code>/<code>_update</code> reads
-        <code>NEW.content</code> directly &mdash; not JSON, but still content-bearing.</li>
+      <li><strong>What changes in code:</strong> add <code>blocks_synced</code> table to
+        <code>blockSchema.ts</code> (PowerSync target); add JS observer wiring at the sync
+        boundary; encrypt-on-upload in the connector hook. Existing trigger code in
+        <code>clientSchema.ts</code> and plugins is untouched.</li>
+      <li><strong>Plus:</strong> queries are direct SQL on plaintext &mdash; no per-row decrypt
+        cost at query time, no UDF latency.</li>
+      <li><strong>Minus:</strong> two writes per E2EE block download (staging, then main).
+        Brief window between sync apply and observer pickup where the row only exists in
+        ciphertext (mitigated by staging-table being separate &mdash; app code never queries it).</li>
+      <li><strong>Risk:</strong> PowerSync's reconciliation semantics. Since
+        <code>blocks_synced</code> is the only table PowerSync directly manages, this is contained
+        &mdash; PowerSync never sees the plaintext <code>blocks</code> table. Verify that
+        PowerSync doesn't expect its target table to be authoritative for app queries (it
+        shouldn't &mdash; raw tables are a documented pattern).</li>
     </ul>
 
-    <p>
-      If we drop a raw <code>enc:v1:&hellip;</code> string into <code>properties_json</code> today,
-      <code>json()</code> and <code>json_each()</code> abort with "malformed JSON" and the write
-      fails before it ever reaches the upload queue. The naive per-column scheme as written can't
-      land without addressing this.
-    </p>
+    <h4>Layout C &mdash; ciphertext at rest, UDF-decorated triggers</h4>
 
-    <ol>
-      <li>
-        <strong>Adopt JSONB first (helps but doesn't cover everything).</strong> The follow-up
-        "JSONB across the data layer" (<code>docs/follow-ups.md</code>) migrates
-        <code>properties_json</code> and <code>references_json</code> from <code>text</code> to
-        <code>jsonb</code> end-to-end. With JSONB columns, ciphertext stored as a JSON <em>string
-        scalar</em> &mdash; <code>"enc:v1:&hellip;"</code> &mdash; is structurally valid JSONB.
-        For triggers that use <strong>path-bound</strong> <code>json_each(value, '$.alias')</code>,
-        the path doesn't resolve on a string scalar, so the trigger returns zero rows and
-        no-ops. Covers most of <code>clientSchema.ts</code> (alias/types/row-event triggers).
-      </li>
-      <li>
-        <strong>Mode-gate the path-less and content-bearing triggers.</strong> JSONB doesn't help
-        all triggers. Two classes still need explicit gates (a <code>WHEN</code> clause consulting
-        <code>workspaces.encryption_mode</code>, or an <code>enc:v1:</code> prefix sniff):
-        <ul>
-          <li><strong>Path-less <code>json_each</code> + <code>json_extract</code>.</strong>
-            The references plugin's <code>src/plugins/references/localSchema.ts</code> does
-            <code>json_each(NEW.references_json)</code> with no path, then drills into each
-            element with <code>json_extract(je.value, '$.id')</code>. On a JSONB string scalar,
-            <code>json_each</code> emits one row and <code>json_extract</code> on a scalar text
-            aborts. JSONB doesn't save this; it needs an explicit gate. Any other trigger that
-            uses pathless iteration + extract on these columns (in current or future plugins)
-            has the same issue.</li>
-          <li><strong>FTS over plain <code>content</code>.</strong> The FTS trigger reads
-            <code>NEW.content</code> directly &mdash; not JSON, so JSONB doesn't apply. Without a
-            gate it would index ciphertext trigrams that never match user queries (useless,
-            mildly bloated).</li>
-        </ul>
-      </li>
-      <li>
-        <strong>Layout B alternative: keep local plaintext, encrypt only at the download/upload
-        boundary.</strong> The local DB stores plaintext for all workspaces; local triggers and
-        indexes all work normally, including for E2EE workspaces. The cost is that PowerSync
-        doesn't expose a per-row download transform hook, so this requires either a custom client
-        connector or a buffer-table indirection &mdash; meaningfully more invasive. Only take this
-        path if losing the derived local indexes for E2EE workspaces turns out to be unacceptable
-        for the product.
-      </li>
-    </ol>
+    <p>
+      The local <code>blocks</code> table holds ciphertext at rest, exactly matching the server.
+      A new async user-defined function &mdash; <code>e2ee_decrypt_json(workspace_id, value)
+      &rarr; text</code> &mdash; is registered against the local SQLite via
+      <code>sqlite3.create_function</code>. The UDF looks up the WK from the in-memory store
+      (populated from localStorage at session start), calls
+      <code>crypto.subtle.decrypt</code>, returns plaintext. For plaintext rows (no
+      <code>enc:v1:</code> prefix) the UDF is a no-op pass-through.
+    </p>
+    <p>
+      Triggers in <code>clientSchema.ts</code> and <code>plugins/references/localSchema.ts</code>
+      get rewritten to wrap column references in the UDF:
+    </p>
+    <pre><code>-- Before:
+INSERT OR IGNORE INTO block_aliases (block_id, workspace_id, alias, alias_lower)
+SELECT NEW.id, NEW.workspace_id, je.value, LOWER(je.value)
+FROM json_each(NEW.properties_json, '$.alias') AS je
+WHERE typeof(je.value) = 'text';
+
+-- After:
+INSERT OR IGNORE INTO block_aliases (block_id, workspace_id, alias, alias_lower)
+SELECT NEW.id, NEW.workspace_id, je.value, LOWER(je.value)
+FROM json_each(e2ee_decrypt_json(NEW.workspace_id, NEW.properties_json), '$.alias') AS je
+WHERE typeof(je.value) = 'text';</code></pre>
+    <p>
+      <code>block_aliases</code>, <code>block_types</code>, <code>blocks_fts</code> populate from
+      UDF-decrypted plaintext. Server upload goes through the sync boundary's encrypt path as
+      today; no staging table needed.
+    </p>
+    <ul>
+      <li><strong>What changes in code:</strong> register the async UDF at DB open
+        (<code>repoProvider.ts</code>); audit every trigger that touches
+        <code>content</code>/<code>properties_json</code>/<code>references_json</code> and wrap
+        column references in the UDF. No new tables.</li>
+      <li><strong>Plus:</strong> local DB mirrors the server (mental-model parity). Existing
+        index machinery stays in SQL.</li>
+      <li><strong>Minus:</strong> every trigger fire on an encrypted row pays a WebCrypto decrypt
+        cost. Bulk operations (initial backfill on first WK paste, large imports) pay it N times.</li>
+      <li><strong>Risk &mdash; needs empirical verification before committing:</strong>
+        wa-sqlite supports async UDFs at the API level
+        (<code>sqlite3.create_function</code>, see the "should return asynchronously" test in
+        <code>node_modules/@journeyapps/wa-sqlite/test/callbacks.test.js</code>), and PowerSync
+        uses the Asyncify build that enables them
+        (<code>mc-wa-sqlite-async.mjs</code>). But whether PowerSync's full query/trigger
+        execution pipeline correctly awaits async UDFs through every code path is not something I
+        verified. A small PoC &mdash; register a trivial async UDF and invoke it from a trigger
+        via a sync apply &mdash; would settle this in an afternoon.</li>
+      <li><strong>Note:</strong> local index side-tables (<code>block_aliases</code>, etc.) end up
+        containing plaintext-derived data even though <code>blocks.*</code> columns are
+        ciphertext. For threat model A (server can't read content) this is irrelevant &mdash;
+        local indexes never reach the server. Worth flagging if the threat model is ever
+        broadened to local-disk attackers.</li>
+    </ul>
 
     <div class="decision">
-      <strong>Working decision.</strong> Path #1 + #2 (Layout A). JSONB covers the path-bound
-      <code>json_each</code> triggers cheaply; the references-plugin and FTS triggers (and any
-      similar future ones) still need explicit gates. Audit at implementation time: any trigger
-      on <code>blocks</code> that consumes <code>content</code>, <code>properties_json</code>, or
-      <code>references_json</code> &mdash; in <code>src/data/internals/clientSchema.ts</code>,
-      <code>src/plugins/*/localSchema.ts</code>, or anywhere else &mdash; needs to be checked
-      for whether JSONB-as-string-scalar saves it or a gate is required.
+      <strong>Working decision.</strong> Layout B and Layout C are both viable; Layout A is
+      rejected. The choice between B and C hinges on (1) whether the PoC confirms PowerSync
+      awaits async UDFs end-to-end (if not, C is off the table) and (2) which set of risks is
+      easier to live with &mdash; B's two-write download path and observer wiring versus C's
+      per-trigger decrypt cost. Default lean toward Layout C if the PoC passes: less new
+      infrastructure, no parallel table, and the existing trigger logic stays intact.
     </div>
 
     <p>
-      Consequence for E2EE workspaces under Layout A: the trigger-maintained local indexes
-      (<code>block_aliases</code>, <code>block_types</code>, <code>blocks_fts</code>) silently
-      don't get populated for encrypted rows. Features that rely on them &mdash; in-workspace
-      alias autocomplete, type-filtered queries, local FTS &mdash; therefore don't work for E2EE
-      workspaces unless we layer on a separate "decrypt-then-populate" pass triggered when the WK
-      lands in localStorage.
+      JSONB migration is no longer load-bearing for E2EE under either layout (it was only relevant
+      for Layout A's no-op trick). It remains an independently motivated perf improvement
+      (<code>docs/follow-ups.md</code>); E2EE doesn't gate on it and it doesn't gate on E2EE.
     </p>
 
     <h2 id="duality">10. Mode-by-mode behavior</h2>
@@ -819,7 +858,7 @@ CREATE OR REPLACE FUNCTION create_workspace(
       <tr>
         <td>Local derived indexes (<code>block_aliases</code>, <code>block_types</code>, <code>blocks_fts</code>)</td>
         <td>Maintained automatically by triggers as today.</td>
-        <td>Triggers are JSONB-tolerant and FTS-gated (see §9.2), so writes succeed but the indexes are empty for encrypted rows. Features depending on them don't work until a decrypt-then-populate pass is added.</td>
+        <td>Fully populated, matching plaintext-workspace behavior. Layout B fills them via plaintext writes through the JS observer; Layout C fills them via UDF-decrypted reads in the existing triggers (see §9.2).</td>
       </tr>
       <tr>
         <td>Sharing / collaboration</td>
@@ -849,10 +888,13 @@ CREATE OR REPLACE FUNCTION create_workspace(
     <p>
       Introduce <code>src/sync/transform.ts</code> as identity
       <code>encodeForWire</code>/<code>decodeFromWire</code>, with the
-      <code>getCek(workspaceId)</code> pluggable callback signature in place from day one. Route
-      all PowerSync upload mutations and all reads from local SQLite through it. Pure no-op
-      refactor today; the eventual E2EE PR is a focused crypto change rather than a cross-cutting
-      refactor.
+      <code>getCek(workspaceId)</code> pluggable callback signature in place from day one.
+      Under Layout B the seam also hosts the JS observer that watches PowerSync changes and
+      decrypts staging-table rows into <code>blocks</code>; under Layout C it just hosts the
+      upload-side encrypt (download decrypt happens in-SQL via the UDF). Either way, the boundary
+      is one named module rather than behavior scattered across <code>repo.ts</code> and
+      <code>services/powersync.ts</code>. Pure no-op refactor today; the eventual E2EE PR is a
+      focused crypto change rather than a cross-cutting refactor.
     </p>
 
     <h3>11.2 Drift guard: server-side content features must filter on mode (codify now)</h3>
@@ -864,14 +906,13 @@ CREATE OR REPLACE FUNCTION create_workspace(
       design docs; this slots in.
     </p>
 
-    <h3>11.3 Land the JSONB migration before the encryption work</h3>
+    <h3>11.3 JSONB migration is independent of E2EE now</h3>
     <p>
-      The follow-up "JSONB across the data layer" already has independent motivation (perf wins
-      across ~29 <code>json_extract</code>/<code>json_each</code> callsites, including the hot
-      alias/types triggers). Doing it before the encryption work is what makes the per-column
-      ciphertext shape in §9 actually tractable: a ciphertext-as-JSON-string-scalar value is a
-      valid JSONB value, so the existing triggers naturally no-op on encrypted rows instead of
-      aborting. See §9.2.
+      The follow-up "JSONB across the data layer" has independent motivation (perf wins across
+      ~29 <code>json_extract</code>/<code>json_each</code> callsites). An earlier draft of this
+      sketch treated JSONB as a prerequisite for E2EE under Layout A; with Layout A rejected and
+      both B and C operating on plaintext at trigger time (see §9.2), that coupling is gone.
+      Pursue JSONB on its own schedule for perf reasons; E2EE doesn't gate on it.
     </p>
 
     <h3>11.4 Discipline rules surfaced from review iteration</h3>
@@ -1043,18 +1084,20 @@ CREATE OR REPLACE FUNCTION create_workspace(
         cost is real for large workspaces; worth thinking through the UX (progress bar, atomic
         rotation token to detect mid-rotation states).</li>
 
-      <li><strong>Layout A vs Layout B for local storage.</strong> Path A (§9.2) stores ciphertext
-        in local SQLite and accepts that the derived local indexes don't apply to E2EE workspaces
-        until we add a decrypt-then-populate pass. Path B keeps local plaintext and intercepts at
-        the PowerSync download seam &mdash; functionally nicer but architecturally heavier.
-        Current working assumption is A; revisit if product testing shows the lost local features
-        are unacceptable for E2EE workspaces.</li>
+      <li><strong>Layout B vs Layout C for local plaintext.</strong> §9.2 lays out both. The
+        choice hinges on (a) a small PoC verifying that PowerSync's pipeline correctly awaits
+        async wa-sqlite UDFs through every code path (if not, C is off the table), and (b) which
+        set of risks is easier to live with &mdash; B's staging table + JS observer + two writes
+        per E2EE download, or C's per-trigger WebCrypto decrypt cost. Default lean toward C if
+        the PoC passes.</li>
 
-      <li><strong>JSONB migration as gate vs. parallel work.</strong> §11.3 calls for landing the
-        JSONB migration before the encryption work to get the trigger no-op behavior for free.
-        Worth confirming whether that ordering is acceptable (it bundles two independently
-        motivated changes) or whether E2EE should ship with explicit trigger gates and JSONB
-        follows separately.</li>
+      <li><strong>Backfill behavior on first WK paste.</strong> The first time a device gets a
+        WK for a workspace, the local plaintext-derived indexes need populating. Under Layout B
+        this means draining the staging table for that workspace through the observer. Under
+        Layout C this means triggering a re-evaluation of the maintenance triggers (e.g.
+        <code>UPDATE blocks SET id = id WHERE workspace_id = ?</code> as a no-op-write trick, or
+        a dedicated rebuild SQL). Either way, the backfill is N-block work; UX needs a progress
+        indicator for large workspaces.</li>
 
       <li><strong>Are settings or user preferences in scope?</strong> Survey didn't surface a
         settings table. If preferences are stored server-side and contain user content, they may
@@ -1079,9 +1122,12 @@ CREATE OR REPLACE FUNCTION create_workspace(
         Tolerable for small N; if N grows past ~5 per user, that's the signal to add the
         hierarchy (§13).</li>
       <li><strong>Ciphertext-diff history</strong> for E2EE workspaces.</li>
-      <li><strong>Local derived indexes inactive in E2EE workspaces</strong> under Layout A.
-        Alias autocomplete, type-filtered queries, and local FTS don't work for encrypted
-        workspaces until a decrypt-then-populate pass is added.</li>
+      <li><strong>Local index side-tables contain plaintext-derived data</strong> under either
+        Layout B or C. <code>block_aliases.alias</code>, FTS trigrams, etc. are plaintext on
+        local disk even though <code>blocks.*</code> may be ciphertext (Layout C) or PowerSync's
+        staging is (Layout B). Irrelevant for threat model A (server can't read content);
+        relevant only if the threat model is later broadened to local-disk attackers, in which
+        case OS disk encryption is the right answer.</li>
       <li><strong>Client-trust required.</strong> A backdoored build can exfiltrate keys.
         Subresource integrity, reproducible builds, and audit are mitigations, not solutions.</li>
     </ul>
