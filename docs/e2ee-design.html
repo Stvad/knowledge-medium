@@ -461,14 +461,23 @@ CREATE TRIGGER workspaces_prevent_encryption_mode_change_trg
 -- (AEAD failure = wrong key) and confirms it's bound to this workspace
 -- (right key on the wrong workspace's canary fails the plaintext check).
 ALTER TABLE workspaces ADD COLUMN wk_canary TEXT;
--- NULL for plaintext workspaces; required for E2EE workspaces.
--- Format: enc:v1:base64url(nonce || ciphertext) of workspace_id
--- as the plaintext, with the same AAD shape as block columns
--- (workspace_id || "canary" || schema_version).
+-- NULL for plaintext workspaces; NOT NULL for E2EE workspaces,
+-- enforced via CHECK (encryption_mode = 'none' OR wk_canary IS NOT NULL).
+-- Immutable after create, parallel to encryption_mode: an editor with
+-- write access to the workspaces row could otherwise replace the canary
+-- and brick WK validation for other members. Add a sibling trigger
+-- workspaces_prevent_wk_canary_change() following the same pattern as
+-- workspaces_prevent_encryption_mode_change above.
+-- Format: enc:v1:base64url(nonce || ciphertext) of workspace_id as the
+-- plaintext, with AAD = workspace_id || "canary" || schema_version.
 
 CREATE OR REPLACE FUNCTION create_workspace(
     p_name             text,
     p_encryption_mode  text DEFAULT 'none',  -- 'none' | 'e2ee'
+    p_workspace_id     text DEFAULT NULL,    -- client-chosen for E2EE so the
+                                             -- canary's AAD/plaintext line up;
+                                             -- NULL falls back to server-generated
+                                             -- UUID for plaintext (current behavior)
     p_wk_canary        text DEFAULT NULL     -- required iff p_encryption_mode = 'e2ee'
   ) RETURNS jsonb ...;</code></pre>
 
@@ -501,13 +510,14 @@ CREATE OR REPLACE FUNCTION create_workspace(
       <li>User clicks "Create encrypted workspace".</li>
       <li>Client generates a 32-byte WK via <code>crypto.getRandomValues</code>; encodes it as
         <code>kmp-wk-1:&lt;base32&gt;</code>.</li>
-      <li>Client picks the workspace id, then encrypts the id with the WK (AAD =
+      <li>Client picks the workspace id (UUID v4), then encrypts the id with the WK (AAD =
         <code>workspace_id || "canary" || schema_version</code>) to produce the
         <code>wk_canary</code>. The canary is a known-plaintext AEAD blob that any future device
         can decrypt to validate a pasted WK, even on a workspace that has no blocks yet.</li>
       <li>Client stores the WK in localStorage at <code>(user_id, workspace_id) &rarr; raw bytes</code>.</li>
-      <li>Client calls <code>create_workspace(p_name, p_encryption_mode='e2ee', p_wk_canary=&hellip;)</code>.
-        Server inserts <code>workspaces</code> with the canary and the owner's
+      <li>Client calls <code>create_workspace(p_name, p_encryption_mode='e2ee', p_workspace_id, p_wk_canary)</code>
+        with the client-chosen id so the canary's plaintext and AAD line up with the server's
+        stored row. Server inserts <code>workspaces</code> with the canary and the owner's
         <code>workspace_members</code> row, exactly as the plaintext flow does. No WK bytes are
         sent to the server &mdash; only the canary (which is opaque ciphertext).</li>
       <li>UI: show the WK once with strong "save this securely &mdash; no recovery is possible"
