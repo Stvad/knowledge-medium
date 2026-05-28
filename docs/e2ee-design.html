@@ -419,82 +419,81 @@
       </tr>
     </table>
 
-    <div class="warn">
-      <strong>Downgrade-attack guard.</strong> The <code>enc:v1:</code> prefix is convenient but
-      not authoritative on its own &mdash; a hostile server could strip it and serve attacker-chosen
-      plaintext. The decode layer must cross-check the row's encryption mode and refuse to render
-      (with a tamper warning) if an E2EE-claimed row lacks the prefix.
+    <div class="decision">
+      <strong>Mode authority is cryptographic, not a server flag.</strong> A workspace is E2EE
+      <em>for this client</em> iff the client holds a WK that decrypts the workspace's
+      <code>wk_canary</code> &mdash; that single fact is the entire definition of "this workspace
+      is encrypted." <code>workspaces.encryption_mode</code> is a server-maintained projection
+      (§7) consulted only as a UX hint (which prompt to show first), with <strong>zero security
+      weight</strong>. Because no server-supplied field sits in the security path, there is nothing
+      for a hostile server to flip and the downgrade attack has no target. The three rules below
+      are corollaries of this one principle, not separate defenses bolted on top of a trusted flag.
+      <br><br>
+      <strong>1. The local key is the pin &mdash; there is no separate "known-E2EE" flag to keep
+      honest.</strong> Holding a WK that validated against the canary <em>is</em> the durable,
+      server-independent signal "this is E2EE." It is established at two points: (a) creating an
+      E2EE workspace on this device (the creator generated the WK and minted the canary); and (b)
+      pasting a WK on another device that decrypts <code>wk_canary</code> &mdash; an authentic AEAD
+      blob, unforgeable without the key. Clearing key material (a future "lock / clear my keys"
+      action, §5) drops the WK but does <strong>not</strong> downgrade the workspace: it re-enters
+      the read-only state in rule 3 until the WK is pasted again, exactly as on a new device.
+      Workspace mode is immutable once set (§7), so clearing keys re-locks; it never flips to
+      plaintext. This is TOFU, mirroring §5's WK store.
+      <br><br>
+      <strong>2. The <code>enc:v1:</code> prefix is not self-authorizing &mdash; key possession
+      decides.</strong> A hostile server could strip the prefix and serve attacker-chosen
+      plaintext, so the prefix never decides whether a row should be encrypted. For any workspace
+      the client holds a validated WK for, the decode layer requires <code>enc:v1:</code> on the
+      three content columns and refuses to render (with a tamper warning) if such a row arrives
+      without it. The server's mode and the prefix are both untrusted inputs; the locally-held key
+      is the authority.
     </div>
 
     <div class="warn">
-      <strong>Pin encryption_mode locally; don't trust server metadata.</strong>
-      <code>workspaces.encryption_mode</code> is itself server-supplied state arriving over the
-      same sync path the threat model treats as hostile. A malicious server could serve an
-      existing E2EE workspace's row with <code>encryption_mode = 'none'</code> and a NULL
-      <code>wk_canary</code>; if the client trusted that flip, the UDF would pass attacker
-      plaintext through (no enc:v1: prefix expected for plaintext workspaces), and
-      <code>TxImpl</code> would stop encrypting future edits &mdash; leaking new content to the
-      server.
+      <strong>3. The gap to close: a membership with no validated key yet.</strong> Until the
+      client holds a validated WK, it cannot know cryptographically whether a workspace is
+      encrypted &mdash; and it must not ask the server, because an active server can present an
+      existing E2EE workspace as plaintext on a fresh device, accept plaintext writes before the
+      user is prompted for a key, and exfiltrate new content. One rule closes the window:
       <br><br>
-      Fix: maintain a client-side <em>known-E2EE workspaces</em> set in localStorage alongside
-      the WKs. The set is populated at two points: (a) when a user creates an E2EE workspace on
-      this device &mdash; the creator generated the WK locally, has the canary, and trivially
-      knows the workspace is E2EE; and (b) when a user pastes a WK on another device that
-      decrypts the workspace's <code>wk_canary</code> (the canary is authentically encrypted
-      under the user's WK, so it can't be forged). Once a workspace is in the set, the client
-      treats it as E2EE permanently on this device regardless of any later
-      <code>encryption_mode</code> value from the server. The E2EE pin is sticky: it is never
-      cleared by server metadata, and &mdash; crucially &mdash; not by clearing local key
-      material either. A future "lock / clear my keys" action (§5) drops the WK but leaves the
-      pin and the <code>enc:v1:</code> requirement intact; the workspace simply re-enters the
-      read-only quarantine described below until the WK is pasted again, exactly as on a new
-      device. Because workspace mode is immutable once set (§7), there is no "flip to plaintext"
-      path for an E2EE workspace at all &mdash; clearing keys re-locks, it does not downgrade.
-      This is TOFU for the mode signal, mirroring how §5's WK store works.
+      <strong>Any workspace membership for which the client holds neither a validated key nor an
+      explicit plaintext confirmation is quarantined as encryption-uncertain.</strong> It renders
+      read-only with a banner, and <strong>no local writes are permitted</strong> until resolved.
+      Two resolution paths: (a) paste a WK that validates against <code>wk_canary</code> &rarr; the
+      validated key becomes the pin (rule 1); (b) explicitly confirm "this workspace is plaintext"
+      &rarr; pinned plaintext.
       <br><br>
-      First-encounter handling matters and isn't free. A naive "trust server
-      <code>encryption_mode</code> on first encounter" is exploitable: an active server can
-      present an existing E2EE workspace as plaintext on a device that doesn't yet have it
-      pinned, accept plaintext writes before the user is ever prompted for a key, and exfiltrate
-      new content that way. Closing the window requires one general rule:
-      <br><br>
-      <strong>Any workspace membership without a local mode pin is quarantined as
-      encryption-uncertain.</strong> The workspace renders read-only with a banner asking the
-      user to resolve, and <strong>no local writes are permitted</strong> until resolution. Two
-      resolution paths: (a) paste a WK that validates against the workspace's
-      <code>wk_canary</code> &rarr; pin as E2EE; (b) explicitly confirm "this workspace is
-      plaintext" via a UI affordance &rarr; pin as plaintext.
-      <br><br>
-      This rule applies uniformly to every entry point where a workspace membership becomes
-      visible locally without a pre-existing pin:
+      This single rule covers every entry point where a membership becomes visible locally without
+      a pre-existing key or confirmation:
       <ul>
-        <li><strong>Self-create on this device:</strong> both create paths pin immediately
-          inside the create RPC, so the quarantine window is effectively zero. The plaintext
-          create flow (existing today) pins as plaintext on success &mdash; otherwise plaintext
-          workspaces would immediately enter the quarantine on creation, contradicting the
-          "behave as today" premise. The E2EE create flow (§8.1) generates the WK, validates
-          against the canary it just produced, and pins as E2EE.</li>
-        <li><strong>Accept invitation on this device:</strong> the accept flow (§8.3) marks
-          the workspace as encryption-uncertain pending the user's resolution (paste WK or
-          confirm plaintext). Brief quarantine while the user acts.</li>
+        <li><strong>Self-create on this device:</strong> both create paths resolve immediately
+          inside the create RPC, so the quarantine window is effectively zero. The plaintext create
+          flow (existing today) confirms plaintext on success &mdash; otherwise plaintext
+          workspaces would enter quarantine on creation, contradicting the "behave as today"
+          premise. The E2EE create flow (§8.1) generates the WK and validates it against the canary
+          it just minted.</li>
+        <li><strong>Accept invitation on this device:</strong> the accept flow (§8.3) leaves the
+          workspace encryption-uncertain pending the user's resolution (paste WK or confirm
+          plaintext). Brief quarantine while the user acts.</li>
         <li><strong>Existing membership encountered on a new device or after reinstall:</strong>
-          the membership row arrives via sync without ever going through accept_invitation, and
-          there's no local pin. Same quarantine rule applies &mdash; the user must paste their
-          WK (if E2EE) or confirm plaintext (if not) before any local writes. This is the case
-          the earlier draft missed.</li>
+          the membership row arrives via sync without going through accept_invitation and there's
+          no local key. Same rule &mdash; the user pastes their WK (if E2EE) or confirms plaintext
+          before any local writes.</li>
       </ul>
-      Server-claimed <code>encryption_mode</code> is still used as a <em>hint</em> for UX (which
-      prompt to show first &mdash; "do you have a key?" vs "is this a plaintext workspace?"),
-      but it's never authoritative. The cost is one resolution step per workspace per new device
-      &mdash; not free, but worth it: the alternative is silently accepting attacker plaintext
-      on a workspace the user has every reason to believe is encrypted.
+      The cost is one resolution step per workspace per new device &mdash; not free, but the
+      alternative is silently accepting attacker plaintext on a workspace the user has every reason
+      to believe is encrypted.
     </div>
 
     <h2 id="schema">7. Schema additions</h2>
 
     <p>One small migration. No changes to <code>blocks</code> columns; no new tables.</p>
 
-    <pre><code>-- Encryption mode is an immutable property of a workspace.
+    <pre><code>-- encryption_mode is a server-side PROJECTION of canary presence, not the
+-- source of truth: per §6, a client decides "E2EE" from holding a validated
+-- WK, never from this column. It exists for server-side feature gating and
+-- as a UX hint; the CHECK below keeps it in lockstep with wk_canary. It is
+-- an immutable property of a workspace once set.
 ALTER TABLE workspaces ADD COLUMN encryption_mode TEXT
   NOT NULL DEFAULT 'none'
   CHECK (encryption_mode IN ('none', 'e2ee'));
@@ -603,9 +602,9 @@ GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
     </p>
     <ul>
       <li>Add <code>encryption_mode</code> and <code>wk_canary</code> to
-        <code>WORKSPACE_COLUMNS</code>. Both need to reach clients: the mode for the
-        downgrade-pin logic in §6, the canary for §8.2 WK validation on new devices and empty
-        workspaces.</li>
+        <code>WORKSPACE_COLUMNS</code>. Both need to reach clients: the canary for §8.2 WK
+        validation on new devices and empty workspaces (the security-critical one), and the mode
+        as the §6 UX hint that picks which resolution prompt to show first.</li>
       <li><strong>Local-schema migration for upgrading clients.</strong> The
         <code>workspaces</code> table is created with <code>CREATE TABLE IF NOT EXISTS</code> in
         <code>repoProvider.ts</code>; that's a no-op on devices where the table already exists
@@ -631,10 +630,11 @@ GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
         <code>workspace_id || "canary" || schema_version</code>) to produce the
         <code>wk_canary</code>. The canary is a known-plaintext AEAD blob that any future device
         can decrypt to validate a pasted WK, even on a workspace that has no blocks yet.</li>
-      <li>Client stores the WK in localStorage at <code>(user_id, workspace_id) &rarr; raw bytes</code>,
-        and pins the workspace into the local known-E2EE set (per §6's downgrade-pin callout)
-        so future loads on this device don't trust a server-supplied
-        <code>encryption_mode = 'none'</code> for this workspace.</li>
+      <li>Client validates the WK against the canary it just minted, then stores it in localStorage
+        at <code>(user_id, workspace_id) &rarr; raw bytes</code>. That stored, canary-validated WK
+        <em>is</em> the E2EE pin (§6 rule 1) &mdash; there is no separate flag &mdash; so future
+        loads on this device never trust a server-supplied <code>encryption_mode = 'none'</code> for
+        this workspace.</li>
       <li>Client calls <code>create_workspace(p_name, p_encryption_mode='e2ee', p_workspace_id, p_wk_canary)</code>
         with the client-chosen id so the canary's plaintext and AAD line up with the server's
         stored row. Server inserts <code>workspaces</code> with the canary and the owner's
@@ -657,9 +657,9 @@ GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
         mismatch (right key, wrong workspace) both reject. Works for freshly invited / empty
         workspaces because the canary is created at workspace-create time, not derived from
         blocks.</li>
-      <li>On success: store in localStorage, pin the workspace into the local known-E2EE set
-        (§6), render normally. On failure: surface "that key
-        doesn't decrypt this workspace's data," let the user retry.</li>
+      <li>On success: store the WK in localStorage &mdash; the stored, canary-validated WK is the
+        pin (§6 rule 1) &mdash; and render normally. On failure: surface "that key doesn't decrypt
+        this workspace's data," let the user retry.</li>
     </ol>
 
     <h3>8.3 Share an E2EE workspace with another user</h3>
@@ -887,9 +887,9 @@ GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
       <strong>Locked-workspace rows stay in staging.</strong> On a new device, sync delivers
       E2EE block rows to <code>blocks_synced</code> before the user has pasted the WK. The
       observer can't decrypt without the key, so it must not apply E2EE rows to <code>blocks</code>
-      while the workspace is unpinned (per §6's quarantine rule). Concrete behavior: for each
-      staging row whose workspace is encryption-uncertain or known-E2EE-without-WK, leave it in
-      <code>blocks_synced</code> untouched. When the user pastes a WK and the workspace pins,
+      while the client holds no validated WK for that workspace (per §6's rule 3). Concrete
+      behavior: for any staging row whose workspace the client lacks a validated key for, leave it
+      in <code>blocks_synced</code> untouched. When the user pastes a WK that validates,
       run a drain pass that re-processes every staging row for that workspace through the
       observer (now with a WK available, decryption succeeds and the rows land in
       <code>blocks</code>). Mirrors the per-workspace backfill in Layout C, but with the source
@@ -1397,7 +1397,8 @@ WHERE typeof(je.value) = 'text';</code></pre>
       </tr>
       <tr>
         <td>Future server-side features (search, AI, summaries, embeddings, share-link rendering)</td>
-        <td>Can be built. Must filter on <code>encryption_mode = 'none'</code>.</td>
+        <td>Can be built. Must filter on <code>encryption_mode = 'none'</code> (equivalently
+          <code>wk_canary IS NULL</code> &mdash; the column is a projection of canary presence, §6).</td>
         <td>Not available. The product surfaces this clearly when the user opts in.</td>
       </tr>
       <tr>
@@ -1667,6 +1668,16 @@ WHERE typeof(je.value) = 'text';</code></pre>
       <li><strong>Are settings or user preferences in scope?</strong> Survey didn't surface a
         settings table. If preferences are stored server-side and contain user content, they may
         also need encryption &mdash; or be explicitly carved out as metadata.</li>
+
+      <li><strong>Could the <code>encryption_mode</code> enum be dropped entirely?</strong> Since a
+        workspace is E2EE iff <code>wk_canary IS NOT NULL</code> (§6), the column is a denormalized
+        projection of canary presence &mdash; strictly redundant for correctness. Keeping it buys
+        readable server-side feature-gating filters (<code>encryption_mode = 'none'</code> reads
+        better than <code>wk_canary IS NULL</code>) and headroom for a future third mode; dropping
+        it removes a column, its CHECK, its immutability trigger, and a <code>create_workspace</code>
+        param. The current design keeps it as an explicit, server-maintained column because the
+        duality thesis (§10) has server code gating on mode &mdash; but nothing in the security
+        model depends on it. Revisit if a third mode never materializes.</li>
     </ol>
 
     <h2 id="tradeoffs">15. Tradeoffs we're accepting</h2>
