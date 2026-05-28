@@ -921,6 +921,17 @@ WHERE typeof(je.value) = 'text';</code></pre>
             <code>instr(content, ?)</code> literal-substring search. Route through FTS for
             E2EE workspaces (<code>blocks_fts.content</code> already holds plaintext via the
             UDF-wrapped FTS trigger).</li>
+          <li><code>src/data/internals/typedBlockQuery.ts</code> lines 198 and 472-475 &mdash;
+            the typed-query compiler builds <code>FROM blocks b</code> and emits every
+            <code>where</code> predicate as <code>json_extract(b.properties_json, ?)</code>. This
+            backs <code>repo.queryBlocks</code> / <code>subscribeBlocks</code>, which are
+            centralized query APIs used throughout the data layer. Under Layout C the
+            <code>json_extract</code> runs against ciphertext and fails or skips. Fix: parameterize
+            the compiler so the JSON-text expression is pluggable, and emit
+            <code>e2ee_decrypt_json(b.workspace_id, b.properties_json)</code> for E2EE-scoped
+            queries (or unconditionally, accepting the UDF passthrough cost for plaintext
+            workspaces). The compiler change is small but the consumer surface is large &mdash;
+            anywhere <code>repo.queryBlocks</code> runs across an E2EE workspace.</li>
         </ul>
         Each is mechanical once identified, but the list keeps growing under review and almost
         certainly isn't complete. <strong>This is a real cost of Layout C: it scatters
@@ -977,10 +988,13 @@ WHERE typeof(je.value) = 'text';</code></pre>
         (<code>BACKFILL_BLOCK_ALIASES_SQL</code>, <code>BACKFILL_BLOCK_TYPES_SQL</code>,
         <code>BACKFILL_BLOCKS_FTS_SQL</code> in <code>clientSchema.ts</code>,
         <code>BACKFILL_BLOCK_REFERENCES_SQL</code> in <code>plugins/references/localSchema.ts</code>);
-        fix the six known raw-SQL readers (<code>repo.ts:1553-1559</code> reprojection scan;
+        fix the seven known raw-SQL readers (<code>repo.ts:1553-1559</code> reprojection scan;
         <code>repo.ts:1338-1343</code> property-count; <code>extensions/extensionLookup.ts:40-49</code>;
         <code>data/targets.ts:234-251</code>; <code>plugins/references/renameProcessor.ts:60-66</code>;
-        <code>plugins/find-replace/dataExtension.ts:80-89</code> via FTS reroute); convert the
+        <code>plugins/find-replace/dataExtension.ts:80-89</code> via FTS reroute;
+        <code>data/internals/typedBlockQuery.ts:198,472-475</code> typed-query compiler &mdash;
+        parameterize its JSON-text expression so E2EE-scoped queries emit the UDF-wrapped form);
+        convert the
         daily-notes expression index to a side table; wire <code>encodeForWire</code> into
         <code>TxImpl.create</code> / <code>TxImpl.update</code> so local writes hit the encrypt
         step before INSERT/UPDATE reaches <code>blocks</code> (not at upload &mdash; see the
@@ -1015,9 +1029,10 @@ WHERE typeof(je.value) = 'text';</code></pre>
         <li>Whether the PoC confirms PowerSync awaits async UDFs end-to-end (if not, C is off the
           table).</li>
         <li>How big the Layout C touch surface actually is. Each review round has found more raw
-          SQL sites that need awareness of the encryption boundary (currently 6 in app code plus
-          4 backfill statements, almost certainly more). Under Layout B this surface is empty
-          &mdash; local writes are plaintext, all existing readers Just Work.</li>
+          SQL sites that need awareness of the encryption boundary (currently 7 in app code
+          including the typed-query compiler, plus 4 backfill statements, almost certainly more).
+          Under Layout B this surface is empty &mdash; local writes are plaintext, all existing
+          readers Just Work.</li>
         <li>Which set of risks is easier to live with &mdash; B's two-write download path and JS
           observer wiring (a single concentrated mechanism), versus C's encryption-awareness
           scattered across the codebase wherever raw SQL touches a content column (mechanical
@@ -1314,9 +1329,13 @@ WHERE typeof(je.value) = 'text';</code></pre>
       <li><strong>Layout B vs Layout C for local plaintext.</strong> §9.2 lays out both. The
         choice hinges on (a) a small PoC verifying that PowerSync's pipeline correctly awaits
         async wa-sqlite UDFs through every code path (if not, C is off the table), and (b) which
-        set of risks is easier to live with &mdash; B's staging table + JS observer + two writes
-        per E2EE download, or C's per-trigger WebCrypto decrypt cost. Default lean toward C if
-        the PoC passes.</li>
+        set of risks is easier to live with &mdash; B's universal-observer two-writes-per-download
+        cost concentrated at one named seam, versus C's encryption-awareness scattered across
+        7+ raw-SQL sites and 4 backfill statements (and counting — the survey list has grown each
+        review round). Default lean now <strong>toward B</strong>, reversed from the earlier
+        draft: B's complexity is contained at the sync boundary while C's is structural and
+        ongoing, with future plugins one author away from breaking E2EE silently. Re-evaluate if
+        the PoC for C is particularly clean. See §9.2's working decision for the longer argument.</li>
 
       <li><strong>Backfill behavior on first WK paste.</strong> The first time a device gets a
         WK for a workspace, the local plaintext-derived indexes need populating. Under Layout B
