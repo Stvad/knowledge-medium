@@ -427,18 +427,43 @@ ALTER TABLE workspaces ADD COLUMN encryption_mode TEXT
   NOT NULL DEFAULT 'none'
   CHECK (encryption_mode IN ('none', 'e2ee'));
 
--- Trigger: encryption_mode is set at create time and never changes.
-CREATE TRIGGER workspaces_lock_encryption_mode
+-- Per-column immutability trigger, matching the existing
+-- blocks_prevent_workspace_change() pattern in the consolidated
+-- migration (concrete function per invariant, not a generic helper).
+CREATE OR REPLACE FUNCTION workspaces_prevent_encryption_mode_change()
+  RETURNS trigger
+  LANGUAGE plpgsql AS $$
+begin
+  if OLD.encryption_mode is distinct from NEW.encryption_mode then
+    raise exception 'workspaces.encryption_mode is immutable (% -> %)',
+      OLD.encryption_mode, NEW.encryption_mode;
+  end if;
+  return NEW;
+end;
+$$;
+
+CREATE TRIGGER workspaces_prevent_encryption_mode_change_trg
   BEFORE UPDATE ON workspaces
   FOR EACH ROW
-  WHEN (OLD.encryption_mode IS DISTINCT FROM NEW.encryption_mode)
-  EXECUTE FUNCTION raise_immutable_column();</code></pre>
+  EXECUTE FUNCTION workspaces_prevent_encryption_mode_change();
+
+-- create_workspace must accept the encryption_mode at create time;
+-- since there's no INSERT RLS on workspaces, the RPC is the only
+-- path and immutability means we can never set it later.
+CREATE OR REPLACE FUNCTION create_workspace(
+    p_name             text,
+    p_encryption_mode  text DEFAULT 'none'  -- 'none' | 'e2ee'
+  ) RETURNS jsonb ...;
+-- Existing TS caller (src/data/workspaces.ts) passes p_encryption_mode
+-- when the user clicks "Create encrypted workspace".</code></pre>
 
     <p>
       That's the entire server-side schema change. Notably <em>not</em> added (saved for the
       eventual hierarchy migration, §13): <code>user_vault</code>, public keys,
       <code>workspace_members.wrapped_cek</code>, <code>workspace_invitations.wrapped_cek_for_invitee</code>.
-      None of the invitation RPCs change signatures.
+      The invitation RPCs (<code>invite_member_by_email</code>, <code>list_my_pending_invitations</code>,
+      <code>accept_invitation</code>) keep their existing signatures &mdash; permissions flow
+      through them, key material does not.
     </p>
 
     <p>
