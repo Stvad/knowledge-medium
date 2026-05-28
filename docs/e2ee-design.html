@@ -606,17 +606,27 @@ ALTER TABLE workspaces ADD COLUMN wk_canary TEXT;
 -- default mode plus p_wk_canary), which would otherwise let server-side
 -- gating and client prompts misclassify a "plaintext" workspace given
 -- that later sections treat wk_canary IS NULL as the plaintext signal.
--- Presence alone isn't enough: an e2ee canary must also be a well-formed
--- enc:v1: AEAD envelope. Otherwise create_workspace(..., p_wk_canary =>
--- 'anything') satisfies the biconditional while storing a value the §8.2
--- unlock flow can never validate a pasted WK against -- an unrecoverable
--- encrypted workspace. So require the same enc:v1: envelope + base64url
--- shape used for block ciphertext.
+-- Presence alone isn't enough: an e2ee canary (and every E2EE content column,
+-- see the blocks trigger below) must be a syntactically well-formed enc:v1:
+-- AEAD envelope, not merely a prefixed string. Otherwise p_wk_canary =>
+-- 'anything' or content => 'enc:v1:My plaintext note' is accepted -- the
+-- former leaves the workspace unrecoverable (§8.2 can never validate a WK
+-- against it), the latter leaves the server storing readable plaintext. The
+-- server can't prove the bytes are real ciphertext (it has no key), but it can
+-- require the envelope SHAPE: enc:v1: + a base64url payload of at least
+-- nonce(12B)+tag(16B) = 28B, i.e. >= 38 base64url chars. One shared IMMUTABLE
+-- helper keeps the canary CHECK and the blocks trigger in lockstep.
+CREATE OR REPLACE FUNCTION is_enc_v1_envelope(v text)
+  RETURNS boolean
+  LANGUAGE sql IMMUTABLE AS $$
+  SELECT v ~ '^enc:v1:[A-Za-z0-9_-]{38,}={0,2}$'
+$$;
+
 ALTER TABLE workspaces
   ADD CONSTRAINT workspaces_wk_canary_matches_mode
   CHECK (
     (encryption_mode = 'e2ee') = (wk_canary IS NOT NULL)
-    AND (encryption_mode &lt;&gt; 'e2ee' OR wk_canary ~ '^enc:v1:[A-Za-z0-9_=-]+$')
+    AND (encryption_mode &lt;&gt; 'e2ee' OR is_enc_v1_envelope(wk_canary))
   );
 
 -- Immutable after create: an editor with write access to the workspaces row
@@ -689,10 +699,13 @@ GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
 -- hook, or a direct PostgREST write could otherwise land plaintext in an
 -- e2ee workspace's content columns -- the blocks_write RLS policy only checks
 -- writer membership, not payload shape. Enforce it server-side: for any block
--- whose workspace is e2ee, the three content columns must carry the enc:v1:
--- envelope. A CHECK can't read another table, so this is a BEFORE trigger
--- that looks the workspace up (PK lookup, cheap). The client encrypts even
--- "empty" values, so an e2ee block never legitimately holds bare ''/{}/[].
+-- whose workspace is e2ee, the three content columns must carry a well-formed
+-- enc:v1: envelope -- the same is_enc_v1_envelope() shape the canary uses, so
+-- a prefixed-but-readable value like 'enc:v1:My plaintext note' (which would
+-- still leak plaintext to the server) is rejected, not just NULL/bare values.
+-- A CHECK can't read another table, so this is a BEFORE trigger that looks the
+-- workspace up (PK lookup, cheap). The client encrypts even "empty" values, so
+-- an e2ee block never legitimately holds bare ''/{}/[].
 CREATE OR REPLACE FUNCTION blocks_require_ciphertext_for_e2ee()
   RETURNS trigger
   LANGUAGE plpgsql AS $$
@@ -701,11 +714,11 @@ begin
     select 1 from public.workspaces w
     where w.id = NEW.workspace_id and w.encryption_mode = 'e2ee'
   ) and not (
-    NEW.content         like 'enc:v1:%' and
-    NEW.properties_json like 'enc:v1:%' and
-    NEW.references_json like 'enc:v1:%'
+    is_enc_v1_envelope(NEW.content) and
+    is_enc_v1_envelope(NEW.properties_json) and
+    is_enc_v1_envelope(NEW.references_json)
   ) then
-    raise exception 'blocks in an e2ee workspace must carry enc:v1: ciphertext in all content columns';
+    raise exception 'blocks in an e2ee workspace must carry a well-formed enc:v1: envelope in all content columns';
   end if;
   return NEW;
 end;
