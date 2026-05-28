@@ -223,9 +223,11 @@
     <h1>End-to-End Encryption Design</h1>
     <p class="meta">Status: sketch / not yet committed to. Discussion artifact.</p>
     <p class="lede">
-      Per-workspace opt-in E2EE so that Supabase and the network see only opaque ciphertext for
-      content in encrypted workspaces, while plaintext workspaces remain fully server-readable and
-      can keep all current and future server-side features.
+      Per-workspace opt-in E2EE with user-managed workspace keys. Supabase and the network see
+      only ciphertext for content in encrypted workspaces; plaintext workspaces remain fully
+      server-readable and keep all current and future server-side features. The user holds the
+      key, types/pastes it on each device, and shares it with collaborators over whatever channel
+      they trust.
     </p>
 
     <div class="toc">
@@ -235,7 +237,7 @@
         <li><a href="#threat">Threat model</a></li>
         <li><a href="#current">Why the current architecture is friendly to this</a></li>
         <li><a href="#shape">Design shape</a></li>
-        <li><a href="#keys">Key hierarchy</a></li>
+        <li><a href="#wk">Workspace key: shape, lifecycle, and storage</a></li>
         <li><a href="#crypto">Cryptographic choices</a></li>
         <li><a href="#schema">Schema additions</a></li>
         <li><a href="#flows">User-visible flows</a></li>
@@ -243,6 +245,7 @@
         <li><a href="#duality">Mode-by-mode behavior</a></li>
         <li><a href="#prep">Architectural prep that pays off regardless</a></li>
         <li><a href="#rejected">Considered &amp; rejected</a></li>
+        <li><a href="#hierarchy">Adding the hierarchy later (if needed)</a></li>
         <li><a href="#open">Open questions</a></li>
         <li><a href="#tradeoffs">Tradeoffs we're accepting</a></li>
       </ol>
@@ -257,10 +260,10 @@
         <code>blocks.content</code>, <code>blocks.properties_json</code>, <code>blocks.references_json</code>.</li>
       <li>Plaintext workspaces remain bit-identical to today &mdash; same schema, same RLS, same
         access to server-side features (current and future).</li>
-      <li>Multi-device: the same user can decrypt their E2EE workspaces on any device they sign in on,
-        given their passphrase.</li>
-      <li>Workspace sharing: an inviter can grant a new member access to an E2EE workspace without
-        ever revealing the workspace key to the server.</li>
+      <li>Multi-device: a user can decrypt their E2EE workspaces on any device they sign in on by
+        pasting the workspace key once per device.</li>
+      <li>Sharing: an owner can give another user access by sending them the workspace key over
+        whatever channel they trust (Signal, in person, encrypted email, etc.).</li>
     </ul>
 
     <h3>Non-goals (for v1)</h3>
@@ -269,9 +272,13 @@
       <li>Defense against a compromised local device. OS-level disk encryption is the right tool;
         OPFS already gives per-origin isolation.</li>
       <li>Cryptographic verification of authorship (signed writes). Useful later, not in scope now.</li>
-      <li>Account recovery without the user's passphrase. Lost passphrase = lost E2EE data unless we
-        ship recovery codes (see <a href="#open">open questions</a>).</li>
-      <li>Server-side features over encrypted workspaces (search, AI, embeddings). They simply don't apply.</li>
+      <li>Server-mediated key delivery. The app deliberately does not transmit workspace keys
+        through its own server channel &mdash; the user picks the channel. This eliminates an
+        entire class of MITM concerns at the cost of one extra step at share time.</li>
+      <li>Account recovery without the user's workspace key. Lost key = lost data; the UI surfaces
+        this clearly at create time.</li>
+      <li>Server-side features over encrypted workspaces (search, AI, embeddings). They simply
+        don't apply.</li>
     </ul>
 
     <h2 id="threat">2. Threat model</h2>
@@ -280,23 +287,22 @@
       hosting provider read my notes?"</em> Concretely, in v1:
     </p>
     <ul>
-      <li><strong>In scope</strong>: passive attacker with full read access to the Supabase
-        Postgres, the PowerSync replica, network traffic to/from Supabase, and Supabase logs/backups.
-        They must not learn the contents of E2EE-workspace blocks.</li>
-      <li><strong>Out of scope</strong>: attacker who controls the user's browser at runtime
-        (they can read decrypted data and exfiltrate the key); attacker who can compromise the
-        client build pipeline (they can ship a backdoored client); attacker who can perform traffic
-        analysis on edit patterns (still possible).</li>
-      <li><strong>Out of scope, deliberately, in v1</strong>: <em>active</em> attacker who can
-        substitute server responses. The invite-time public-key delivery (§8.4) is a
-        trust-on-server channel: a malicious server can return its own X25519 key in place of
-        Bob's and read everything in the shared workspace. Closing this gap requires
-        out-of-band verification &mdash; TOFU + safety-number compare, key transparency log, or
-        similar &mdash; which is real engineering and UX. Flagged as a v2 requirement in §13 and
-        §14; v1 honestly degrades to passive-only protection on first-share, full passive
-        protection thereafter (once the CEK is on Bob's device, the server can't read past
-        traffic).</li>
+      <li><strong>In scope</strong>: passive or active attacker with full read access to the
+        Supabase Postgres, the PowerSync replica, network traffic to/from Supabase, and Supabase
+        logs/backups. They must not learn the contents of E2EE-workspace blocks.</li>
+      <li><strong>Out of scope</strong>: attacker who controls the user's browser at runtime (they
+        can read decrypted data and exfiltrate the key); attacker who can compromise the client
+        build pipeline (they can ship a backdoored client); attacker who can perform traffic
+        analysis on edit patterns; attacker who can intercept the user's chosen out-of-band
+        channel for sharing the workspace key (that's a property of the channel, not of this
+        system).</li>
     </ul>
+    <p>
+      Notably, the user-managed key model means active attackers on the server gain very little
+      power over confidentiality: the server never sees a workspace key in any form, so there's
+      nothing to substitute, MITM, or extract. The attacker can serve ciphertext rows or refuse
+      to serve them; they can't read them.
+    </p>
 
     <h2 id="current">3. Why the current architecture is friendly to this</h2>
     <p>
@@ -313,117 +319,65 @@
       <li><strong>PowerSync upload compaction</strong> already coalesces edits per block, which
         keeps wire overhead low independent of encoding.</li>
       <li><strong>Client-side edit log</strong> already exists (<code>tx_context</code>,
-        <code>row_events</code>, <code>command_events</code>) &mdash; useful if we ever need to move
-        history off the server for encrypted workspaces.</li>
+        <code>row_events</code>, <code>command_events</code>) &mdash; useful if we ever need to
+        move history off the server for encrypted workspaces.</li>
     </ul>
 
     <h2 id="shape">4. Design shape</h2>
 
-    <p>
-      Two properties drive the entire design:
-    </p>
+    <p>Three properties drive the design:</p>
     <ol>
       <li><strong>Per-workspace opt-in.</strong> One user can have plaintext and E2EE workspaces
         side by side on the same device, in the same local DB.</li>
-      <li><strong>Per-column encryption with the existing schema.</strong> We encrypt the three
-        content columns in place rather than consolidating them into one opaque payload. This
-        preserves PowerSync's column-level PATCH granularity, keeps plaintext workspaces
-        bit-identical, and avoids a schema migration that would touch every workspace.</li>
+      <li><strong>Per-column encryption with the existing schema.</strong> Encrypt the three
+        content columns in place rather than consolidating them into one opaque payload. Preserves
+        PowerSync column-level PATCH granularity, keeps plaintext workspaces bit-identical, and
+        avoids a schema migration that would touch every workspace.</li>
+      <li><strong>User-managed workspace key.</strong> Each E2EE workspace has a single symmetric
+        key. The user is responsible for storing it and transmitting it to collaborators. The
+        server has no role in key management &mdash; no key store, no key wrapping, no
+        per-user identity material.</li>
     </ol>
 
     <div class="decision">
-      <strong>Decision.</strong> Threat model A (Supabase/network can't read content). Per-workspace
-      opt-in. Per-column AEAD with self-identifying <code>enc:v1:</code> prefix in the existing
-      <code>content</code>/<code>properties_json</code>/<code>references_json</code> columns.
+      <strong>Decision.</strong> v1 ships the simple model: one symmetric workspace key (WK) per
+      encrypted workspace, generated client-side, surfaced to the user once at create, stored by
+      the user (password manager, paper, etc.), and pasted on additional devices. Sharing is
+      out-of-band. No server-side key store, no asymmetric crypto, no KDF, no recovery codes.
     </div>
 
-    <h2 id="keys">5. Key hierarchy</h2>
+    <h2 id="wk">5. Workspace key: shape, lifecycle, and storage</h2>
 
-    <figure>
-      <div class="diagram">
-        <svg viewBox="0 0 720 460" xmlns="http://www.w3.org/2000/svg" aria-labelledby="keytree-title">
-          <title id="keytree-title">Key hierarchy from passphrase to per-workspace CEKs</title>
-          <defs>
-            <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-              <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
-            </marker>
-          </defs>
-          <style>
-            .box { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; rx: 6; ry: 6; }
-            .boxDark { fill: none; stroke: var(--fg); stroke-width: 1.2; rx: 6; ry: 6; }
-            .lbl { fill: var(--fg); font: 13px ui-sans-serif, system-ui, sans-serif; text-anchor: middle; }
-            .lblSm { fill: var(--muted); font: 11px ui-sans-serif, system-ui, sans-serif; text-anchor: middle; }
-            .link { stroke: var(--fg); stroke-width: 1.2; fill: none; color: var(--fg); }
-          </style>
+    <p>
+      The workspace key (WK) is the only secret in the entire design.
+    </p>
 
-          <rect class="box" x="280" y="10" width="160" height="40"/>
-          <text class="lbl" x="360" y="34">Passphrase</text>
+    <table>
+      <tr><th>Property</th><th>Value</th></tr>
+      <tr><td>Material</td><td>256 random bits, generated client-side via
+        <code>crypto.getRandomValues</code>.</td></tr>
+      <tr><td>Lifetime</td><td>One per workspace, generated at workspace create. Stable for the
+        life of the workspace unless explicitly rotated.</td></tr>
+      <tr><td>User-facing format</td><td><code>kmp-wk-1:&lt;base32(32 bytes)&gt;</code> &mdash;
+        58-character paste-friendly string. The <code>1</code> reserves a clean upgrade path.</td></tr>
+      <tr><td>Where it lives</td><td>(a) the user's password manager / backup of their choice;
+        (b) IndexedDB on each device the user has pasted it on, keyed by
+        <code>(user_id, workspace_id)</code>. Never the server, in any form.</td></tr>
+      <tr><td>Validation on paste</td><td>Decrypt one already-synced ciphertext block (any will
+        do). Reject on AEAD failure with "that key doesn't decrypt this workspace's data."</td></tr>
+    </table>
 
-          <line class="link" x1="360" y1="50" x2="360" y2="80" marker-end="url(#arr)"/>
-          <text class="lblSm" x="420" y="68">Argon2id (KDF)</text>
-
-          <rect class="box" x="290" y="80" width="140" height="40"/>
-          <text class="lbl" x="360" y="104">Master Key (MK)</text>
-
-          <line class="link" x1="360" y1="120" x2="360" y2="150" marker-end="url(#arr)"/>
-          <text class="lblSm" x="430" y="140">unwraps stored UVK</text>
-
-          <rect class="box" x="290" y="150" width="140" height="40"/>
-          <text class="lbl" x="360" y="174">User Vault Key (UVK)</text>
-
-          <line class="link" x1="360" y1="190" x2="170" y2="240" marker-end="url(#arr)"/>
-          <line class="link" x1="360" y1="190" x2="360" y2="240" marker-end="url(#arr)"/>
-          <line class="link" x1="360" y1="190" x2="550" y2="240" marker-end="url(#arr)"/>
-
-          <rect class="box" x="90" y="240" width="160" height="40"/>
-          <text class="lbl" x="170" y="264">CEK&#x2009;workspace A</text>
-
-          <rect class="box" x="280" y="240" width="160" height="40"/>
-          <text class="lbl" x="360" y="264">CEK&#x2009;workspace B</text>
-
-          <rect class="box" x="470" y="240" width="160" height="40"/>
-          <text class="lbl" x="550" y="264">Asymmetric keypair</text>
-
-          <line class="link" x1="170" y1="280" x2="170" y2="320" marker-end="url(#arr)"/>
-          <line class="link" x1="360" y1="280" x2="360" y2="320" marker-end="url(#arr)"/>
-          <line class="link" x1="550" y1="280" x2="550" y2="320" marker-end="url(#arr)"/>
-
-          <rect class="boxDark" x="90" y="320" width="160" height="60"/>
-          <text class="lbl" x="170" y="344">encrypts blocks</text>
-          <text class="lblSm" x="170" y="364">in workspace A</text>
-
-          <rect class="boxDark" x="280" y="320" width="160" height="60"/>
-          <text class="lbl" x="360" y="344">encrypts blocks</text>
-          <text class="lblSm" x="360" y="364">in workspace B</text>
-
-          <rect class="boxDark" x="470" y="320" width="160" height="60"/>
-          <text class="lbl" x="550" y="338">public key published</text>
-          <text class="lblSm" x="550" y="356">private key wrapped</text>
-          <text class="lblSm" x="550" y="370">by UVK (server-stored)</text>
-
-          <text class="lblSm" x="360" y="420">CEKs live on the server too, each wrapped per-member by that member's UVK,</text>
-          <text class="lblSm" x="360" y="436">so a new device can recover them after passphrase unlock.</text>
-        </svg>
-      </div>
-      <figcaption>Figure 1 &mdash; Key hierarchy. The passphrase is the only secret that never leaves the device.</figcaption>
-    </figure>
-
-    <ul>
-      <li><strong>Master Key (MK)</strong> &mdash; derived from passphrase via Argon2id. Lives only in memory. Never persisted, never sent anywhere.</li>
-      <li><strong>User Vault Key (UVK)</strong> &mdash; random 256-bit. Wrapped by MK and stored server-side (<code>user_vault.wrapped_uvk</code>). Multi-device unlock works because any device that can derive MK can unwrap the same UVK.</li>
-      <li><strong>Content Encryption Key (CEK)</strong> &mdash; random per workspace. Each workspace member holds the CEK wrapped by their UVK (<code>workspace_members.wrapped_cek</code>). One workspace = one CEK shared by all members.</li>
-      <li><strong>Asymmetric keypair</strong> &mdash; per user. Public key published in <code>user_vault.public_key</code>; private key stored wrapped by UVK. Used at invite time to hand a CEK to a new member without an interactive session.</li>
-    </ul>
+    <p>
+      The UI shows the WK exactly once, at create time, with prominent "save this somewhere safe
+      &mdash; there is no recovery" copy and a recommendation to paste it into a password manager.
+      A confirmation step ("type the last 6 characters") ensures the user actually saw it rather
+      than dismissing the dialog.
+    </p>
 
     <h2 id="crypto">6. Cryptographic choices</h2>
 
     <table>
       <tr><th>Concern</th><th>Choice</th><th>Why</th></tr>
-      <tr>
-        <td>KDF</td>
-        <td>Argon2id (params: m=64MiB, t=3, p=1)</td>
-        <td>Modern memory-hard KDF. If a libsodium dep is unwanted, PBKDF2-SHA256 (600k iters) via WebCrypto is the fallback.</td>
-      </tr>
       <tr>
         <td>Symmetric AEAD</td>
         <td>AES-256-GCM</td>
@@ -432,28 +386,33 @@
       <tr>
         <td>Nonce</td>
         <td>96-bit random per ciphertext</td>
-        <td>Per-column random nonce. Reuse probability negligible at our write volumes; keep a guard rail counter.</td>
+        <td>Per-column random nonce. Reuse probability negligible at our write volumes.</td>
       </tr>
       <tr>
         <td>AAD (associated data)</td>
         <td><code>block_id &Vert; workspace_id &Vert; column_name &Vert; schema_version</code></td>
-        <td>Prevents the server from swapping ciphertexts between blocks, between workspaces, or between columns of the same block.</td>
-      </tr>
-      <tr>
-        <td>Asymmetric primitive</td>
-        <td>X25519 for key wrapping, optional Ed25519 for future signing</td>
-        <td>Tiny, well-understood. libsodium covers both cleanly; WebCrypto's ECDH P-256 is an acceptable fallback if we stay dependency-light.</td>
+        <td>Prevents the server from swapping ciphertexts between blocks, between workspaces, or between columns of the same block. <code>schema_version</code> reserves room for future format upgrades (e.g. a hierarchy migration).</td>
       </tr>
       <tr>
         <td>Ciphertext format</td>
         <td><code>"enc:v1:" + base64url(nonce &Vert; ciphertext)</code></td>
         <td>Self-identifying prefix lets the decode layer detect E2EE rows without a workspace lookup. The <code>v1</code> reserves a clean upgrade path.</td>
       </tr>
+      <tr>
+        <td>WK display/paste format</td>
+        <td><code>kmp-wk-1:&lt;base32&gt;</code></td>
+        <td>Base32 (Crockford or RFC 4648 without padding) is paste-friendly across messaging apps and looks reasonable on paper. The <code>kmp-wk-1:</code> prefix makes mis-pasted keys identifiable.</td>
+      </tr>
+      <tr>
+        <td>KDF</td>
+        <td>None &mdash; the WK <em>is</em> the key.</td>
+        <td>No passphrase in v1, so no derivation. If the hierarchy is added later (§13), Argon2id over the user's vault passphrase is the right primitive.</td>
+      </tr>
     </table>
 
     <div class="warn">
-      <strong>Downgrade-attack guard.</strong> The <code>enc:v1:</code> prefix is convenient but not
-      authoritative on its own &mdash; a hostile server could strip it and serve attacker-chosen
+      <strong>Downgrade-attack guard.</strong> The <code>enc:v1:</code> prefix is convenient but
+      not authoritative on its own &mdash; a hostile server could strip it and serve attacker-chosen
       plaintext. The decode layer must cross-check the row's <code>workspaces.encryption_mode</code>:
       if the workspace is E2EE and the value lacks the prefix, refuse to render (and surface a
       tamper warning).
@@ -461,7 +420,7 @@
 
     <h2 id="schema">7. Schema additions</h2>
 
-    <p>One new migration. No changes to <code>blocks</code> columns themselves.</p>
+    <p>One small migration. No changes to <code>blocks</code> columns; no new tables.</p>
 
     <pre><code>-- Encryption mode is an immutable property of a workspace.
 ALTER TABLE workspaces ADD COLUMN encryption_mode TEXT
@@ -473,285 +432,87 @@ CREATE TRIGGER workspaces_lock_encryption_mode
   BEFORE UPDATE ON workspaces
   FOR EACH ROW
   WHEN (OLD.encryption_mode IS DISTINCT FROM NEW.encryption_mode)
-  EXECUTE FUNCTION raise_immutable_column();
-
--- At-rest CEK envelope: each member of an E2EE workspace holds the CEK
--- symmetrically wrapped by their own UVK.
-ALTER TABLE workspace_members ADD COLUMN wrapped_cek BYTEA;
--- Constraint enforced via trigger (cross-table check): required iff workspace is E2EE.
-
--- In-transit CEK envelope: when Alice invites Bob, she wraps the CEK with
--- Bob's *public key* (X25519) and parks it here. On accept_invitation, Bob
--- unwraps with his private key, re-wraps with his UVK, and the result lands
--- in workspace_members.wrapped_cek (the at-rest envelope above). The two
--- envelopes are deliberately different shapes so that the unlock path only
--- ever needs the UVK, while invitation delivery doesn't require Bob to be
--- online or unlocked.
-ALTER TABLE workspace_invitations
-  ADD COLUMN wrapped_cek_for_invitee BYTEA;
-
--- Per-user vault: enables multi-device unlock and invite-time CEK wrapping.
-CREATE TABLE user_vault (
-  user_id              UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
-  kdf_params           JSONB  NOT NULL,  -- algo, salt (base64), m, t, p
-  wrapped_uvk          BYTEA  NOT NULL,  -- UVK encrypted by MK
-  public_key           BYTEA  NOT NULL,  -- X25519 public, published openly
-  wrapped_private_key  BYTEA  NOT NULL,  -- X25519 private, wrapped by UVK
-  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- RLS on user_vault: each user can read/write their own row. Public keys
--- can't sit behind a "shares-a-workspace-with-owner" predicate (the very
--- first invite, when Alice and Bob share nothing, would deadlock on it),
--- but they also can't be openly looked up by email: invite_member_by_email
--- today never reaches into auth.users and so doesn't leak which emails are
--- registered. A bare get_user_public_key(email) would be a new account-
--- existence oracle. Instead, gate the lookup on an existing invitation
--- the caller created (see §8.4): invite_member_by_email itself returns the
--- invitee's public_key when known. Probing reduces to "create a fake
--- invitation against this workspace and read the result" — auditable,
--- rate-limitable, and bound to a workspace the caller owns, rather than
--- a free oracle for any authenticated user.</code></pre>
+  EXECUTE FUNCTION raise_immutable_column();</code></pre>
 
     <p>
-      <strong>Sync stream needs to learn the new columns.</strong> Both
+      That's the entire server-side schema change. Notably <em>not</em> added (saved for the
+      eventual hierarchy migration, §13): <code>user_vault</code>, public keys,
+      <code>workspace_members.wrapped_cek</code>, <code>workspace_invitations.wrapped_cek_for_invitee</code>.
+      None of the invitation RPCs change signatures.
+    </p>
+
+    <p>
+      <strong>Sync stream learns one new column.</strong> Both
       <code>powersync/sync-config.yaml</code> and <code>src/data/workspaceSchema.ts</code>
-      enumerate the columns clients hydrate. The yaml is generated by
-      <code>scripts/gen-sync-config.ts</code> from the schema file, so the actual edit is in
+      enumerate columns explicitly. The yaml is generated by <code>scripts/gen-sync-config.ts</code>
+      from the schema file, so the actual edit is to <code>WORKSPACE_COLUMNS</code> in
       <code>workspaceSchema.ts</code>:
     </p>
     <ul>
-      <li>Add <code>encryption_mode</code> to <code>WORKSPACE_COLUMNS</code> &mdash; clients need
-        it on the read path to gate triggers and to do the downgrade check from §6.</li>
-      <li>Add <code>wrapped_cek</code> to <code>WORKSPACE_MEMBER_COLUMNS</code> &mdash; the §8.2
-        unlock flow can't unwrap CEKs that never reach the client.</li>
+      <li>Add <code>encryption_mode</code> to <code>WORKSPACE_COLUMNS</code>.</li>
       <li>Run <code>yarn gen:sync-config</code> to refresh the yaml; <code>yarn check:sync-config</code>
         in CI catches anyone who forgets.</li>
     </ul>
-    <p>
-      Notably <em>not</em> changed: <code>blocks</code> columns, sync rule predicates, the streams
-      themselves. The new columns ride existing streams.
-    </p>
-
-    <div class="decision">
-      <strong>Naming convention for envelopes.</strong> Wrapped-key columns are named after the
-      <em>wrapping</em> key, not the <em>wrapped</em> contents, so the unwrap path is obvious from
-      the column name: <code>wrapped_cek</code> (UVK-wrapped, at rest) versus
-      <code>wrapped_cek_for_invitee</code> (pubkey-wrapped, in transit). At the TS layer the two
-      should be branded types &mdash; a <code>WrappedForUvk</code> can't accidentally flow into a
-      function expecting a <code>WrappedForPubkey</code> envelope. One round of review already
-      tripped on a column called just <code>wrapped_cek</code> being asked to do double duty; the
-      convention is the cheap fix.
-    </div>
 
     <h2 id="flows">8. User-visible flows</h2>
 
-    <h3>8.1 First-time vault setup</h3>
-    <p>
-      Triggered the first time a user either creates an E2EE workspace or is invited to one.
-      Plaintext-only users never see this flow.
-    </p>
+    <h3>8.1 Create an encrypted workspace</h3>
     <ol>
-      <li>Prompt for a passphrase (and confirm).</li>
-      <li>Generate random salt; run Argon2id &rarr; MK.</li>
-      <li>Generate random UVK (256-bit). Generate X25519 keypair.</li>
-      <li>Wrap UVK with MK; wrap private key with UVK.</li>
-      <li>POST <code>user_vault</code> row with <code>kdf_params</code>, wrapped UVK, public key,
-        wrapped private key.</li>
-      <li>Cache MK and UVK in memory (and unwrapped private key, lazily).</li>
+      <li>User clicks "Create encrypted workspace".</li>
+      <li>Client generates a 32-byte WK via <code>crypto.getRandomValues</code>; encodes it as
+        <code>kmp-wk-1:&lt;base32&gt;</code>.</li>
+      <li>Client stores the WK in IndexedDB at key
+        <code>(user_id, workspace_id) &rarr; raw bytes</code>.</li>
+      <li>Server: insert the <code>workspaces</code> row with
+        <code>encryption_mode = 'e2ee'</code> and the owner's <code>workspace_members</code> row,
+        exactly as the plaintext flow does. No crypto material is sent to the server.</li>
+      <li>UI: show the WK once with strong "save this securely &mdash; no recovery is possible"
+        copy. Recommend pasting into a password manager. Confirm-by-retype on the last 6
+        characters before dismissing.</li>
     </ol>
 
-    <h3>8.2 Sign-in / vault unlock</h3>
+    <h3>8.2 Open an E2EE workspace on a new device</h3>
     <ol>
-      <li>Supabase <code>signInWithPassword</code> as today.</li>
-      <li>If the user has a <code>user_vault</code> row, prompt for passphrase. (If they don't,
-        skip &mdash; they have no E2EE workspaces yet.)</li>
-      <li>Re-derive MK using stored <code>kdf_params</code>. Unwrap UVK. Unwrap private key.</li>
-      <li>Fetch all <code>workspace_members</code> rows for this user with <code>wrapped_cek</code>;
-        unwrap into an in-memory map <code>workspace_id &rarr; CEK</code>.</li>
-      <li>Mark vault as "unlocked." App content code now resolves CEKs synchronously.</li>
+      <li>User signs in on device 2. PowerSync syncs encrypted block rows for workspaces they're
+        a member of.</li>
+      <li>Client checks IndexedDB at <code>(user_id, workspace_id)</code> &mdash; no WK present.</li>
+      <li>UI surfaces a "this workspace needs its key" prompt instead of rendering ciphertext.</li>
+      <li>User pastes their stored WK.</li>
+      <li>Client validates by attempting to decrypt one already-synced ciphertext block (any will
+        do &mdash; the AAD includes <code>block_id</code> and <code>workspace_id</code> so success
+        is unambiguous).</li>
+      <li>On success: store in IndexedDB, render normally. On AEAD failure: surface "that key
+        doesn't decrypt this workspace's data," let the user retry.</li>
+    </ol>
+
+    <h3>8.3 Share an E2EE workspace with another user</h3>
+    <ol>
+      <li>Owner invites the collaborator via the existing
+        <code>invite_member_by_email</code> &rarr; <code>accept_invitation</code> flow. The RPC
+        chain doesn't change; the membership row is plaintext-only metadata.</li>
+      <li>Owner sends the WK to the collaborator over <strong>a channel the user picks
+        themselves</strong> &mdash; Signal, in person, sealed envelope, encrypted email, password
+        manager share, whatever they trust for this contact. The app does not transmit the WK
+        through its own server channel.</li>
+      <li>Collaborator accepts the invitation server-side as today. In their UI, the workspace
+        appears with the same "needs key" prompt as §8.2. They paste the WK they received
+        out-of-band.</li>
     </ol>
 
     <div class="warn">
-      <strong>Locked-but-syncing state.</strong> The session can be valid before the vault is
-      unlocked (or if the user dismisses the passphrase prompt). PowerSync will happily download
-      E2EE blocks during that window. The data layer must surface a "locked" placeholder for those
-      rows rather than throwing on decrypt &mdash; otherwise a user who closes the prompt sees a
-      cascade of errors.
+      <strong>Sharing is the user's responsibility.</strong> The app does not provide an in-app
+      "send key to Bob" button on purpose. Any in-app key delivery routes through the server,
+      which would re-introduce the MITM concern that motivated this design. The "annoying" extra
+      step (using Signal / a password manager / a piece of paper) is the security property.
     </div>
-
-    <h3>8.3 Create an encrypted workspace</h3>
-    <ol>
-      <li>If no <code>user_vault</code>, run §8.1 inline.</li>
-      <li>Generate a random CEK.</li>
-      <li>Wrap CEK with the creator's UVK.</li>
-      <li>Call <code>create_workspace(name, encryption_mode='e2ee', wrapped_cek=&hellip;)</code>.
-        The RPC inserts the workspace, the owner's membership row, and the wrapped CEK atomically.</li>
-    </ol>
-
-    <h3>8.4 Invite a user to an encrypted workspace</h3>
-
-    <p>
-      The CEK reaches a new member through <em>two</em> different envelopes back-to-back. The
-      in-transit envelope (asymmetric, wrapped with the invitee's public key) lets the inviter
-      deliver the CEK without the invitee being online. The invitee rewraps it into the at-rest
-      envelope (symmetric, wrapped with their own UVK) and passes the result <em>as a parameter</em>
-      to <code>accept_invitation</code>. Without the rewrap a second device would have no way to
-      recover the CEK; without doing it before the RPC call the cross-table trigger that requires
-      <code>workspace_members.wrapped_cek</code> for E2EE memberships would reject the insert,
-      since the membership row is created atomically inside <code>accept_invitation</code>.
-    </p>
-
-    <p>
-      Three RPC signatures change. <code>invite_member_by_email</code> grows a return shape so the
-      inviter learns the invitee's public key without a separate lookup (which would otherwise be
-      an email-enumeration oracle &mdash; see the RLS note in §7). <code>list_my_pending_invitations</code>
-      surfaces the transit envelope to the invitee. <code>accept_invitation</code> accepts the
-      re-wrapped at-rest envelope atomically with the membership insert.
-    </p>
-
-    <pre><code>-- Inviter learns the invitee's public key (if vaulted) in the same call
--- that creates the invitation. NULL pubkey ⇒ invitee has no vault; the
--- client surfaces "they need to set up a vault first" and either blocks
--- (v1) or queues a defer-wrap (later).
-CREATE OR REPLACE FUNCTION invite_member_by_email(
-    p_workspace_id text,
-    p_email        text,
-    p_role         text
-  ) RETURNS TABLE(
-    invitation_id        text,
-    invitee_public_key   bytea   -- new; NULL when no vault for that email
-  ) ...;
-
--- After invite_member_by_email returns a non-NULL public_key, the inviter
--- wraps the CEK with it and attaches the transit envelope to the same
--- invitation row. Caller must be the inviter on that invitation.
-CREATE OR REPLACE FUNCTION attach_invite_envelope(
-    p_invitation_id           text,
-    p_wrapped_cek_for_invitee bytea
-  ) RETURNS void ...;
-
--- Surface the transit envelope so the invitee's client can read it.
-CREATE OR REPLACE FUNCTION list_my_pending_invitations()
-  RETURNS TABLE(
-    id text,
-    workspace_id text,
-    workspace_name text,
-    email text,
-    role text,
-    invited_by_user_id text,
-    create_time bigint,
-    wrapped_cek_for_invitee bytea   -- new; NULL for plaintext-workspace invites
-  ) ...;
-
--- Accept the (re-wrapped) at-rest envelope atomically with membership insert.
-CREATE OR REPLACE FUNCTION accept_invitation(
-    p_invitation_id text,
-    p_wrapped_cek   bytea DEFAULT NULL   -- required iff target workspace is E2EE
-  ) RETURNS workspace_members ...;</code></pre>
-
-    <p>
-      <code>p_wrapped_cek</code> defaults to NULL so plaintext-workspace invites still call the RPC
-      with one argument. The cross-table trigger on <code>workspace_members</code> enforces the
-      "required iff E2EE" half &mdash; a NULL parameter on an E2EE invitation aborts the insert
-      with a clear error rather than silently breaking the unlock path later. Splitting
-      <code>invite_member_by_email</code> (creates row + reveals pubkey) from
-      <code>attach_invite_envelope</code> (attaches the wrap) keeps the second step optional &mdash;
-      a plaintext-workspace invite just doesn't call it.
-    </p>
-
-    <div class="warn">
-      <strong>Trust-on-server caveat (v1).</strong> Alice receives Bob's public key from the
-      server in <code>invite_member_by_email</code>'s response, and wraps the CEK with whatever she
-      gets back. A malicious server can substitute its own X25519 public key here and read every
-      block in the resulting shared workspace. v1 lives with this against the (re-scoped) passive
-      threat model in §2; v2 closes it with TOFU + safety-number verification, or a key-transparency
-      log. Flagged in §13 and §14.
-    </div>
-
-    <figure>
-      <div class="diagram">
-        <svg viewBox="0 0 720 440" xmlns="http://www.w3.org/2000/svg" aria-labelledby="invite-title">
-          <title id="invite-title">Invite flow that delivers a CEK without server knowledge of it</title>
-          <style>
-            .col { fill: var(--fg); font: 13px ui-sans-serif, system-ui, sans-serif; text-anchor: middle; font-weight: 600; }
-            .arr { stroke: var(--fg); stroke-width: 1.2; fill: none; }
-            .lbl { fill: var(--fg); font: 12px ui-sans-serif, system-ui, sans-serif; }
-            .note { fill: var(--muted); font: 11px ui-sans-serif, system-ui, sans-serif; font-style: italic; }
-            .axis { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 3; }
-          </style>
-          <defs>
-            <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-              <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
-            </marker>
-          </defs>
-
-          <text class="col" x="110" y="24">Alice (inviter)</text>
-          <text class="col" x="360" y="24">Server</text>
-          <text class="col" x="610" y="24">Bob (invitee)</text>
-
-          <line class="axis" x1="110" y1="36" x2="110" y2="420"/>
-          <line class="axis" x1="360" y1="36" x2="360" y2="420"/>
-          <line class="axis" x1="610" y1="36" x2="610" y2="420"/>
-
-          <line class="arr" x1="610" y1="68" x2="370" y2="68" marker-end="url(#arr2)" color="var(--fg)"/>
-          <text class="lbl" x="490" y="62" text-anchor="middle">publish public key (vault setup)</text>
-
-          <line class="arr" x1="110" y1="110" x2="350" y2="110" marker-end="url(#arr2)" color="var(--fg)"/>
-          <text class="lbl" x="230" y="104" text-anchor="middle">invite_member_by_email(ws, email, role)</text>
-
-          <line class="arr" x1="360" y1="138" x2="120" y2="138" marker-end="url(#arr2)" color="var(--fg)"/>
-          <text class="lbl" x="240" y="132" text-anchor="middle">invitation_id + Bob's public_key</text>
-
-          <rect x="30" y="160" width="160" height="42" fill="var(--accent-soft)" stroke="var(--accent)" rx="4"/>
-          <text class="note" x="110" y="178" text-anchor="middle">wrap CEK with Bob's</text>
-          <text class="note" x="110" y="192" text-anchor="middle">public key (transit env.)</text>
-
-          <line class="arr" x1="110" y1="222" x2="350" y2="222" marker-end="url(#arr2)" color="var(--fg)"/>
-          <text class="lbl" x="230" y="216" text-anchor="middle">attach_invite_envelope(id, wrapped_cek)</text>
-
-          <line class="arr" x1="610" y1="262" x2="370" y2="262" marker-end="url(#arr2)" color="var(--fg)"/>
-          <text class="lbl" x="490" y="256" text-anchor="middle">list_pending_invitations()</text>
-
-          <line class="arr" x1="360" y1="290" x2="600" y2="290" marker-end="url(#arr2)" color="var(--fg)"/>
-          <text class="lbl" x="480" y="284" text-anchor="middle">invitation w/ wrapped_cek_for_invitee</text>
-
-          <rect x="530" y="308" width="160" height="44" fill="var(--accent-soft)" stroke="var(--accent)" rx="4"/>
-          <text class="note" x="610" y="326" text-anchor="middle">unwrap with private key</text>
-          <text class="note" x="610" y="342" text-anchor="middle">re-wrap with UVK</text>
-
-          <line class="arr" x1="610" y1="372" x2="370" y2="372" marker-end="url(#arr2)" color="var(--fg)"/>
-          <text class="lbl" x="490" y="362" text-anchor="middle">accept_invitation(id,</text>
-          <text class="lbl" x="490" y="376" text-anchor="middle">wrapped_cek_uvk_wrapped)</text>
-
-          <text class="note" x="360" y="410" text-anchor="middle">Server atomically inserts workspace_members with wrapped_cek set, and deletes the invitation row.</text>
-        </svg>
-      </div>
-      <figcaption>Figure 2 &mdash; Invite flow with the envelope swap. The server brokers metadata but never holds an unwrapped CEK; the membership row settles on the same symmetric (UVK-wrapped) shape used by everyone else.</figcaption>
-    </figure>
-
-    <p>
-      The awkward case is inviting someone who hasn't signed up yet (no public key on file). Two
-      defensible options:
-    </p>
-    <ul>
-      <li><strong>Block</strong>: refuse E2EE-workspace invites to users without a vault. Surface
-        "they need to sign up and set a vault first" UX. Simplest, slightly worse UX.</li>
-      <li><strong>Defer-wrap</strong>: store the invite pending; when the invitee signs up and
-        publishes a key, queue a notification to the inviter; next time the inviter is online,
-        wrap the CEK and complete the invitation. Better UX, more moving parts, requires a "complete
-        pending invites" client step.</li>
-    </ul>
-
-    <p>We can ship "block" in v1 and "defer-wrap" later without schema changes.</p>
 
     <h2 id="seam">9. Sync boundary &amp; per-column encryption</h2>
 
     <p>
-      The encrypt/decrypt seam lives in a new module &mdash; call it <code>src/sync/transform.ts</code>
-      &mdash; that sits between the app domain and the PowerSync CRUD edge. It is the single named
-      place where "what crosses the wire" gets transformed.
+      The encrypt/decrypt seam lives in a new module &mdash; call it
+      <code>src/sync/transform.ts</code> &mdash; that sits between the app domain and the
+      PowerSync CRUD edge. It is the single named place where "what crosses the wire" gets
+      transformed.
     </p>
 
     <figure>
@@ -798,23 +559,32 @@ CREATE OR REPLACE FUNCTION accept_invitation(
           <text class="lblSm" x="305" y="170">per-workspace mode lookup</text>
           <text class="lblSm" x="305" y="186">encrypt / decrypt columns</text>
           <text class="lblSm" x="305" y="202">payload schema-version migration</text>
-          <text class="lblSm" x="305" y="218">(future: compression, redaction, signing)</text>
+          <text class="lblSm" x="305" y="218">getCek(workspaceId): pluggable WK lookup</text>
 
           <line class="link" x1="305" y1="130" x2="305" y2="155" marker-end="url(#arr3)"/>
         </svg>
       </div>
-      <figcaption>Figure 3 &mdash; The sync boundary is one named module, not a behavior scattered across <code>repo.ts</code> and <code>services/powersync.ts</code>.</figcaption>
+      <figcaption>Figure 1 &mdash; The sync boundary is one named module, not behavior scattered across <code>repo.ts</code> and <code>services/powersync.ts</code>.</figcaption>
     </figure>
 
     <p>
-      The seam owns two pure functions: <code>encodeForWire(block, mode, cek)</code> and
-      <code>decodeFromWire(row, mode, cek)</code>. They start as identity functions and grow
+      The seam owns two pure functions: <code>encodeForWire(block, mode, getCek)</code> and
+      <code>decodeFromWire(row, mode, getCek)</code>. They start as identity functions and grow
       transforms over time. Today: per-workspace per-column AES-GCM. Later: schema-version
       migration of payload shapes, redaction for share-link previews, optional compression if data
       sizes ever justify it.
     </p>
 
-    <h3>What "per-column" actually means on the wire</h3>
+    <div class="decision">
+      <strong>Pluggable key lookup.</strong> The seam takes <code>getCek(workspaceId)</code> as a
+      callback rather than reading any global. In the simple model, the implementation is
+      "IndexedDB lookup at <code>(user_id, workspace_id)</code>." If the hierarchy is added later
+      (§13), the implementation becomes "look up in the in-memory unwrapped-CEK map populated at
+      vault unlock." Same call site, two implementations. This is the single most important seam
+      to get right for keeping the hierarchy migration cheap.
+    </div>
+
+    <h3 id="cols">9.1 What "per-column" actually means on the wire</h3>
 
     <figure>
       <div class="diagram">
@@ -853,12 +623,12 @@ CREATE OR REPLACE FUNCTION accept_invitation(
           <text class="caption" x="380" y="268">AAD binds each ciphertext to its block, workspace, column, and schema version.</text>
         </svg>
       </div>
-      <figcaption>Figure 4 &mdash; Per-column encryption keeps PATCH granularity: editing only <code>content</code> still PATCHes only that column.</figcaption>
+      <figcaption>Figure 2 &mdash; Per-column encryption keeps PATCH granularity: editing only <code>content</code> still PATCHes only that column.</figcaption>
     </figure>
 
     <p>
-      Each of the three content columns is sealed independently with its own random nonce. The AAD
-      carries the column name so the server can't silently move ciphertext from one column to
+      Each of the three content columns is sealed independently with its own random nonce. The
+      AAD carries the column name so the server can't silently move ciphertext from one column to
       another and have it still decrypt as valid.
     </p>
 
@@ -872,8 +642,8 @@ CREATE OR REPLACE FUNCTION accept_invitation(
 
     <ul>
       <li><code>blocks_row_event_insert</code>/<code>_update</code> call
-        <code>json(NEW.properties_json)</code> and <code>json(NEW.references_json)</code> to snapshot
-        the row into the local edit log.</li>
+        <code>json(NEW.properties_json)</code> and <code>json(NEW.references_json)</code> to
+        snapshot the row into the local edit log.</li>
       <li><code>blocks_alias_insert</code>/<code>_update</code> walk
         <code>json_each(NEW.properties_json, '$.alias')</code> to maintain the
         <code>block_aliases</code> index.</li>
@@ -892,42 +662,32 @@ CREATE OR REPLACE FUNCTION accept_invitation(
       land without addressing this.
     </p>
 
-    <p>
-      There are three paths. They aren't mutually exclusive; #1 and #2 compose.
-    </p>
-
     <ol>
       <li>
         <strong>Adopt JSONB first (recommended).</strong> The follow-up "JSONB across the data
         layer" (<code>docs/follow-ups.md</code>) migrates <code>properties_json</code> and
         <code>references_json</code> from <code>text</code> to <code>jsonb</code> end-to-end. With
         JSONB columns, the natural shape for ciphertext is a JSON <em>string scalar</em> &mdash;
-        <code>"enc:v1:&hellip;"</code> &mdash; which is structurally valid JSONB. <code>json()</code>
-        returns the string, <code>json_each(value, '$.alias')</code> gracefully returns zero rows
-        on a non-object value, and the alias/types/row-event triggers become a no-op on encrypted
-        rows without any explicit branching. This is the single change that removes the most
-        friction.
+        <code>"enc:v1:&hellip;"</code> &mdash; which is structurally valid JSONB.
+        <code>json()</code> returns the string, <code>json_each(value, '$.alias')</code>
+        gracefully returns zero rows on a non-object value, and the alias/types/row-event triggers
+        become a no-op on encrypted rows without any explicit branching.
       </li>
       <li>
-        <strong>Mode-gate the content-bearing triggers that don't get JSONB's free pass.</strong>
-        The FTS trigger reads <code>content</code> (plain text, not JSON), so JSONB doesn't help
-        it; without a gate it would index ciphertext trigrams that can never match user queries
-        (useless, mildly bloated). Add a <code>WHEN</code> clause that consults
-        <code>workspaces.encryption_mode</code> (or equivalently, sniffs the
-        <code>enc:v1:</code> prefix) and skips the index maintenance for encrypted rows. Same gate
-        applies to the alias/types triggers if we don't adopt #1 &mdash; they'd still need an
-        explicit branch to avoid touching <code>json_each</code> on a string.
+        <strong>Mode-gate the FTS trigger.</strong> The FTS trigger reads <code>content</code>
+        (plain text, not JSON), so JSONB doesn't help; without a gate it would index ciphertext
+        trigrams that can never match user queries (useless, mildly bloated). Add a
+        <code>WHEN</code> clause that consults <code>workspaces.encryption_mode</code> (or sniffs
+        the <code>enc:v1:</code> prefix) and skips index maintenance for encrypted rows.
       </li>
       <li>
-        <strong>Move encryption to a download-decrypt boundary instead, keeping local plaintext.</strong>
-        This is the "Layout B" alternative. The local DB stores plaintext for all workspaces;
-        encryption happens only at PowerSync's upload/download seam. Local triggers and indexes
-        all work normally, including for E2EE workspaces. The cost is that PowerSync doesn't
-        expose a per-row download transform hook, so this requires either a custom client
-        connector or a buffer-table indirection &mdash; meaningfully more invasive than #1 + #2.
-        Threat-model-A doesn't require it (the OPFS database is already per-user, and local at-rest
-        protection is the OS disk encryption's job), so we'd only take this path if losing the
-        derived local indexes for E2EE workspaces turns out to be unacceptable for the product.
+        <strong>Layout B alternative: keep local plaintext, encrypt only at the download/upload
+        boundary.</strong> The local DB stores plaintext for all workspaces; local triggers and
+        indexes all work normally, including for E2EE workspaces. The cost is that PowerSync
+        doesn't expose a per-row download transform hook, so this requires either a custom client
+        connector or a buffer-table indirection &mdash; meaningfully more invasive. Only take this
+        path if losing the derived local indexes for E2EE workspaces turns out to be unacceptable
+        for the product.
       </li>
     </ol>
 
@@ -935,18 +695,16 @@ CREATE OR REPLACE FUNCTION accept_invitation(
       <strong>Working decision.</strong> Path #1 + #2 (Layout A). JSONB migration is a strong
       prerequisite &mdash; not strictly required, but doing E2EE without it means hand-gating ~7
       triggers and accepting that any future trigger over those columns is one author away from
-      a footgun. The FTS gate remains needed either way.
+      a footgun.
     </div>
 
     <p>
       Consequence for E2EE workspaces under Layout A: the trigger-maintained local indexes
       (<code>block_aliases</code>, <code>block_types</code>, <code>blocks_fts</code>) silently
-      don't get populated for encrypted rows. Features that rely on them &mdash; in-workspace alias
-      autocomplete, type-filtered queries, local FTS &mdash; therefore don't work for E2EE
-      workspaces unless we layer on a separate "decrypt-then-populate" pass at vault unlock time.
-      That pass is straightforward to add later (read encrypted rows, decrypt in memory, write into
-      the side tables, never touch <code>blocks</code> itself), but it's not free and it's the
-      reason to flag the feature loss explicitly in §10 and §14.
+      don't get populated for encrypted rows. Features that rely on them &mdash; in-workspace
+      alias autocomplete, type-filtered queries, local FTS &mdash; therefore don't work for E2EE
+      workspaces unless we layer on a separate "decrypt-then-populate" pass triggered when the WK
+      lands in IndexedDB.
     </p>
 
     <h2 id="duality">10. Mode-by-mode behavior</h2>
@@ -973,14 +731,14 @@ CREATE OR REPLACE FUNCTION accept_invitation(
         <td>Unchanged.</td>
       </tr>
       <tr>
+        <td>Invite RPC chain</td>
+        <td>Unchanged.</td>
+        <td>Unchanged. Permissions flow server-side; the WK flows out-of-band.</td>
+      </tr>
+      <tr>
         <td><code>blocks_history</code> (server trigger)</td>
         <td>Server-computed diffs, human-readable, queryable.</td>
         <td>Records ciphertext diffs. Still useful for PITR / "this block changed at this time" but unreadable server-side. Acceptable degradation.</td>
-      </tr>
-      <tr>
-        <td>Local derived indexes (<code>block_aliases</code>, <code>block_types</code>, <code>blocks_fts</code>)</td>
-        <td>Maintained automatically by triggers as today.</td>
-        <td>Triggers are JSONB-tolerant and FTS-gated (see §9.2), so writes succeed but the indexes are empty for encrypted rows. Features depending on them (alias autocomplete, type-filtered queries, local FTS) don't work for E2EE workspaces until we add a decrypt-then-populate pass.</td>
       </tr>
       <tr>
         <td>Future server-side features (search, AI, summaries, embeddings, share-link rendering)</td>
@@ -988,9 +746,19 @@ CREATE OR REPLACE FUNCTION accept_invitation(
         <td>Not available. The product surfaces this clearly when the user opts in.</td>
       </tr>
       <tr>
+        <td>Local derived indexes (<code>block_aliases</code>, <code>block_types</code>, <code>blocks_fts</code>)</td>
+        <td>Maintained automatically by triggers as today.</td>
+        <td>Triggers are JSONB-tolerant and FTS-gated (see §9.2), so writes succeed but the indexes are empty for encrypted rows. Features depending on them don't work until a decrypt-then-populate pass is added.</td>
+      </tr>
+      <tr>
         <td>Sharing / collaboration</td>
         <td>Invite by email; server-mediated.</td>
-        <td>Invite by email plus invite-time CEK wrap (Figure 2).</td>
+        <td>Invite by email (permissions) + out-of-band WK transfer (key material). The user picks the channel.</td>
+      </tr>
+      <tr>
+        <td>Recovery if key lost</td>
+        <td>n/a</td>
+        <td>None &mdash; back up the WK at create time, or it's gone.</td>
       </tr>
       <tr>
         <td>Workspace mode change</td>
@@ -1008,64 +776,37 @@ CREATE OR REPLACE FUNCTION accept_invitation(
 
     <h3>11.1 Establish the sync boundary module (do now)</h3>
     <p>
-      Introduce <code>src/sync/transform.ts</code> as identity <code>encode</code>/<code>decode</code>.
-      Route all PowerSync upload mutations and all reads from local SQLite through it. Pure
-      no-op refactor. ~50 LOC of plumbing. After this lands, the E2EE PR is a focused crypto change,
-      not a cross-cutting refactor.
+      Introduce <code>src/sync/transform.ts</code> as identity
+      <code>encodeForWire</code>/<code>decodeFromWire</code>, with the
+      <code>getCek(workspaceId)</code> pluggable callback signature in place from day one. Route
+      all PowerSync upload mutations and all reads from local SQLite through it. Pure no-op
+      refactor today; the eventual E2EE PR is a focused crypto change rather than a cross-cutting
+      refactor.
     </p>
 
-    <h3>11.2 Decouple auth session from vault unlock (do now)</h3>
-    <p>
-      Introduce <code>useAuthSession()</code> and <code>useUnlockedVault()</code> hooks even
-      before E2EE. Vault is always trivially "unlocked" today. App code that touches content
-      depends on the unlocked-vault hook. Makes the future passphrase prompt, recovery code, or
-      WebAuthn-PRF unlock all drop-in replacements rather than refactors.
-    </p>
-
-    <h3>11.3 Pre-provision the vault schema (do now)</h3>
-    <p>
-      Add the <code>user_vault</code> table now. Rows aren't created at signup &mdash; the
-      schema's non-null <code>kdf_params</code>/<code>wrapped_uvk</code>/<code>wrapped_private_key</code>
-      all depend on the user's passphrase, which we deliberately don't ask for from plaintext-only
-      users. The row gets inserted during §8.1's first-time vault setup, the first time a user
-      either creates an E2EE workspace or accepts an invite to one. Pre-provisioning just the
-      table (empty until the first opt-in) means the eventual E2EE work doesn't have to coordinate
-      a schema migration with the crypto change.
-    </p>
-    <p>
-      <em>Earlier draft generated a keypair at signup so signed-write-style features could be
-      added later without a backfill problem. That doesn't actually work against the proposed
-      schema &mdash; the private key needs a wrapping key, which needs a passphrase, which we
-      don't have at signup. A future signed-write feature would need its own (lighter) keypair
-      table that doesn't require passphrase wrapping, designed when there's a concrete user.</em>
-    </p>
-
-    <h3>11.4 Drift guard: server-side content features must filter on mode (codify now)</h3>
+    <h3>11.2 Drift guard: server-side content features must filter on mode (codify now)</h3>
     <p>
       A short repo-level note: any new server-side feature that reads <code>blocks.content</code>,
       <code>properties_json</code>, or <code>references_json</code> must include
       <code>workspaces.encryption_mode = 'none'</code> in its filter, or explicitly document a
-      decision to skip E2EE workspaces. The repo already has a drift-guard pattern from prior design
-      docs; this slots in.
+      decision to skip E2EE workspaces. The repo already has a drift-guard pattern from prior
+      design docs; this slots in.
     </p>
 
-    <h3>11.5 Land the JSONB migration before the encryption work</h3>
+    <h3>11.3 Land the JSONB migration before the encryption work</h3>
     <p>
       The follow-up "JSONB across the data layer" already has independent motivation (perf wins
       across ~29 <code>json_extract</code>/<code>json_each</code> callsites, including the hot
       alias/types triggers). Doing it before the encryption work is what makes the per-column
       ciphertext shape in §9 actually tractable: a ciphertext-as-JSON-string-scalar value is a
       valid JSONB value, so the existing triggers naturally no-op on encrypted rows instead of
-      aborting. Without this prep, the E2EE work has to hand-gate every JSON-bearing trigger and
-      live with the fragility that any future trigger adds another footgun. See §9.2.
+      aborting. See §9.2.
     </p>
 
-    <h3>11.6 Discipline rules surfaced from review iteration</h3>
+    <h3>11.4 Discipline rules surfaced from review iteration</h3>
     <p>
-      The review cycle on this sketch produced repeated findings that fell into a small number of
-      shapes. Each pattern below has a one-liner rule worth carrying into future cross-cutting
-      designs &mdash; encryption-specific only incidentally. They're cheap to follow if named, easy
-      to miss otherwise.
+      Two patterns are worth carrying into future cross-cutting designs &mdash;
+      encryption-specific only incidentally.
     </p>
 
     <ul>
@@ -1074,40 +815,15 @@ CREATE OR REPLACE FUNCTION accept_invitation(
         <code>sync-config.yaml</code>, every RPC's <code>RETURNS TABLE</code> projection, every
         RPC's parameter list (when callers need to supply the new field), TS row interfaces and
         parse functions, and any <code>clientSchema.ts</code> triggers that reference the column.
-        Three review findings came from missing one of these layers. A separate task is open
+        A separate task is open
         (<em>"Investigate schema-generator extensions"</em>) to extend the existing generator
         coverage so this becomes structural rather than discipline.</li>
 
-      <li><strong>Cross-table NOT NULL invariants force atomic RPC parameters.</strong> When a
-        constraint like "<code>workspace_members.wrapped_cek</code> is required iff the workspace
-        is E2EE" is enforced by a trigger (because Postgres can't express it as a single-table
-        CHECK), the RPC that creates the dependent row must accept the required value as a
-        parameter and write it atomically. A "create now, fill in later" two-step flow looks
-        reasonable in the design but trips the trigger at INSERT time. Rule: every cross-table
-        NOT NULL becomes a required RPC parameter, not a follow-up write.</li>
-
-      <li><strong>Lifecycle moments are first-class and not bundleable.</strong> "Signup" and
-        "first vault setup" and "first E2EE workspace" are different events with different
-        preconditions. Bundling them &mdash; e.g. "generate a keypair at signup" when the schema
-        requires a passphrase that doesn't exist yet &mdash; produces impossible flows. Name each
-        moment, its preconditions, and the table rows that come into existence at it. Do not
-        write "at signup" or "at first launch" without specifying which user lifecycle event you
-        actually mean.</li>
-
-      <li><strong>RPC-as-oracle check.</strong> Any new RPC that takes an external identifier
-        (email, phone, username) and returns user-specific data is a potential account-existence
-        oracle. Before adding one, ask: <em>if I pass in an identifier that does not belong to me,
-        what does my ability to call this tell me about that identifier?</em> If the answer is
-        non-trivial, gate the call behind an existing relationship (membership, invitation the
-        caller created, etc.) rather than letting any authenticated user probe. Folds naturally
-        into §11.4's drift-guard pattern.</li>
-
-      <li><strong>Server-mediated key delivery is trust-on-server unless verified.</strong>
-        Anything where the client receives identity material from the server and uses it to
-        encrypt for that identity (the §8.4 invite flow) inherits the server's trustworthiness for
-        that exchange. v1 lives with this against a passive threat model; v2 needs TOFU + safety
-        numbers, a key-transparency log, or out-of-band verification. Carry the assumption
-        explicitly &mdash; don't claim active-attacker protection that isn't there.</li>
+      <li><strong>Lifecycle moments are first-class and not bundleable.</strong> Even in the
+        simple model: "user creates first encrypted workspace" and "user pastes WK on a new
+        device" are distinct moments with distinct preconditions. Name each, its preconditions,
+        and the state that comes into existence at it. Do not write "at signup" or "at first
+        launch" without specifying which event you actually mean.</li>
     </ul>
 
     <h2 id="rejected">12. Considered &amp; rejected</h2>
@@ -1120,13 +836,44 @@ CREATE OR REPLACE FUNCTION accept_invitation(
       </p>
       <ul>
         <li><strong>Sync granularity.</strong> PowerSync's CRUD upload PATCHes individual columns.
-          Collapsing to one column makes every edit rewrite the entire payload. For blocks with
-          large <code>properties_json</code> and small text edits to <code>content</code>, this is
-          a real regression.</li>
+          Collapsing to one column makes every edit rewrite the entire payload.</li>
         <li><strong>Server-side features for plaintext workspaces.</strong> The whole point of
           opt-in is that unencrypted workspaces stay first-class. Making content opaque for
-          everyone forecloses future server-side search, AI, indexed properties, etc. &mdash; even
-          for users who never opted into E2EE.</li>
+          everyone forecloses future server-side search, AI, indexed properties, etc. &mdash;
+          even for users who never opted into E2EE.</li>
+      </ul>
+    </div>
+
+    <div class="reject">
+      <strong>Rejected: passphrase-derived key hierarchy for v1.</strong>
+      <p>
+        A passphrase &rarr; MK &rarr; UVK &rarr; per-workspace CEK hierarchy (with per-user X25519
+        keypair for server-mediated invite delivery) is what most multi-user E2EE products ship.
+        The earlier iteration of this sketch went deep on that design. It buys: one passphrase for
+        N workspaces, multi-device unlock without re-pasting per workspace, server-brokered key
+        delivery during invite, passphrase rotation without re-encrypting blocks, and CEK rotation
+        for member removal.
+      </p>
+      <p>
+        Not the right v1 for this product:
+      </p>
+      <ul>
+        <li><strong>Over-budgeted.</strong> For a personal-leaning knowledge tool, N is usually
+          1&ndash;5, not 50. A password manager covers the multi-key UX entirely.</li>
+        <li><strong>The headline sharing benefit isn't actually delivered in v1.</strong>
+          Server-brokered key delivery requires the server to be trusted for that exchange. Closing
+          the active-attacker gap (a malicious server substituting its own pubkey) needs TOFU +
+          safety numbers or a key-transparency log &mdash; real engineering and UX. Without that,
+          the hierarchy's "no out-of-band" advantage is illusory; the simple model's deliberate
+          out-of-band step is more honest.</li>
+        <li><strong>Adds a class of bugs the simple model doesn't have.</strong> Iterating on the
+          hierarchy sketch surfaced findings across pubkey distribution, email enumeration,
+          envelope confusion, cross-table NOT NULL invariants, RPC signature widening, and
+          lifecycle bundling. The simple model has none of these because there is no per-user
+          identity material on the server.</li>
+        <li><strong>Strictly upgradable later</strong> (see §13). The encryption shape is
+          identical; the hierarchy just adds a wrapping layer on top of the WK. Nothing about the
+          simple model forecloses it.</li>
       </ul>
     </div>
 
@@ -1134,11 +881,11 @@ CREATE OR REPLACE FUNCTION accept_invitation(
       <strong>Rejected: application-layer compression at the sync boundary.</strong>
       <p>
         HTTP transport already does gzip/br for any response over ~1KB. Postgres TOAST already
-        compresses large TEXT/JSONB on disk. Per-row gzip on typical block sizes
-        (often well under 1KB) frequently <em>grows</em> the payload due to framing overhead.
-        Application-layer compression only starts to win with shared dictionaries trained on the
-        corpus, which is real engineering effort for marginal gains. The sync boundary keeps the
-        option open; we just don't exercise it.
+        compresses large TEXT/JSONB on disk. Per-row gzip on typical block sizes (often well
+        under 1KB) frequently <em>grows</em> the payload due to framing overhead. Application-layer
+        compression only starts to win with shared dictionaries trained on the corpus, which is
+        real engineering effort for marginal gains. The sync boundary keeps the option open; we
+        just don't exercise it.
       </p>
     </div>
 
@@ -1156,93 +903,122 @@ CREATE OR REPLACE FUNCTION accept_invitation(
     <div class="reject">
       <strong>Rejected: full at-rest encryption of the local OPFS SQLite.</strong>
       <p>
-        Out of scope (not part of threat model A). OPFS already gives per-origin and per-user
-        isolation via <code>kmp-v6-&lt;user_id&gt;.db</code>. Device-level protection is OS disk
-        encryption's job. We can revisit if a device-theft threat model is later added.
+        Out of scope. OPFS already gives per-origin and per-user isolation via
+        <code>kmp-v6-&lt;user_id&gt;.db</code>. Device-level protection is OS disk encryption's
+        job. We can revisit if a device-theft threat model is later added.
       </p>
     </div>
 
-    <h2 id="open">13. Open questions</h2>
+    <h2 id="hierarchy">13. Adding the hierarchy later (if needed)</h2>
+
+    <p>
+      The simple model and the hierarchy share the entire encryption layer. The hierarchy is
+      strictly an additive layer for storing WKs behind a passphrase and (optionally) delivering
+      them via asymmetric crypto. Nothing about the simple model forecloses the upgrade.
+    </p>
+
+    <p>Concrete migration shape, when and if usage justifies it:</p>
 
     <ol>
-      <li><strong>Recovery codes in v1?</strong> Forgotten passphrase = lost E2EE data unless we
-        ship a recovery code (a high-entropy string, printed at vault setup, that wraps a copy of
-        the UVK). Recovery codes weaken security mildly (the user must store them somewhere) and
-        introduce real UX complexity. Decision deferred; default is "no recovery in v1, document
-        the consequence loudly at setup."</li>
+      <li><strong>Add the wrapping schema.</strong>
+        <code>ALTER TABLE workspace_members ADD COLUMN wrapped_cek BYTEA</code>;
+        <code>CREATE TABLE user_vault (...)</code> with kdf_params, wrapped_uvk, public_key,
+        wrapped_private_key. Both nullable / empty until opt-in.</li>
+      <li><strong>Per-user opt-in flow.</strong> User enters a new passphrase &rarr; derive MK
+        via Argon2id &rarr; generate UVK &rarr; generate X25519 keypair &rarr; wrap UVK with MK
+        &rarr; wrap private key with UVK &rarr; insert their <code>user_vault</code> row.</li>
+      <li><strong>Wrap existing WKs.</strong> For every WK already in the user's device IndexedDB,
+        wrap it with the new UVK and write to <code>workspace_members.wrapped_cek</code>. Local
+        paste flow remains as a backup unlock path.</li>
+      <li><strong>Future workspaces.</strong> The create flow now also wraps the new WK with UVK
+        and stores it. Sharing can use the pubkey-mediated handoff (with whatever TOFU /
+        key-transparency story the hierarchy migration brings).</li>
+      <li><strong>New device flow.</strong> Sign in &rarr; enter passphrase &rarr; unwrap UVK
+        &rarr; unwrap all <code>wrapped_cek</code> values &rarr; no per-workspace paste needed.
+        Falls back to per-workspace paste for workspaces where the user opted out (or for
+        workspaces predating their hierarchy adoption).</li>
+    </ol>
 
-      <li><strong>Invite-before-vault policy.</strong> Block vs. defer-wrap (§8.4). I'd ship block
-        and revisit if it bites real users.</li>
+    <p>
+      <strong>What's a one-way door:</strong> almost nothing. The encryption format is preserved
+      (the AAD includes <code>schema_version</code> for future format revs); the WK is structurally
+      identical to the hierarchy's CEK; collaborators who already received WKs out-of-band
+      continue to hold them &mdash; that knowledge persists, but it's the same threat shape as
+      any shared key.
+    </p>
 
-      <li><strong>Argon2id vs. PBKDF2.</strong> Argon2id is the right primitive but needs a
-        dependency (e.g. <code>argon2-browser</code> or <code>libsodium.js</code>, ~150KB gzipped).
-        PBKDF2-SHA256 at 600k iterations is in WebCrypto natively, no dep, but weaker against
-        GPU/ASIC attackers. We're protecting one-user-at-a-time data, not a credential dump, so
-        either is defensible.</li>
+    <p>
+      <strong>Design seams to preserve in v1 for cheap upgrade:</strong>
+    </p>
+    <ul>
+      <li><code>schema_version</code> in the AAD (already in §6).</li>
+      <li>The sync boundary's <code>getCek(workspaceId)</code> callback signature (§9). Simple
+        model implements it as an IndexedDB lookup; hierarchy implements it as an in-memory
+        unwrapped-CEK-map read. Same call site, two implementations.</li>
+      <li>No "user has a passphrase" assumption baked anywhere upstream of the sync boundary. The
+        simple model has no user-level secrets; the hierarchy adds them. Keep the upstream layer
+        ignorant.</li>
+      <li>Don't repurpose <code>workspace_members</code> columns for crypto things. The
+        <code>wrapped_cek</code> column will land cleanly when needed.</li>
+    </ul>
 
-      <li><strong>UVK rotation.</strong> Should users be able to change their passphrase without
-        re-encrypting everything? Yes &mdash; that's exactly what the UVK-wrapping layer is for:
-        rotate MK by re-wrapping UVK. No content re-encryption needed. Worth confirming this is in
-        scope for v1.</li>
+    <h2 id="open">14. Open questions</h2>
 
-      <li><strong>Membership removal.</strong> When a member is removed from an E2EE workspace, the
-        CEK is no longer secret from them (they cached it). Strict guarantee requires CEK rotation,
-        which means re-encrypting every block. Mark as a known limitation for v1; add CEK rotation
-        as a v2 capability with a "rekey workspace" client-side job.</li>
-
-      <li><strong>Are settings or user preferences in scope?</strong> Survey didn't surface a
-        settings table. If preferences are stored server-side and contain user content, they may
-        also need encryption &mdash; or be explicitly carved out as metadata.</li>
+    <ol>
+      <li><strong>WK rotation.</strong> If a workspace key is compromised (a collaborator
+        exfiltrated it, or it leaked via a backup), the owner needs to rotate. Mechanically: client
+        generates a new WK, decrypts every block with old WK and re-encrypts with new WK, uploads;
+        distributes the new WK to current collaborators out-of-band. The "re-encrypt all blocks"
+        cost is real for large workspaces; worth thinking through the UX (progress bar, atomic
+        rotation token to detect mid-rotation states).</li>
 
       <li><strong>Layout A vs Layout B for local storage.</strong> Path A (§9.2) stores ciphertext
         in local SQLite and accepts that the derived local indexes don't apply to E2EE workspaces
         until we add a decrypt-then-populate pass. Path B keeps local plaintext and intercepts at
-        the PowerSync download seam &mdash; functionally nicer but architecturally heavier. Current
-        working assumption is A; revisit if product testing shows the lost local features are
-        unacceptable for E2EE workspaces.</li>
+        the PowerSync download seam &mdash; functionally nicer but architecturally heavier.
+        Current working assumption is A; revisit if product testing shows the lost local features
+        are unacceptable for E2EE workspaces.</li>
 
-      <li><strong>JSONB migration as gate vs. parallel work.</strong> §11.5 calls for landing the
+      <li><strong>JSONB migration as gate vs. parallel work.</strong> §11.3 calls for landing the
         JSONB migration before the encryption work to get the trigger no-op behavior for free.
         Worth confirming whether that ordering is acceptable (it bundles two independently
         motivated changes) or whether E2EE should ship with explicit trigger gates and JSONB
         follows separately.</li>
 
-      <li><strong>When to add invite-time public-key verification.</strong> v1 takes the §2
-        scope-down: trust the server's pubkey response during invite. v2 needs some form of
-        out-of-band verification &mdash; TOFU + safety-number compare (cheapest UX, Signal-style),
-        a key-transparency log (best technical answer, real engineering), or in-product
-        fingerprint exchange. The decision is more product than crypto: how much UX friction is
-        acceptable for invite flow, and how loud should the "first share with new contact"
-        warning be?</li>
+      <li><strong>Are settings or user preferences in scope?</strong> Survey didn't surface a
+        settings table. If preferences are stored server-side and contain user content, they may
+        also need encryption &mdash; or be explicitly carved out as metadata.</li>
     </ol>
 
-    <h2 id="tradeoffs">14. Tradeoffs we're accepting</h2>
+    <h2 id="tradeoffs">15. Tradeoffs we're accepting</h2>
 
     <ul>
       <li><strong>Metadata leak.</strong> Block tree shape (<code>parent_id</code>), order
         (<code>order_key</code>), edit timing, authorship, deletion flag, and per-column "which
-        column changed" are all visible to the server. Acceptable under threat model A.</li>
+        column changed" are all visible to the server. Acceptable for the stated threat model.</li>
       <li><strong>No server-side features for E2EE workspaces, ever.</strong> Search, AI,
         summaries, server-rendered share links. This is a real product cost; the opt-in toggle is
         the user surfacing it explicitly.</li>
-      <li><strong>Lost passphrase = lost data</strong> (modulo recovery codes if we ship them).</li>
+      <li><strong>Lost WK = lost data.</strong> No recovery in v1. The UI surfaces this loudly at
+        create time; users who need recovery can store the WK in multiple places themselves.</li>
+      <li><strong>Sharing requires an out-of-band channel.</strong> This is a deliberate
+        non-goal, not a defect &mdash; an in-app share button would re-introduce the MITM concern.
+        Users pick Signal, password-manager share, paper, whatever.</li>
+      <li><strong>Pasting WK on each new device.</strong> One extra step per workspace per device.
+        Tolerable for small N; if N grows past ~5 per user, that's the signal to add the
+        hierarchy (§13).</li>
       <li><strong>Ciphertext-diff history</strong> for E2EE workspaces.</li>
-      <li><strong>Membership removal is best-effort</strong> until v2 brings CEK rotation.</li>
-      <li><strong>Local derived indexes inactive in E2EE workspaces</strong> under Layout A
-        (§9.2). Alias autocomplete, type-filtered queries, and local FTS don't work for encrypted
+      <li><strong>Local derived indexes inactive in E2EE workspaces</strong> under Layout A.
+        Alias autocomplete, type-filtered queries, and local FTS don't work for encrypted
         workspaces until a decrypt-then-populate pass is added.</li>
-      <li><strong>Invite-time pubkey trust-on-server.</strong> The server can substitute its own
-        X25519 key in <code>invite_member_by_email</code>'s response and read everything in the
-        resulting shared workspace. v1 scopes the threat model to passive attackers (§2); active
-        substitution at invite time becomes a real concern only when v2 adds verification.</li>
-      <li><strong>Client-trust required.</strong> A backdoored build can exfiltrate keys. Subresource
-        integrity, reproducible builds, and audit are mitigations, not solutions.</li>
+      <li><strong>Client-trust required.</strong> A backdoored build can exfiltrate keys.
+        Subresource integrity, reproducible builds, and audit are mitigations, not solutions.</li>
     </ul>
 
     <p class="meta" style="margin-top:36px;">
-      This is a sketch, not a commitment. The architectural prep work in §11 (sync boundary, auth/vault
-      split, public-key identity, drift guard) is the recommended starting point regardless of whether
-      we proceed with §5&ndash;§9 on a specific timeline.
+      This is a sketch, not a commitment. The architectural prep work in §11 (sync boundary, drift
+      guard, JSONB) is the recommended starting point regardless of whether we proceed with
+      §5&ndash;§9 on a specific timeline.
     </p>
   </main>
 </body>
