@@ -597,12 +597,28 @@ DROP FUNCTION IF EXISTS create_workspace(text);
 CREATE OR REPLACE FUNCTION create_workspace(
     p_name             text,
     p_encryption_mode  text DEFAULT 'none',  -- 'none' | 'e2ee'
-    p_workspace_id     text DEFAULT NULL,    -- client-chosen for E2EE so the
-                                             -- canary's AAD/plaintext line up;
+    p_workspace_id     text DEFAULT NULL,    -- REQUIRED for e2ee (guard below);
                                              -- NULL falls back to server-generated
                                              -- UUID for plaintext (current behavior)
     p_wk_canary        text DEFAULT NULL     -- required iff p_encryption_mode = 'e2ee'
-  ) RETURNS jsonb ...;
+  ) RETURNS jsonb
+  LANGUAGE plpgsql AS $$
+declare
+  v_id text := coalesce(p_workspace_id, gen_random_uuid()::text);
+begin
+  -- The e2ee canary is minted client-side binding the CLIENT-CHOSEN workspace id
+  -- (it's the canary's plaintext and part of its AAD). If the server were to
+  -- generate a different id, the canary/mode CHECK would still pass, but the
+  -- canary would never validate the WK on reload or another device (it decrypts
+  -- to the client's intended id, not the row's actual id). So e2ee MUST supply
+  -- its own id, and the row is inserted with exactly that id.
+  if p_encryption_mode = 'e2ee' and p_workspace_id is null then
+    raise exception 'create_workspace: p_workspace_id is required for e2ee workspaces';
+  end if;
+  -- ... INSERT INTO workspaces (id, encryption_mode, wk_canary, ...) VALUES (v_id, ...);
+  --     INSERT owner workspace_members row; RETURN the new workspace as jsonb ...
+end;
+$$;
 
 GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
   TO anon, authenticated, service_role;</code></pre>
@@ -908,17 +924,19 @@ GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
     </p>
 
     <p>
-      <strong>Locked-workspace rows stay in staging.</strong> On a new device, sync delivers
-      E2EE block rows to <code>blocks_synced</code> before the user has pasted the WK. The
-      observer can't decrypt without the key, so it must not apply E2EE rows to <code>blocks</code>
-      whenever no WK is available for that workspace &mdash; the "locked" and encryption-uncertain
-      states of §6, both of which lack decrypt material regardless of the durable pin. Concrete
-      behavior: for any staging row whose workspace has no WK loaded, leave it
-      in <code>blocks_synced</code> untouched. When the user pastes a WK that validates,
-      run a drain pass that re-processes every staging row for that workspace through the
-      observer (now with a WK available, decryption succeeds and the rows land in
-      <code>blocks</code>). The backfill is a per-workspace drain of the staging table on WK
-      paste.
+      <strong>Rows the observer can't yet materialize stay in staging &mdash; but "no WK" is not
+      the test.</strong> Because the blocks stream is retargeted globally, the observer drains
+      <em>every</em> workspace's rows out of <code>blocks_synced</code>: plaintext workspaces by
+      copy-through (no key needed), E2EE workspaces by decrypt. The only rows it must leave staged
+      are the ones it can't turn into plaintext yet &mdash; an E2EE-pinned workspace whose WK isn't
+      loaded ("locked", §6), or an encryption-uncertain workspace (§6 rule 3). A
+      <strong>plaintext</strong>-pinned workspace has no WK by design, so a naive "skip any row
+      whose workspace has no WK loaded" would strand its rows in staging forever and the
+      app-visible table would never hydrate. Concrete behavior: skip a staging row only when its
+      workspace is E2EE-pinned-without-WK <em>or</em> encryption-uncertain; otherwise apply it
+      immediately (decrypt for E2EE-with-WK, copy-through for plaintext). A drain pass re-processes
+      a workspace's staged rows whenever it becomes materializable &mdash; on WK paste (E2EE) or on
+      plaintext confirmation (a never-pinned workspace the user resolves as plaintext).
     </p>
 
     <p>
