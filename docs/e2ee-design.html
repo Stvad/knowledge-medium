@@ -566,10 +566,11 @@ ALTER TABLE workspaces
 -- before updating wk_canary, so it cannot scope a bypass to a single RPC.
 -- Instead make wk_canary (and encryption_mode) unwritable by client roles:
 REVOKE UPDATE ON workspaces FROM anon, authenticated;
-GRANT  UPDATE (name) ON workspaces TO anon, authenticated;  -- client-mutable
-                                                            -- columns only
--- Grant UPDATE only on the columns clients may change (e.g. name); omit
--- wk_canary and encryption_mode. Any client UPDATE that sets wk_canary now
+GRANT  UPDATE (name, update_time) ON workspaces TO authenticated;
+-- Grant UPDATE only on the columns clients legitimately write — name and
+-- update_time (renameWorkspace in src/data/workspaces.ts updates both, and the
+-- existing migration already column-grants both) — and omit wk_canary and
+-- encryption_mode. Any client UPDATE that sets wk_canary now
 -- fails with "permission denied for column wk_canary" — direct updates
 -- outside the RPC are impossible, enforced by the privilege system rather
 -- than a forgeable session flag. The sole writer of wk_canary is the
