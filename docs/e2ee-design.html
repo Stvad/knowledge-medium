@@ -445,7 +445,16 @@
       (<code>block_aliases</code>/<code>block_types</code>/<code>blocks_fts</code>) and the
       <code>BlockCache</code> &mdash; so clearing the WK must also evict that workspace's rows from
       <code>blocks</code>, its derived-index entries, and its <code>BlockCache</code> snapshots, or
-      the normal local read paths keep serving the plaintext and "locked" locks nothing. The
+      the normal local read paths keep serving the plaintext and "locked" locks nothing. Pending
+      local edits need the same care: not-yet-uploaded edits sit in <code>ps_crud</code> as
+      <em>plaintext</em> envelopes (the upload trigger captures plaintext; <code>uploadData</code>
+      encrypts only at send, §9.2). So the lock flow must first <strong>flush that workspace's
+      <code>ps_crud</code> entries</strong> &mdash; encrypt-and-upload them while the WK is still
+      loaded &mdash; then drop the WK and purge. That both removes the plaintext-in-<code>ps_crud</code>
+      leak and avoids stranding rows on re-paste: the observer's reconciliation skips any staged row
+      that still has a pending CRUD entry (§9.2), so a non-empty queue would block re-hydration. If
+      the flush can't complete (offline), defer the lock rather than leave plaintext queued or
+      silently drop the user's unsynced edits. The
       ciphertext is untouched in <code>blocks_synced</code>, so re-pasting the WK simply re-runs the
       §9.2 staging&rarr;<code>blocks</code> drain and the workspace re-hydrates. Clearing keys
       re-locks; it never downgrades, and the plaintext-confirmation path (rule 3) is
@@ -997,8 +1006,15 @@ GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
       columns before sending to the server. The server only ever sees ciphertext.
     </p>
     <ul>
-      <li><strong>What changes in code:</strong> add <code>blocks_synced</code> raw table to
-        <code>blockSchema.ts</code> (PowerSync target); update
+      <li><strong>What changes in code:</strong> define the <code>blocks_synced</code> raw table
+        <em>and</em> a <code>CREATE_BLOCKS_SYNCED_TABLE_SQL</code> in <code>blockSchema.ts</code>,
+        then wire both into <code>src/data/repoProvider.ts</code> &mdash; the raw-table mapping does
+        <strong>not</strong> create the local SQLite table by itself. Two registration points there:
+        add it to the <code>appSchema.withRawTables({&hellip;})</code> call (so PowerSync targets it),
+        and <code>execute()</code> the <code>CREATE TABLE</code> in DB-init alongside
+        <code>CREATE_BLOCKS_TABLE_SQL</code> (so the client table actually exists). Skip either and
+        there is no <code>blocks_synced</code> table for downloaded rows to hydrate, and the observer
+        has nothing to read. Then update
         <code>powersync/sync-config.yaml</code> (via <code>scripts/gen-sync-config.ts</code>) so
         the row_type for the blocks stream maps to <code>blocks_synced</code> rather than
         <code>blocks</code> &mdash; the sync rule's <code>FROM</code>-clause name <em>is</em> the
