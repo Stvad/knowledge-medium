@@ -839,12 +839,6 @@ const syncBookToBlocks = async (
           properties: {},
         })
       } else {
-        if (existingH.parentId !== highlightsSectionId) {
-          await tx.move(hId, {
-            parentId: highlightsSectionId,
-            orderKey: newHighlightKeys[nextNewHighlightKey++],
-          })
-        }
         if (existingH.content !== hContent) {
           await tx.update(hId, { content: hContent })
         }
