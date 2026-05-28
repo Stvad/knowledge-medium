@@ -466,9 +466,20 @@ CREATE TRIGGER workspaces_lock_encryption_mode
   WHEN (OLD.encryption_mode IS DISTINCT FROM NEW.encryption_mode)
   EXECUTE FUNCTION raise_immutable_column();
 
--- Each member of an E2EE workspace holds the CEK wrapped by their own UVK.
+-- At-rest CEK envelope: each member of an E2EE workspace holds the CEK
+-- symmetrically wrapped by their own UVK.
 ALTER TABLE workspace_members ADD COLUMN wrapped_cek BYTEA;
 -- Constraint enforced via trigger (cross-table check): required iff workspace is E2EE.
+
+-- In-transit CEK envelope: when Alice invites Bob, she wraps the CEK with
+-- Bob's *public key* (X25519) and parks it here. On accept_invitation, Bob
+-- unwraps with his private key, re-wraps with his UVK, and the result lands
+-- in workspace_members.wrapped_cek (the at-rest envelope above). The two
+-- envelopes are deliberately different shapes so that the unlock path only
+-- ever needs the UVK, while invitation delivery doesn't require Bob to be
+-- online or unlocked.
+ALTER TABLE workspace_invitations
+  ADD COLUMN wrapped_cek_for_invitee BYTEA;
 
 -- Per-user vault: enables multi-device unlock and invite-time CEK wrapping.
 CREATE TABLE user_vault (
@@ -538,9 +549,18 @@ CREATE TABLE user_vault (
 
     <h3>8.4 Invite a user to an encrypted workspace</h3>
 
+    <p>
+      The CEK reaches a new member through <em>two</em> different envelopes back-to-back. The
+      in-transit envelope (asymmetric, wrapped with the invitee's public key) lets the inviter
+      deliver the CEK without the invitee being online. On accept, the invitee rewraps it into the
+      at-rest envelope (symmetric, wrapped with their own UVK) so that subsequent device unlocks
+      need only the UVK. Without the rewrap, a second device would have no way to recover the CEK
+      &mdash; it doesn't carry the original private key in a way the unlock path reaches for.
+    </p>
+
     <figure>
       <div class="diagram">
-        <svg viewBox="0 0 720 360" xmlns="http://www.w3.org/2000/svg" aria-labelledby="invite-title">
+        <svg viewBox="0 0 720 440" xmlns="http://www.w3.org/2000/svg" aria-labelledby="invite-title">
           <title id="invite-title">Invite flow that delivers a CEK without server knowledge of it</title>
           <style>
             .col { fill: var(--fg); font: 13px ui-sans-serif, system-ui, sans-serif; text-anchor: middle; font-weight: 600; }
@@ -559,37 +579,43 @@ CREATE TABLE user_vault (
           <text class="col" x="360" y="24">Server</text>
           <text class="col" x="610" y="24">Bob (invitee)</text>
 
-          <line class="axis" x1="110" y1="36" x2="110" y2="340"/>
-          <line class="axis" x1="360" y1="36" x2="360" y2="340"/>
-          <line class="axis" x1="610" y1="36" x2="610" y2="340"/>
+          <line class="axis" x1="110" y1="36" x2="110" y2="420"/>
+          <line class="axis" x1="360" y1="36" x2="360" y2="420"/>
+          <line class="axis" x1="610" y1="36" x2="610" y2="420"/>
 
           <line class="arr" x1="610" y1="68" x2="370" y2="68" marker-end="url(#arr2)" color="var(--fg)"/>
           <text class="lbl" x="490" y="62" text-anchor="middle">publish public key (signup)</text>
 
-          <line class="arr" x1="110" y1="120" x2="350" y2="120" marker-end="url(#arr2)" color="var(--fg)"/>
-          <text class="lbl" x="230" y="114" text-anchor="middle">request Bob's public key</text>
+          <line class="arr" x1="110" y1="110" x2="350" y2="110" marker-end="url(#arr2)" color="var(--fg)"/>
+          <text class="lbl" x="230" y="104" text-anchor="middle">request Bob's public key</text>
 
-          <line class="arr" x1="360" y1="148" x2="120" y2="148" marker-end="url(#arr2)" color="var(--fg)"/>
-          <text class="lbl" x="240" y="142" text-anchor="middle">Bob's public key</text>
+          <line class="arr" x1="360" y1="138" x2="120" y2="138" marker-end="url(#arr2)" color="var(--fg)"/>
+          <text class="lbl" x="240" y="132" text-anchor="middle">Bob's public key</text>
 
-          <rect x="30" y="170" width="160" height="40" fill="var(--accent-soft)" stroke="var(--accent)" rx="4"/>
-          <text class="note" x="110" y="186" text-anchor="middle">wrap CEK with Bob's</text>
-          <text class="note" x="110" y="200" text-anchor="middle">public key (X25519)</text>
+          <rect x="30" y="160" width="160" height="42" fill="var(--accent-soft)" stroke="var(--accent)" rx="4"/>
+          <text class="note" x="110" y="178" text-anchor="middle">wrap CEK with Bob's</text>
+          <text class="note" x="110" y="192" text-anchor="middle">public key (transit env.)</text>
 
-          <line class="arr" x1="110" y1="228" x2="350" y2="228" marker-end="url(#arr2)" color="var(--fg)"/>
-          <text class="lbl" x="230" y="222" text-anchor="middle">invite(email, wrapped_cek_for_bob)</text>
+          <line class="arr" x1="110" y1="222" x2="350" y2="222" marker-end="url(#arr2)" color="var(--fg)"/>
+          <text class="lbl" x="230" y="216" text-anchor="middle">invite(email, wrapped_cek_for_invitee)</text>
 
-          <line class="arr" x1="610" y1="270" x2="370" y2="270" marker-end="url(#arr2)" color="var(--fg)"/>
-          <text class="lbl" x="490" y="264" text-anchor="middle">accept_invitation()</text>
+          <line class="arr" x1="610" y1="262" x2="370" y2="262" marker-end="url(#arr2)" color="var(--fg)"/>
+          <text class="lbl" x="490" y="256" text-anchor="middle">accept_invitation()</text>
 
-          <line class="arr" x1="360" y1="298" x2="600" y2="298" marker-end="url(#arr2)" color="var(--fg)"/>
-          <text class="lbl" x="480" y="292" text-anchor="middle">membership row + wrapped_cek</text>
+          <line class="arr" x1="360" y1="290" x2="600" y2="290" marker-end="url(#arr2)" color="var(--fg)"/>
+          <text class="lbl" x="480" y="284" text-anchor="middle">delivers wrapped_cek_for_invitee</text>
 
-          <rect x="530" y="316" width="160" height="34" fill="var(--accent-soft)" stroke="var(--accent)" rx="4"/>
-          <text class="note" x="610" y="338" text-anchor="middle">unwrap with private key</text>
+          <rect x="530" y="308" width="160" height="44" fill="var(--accent-soft)" stroke="var(--accent)" rx="4"/>
+          <text class="note" x="610" y="326" text-anchor="middle">unwrap with private key</text>
+          <text class="note" x="610" y="342" text-anchor="middle">re-wrap with UVK</text>
+
+          <line class="arr" x1="610" y1="372" x2="370" y2="372" marker-end="url(#arr2)" color="var(--fg)"/>
+          <text class="lbl" x="490" y="366" text-anchor="middle">write workspace_members.wrapped_cek</text>
+
+          <text class="note" x="360" y="406" text-anchor="middle">From here on, any of Bob's devices unlocks the workspace using only its UVK.</text>
         </svg>
       </div>
-      <figcaption>Figure 2 &mdash; Invite flow. The server brokers the metadata but never holds an unwrapped CEK.</figcaption>
+      <figcaption>Figure 2 &mdash; Invite flow with the envelope swap. The server brokers metadata but never holds an unwrapped CEK; the membership row settles on the same symmetric (UVK-wrapped) shape used by everyone else.</figcaption>
     </figure>
 
     <p>
@@ -723,6 +749,93 @@ CREATE TABLE user_vault (
       another and have it still decrypt as valid.
     </p>
 
+    <h3 id="triggers">9.2 Local SQLite triggers and the JSONB connection</h3>
+
+    <p>
+      Storing ciphertext in the same columns the app already uses sounds clean until you remember
+      that the local SQLite schema (<code>src/data/internals/clientSchema.ts</code>) runs JSON
+      functions over those columns on every write. Concretely:
+    </p>
+
+    <ul>
+      <li><code>blocks_row_event_insert</code>/<code>_update</code> call
+        <code>json(NEW.properties_json)</code> and <code>json(NEW.references_json)</code> to snapshot
+        the row into the local edit log.</li>
+      <li><code>blocks_alias_insert</code>/<code>_update</code> walk
+        <code>json_each(NEW.properties_json, '$.alias')</code> to maintain the
+        <code>block_aliases</code> index.</li>
+      <li><code>blocks_type_insert</code>/<code>_update</code> walk
+        <code>json_each(NEW.properties_json, '$.types')</code> for <code>block_types</code>.</li>
+      <li>The startup backfills (<code>BACKFILL_BLOCK_ALIASES_SQL</code>,
+        <code>BACKFILL_BLOCK_TYPES_SQL</code>) do the same against historical rows.</li>
+      <li><code>blocks_fts_insert</code>/<code>_update</code> reads
+        <code>NEW.content</code> directly &mdash; not JSON, but still content-bearing.</li>
+    </ul>
+
+    <p>
+      If we drop a raw <code>enc:v1:&hellip;</code> string into <code>properties_json</code> today,
+      <code>json()</code> and <code>json_each()</code> abort with "malformed JSON" and the write
+      fails before it ever reaches the upload queue. The naive per-column scheme as written can't
+      land without addressing this.
+    </p>
+
+    <p>
+      There are three paths. They aren't mutually exclusive; #1 and #2 compose.
+    </p>
+
+    <ol>
+      <li>
+        <strong>Adopt JSONB first (recommended).</strong> The follow-up "JSONB across the data
+        layer" (<code>docs/follow-ups.md</code>) migrates <code>properties_json</code> and
+        <code>references_json</code> from <code>text</code> to <code>jsonb</code> end-to-end. With
+        JSONB columns, the natural shape for ciphertext is a JSON <em>string scalar</em> &mdash;
+        <code>"enc:v1:&hellip;"</code> &mdash; which is structurally valid JSONB. <code>json()</code>
+        returns the string, <code>json_each(value, '$.alias')</code> gracefully returns zero rows
+        on a non-object value, and the alias/types/row-event triggers become a no-op on encrypted
+        rows without any explicit branching. This is the single change that removes the most
+        friction.
+      </li>
+      <li>
+        <strong>Mode-gate the content-bearing triggers that don't get JSONB's free pass.</strong>
+        The FTS trigger reads <code>content</code> (plain text, not JSON), so JSONB doesn't help
+        it; without a gate it would index ciphertext trigrams that can never match user queries
+        (useless, mildly bloated). Add a <code>WHEN</code> clause that consults
+        <code>workspaces.encryption_mode</code> (or equivalently, sniffs the
+        <code>enc:v1:</code> prefix) and skips the index maintenance for encrypted rows. Same gate
+        applies to the alias/types triggers if we don't adopt #1 &mdash; they'd still need an
+        explicit branch to avoid touching <code>json_each</code> on a string.
+      </li>
+      <li>
+        <strong>Move encryption to a download-decrypt boundary instead, keeping local plaintext.</strong>
+        This is the "Layout B" alternative. The local DB stores plaintext for all workspaces;
+        encryption happens only at PowerSync's upload/download seam. Local triggers and indexes
+        all work normally, including for E2EE workspaces. The cost is that PowerSync doesn't
+        expose a per-row download transform hook, so this requires either a custom client
+        connector or a buffer-table indirection &mdash; meaningfully more invasive than #1 + #2.
+        Threat-model-A doesn't require it (the OPFS database is already per-user, and local at-rest
+        protection is the OS disk encryption's job), so we'd only take this path if losing the
+        derived local indexes for E2EE workspaces turns out to be unacceptable for the product.
+      </li>
+    </ol>
+
+    <div class="decision">
+      <strong>Working decision.</strong> Path #1 + #2 (Layout A). JSONB migration is a strong
+      prerequisite &mdash; not strictly required, but doing E2EE without it means hand-gating ~7
+      triggers and accepting that any future trigger over those columns is one author away from
+      a footgun. The FTS gate remains needed either way.
+    </div>
+
+    <p>
+      Consequence for E2EE workspaces under Layout A: the trigger-maintained local indexes
+      (<code>block_aliases</code>, <code>block_types</code>, <code>blocks_fts</code>) silently
+      don't get populated for encrypted rows. Features that rely on them &mdash; in-workspace alias
+      autocomplete, type-filtered queries, local FTS &mdash; therefore don't work for E2EE
+      workspaces unless we layer on a separate "decrypt-then-populate" pass at vault unlock time.
+      That pass is straightforward to add later (read encrypted rows, decrypt in memory, write into
+      the side tables, never touch <code>blocks</code> itself), but it's not free and it's the
+      reason to flag the feature loss explicitly in §10 and §14.
+    </p>
+
     <h2 id="duality">10. Mode-by-mode behavior</h2>
 
     <table>
@@ -750,6 +863,11 @@ CREATE TABLE user_vault (
         <td><code>blocks_history</code> (server trigger)</td>
         <td>Server-computed diffs, human-readable, queryable.</td>
         <td>Records ciphertext diffs. Still useful for PITR / "this block changed at this time" but unreadable server-side. Acceptable degradation.</td>
+      </tr>
+      <tr>
+        <td>Local derived indexes (<code>block_aliases</code>, <code>block_types</code>, <code>blocks_fts</code>)</td>
+        <td>Maintained automatically by triggers as today.</td>
+        <td>Triggers are JSONB-tolerant and FTS-gated (see §9.2), so writes succeed but the indexes are empty for encrypted rows. Features depending on them (alias autocomplete, type-filtered queries, local FTS) don't work for E2EE workspaces until we add a decrypt-then-populate pass.</td>
       </tr>
       <tr>
         <td>Future server-side features (search, AI, summaries, embeddings, share-link rendering)</td>
@@ -806,6 +924,17 @@ CREATE TABLE user_vault (
       <code>workspaces.encryption_mode = 'none'</code> in its filter, or explicitly document a
       decision to skip E2EE workspaces. The repo already has a drift-guard pattern from prior design
       docs; this slots in.
+    </p>
+
+    <h3>11.5 Land the JSONB migration before the encryption work</h3>
+    <p>
+      The follow-up "JSONB across the data layer" already has independent motivation (perf wins
+      across ~29 <code>json_extract</code>/<code>json_each</code> callsites, including the hot
+      alias/types triggers). Doing it before the encryption work is what makes the per-column
+      ciphertext shape in §9 actually tractable: a ciphertext-as-JSON-string-scalar value is a
+      valid JSONB value, so the existing triggers naturally no-op on encrypted rows instead of
+      aborting. Without this prep, the E2EE work has to hand-gate every JSON-bearing trigger and
+      live with the fragility that any future trigger adds another footgun. See §9.2.
     </p>
 
     <h2 id="rejected">12. Considered &amp; rejected</h2>
@@ -891,6 +1020,19 @@ CREATE TABLE user_vault (
       <li><strong>Are settings or user preferences in scope?</strong> Survey didn't surface a
         settings table. If preferences are stored server-side and contain user content, they may
         also need encryption &mdash; or be explicitly carved out as metadata.</li>
+
+      <li><strong>Layout A vs Layout B for local storage.</strong> Path A (§9.2) stores ciphertext
+        in local SQLite and accepts that the derived local indexes don't apply to E2EE workspaces
+        until we add a decrypt-then-populate pass. Path B keeps local plaintext and intercepts at
+        the PowerSync download seam &mdash; functionally nicer but architecturally heavier. Current
+        working assumption is A; revisit if product testing shows the lost local features are
+        unacceptable for E2EE workspaces.</li>
+
+      <li><strong>JSONB migration as gate vs. parallel work.</strong> §11.5 calls for landing the
+        JSONB migration before the encryption work to get the trigger no-op behavior for free.
+        Worth confirming whether that ordering is acceptable (it bundles two independently
+        motivated changes) or whether E2EE should ship with explicit trigger gates and JSONB
+        follows separately.</li>
     </ol>
 
     <h2 id="tradeoffs">14. Tradeoffs we're accepting</h2>
@@ -905,6 +1047,9 @@ CREATE TABLE user_vault (
       <li><strong>Lost passphrase = lost data</strong> (modulo recovery codes if we ship them).</li>
       <li><strong>Ciphertext-diff history</strong> for E2EE workspaces.</li>
       <li><strong>Membership removal is best-effort</strong> until v2 brings CEK rotation.</li>
+      <li><strong>Local derived indexes inactive in E2EE workspaces</strong> under Layout A
+        (§9.2). Alias autocomplete, type-filtered queries, and local FTS don't work for encrypted
+        workspaces until a decrypt-then-populate pass is added.</li>
       <li><strong>Client-trust required.</strong> A backdoored build can exfiltrate keys. Subresource
         integrity, reproducible builds, and audit are mitigations, not solutions.</li>
     </ul>
