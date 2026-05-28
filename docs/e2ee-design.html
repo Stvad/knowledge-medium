@@ -719,12 +719,32 @@ CREATE OR REPLACE FUNCTION create_workspace(
 
     <p>
       The local <code>blocks</code> table holds plaintext for everything (encrypted and plaintext
-      workspaces alike). PowerSync's sync apply lands ciphertext rows in a parallel
-      <code>blocks_synced</code> staging table (the row shape that matches the server). A
-      JS observer on PowerSync's change events reads each new E2EE row from staging, decrypts the
-      content columns with the WK, and writes the plaintext row into <code>blocks</code>. Triggers
-      fire on the plaintext write &mdash; everything in <code>clientSchema.ts</code> and the
-      plugin schemas runs unchanged.
+      workspaces alike). PowerSync's sync apply lands all blocks rows &mdash; for both plaintext
+      and E2EE workspaces &mdash; in a parallel <code>blocks_synced</code> staging table (the row
+      shape that matches the server). PowerSync's sync rule projects from
+      <code>public.blocks</code>, so the FROM-clause-as-row_type behavior would route everything
+      to the client <code>blocks</code> table by default; the gen-sync-config change re-targets the
+      stream's row_type to <code>blocks_synced</code>, which means <em>every</em> downloaded row
+      (plaintext or encrypted) lands in staging, not just E2EE rows.
+    </p>
+    <p>
+      A JS observer on PowerSync's change events processes every staging insert/update.
+      For rows in plaintext workspaces it copies through unchanged. For rows in E2EE workspaces
+      it decrypts the content columns with the WK and writes plaintext to <code>blocks</code>.
+      Both cases end up populating <code>blocks</code> as the app-visible table; existing triggers
+      in <code>clientSchema.ts</code> and plugins fire on plaintext writes as today.
+    </p>
+    <p>
+      <strong>The observer is universal, not E2EE-only.</strong> If it only handled E2EE rows,
+      plaintext-workspace sync updates would be stuck in <code>blocks_synced</code> and never
+      reach the app's <code>blocks</code> table &mdash; breaking the requirement that plaintext
+      workspaces stay unchanged. The cost: every downloaded row pays one extra local write
+      (staging → blocks), not just E2EE rows. For typical workloads this is small; for a large
+      workspace's initial sync it's N extra writes. The dual-target alternative (Postgres view
+      partitioning E2EE workspaces, two sync rules, one mapping to <code>blocks</code> and one
+      to <code>blocks_synced</code>) avoids the cost on plaintext users at the price of more
+      Postgres-side complexity; not pursued in v1 unless profiling shows the universal-observer
+      cost matters.
     </p>
     <p>
       Upload is symmetric. App writes plaintext to <code>blocks</code> as today; the existing
@@ -747,9 +767,11 @@ CREATE OR REPLACE FUNCTION create_workspace(
         <code>blocks</code> as today).</li>
       <li><strong>Plus:</strong> queries are direct SQL on plaintext &mdash; no per-row decrypt
         cost at query time, no UDF latency.</li>
-      <li><strong>Minus:</strong> two writes per E2EE block download (staging, then main).
-        Brief window between sync apply and observer pickup where the row only exists in
-        ciphertext (mitigated by staging-table being separate &mdash; app code never queries it).</li>
+      <li><strong>Minus:</strong> two writes per <em>every</em> block download (staging, then
+        main) &mdash; the universal-observer pattern means plaintext-workspace users pay this cost
+        too, not just E2EE users. Brief window between sync apply and observer pickup where the
+        row only exists in staging (mitigated by app code never querying
+        <code>blocks_synced</code>).</li>
       <li><strong>Risk:</strong> PowerSync's reconciliation semantics. Since
         <code>blocks_synced</code> is the only table PowerSync directly manages, this is contained
         &mdash; PowerSync never sees the plaintext <code>blocks</code> table. Verify that
