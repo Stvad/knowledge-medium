@@ -443,9 +443,14 @@
       decrypts the workspace's <code>wk_canary</code> (the canary is authentically encrypted
       under the user's WK, so it can't be forged). Once a workspace is in the set, the client
       treats it as E2EE permanently on this device regardless of any later
-      <code>encryption_mode</code> value from the server. Mode flip from E2EE to plaintext
-      requires explicit local user action (e.g. "remove this workspace's key"), never server
-      initiative. This is TOFU for the mode signal, mirroring how §5's WK store works.
+      <code>encryption_mode</code> value from the server. The E2EE pin is sticky: it is never
+      cleared by server metadata, and &mdash; crucially &mdash; not by clearing local key
+      material either. A future "lock / clear my keys" action (§5) drops the WK but leaves the
+      pin and the <code>enc:v1:</code> requirement intact; the workspace simply re-enters the
+      read-only quarantine described below until the WK is pasted again, exactly as on a new
+      device. Because workspace mode is immutable once set (§7), there is no "flip to plaintext"
+      path for an E2EE workspace at all &mdash; clearing keys re-locks, it does not downgrade.
+      This is TOFU for the mode signal, mirroring how §5's WK store works.
       <br><br>
       First-encounter handling matters and isn't free. A naive "trust server
       <code>encryption_mode</code> on first encounter" is exploitable: an active server can
@@ -795,11 +800,11 @@ GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
           <text class="row"  x="410" y="172">references_json:  "enc:v1:Mn1x&hellip;"</text>
           <text class="rowMuted" x="410" y="196">&hellip; (server sees only ciphertext)</text>
 
-          <text class="caption" x="380" y="252">Same schema. Same RLS. Same sync rules. The encoding inside the three content columns differs.</text>
+          <text class="caption" x="380" y="252">Same schema. Same RLS. The encoding inside the three content columns differs.</text>
           <text class="caption" x="380" y="268">AAD binds each ciphertext to its block, workspace, column, and schema version.</text>
         </svg>
       </div>
-      <figcaption>Figure 2 &mdash; Per-column encryption keeps PATCH granularity: editing only <code>content</code> still PATCHes only that column.</figcaption>
+      <figcaption>Figure 2 &mdash; Per-column encryption keeps PATCH granularity: editing only <code>content</code> still PATCHes only that column. The wire <em>shape</em> is unchanged, but the sync rules are not: Layout B (§9.2) retargets the global <code>public.blocks</code> stream so these rows land in <code>blocks_synced</code>, not <code>blocks</code>.</figcaption>
     </figure>
 
     <p>
