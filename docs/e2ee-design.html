@@ -493,14 +493,17 @@ CREATE TABLE user_vault (
 );
 
 -- RLS on user_vault: each user can read/write their own row. Public keys
--- can't sit behind a "shares-a-workspace-with-owner" predicate because the
--- very first invite (when Alice and Bob share nothing yet) would deadlock
--- on that check. Instead, expose pubkey lookup via a SECURITY DEFINER RPC
--- like get_user_public_key(email) that returns just the public_key column
--- (and nothing else from user_vault). The email→user_id mapping is already
--- implicitly exposed by invite_member_by_email, so this doesn't add a new
--- privacy boundary; it just narrows what's returned to the one column
--- that's already public by design.</code></pre>
+-- can't sit behind a "shares-a-workspace-with-owner" predicate (the very
+-- first invite, when Alice and Bob share nothing, would deadlock on it),
+-- but they also can't be openly looked up by email: invite_member_by_email
+-- today never reaches into auth.users and so doesn't leak which emails are
+-- registered. A bare get_user_public_key(email) would be a new account-
+-- existence oracle. Instead, gate the lookup on an existing invitation
+-- the caller created (see §8.4): invite_member_by_email itself returns the
+-- invitee's public_key when known. Probing reduces to "create a fake
+-- invitation against this workspace and read the result" — auditable,
+-- rate-limitable, and bound to a workspace the caller owns, rather than
+-- a free oracle for any authenticated user.</code></pre>
 
     <p>
       <strong>Sync stream needs to learn the new columns.</strong> Both
@@ -581,13 +584,35 @@ CREATE TABLE user_vault (
     </p>
 
     <p>
-      Two existing RPCs need their signatures widened so the envelope can actually flow. Adding the
-      column to <code>workspace_invitations</code> isn't enough: <code>list_my_pending_invitations</code>
-      enumerates its return columns explicitly, and <code>accept_invitation</code> currently takes
-      only the invitation id.
+      Three RPC signatures change. <code>invite_member_by_email</code> grows a return shape so the
+      inviter learns the invitee's public key without a separate lookup (which would otherwise be
+      an email-enumeration oracle &mdash; see the RLS note in §7). <code>list_my_pending_invitations</code>
+      surfaces the transit envelope to the invitee. <code>accept_invitation</code> accepts the
+      re-wrapped at-rest envelope atomically with the membership insert.
     </p>
 
-    <pre><code>-- Surface the in-transit envelope so the invitee's client can read it.
+    <pre><code>-- Inviter learns the invitee's public key (if vaulted) in the same call
+-- that creates the invitation. NULL pubkey ⇒ invitee has no vault; the
+-- client surfaces "they need to set up a vault first" and either blocks
+-- (v1) or queues a defer-wrap (later).
+CREATE OR REPLACE FUNCTION invite_member_by_email(
+    p_workspace_id text,
+    p_email        text,
+    p_role         text
+  ) RETURNS TABLE(
+    invitation_id        text,
+    invitee_public_key   bytea   -- new; NULL when no vault for that email
+  ) ...;
+
+-- After invite_member_by_email returns a non-NULL public_key, the inviter
+-- wraps the CEK with it and attaches the transit envelope to the same
+-- invitation row. Caller must be the inviter on that invitation.
+CREATE OR REPLACE FUNCTION attach_invite_envelope(
+    p_invitation_id           text,
+    p_wrapped_cek_for_invitee bytea
+  ) RETURNS void ...;
+
+-- Surface the transit envelope so the invitee's client can read it.
 CREATE OR REPLACE FUNCTION list_my_pending_invitations()
   RETURNS TABLE(
     id text,
@@ -610,7 +635,10 @@ CREATE OR REPLACE FUNCTION accept_invitation(
       <code>p_wrapped_cek</code> defaults to NULL so plaintext-workspace invites still call the RPC
       with one argument. The cross-table trigger on <code>workspace_members</code> enforces the
       "required iff E2EE" half &mdash; a NULL parameter on an E2EE invitation aborts the insert
-      with a clear error rather than silently breaking the unlock path later.
+      with a clear error rather than silently breaking the unlock path later. Splitting
+      <code>invite_member_by_email</code> (creates row + reveals pubkey) from
+      <code>attach_invite_envelope</code> (attaches the wrap) keeps the second step optional &mdash;
+      a plaintext-workspace invite just doesn't call it.
     </p>
 
     <figure>
@@ -639,20 +667,20 @@ CREATE OR REPLACE FUNCTION accept_invitation(
           <line class="axis" x1="610" y1="36" x2="610" y2="420"/>
 
           <line class="arr" x1="610" y1="68" x2="370" y2="68" marker-end="url(#arr2)" color="var(--fg)"/>
-          <text class="lbl" x="490" y="62" text-anchor="middle">publish public key (signup)</text>
+          <text class="lbl" x="490" y="62" text-anchor="middle">publish public key (vault setup)</text>
 
           <line class="arr" x1="110" y1="110" x2="350" y2="110" marker-end="url(#arr2)" color="var(--fg)"/>
-          <text class="lbl" x="230" y="104" text-anchor="middle">request Bob's public key</text>
+          <text class="lbl" x="230" y="104" text-anchor="middle">invite_member_by_email(ws, email, role)</text>
 
           <line class="arr" x1="360" y1="138" x2="120" y2="138" marker-end="url(#arr2)" color="var(--fg)"/>
-          <text class="lbl" x="240" y="132" text-anchor="middle">Bob's public key</text>
+          <text class="lbl" x="240" y="132" text-anchor="middle">invitation_id + Bob's public_key</text>
 
           <rect x="30" y="160" width="160" height="42" fill="var(--accent-soft)" stroke="var(--accent)" rx="4"/>
           <text class="note" x="110" y="178" text-anchor="middle">wrap CEK with Bob's</text>
           <text class="note" x="110" y="192" text-anchor="middle">public key (transit env.)</text>
 
           <line class="arr" x1="110" y1="222" x2="350" y2="222" marker-end="url(#arr2)" color="var(--fg)"/>
-          <text class="lbl" x="230" y="216" text-anchor="middle">invite(email, wrapped_cek_for_invitee)</text>
+          <text class="lbl" x="230" y="216" text-anchor="middle">attach_invite_envelope(id, wrapped_cek)</text>
 
           <line class="arr" x1="610" y1="262" x2="370" y2="262" marker-end="url(#arr2)" color="var(--fg)"/>
           <text class="lbl" x="490" y="256" text-anchor="middle">list_pending_invitations()</text>
@@ -965,12 +993,22 @@ CREATE OR REPLACE FUNCTION accept_invitation(
       WebAuthn-PRF unlock all drop-in replacements rather than refactors.
     </p>
 
-    <h3>11.3 Public-key identity at signup (do now)</h3>
+    <h3>11.3 Pre-provision the vault schema (do now)</h3>
     <p>
-      Add the <code>user_vault</code> table. Body is empty for users who never opt in. Backfilling
-      public keys for an existing user base is expensive (only happens at next interactive sign-in,
-      so rollout takes months); generating at signup is trivial. Even if E2EE slips, signed writes
-      and tamper-evident audit later become possible.
+      Add the <code>user_vault</code> table now. Rows aren't created at signup &mdash; the
+      schema's non-null <code>kdf_params</code>/<code>wrapped_uvk</code>/<code>wrapped_private_key</code>
+      all depend on the user's passphrase, which we deliberately don't ask for from plaintext-only
+      users. The row gets inserted during §8.1's first-time vault setup, the first time a user
+      either creates an E2EE workspace or accepts an invite to one. Pre-provisioning just the
+      table (empty until the first opt-in) means the eventual E2EE work doesn't have to coordinate
+      a schema migration with the crypto change.
+    </p>
+    <p>
+      <em>Earlier draft generated a keypair at signup so signed-write-style features could be
+      added later without a backfill problem. That doesn't actually work against the proposed
+      schema &mdash; the private key needs a wrapping key, which needs a passphrase, which we
+      don't have at signup. A future signed-write feature would need its own (lighter) keypair
+      table that doesn't require passphrase wrapping, designed when there's a concrete user.</em>
     </p>
 
     <h3>11.4 Drift guard: server-side content features must filter on mode (codify now)</h3>
