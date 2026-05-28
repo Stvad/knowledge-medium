@@ -779,10 +779,19 @@ CREATE TRIGGER blocks_require_ciphertext_for_e2ee_trg
         with the old column set. Editing <code>WORKSPACE_COLUMNS</code> alone would regenerate
         the raw-table <code>put</code> SQL to reference the new columns, but PowerSync's apply
         would then fail with a missing-column error on existing clients. Need explicit
-        <code>ALTER TABLE workspaces ADD COLUMN encryption_mode TEXT</code> and
-        <code>ALTER TABLE workspaces ADD COLUMN wk_canary TEXT</code> migrations, gated on a
+        <code>ALTER TABLE workspaces ADD COLUMN encryption_mode TEXT NOT NULL DEFAULT 'none'</code>
+        and <code>ALTER TABLE workspaces ADD COLUMN wk_canary TEXT</code> migrations, gated on a
         marker in <code>client_schema_state</code> following the existing
-        backfill-marker pattern, so they run exactly once per device on schema upgrade.</li>
+        backfill-marker pattern, so they run exactly once per device on schema upgrade.
+        <strong>Mirror the server's <code>NOT NULL DEFAULT 'none'</code> on the local
+        <code>encryption_mode</code> column.</strong> A bare <code>ADD COLUMN</code> leaves the
+        workspace rows that already exist on an upgrading device as <code>NULL</code> until
+        PowerSync happens to replay each one &mdash; and the §6 rollout seed pins pre-existing
+        workspaces from <code>encryption_mode = 'none'</code>, so those <code>NULL</code> rows
+        would be skipped and left encryption-uncertain on first boot after upgrade. The default
+        backfills existing rows to <code>'none'</code> at migration time (matching the server),
+        and later replays overwrite with the real value. <code>wk_canary</code> stays nullable
+        &mdash; <code>NULL</code> is the correct value for a plaintext workspace.</li>
       <li>Run <code>yarn gen:sync-config</code> to refresh the yaml; <code>yarn check:sync-config</code>
         in CI catches anyone who forgets.</li>
     </ul>
