@@ -437,13 +437,15 @@
       server.
       <br><br>
       Fix: maintain a client-side <em>known-E2EE workspaces</em> set in localStorage alongside
-      the WKs. The set is populated when a user first pastes a WK that decrypts the workspace's
-      <code>wk_canary</code> (the canary is authentically encrypted under the user's WK, so it
-      can't be forged). Once a workspace is in the set, the client treats it as E2EE permanently
-      on this device regardless of any later <code>encryption_mode</code> value from the server.
-      Mode flip from E2EE to plaintext requires explicit local user action (e.g. "remove this
-      workspace's key"), never server initiative. This is TOFU for the mode signal, mirroring how
-      §5's WK store works.
+      the WKs. The set is populated at two points: (a) when a user creates an E2EE workspace on
+      this device &mdash; the creator generated the WK locally, has the canary, and trivially
+      knows the workspace is E2EE; and (b) when a user pastes a WK on another device that
+      decrypts the workspace's <code>wk_canary</code> (the canary is authentically encrypted
+      under the user's WK, so it can't be forged). Once a workspace is in the set, the client
+      treats it as E2EE permanently on this device regardless of any later
+      <code>encryption_mode</code> value from the server. Mode flip from E2EE to plaintext
+      requires explicit local user action (e.g. "remove this workspace's key"), never server
+      initiative. This is TOFU for the mode signal, mirroring how §5's WK store works.
       <br><br>
       Workspaces <em>not</em> in the local set fall back to trusting <code>encryption_mode</code>
       on first encounter &mdash; otherwise there's no way to know to prompt for a WK. That first
@@ -487,16 +489,36 @@ CREATE TRIGGER workspaces_prevent_encryption_mode_change_trg
 -- decrypting it with the candidate WK both authenticates the key
 -- (AEAD failure = wrong key) and confirms it's bound to this workspace
 -- (right key on the wrong workspace's canary fails the plaintext check).
+-- wk_canary format: enc:v1:base64url(nonce || ciphertext) of workspace_id
+-- as the plaintext, with AAD = workspace_id || "canary" || schema_version.
 ALTER TABLE workspaces ADD COLUMN wk_canary TEXT;
--- NULL for plaintext workspaces; NOT NULL for E2EE workspaces,
--- enforced via CHECK (encryption_mode = 'none' OR wk_canary IS NOT NULL).
+
+-- NULL for plaintext workspaces; required for E2EE so new devices can
+-- validate a pasted WK before any blocks exist. Cross-column CHECK.
+ALTER TABLE workspaces
+  ADD CONSTRAINT workspaces_wk_canary_required_for_e2ee
+  CHECK (encryption_mode = 'none' OR wk_canary IS NOT NULL);
+
 -- Immutable after create, parallel to encryption_mode: an editor with
 -- write access to the workspaces row could otherwise replace the canary
--- and brick WK validation for other members. Add a sibling trigger
--- workspaces_prevent_wk_canary_change() following the same pattern as
--- workspaces_prevent_encryption_mode_change above.
--- Format: enc:v1:base64url(nonce || ciphertext) of workspace_id as the
--- plaintext, with AAD = workspace_id || "canary" || schema_version.
+-- and brick WK validation for other members.
+CREATE OR REPLACE FUNCTION workspaces_prevent_wk_canary_change()
+  RETURNS trigger
+  LANGUAGE plpgsql AS $$
+begin
+  if OLD.wk_canary is distinct from NEW.wk_canary then
+    raise exception 'workspaces.wk_canary is immutable';
+  end if;
+  return NEW;
+end;
+$$;
+
+CREATE TRIGGER workspaces_prevent_wk_canary_change_trg
+  BEFORE UPDATE ON workspaces
+  FOR EACH ROW
+  EXECUTE FUNCTION workspaces_prevent_wk_canary_change();
+-- One-shot exception for the rotate_workspace_wk RPC (§14) which
+-- updates the canary alongside re-encrypted blocks.
 
 CREATE OR REPLACE FUNCTION create_workspace(
     p_name             text,
@@ -541,7 +563,10 @@ CREATE OR REPLACE FUNCTION create_workspace(
         <code>workspace_id || "canary" || schema_version</code>) to produce the
         <code>wk_canary</code>. The canary is a known-plaintext AEAD blob that any future device
         can decrypt to validate a pasted WK, even on a workspace that has no blocks yet.</li>
-      <li>Client stores the WK in localStorage at <code>(user_id, workspace_id) &rarr; raw bytes</code>.</li>
+      <li>Client stores the WK in localStorage at <code>(user_id, workspace_id) &rarr; raw bytes</code>,
+        and pins the workspace into the local known-E2EE set (per §6's downgrade-pin callout)
+        so future loads on this device don't trust a server-supplied
+        <code>encryption_mode = 'none'</code> for this workspace.</li>
       <li>Client calls <code>create_workspace(p_name, p_encryption_mode='e2ee', p_workspace_id, p_wk_canary)</code>
         with the client-chosen id so the canary's plaintext and AAD line up with the server's
         stored row. Server inserts <code>workspaces</code> with the canary and the owner's
@@ -564,7 +589,8 @@ CREATE OR REPLACE FUNCTION create_workspace(
         mismatch (right key, wrong workspace) both reject. Works for freshly invited / empty
         workspaces because the canary is created at workspace-create time, not derived from
         blocks.</li>
-      <li>On success: store in localStorage, render normally. On failure: surface "that key
+      <li>On success: store in localStorage, pin the workspace into the local known-E2EE set
+        (§6), render normally. On failure: surface "that key
         doesn't decrypt this workspace's data," let the user retry.</li>
     </ol>
 
