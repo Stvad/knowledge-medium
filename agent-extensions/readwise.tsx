@@ -7,7 +7,10 @@ import {
   showError, showInfo, showProgress, showPropertiesProp,
   showSuccess, typesFacet, useRepo,
   type PropertyEditorProps,
+  type PropertySchema,
 } from '@/extensions/api.js'
+import { PAGE_TYPE } from '@/data/blockTypes.js'
+import { aliasesProp } from '@/data/properties.js'
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter,
   DialogHeader, DialogTitle,
@@ -26,17 +29,14 @@ const READWISE_NS = '0d4f1c2e-7e9a-4f4d-a4f1-2c0a3a6e7f01'
 const TOKEN_KEY = 'knowledge-medium:readwise:token:v1'
 const OPEN_SETUP_EVENT = 'readwise:setup:open'
 const READWISE_API = 'https://readwise.io/api/v2'
+const READWISE_LIBRARY_TYPE = 'readwise-library'
+const READWISE_DOCUMENT_TYPE = 'readwise-document'
+const READWISE_HIGHLIGHT_TYPE = 'readwise-highlight'
+const READWISE_NOTE_TYPE = 'readwise-note'
 
 const DEFAULT_PAGE_TITLE_TEMPLATE = '{title}'
-const DEFAULT_BOOK_TEMPLATE =
-  'Author:: {author}\n' +
-  'Category:: {category}\n' +
-  'Source:: {source}\n' +
-  'URL:: {source_url}\n' +
-  'Readwise URL:: {readwise_url}\n' +
-  'Cover:: ![cover]({cover_image_url})\n' +
-  'Tags:: {tags}'
-const DEFAULT_HIGHLIGHT_TEMPLATE = '{text} ([readwise]({readwise_url}))'
+const DEFAULT_BOOK_TEMPLATE = ''
+const DEFAULT_HIGHLIGHT_TEMPLATE = '{text}'
 
 // ---------------------------------------------------------------------------
 // token helpers — never echo the value back through bridge / toast output
@@ -107,6 +107,101 @@ const highlightIdProp = defineProperty<string | undefined>('readwise:highlight_i
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
+const titleProp = defineProperty<string | undefined>('readwise:title', {
+  codec: codecs.optionalString,
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+const authorProp = defineProperty<string | undefined>('readwise:author', {
+  codec: codecs.optionalString,
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+const categoryProp = defineProperty<string | undefined>('readwise:category', {
+  codec: codecs.optionalString,
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+const sourceProp = defineProperty<string | undefined>('readwise:source', {
+  codec: codecs.optionalString,
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+const sourceUrlProp = defineProperty<string | undefined>('readwise:source_url', {
+  codec: codecs.optionalString,
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+const readwiseUrlProp = defineProperty<string | undefined>('readwise:readwise_url', {
+  codec: codecs.optionalString,
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+const coverImageUrlProp = defineProperty<string | undefined>('readwise:cover_image_url', {
+  codec: codecs.optionalString,
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+const documentNoteProp = defineProperty<string | undefined>('readwise:document_note', {
+  codec: codecs.optionalString,
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+const numHighlightsProp = defineProperty<number | undefined>('readwise:num_highlights', {
+  codec: codecs.optionalNumber,
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+const lastHighlightAtProp = defineProperty<string | undefined>('readwise:last_highlight_at', {
+  codec: codecs.optionalString,
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+const asinProp = defineProperty<string | undefined>('readwise:asin', {
+  codec: codecs.optionalString,
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+const tagsProp = defineProperty<string[]>('readwise:tags', {
+  codec: codecs.list(codecs.string),
+  defaultValue: [],
+  changeScope: ChangeScope.BlockDefault,
+})
+const locationProp = defineProperty<string | undefined>('readwise:location', {
+  codec: codecs.optionalString,
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+const locationTypeProp = defineProperty<string | undefined>('readwise:location_type', {
+  codec: codecs.optionalString,
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+const colorProp = defineProperty<string | undefined>('readwise:color', {
+  codec: codecs.optionalString,
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+const highlightedAtProp = defineProperty<string | undefined>('readwise:highlighted_at', {
+  codec: codecs.optionalString,
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+const updatedAtProp = defineProperty<string | undefined>('readwise:updated_at', {
+  codec: codecs.optionalString,
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+const createdAtProp = defineProperty<string | undefined>('readwise:created_at', {
+  codec: codecs.optionalString,
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+const noteForHighlightIdProp = defineProperty<string | undefined>('readwise:note_for_highlight_id', {
+  codec: codecs.optionalString,
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
 
 const readwisePrefsType = defineBlockType({
   id: 'readwise-prefs',
@@ -117,6 +212,71 @@ const readwisePrefsType = defineBlockType({
     autoSyncIntervalProp, connectedHintProp,
   ],
 })
+const readwiseLibraryType = defineBlockType({
+  id: READWISE_LIBRARY_TYPE,
+  label: 'Readwise library',
+})
+const readwiseDocumentType = defineBlockType({
+  id: READWISE_DOCUMENT_TYPE,
+  label: 'Readwise document',
+  description: 'A document imported from Readwise Reader or the Readwise export API.',
+  properties: [
+    userBookIdProp, titleProp, authorProp, categoryProp, sourceProp,
+    sourceUrlProp, readwiseUrlProp, coverImageUrlProp, documentNoteProp,
+    numHighlightsProp, lastHighlightAtProp, asinProp, tagsProp,
+  ],
+})
+const readwiseHighlightType = defineBlockType({
+  id: READWISE_HIGHLIGHT_TYPE,
+  label: 'Readwise highlight',
+  description: 'A highlight imported from Readwise.',
+  properties: [
+    highlightIdProp, userBookIdProp, readwiseUrlProp, locationProp, locationTypeProp,
+    colorProp, highlightedAtProp, updatedAtProp, createdAtProp, tagsProp,
+  ],
+})
+const readwiseNoteType = defineBlockType({
+  id: READWISE_NOTE_TYPE,
+  label: 'Readwise note',
+  properties: [noteForHighlightIdProp],
+})
+
+const DOCUMENT_PROPERTY_SCHEMAS = [
+  userBookIdProp,
+  titleProp,
+  authorProp,
+  categoryProp,
+  sourceProp,
+  sourceUrlProp,
+  readwiseUrlProp,
+  coverImageUrlProp,
+  documentNoteProp,
+  numHighlightsProp,
+  lastHighlightAtProp,
+  asinProp,
+  tagsProp,
+]
+const HIGHLIGHT_PROPERTY_SCHEMAS = [
+  userBookIdProp,
+  highlightIdProp,
+  readwiseUrlProp,
+  tagsProp,
+  locationProp,
+  locationTypeProp,
+  colorProp,
+  highlightedAtProp,
+  updatedAtProp,
+  createdAtProp,
+]
+const NOTE_PROPERTY_SCHEMAS = [
+  noteForHighlightIdProp,
+]
+const IMPORTED_PROPERTY_SCHEMAS = [
+  ...DOCUMENT_PROPERTY_SCHEMAS,
+  ...HIGHLIGHT_PROPERTY_SCHEMAS.filter(schema =>
+    !DOCUMENT_PROPERTY_SCHEMAS.some(existing => existing.name === schema.name)),
+  ...NOTE_PROPERTY_SCHEMAS,
+]
 
 // ---------------------------------------------------------------------------
 // template rendering
@@ -130,6 +290,7 @@ type BookRecord = {
   source_url?: string
   readwise_url?: string
   cover_image_url?: string
+  asin?: string
   book_tags?: Array<{ name?: string }>
   document_note?: string
   num_highlights?: number
@@ -154,7 +315,7 @@ type HighlightRecord = {
 
 const formatTags = (tags: Array<{ name?: string }> | undefined): string => {
   if (!tags || !tags.length) return ''
-  return tags.map(t => t.name).filter(Boolean).map(n => `#[[${n}]]`).join(' ')
+  return tags.map(t => t.name?.trim()).filter(Boolean).map(n => `#[[${n}]]`).join(' ')
 }
 
 const substitute = (template: string, vars: Record<string, string>): string => {
@@ -172,6 +333,7 @@ const bookVars = (b: BookRecord): Record<string, string> => ({
   source_url: b.source_url ?? '',
   readwise_url: b.readwise_url ?? '',
   cover_image_url: b.cover_image_url ?? '',
+  asin: b.asin ?? '',
   document_note: b.document_note ?? '',
   num_highlights: String(b.num_highlights ?? ''),
   last_highlight_at: b.last_highlight_at ?? '',
@@ -202,6 +364,160 @@ const renderTemplateLines = (template: string, vars: Record<string, string>): st
     .map(line => substitute(line, vars))
     .filter(line => line.trim().length > 0)
 }
+
+const templateKeys = (line: string): string[] =>
+  Array.from(line.matchAll(/\{([a-z_]+)\}/gi), match => match[1])
+
+const propertyBackedLine = (line: string, propertyBackedKeys: ReadonlySet<string>): boolean => {
+  const keys = templateKeys(line)
+  return keys.length > 0 && keys.every(key => propertyBackedKeys.has(key))
+}
+
+const renderSupplementalTemplateLines = (
+  template: string,
+  vars: Record<string, string>,
+  propertyBackedKeys: ReadonlySet<string>,
+): string[] => {
+  return template
+    .split('\n')
+    .filter(line => !propertyBackedLine(line, propertyBackedKeys))
+    .map(line => substitute(line, vars))
+    .filter(line => line.trim().length > 0)
+}
+
+const BOOK_PROPERTY_TEMPLATE_KEYS = new Set([
+  'author',
+  'asin',
+  'category',
+  'cover_image_url',
+  'document_note',
+  'last_highlight_at',
+  'num_highlights',
+  'readwise_url',
+  'source',
+  'source_url',
+  'tags',
+  'title',
+  'user_book_id',
+])
+
+const HIGHLIGHT_PROPERTY_TEMPLATE_KEYS = new Set([
+  'color',
+  'created_at',
+  'highlight_id',
+  'highlighted_at',
+  'location',
+  'location_type',
+  'note',
+  'readwise_url',
+  'tags',
+  'text',
+  'updated_at',
+])
+
+const nonEmptyString = (value: unknown): string | undefined => {
+  if (value === null || value === undefined) return undefined
+  const text = String(value).trim()
+  return text.length ? text : undefined
+}
+
+const tagNames = (tags: Array<{ name?: string }> | undefined): string[] =>
+  (tags ?? [])
+    .map(tag => tag.name?.trim())
+    .filter((name): name is string => Boolean(name))
+
+const optionalNumber = (value: unknown): number | undefined =>
+  typeof value === 'number' && Number.isFinite(value) ? value : undefined
+
+const sameJson = (a: unknown, b: unknown): boolean =>
+  JSON.stringify(a) === JSON.stringify(b)
+
+type ManagedPropertyEntry<T = any> = readonly [PropertySchema<T>, T | undefined]
+
+const applyManagedProperties = async (
+  tx: any,
+  blockId: string,
+  schemas: readonly PropertySchema<any>[],
+  entries: readonly ManagedPropertyEntry[],
+) => {
+  const row = await tx.get(blockId)
+  if (!row) return
+
+  const next = { ...row.properties }
+  let changed = false
+  const values = new Map<string, unknown>()
+  for (const [schema, value] of entries) {
+    if (value !== undefined) values.set(schema.name, schema.codec.encode(value))
+  }
+
+  for (const schema of schemas) {
+    if (!values.has(schema.name)) {
+      if (Object.prototype.hasOwnProperty.call(next, schema.name)) {
+        delete next[schema.name]
+        changed = true
+      }
+      continue
+    }
+    const encoded = values.get(schema.name)
+    if (!sameJson(next[schema.name], encoded)) {
+      next[schema.name] = encoded
+      changed = true
+    }
+  }
+
+  if (changed) await tx.update(blockId, { properties: next })
+}
+
+const mergeSourceOwnedAlias = async (
+  tx: any,
+  blockId: string,
+  previousTitle: string | undefined,
+  nextTitle: string,
+) => {
+  const current = await tx.getProperty(blockId, aliasesProp)
+  if (current.length === 0 || (previousTitle !== undefined && current.length === 1 && current[0] === previousTitle)) {
+    await tx.setProperty(blockId, aliasesProp, [nextTitle])
+  }
+}
+
+const documentPropertyEntries = (book: BookRecord): ManagedPropertyEntry[] => {
+  const tags = tagNames(book.book_tags)
+  return [
+    [userBookIdProp, String(book.user_book_id)],
+    [titleProp, nonEmptyString(book.title)],
+    [authorProp, nonEmptyString(book.author)],
+    [categoryProp, nonEmptyString(book.category)],
+    [sourceProp, nonEmptyString(book.source)],
+    [sourceUrlProp, nonEmptyString(book.source_url)],
+    [readwiseUrlProp, nonEmptyString(book.readwise_url)],
+    [coverImageUrlProp, nonEmptyString(book.cover_image_url)],
+    [documentNoteProp, nonEmptyString(book.document_note)],
+    [numHighlightsProp, optionalNumber(book.num_highlights)],
+    [lastHighlightAtProp, nonEmptyString(book.last_highlight_at)],
+    [asinProp, nonEmptyString(book.asin)],
+    [tagsProp, tags.length ? tags : undefined],
+  ]
+}
+
+const highlightPropertyEntries = (book: BookRecord, highlight: HighlightRecord): ManagedPropertyEntry[] => {
+  const tags = tagNames(highlight.tags)
+  return [
+    [highlightIdProp, String(highlight.id)],
+    [userBookIdProp, String(book.user_book_id)],
+    [readwiseUrlProp, nonEmptyString(highlight.readwise_url)],
+    [locationProp, nonEmptyString(highlight.location)],
+    [locationTypeProp, nonEmptyString(highlight.location_type)],
+    [colorProp, nonEmptyString(highlight.color)],
+    [highlightedAtProp, nonEmptyString(highlight.highlighted_at)],
+    [updatedAtProp, nonEmptyString(highlight.updated_at)],
+    [createdAtProp, nonEmptyString(highlight.created_at)],
+    [tagsProp, tags.length ? tags : undefined],
+  ]
+}
+
+const notePropertyEntries = (highlight: HighlightRecord): ManagedPropertyEntry[] => [
+  [noteForHighlightIdProp, String(highlight.id)],
+]
 
 // ---------------------------------------------------------------------------
 // Readwise export pagination
@@ -235,19 +551,23 @@ type SyncDeps = {
 
 const ensureRoot = async (repo: any, workspaceId: string) => {
   const rootId = pluginBlockId(workspaceId, READWISE_NS, 'library-root')
+  const typeSnapshot = repo.snapshotTypeRegistries()
   await repo.tx(async (tx: any) => {
     const existing = await tx.get(rootId)
-    if (existing) return
-    const roots = await tx.childrenOf(null, workspaceId)
-    const lastKey = roots.length ? roots[roots.length - 1].orderKey : null
-    await tx.create({
-      id: rootId,
-      workspaceId,
-      parentId: null,
-      orderKey: keyBetween(lastKey, null),
-      content: 'Readwise Library',
-      properties: { alias: ['Readwise Library'], types: ['page'] },
-    })
+    if (!existing) {
+      const roots = await tx.childrenOf(null, workspaceId)
+      const lastKey = roots.length ? roots[roots.length - 1].orderKey : null
+      await tx.create({
+        id: rootId,
+        workspaceId,
+        parentId: null,
+        orderKey: keyBetween(lastKey, null),
+        content: 'Readwise Library',
+        properties: {},
+      })
+    }
+    await repo.addTypeInTx(tx, rootId, PAGE_TYPE, { [aliasesProp.name]: ['Readwise Library'] }, typeSnapshot)
+    await repo.addTypeInTx(tx, rootId, READWISE_LIBRARY_TYPE, {}, typeSnapshot)
   }, { scope: ChangeScope.BlockDefault, description: 'readwise: create root' })
   return rootId
 }
@@ -264,10 +584,11 @@ const syncBookToBlocks = async (
   const bookId = pluginBlockId(workspaceId, READWISE_NS, `book:${book.user_book_id}`)
   const bVars = bookVars(book)
   const title = substitute(pageTitleTemplate, bVars).trim() || `Readwise: ${book.title ?? book.user_book_id}`
-  const metaLines = renderTemplateLines(bookTemplate, bVars)
+  const supplementalLines = renderSupplementalTemplateLines(bookTemplate, bVars, BOOK_PROPERTY_TEMPLATE_KEYS)
+  const typeSnapshot = repo.snapshotTypeRegistries()
 
   await repo.tx(async (tx: any) => {
-    // 1. book page
+    // 1. document page
     const existing = await tx.get(bookId)
     if (!existing) {
       const siblings = await tx.childrenOf(rootId)
@@ -278,32 +599,30 @@ const syncBookToBlocks = async (
         parentId: rootId,
         orderKey: keyBetween(lastKey, null),
         content: title,
-        properties: {
-          alias: [title],
-          types: ['page'],
-          'readwise:user_book_id': String(book.user_book_id),
-        },
+        properties: {},
       })
     } else if (existing.content !== title) {
       await tx.update(bookId, { content: title })
     }
-    await tx.setProperty(bookId, userBookIdProp, String(book.user_book_id))
+    await repo.addTypeInTx(tx, bookId, PAGE_TYPE, { [aliasesProp.name]: [title] }, typeSnapshot)
+    await repo.addTypeInTx(tx, bookId, READWISE_DOCUMENT_TYPE, {}, typeSnapshot)
+    await mergeSourceOwnedAlias(tx, bookId, existing?.content, title)
+    await applyManagedProperties(tx, bookId, DOCUMENT_PROPERTY_SCHEMAS, documentPropertyEntries(book))
 
-    // 2. meta children — first N children of the book page are meta lines;
-    //    they're upserted by deterministic id so re-syncs replace them in
-    //    place. If the user edits a meta block we'll happily clobber on the
-    //    next sync (matches Roam's behavior).
+    // 2. supplemental template children. Property-backed template lines are
+    //    intentionally omitted here because their values live on the
+    //    Readwise document type.
     const bookKids = await tx.childrenOf(bookId)
-    const metaIds = metaLines.map((_, i) =>
+    const metaIds = supplementalLines.map((_, i) =>
       pluginBlockId(workspaceId, READWISE_NS, `book:${book.user_book_id}:meta:${i}`))
 
-    // Meta lines sit at the top of the book page, before any other children.
+    // Template lines sit at the top of the book page, before any other children.
     const firstNonMetaKey = bookKids.find((k: any) => !metaIds.includes(k.id))?.orderKey ?? null
-    const metaKeys = keysBetween(null, firstNonMetaKey, metaLines.length || 1)
+    const metaKeys = keysBetween(null, firstNonMetaKey, supplementalLines.length || 1)
 
-    for (let i = 0; i < metaLines.length; i++) {
+    for (let i = 0; i < supplementalLines.length; i++) {
       const id = metaIds[i]
-      const content = metaLines[i]
+      const content = supplementalLines[i]
       const orderKey = metaKeys[i]
       const existingMetaBlock = await tx.get(id)
       if (!existingMetaBlock) {
@@ -339,8 +658,12 @@ const syncBookToBlocks = async (
       const hVars = highlightVars(h)
       const hLines = renderTemplateLines(highlightTemplate, hVars)
       const hContent = hLines[0] ?? (h.text ?? '')
-      const noteLines = hLines.slice(1)
-      const noteText = h.note?.trim()
+      const noteLines = renderSupplementalTemplateLines(
+        highlightTemplate.split('\n').slice(1).join('\n'),
+        hVars,
+        HIGHLIGHT_PROPERTY_TEMPLATE_KEYS,
+      )
+      const noteText = nonEmptyString(h.note)
 
       const existingH = await tx.get(hId)
       if (!existingH) {
@@ -350,19 +673,17 @@ const syncBookToBlocks = async (
           parentId: bookId,
           orderKey: newHighlightKeys[i],
           content: hContent,
-          properties: {
-            'readwise:highlight_id': String(h.id),
-          },
+          properties: {},
         })
       } else if (existingH.content !== hContent) {
         await tx.update(hId, { content: hContent })
       }
-      await tx.setProperty(hId, highlightIdProp, String(h.id))
+      await repo.addTypeInTx(tx, hId, READWISE_HIGHLIGHT_TYPE, {}, typeSnapshot)
+      await applyManagedProperties(tx, hId, HIGHLIGHT_PROPERTY_SCHEMAS, highlightPropertyEntries(book, h))
 
       // a single deterministic note child
       const noteId = pluginBlockId(workspaceId, READWISE_NS, `hl:${h.id}:note`)
-      const finalNoteText = noteText && noteText.length ? `Note:: ${noteText}` : ''
-      const extraLines = [finalNoteText, ...noteLines].filter(s => s && s.trim().length)
+      const extraLines = [noteText, ...noteLines].filter(s => s && s.trim().length)
       const noteBlock = await tx.get(noteId)
       if (extraLines.length === 0) {
         if (noteBlock) await tx.delete(noteId)
@@ -375,10 +696,13 @@ const syncBookToBlocks = async (
             id: noteId, workspaceId, parentId: hId,
             orderKey: keyBetween(lastHKid, null),
             content: noteContent,
+            properties: {},
           })
         } else if (noteBlock.content !== noteContent) {
           await tx.update(noteId, { content: noteContent })
         }
+        await repo.addTypeInTx(tx, noteId, READWISE_NOTE_TYPE, {}, typeSnapshot)
+        await applyManagedProperties(tx, noteId, NOTE_PROPERTY_SCHEMAS, notePropertyEntries(h))
       }
     }
   }, { scope: ChangeScope.BlockDefault, description: `readwise: sync book ${book.user_book_id}` })
@@ -700,7 +1024,7 @@ const pageTitleEditor = definePropertyEditorOverride<string>({
 })
 const bookTemplateEditor = definePropertyEditorOverride<string>({
   name: bookTemplateProp.name,
-  label: 'Book metadata template',
+  label: 'Document supplemental template',
   Editor: TextareaEditor,
 })
 const highlightTemplateEditor = definePropertyEditorOverride<string>({
@@ -721,6 +1045,10 @@ const source = 'readwise'
 
 export default [
   typesFacet.of(readwisePrefsType, { source }),
+  typesFacet.of(readwiseLibraryType, { source }),
+  typesFacet.of(readwiseDocumentType, { source }),
+  typesFacet.of(readwiseHighlightType, { source }),
+  typesFacet.of(readwiseNoteType, { source }),
 
   propertySchemasFacet.of(lastSyncedAtProp, { source }),
   propertySchemasFacet.of(syncSinceProp, { source }),
@@ -729,8 +1057,7 @@ export default [
   propertySchemasFacet.of(highlightTemplateProp, { source }),
   propertySchemasFacet.of(autoSyncIntervalProp, { source }),
   propertySchemasFacet.of(connectedHintProp, { source }),
-  propertySchemasFacet.of(userBookIdProp, { source }),
-  propertySchemasFacet.of(highlightIdProp, { source }),
+  ...IMPORTED_PROPERTY_SCHEMAS.map(schema => propertySchemasFacet.of(schema, { source })),
 
   propertyEditorOverridesFacet.of(connectedEditor, { source }),
   propertyEditorOverridesFacet.of(lastSyncedEditor, { source }),
