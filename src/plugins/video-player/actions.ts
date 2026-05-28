@@ -19,6 +19,7 @@ export const VIDEO_PLAYER_CONTEXT = 'video-player'
 export interface VideoPlayerShortcutDependencies extends BaseShortcutDependencies {
   block: Block
   videoBlock: Block
+  renderScopeId?: string
   editorView?: EditorView
 }
 
@@ -33,6 +34,11 @@ const isVideoPlayerShortcutDependencies = (
   deps.block instanceof Block &&
   'videoBlock' in deps &&
   deps.videoBlock instanceof Block &&
+  (
+    !('renderScopeId' in deps) ||
+    deps.renderScopeId === undefined ||
+    typeof deps.renderScopeId === 'string'
+  ) &&
   (
     !('editorView' in deps) ||
     deps.editorView === undefined ||
@@ -81,6 +87,7 @@ const createTimestampNote = async (
   videoBlock: Block,
   uiStateBlock: Block,
   text: string,
+  renderScopeId?: string,
 ): Promise<void> => {
   const newId = await videoBlock.repo.mutate.createChild({
     parentId: videoBlock.id,
@@ -88,7 +95,7 @@ const createTimestampNote = async (
     position: {kind: 'first'},
   }) as string
 
-  if (newId) void focusBlock(uiStateBlock, newId)
+  if (newId) void focusBlock(uiStateBlock, newId, {renderScopeId})
 }
 
 const insertVideoTimestamp: ActionConfig = {
@@ -108,7 +115,7 @@ const insertVideoTimestamp: ActionConfig = {
     }
 
     if (deps.block.id === deps.videoBlock.id) {
-      await createTimestampNote(deps.videoBlock, deps.uiStateBlock, timestamp)
+      await createTimestampNote(deps.videoBlock, deps.uiStateBlock, timestamp, deps.renderScopeId)
       return
     }
 
@@ -135,7 +142,7 @@ const toggleVideoNotesView: ActionConfig = {
       return
     }
 
-    await enterVideoNotesView(deps.videoBlock, deps.uiStateBlock)
+    await enterVideoNotesView(deps.videoBlock, deps.uiStateBlock, deps.renderScopeId)
   },
   defaultBinding: {
     keys: '$mod+Shift+n',
@@ -158,6 +165,10 @@ export const videoPlayerShortcutActivation: ShortcutActivationContribution = con
     block: context.block,
     videoBlock: context.repo.block(videoBlockId),
   }
+  const renderScopeId = typeof context.blockContext?.renderScopeId === 'string'
+    ? context.blockContext.renderScopeId
+    : undefined
+  if (renderScopeId) dependencies.renderScopeId = renderScopeId
 
   if (context.surface === 'codemirror') {
     if (!context.editorView || context.block.id === videoBlockId) return null

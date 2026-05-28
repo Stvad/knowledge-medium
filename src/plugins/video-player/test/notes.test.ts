@@ -69,10 +69,10 @@ const makeBlocks = ({
 }
 
 describe('video notes view', () => {
-  it('creates and focuses an editable first note when entering notes view without children', async () => {
+  it('creates and focuses an editable first note in the current render scope', async () => {
     const {createChild, setUiProperty, setVideoProperty, uiStateBlock, videoBlock} = makeBlocks()
 
-    await enterVideoNotesView(videoBlock, uiStateBlock)
+    await enterVideoNotesView(videoBlock, uiStateBlock, 'embed:source:video-1:0')
 
     expect(setVideoProperty).toHaveBeenCalledWith(videoPlayerViewProp, 'notes')
     expect(createChild).toHaveBeenCalledWith({
@@ -81,7 +81,7 @@ describe('video notes view', () => {
     })
     expect(setUiProperty).toHaveBeenCalledWith(focusedBlockLocationProp, {
       blockId: 'note-1',
-      renderScopeId: 'outline:note-1',
+      renderScopeId: 'embed:source:video-1:0',
     })
     expect(setUiProperty).toHaveBeenCalledWith(focusedBlockIdProp, undefined)
     expect(setUiProperty).toHaveBeenCalledWith(editorSelection, {

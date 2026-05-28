@@ -6,7 +6,7 @@ import {
 } from '@/components/renderer/DefaultBlockRenderer.js'
 import { useEffect, useRef, useState } from 'react'
 import type { CSSProperties, KeyboardEvent, PointerEvent } from 'react'
-import { NestedBlockContextProvider } from '@/context/block.js'
+import { NestedBlockContextProvider, useBlockContext } from '@/context/block.js'
 import { useContent, usePropertyValue } from '@/hooks/block.js'
 import { useUIStateBlock } from '@/data/globalState.js'
 import { Button } from '@/components/ui/button.js'
@@ -55,6 +55,7 @@ const VideoPlayerContentRenderer = ({block}: BlockRendererProps) => {
   const content = useContent(block)
   const [view] = usePropertyValue(block, videoPlayerViewProp)
   const uiStateBlock = useUIStateBlock()
+  const blockContext = useBlockContext()
   const player = useRef<HTMLVideoElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const [isPlaying, setIsPlaying] = useState(false)
@@ -134,7 +135,12 @@ const VideoPlayerContentRenderer = ({block}: BlockRendererProps) => {
           aria-label="Open video notes view"
           title="Open video notes view"
           className="absolute right-2 top-2 opacity-0 shadow-md transition-opacity group-hover/video-player:opacity-100 focus-visible:opacity-100"
-          onClick={() => { void enterVideoNotesView(block, uiStateBlock) }}
+          onClick={() => {
+            const renderScopeId = typeof blockContext.renderScopeId === 'string'
+              ? blockContext.renderScopeId
+              : undefined
+            void enterVideoNotesView(block, uiStateBlock, renderScopeId)
+          }}
         >
           <PanelRightOpen className="h-4 w-4"/>
         </Button>

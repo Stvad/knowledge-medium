@@ -6,8 +6,15 @@ import {
 } from '@/data/properties.js'
 import { videoPlayerViewProp } from './view.ts'
 
-const focusNewVideoNote = async (noteId: string, uiStateBlock: Block): Promise<void> => {
-  await focusBlock(uiStateBlock, noteId, {edit: !uiStateBlock.repo.isReadOnly})
+const focusNewVideoNote = async (
+  noteId: string,
+  uiStateBlock: Block,
+  renderScopeId?: string,
+): Promise<void> => {
+  await focusBlock(uiStateBlock, noteId, {
+    edit: !uiStateBlock.repo.isReadOnly,
+    renderScopeId,
+  })
   await uiStateBlock.set(editorSelection, {blockId: noteId, start: 0})
 
   if (uiStateBlock.repo.isReadOnly) return
@@ -20,6 +27,7 @@ const focusNewVideoNote = async (noteId: string, uiStateBlock: Block): Promise<v
 export const ensureEditableVideoNoteChild = async (
   videoBlock: Block,
   uiStateBlock: Block,
+  renderScopeId?: string,
 ): Promise<string | null> => {
   if (videoBlock.repo.isReadOnly) return null
 
@@ -33,14 +41,15 @@ export const ensureEditableVideoNoteChild = async (
 
   if (!newId) return null
 
-  await focusNewVideoNote(newId, uiStateBlock)
+  await focusNewVideoNote(newId, uiStateBlock, renderScopeId)
   return newId
 }
 
 export const enterVideoNotesView = async (
   videoBlock: Block,
   uiStateBlock: Block,
+  renderScopeId?: string,
 ): Promise<void> => {
   await videoBlock.set(videoPlayerViewProp, 'notes')
-  await ensureEditableVideoNoteChild(videoBlock, uiStateBlock)
+  await ensureEditableVideoNoteChild(videoBlock, uiStateBlock, renderScopeId)
 }
