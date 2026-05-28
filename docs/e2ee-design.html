@@ -558,19 +558,24 @@
 
     <p>One small migration. No changes to <code>blocks</code> columns; no new tables.</p>
 
-    <pre><code>-- encryption_mode is a server-side PROJECTION of canary presence, not the
+    <pre><code>-- Every object below is schema-qualified (public.*). The repo's migrations run
+-- with an empty search_path (the consolidated initial migration sets
+-- search_path = '' and qualifies all objects), so an unqualified DROP/CREATE/
+-- ALTER/GRANT would not resolve when this sketch is copied into a migration.
+--
+-- encryption_mode is a server-side PROJECTION of canary presence, not the
 -- source of truth: per §6, a client decides "E2EE" from holding a validated
 -- WK, never from this column. It exists for server-side feature gating and
 -- as a UX hint; the CHECK below keeps it in lockstep with wk_canary. It is
 -- an immutable property of a workspace once set.
-ALTER TABLE workspaces ADD COLUMN encryption_mode TEXT
+ALTER TABLE public.workspaces ADD COLUMN encryption_mode TEXT
   NOT NULL DEFAULT 'none'
   CHECK (encryption_mode IN ('none', 'e2ee'));
 
 -- Per-column immutability trigger, matching the existing
 -- blocks_prevent_workspace_change() pattern in the consolidated
 -- migration (concrete function per invariant, not a generic helper).
-CREATE OR REPLACE FUNCTION workspaces_prevent_encryption_mode_change()
+CREATE OR REPLACE FUNCTION public.workspaces_prevent_encryption_mode_change()
   RETURNS trigger
   LANGUAGE plpgsql AS $$
 begin
@@ -583,9 +588,9 @@ end;
 $$;
 
 CREATE TRIGGER workspaces_prevent_encryption_mode_change_trg
-  BEFORE UPDATE ON workspaces
+  BEFORE UPDATE ON public.workspaces
   FOR EACH ROW
-  EXECUTE FUNCTION workspaces_prevent_encryption_mode_change();
+  EXECUTE FUNCTION public.workspaces_prevent_encryption_mode_change();
 
 -- create_workspace accepts encryption_mode and a key-check canary
 -- so we can validate pasted WKs even on workspaces that have no
@@ -596,7 +601,7 @@ CREATE TRIGGER workspaces_prevent_encryption_mode_change_trg
 -- (right key on the wrong workspace's canary fails the plaintext check).
 -- wk_canary format: enc:v1:base64url(nonce || ciphertext) of workspace_id
 -- as the plaintext, with AAD = workspace_id || "canary" || schema_version.
-ALTER TABLE workspaces ADD COLUMN wk_canary TEXT;
+ALTER TABLE public.workspaces ADD COLUMN wk_canary TEXT;
 
 -- NULL for plaintext workspaces; required for E2EE so new devices can
 -- validate a pasted WK before any blocks exist. Two-way (biconditional)
@@ -616,17 +621,17 @@ ALTER TABLE workspaces ADD COLUMN wk_canary TEXT;
 -- require the envelope SHAPE: enc:v1: + a base64url payload of at least
 -- nonce(12B)+tag(16B) = 28B, i.e. >= 38 base64url chars. One shared IMMUTABLE
 -- helper keeps the canary CHECK and the blocks trigger in lockstep.
-CREATE OR REPLACE FUNCTION is_enc_v1_envelope(v text)
+CREATE OR REPLACE FUNCTION public.is_enc_v1_envelope(v text)
   RETURNS boolean
   LANGUAGE sql IMMUTABLE AS $$
   SELECT v ~ '^enc:v1:[A-Za-z0-9_-]{38,}={0,2}$'
 $$;
 
-ALTER TABLE workspaces
+ALTER TABLE public.workspaces
   ADD CONSTRAINT workspaces_wk_canary_matches_mode
   CHECK (
     (encryption_mode = 'e2ee') = (wk_canary IS NOT NULL)
-    AND (encryption_mode &lt;&gt; 'e2ee' OR is_enc_v1_envelope(wk_canary))
+    AND (encryption_mode &lt;&gt; 'e2ee' OR public.is_enc_v1_envelope(wk_canary))
   );
 
 -- Immutable after create: an editor with write access to the workspaces row
@@ -636,8 +641,8 @@ ALTER TABLE workspaces
 -- any caller who can run SQL as the authenticated role can set it to 'on'
 -- before updating wk_canary, so it cannot scope a bypass to a single RPC.
 -- Instead make wk_canary (and encryption_mode) unwritable by client roles:
-REVOKE UPDATE ON workspaces FROM anon, authenticated;
-GRANT  UPDATE (name, update_time) ON workspaces TO authenticated;
+REVOKE UPDATE ON public.workspaces FROM anon, authenticated;
+GRANT  UPDATE (name, update_time) ON public.workspaces TO authenticated;
 -- Grant UPDATE only on the columns clients legitimately write — name and
 -- update_time (renameWorkspace in src/data/workspaces.ts updates both, and the
 -- existing migration already column-grants both) — and omit wk_canary and
@@ -657,9 +662,9 @@ GRANT  UPDATE (name, update_time) ON workspaces TO authenticated;
 -- existing create_workspace(p_name text) rather than replace it — and
 -- create_workspace('foo') would then be ambiguous. Drop the old signature
 -- explicitly, then create the new one and grant it.
-DROP FUNCTION IF EXISTS create_workspace(text);
+DROP FUNCTION IF EXISTS public.create_workspace(text);
 
-CREATE OR REPLACE FUNCTION create_workspace(
+CREATE OR REPLACE FUNCTION public.create_workspace(
     p_name             text,
     p_encryption_mode  text DEFAULT 'none',  -- 'none' | 'e2ee'
     p_workspace_id     text DEFAULT NULL,    -- REQUIRED for e2ee (guard below);
@@ -691,7 +696,7 @@ begin
 end;
 $$;
 
-GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
+GRANT EXECUTE ON FUNCTION public.create_workspace(text, text, text, text)
   TO anon, authenticated, service_role;
 
 -- Defense-in-depth: "the server only sees ciphertext for e2ee workspaces"
@@ -706,7 +711,7 @@ GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
 -- A CHECK can't read another table, so this is a BEFORE trigger that looks the
 -- workspace up (PK lookup, cheap). The client encrypts even "empty" values, so
 -- an e2ee block never legitimately holds bare ''/{}/[].
-CREATE OR REPLACE FUNCTION blocks_require_ciphertext_for_e2ee()
+CREATE OR REPLACE FUNCTION public.blocks_require_ciphertext_for_e2ee()
   RETURNS trigger
   LANGUAGE plpgsql AS $$
 begin
@@ -714,9 +719,9 @@ begin
     select 1 from public.workspaces w
     where w.id = NEW.workspace_id and w.encryption_mode = 'e2ee'
   ) and not (
-    is_enc_v1_envelope(NEW.content) and
-    is_enc_v1_envelope(NEW.properties_json) and
-    is_enc_v1_envelope(NEW.references_json)
+    public.is_enc_v1_envelope(NEW.content) and
+    public.is_enc_v1_envelope(NEW.properties_json) and
+    public.is_enc_v1_envelope(NEW.references_json)
   ) then
     raise exception 'blocks in an e2ee workspace must carry a well-formed enc:v1: envelope in all content columns';
   end if;
@@ -727,7 +732,7 @@ $$;
 CREATE TRIGGER blocks_require_ciphertext_for_e2ee_trg
   BEFORE INSERT OR UPDATE ON public.blocks
   FOR EACH ROW
-  EXECUTE FUNCTION blocks_require_ciphertext_for_e2ee();</code></pre>
+  EXECUTE FUNCTION public.blocks_require_ciphertext_for_e2ee();</code></pre>
 
     <p>
       That's the entire server-side schema change. Notably <em>not</em> added (saved for the
