@@ -121,6 +121,24 @@ Lower-effort variant: leave the direct-call pattern, but lift the focus dance in
 
 Originally surfaced while debugging codex-flagged P2s on PR #21 (palette quick-action race + edit-mode latch). The handler-level workaround landed; this is the architectural cleanup.
 
+### Semantic action groups for decorator targets
+
+SRS and Readwise both want to intercept the same user intent — "mark this block as complete/reviewed" — across three concrete actions: `todo.cycle`, `edit.cm.todo.cycle`, and `block.swipe-right`. Today each plugin contributes three decorators. That is locally simple and matches the current `actionDecoratorsFacet` contract, but it leaks the physical action list into every plugin that wants to specialize the semantic behavior.
+
+Important distinction: the todo actions already delegate to one implementation function (`cycleTodoState`), but decorators do not wrap implementation calls. They wrap registered `ActionConfig` records by exact `action.id` plus optional context. So "decorate only todo cycle" would miss edit-mode and swipe-right unless those actions stopped being distinct action records.
+
+Explore adding semantic grouping metadata to actions, e.g. `groups: ['block.primary-complete']`, and letting decorators target a group as well as an id. Todo would mark all three concrete actions with the group; SRS/Readwise would contribute one group decorator that checks the block type and either consumes the action or falls through. Keep group membership as metadata during `getEffectiveActions` expansion — not a dispatch alias — so `block.swipe-right` remains a gesture-owned action and the swipe menu does not have to route through keyboard active-context dispatch.
+
+Questions to answer before building:
+
+- Does `ActionDecorator` grow `groupId?: string`, or do actions expose `aliases?: readonly string[]` and decorators keep the single `actionId` field?
+- What is the ordering rule when both id-targeted and group-targeted decorators match the same action? Preserve contribution order if possible.
+- Should group decorators optionally constrain context, same as id decorators do today?
+- How should command palette / shortcut settings display grouped semantics without hiding the concrete action id that the user binds?
+- Is this worth a runtime semantic change, or is a helper like `decorateActions([ids...], factory)` enough until a third plugin needs the same pattern?
+
+Acceptance for the exploration: produce a small design note or spike with tests around `getEffectiveActions`, compare it against the helper-only option, and only then migrate SRS/Readwise. Avoid making `block.swipe-right` delegate to `todo.cycle`; that would blur gesture deps with active keyboard contexts and make swipe behavior harder to reason about.
+
 ### Schema-rename does not cascade — instance values orphan on rename
 
 When a user renames a `property-schema` block (editing `property-schema:name` via `PropertySchemaBlockRenderer`), the schema republishes under the new name but every instance block's `properties_json` is still keyed by the OLD name. The old name has values but no schema; the new name has a schema but no values. The renamed property silently disappears from the UI.
