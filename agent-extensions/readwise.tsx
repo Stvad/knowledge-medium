@@ -399,7 +399,14 @@ const templateKeys = (line: string): string[] =>
 
 const propertyBackedLine = (line: string, propertyBackedKeys: ReadonlySet<string>): boolean => {
   const keys = templateKeys(line)
-  return keys.length > 0 && keys.every(key => propertyBackedKeys.has(key))
+  if (keys.length === 0 || !keys.every(key => propertyBackedKeys.has(key))) return false
+  // Only treat the line as fully property-backed (and therefore safe to drop,
+  // since the managed properties now carry these values) when it is *nothing
+  // but* those placeholders plus whitespace. A line like `My note: {note}` or
+  // `Review prompt for {title}` carries literal text the properties don't
+  // represent, so dropping it would lose the user's custom template output —
+  // keep it and render it as a supplemental line instead.
+  return line.replace(/\{[a-z_]+\}/gi, '').trim().length === 0
 }
 
 const renderSupplementalTemplateLines = (
@@ -599,12 +606,6 @@ const toggleHighlightReviewed = async (block: any): Promise<boolean> => {
   return true
 }
 
-const isReadwiseHighlightRow = (row: any): boolean => {
-  const properties = row?.properties ?? {}
-  return getBlockTypes(row).includes(READWISE_HIGHLIGHT_TYPE) ||
-    Object.prototype.hasOwnProperty.call(properties, highlightIdProp.name)
-}
-
 const decorateActionToToggleReadwiseReview = (
   actionId: string,
   context?: ActionContextType,
@@ -760,12 +761,12 @@ const syncBookToBlocks = async (
     const existing = await tx.get(bookId)
     if (!existing) {
       const siblings = await tx.childrenOf(rootId)
-      const lastKey = siblings.length ? siblings[siblings.length - 1].orderKey : null
+      const firstKey = siblings.length ? siblings[0].orderKey : null
       await tx.create({
         id: bookId,
         workspaceId,
         parentId: rootId,
-        orderKey: keyBetween(lastKey, null),
+        orderKey: keyBetween(null, firstKey),
         content: title,
         properties: {},
       })
@@ -813,10 +814,7 @@ const syncBookToBlocks = async (
 
     // 3. highlights live under a deterministic sub-bullet on the document
     //    page, with notes still nested under their highlight.
-    const currentBookKids = await tx.childrenOf(bookId)
-    const directHighlightKids = currentBookKids.filter((k: any) =>
-      k.id !== highlightsSectionId && isReadwiseHighlightRow(k))
-    if (!highlights.length && !directHighlightKids.length) return
+    if (!highlights.length) return
 
     await ensureHighlightsSection(tx, workspaceId, bookId, highlightsSectionId, metaIds)
 
@@ -887,23 +885,6 @@ const syncBookToBlocks = async (
         }
         await repo.addTypeInTx(tx, noteId, READWISE_NOTE_TYPE, {}, typeSnapshot)
         await applyManagedProperties(tx, noteId, NOTE_PROPERTY_SCHEMAS, notePropertyEntries(h))
-      }
-    }
-
-    const refreshedBookKids = await tx.childrenOf(bookId)
-    const strayHighlightKids = refreshedBookKids.filter((k: any) =>
-      k.id !== highlightsSectionId && isReadwiseHighlightRow(k))
-    if (strayHighlightKids.length) {
-      const refreshedSectionKids = await tx.childrenOf(highlightsSectionId)
-      const lastSectionKey = refreshedSectionKids.length
-        ? refreshedSectionKids[refreshedSectionKids.length - 1].orderKey
-        : null
-      const strayKeys = keysBetween(lastSectionKey, null, strayHighlightKids.length)
-      for (let i = 0; i < strayHighlightKids.length; i++) {
-        await tx.move(strayHighlightKids[i].id, {
-          parentId: highlightsSectionId,
-          orderKey: strayKeys[i],
-        })
       }
     }
   }, { scope: ChangeScope.BlockDefault, description: `readwise: sync book ${book.user_book_id}` })
