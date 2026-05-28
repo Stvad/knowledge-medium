@@ -763,20 +763,31 @@ CREATE OR REPLACE FUNCTION create_workspace(
       The local <code>blocks</code> table holds ciphertext at rest, exactly matching the server.
       A new async user-defined function &mdash; <code>e2ee_decrypt_json(workspace_id, value)
       &rarr; text</code> &mdash; is registered against the local SQLite via
-      <code>sqlite3.create_function</code>. Three behaviors based on input:
+      <code>sqlite3.create_function</code>. The UDF needs to know the workspace's
+      <code>encryption_mode</code> to dispatch correctly; cache it JS-side at session start (the
+      mode is immutable per §7) so each call is a Map lookup, not a SQL subquery. Four behaviors
+      based on (mode, input):
     </p>
     <ul>
-      <li><strong>Plaintext input</strong> (no <code>enc:v1:</code> prefix): pass-through unchanged.
-        Plaintext-workspace rows aren't affected.</li>
-      <li><strong>Encrypted input, WK available</strong>: look up the WK from the in-memory store,
-        call <code>crypto.subtle.decrypt</code>, return plaintext JSON text.</li>
-      <li><strong>Encrypted input, WK absent (locked workspace)</strong>: return <code>NULL</code>.
-        This is the critical fallback. PowerSync's sync apply can land encrypted rows before the
-        user has pasted the WK; Layout C routes those writes through the maintenance triggers
-        immediately. With the UDF returning NULL, <code>json_each(NULL, '$.alias')</code> yields
-        zero rows, <code>json(NULL)</code> in the row-event snapshot yields NULL, and the
-        indexes/audit log simply skip the row. Sync apply succeeds. The per-workspace backfill on
-        WK paste (below) repopulates everything once the key is available.</li>
+      <li><strong>Plaintext workspace, any input</strong>: pass-through unchanged. The UDF only
+        ever runs on the three content columns; for plaintext workspaces those are already
+        plaintext.</li>
+      <li><strong>E2EE workspace, encrypted input (<code>enc:v1:</code> prefix), WK available</strong>:
+        look up the WK, call <code>crypto.subtle.decrypt</code>, return plaintext JSON text.</li>
+      <li><strong>E2EE workspace, encrypted input, WK absent (locked workspace)</strong>: return
+        <code>NULL</code>. Sync apply can land encrypted rows before the user has pasted the WK;
+        the UDF returning NULL makes <code>json_each(NULL, '$.alias')</code> yield zero rows,
+        <code>json(NULL)</code> yield NULL, and the indexes/audit log skip the row. Sync apply
+        succeeds. Per-workspace backfill on WK paste repopulates.</li>
+      <li><strong>E2EE workspace, <em>unprefixed</em> input</strong>: return <code>NULL</code> and
+        record a tamper signal. This is the downgrade-attack defense at the UDF layer. A hostile
+        server could strip the <code>enc:v1:</code> prefix and serve attacker-controlled plaintext
+        for an E2EE row; the §6 downgrade guard catches this at <code>parseBlockRow</code> for
+        app reads, but trigger-driven side tables and the row-event/<code>BlockCache</code> path
+        fire <em>before</em> that guard. Without this UDF-level check, attacker plaintext would
+        seed FTS, aliases, references, and the row-event cache as trusted content. Treat
+        unprefixed-in-E2EE the same as locked: trigger maintenance no-ops, surface a tamper warning
+        in the UI.</li>
     </ul>
     <p>
       The row_event snapshot triggers in <code>clientSchema.ts</code> need the UDF wrap too &mdash;
@@ -846,13 +857,21 @@ WHERE typeof(je.value) = 'text';</code></pre>
     <p><strong>What the survey did surface:</strong></p>
     <ul>
       <li><strong>Trigger surface is wider than just <code>clientSchema.ts</code>.</strong>
-        Confirmed UDF-wrap targets: 7 triggers in
-        <code>src/data/internals/clientSchema.ts</code> (row-events, alias, type, FTS, plus the
-        upload-routing trigger), 3 in <code>src/plugins/references/localSchema.ts</code>
-        (references-graph maintenance), and the daily-notes trigger in
-        <code>src/plugins/daily-notes/localSchema.ts</code> reading
-        <code>properties_json</code>. The pattern propagates &mdash; any future plugin that maintains a
-        derived index over these columns needs the same UDF wrap.</li>
+        Confirmed UDF-wrap targets: row-event, alias, type, and FTS triggers in
+        <code>src/data/internals/clientSchema.ts</code>; the three triggers in
+        <code>src/plugins/references/localSchema.ts</code> (references-graph maintenance); the
+        daily-notes trigger in <code>src/plugins/daily-notes/localSchema.ts</code> reading
+        <code>properties_json</code>. The pattern propagates &mdash; any future plugin that
+        maintains a derived index over these columns needs the same UDF wrap.
+        <br><br>
+        <strong>Explicit exception: the upload-routing triggers in
+        <code>clientSchema.ts</code> (<code>blocks_upload_insert</code> /
+        <code>blocks_upload_update</code>) must NOT be UDF-wrapped.</strong> Their job is to
+        capture <code>NEW.content</code>/<code>NEW.properties_json</code>/<code>NEW.references_json</code>
+        into <code>ps_crud</code> for PowerSync to upload to Supabase. Under Layout C those
+        columns already hold ciphertext (per the encrypt-at-write callout above), and the upload
+        must forward ciphertext unchanged. Wrapping these in the decrypt UDF would queue plaintext
+        for upload &mdash; the exact opposite of what we want.</li>
       <li><strong>Two raw-SQL queries bypass <code>parseBlockRow</code> and operate on the
         content columns directly.</strong> Both are Layout C touch points that the initial
         survey claim missed:
