@@ -968,7 +968,18 @@ GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
         <code>NULL</code>. Sync apply can land encrypted rows before the user has pasted the WK;
         the UDF returning NULL makes <code>json_each(NULL, '$.alias')</code> yield zero rows,
         <code>json(NULL)</code> yield NULL, and the indexes/audit log skip the row. Sync apply
-        succeeds. Per-workspace backfill on WK paste repopulates.</li>
+        succeeds. Per-workspace backfill on WK paste repopulates.
+        <br><br>
+        <strong>But the row_event snapshot trigger fires anyway with NULL content,
+        <code>rowEventsTail</code> parses it, and <code>BlockCache.applyIfNewer</code> caches a
+        snapshot with content/properties/references as NULL placeholders</strong> keyed to the
+        current <code>updated_at</code>. The WK-paste drain pass typically runs as a no-op
+        UPDATE that preserves the same <code>updated_at</code>, so the cache's <code>&le;</code>
+        LWW guard rejects the real decrypted snapshot &mdash; the workspace stays stuck with NULL
+        placeholders. Fix: on WK paste, before the drain pass, the client explicitly evicts every
+        <code>BlockCache</code> entry for that workspace. The drain then repopulates from
+        decrypted data without fighting LWW. Cleaner than gating the row_event trigger on the
+        UDF's non-NULL output (which would need per-column conditional logic in the trigger).</li>
       <li><strong>E2EE workspace, <em>unprefixed</em> input</strong>: return <code>NULL</code> and
         record a tamper signal. This is the downgrade-attack defense at the UDF layer. A hostile
         server could strip the <code>enc:v1:</code> prefix and serve attacker-controlled plaintext
@@ -1355,11 +1366,14 @@ WHERE typeof(je.value) = 'text';</code></pre>
       Introduce <code>src/sync/transform.ts</code> as identity
       <code>encodeForWire</code>/<code>decodeFromWire</code>, with the
       <code>getCek(workspaceId)</code> pluggable callback signature in place from day one.
-      Under Layout B the seam also hosts the JS observer that watches PowerSync changes and
-      decrypts staging-table rows into <code>blocks</code>; under Layout C it just hosts the
-      upload-side encrypt (download decrypt happens in-SQL via the UDF). Either way, the boundary
-      is one named module rather than behavior scattered across <code>repo.ts</code> and
-      <code>services/powersync.ts</code>. Pure no-op refactor today; the eventual E2EE PR is a
+      Under Layout B the seam hosts the JS observer that watches PowerSync changes and decrypts
+      staging-table rows into <code>blocks</code>, plus the upload-side encrypt in the
+      <code>uploadData</code> connector hook. Under Layout C the seam hosts the
+      <em>write-time</em> encrypt that every <code>TxImpl</code> content-writing path calls
+      before INSERT/UPDATE reaches <code>blocks</code> (not upload-side &mdash; see the §9.2
+      encrypt-at-write callout); download decrypt happens in-SQL via the UDF. Either way, the
+      boundary is one named module rather than behavior scattered across <code>repo.ts</code>
+      and <code>services/powersync.ts</code>. Pure no-op refactor today; the eventual E2EE PR is a
       focused crypto change rather than a cross-cutting refactor.
     </p>
 
