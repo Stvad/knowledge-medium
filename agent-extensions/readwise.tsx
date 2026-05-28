@@ -17,7 +17,7 @@ import {
 import type { Block } from '@/data/block.js'
 import { PAGE_TYPE } from '@/data/blockTypes.js'
 import { aliasesProp, getBlockTypes } from '@/data/properties.js'
-import { createOrRestoreTargetBlock } from '@/data/targets.js'
+import { createOrRestoreTargetBlock, ensureAliasTarget } from '@/data/targets.js'
 import { addDaysIso, getOrCreateDailyNote, todayIso } from '@/plugins/daily-notes/dailyNotes.js'
 import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.js'
 import { SWIPE_RIGHT_BLOCK_ACTION_ID } from '@/plugins/swipe-quick-actions/actions.js'
@@ -34,9 +34,11 @@ import { Button } from '@/components/ui/button.js'
 import { Input } from '@/components/ui/input.js'
 import { Label } from '@/components/ui/label.js'
 import { Textarea } from '@/components/ui/textarea.js'
-import { navigate } from '@/utils/navigation.js'
-import type { BlockRenderer, BlockRendererProps } from '@/types.js'
-import { useEffect, useState, type CSSProperties } from 'react'
+import { navigate, useOpenBlock } from '@/utils/navigation.js'
+import { buildAppHash } from '@/utils/routing.js'
+import { useHandle } from '@/hooks/block.js'
+import type { BlockData, BlockRenderer, BlockRendererProps } from '@/types.js'
+import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 
 // ---------------------------------------------------------------------------
 // constants
@@ -130,9 +132,9 @@ const titleProp = defineProperty<string | undefined>('readwise:title', {
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
-const authorProp = defineProperty<string | undefined>('readwise:author', {
-  codec: codecs.optionalString,
-  defaultValue: undefined,
+const authorProp = defineProperty<string>('readwise:author', {
+  codec: codecs.ref({ targetTypes: [PAGE_TYPE] }),
+  defaultValue: '',
   changeScope: ChangeScope.BlockDefault,
 })
 const categoryProp = defineProperty<string | undefined>('readwise:category', {
@@ -317,7 +319,7 @@ const IMPORTED_PROPERTY_SCHEMAS = [
 
 type ReadwiseDocumentMeta = {
   title?: string
-  author?: string
+  authorId?: string
   category?: string
   source?: string
   sourceUrl?: string
@@ -340,7 +342,7 @@ const readBlockProperty = <T,>(block: Block, schema: PropertySchema<T>): T | und
 
 const readwiseDocumentMeta = (block: Block): ReadwiseDocumentMeta => ({
   title: readBlockProperty(block, titleProp),
-  author: readBlockProperty(block, authorProp),
+  authorId: readBlockProperty(block, authorProp),
   category: readBlockProperty(block, categoryProp),
   source: readBlockProperty(block, sourceProp),
   sourceUrl: readBlockProperty(block, sourceUrlProp),
@@ -387,8 +389,18 @@ const highlightCountLabel = (count: number | undefined): string | undefined => {
 }
 
 const titleInitial = (meta: ReadwiseDocumentMeta, fallback: string | undefined): string => {
-  const source = cleanText(meta.title) ?? cleanText(fallback) ?? cleanText(meta.author) ?? 'R'
+  const source = cleanText(meta.title) ?? cleanText(fallback) ?? 'R'
   return source.slice(0, 1).toUpperCase()
+}
+
+const decodeAliasLabel = (data: BlockData | undefined): string | undefined => {
+  if (!data) return undefined
+  try {
+    const aliases = aliasesProp.codec.decode(data.properties[aliasesProp.name])
+    return cleanText(aliases[0]) ?? cleanText(data.content)
+  } catch {
+    return cleanText(data.content)
+  }
 }
 
 const readwiseDocumentStyles = {
@@ -506,6 +518,33 @@ interface ReadwiseDocumentDecoratorViewProps {
   innerProps: BlockRendererProps
 }
 
+const ReadwiseAuthorLine = ({block, authorId}: {block: Block; authorId: string}) => {
+  const authorBlock = useMemo(() => block.repo.block(authorId), [block.repo, authorId])
+  const authorData = useHandle(authorBlock, {selector: data => data ?? undefined})
+  const label = decodeAliasLabel(authorData)
+  const workspaceId = block.peek()?.workspaceId ?? authorData?.workspaceId
+  const openAuthor = useOpenBlock({blockId: authorId, workspaceId})
+
+  if (!label) return null
+
+  return (
+    <div style={readwiseDocumentStyles.author}>
+      by{' '}
+      {workspaceId ? (
+        <a
+          className="wikilink"
+          data-alias={label}
+          href={buildAppHash(workspaceId, authorId)}
+          onClick={openAuthor}
+          onMouseDown={event => event.stopPropagation()}
+        >
+          {label}
+        </a>
+      ) : label}
+    </div>
+  )
+}
+
 const ReadwiseDocumentDecoratorView = ({
   block,
   Inner,
@@ -514,7 +553,7 @@ const ReadwiseDocumentDecoratorView = ({
   const meta = readwiseDocumentMeta(block)
   const source = cleanText(meta.source) ?? hostLabel(meta.sourceUrl)
   const category = cleanText(meta.category)
-  const author = cleanText(meta.author)
+  const authorId = cleanText(meta.authorId)
   const note = cleanText(meta.documentNote)
   const sourceUrl = cleanText(meta.sourceUrl)
   const readwiseUrl = cleanText(meta.readwiseUrl)
@@ -551,7 +590,7 @@ const ReadwiseDocumentDecoratorView = ({
         <div style={readwiseDocumentStyles.title}>
           <Inner {...innerProps}/>
         </div>
-        {author && <div style={readwiseDocumentStyles.author}>by {author}</div>}
+        {authorId && <ReadwiseAuthorLine block={block} authorId={authorId}/>}
         {(highlightCount || lastHighlight || asin) && (
           <div style={readwiseDocumentStyles.detailRow}>
             {highlightCount && <span style={readwiseDocumentStyles.detail}>{highlightCount}</span>}
@@ -829,12 +868,32 @@ const mergeSourceOwnedAlias = async (
   }
 }
 
-const documentPropertyEntries = (book: BookRecord): ManagedPropertyEntry[] => {
+const lookupOrCreateAuthorPage = async (
+  tx: any,
+  repo: any,
+  workspaceId: string,
+  author: string | undefined,
+  typeSnapshot: any,
+): Promise<string | undefined> => {
+  const name = nonEmptyString(author)
+  if (!name) return undefined
+
+  const existing = await tx.aliasLookup(name, workspaceId)
+  if (existing && !existing.deleted) return existing.id
+
+  const ensured = await ensureAliasTarget(tx, repo, name, workspaceId, typeSnapshot)
+  return ensured.id
+}
+
+const documentPropertyEntries = (
+  book: BookRecord,
+  authorPageId: string | undefined,
+): ManagedPropertyEntry[] => {
   const tags = tagNames(book.book_tags)
   return [
     [userBookIdProp, String(book.user_book_id)],
     [titleProp, nonEmptyString(book.title)],
-    [authorProp, nonEmptyString(book.author)],
+    [authorProp, authorPageId],
     [categoryProp, nonEmptyString(book.category)],
     [sourceProp, nonEmptyString(book.source)],
     [sourceUrlProp, nonEmptyString(book.source_url)],
@@ -1086,7 +1145,8 @@ const syncBookToBlocks = async (
     await repo.addTypeInTx(tx, bookId, PAGE_TYPE, { [aliasesProp.name]: [title] }, typeSnapshot)
     await repo.addTypeInTx(tx, bookId, READWISE_DOCUMENT_TYPE, {}, typeSnapshot)
     await mergeSourceOwnedAlias(tx, bookId, existing?.content, title)
-    await applyManagedProperties(tx, bookId, DOCUMENT_PROPERTY_SCHEMAS, documentPropertyEntries(book))
+    const authorPageId = await lookupOrCreateAuthorPage(tx, repo, workspaceId, book.author, typeSnapshot)
+    await applyManagedProperties(tx, bookId, DOCUMENT_PROPERTY_SCHEMAS, documentPropertyEntries(book, authorPageId))
 
     // 2. supplemental template children. Property-backed template lines are
     //    intentionally omitted here because their values live on the
