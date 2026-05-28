@@ -1085,17 +1085,34 @@ WHERE typeof(je.value) = 'text';</code></pre>
             queries (or unconditionally, accepting the UDF passthrough cost for plaintext
             workspaces). The compiler change is small but the consumer surface is large &mdash;
             anywhere <code>repo.queryBlocks</code> runs across an E2EE workspace.</li>
-          <li><code>src/data/internals/kernelQueries.ts</code> &mdash; three kernel-query sites
-            select <code>b.content</code> directly into custom row shapes that bypass
-            <code>parseBlockRow</code>: <code>buildFuzzyAliasMatchesSql</code> (line 356) and
-            <code>SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL</code> (line 378) drive alias
-            autocomplete previews; <code>SELECT_FIRST_CHILD_BY_CONTENT_SQL</code> (line 402) is
-            a literal <code>WHERE child.content = ?</code> equality filter (would compare user
-            plaintext to ciphertext bytes &mdash; never match). Fixes vary: the autocomplete
-            previews can UDF-wrap the content column; the equality filter can't (passing the
-            UDF-wrapped column to <code>=</code> works but defeats any index on
-            <code>content</code>), so <code>firstChildByContent</code> for E2EE workspaces either
-            needs an in-memory scan-after-decrypt or a side-table approach.</li>
+          <li><code>src/data/internals/kernelQueries.ts</code> &mdash; multiple kernel-query
+            sites touch raw <code>b.content</code>:
+            <ul>
+              <li><code>buildFuzzyAliasMatchesSql</code> (line 356) and
+                <code>SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL</code> (line 378) select
+                <code>b.content</code> into custom row shapes that bypass <code>parseBlockRow</code>.
+                Drive alias autocomplete previews. Fix: UDF-wrap the content column.</li>
+              <li><code>SELECT_FIRST_CHILD_BY_CONTENT_SQL</code> (line 402) is
+                <code>WHERE child.content = ?</code>, a literal equality filter (would compare
+                user plaintext to ciphertext bytes &mdash; never matches under Layout C). Can't
+                UDF-wrap the column in <code>WHERE x = ?</code> without defeating any index on
+                <code>content</code>, so for E2EE workspaces this needs an in-memory
+                scan-after-decrypt or a side-table reshape.</li>
+              <li><code>SELECT_BLOCKS_BY_CONTENT_SQL</code> (line 251) filters
+                <code>WHERE b.content != ''</code> and ranks via
+                <code>LOWER(b.content) = LOWER(?)</code> / <code>LIKE LOWER(?) || '%'</code>.
+                Under Layout C the filter is meaningless (ciphertext is always non-empty), and
+                rank predicates never match user queries. Search degrades silently &mdash;
+                returns rows (the FTS MATCH still works through the UDF-wrapped FTS trigger) but
+                with broken ranking, since every match ends up in the lowest priority bucket.
+                Fix: UDF-wrap the rank expressions and the content filter.</li>
+              <li><code>SELECT_RECENT_BLOCKS_SQL</code> (line 272) filters
+                <code>WHERE content != ''</code>. Same degradation as above &mdash; "recent
+                non-empty blocks" pickers would include blocks the user considers empty (whose
+                ciphertext is non-empty because AEAD pads). Fix: UDF-wrap the content filter.</li>
+            </ul>
+            The last two are silent-degradation rather than crash, which makes them easier to
+            miss in testing &mdash; another reason for the lean toward Layout B.</li>
         </ul>
         Each is mechanical once identified, but the list keeps growing under review and almost
         certainly isn't complete. <strong>This is a real cost of Layout C: it scatters
@@ -1171,7 +1188,8 @@ WHERE typeof(je.value) = 'text';</code></pre>
         <code>data/internals/typedBlockQuery.ts:198,472-475</code> typed-query compiler &mdash;
         parameterize its JSON-text expression so E2EE-scoped queries emit the UDF-wrapped form;
         <code>data/internals/kernelQueries.ts</code>
-        <code>buildFuzzyAliasMatchesSql</code>/<code>SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL</code>
+        <code>buildFuzzyAliasMatchesSql</code>/<code>SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL</code>/
+        <code>SELECT_BLOCKS_BY_CONTENT_SQL</code>/<code>SELECT_RECENT_BLOCKS_SQL</code>
         UDF-wrap; <code>SELECT_FIRST_CHILD_BY_CONTENT_SQL</code> needs an in-memory or side-table
         rework since the equality filter can't index on a UDF-wrapped column);
         convert the
