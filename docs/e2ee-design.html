@@ -359,7 +359,8 @@
       <tr><td>Lifetime</td><td>One per workspace, generated at workspace create. Stable for the
         life of the workspace unless explicitly rotated.</td></tr>
       <tr><td>User-facing format</td><td><code>kmp-wk-1:&lt;base32(32 bytes)&gt;</code> &mdash;
-        58-character paste-friendly string. The <code>1</code> reserves a clean upgrade path.</td></tr>
+        61-character paste-friendly string (52 unpadded base32 chars + 9-char prefix). The
+        <code>1</code> reserves a clean upgrade path.</td></tr>
       <tr><td>Where it lives</td><td>(a) the user's password manager / backup of their choice;
         (b) localStorage on each device the user has pasted it on, keyed by
         <code>(user_id, workspace_id)</code> (e.g. <code>wk:&lt;user_id&gt;:&lt;workspace_id&gt;</code>).
@@ -369,8 +370,10 @@
         than introducing IndexedDB as a new storage surface. Raw 32 bytes encode to ~44 chars
         base64; the cross-tab <code>storage</code> event is a useful side effect (paste-once
         propagates to other tabs). Never the server, in any form.</td></tr>
-      <tr><td>Validation on paste</td><td>Decrypt one already-synced ciphertext block (any will
-        do). Reject on AEAD failure with "that key doesn't decrypt this workspace's data."</td></tr>
+      <tr><td>Validation on paste</td><td>Decrypt <code>workspaces.wk_canary</code> and verify
+        the plaintext equals the workspace id. Works on empty workspaces (no blocks needed).
+        AEAD failure or plaintext mismatch &rarr; reject with "that key doesn't decrypt this
+        workspace's data." See §7 (canary column) and §8.2 (paste flow).</td></tr>
     </table>
 
     <p>
@@ -730,10 +733,18 @@ CREATE OR REPLACE FUNCTION create_workspace(
       columns before sending to the server. The server only ever sees ciphertext.
     </p>
     <ul>
-      <li><strong>What changes in code:</strong> add <code>blocks_synced</code> table to
-        <code>blockSchema.ts</code> (PowerSync target); add JS observer wiring at the sync
-        boundary; encrypt-on-upload in the connector hook. Existing trigger code in
-        <code>clientSchema.ts</code> and plugins is untouched.</li>
+      <li><strong>What changes in code:</strong> add <code>blocks_synced</code> raw table to
+        <code>blockSchema.ts</code> (PowerSync target); update
+        <code>powersync/sync-config.yaml</code> (via <code>scripts/gen-sync-config.ts</code>) so
+        the row_type for the blocks stream maps to <code>blocks_synced</code> rather than
+        <code>blocks</code> &mdash; the sync rule's <code>FROM</code>-clause name <em>is</em> the
+        row_type that maps to the client raw table (called out as load-bearing in
+        sync-config.yaml's own header comment), so leaving it pointing at <code>public.blocks</code>
+        means ciphertext lands in the plaintext <code>blocks</code> table and the observer never
+        sees the rows it's meant to decrypt. Add JS observer wiring at the sync boundary;
+        encrypt-on-upload in the connector hook. Existing trigger code in
+        <code>clientSchema.ts</code> and plugins is untouched (they fire on plaintext writes to
+        <code>blocks</code> as today).</li>
       <li><strong>Plus:</strong> queries are direct SQL on plaintext &mdash; no per-row decrypt
         cost at query time, no UDF latency.</li>
       <li><strong>Minus:</strong> two writes per E2EE block download (staging, then main).
@@ -752,10 +763,27 @@ CREATE OR REPLACE FUNCTION create_workspace(
       The local <code>blocks</code> table holds ciphertext at rest, exactly matching the server.
       A new async user-defined function &mdash; <code>e2ee_decrypt_json(workspace_id, value)
       &rarr; text</code> &mdash; is registered against the local SQLite via
-      <code>sqlite3.create_function</code>. The UDF looks up the WK from the in-memory store
-      (populated from localStorage at session start), calls
-      <code>crypto.subtle.decrypt</code>, returns plaintext. For plaintext rows (no
-      <code>enc:v1:</code> prefix) the UDF is a no-op pass-through.
+      <code>sqlite3.create_function</code>. Three behaviors based on input:
+    </p>
+    <ul>
+      <li><strong>Plaintext input</strong> (no <code>enc:v1:</code> prefix): pass-through unchanged.
+        Plaintext-workspace rows aren't affected.</li>
+      <li><strong>Encrypted input, WK available</strong>: look up the WK from the in-memory store,
+        call <code>crypto.subtle.decrypt</code>, return plaintext JSON text.</li>
+      <li><strong>Encrypted input, WK absent (locked workspace)</strong>: return <code>NULL</code>.
+        This is the critical fallback. PowerSync's sync apply can land encrypted rows before the
+        user has pasted the WK; Layout C routes those writes through the maintenance triggers
+        immediately. With the UDF returning NULL, <code>json_each(NULL, '$.alias')</code> yields
+        zero rows, <code>json(NULL)</code> in the row-event snapshot yields NULL, and the
+        indexes/audit log simply skip the row. Sync apply succeeds. The per-workspace backfill on
+        WK paste (below) repopulates everything once the key is available.</li>
+    </ul>
+    <p>
+      The row_event snapshot triggers in <code>clientSchema.ts</code> need the UDF wrap too &mdash;
+      otherwise <code>after_json</code> would contain <code>enc:v1:</code> ciphertext, which
+      <code>rowEventsTail.ts</code> would pass to <code>BlockCache.applyIfNewer</code> as if it
+      were plaintext, and the cache would emit ciphertext to anyone listening. UDF-wrapping
+      ensures the cache only sees plaintext for E2EE rows (or NULL placeholders when locked).
     </p>
     <p>
       Triggers wrap column references in the UDF before passing into <code>json_each</code>,
@@ -1144,10 +1172,16 @@ WHERE typeof(je.value) = 'text';</code></pre>
     <ol>
       <li><strong>WK rotation.</strong> If a workspace key is compromised (a collaborator
         exfiltrated it, or it leaked via a backup), the owner needs to rotate. Mechanically: client
-        generates a new WK, decrypts every block with old WK and re-encrypts with new WK, uploads;
-        distributes the new WK to current collaborators out-of-band. The "re-encrypt all blocks"
-        cost is real for large workspaces; worth thinking through the UX (progress bar, atomic
-        rotation token to detect mid-rotation states).</li>
+        generates a new WK, decrypts every block with old WK and re-encrypts with new WK, also
+        regenerates <code>workspaces.wk_canary</code> under the new WK (otherwise §8.2 validation
+        would fail for anyone unlocking after rotation &mdash; the canary would still be encrypted
+        under the old WK), uploads the lot; distributes the new WK to current collaborators
+        out-of-band. The "re-encrypt all blocks" cost is real for large workspaces; worth thinking
+        through the UX (progress bar, atomic rotation token to detect mid-rotation states). Note
+        that <code>wk_canary</code> immutability needs a one-shot exception for the rotation path
+        &mdash; either a dedicated <code>rotate_workspace_wk</code> RPC that updates the canary in
+        the same transaction as the rotation token, or a temporary suspension of the immutability
+        trigger inside the RPC. Cleanest is the dedicated RPC.</li>
 
       <li><strong>Layout B vs Layout C for local plaintext.</strong> §9.2 lays out both. The
         choice hinges on (a) a small PoC verifying that PowerSync's pipeline correctly awaits
