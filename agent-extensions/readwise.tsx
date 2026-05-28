@@ -37,7 +37,7 @@ import { useEffect, useState } from 'react'
 // ---------------------------------------------------------------------------
 // constants
 
-const READWISE_NS = '0d4f1c2e-7e9a-4f4d-a4f1-2c0a3a6e7f01'
+const READWISE_NS = '45fb169f-ffac-458b-b2a7-6cec87d2d7ee'
 const TOKEN_KEY = 'knowledge-medium:readwise:token:v1'
 const OPEN_SETUP_EVENT = 'readwise:setup:open'
 const READWISE_API = 'https://readwise.io/api/v2'
