@@ -1,6 +1,6 @@
 import {
   actionDecoratorsFacet, actionsFacet, ActionContextTypes, appEffectsFacet, appMountsFacet,
-  ChangeScope, codecs, defineBlockType, defineProperty,
+  blockContentDecoratorsFacet, ChangeScope, codecs, defineBlockType, defineProperty,
   definePropertyEditorOverride, getPluginPrefsBlock,
   keyBetween, keysBetween, pluginBlockId,
   propertyEditorOverridesFacet, propertySchemasFacet,
@@ -9,9 +9,12 @@ import {
   type ActionConfig,
   type ActionContextType,
   type ActionDecorator,
+  type BlockContentDecorator,
+  type BlockContentDecoratorContribution,
   type PropertyEditorProps,
   type PropertySchema,
 } from '@/extensions/api.js'
+import type { Block } from '@/data/block.js'
 import { PAGE_TYPE } from '@/data/blockTypes.js'
 import { aliasesProp, getBlockTypes } from '@/data/properties.js'
 import { createOrRestoreTargetBlock } from '@/data/targets.js'
@@ -32,7 +35,8 @@ import { Input } from '@/components/ui/input.js'
 import { Label } from '@/components/ui/label.js'
 import { Textarea } from '@/components/ui/textarea.js'
 import { navigate } from '@/utils/navigation.js'
-import { useEffect, useState } from 'react'
+import type { BlockRenderer, BlockRendererProps } from '@/types.js'
+import { useEffect, useState, type CSSProperties } from 'react'
 
 // ---------------------------------------------------------------------------
 // constants
@@ -81,27 +85,27 @@ const lastSyncedAtProp = defineProperty<string | undefined>('readwise:lastSynced
 const syncSinceProp = defineProperty<Date | undefined>('readwise:syncSince', {
   codec: codecs.date,
   defaultValue: undefined,
-  changeScope: ChangeScope.UserPrefs,
+  changeScope: ChangeScope.BlockDefault,
 })
 const pageTitleTemplateProp = defineProperty<string>('readwise:pageTitleTemplate', {
   codec: codecs.string,
   defaultValue: DEFAULT_PAGE_TITLE_TEMPLATE,
-  changeScope: ChangeScope.UserPrefs,
+  changeScope: ChangeScope.BlockDefault,
 })
 const bookTemplateProp = defineProperty<string>('readwise:bookTemplate', {
   codec: codecs.string,
   defaultValue: DEFAULT_BOOK_TEMPLATE,
-  changeScope: ChangeScope.UserPrefs,
+  changeScope: ChangeScope.BlockDefault,
 })
 const highlightTemplateProp = defineProperty<string>('readwise:highlightTemplate', {
   codec: codecs.string,
   defaultValue: DEFAULT_HIGHLIGHT_TEMPLATE,
-  changeScope: ChangeScope.UserPrefs,
+  changeScope: ChangeScope.BlockDefault,
 })
 const autoSyncIntervalProp = defineProperty<number>('readwise:autoSyncIntervalMin', {
   codec: codecs.number,
   defaultValue: 0,
-  changeScope: ChangeScope.UserPrefs,
+  changeScope: ChangeScope.BlockDefault,
 })
 // purely a UI hint — the source of truth is localStorage. We mirror it so the
 // settings page can render a "Connected" pill without subscribing to storage.
@@ -307,6 +311,314 @@ const IMPORTED_PROPERTY_SCHEMAS = [
   ...NOTE_PROPERTY_SCHEMAS,
   ...HIGHLIGHT_REVIEW_PROPERTY_SCHEMAS,
 ]
+
+// ---------------------------------------------------------------------------
+// document decorator
+
+type ReadwiseDocumentMeta = {
+  title?: string
+  author?: string
+  category?: string
+  source?: string
+  sourceUrl?: string
+  readwiseUrl?: string
+  coverImageUrl?: string
+  documentNote?: string
+  numHighlights?: number
+  lastHighlightAt?: string
+  asin?: string
+  tags: string[]
+}
+
+const readBlockProperty = <T,>(block: Block, schema: PropertySchema<T>): T | undefined => {
+  try {
+    return block.peekProperty(schema)
+  } catch {
+    return undefined
+  }
+}
+
+const readwiseDocumentMeta = (block: Block): ReadwiseDocumentMeta => ({
+  title: readBlockProperty(block, titleProp),
+  author: readBlockProperty(block, authorProp),
+  category: readBlockProperty(block, categoryProp),
+  source: readBlockProperty(block, sourceProp),
+  sourceUrl: readBlockProperty(block, sourceUrlProp),
+  readwiseUrl: readBlockProperty(block, readwiseUrlProp),
+  coverImageUrl: readBlockProperty(block, coverImageUrlProp),
+  documentNote: readBlockProperty(block, documentNoteProp),
+  numHighlights: readBlockProperty(block, numHighlightsProp),
+  lastHighlightAt: readBlockProperty(block, lastHighlightAtProp),
+  asin: readBlockProperty(block, asinProp),
+  tags: readBlockProperty(block, tagsProp) ?? [],
+})
+
+const cleanText = (value: string | undefined): string | undefined => {
+  const text = value?.trim()
+  return text ? text : undefined
+}
+
+const formatReadwiseDate = (value: string | undefined): string | undefined => {
+  const text = cleanText(value)
+  if (!text) return undefined
+  const date = new Date(text)
+  if (Number.isNaN(date.getTime())) return text
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(date)
+}
+
+const hostLabel = (value: string | undefined): string | undefined => {
+  const text = cleanText(value)
+  if (!text) return undefined
+  try {
+    return new URL(text).hostname.replace(/^www\./, '')
+  } catch {
+    return undefined
+  }
+}
+
+const highlightCountLabel = (count: number | undefined): string | undefined => {
+  if (count === undefined || !Number.isFinite(count)) return undefined
+  const unit = count === 1 ? 'highlight' : 'highlights'
+  return `${count.toLocaleString()} ${unit}`
+}
+
+const titleInitial = (meta: ReadwiseDocumentMeta, fallback: string | undefined): string => {
+  const source = cleanText(meta.title) ?? cleanText(fallback) ?? cleanText(meta.author) ?? 'R'
+  return source.slice(0, 1).toUpperCase()
+}
+
+const readwiseDocumentStyles = {
+  card: {
+    display: 'flex',
+    width: '100%',
+    alignItems: 'stretch',
+    gap: 16,
+    padding: 12,
+    border: '1px solid var(--border)',
+    borderRadius: 8,
+    background: 'var(--card)',
+    boxShadow: '0 10px 28px rgba(15, 23, 42, 0.08)',
+  },
+  coverFrame: {
+    flex: '0 0 clamp(72px, 18vw, 112px)',
+    alignSelf: 'flex-start',
+    maxWidth: 112,
+  },
+  cover: {
+    display: 'block',
+    width: '100%',
+    aspectRatio: '2 / 3',
+    objectFit: 'cover',
+    border: '1px solid var(--border)',
+    borderRadius: 5,
+    background: 'var(--muted)',
+    boxShadow: '0 8px 18px rgba(15, 23, 42, 0.16)',
+  },
+  coverFallback: {
+    display: 'grid',
+    width: '100%',
+    aspectRatio: '2 / 3',
+    placeItems: 'center',
+    border: '1px solid var(--border)',
+    borderRadius: 5,
+    background: 'linear-gradient(145deg, var(--muted), var(--background))',
+    color: 'var(--muted-foreground)',
+    fontSize: 28,
+    fontWeight: 650,
+    boxShadow: '0 8px 18px rgba(15, 23, 42, 0.14)',
+  },
+  body: {
+    display: 'flex',
+    minWidth: 0,
+    flex: 1,
+    flexDirection: 'column',
+    gap: 8,
+  },
+  kicker: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 6,
+    alignItems: 'center',
+    color: 'var(--muted-foreground)',
+    fontSize: 12,
+    lineHeight: 1.35,
+  },
+  sourceDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 4,
+    background: 'var(--border)',
+  },
+  title: {
+    minWidth: 0,
+    fontSize: 19,
+    fontWeight: 650,
+    lineHeight: 1.3,
+  },
+  author: {
+    color: 'var(--muted-foreground)',
+    fontSize: 13,
+    lineHeight: 1.4,
+  },
+  detailRow: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 6,
+    alignItems: 'center',
+  },
+  detail: {
+    border: '1px solid var(--border)',
+    borderRadius: 6,
+    padding: '2px 6px',
+    color: 'var(--muted-foreground)',
+    fontSize: 12,
+    lineHeight: 1.45,
+  },
+  note: {
+    maxWidth: 680,
+    maxHeight: '4.8em',
+    overflow: 'hidden',
+    color: 'var(--foreground)',
+    fontSize: 13,
+    lineHeight: 1.6,
+  },
+  links: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 10,
+    alignItems: 'center',
+    fontSize: 12,
+    lineHeight: 1.4,
+  },
+  link: {
+    color: 'var(--primary)',
+    textDecoration: 'none',
+  },
+} satisfies Record<string, CSSProperties>
+
+interface ReadwiseDocumentDecoratorViewProps {
+  block: Block
+  Inner: BlockRenderer
+  innerProps: BlockRendererProps
+}
+
+const ReadwiseDocumentDecoratorView = ({
+  block,
+  Inner,
+  innerProps,
+}: ReadwiseDocumentDecoratorViewProps) => {
+  const meta = readwiseDocumentMeta(block)
+  const source = cleanText(meta.source) ?? hostLabel(meta.sourceUrl)
+  const category = cleanText(meta.category)
+  const author = cleanText(meta.author)
+  const note = cleanText(meta.documentNote)
+  const sourceUrl = cleanText(meta.sourceUrl)
+  const readwiseUrl = cleanText(meta.readwiseUrl)
+  const asin = cleanText(meta.asin)
+  const highlightCount = highlightCountLabel(meta.numHighlights)
+  const lastHighlight = formatReadwiseDate(meta.lastHighlightAt)
+  const cover = cleanText(meta.coverImageUrl)
+  const fallbackTitle = block.peek()?.content
+  const tags = meta.tags.map(cleanText).filter((tag): tag is string => Boolean(tag))
+
+  return (
+    <div style={readwiseDocumentStyles.card}>
+      <div style={readwiseDocumentStyles.coverFrame} aria-hidden="true">
+        {cover ? (
+          <img
+            alt=""
+            src={cover}
+            style={readwiseDocumentStyles.cover}
+          />
+        ) : (
+          <div style={readwiseDocumentStyles.coverFallback}>
+            {titleInitial(meta, fallbackTitle)}
+          </div>
+        )}
+      </div>
+      <div style={readwiseDocumentStyles.body}>
+        {(category || source) && (
+          <div style={readwiseDocumentStyles.kicker}>
+            {category && <span>{category}</span>}
+            {category && source && <span style={readwiseDocumentStyles.sourceDot}/>}
+            {source && <span>{source}</span>}
+          </div>
+        )}
+        <div style={readwiseDocumentStyles.title}>
+          <Inner {...innerProps}/>
+        </div>
+        {author && <div style={readwiseDocumentStyles.author}>by {author}</div>}
+        {(highlightCount || lastHighlight || asin) && (
+          <div style={readwiseDocumentStyles.detailRow}>
+            {highlightCount && <span style={readwiseDocumentStyles.detail}>{highlightCount}</span>}
+            {lastHighlight && <span style={readwiseDocumentStyles.detail}>Last highlight {lastHighlight}</span>}
+            {asin && <span style={readwiseDocumentStyles.detail}>ASIN {asin}</span>}
+          </div>
+        )}
+        {tags.length > 0 && (
+          <div style={readwiseDocumentStyles.detailRow}>
+            {tags.map(tag => (
+              <span key={tag} style={readwiseDocumentStyles.detail}>{tag}</span>
+            ))}
+          </div>
+        )}
+        {note && <div style={readwiseDocumentStyles.note}>{note}</div>}
+        {(sourceUrl || readwiseUrl) && (
+          <div style={readwiseDocumentStyles.links}>
+            {sourceUrl && (
+              <a
+                href={sourceUrl}
+                rel="noreferrer"
+                target="_blank"
+                style={readwiseDocumentStyles.link}
+                onClick={event => event.stopPropagation()}
+                onMouseDown={event => event.stopPropagation()}
+              >
+                Source
+              </a>
+            )}
+            {readwiseUrl && (
+              <a
+                href={readwiseUrl}
+                rel="noreferrer"
+                target="_blank"
+                style={readwiseDocumentStyles.link}
+                onClick={event => event.stopPropagation()}
+                onMouseDown={event => event.stopPropagation()}
+              >
+                Readwise
+              </a>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+const readwiseDocumentDecoratorCache = new WeakMap<BlockRenderer, BlockRenderer>()
+
+const decorateReadwiseDocument: BlockContentDecorator = inner => {
+  const existing = readwiseDocumentDecoratorCache.get(inner)
+  if (existing) return existing
+
+  const Decorated: BlockRenderer = props => (
+    <ReadwiseDocumentDecoratorView block={props.block} Inner={inner} innerProps={props}/>
+  )
+  Decorated.displayName = 'WithReadwiseDocumentDecorator'
+  readwiseDocumentDecoratorCache.set(inner, Decorated)
+  return Decorated
+}
+
+const readwiseDocumentContentDecorator: BlockContentDecoratorContribution = ctx => {
+  if (!ctx.types.includes(READWISE_DOCUMENT_TYPE)) return null
+  if (ctx.blockContext?.isBreadcrumb) return null
+  return decorateReadwiseDocument
+}
 
 // ---------------------------------------------------------------------------
 // template rendering
@@ -1213,6 +1525,7 @@ export default [
 
   appMountsFacet.of({ id: 'readwise.setup-dialog', component: ReadwiseSetupDialog }, { source }),
   appEffectsFacet.of(autoSyncEffect, { source }),
+  blockContentDecoratorsFacet.of(readwiseDocumentContentDecorator, { source }),
 
   actionsFacet.of(openSettingsAction, { source }),
   actionsFacet.of(syncNowAction, { source }),
