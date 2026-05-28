@@ -998,6 +998,17 @@ GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
       <code>blocks_synced</code> in addition to insert/update; on delete, run
       <code>DELETE FROM blocks WHERE id = ?</code> with <code>source = NULL</code> so the
       side-index triggers fire and the upload triggers don't.
+      <br><br>
+      <strong>The delete handler must also drop the matching <code>ps_crud</code> entries.</strong>
+      Deleting the mirror row leaves any pending upload envelopes for that block/workspace
+      untouched &mdash; and those still hold <em>plaintext</em> captured by the upload trigger. On a
+      revoke or workspace-delete the server will reject them (RLS/FK), so they retry and then land
+      in <code>ps_crud_rejected</code>, leaving plaintext queued locally and risking replay of stale
+      edits if access is later restored. So when a row leaves the synced stream because access was
+      revoked or the workspace was deleted, the observer must also delete (or quarantine) that
+      workspace's matching <code>ps_crud</code>/<code>ps_crud_rejected</code> entries &mdash; the
+      same "<code>ps_crud</code> is plaintext, handle it on every teardown path" discipline as the
+      lock flow in §6.
     </p>
     <p>
       Upload is symmetric. App writes plaintext to <code>blocks</code> as today; the existing
