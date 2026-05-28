@@ -515,35 +515,32 @@
           the membership row arrives via sync without going through accept_invitation and there's
           no local pin. Same rule &mdash; the user pastes their WK (if E2EE) or confirms plaintext
           before any local writes.</li>
-        <li><strong>Pre-existing memberships on the rollout release (one-shot seed).</strong> The
-          first release that introduces mode pins finds every pre-existing workspace unpinned &mdash;
-          the pin namespace didn't exist when they were created &mdash; so without special handling
-          they would <em>all</em> quarantine, breaking "plaintext workspaces behave as today." A
-          one-shot, marker-gated migration seeds the pins, but the seed is a <strong>UX
-          optimization, not a security decision, so it must be conservative</strong>: pin
-          <code>plaintext</code> only for workspaces the client can <em>locally confirm</em> are
-          plaintext &mdash; no <code>wk_canary</code> and no <code>enc:v1:</code>-prefixed content in
-          their synced blocks &mdash; and let anything else fall through to the normal quarantine.
+        <li><strong>Pre-existing memberships on the rollout release.</strong> The first release that
+          introduces mode pins finds every pre-existing workspace unpinned &mdash; the pin namespace
+          didn't exist when they were created &mdash; so without handling they would <em>all</em>
+          quarantine, friction for current plaintext users. The tempting fix is a one-shot migration
+          that auto-pins plaintext, but <strong>no automatic rule is safe here.</strong> Everything
+          the migration could inspect &mdash; the synced <code>wk_canary</code>, whether any
+          <code>enc:v1:</code> blocks are present &mdash; is server-controlled, and a device that has
+          only ever run the pre-E2EE client holds <em>no server-independent evidence</em> of a
+          workspace's true mode (the old client had no WK and no E2EE concept, so the server could
+          always have fed it forged plaintext). An active server can withhold the ciphertext rows
+          <em>and</em> strip the canary, presenting a real E2EE workspace as "looks plaintext"; the
+          immutable plaintext pin then reopens the downgrade leak on the next local write. (This is
+          why the earlier "blanket-seed", and even its narrowed "no canary + no <code>enc:v1:</code>
+          content" form, were both unsafe &mdash; both trust server-controlled state.)
           <br><br>
-          An earlier draft seeded "every membership present at upgrade" and argued it was safe
-          because "E2EE can't exist before this release." That's wrong under a <strong>staggered
-          rollout</strong>: an already-upgraded device A can create or accept an E2EE workspace whose
-          (plaintext) membership syncs to a not-yet-upgraded device B; when B finally upgrades and
-          runs the seed, that membership is "present at upgrade" and would get an immutable plaintext
-          pin &mdash; turning a real E2EE workspace into a plaintext one on B (plaintext writes reach
-          the server, downgrade defense broken). The conservative rule blocks it: an E2EE workspace
-          carries a <code>wk_canary</code>, and any content B already synced for it is
-          <code>enc:v1:</code> ciphertext (the keyless old client stored it verbatim and couldn't
-          have produced plaintext), so it fails the "locally confirm plaintext" test and quarantines
-          instead &mdash; the user pastes the WK. The content check is the robust half: a keyless
-          server can't turn an E2EE workspace's ciphertext into plaintext to sneak it past. (The one
-          residual is an <em>empty</em> E2EE workspace whose canary a hostile server also strips
-          &mdash; nothing local distinguishes it; the window is narrow, no content has leaked yet,
-          and the cross-device tamper check on A catches the first plaintext write. A
-          version/created-by-client-version gate on the membership would close it fully if that's
-          worth the rollout plumbing.) The seed stays a <strong>one-shot keyed to the upgrade moment,
-          not a standing "unpinned &rarr; plaintext" rule</strong>; later memberships take the
-          quarantine paths above.</li>
+          So the rollout <strong>falls back to user confirmation</strong>, batched for UX: a one-time
+          prompt lists the existing workspaces &mdash; "these will be treated as plaintext; confirm,
+          or paste a key for any that are encrypted." Server-controlled state may <em>pre-fill the
+          suggestion</em> (default each to plaintext when nothing looks encrypted), but the immutable
+          pin is only written on the user's explicit confirmation &mdash; the user is the one oracle
+          the server can't forge, since they know which of their workspaces they created as E2EE.
+          That keeps "plaintext behaves as today" down to a single one-time confirmation at feature
+          introduction, and it's the same explicit-user-action the rest of rule 3 already requires.
+          A genuinely forge-proof <em>automatic</em> seed would need server-independent provenance
+          (e.g. a created-by-client-version stamp the server can't backdate), which isn't worth the
+          rollout plumbing for a one-time prompt.</li>
       </ul>
       The cost is one resolution step per workspace per new device &mdash; not free, but the
       alternative is silently accepting attacker plaintext on a workspace the user has every reason
