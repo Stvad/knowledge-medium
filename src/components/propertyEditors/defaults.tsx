@@ -11,7 +11,13 @@
  * and run through the same fallback editor chain.
  */
 
-import { useState, type ComponentType } from 'react'
+import {
+  useCallback,
+  useState,
+  type ComponentType,
+  type FocusEvent,
+  type KeyboardEvent,
+} from 'react'
 import { Plus, X } from 'lucide-react'
 import {
   ChangeScope,
@@ -26,7 +32,7 @@ import {
 import { Block } from '@/data/block'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Input } from '@/components/ui/input'
+import { Input, type InputProps } from '@/components/ui/input'
 import { usePropertyEditingActivation } from '@/components/propertyPanel/usePropertyEditingActivation'
 
 const INLINE_INPUT_CLASS =
@@ -35,61 +41,150 @@ const INLINE_INPUT_CLASS =
 const readOnlyForBlock = (block: unknown): boolean =>
   block instanceof Block && block.repo.isReadOnly
 
+interface TextDraft {
+  draft: string
+  dirty: boolean
+  setDraft: (next: string) => void
+}
+
+interface TextDraftState {
+  committedValue: string
+  draft: string
+  dirty: boolean
+}
+
+const useTextDraft = (committedValue: string): TextDraft => {
+  const [state, setState] = useState<TextDraftState>({
+    committedValue,
+    draft: committedValue,
+    dirty: false,
+  })
+
+  // Guarded derived state: external committed changes replace a clean draft,
+  // while dirty text stays local until that exact commit echoes back.
+  let current = state
+  if (state.committedValue !== committedValue) {
+    current = state.dirty && state.draft !== committedValue
+      ? {...state, committedValue}
+      : {committedValue, draft: committedValue, dirty: false}
+    setState(current)
+  }
+
+  const setDraft = useCallback((next: string) => {
+    setState(prev => ({
+      ...prev,
+      draft: next,
+      dirty: next !== prev.committedValue,
+    }))
+  }, [])
+
+  return {draft: current.draft, dirty: current.dirty, setDraft}
+}
+
+type DraftInputProps = Omit<
+  InputProps,
+  'defaultValue' | 'onBlur' | 'onChange' | 'onFocus' | 'value'
+> & {
+  committedValue: string
+  block: unknown
+  onCommit: (text: string) => void
+}
+
+function DraftInput({
+  committedValue,
+  block,
+  disabled,
+  onCommit,
+  onKeyDown,
+  readOnly = false,
+  ...props
+}: DraftInputProps) {
+  const {draft, dirty, setDraft} = useTextDraft(committedValue)
+  const focusHandlers = usePropertyEditingActivation(block)
+  const locked = readOnly || disabled === true
+  const commit = useCallback((text: string) => {
+    if (locked) return
+    if (!dirty && text === committedValue) return
+    onCommit(text)
+  }, [committedValue, dirty, locked, onCommit])
+
+  const handleFocus = (event: FocusEvent<HTMLInputElement>) => {
+    focusHandlers.onFocus(event)
+  }
+  const handleBlur = (event: FocusEvent<HTMLInputElement>) => {
+    commit(event.currentTarget.value)
+    focusHandlers.onBlur()
+  }
+  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      commit(event.currentTarget.value)
+    }
+    onKeyDown?.(event)
+  }
+
+  return (
+    <Input
+      {...props}
+      disabled={disabled}
+      readOnly={readOnly}
+      value={draft}
+      onFocus={handleFocus}
+      onBlur={handleBlur}
+      onChange={(event) => {
+        if (!locked) setDraft(event.target.value)
+      }}
+      onKeyDown={handleKeyDown}
+    />
+  )
+}
+
 // ──── Primitive fallback editors ────
 
 export function UrlPropertyEditor({value, onChange, block}: PropertyEditorProps<unknown>) {
   const readOnly = readOnlyForBlock(block)
-  const focusHandlers = usePropertyEditingActivation(block)
   const text = value === undefined || value === null ? '' : String(value)
   return (
-    <Input
+    <DraftInput
       type="url"
       className={INLINE_INPUT_CLASS}
-      value={text}
+      committedValue={text}
       placeholder="https://…"
       readOnly={readOnly}
-      onFocus={focusHandlers.onFocus}
-      onBlur={focusHandlers.onBlur}
-      onChange={(event) => {
-        if (!readOnly) onChange(event.target.value)
-      }}
+      block={block}
+      onCommit={onChange}
     />
   )
 }
 
 export function StringPropertyEditor({value, onChange, block}: PropertyEditorProps<unknown>) {
   const readOnly = readOnlyForBlock(block)
-  const focusHandlers = usePropertyEditingActivation(block)
+  const text = value === undefined || value === null ? '' : String(value)
   return (
-    <Input
+    <DraftInput
       className={INLINE_INPUT_CLASS}
-      value={value === undefined || value === null ? '' : String(value)}
+      committedValue={text}
       placeholder="Empty"
       readOnly={readOnly}
-      onFocus={focusHandlers.onFocus}
-      onBlur={focusHandlers.onBlur}
-      onChange={(event) => {
-        if (!readOnly) onChange(event.target.value)
-      }}
+      block={block}
+      onCommit={onChange}
     />
   )
 }
 
 export function NumberPropertyEditor({value, onChange, block}: PropertyEditorProps<unknown>) {
   const readOnly = readOnlyForBlock(block)
-  const focusHandlers = usePropertyEditingActivation(block)
+  const text = value === undefined || value === null ? '' : String(value)
   return (
-    <Input
+    <DraftInput
       type="number"
       className={INLINE_INPUT_CLASS}
-      value={value === undefined || value === null ? '' : String(value)}
+      committedValue={text}
       placeholder="Empty"
       readOnly={readOnly}
-      onFocus={focusHandlers.onFocus}
-      onBlur={focusHandlers.onBlur}
-      onChange={(event) => {
-        if (readOnly) return
-        const n = parseFloat(event.target.value)
+      block={block}
+      onCommit={(text) => {
+        const n = parseFloat(text)
         onChange(Number.isNaN(n) ? undefined : n)
       }}
     />
@@ -117,9 +212,31 @@ export function BooleanPropertyEditor({
   )
 }
 
+function ListItemInput({
+  block,
+  disabled,
+  value,
+  onCommit,
+}: {
+  block: unknown
+  disabled: boolean
+  value: string
+  onCommit: (next: string) => void
+}) {
+  return (
+    <DraftInput
+      committedValue={value}
+      onCommit={onCommit}
+      block={block}
+      className="h-7 text-xs md:text-sm"
+      placeholder="Enter value..."
+      disabled={disabled}
+    />
+  )
+}
+
 export function ListPropertyEditor({value, onChange, block}: PropertyEditorProps<unknown>) {
   const readOnly = readOnlyForBlock(block)
-  const itemFocusHandlers = usePropertyEditingActivation(block)
   const newItemFocusHandlers = usePropertyEditingActivation(block)
   const [newItem, setNewItem] = useState('')
   const items = Array.isArray(value)
@@ -143,14 +260,11 @@ export function ListPropertyEditor({value, onChange, block}: PropertyEditorProps
     <div className="space-y-2">
       {items.map((item, index) => (
         <div key={index} className="flex gap-2 items-center">
-          <Input
+          <ListItemInput
+            block={block}
             value={item}
-            onChange={(e) => updateItem(index, e.target.value)}
-            onFocus={itemFocusHandlers.onFocus}
-            onBlur={itemFocusHandlers.onBlur}
-            className="h-7 text-xs md:text-sm"
-            placeholder="Enter value..."
             disabled={readOnly}
+            onCommit={(next) => updateItem(index, next)}
           />
           {!readOnly && (
             <Button
@@ -191,19 +305,17 @@ export function ListPropertyEditor({value, onChange, block}: PropertyEditorProps
 
 export function ObjectPropertyEditor({value, onChange, block}: PropertyEditorProps<unknown>) {
   const readOnly = readOnlyForBlock(block)
-  const focusHandlers = usePropertyEditingActivation(block)
+  const text = JSON.stringify(value ?? {})
   return (
-    <Input
+    <DraftInput
       className={`${INLINE_INPUT_CLASS} font-mono`}
-      value={JSON.stringify(value ?? {})}
+      committedValue={text}
       placeholder="Empty"
       readOnly={readOnly}
-      onFocus={focusHandlers.onFocus}
-      onBlur={focusHandlers.onBlur}
-      onChange={(event) => {
-        if (readOnly) return
+      block={block}
+      onCommit={(text) => {
         try {
-          onChange(JSON.parse(event.target.value))
+          onChange(JSON.parse(text))
         } catch {
           // Keep the editor forgiving while the user is typing malformed JSON.
         }
@@ -214,22 +326,18 @@ export function ObjectPropertyEditor({value, onChange, block}: PropertyEditorPro
 
 export function DatePropertyEditor({value, onChange, block}: PropertyEditorProps<unknown>) {
   const readOnly = readOnlyForBlock(block)
-  const focusHandlers = usePropertyEditingActivation(block)
   const isoString = value instanceof Date
     ? value.toISOString().slice(0, 10)
     : (typeof value === 'string' && value ? value.slice(0, 10) : '')
   return (
-    <Input
+    <DraftInput
       type="date"
       className={INLINE_INPUT_CLASS}
-      value={isoString}
+      committedValue={isoString}
       placeholder="Empty"
       readOnly={readOnly}
-      onFocus={focusHandlers.onFocus}
-      onBlur={focusHandlers.onBlur}
-      onChange={(event) => {
-        if (readOnly) return
-        const text = event.target.value
+      block={block}
+      onCommit={(text) => {
         onChange(text ? new Date(text) : undefined)
       }}
     />

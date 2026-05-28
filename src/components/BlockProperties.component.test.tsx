@@ -162,7 +162,7 @@ describe('BlockProperties component', () => {
     await h.cleanup()
   })
 
-  it('edits and materialises an unset type-contributed property slot', async () => {
+  it('keeps primitive value edits local until blur commits them', async () => {
     const block = repo.block('block-1')
     expect(block.peekProperty(reviewStatusProp)).toBeUndefined()
 
@@ -176,15 +176,47 @@ describe('BlockProperties component', () => {
 
     expect(screen.getByText('phase2:review-status')).toBeTruthy()
 
-    const input = screen.getByDisplayValue('open')
+    const input = screen.getByDisplayValue('open') as HTMLInputElement
     await act(async () => {
       fireEvent.change(input, {target: {value: 'done'}})
+    })
+
+    expect(input.value).toBe('done')
+    expect(block.peekProperty(reviewStatusProp)).toBeUndefined()
+
+    await act(async () => {
+      fireEvent.blur(input)
     })
 
     await waitFor(() => {
       expect(block.peekProperty(reviewStatusProp)).toBe('done')
     })
     expect(block.data.properties[reviewStatusProp.name]).toBe('done')
+  })
+
+  it('commits primitive value edits on Enter without leaving the field', async () => {
+    const block = repo.block('block-1')
+
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <ActiveContextsProvider>
+        <BlockProperties block={block}/>
+        </ActiveContextsProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+    const input = screen.getByDisplayValue('open') as HTMLInputElement
+    input.focus()
+
+    await act(async () => {
+      fireEvent.change(input, {target: {value: 'queued'}})
+      fireEvent.keyDown(input, {key: 'Enter'})
+    })
+
+    await waitFor(() => {
+      expect(block.peekProperty(reviewStatusProp)).toBe('queued')
+    })
+    expect(document.activeElement).toBe(input)
   })
 
   it('keeps hidden fields discoverable behind a toggle', async () => {
