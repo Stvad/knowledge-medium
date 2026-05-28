@@ -1,16 +1,27 @@
 import {
-  actionsFacet, ActionContextTypes, appEffectsFacet, appMountsFacet,
+  actionDecoratorsFacet, actionsFacet, ActionContextTypes, appEffectsFacet, appMountsFacet,
   ChangeScope, codecs, defineBlockType, defineProperty,
   definePropertyEditorOverride, getPluginPrefsBlock,
   keyBetween, keysBetween, pluginBlockId,
   propertyEditorOverridesFacet, propertySchemasFacet,
   showError, showInfo, showProgress, showPropertiesProp,
   showSuccess, typesFacet, useRepo,
+  type ActionConfig,
+  type ActionContextType,
+  type ActionDecorator,
   type PropertyEditorProps,
   type PropertySchema,
 } from '@/extensions/api.js'
 import { PAGE_TYPE } from '@/data/blockTypes.js'
-import { aliasesProp } from '@/data/properties.js'
+import { aliasesProp, getBlockTypes } from '@/data/properties.js'
+import { addDaysIso, getOrCreateDailyNote, todayIso } from '@/plugins/daily-notes/dailyNotes.js'
+import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.js'
+import { SWIPE_RIGHT_BLOCK_ACTION_ID } from '@/plugins/swipe-quick-actions/actions.js'
+import {
+  EDIT_MODE_TODO_CYCLE_ACTION_ID,
+  TODO_CYCLE_ACTION_ID,
+} from '@/plugins/todo/actions.js'
+import type { BlockShortcutDependencies } from '@/shortcuts/types.js'
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter,
   DialogHeader, DialogTitle,
@@ -33,6 +44,7 @@ const READWISE_LIBRARY_TYPE = 'readwise-library'
 const READWISE_DOCUMENT_TYPE = 'readwise-document'
 const READWISE_HIGHLIGHT_TYPE = 'readwise-highlight'
 const READWISE_NOTE_TYPE = 'readwise-note'
+const REVIEW_ROLLOVER_BUFFER_MINUTES = 120
 
 const DEFAULT_PAGE_TITLE_TEMPLATE = '{title}'
 const DEFAULT_BOOK_TEMPLATE = ''
@@ -202,6 +214,16 @@ const noteForHighlightIdProp = defineProperty<string | undefined>('readwise:note
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
+const reviewDateProp = defineProperty<string>('readwise:review_date', {
+  codec: codecs.ref({ targetTypes: [DAILY_NOTE_TYPE] }),
+  defaultValue: '',
+  changeScope: ChangeScope.BlockDefault,
+})
+const reviewedProp = defineProperty<boolean>('readwise:reviewed', {
+  codec: codecs.boolean,
+  defaultValue: false,
+  changeScope: ChangeScope.BlockDefault,
+})
 
 const readwisePrefsType = defineBlockType({
   id: 'readwise-prefs',
@@ -233,6 +255,7 @@ const readwiseHighlightType = defineBlockType({
   properties: [
     highlightIdProp, userBookIdProp, readwiseUrlProp, locationProp, locationTypeProp,
     colorProp, highlightedAtProp, updatedAtProp, createdAtProp, tagsProp,
+    reviewDateProp, reviewedProp,
   ],
 })
 const readwiseNoteType = defineBlockType({
@@ -271,11 +294,16 @@ const HIGHLIGHT_PROPERTY_SCHEMAS = [
 const NOTE_PROPERTY_SCHEMAS = [
   noteForHighlightIdProp,
 ]
+const HIGHLIGHT_REVIEW_PROPERTY_SCHEMAS = [
+  reviewDateProp,
+  reviewedProp,
+]
 const IMPORTED_PROPERTY_SCHEMAS = [
   ...DOCUMENT_PROPERTY_SCHEMAS,
   ...HIGHLIGHT_PROPERTY_SCHEMAS.filter(schema =>
     !DOCUMENT_PROPERTY_SCHEMAS.some(existing => existing.name === schema.name)),
   ...NOTE_PROPERTY_SCHEMAS,
+  ...HIGHLIGHT_REVIEW_PROPERTY_SCHEMAS,
 ]
 
 // ---------------------------------------------------------------------------
@@ -519,6 +547,87 @@ const notePropertyEntries = (highlight: HighlightRecord): ManagedPropertyEntry[]
   [noteForHighlightIdProp, String(highlight.id)],
 ]
 
+const reviewDateIsoForSync = (now = new Date()): string => {
+  const today = todayIso(now)
+  const tomorrowStart = new Date(now)
+  tomorrowStart.setHours(24, 0, 0, 0)
+  const msUntilTomorrow = tomorrowStart.getTime() - now.getTime()
+  return msUntilTomorrow <= REVIEW_ROLLOVER_BUFFER_MINUTES * 60_000
+    ? addDaysIso(today, 1)
+    : today
+}
+
+const ensureHighlightReviewState = async (
+  tx: any,
+  blockId: string,
+  reviewDateBlockId: string,
+) => {
+  const row = await tx.get(blockId)
+  if (!row) return
+
+  const next = { ...row.properties }
+  let changed = false
+  if (!Object.prototype.hasOwnProperty.call(next, reviewDateProp.name)) {
+    next[reviewDateProp.name] = reviewDateProp.codec.encode(reviewDateBlockId)
+    changed = true
+  }
+  if (!Object.prototype.hasOwnProperty.call(next, reviewedProp.name)) {
+    next[reviewedProp.name] = reviewedProp.codec.encode(false)
+    changed = true
+  }
+  if (changed) await tx.update(blockId, { properties: next })
+}
+
+const readReviewed = (properties: Record<string, unknown>): boolean => {
+  const stored = properties[reviewedProp.name]
+  if (stored === undefined) return reviewedProp.defaultValue
+  try {
+    return reviewedProp.codec.decode(stored)
+  } catch {
+    return reviewedProp.defaultValue
+  }
+}
+
+const toggleHighlightReviewed = async (block: any): Promise<boolean> => {
+  const data = block.peek() ?? await block.load()
+  if (!data || !getBlockTypes(data).includes(READWISE_HIGHLIGHT_TYPE)) return false
+
+  if (!block.repo.isReadOnly) {
+    await block.set(reviewedProp, !readReviewed(data.properties))
+  }
+  return true
+}
+
+const decorateActionToToggleReadwiseReview = (
+  actionId: string,
+  context?: ActionContextType,
+): ActionDecorator => ({
+  actionId,
+  ...(context ? { context } : {}),
+  decorate: (action: ActionConfig): ActionConfig => ({
+    ...action,
+    handler: async (deps, trigger, dispatch) => {
+      const block = (deps as BlockShortcutDependencies).block
+      if (block && (await toggleHighlightReviewed(block))) return
+      await action.handler(deps as never, trigger, dispatch)
+    },
+  }),
+})
+
+const readwiseSwipeRightDecorator: ActionDecorator =
+  decorateActionToToggleReadwiseReview(SWIPE_RIGHT_BLOCK_ACTION_ID)
+
+const readwiseTodoCycleDecorators: readonly ActionDecorator[] = [
+  decorateActionToToggleReadwiseReview(
+    TODO_CYCLE_ACTION_ID,
+    ActionContextTypes.NORMAL_MODE,
+  ),
+  decorateActionToToggleReadwiseReview(
+    EDIT_MODE_TODO_CYCLE_ACTION_ID,
+    ActionContextTypes.EDIT_MODE_CM,
+  ),
+]
+
 // ---------------------------------------------------------------------------
 // Readwise export pagination
 
@@ -580,12 +689,18 @@ const syncBookToBlocks = async (
   pageTitleTemplate: string,
   bookTemplate: string,
   highlightTemplate: string,
+  reviewDateIso: string,
 ) => {
   const bookId = pluginBlockId(workspaceId, READWISE_NS, `book:${book.user_book_id}`)
   const bVars = bookVars(book)
   const title = substitute(pageTitleTemplate, bVars).trim() || `Readwise: ${book.title ?? book.user_book_id}`
   const supplementalLines = renderSupplementalTemplateLines(bookTemplate, bVars, BOOK_PROPERTY_TEMPLATE_KEYS)
   const typeSnapshot = repo.snapshotTypeRegistries()
+  const highlights = (book.highlights ?? [])
+    .filter(h => !h.is_deleted && h.text && h.text.trim().length)
+  const reviewDateBlock = highlights.length
+    ? await getOrCreateDailyNote(repo, workspaceId, reviewDateIso)
+    : null
 
   await repo.tx(async (tx: any) => {
     // 1. document page
@@ -644,8 +759,6 @@ const syncBookToBlocks = async (
     }
 
     // 3. highlights as children of the book page
-    const highlights = (book.highlights ?? [])
-      .filter(h => !h.is_deleted && h.text && h.text.trim().length)
     if (!highlights.length) return
 
     const refreshed = await tx.childrenOf(bookId)
@@ -680,6 +793,9 @@ const syncBookToBlocks = async (
       }
       await repo.addTypeInTx(tx, hId, READWISE_HIGHLIGHT_TYPE, {}, typeSnapshot)
       await applyManagedProperties(tx, hId, HIGHLIGHT_PROPERTY_SCHEMAS, highlightPropertyEntries(book, h))
+      if (reviewDateBlock) {
+        await ensureHighlightReviewState(tx, hId, reviewDateBlock.id)
+      }
 
       // a single deterministic note child
       const noteId = pluginBlockId(workspaceId, READWISE_NS, `hl:${h.id}:note`)
@@ -730,6 +846,7 @@ const runSync = async (repo: any, { silent = false } = {}) => {
   const pageTitleTemplate = prefs.get(pageTitleTemplateProp)
   const bookTemplate = prefs.get(bookTemplateProp)
   const highlightTemplate = prefs.get(highlightTemplateProp)
+  const reviewDateIso = reviewDateIsoForSync(new Date())
 
   const progress = showProgress('Readwise: fetching…')
   try {
@@ -746,7 +863,7 @@ const runSync = async (repo: any, { silent = false } = {}) => {
         progress.update(`Readwise: ${bookCount} books, ${highlightCount} highlights…`)
         await syncBookToBlocks(
           repo, workspaceId, rootId, book,
-          pageTitleTemplate, bookTemplate, highlightTemplate,
+          pageTitleTemplate, bookTemplate, highlightTemplate, reviewDateIso,
         )
       }
     } while (pageCursor)
@@ -1073,4 +1190,7 @@ export default [
   actionsFacet.of(openSettingsAction, { source }),
   actionsFacet.of(syncNowAction, { source }),
   actionsFacet.of(connectAction, { source }),
+  actionDecoratorsFacet.of(readwiseSwipeRightDecorator, { source }),
+  ...readwiseTodoCycleDecorators.map(decorator =>
+    actionDecoratorsFacet.of(decorator, { source })),
 ]
