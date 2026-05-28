@@ -577,7 +577,10 @@ CREATE OR REPLACE FUNCTION create_workspace(
       <code>workspaceSchema.ts</code>:
     </p>
     <ul>
-      <li>Add <code>encryption_mode</code> to <code>WORKSPACE_COLUMNS</code>.</li>
+      <li>Add <code>encryption_mode</code> and <code>wk_canary</code> to
+        <code>WORKSPACE_COLUMNS</code>. Both need to reach clients: the mode for the
+        downgrade-pin logic in §6, the canary for §8.2 WK validation on new devices and empty
+        workspaces.</li>
       <li>Run <code>yarn gen:sync-config</code> to refresh the yaml; <code>yarn check:sync-config</code>
         in CI catches anyone who forgets.</li>
     </ul>
