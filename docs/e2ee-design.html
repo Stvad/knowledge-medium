@@ -446,12 +446,19 @@
       <code>encryption_mode</code> still carries zero authority &mdash; the authority is the durable
       pin, not the server flag and not the ephemeral key.
       <br><br>
-      <strong>2. The <code>enc:v1:</code> prefix is not self-authorizing &mdash; the pin decides.</strong>
-      A hostile server could strip the prefix and serve attacker-chosen plaintext, so the prefix
-      never decides whether a row should be encrypted. For any workspace pinned <code>e2ee</code>
-      (rule 1), the decode layer requires <code>enc:v1:</code> on the three content columns and
-      refuses to render (with a tamper warning) if such a row arrives without it. The server's mode
-      and the prefix are both untrusted inputs; the local pin is the authority.
+      <strong>2. The <code>enc:v1:</code> prefix is not self-authorizing, and the check belongs at
+      the wire boundary.</strong> A hostile server could strip the prefix and serve attacker-chosen
+      plaintext, so the prefix never decides whether a row should be encrypted &mdash; the pin does.
+      For a workspace pinned <code>e2ee</code> (rule 1), every <em>server-origin</em> value must
+      carry <code>enc:v1:</code> on the three content columns; a wire value missing it is treated as
+      tampering (reject, surface a warning). "Server-origin" is the scope that matters: under Layout
+      B (§9.2) the check sits where ciphertext actually appears &mdash; the observer ingesting
+      <code>blocks_synced</code>, plus the upload/decrypt boundary &mdash; <strong>not</strong> at
+      <code>parseBlockRow</code> over the app-visible <code>blocks</code> table, which by design holds
+      <em>decrypted plaintext</em> for E2EE workspaces (and plaintext local edits until
+      <code>uploadData</code> encrypts them). Demanding the prefix on <code>blocks</code> would
+      reject every legitimate decrypted row and break rendering. The server's mode and the prefix are
+      both untrusted; the local pin decides whether to demand a prefix at the boundary.
     </div>
 
     <div class="warn">
@@ -1032,8 +1039,9 @@ GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
       <li><strong>E2EE workspace, <em>unprefixed</em> input</strong>: return <code>NULL</code> and
         record a tamper signal. This is the downgrade-attack defense at the UDF layer. A hostile
         server could strip the <code>enc:v1:</code> prefix and serve attacker-controlled plaintext
-        for an E2EE row; the §6 downgrade guard catches this at <code>parseBlockRow</code> for
-        app reads, but trigger-driven side tables and the row-event/<code>BlockCache</code> path
+        for an E2EE row; under Layout C's decrypt-at-read model the §6 prefix check would sit at
+        <code>parseBlockRow</code> for app reads (Layout B instead enforces it at the wire boundary,
+        §6 rule 2), but trigger-driven side tables and the row-event/<code>BlockCache</code> path
         fire <em>before</em> that guard. Without this UDF-level check, attacker plaintext would
         seed FTS, aliases, references, and the row-event cache as trusted content. Treat
         unprefixed-in-E2EE the same as locked: trigger maintenance no-ops, surface a tamper warning
