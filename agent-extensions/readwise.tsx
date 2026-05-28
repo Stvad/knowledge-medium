@@ -44,6 +44,7 @@ const READWISE_LIBRARY_TYPE = 'readwise-library'
 const READWISE_DOCUMENT_TYPE = 'readwise-document'
 const READWISE_HIGHLIGHT_TYPE = 'readwise-highlight'
 const READWISE_NOTE_TYPE = 'readwise-note'
+const HIGHLIGHTS_SECTION_CONTENT = 'Highlights'
 const REVIEW_ROLLOVER_BUFFER_MINUTES = 120
 
 const DEFAULT_PAGE_TITLE_TEMPLATE = '{title}'
@@ -598,6 +599,12 @@ const toggleHighlightReviewed = async (block: any): Promise<boolean> => {
   return true
 }
 
+const isReadwiseHighlightRow = (row: any): boolean => {
+  const properties = row?.properties ?? {}
+  return getBlockTypes(row).includes(READWISE_HIGHLIGHT_TYPE) ||
+    Object.prototype.hasOwnProperty.call(properties, highlightIdProp.name)
+}
+
 const decorateActionToToggleReadwiseReview = (
   actionId: string,
   context?: ActionContextType,
@@ -681,6 +688,51 @@ const ensureRoot = async (repo: any, workspaceId: string) => {
   return rootId
 }
 
+const ensureHighlightsSection = async (
+  tx: any,
+  workspaceId: string,
+  bookId: string,
+  sectionId: string,
+  metaIds: readonly string[],
+): Promise<string> => {
+  const children = await tx.childrenOf(bookId)
+  const section = await tx.get(sectionId)
+  const metaOrderKeys = metaIds
+    .map(id => children.find((child: any) => child.id === id)?.orderKey)
+    .filter((key): key is string => typeof key === 'string')
+  const lower = metaOrderKeys.length ? metaOrderKeys[metaOrderKeys.length - 1] : null
+  const upper = children.find((child: any) =>
+    child.id !== sectionId &&
+    !metaIds.includes(child.id) &&
+    (lower === null || child.orderKey > lower))?.orderKey ?? null
+  const targetOrderKey = keyBetween(lower, upper)
+
+  if (!section) {
+    await tx.create({
+      id: sectionId,
+      workspaceId,
+      parentId: bookId,
+      orderKey: targetOrderKey,
+      content: HIGHLIGHTS_SECTION_CONTENT,
+      properties: {},
+    })
+    return sectionId
+  }
+
+  if (section.content !== HIGHLIGHTS_SECTION_CONTENT) {
+    await tx.update(sectionId, { content: HIGHLIGHTS_SECTION_CONTENT })
+  }
+
+  const alreadyInPlace = section.parentId === bookId &&
+    (lower === null || section.orderKey > lower) &&
+    (upper === null || section.orderKey < upper)
+  if (!alreadyInPlace) {
+    await tx.move(sectionId, { parentId: bookId, orderKey: targetOrderKey })
+  }
+
+  return sectionId
+}
+
 const syncBookToBlocks = async (
   repo: any,
   workspaceId: string,
@@ -692,6 +744,7 @@ const syncBookToBlocks = async (
   reviewDateIso: string,
 ) => {
   const bookId = pluginBlockId(workspaceId, READWISE_NS, `book:${book.user_book_id}`)
+  const highlightsSectionId = pluginBlockId(workspaceId, READWISE_NS, `book:${book.user_book_id}:highlights`)
   const bVars = bookVars(book)
   const title = substitute(pageTitleTemplate, bVars).trim() || `Readwise: ${book.title ?? book.user_book_id}`
   const supplementalLines = renderSupplementalTemplateLines(bookTemplate, bVars, BOOK_PROPERTY_TEMPLATE_KEYS)
@@ -758,12 +811,19 @@ const syncBookToBlocks = async (
       }
     }
 
-    // 3. highlights as children of the book page
-    if (!highlights.length) return
+    // 3. highlights live under a deterministic sub-bullet on the document
+    //    page, with notes still nested under their highlight.
+    const currentBookKids = await tx.childrenOf(bookId)
+    const directHighlightKids = currentBookKids.filter((k: any) =>
+      k.id !== highlightsSectionId && isReadwiseHighlightRow(k))
+    if (!highlights.length && !directHighlightKids.length) return
 
-    const refreshed = await tx.childrenOf(bookId)
-    const lastChildKey = refreshed.length ? refreshed[refreshed.length - 1].orderKey : null
-    const newHighlightKeys = keysBetween(lastChildKey, null, highlights.length)
+    await ensureHighlightsSection(tx, workspaceId, bookId, highlightsSectionId, metaIds)
+
+    const sectionKids = await tx.childrenOf(highlightsSectionId)
+    const lastHighlightKey = sectionKids.length ? sectionKids[sectionKids.length - 1].orderKey : null
+    const newHighlightKeys = keysBetween(lastHighlightKey, null, highlights.length || 1)
+    let nextNewHighlightKey = 0
 
     for (let i = 0; i < highlights.length; i++) {
       const h = highlights[i]
@@ -783,13 +843,21 @@ const syncBookToBlocks = async (
         await tx.create({
           id: hId,
           workspaceId,
-          parentId: bookId,
-          orderKey: newHighlightKeys[i],
+          parentId: highlightsSectionId,
+          orderKey: newHighlightKeys[nextNewHighlightKey++],
           content: hContent,
           properties: {},
         })
-      } else if (existingH.content !== hContent) {
-        await tx.update(hId, { content: hContent })
+      } else {
+        if (existingH.parentId !== highlightsSectionId) {
+          await tx.move(hId, {
+            parentId: highlightsSectionId,
+            orderKey: newHighlightKeys[nextNewHighlightKey++],
+          })
+        }
+        if (existingH.content !== hContent) {
+          await tx.update(hId, { content: hContent })
+        }
       }
       await repo.addTypeInTx(tx, hId, READWISE_HIGHLIGHT_TYPE, {}, typeSnapshot)
       await applyManagedProperties(tx, hId, HIGHLIGHT_PROPERTY_SCHEMAS, highlightPropertyEntries(book, h))
@@ -819,6 +887,23 @@ const syncBookToBlocks = async (
         }
         await repo.addTypeInTx(tx, noteId, READWISE_NOTE_TYPE, {}, typeSnapshot)
         await applyManagedProperties(tx, noteId, NOTE_PROPERTY_SCHEMAS, notePropertyEntries(h))
+      }
+    }
+
+    const refreshedBookKids = await tx.childrenOf(bookId)
+    const strayHighlightKids = refreshedBookKids.filter((k: any) =>
+      k.id !== highlightsSectionId && isReadwiseHighlightRow(k))
+    if (strayHighlightKids.length) {
+      const refreshedSectionKids = await tx.childrenOf(highlightsSectionId)
+      const lastSectionKey = refreshedSectionKids.length
+        ? refreshedSectionKids[refreshedSectionKids.length - 1].orderKey
+        : null
+      const strayKeys = keysBetween(lastSectionKey, null, strayHighlightKids.length)
+      for (let i = 0; i < strayHighlightKids.length; i++) {
+        await tx.move(strayHighlightKids[i].id, {
+          parentId: highlightsSectionId,
+          orderKey: strayKeys[i],
+        })
       }
     }
   }, { scope: ChangeScope.BlockDefault, description: `readwise: sync book ${book.user_book_id}` })
