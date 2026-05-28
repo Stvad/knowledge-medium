@@ -470,8 +470,8 @@
       delete on that next boot, before the DB is opened, so wa-sqlite isn't holding the OPFS file
       when it's removed) &mdash; and the durable pins (in localStorage, deliberately preserved so
       each workspace's mode stays known). Note this coarse file-wipe is the
-      <em>lock</em> action only; the per-workspace revoke/delete teardown (§9.2) can't wipe the whole
-      file and still needs per-<code>workspace_id</code> surface removal. On next use,
+      <em>lock</em> action only; revoke/workspace-delete is a separate, per-workspace concern that
+      v1 defers (§9.2) and that must never trigger this wipe. On next use,
       plaintext workspaces re-sync and render as usual; an <code>e2ee</code>-pinned workspace
       re-enters the quarantine (rule 3) read-only until its WK is re-pasted &mdash; so the wipe never
       downgrades, and the plaintext-confirmation path is still <strong>not</strong> offered for a
@@ -1080,31 +1080,22 @@ CREATE TRIGGER blocks_require_ciphertext_for_e2ee_trg
     </p>
 
     <p>
-      <strong>Observer must propagate deletes and tombstones, not just inserts/updates.</strong>
-      PowerSync drops rows from the synced stream when membership is revoked or a workspace is
-      deleted &mdash; the row simply leaves <code>blocks_synced</code>, no insert/update fires.
-      Since PowerSync no longer manages the app-visible <code>blocks</code> table under Layout B,
-      the observer is also responsible for removing the corresponding row from <code>blocks</code>
-      (and triggering the existing delete-side maintenance: row_events, alias/type/FTS index
-      cleanup). Concretely: subscribe to PowerSync's deletion events on
-      <code>blocks_synced</code> in addition to insert/update; on delete, run
-      <code>DELETE FROM blocks WHERE id = ?</code> with <code>source = NULL</code> so the
-      side-index triggers fire and the upload triggers don't.
-      <br><br>
-      <strong>Pending-envelope cleanup on revoke is best-effort, and deliberately not a v1
-      priority.</strong> When access is revoked, any pending upload envelopes for that workspace sit
-      in <code>ps_crud</code>/<code>ps_crud_rejected</code> as plaintext (captured before the upload
-      hook encrypts); the server rejects them (RLS/FK) and they'd linger, risking a stale-edit replay
-      if access were later restored. The observer <em>can</em> tidy this up &mdash; delete or
-      quarantine that workspace's <code>ps_crud</code>/<code>ps_crud_rejected</code> entries &mdash;
-      but two things matter more than the tidy-up itself. First, it must stay strictly
-      <strong>per-workspace</strong>: revoke concerns one workspace, so it must <em>never</em>
-      escalate to the §6 coarse "Lock &amp; wipe" (that is all-workspaces and destructive, and is a
-      user-only action). Second, the security stakes are low: a revoked member already held the WK
-      and the decrypted data they had synced, so revoke can't retroactively protect any of it
-      &mdash; purge-on-revoke is local hygiene, not a confidentiality boundary. So v1 can leave the
-      revoked workspace's local data and queue entries to go stale (cleared on the next explicit
-      Lock &amp; wipe, or simply left), and revisit dedicated revoke cleanup later.
+      <strong>Rows that leave the synced stream (revoke / workspace-delete) are deferred in v1.</strong>
+      PowerSync's <code>onDiff</code> surfaces a <code>removed</code> set when rows leave the user's
+      buckets &mdash; which here is predominantly membership revoke or workspace delete, since
+      ordinary block deletes are <em>soft</em> (<code>deleted = 1</code>, the row stays in the
+      stream). Fully handling removals would mean a per-workspace local teardown: drop those rows
+      from <code>blocks</code> and their derived-index entries, plus the plaintext
+      <code>ps_crud</code>/<code>ps_crud_rejected</code> envelopes for that workspace.
+      <strong>v1 deliberately does not build that</strong> &mdash; we don't want to invent a
+      partial-workspace wipe just for revoke. Instead the revoked workspace's local rows and queue
+      entries are allowed to go stale, cleared by the next explicit Lock &amp; wipe (§6). This is
+      safe to defer: a revoked member already held the WK and the data they had synced, so revoke
+      can't retroactively protect any of it &mdash; cleanup is local hygiene, not a confidentiality
+      boundary. Two rules hold regardless: revoke stays <strong>per-workspace</strong> and must
+      <em>never</em> escalate to §6's coarse all-workspaces wipe; and if a partial-workspace wipe is
+      ever added for another reason, we can revisit whether to adopt it for removed-row handling
+      here.
     </p>
     <p>
       Upload is symmetric. App writes plaintext to <code>blocks</code> as today; the existing
