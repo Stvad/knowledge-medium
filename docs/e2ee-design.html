@@ -447,7 +447,10 @@
       and never the record of mode. <strong>Locking is a deliberate, coarse action in v1.</strong>
       "Lock &amp; wipe local data" is an explicit user action &mdash; distinct from sign-out (it
       keeps you signed in; it isn't a logout). It flushes the upload queue first so unsynced edits
-      aren't lost (or defers if offline), drops <em>all</em> WKs, and then <strong>wipes the whole
+      aren't lost; if the flush can't complete (offline, or an edit the server permanently rejects)
+      it <strong>warns the user</strong> that locking now would discard unsynced edits and lets them
+      choose &mdash; reconnect and retry, or proceed and lose them &mdash; rather than silently doing
+      nothing or silently dropping work. It then drops <em>all</em> WKs and <strong>wipes the whole
       local SQLite DB file</strong> rather than enumerating tables. The file holds every
       plaintext-bearing surface &mdash; the <code>blocks</code> table, the derived indexes
       (<code>block_aliases</code>/<code>block_types</code>/<code>blocks_fts</code>), the
@@ -457,8 +460,11 @@
       per-surface checklist to keep complete, which is the right shape given how many times that
       checklist grew under review. (This maps onto PowerSync's supported clear-and-resync path, not
       a hack.) Two things live <em>outside</em> the file and are handled separately: the in-memory
-      <code>BlockCache</code> (torn down with the data layer), and the durable pins (in localStorage,
-      deliberately preserved so each workspace's mode stays known). Note this coarse file-wipe is the
+      <code>BlockCache</code> and other live JS state, cleared the simplest way &mdash; a forced page
+      reload after the wipe (a fresh boot re-opens the recreated DB and re-syncs; run the actual file
+      delete on that next boot, before the DB is opened, so wa-sqlite isn't holding the OPFS file
+      when it's removed) &mdash; and the durable pins (in localStorage, deliberately preserved so
+      each workspace's mode stays known). Note this coarse file-wipe is the
       <em>lock</em> action only; the per-workspace revoke/delete teardown (§9.2) can't wipe the whole
       file and still needs per-<code>workspace_id</code> surface removal. On next use,
       plaintext workspaces re-sync and render as usual; an <code>e2ee</code>-pinned workspace
