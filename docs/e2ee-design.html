@@ -1,0 +1,919 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>End-to-End Encryption Design</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --fg: #171717;
+      --muted: #5f6368;
+      --line: #d6d9de;
+      --code: #f5f6f8;
+      --accent: #0f766e;
+      --accent-soft: #d1faf2;
+      --warn: #b45309;
+      --warn-soft: #fef3c7;
+      --reject: #9f1239;
+      --reject-soft: #ffe4e6;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --fg: #e8eaed;
+        --muted: #a8adb4;
+        --line: #343941;
+        --code: #20242a;
+        --accent: #5eead4;
+        --accent-soft: #134e4a;
+        --warn: #fbbf24;
+        --warn-soft: #422006;
+        --reject: #fda4af;
+        --reject-soft: #4c0519;
+      }
+    }
+
+    body {
+      margin: 0;
+      color: var(--fg);
+      background: Canvas;
+      line-height: 1.55;
+    }
+
+    main {
+      max-width: 880px;
+      margin: 0 auto;
+      padding: 40px 24px 56px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 2rem;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin: 36px 0 8px;
+      font-size: 1.3rem;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 4px;
+    }
+
+    h3 {
+      margin: 24px 0 6px;
+      font-size: 1.05rem;
+    }
+
+    p {
+      margin: 0 0 14px;
+    }
+
+    ul, ol {
+      margin: 0 0 16px 20px;
+      padding: 0;
+    }
+
+    li {
+      margin-bottom: 4px;
+    }
+
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    }
+
+    code {
+      padding: 0.08rem 0.25rem;
+      border-radius: 4px;
+      background: var(--code);
+      font-size: 0.92em;
+    }
+
+    pre {
+      overflow-x: auto;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--code);
+      font-size: 0.88em;
+      line-height: 1.5;
+    }
+
+    pre code {
+      padding: 0;
+      background: transparent;
+    }
+
+    .lede {
+      color: var(--muted);
+      font-size: 1.05rem;
+    }
+
+    .decision {
+      border-left: 3px solid var(--accent);
+      padding: 10px 14px;
+      background: var(--accent-soft);
+      border-radius: 0 6px 6px 0;
+      margin: 12px 0 18px;
+    }
+
+    .decision strong {
+      color: var(--accent);
+    }
+
+    .warn {
+      border-left: 3px solid var(--warn);
+      padding: 10px 14px;
+      background: var(--warn-soft);
+      border-radius: 0 6px 6px 0;
+      margin: 12px 0 18px;
+    }
+
+    .reject {
+      border-left: 3px solid var(--reject);
+      padding: 10px 14px;
+      background: var(--reject-soft);
+      border-radius: 0 6px 6px 0;
+      margin: 12px 0 18px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0 20px;
+      font-size: 0.95em;
+    }
+
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 8px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      font-weight: 600;
+      color: var(--muted);
+      font-size: 0.85em;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    figure {
+      margin: 18px 0 22px;
+      padding: 0;
+    }
+
+    figcaption {
+      color: var(--muted);
+      font-size: 0.9em;
+      margin-top: 6px;
+      text-align: center;
+    }
+
+    svg {
+      display: block;
+      margin: 0 auto;
+      max-width: 100%;
+      height: auto;
+    }
+
+    .diagram {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      background: var(--code);
+    }
+
+    .toc {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px 22px;
+      background: var(--code);
+      margin: 20px 0 28px;
+    }
+
+    .toc ol {
+      margin: 6px 0 0 18px;
+    }
+
+    .toc li {
+      margin-bottom: 2px;
+    }
+
+    .toc a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    .toc a:hover {
+      text-decoration: underline;
+    }
+
+    .meta {
+      color: var(--muted);
+      font-size: 0.9em;
+      margin: -4px 0 24px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>End-to-End Encryption Design</h1>
+    <p class="meta">Status: sketch / not yet committed to. Discussion artifact.</p>
+    <p class="lede">
+      Per-workspace opt-in E2EE so that Supabase and the network see only opaque ciphertext for
+      content in encrypted workspaces, while plaintext workspaces remain fully server-readable and
+      can keep all current and future server-side features.
+    </p>
+
+    <div class="toc">
+      <strong>Contents</strong>
+      <ol>
+        <li><a href="#goals">Goals &amp; non-goals</a></li>
+        <li><a href="#threat">Threat model</a></li>
+        <li><a href="#current">Why the current architecture is friendly to this</a></li>
+        <li><a href="#shape">Design shape</a></li>
+        <li><a href="#keys">Key hierarchy</a></li>
+        <li><a href="#crypto">Cryptographic choices</a></li>
+        <li><a href="#schema">Schema additions</a></li>
+        <li><a href="#flows">User-visible flows</a></li>
+        <li><a href="#seam">Sync boundary &amp; per-column encryption</a></li>
+        <li><a href="#duality">Mode-by-mode behavior</a></li>
+        <li><a href="#prep">Architectural prep that pays off regardless</a></li>
+        <li><a href="#rejected">Considered &amp; rejected</a></li>
+        <li><a href="#open">Open questions</a></li>
+        <li><a href="#tradeoffs">Tradeoffs we're accepting</a></li>
+      </ol>
+    </div>
+
+    <h2 id="goals">1. Goals &amp; non-goals</h2>
+
+    <h3>Goals</h3>
+    <ul>
+      <li>Workspace owner can mark a workspace as <strong>end-to-end encrypted</strong> at creation. Mode is immutable thereafter.</li>
+      <li>For E2EE workspaces, Supabase (and anyone with DB access) sees only ciphertext for
+        <code>blocks.content</code>, <code>blocks.properties_json</code>, <code>blocks.references_json</code>.</li>
+      <li>Plaintext workspaces remain bit-identical to today &mdash; same schema, same RLS, same
+        access to server-side features (current and future).</li>
+      <li>Multi-device: the same user can decrypt their E2EE workspaces on any device they sign in on,
+        given their passphrase.</li>
+      <li>Workspace sharing: an inviter can grant a new member access to an E2EE workspace without
+        ever revealing the workspace key to the server.</li>
+    </ul>
+
+    <h3>Non-goals (for v1)</h3>
+    <ul>
+      <li>Hiding metadata (workspace structure, block tree shape, edit timing, who-edited-what).</li>
+      <li>Defense against a compromised local device. OS-level disk encryption is the right tool;
+        OPFS already gives per-origin isolation.</li>
+      <li>Cryptographic verification of authorship (signed writes). Useful later, not in scope now.</li>
+      <li>Account recovery without the user's passphrase. Lost passphrase = lost E2EE data unless we
+        ship recovery codes (see <a href="#open">open questions</a>).</li>
+      <li>Server-side features over encrypted workspaces (search, AI, embeddings). They simply don't apply.</li>
+    </ul>
+
+    <h2 id="threat">2. Threat model</h2>
+    <p>
+      The threat we're addressing is the most common one users actually ask about: <em>"can the
+      hosting provider read my notes?"</em> Concretely, in v1:
+    </p>
+    <ul>
+      <li><strong>In scope</strong>: passive or active attacker with full read access to the Supabase
+        Postgres, the PowerSync replica, network traffic to/from Supabase, and Supabase logs/backups.
+        They must not learn the contents of E2EE-workspace blocks.</li>
+      <li><strong>Out of scope</strong>: attacker who controls the user's browser at runtime
+        (they can read decrypted data and exfiltrate the key); attacker who can compromise the
+        client build pipeline (they can ship a backdoored client); attacker who can perform traffic
+        analysis on edit patterns (still possible).</li>
+    </ul>
+
+    <h2 id="current">3. Why the current architecture is friendly to this</h2>
+    <p>
+      The codebase is already structured in a way that makes E2EE tractable rather than invasive:
+    </p>
+    <ul>
+      <li><strong>Server is blind storage today.</strong> RLS policies filter by workspace membership,
+        not content. No <code>tsvector</code>, no <code>pg_trgm</code>, no AI/embeddings, no
+        webhooks read block content.</li>
+      <li><strong>Workspace is already the RLS boundary.</strong> Per-workspace key material maps
+        cleanly onto a unit that already exists.</li>
+      <li><strong>Per-user OPFS SQLite</strong> via <code>kmp-v6-&lt;user_id&gt;.db</code> gives
+        physical isolation between users on a shared device.</li>
+      <li><strong>PowerSync upload compaction</strong> already coalesces edits per block, which
+        keeps wire overhead low independent of encoding.</li>
+      <li><strong>Client-side edit log</strong> already exists (<code>tx_context</code>,
+        <code>row_events</code>, <code>command_events</code>) &mdash; useful if we ever need to move
+        history off the server for encrypted workspaces.</li>
+    </ul>
+
+    <h2 id="shape">4. Design shape</h2>
+
+    <p>
+      Two properties drive the entire design:
+    </p>
+    <ol>
+      <li><strong>Per-workspace opt-in.</strong> One user can have plaintext and E2EE workspaces
+        side by side on the same device, in the same local DB.</li>
+      <li><strong>Per-column encryption with the existing schema.</strong> We encrypt the three
+        content columns in place rather than consolidating them into one opaque payload. This
+        preserves PowerSync's column-level PATCH granularity, keeps plaintext workspaces
+        bit-identical, and avoids a schema migration that would touch every workspace.</li>
+    </ol>
+
+    <div class="decision">
+      <strong>Decision.</strong> Threat model A (Supabase/network can't read content). Per-workspace
+      opt-in. Per-column AEAD with self-identifying <code>enc:v1:</code> prefix in the existing
+      <code>content</code>/<code>properties_json</code>/<code>references_json</code> columns.
+    </div>
+
+    <h2 id="keys">5. Key hierarchy</h2>
+
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 0 720 460" xmlns="http://www.w3.org/2000/svg" aria-labelledby="keytree-title">
+          <title id="keytree-title">Key hierarchy from passphrase to per-workspace CEKs</title>
+          <defs>
+            <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+            </marker>
+          </defs>
+          <style>
+            .box { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; rx: 6; ry: 6; }
+            .boxDark { fill: none; stroke: var(--fg); stroke-width: 1.2; rx: 6; ry: 6; }
+            .lbl { fill: var(--fg); font: 13px ui-sans-serif, system-ui, sans-serif; text-anchor: middle; }
+            .lblSm { fill: var(--muted); font: 11px ui-sans-serif, system-ui, sans-serif; text-anchor: middle; }
+            .link { stroke: var(--fg); stroke-width: 1.2; fill: none; color: var(--fg); }
+          </style>
+
+          <rect class="box" x="280" y="10" width="160" height="40"/>
+          <text class="lbl" x="360" y="34">Passphrase</text>
+
+          <line class="link" x1="360" y1="50" x2="360" y2="80" marker-end="url(#arr)"/>
+          <text class="lblSm" x="420" y="68">Argon2id (KDF)</text>
+
+          <rect class="box" x="290" y="80" width="140" height="40"/>
+          <text class="lbl" x="360" y="104">Master Key (MK)</text>
+
+          <line class="link" x1="360" y1="120" x2="360" y2="150" marker-end="url(#arr)"/>
+          <text class="lblSm" x="430" y="140">unwraps stored UVK</text>
+
+          <rect class="box" x="290" y="150" width="140" height="40"/>
+          <text class="lbl" x="360" y="174">User Vault Key (UVK)</text>
+
+          <line class="link" x1="360" y1="190" x2="170" y2="240" marker-end="url(#arr)"/>
+          <line class="link" x1="360" y1="190" x2="360" y2="240" marker-end="url(#arr)"/>
+          <line class="link" x1="360" y1="190" x2="550" y2="240" marker-end="url(#arr)"/>
+
+          <rect class="box" x="90" y="240" width="160" height="40"/>
+          <text class="lbl" x="170" y="264">CEK&#x2009;workspace A</text>
+
+          <rect class="box" x="280" y="240" width="160" height="40"/>
+          <text class="lbl" x="360" y="264">CEK&#x2009;workspace B</text>
+
+          <rect class="box" x="470" y="240" width="160" height="40"/>
+          <text class="lbl" x="550" y="264">Asymmetric keypair</text>
+
+          <line class="link" x1="170" y1="280" x2="170" y2="320" marker-end="url(#arr)"/>
+          <line class="link" x1="360" y1="280" x2="360" y2="320" marker-end="url(#arr)"/>
+          <line class="link" x1="550" y1="280" x2="550" y2="320" marker-end="url(#arr)"/>
+
+          <rect class="boxDark" x="90" y="320" width="160" height="60"/>
+          <text class="lbl" x="170" y="344">encrypts blocks</text>
+          <text class="lblSm" x="170" y="364">in workspace A</text>
+
+          <rect class="boxDark" x="280" y="320" width="160" height="60"/>
+          <text class="lbl" x="360" y="344">encrypts blocks</text>
+          <text class="lblSm" x="360" y="364">in workspace B</text>
+
+          <rect class="boxDark" x="470" y="320" width="160" height="60"/>
+          <text class="lbl" x="550" y="338">public key published</text>
+          <text class="lblSm" x="550" y="356">private key wrapped</text>
+          <text class="lblSm" x="550" y="370">by UVK (server-stored)</text>
+
+          <text class="lblSm" x="360" y="420">CEKs live on the server too, each wrapped per-member by that member's UVK,</text>
+          <text class="lblSm" x="360" y="436">so a new device can recover them after passphrase unlock.</text>
+        </svg>
+      </div>
+      <figcaption>Figure 1 &mdash; Key hierarchy. The passphrase is the only secret that never leaves the device.</figcaption>
+    </figure>
+
+    <ul>
+      <li><strong>Master Key (MK)</strong> &mdash; derived from passphrase via Argon2id. Lives only in memory. Never persisted, never sent anywhere.</li>
+      <li><strong>User Vault Key (UVK)</strong> &mdash; random 256-bit. Wrapped by MK and stored server-side (<code>user_vault.wrapped_uvk</code>). Multi-device unlock works because any device that can derive MK can unwrap the same UVK.</li>
+      <li><strong>Content Encryption Key (CEK)</strong> &mdash; random per workspace. Each workspace member holds the CEK wrapped by their UVK (<code>workspace_members.wrapped_cek</code>). One workspace = one CEK shared by all members.</li>
+      <li><strong>Asymmetric keypair</strong> &mdash; per user. Public key published in <code>user_vault.public_key</code>; private key stored wrapped by UVK. Used at invite time to hand a CEK to a new member without an interactive session.</li>
+    </ul>
+
+    <h2 id="crypto">6. Cryptographic choices</h2>
+
+    <table>
+      <tr><th>Concern</th><th>Choice</th><th>Why</th></tr>
+      <tr>
+        <td>KDF</td>
+        <td>Argon2id (params: m=64MiB, t=3, p=1)</td>
+        <td>Modern memory-hard KDF. If a libsodium dep is unwanted, PBKDF2-SHA256 (600k iters) via WebCrypto is the fallback.</td>
+      </tr>
+      <tr>
+        <td>Symmetric AEAD</td>
+        <td>AES-256-GCM</td>
+        <td>Native in WebCrypto, no dependency. XChaCha20-Poly1305 only meaningfully wins on platforms without AES hardware.</td>
+      </tr>
+      <tr>
+        <td>Nonce</td>
+        <td>96-bit random per ciphertext</td>
+        <td>Per-column random nonce. Reuse probability negligible at our write volumes; keep a guard rail counter.</td>
+      </tr>
+      <tr>
+        <td>AAD (associated data)</td>
+        <td><code>block_id &Vert; workspace_id &Vert; column_name &Vert; schema_version</code></td>
+        <td>Prevents the server from swapping ciphertexts between blocks, between workspaces, or between columns of the same block.</td>
+      </tr>
+      <tr>
+        <td>Asymmetric primitive</td>
+        <td>X25519 for key wrapping, optional Ed25519 for future signing</td>
+        <td>Tiny, well-understood. libsodium covers both cleanly; WebCrypto's ECDH P-256 is an acceptable fallback if we stay dependency-light.</td>
+      </tr>
+      <tr>
+        <td>Ciphertext format</td>
+        <td><code>"enc:v1:" + base64url(nonce &Vert; ciphertext)</code></td>
+        <td>Self-identifying prefix lets the decode layer detect E2EE rows without a workspace lookup. The <code>v1</code> reserves a clean upgrade path.</td>
+      </tr>
+    </table>
+
+    <div class="warn">
+      <strong>Downgrade-attack guard.</strong> The <code>enc:v1:</code> prefix is convenient but not
+      authoritative on its own &mdash; a hostile server could strip it and serve attacker-chosen
+      plaintext. The decode layer must cross-check the row's <code>workspaces.encryption_mode</code>:
+      if the workspace is E2EE and the value lacks the prefix, refuse to render (and surface a
+      tamper warning).
+    </div>
+
+    <h2 id="schema">7. Schema additions</h2>
+
+    <p>One new migration. No changes to <code>blocks</code> columns themselves.</p>
+
+    <pre><code>-- Encryption mode is an immutable property of a workspace.
+ALTER TABLE workspaces ADD COLUMN encryption_mode TEXT
+  NOT NULL DEFAULT 'none'
+  CHECK (encryption_mode IN ('none', 'e2ee'));
+
+-- Trigger: encryption_mode is set at create time and never changes.
+CREATE TRIGGER workspaces_lock_encryption_mode
+  BEFORE UPDATE ON workspaces
+  FOR EACH ROW
+  WHEN (OLD.encryption_mode IS DISTINCT FROM NEW.encryption_mode)
+  EXECUTE FUNCTION raise_immutable_column();
+
+-- Each member of an E2EE workspace holds the CEK wrapped by their own UVK.
+ALTER TABLE workspace_members ADD COLUMN wrapped_cek BYTEA;
+-- Constraint enforced via trigger (cross-table check): required iff workspace is E2EE.
+
+-- Per-user vault: enables multi-device unlock and invite-time CEK wrapping.
+CREATE TABLE user_vault (
+  user_id              UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  kdf_params           JSONB  NOT NULL,  -- algo, salt (base64), m, t, p
+  wrapped_uvk          BYTEA  NOT NULL,  -- UVK encrypted by MK
+  public_key           BYTEA  NOT NULL,  -- X25519 public, published openly
+  wrapped_private_key  BYTEA  NOT NULL,  -- X25519 private, wrapped by UVK
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- RLS: each user manages their own vault row.
+-- Public keys are readable by anyone who shares a workspace with the owner
+-- (needed for invite-time CEK wrapping).</code></pre>
+
+    <p>
+      Notably absent: no changes to <code>blocks</code>, no changes to <code>sync-config.yaml</code>
+      stream definitions, no new tables for ciphertext storage. The duality is preserved by data
+      shape, not by structural separation.
+    </p>
+
+    <h2 id="flows">8. User-visible flows</h2>
+
+    <h3>8.1 First-time vault setup</h3>
+    <p>
+      Triggered the first time a user either creates an E2EE workspace or is invited to one.
+      Plaintext-only users never see this flow.
+    </p>
+    <ol>
+      <li>Prompt for a passphrase (and confirm).</li>
+      <li>Generate random salt; run Argon2id &rarr; MK.</li>
+      <li>Generate random UVK (256-bit). Generate X25519 keypair.</li>
+      <li>Wrap UVK with MK; wrap private key with UVK.</li>
+      <li>POST <code>user_vault</code> row with <code>kdf_params</code>, wrapped UVK, public key,
+        wrapped private key.</li>
+      <li>Cache MK and UVK in memory (and unwrapped private key, lazily).</li>
+    </ol>
+
+    <h3>8.2 Sign-in / vault unlock</h3>
+    <ol>
+      <li>Supabase <code>signInWithPassword</code> as today.</li>
+      <li>If the user has a <code>user_vault</code> row, prompt for passphrase. (If they don't,
+        skip &mdash; they have no E2EE workspaces yet.)</li>
+      <li>Re-derive MK using stored <code>kdf_params</code>. Unwrap UVK. Unwrap private key.</li>
+      <li>Fetch all <code>workspace_members</code> rows for this user with <code>wrapped_cek</code>;
+        unwrap into an in-memory map <code>workspace_id &rarr; CEK</code>.</li>
+      <li>Mark vault as "unlocked." App content code now resolves CEKs synchronously.</li>
+    </ol>
+
+    <div class="warn">
+      <strong>Locked-but-syncing state.</strong> The session can be valid before the vault is
+      unlocked (or if the user dismisses the passphrase prompt). PowerSync will happily download
+      E2EE blocks during that window. The data layer must surface a "locked" placeholder for those
+      rows rather than throwing on decrypt &mdash; otherwise a user who closes the prompt sees a
+      cascade of errors.
+    </div>
+
+    <h3>8.3 Create an encrypted workspace</h3>
+    <ol>
+      <li>If no <code>user_vault</code>, run §8.1 inline.</li>
+      <li>Generate a random CEK.</li>
+      <li>Wrap CEK with the creator's UVK.</li>
+      <li>Call <code>create_workspace(name, encryption_mode='e2ee', wrapped_cek=&hellip;)</code>.
+        The RPC inserts the workspace, the owner's membership row, and the wrapped CEK atomically.</li>
+    </ol>
+
+    <h3>8.4 Invite a user to an encrypted workspace</h3>
+
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 0 720 360" xmlns="http://www.w3.org/2000/svg" aria-labelledby="invite-title">
+          <title id="invite-title">Invite flow that delivers a CEK without server knowledge of it</title>
+          <style>
+            .col { fill: var(--fg); font: 13px ui-sans-serif, system-ui, sans-serif; text-anchor: middle; font-weight: 600; }
+            .arr { stroke: var(--fg); stroke-width: 1.2; fill: none; }
+            .lbl { fill: var(--fg); font: 12px ui-sans-serif, system-ui, sans-serif; }
+            .note { fill: var(--muted); font: 11px ui-sans-serif, system-ui, sans-serif; font-style: italic; }
+            .axis { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 3; }
+          </style>
+          <defs>
+            <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+            </marker>
+          </defs>
+
+          <text class="col" x="110" y="24">Alice (inviter)</text>
+          <text class="col" x="360" y="24">Server</text>
+          <text class="col" x="610" y="24">Bob (invitee)</text>
+
+          <line class="axis" x1="110" y1="36" x2="110" y2="340"/>
+          <line class="axis" x1="360" y1="36" x2="360" y2="340"/>
+          <line class="axis" x1="610" y1="36" x2="610" y2="340"/>
+
+          <line class="arr" x1="610" y1="68" x2="370" y2="68" marker-end="url(#arr2)" color="var(--fg)"/>
+          <text class="lbl" x="490" y="62" text-anchor="middle">publish public key (signup)</text>
+
+          <line class="arr" x1="110" y1="120" x2="350" y2="120" marker-end="url(#arr2)" color="var(--fg)"/>
+          <text class="lbl" x="230" y="114" text-anchor="middle">request Bob's public key</text>
+
+          <line class="arr" x1="360" y1="148" x2="120" y2="148" marker-end="url(#arr2)" color="var(--fg)"/>
+          <text class="lbl" x="240" y="142" text-anchor="middle">Bob's public key</text>
+
+          <rect x="30" y="170" width="160" height="40" fill="var(--accent-soft)" stroke="var(--accent)" rx="4"/>
+          <text class="note" x="110" y="186" text-anchor="middle">wrap CEK with Bob's</text>
+          <text class="note" x="110" y="200" text-anchor="middle">public key (X25519)</text>
+
+          <line class="arr" x1="110" y1="228" x2="350" y2="228" marker-end="url(#arr2)" color="var(--fg)"/>
+          <text class="lbl" x="230" y="222" text-anchor="middle">invite(email, wrapped_cek_for_bob)</text>
+
+          <line class="arr" x1="610" y1="270" x2="370" y2="270" marker-end="url(#arr2)" color="var(--fg)"/>
+          <text class="lbl" x="490" y="264" text-anchor="middle">accept_invitation()</text>
+
+          <line class="arr" x1="360" y1="298" x2="600" y2="298" marker-end="url(#arr2)" color="var(--fg)"/>
+          <text class="lbl" x="480" y="292" text-anchor="middle">membership row + wrapped_cek</text>
+
+          <rect x="530" y="316" width="160" height="34" fill="var(--accent-soft)" stroke="var(--accent)" rx="4"/>
+          <text class="note" x="610" y="338" text-anchor="middle">unwrap with private key</text>
+        </svg>
+      </div>
+      <figcaption>Figure 2 &mdash; Invite flow. The server brokers the metadata but never holds an unwrapped CEK.</figcaption>
+    </figure>
+
+    <p>
+      The awkward case is inviting someone who hasn't signed up yet (no public key on file). Two
+      defensible options:
+    </p>
+    <ul>
+      <li><strong>Block</strong>: refuse E2EE-workspace invites to users without a vault. Surface
+        "they need to sign up and set a vault first" UX. Simplest, slightly worse UX.</li>
+      <li><strong>Defer-wrap</strong>: store the invite pending; when the invitee signs up and
+        publishes a key, queue a notification to the inviter; next time the inviter is online,
+        wrap the CEK and complete the invitation. Better UX, more moving parts, requires a "complete
+        pending invites" client step.</li>
+    </ul>
+
+    <p>We can ship "block" in v1 and "defer-wrap" later without schema changes.</p>
+
+    <h2 id="seam">9. Sync boundary &amp; per-column encryption</h2>
+
+    <p>
+      The encrypt/decrypt seam lives in a new module &mdash; call it <code>src/sync/transform.ts</code>
+      &mdash; that sits between the app domain and the PowerSync CRUD edge. It is the single named
+      place where "what crosses the wire" gets transformed.
+    </p>
+
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 0 760 280" xmlns="http://www.w3.org/2000/svg" aria-labelledby="seam-title">
+          <title id="seam-title">Placement of the sync boundary module</title>
+          <style>
+            .stage { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.4; rx: 8; ry: 8; }
+            .stageNeutral { fill: none; stroke: var(--fg); stroke-width: 1.2; rx: 8; ry: 8; }
+            .lbl { fill: var(--fg); font: 13px ui-sans-serif, system-ui, sans-serif; text-anchor: middle; }
+            .lblSm { fill: var(--muted); font: 11px ui-sans-serif, system-ui, sans-serif; text-anchor: middle; }
+            .link { stroke: var(--fg); stroke-width: 1.4; fill: none; color: var(--fg); }
+          </style>
+          <defs>
+            <marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+            </marker>
+          </defs>
+
+          <rect class="stageNeutral" x="20" y="60" width="150" height="70"/>
+          <text class="lbl" x="95" y="90">App domain</text>
+          <text class="lblSm" x="95" y="108">repo.ts, hooks,</text>
+          <text class="lblSm" x="95" y="122">React components</text>
+
+          <line class="link" x1="170" y1="95" x2="220" y2="95" marker-end="url(#arr3)"/>
+
+          <rect class="stage" x="220" y="60" width="170" height="70"/>
+          <text class="lbl" x="305" y="86">sync/transform.ts</text>
+          <text class="lblSm" x="305" y="104">encode &harr; decode</text>
+          <text class="lblSm" x="305" y="120">(the seam)</text>
+
+          <line class="link" x1="390" y1="95" x2="440" y2="95" marker-end="url(#arr3)"/>
+
+          <rect class="stageNeutral" x="440" y="60" width="140" height="70"/>
+          <text class="lbl" x="510" y="90">PowerSync</text>
+          <text class="lblSm" x="510" y="108">CRUD &amp; local DB</text>
+
+          <line class="link" x1="580" y1="95" x2="630" y2="95" marker-end="url(#arr3)"/>
+
+          <rect class="stageNeutral" x="630" y="60" width="110" height="70"/>
+          <text class="lbl" x="685" y="90">Supabase</text>
+          <text class="lblSm" x="685" y="108">Postgres</text>
+
+          <text class="lblSm" x="305" y="170">per-workspace mode lookup</text>
+          <text class="lblSm" x="305" y="186">encrypt / decrypt columns</text>
+          <text class="lblSm" x="305" y="202">payload schema-version migration</text>
+          <text class="lblSm" x="305" y="218">(future: compression, redaction, signing)</text>
+
+          <line class="link" x1="305" y1="130" x2="305" y2="155" marker-end="url(#arr3)"/>
+        </svg>
+      </div>
+      <figcaption>Figure 3 &mdash; The sync boundary is one named module, not a behavior scattered across <code>repo.ts</code> and <code>services/powersync.ts</code>.</figcaption>
+    </figure>
+
+    <p>
+      The seam owns two pure functions: <code>encodeForWire(block, mode, cek)</code> and
+      <code>decodeFromWire(row, mode, cek)</code>. They start as identity functions and grow
+      transforms over time. Today: per-workspace per-column AES-GCM. Later: schema-version
+      migration of payload shapes, redaction for share-link previews, optional compression if data
+      sizes ever justify it.
+    </p>
+
+    <h3>What "per-column" actually means on the wire</h3>
+
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 0 760 280" xmlns="http://www.w3.org/2000/svg" aria-labelledby="cols-title">
+          <title id="cols-title">Per-column encryption preserves PowerSync's column-level PATCH granularity</title>
+          <style>
+            .panel { fill: none; stroke: var(--line); stroke-width: 1; rx: 6; ry: 6; }
+            .head  { fill: var(--fg); font: 12px ui-sans-serif, system-ui, sans-serif; text-anchor: start; font-weight: 600; }
+            .row   { fill: var(--fg); font: 12px ui-monospace, monospace; text-anchor: start; }
+            .rowMuted { fill: var(--muted); font: 12px ui-monospace, monospace; text-anchor: start; }
+            .caption { fill: var(--muted); font: 11px ui-sans-serif, system-ui, sans-serif; text-anchor: middle; font-style: italic; }
+            .tag { fill: var(--accent); font: 10px ui-sans-serif, system-ui, sans-serif; text-anchor: middle; font-weight: 600; }
+          </style>
+
+          <rect class="panel" x="20" y="20" width="350" height="200"/>
+          <text class="tag" x="195" y="40">PLAINTEXT WORKSPACE</text>
+          <text class="head" x="40" y="68">blocks row</text>
+          <text class="row"  x="40" y="92">id:               uuid-1</text>
+          <text class="row"  x="40" y="112">workspace_id:     ws-A</text>
+          <text class="row"  x="40" y="132">content:          "Hello world"</text>
+          <text class="row"  x="40" y="152">properties_json:  {"type":"text"}</text>
+          <text class="row"  x="40" y="172">references_json:  []</text>
+          <text class="rowMuted" x="40" y="196">&hellip; (server reads any column directly)</text>
+
+          <rect class="panel" x="390" y="20" width="350" height="200"/>
+          <text class="tag" x="565" y="40">E2EE WORKSPACE</text>
+          <text class="head" x="410" y="68">blocks row</text>
+          <text class="row"  x="410" y="92">id:               uuid-2</text>
+          <text class="row"  x="410" y="112">workspace_id:     ws-B</text>
+          <text class="row"  x="410" y="132">content:          "enc:v1:Yk3z&hellip;"</text>
+          <text class="row"  x="410" y="152">properties_json:  "enc:v1:9aPq&hellip;"</text>
+          <text class="row"  x="410" y="172">references_json:  "enc:v1:Mn1x&hellip;"</text>
+          <text class="rowMuted" x="410" y="196">&hellip; (server sees only ciphertext)</text>
+
+          <text class="caption" x="380" y="252">Same schema. Same RLS. Same sync rules. The encoding inside the three content columns differs.</text>
+          <text class="caption" x="380" y="268">AAD binds each ciphertext to its block, workspace, column, and schema version.</text>
+        </svg>
+      </div>
+      <figcaption>Figure 4 &mdash; Per-column encryption keeps PATCH granularity: editing only <code>content</code> still PATCHes only that column.</figcaption>
+    </figure>
+
+    <p>
+      Each of the three content columns is sealed independently with its own random nonce. The AAD
+      carries the column name so the server can't silently move ciphertext from one column to
+      another and have it still decrypt as valid.
+    </p>
+
+    <h2 id="duality">10. Mode-by-mode behavior</h2>
+
+    <table>
+      <tr>
+        <th>Capability</th>
+        <th>Plaintext workspace</th>
+        <th>E2EE workspace</th>
+      </tr>
+      <tr>
+        <td>Block reads/writes</td>
+        <td>As today.</td>
+        <td>Encrypt on write, decrypt on read, both at the sync boundary.</td>
+      </tr>
+      <tr>
+        <td>RLS</td>
+        <td>Workspace membership.</td>
+        <td>Workspace membership. Unchanged.</td>
+      </tr>
+      <tr>
+        <td>PowerSync sync rules</td>
+        <td>Unchanged.</td>
+        <td>Unchanged.</td>
+      </tr>
+      <tr>
+        <td><code>blocks_history</code> (server trigger)</td>
+        <td>Server-computed diffs, human-readable, queryable.</td>
+        <td>Records ciphertext diffs. Still useful for PITR / "this block changed at this time" but unreadable server-side. Acceptable degradation.</td>
+      </tr>
+      <tr>
+        <td>Future server-side features (search, AI, summaries, embeddings, share-link rendering)</td>
+        <td>Can be built. Must filter on <code>encryption_mode = 'none'</code>.</td>
+        <td>Not available. The product surfaces this clearly when the user opts in.</td>
+      </tr>
+      <tr>
+        <td>Sharing / collaboration</td>
+        <td>Invite by email; server-mediated.</td>
+        <td>Invite by email plus invite-time CEK wrap (Figure 2).</td>
+      </tr>
+      <tr>
+        <td>Workspace mode change</td>
+        <td>Immutable.</td>
+        <td>Immutable. Migrating across modes = export + create new workspace + import.</td>
+      </tr>
+    </table>
+
+    <h2 id="prep">11. Architectural prep that pays off regardless</h2>
+
+    <p>
+      These changes have value independently of when (or whether) E2EE actually ships. They make
+      the eventual encryption work small and reversible-shaped.
+    </p>
+
+    <h3>11.1 Establish the sync boundary module (do now)</h3>
+    <p>
+      Introduce <code>src/sync/transform.ts</code> as identity <code>encode</code>/<code>decode</code>.
+      Route all PowerSync upload mutations and all reads from local SQLite through it. Pure
+      no-op refactor. ~50 LOC of plumbing. After this lands, the E2EE PR is a focused crypto change,
+      not a cross-cutting refactor.
+    </p>
+
+    <h3>11.2 Decouple auth session from vault unlock (do now)</h3>
+    <p>
+      Introduce <code>useAuthSession()</code> and <code>useUnlockedVault()</code> hooks even
+      before E2EE. Vault is always trivially "unlocked" today. App code that touches content
+      depends on the unlocked-vault hook. Makes the future passphrase prompt, recovery code, or
+      WebAuthn-PRF unlock all drop-in replacements rather than refactors.
+    </p>
+
+    <h3>11.3 Public-key identity at signup (do now)</h3>
+    <p>
+      Add the <code>user_vault</code> table. Body is empty for users who never opt in. Backfilling
+      public keys for an existing user base is expensive (only happens at next interactive sign-in,
+      so rollout takes months); generating at signup is trivial. Even if E2EE slips, signed writes
+      and tamper-evident audit later become possible.
+    </p>
+
+    <h3>11.4 Drift guard: server-side content features must filter on mode (codify now)</h3>
+    <p>
+      A short repo-level note: any new server-side feature that reads <code>blocks.content</code>,
+      <code>properties_json</code>, or <code>references_json</code> must include
+      <code>workspaces.encryption_mode = 'none'</code> in its filter, or explicitly document a
+      decision to skip E2EE workspaces. The repo already has a drift-guard pattern from prior design
+      docs; this slots in.
+    </p>
+
+    <h2 id="rejected">12. Considered &amp; rejected</h2>
+
+    <div class="reject">
+      <strong>Rejected: consolidate <code>content</code>/<code>properties_json</code>/<code>references_json</code> into a single opaque <code>payload</code> column.</strong>
+      <p>
+        Initially attractive because it makes the encryption layer trivial: one sealed blob.
+        Rejected for two compounding reasons:
+      </p>
+      <ul>
+        <li><strong>Sync granularity.</strong> PowerSync's CRUD upload PATCHes individual columns.
+          Collapsing to one column makes every edit rewrite the entire payload. For blocks with
+          large <code>properties_json</code> and small text edits to <code>content</code>, this is
+          a real regression.</li>
+        <li><strong>Server-side features for plaintext workspaces.</strong> The whole point of
+          opt-in is that unencrypted workspaces stay first-class. Making content opaque for
+          everyone forecloses future server-side search, AI, indexed properties, etc. &mdash; even
+          for users who never opted into E2EE.</li>
+      </ul>
+    </div>
+
+    <div class="reject">
+      <strong>Rejected: application-layer compression at the sync boundary.</strong>
+      <p>
+        HTTP transport already does gzip/br for any response over ~1KB. Postgres TOAST already
+        compresses large TEXT/JSONB on disk. Per-row gzip on typical block sizes
+        (often well under 1KB) frequently <em>grows</em> the payload due to framing overhead.
+        Application-layer compression only starts to win with shared dictionaries trained on the
+        corpus, which is real engineering effort for marginal gains. The sync boundary keeps the
+        option open; we just don't exercise it.
+      </p>
+    </div>
+
+    <div class="reject">
+      <strong>Rejected: replace server-side <code>blocks_history</code> with a client-uploaded edit log.</strong>
+      <p>
+        Tempting because the client-side edit log already exists. But for plaintext workspaces,
+        server-side history earns its keep &mdash; server-computed diffs, queryable, no client
+        round-trip. Ripping it out to make the E2EE path slightly cleaner would degrade the
+        plaintext workspace experience. Keep the trigger; accept that for E2EE workspaces it
+        records ciphertext diffs (still useful for PITR, audit-of-when).
+      </p>
+    </div>
+
+    <div class="reject">
+      <strong>Rejected: full at-rest encryption of the local OPFS SQLite.</strong>
+      <p>
+        Out of scope (not part of threat model A). OPFS already gives per-origin and per-user
+        isolation via <code>kmp-v6-&lt;user_id&gt;.db</code>. Device-level protection is OS disk
+        encryption's job. We can revisit if a device-theft threat model is later added.
+      </p>
+    </div>
+
+    <h2 id="open">13. Open questions</h2>
+
+    <ol>
+      <li><strong>Recovery codes in v1?</strong> Forgotten passphrase = lost E2EE data unless we
+        ship a recovery code (a high-entropy string, printed at vault setup, that wraps a copy of
+        the UVK). Recovery codes weaken security mildly (the user must store them somewhere) and
+        introduce real UX complexity. Decision deferred; default is "no recovery in v1, document
+        the consequence loudly at setup."</li>
+
+      <li><strong>Invite-before-vault policy.</strong> Block vs. defer-wrap (§8.4). I'd ship block
+        and revisit if it bites real users.</li>
+
+      <li><strong>Argon2id vs. PBKDF2.</strong> Argon2id is the right primitive but needs a
+        dependency (e.g. <code>argon2-browser</code> or <code>libsodium.js</code>, ~150KB gzipped).
+        PBKDF2-SHA256 at 600k iterations is in WebCrypto natively, no dep, but weaker against
+        GPU/ASIC attackers. We're protecting one-user-at-a-time data, not a credential dump, so
+        either is defensible.</li>
+
+      <li><strong>UVK rotation.</strong> Should users be able to change their passphrase without
+        re-encrypting everything? Yes &mdash; that's exactly what the UVK-wrapping layer is for:
+        rotate MK by re-wrapping UVK. No content re-encryption needed. Worth confirming this is in
+        scope for v1.</li>
+
+      <li><strong>Membership removal.</strong> When a member is removed from an E2EE workspace, the
+        CEK is no longer secret from them (they cached it). Strict guarantee requires CEK rotation,
+        which means re-encrypting every block. Mark as a known limitation for v1; add CEK rotation
+        as a v2 capability with a "rekey workspace" client-side job.</li>
+
+      <li><strong>Are settings or user preferences in scope?</strong> Survey didn't surface a
+        settings table. If preferences are stored server-side and contain user content, they may
+        also need encryption &mdash; or be explicitly carved out as metadata.</li>
+    </ol>
+
+    <h2 id="tradeoffs">14. Tradeoffs we're accepting</h2>
+
+    <ul>
+      <li><strong>Metadata leak.</strong> Block tree shape (<code>parent_id</code>), order
+        (<code>order_key</code>), edit timing, authorship, deletion flag, and per-column "which
+        column changed" are all visible to the server. Acceptable under threat model A.</li>
+      <li><strong>No server-side features for E2EE workspaces, ever.</strong> Search, AI,
+        summaries, server-rendered share links. This is a real product cost; the opt-in toggle is
+        the user surfacing it explicitly.</li>
+      <li><strong>Lost passphrase = lost data</strong> (modulo recovery codes if we ship them).</li>
+      <li><strong>Ciphertext-diff history</strong> for E2EE workspaces.</li>
+      <li><strong>Membership removal is best-effort</strong> until v2 brings CEK rotation.</li>
+      <li><strong>Client-trust required.</strong> A backdoored build can exfiltrate keys. Subresource
+        integrity, reproducible builds, and audit are mitigations, not solutions.</li>
+    </ul>
+
+    <p class="meta" style="margin-top:36px;">
+      This is a sketch, not a commitment. The architectural prep work in §11 (sync boundary, auth/vault
+      split, public-key identity, drift guard) is the recommended starting point regardless of whether
+      we proceed with §5&ndash;§9 on a specific timeline.
+    </p>
+  </main>
+</body>
+</html>
