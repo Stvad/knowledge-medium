@@ -1009,10 +1009,15 @@ GRANT EXECUTE ON FUNCTION create_workspace(text, text, text, text)
       The local <code>blocks</code> table holds ciphertext at rest, exactly matching the server.
       A new async user-defined function &mdash; <code>e2ee_decrypt_json(workspace_id, value)
       &rarr; text</code> &mdash; is registered against the local SQLite via
-      <code>sqlite3.create_function</code>. The UDF needs to know the workspace's
-      <code>encryption_mode</code> to dispatch correctly; cache it JS-side at session start (the
-      mode is immutable per §7) so each call is a Map lookup, not a SQL subquery. Four behaviors
-      based on (mode, input):
+      <code>sqlite3.create_function</code>. The UDF needs to know whether the workspace is E2EE
+      (and whether its WK is currently loaded) to dispatch correctly. It must source this from the
+      <strong>durable local mode pin and the WK store (§6 rule 1)</strong>, <strong>not</strong>
+      from the synced <code>workspaces.encryption_mode</code> &mdash; that column is a zero-authority
+      server hint, and dispatching on it would let a hostile sync source present a pinned E2EE
+      workspace as <code>'none'</code> and pass attacker plaintext straight through the UDF into
+      aliases/FTS/row_events before any app-level guard runs. Cache the pin (and locked/WK state)
+      JS-side at session start &mdash; the pin is locally immutable (§6 rule 1) &mdash; so each call
+      is a Map lookup, not a SQL subquery. Four behaviors based on (pin/WK state, input):
     </p>
     <ul>
       <li><strong>Plaintext workspace, any input</strong>: pass-through unchanged. The UDF only
