@@ -804,14 +804,6 @@ const syncBookToBlocks = async (
         }
       }
     }
-    // delete stale meta lines (template shrunk)
-    for (const k of bookKids) {
-      if (typeof k.id !== 'string') continue
-      if (!metaIds.includes(k.id) && k.id.includes(`:meta:`)) {
-        await tx.delete(k.id)
-      }
-    }
-
     // 3. highlights live under a deterministic sub-bullet on the document
     //    page, with notes still nested under their highlight.
     if (!highlights.length) return
@@ -914,7 +906,7 @@ const runSync = async (repo: any, { silent = false } = {}) => {
   const highlightTemplate = prefs.get(highlightTemplateProp)
   const reviewDateIso = reviewDateIsoForSync(new Date())
 
-  const progress = showProgress('Readwise: fetching…')
+  let progress = silent ? null : showProgress('Readwise: fetching…')
   try {
     const rootId = await ensureRoot(repo, workspaceId)
     let pageCursor: string | null = null
@@ -926,6 +918,7 @@ const runSync = async (repo: any, { silent = false } = {}) => {
       for (const book of results) {
         bookCount++
         highlightCount += (book.highlights ?? []).length
+        if (!progress) progress = showProgress('Readwise: syncing…')
         progress.update(`Readwise: ${bookCount} books, ${highlightCount} highlights…`)
         await syncBookToBlocks(
           repo, workspaceId, rootId, book,
@@ -936,12 +929,15 @@ const runSync = async (repo: any, { silent = false } = {}) => {
 
     const finishedAt = new Date().toISOString()
     await prefs.set(lastSyncedAtProp, finishedAt)
-    progress.done(
-      bookCount === 0
-        ? 'Readwise: nothing new since last sync'
-        : `Readwise: synced ${bookCount} book(s), ${highlightCount} highlight(s)`)
+    progress?.done(bookCount === 0
+      ? undefined
+      : `Readwise: synced ${bookCount} book(s), ${highlightCount} highlight(s)`)
   } catch (err: any) {
-    progress.fail(`Readwise sync failed: ${err?.message ?? err}`)
+    if (progress) {
+      progress.fail(`Readwise sync failed: ${err?.message ?? err}`)
+    } else if (!silent) {
+      showError(`Readwise sync failed: ${err?.message ?? err}`)
+    }
   }
 }
 
