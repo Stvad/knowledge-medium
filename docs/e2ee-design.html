@@ -534,32 +534,20 @@
           the membership row arrives via sync without going through accept_invitation and there's
           no local pin. Same rule &mdash; the user pastes their WK (if E2EE) or confirms plaintext
           before any local writes.</li>
-        <li><strong>Pre-existing memberships on the rollout release.</strong> The first release that
-          introduces mode pins finds every pre-existing workspace unpinned. <strong>In the general
-          case no automatic rule can safely pin these:</strong> a device that has only ever run the
-          pre-E2EE client holds no server-independent evidence of a workspace's mode (the old client
-          had no WK and no E2EE concept), and everything the migration could inspect &mdash; the
-          synced <code>wk_canary</code>, whether any <code>enc:v1:</code> blocks are present &mdash;
-          is server-controlled, so an active server can present a real E2EE workspace as "looks
-          plaintext" and the immutable pin would reopen the downgrade leak. The general-case-safe
-          default is therefore the same quarantine + user-confirmation the other entry points use,
-          batched for UX (one prompt: "these will be treated as plaintext; confirm, or paste a key
-          for any that are encrypted"); server state may pre-fill the suggestion but the pin is only
-          written on the user's explicit confirmation &mdash; the one oracle the server can't forge.
-          <br><br>
-          <strong>The alpha can sidestep the prompt with a deployment ordering.</strong> With only a
-          handful of coordinated clients, we can require that <em>every pre-pin device upgrades (and
-          runs the one-shot, marker-gated seed) before the first E2EE workspace is created
-          anywhere.</em> Under that guarantee the seed can blanket-pin every present membership
-          <code>plaintext</code>, and it is not merely convenient but <em>correct</em>: at seed time
-          no E2EE workspace exists, so there is nothing to mis-pin &mdash; not even an active server
-          can conjure a user-created E2EE workspace, since the canary is minted client-side and can't
-          be forged without the WK. This is a deliberate, alpha-scoped simplification &mdash; a
-          <em>deployment requirement, not a code invariant</em>: a device that upgrades late, after
-          E2EE is already in use, would mis-pin, so if the client population ever outgrows
-          hand-coordination, fall back to the user-confirmation default above. Either way it's
-          one-shot, keyed to the pre-pin&rarr;pin upgrade; steady-state memberships (new device, new
-          invite) always take the quarantine paths.</li>
+        <li><strong>Pre-existing memberships on the rollout release &mdash; trust the server, build
+          nothing.</strong> The first release that introduces mode pins finds every pre-existing
+          workspace unpinned. We initialize those pins <em>directly from the server's
+          <code>encryption_mode</code></em> (all <code>none</code> at this point) &mdash; the one
+          place the design trusts that field. This is safe because the rollout is a
+          <strong>coordinated bootstrap</strong>: we're alpha with a handful of clients, so we simply
+          require that everyone updates before any E2EE workspace is created. At that moment no E2EE
+          workspace exists, so there's nothing for the server to misrepresent. No seed heuristics, no
+          confirmation prompts, no staggered-rollout handling &mdash; we don't build rollout-specific
+          machinery we can avoid by coordinating the update order. If coordination ever broke a
+          late-upgrading device could mis-pin; that's an accepted alpha limitation, not something
+          engineered around. Crucially the trust is scoped to <em>this one bootstrap</em>: the
+          steady-state entry points above (new device, new invite) keep the full pin / quarantine /
+          wire-check defense, so a <em>later</em> server compromise is still contained.</li>
       </ul>
       The cost is one resolution step per workspace per new device &mdash; not free, but the
       alternative is silently accepting attacker plaintext on a workspace the user has every reason
