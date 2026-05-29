@@ -1749,8 +1749,40 @@ CREATE TRIGGER blocks_require_ciphertext_for_e2ee_trg
         local-disk attackers, in which case OS disk encryption or the app-level at-rest encryption
         tracked in §14 is the answer (OS encryption alone doesn't give the "drop the key to lock"
         property, since its key is always present while the user is logged in).</li>
-      <li><strong>Client-trust required.</strong> A backdoored build can exfiltrate keys.
-        Subresource integrity, reproducible builds, and audit are mitigations, not solutions.</li>
+      <li><strong>Client-trust required &mdash; the residual the web-delivery model can't fully
+        close.</strong> The code that holds the keys is re-fetched from the server on every load, and
+        the root HTML that would anchor any integrity check is itself server-served &mdash; so there is
+        no in-band trust root, and a backdoored build can exfiltrate keys or plaintext. This is
+        inherent to <em>all</em> browser-delivered E2EE, not specific to this design. It splits into
+        three cases whose mitigations are graded &mdash; none a full solution:
+        <ul>
+          <li><strong>Passive / data-at-rest</strong> (DB dump, backup leak, curious operator,
+            subpoena): <strong>fully defeated</strong> &mdash; the server only ever holds ciphertext
+            plus the canary. This is the guarantee the whole design buys, and it holds regardless of
+            the build problem.</li>
+          <li><strong>Active, broad</strong> (backdoor everyone): <strong>detectable, not
+            prevented</strong> &mdash; via open source + reproducible builds + published build hashes /
+            signed provenance (e.g. a Sigstore/Rekor attestation emitted from CI). A bad build becomes
+            observable to anyone auditing the delivered artifact.</li>
+          <li><strong>Active, targeted</strong> (clean code to auditors, backdoored code to one user):
+            <strong>the hard residual</strong> &mdash; only an out-of-band verifier that checks the
+            <em>actually-delivered</em> bytes (a "Code Verify"&ndash;style browser extension, or a
+            native client with a signed, reviewed update channel) meaningfully addresses it.
+            Documented as future, not solved.</li>
+        </ul>
+        What the design already leans on: keys are <strong>non-extractable
+        <code>CryptoKey</code>s</strong> (§5) &mdash; a backdoored load can still <em>use</em> the
+        handle to decrypt live, but can't dump raw key bytes, narrowing the attack to a noisy live
+        session; and the <strong>code host is separate from the data host</strong> &mdash; the
+        adversary that <em>is</em> in scope (§2: full read access to the Supabase/PowerSync backend)
+        does not control code delivery (static hosting), so it structurally can't mount this attack at
+        all. Cheap bar-raisers we can add: a strict <strong>CSP</strong> with a locked
+        <code>connect-src</code> (constrains exfiltration to the first party &mdash; weak against a
+        malicious first party, since the server sets it, but cuts off third-party supply-chain paths),
+        and publishing build hashes / provenance from CI (tracked separately). Net:
+        <strong>strong</strong> against the passive threat the design targets,
+        <strong>detection</strong> against broad tampering, and an honest <strong>residual</strong>
+        against a targeted backdoor.</li>
     </ul>
 
     <p class="meta" style="margin-top:36px;">
