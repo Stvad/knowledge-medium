@@ -32,6 +32,8 @@ import type {
   Mutator,
   NewBlockData,
   PropertySchema,
+  SiblingAnchor,
+  SiblingDirection,
   Tx,
   TxMeta,
   TxSource,
@@ -169,6 +171,30 @@ const SELECT_CHILDREN_SQL =
  *  on root blocks. */
 const SELECT_ROOT_SIBLINGS_SQL =
   `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id IS NULL AND deleted = 0 AND workspace_id = ? ORDER BY order_key, id`
+const SELECT_NEXT_CHILD_SIBLING_SQL =
+  `SELECT ${COLUMN_LIST} FROM blocks
+   WHERE parent_id = ? AND deleted = 0
+     AND (order_key > ? OR (order_key = ? AND id > ?))
+   ORDER BY order_key, id
+   LIMIT 1`
+const SELECT_PREVIOUS_CHILD_SIBLING_SQL =
+  `SELECT ${COLUMN_LIST} FROM blocks
+   WHERE parent_id = ? AND deleted = 0
+     AND (order_key < ? OR (order_key = ? AND id < ?))
+   ORDER BY order_key DESC, id DESC
+   LIMIT 1`
+const SELECT_NEXT_ROOT_SIBLING_SQL =
+  `SELECT ${COLUMN_LIST} FROM blocks
+   WHERE parent_id IS NULL AND deleted = 0 AND workspace_id = ?
+     AND (order_key > ? OR (order_key = ? AND id > ?))
+   ORDER BY order_key, id
+   LIMIT 1`
+const SELECT_PREVIOUS_ROOT_SIBLING_SQL =
+  `SELECT ${COLUMN_LIST} FROM blocks
+   WHERE parent_id IS NULL AND deleted = 0 AND workspace_id = ?
+     AND (order_key < ? OR (order_key = ? AND id < ?))
+   ORDER BY order_key DESC, id DESC
+   LIMIT 1`
 const SELECT_PARENT_SQL =
   `SELECT p.* FROM blocks AS c JOIN blocks AS p ON p.id = c.parent_id WHERE c.id = ? AND p.deleted = 0`
 const SELECT_PARENT_WORKSPACE_SQL =
@@ -471,6 +497,24 @@ export class TxImpl implements Tx {
     return rows.map(parseBlockRow)
   }
 
+  async adjacentSibling(
+    anchor: SiblingAnchor,
+    direction: SiblingDirection,
+  ): Promise<BlockData | null> {
+    const params = anchor.parentId === null
+      ? [anchor.workspaceId, anchor.orderKey, anchor.orderKey, anchor.id]
+      : [anchor.parentId, anchor.orderKey, anchor.orderKey, anchor.id]
+    const sql = anchor.parentId === null
+      ? direction === 'after'
+        ? SELECT_NEXT_ROOT_SIBLING_SQL
+        : SELECT_PREVIOUS_ROOT_SIBLING_SQL
+      : direction === 'after'
+        ? SELECT_NEXT_CHILD_SIBLING_SQL
+        : SELECT_PREVIOUS_CHILD_SIBLING_SQL
+    const row = await this.ctx.txDb.getOptional<BlockRow>(sql, params)
+    return row === null ? null : parseBlockRow(row)
+  }
+
   async parentOf(childId: string): Promise<BlockData | null> {
     const row = await this.ctx.txDb.getOptional<BlockRow>(SELECT_PARENT_SQL, [childId])
     return row === null ? null : parseBlockRow(row)
@@ -681,6 +725,11 @@ export class TxImpl implements Tx {
   }
 
   private async requireExisting(id: string): Promise<BlockData> {
+    const ownWrite = peekSnapshot(this.ctx.snapshots, id)
+    if (ownWrite !== undefined) {
+      if (ownWrite === null) throw new BlockNotFoundError(id)
+      return ownWrite
+    }
     const row = await this.ctx.txDb.getOptional<BlockRow>(SELECT_BY_ID_SQL, [id])
     if (row === null) throw new BlockNotFoundError(id)
     return parseBlockRow(row)

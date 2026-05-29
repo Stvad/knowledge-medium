@@ -13,13 +13,14 @@
  * (stage 1.6) will migrate to.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, ParentDeletedError, codecs, defineProperty, type BlockData } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '../repo'
 import { isCollapsedProp } from '@/data/properties'
 import { aliasesProp } from './coreProperties'
+import { TxImpl } from './txEngine'
 
 interface Harness {
   h: TestDb
@@ -256,6 +257,18 @@ describe('core.createSiblingAbove / createSiblingBelow', () => {
     await seedABC()
     const id = await env.repo.mutate.createSiblingBelow({siblingId: 'C', id: 'X'})
     expect(await env.childIds('root')).toEqual(['A', 'B', 'C', id])
+  })
+
+  it('createSiblingBelow avoids full sibling-list enumeration', async () => {
+    await seedABC()
+    const childrenOfSpy = vi.spyOn(TxImpl.prototype, 'childrenOf')
+    try {
+      const id = await env.repo.mutate.createSiblingBelow({siblingId: 'C', id: 'X'})
+      expect(childrenOfSpy).not.toHaveBeenCalled()
+      expect(await env.childIds('root')).toEqual(['A', 'B', 'C', id])
+    } finally {
+      childrenOfSpy.mockRestore()
+    }
   })
 
   it('createSiblingAbove works on a workspace-root block (parentId = null)', async () => {

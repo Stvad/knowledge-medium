@@ -31,6 +31,15 @@ export interface TxMeta {
   workspaceId: string | null
 }
 
+export type SiblingDirection = 'before' | 'after'
+
+export interface SiblingAnchor {
+  id: string
+  workspaceId: string
+  parentId: string | null
+  orderKey: string
+}
+
 /** Forward declarations — these come from `mutator.ts` / `processor.ts`
  *  but are referenced by the Tx interface. */
 import type { Mutator } from './mutator'
@@ -146,6 +155,13 @@ export interface Tx {
    *  When `parentId !== null`, `workspaceId` is ignored — the parent
    *  row already constrains the query. */
   childrenOf(parentId: string | null, workspaceId?: string): Promise<BlockData[]>
+
+  /** Nearest live sibling before/after `anchor` in `(order_key, id)`
+   *  order. Unlike `childrenOf`, this is a cursor lookup, so insertion
+   *  mutators can compute adjacent order keys without loading a large
+   *  sibling list. Root-level lookups are scoped by `anchor.workspaceId`
+   *  for the same reason `childrenOf(null, workspaceId)` is. */
+  adjacentSibling(anchor: SiblingAnchor, direction: SiblingDirection): Promise<BlockData | null>
 
   /** Parent of `childId`, or null if `childId` has no parent or doesn't
    *  exist. Reads SQL via the writeTransaction. */

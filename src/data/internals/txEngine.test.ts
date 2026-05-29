@@ -584,6 +584,36 @@ describe('tx.childrenOf / tx.parentOf', () => {
       expect(await tx.parentOf('c-p')).toBeNull()
     }, {scope: ChangeScope.BlockDefault})
   })
+
+  it('finds adjacent siblings without enumerating the full sibling list', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'adj-p',  workspaceId: 'ws-1', parentId: null,    orderKey: 'a0'})
+      await tx.create({id: 'adj-a',  workspaceId: 'ws-1', parentId: 'adj-p', orderKey: 'a0'})
+      await tx.create({id: 'adj-b',  workspaceId: 'ws-1', parentId: 'adj-p', orderKey: 'a1'})
+      await tx.create({id: 'adj-c',  workspaceId: 'ws-1', parentId: 'adj-p', orderKey: 'a2'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(async tx => {
+      const b = (await tx.get('adj-b'))!
+      expect((await tx.adjacentSibling(b, 'before'))?.id).toBe('adj-a')
+      expect((await tx.adjacentSibling(b, 'after'))?.id).toBe('adj-c')
+      const c = (await tx.get('adj-c'))!
+      expect(await tx.adjacentSibling(c, 'after')).toBeNull()
+    }, {scope: ChangeScope.BlockDefault})
+  })
+
+  it('scopes root adjacent-sibling lookup to the anchor workspace', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'ws1-a', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ws1-b', workspaceId: 'ws-1', parentId: null, orderKey: 'a2'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'ws2-between', workspaceId: 'ws-2', parentId: null, orderKey: 'a1'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(async tx => {
+      const root = (await tx.get('ws1-a'))!
+      expect((await tx.adjacentSibling(root, 'after'))?.id).toBe('ws1-b')
+    }, {scope: ChangeScope.BlockDefault})
+  })
 })
 
 describe('tx.aliasLookup', () => {

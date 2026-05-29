@@ -20,6 +20,7 @@ import {
   ChangeScope,
   defineMutator,
   type AnyMutator,
+  type BlockData,
   type BlockReference,
   type PropertySchema,
   type Tx,
@@ -37,6 +38,16 @@ const requireBlock = async (tx: Tx, id: string) => {
   const data = await tx.get(id)
   if (data === null) throw new BlockNotFoundError(id)
   return data
+}
+
+const orderKeyAfterSibling = async (tx: Tx, sibling: BlockData): Promise<string> => {
+  const next = await tx.adjacentSibling(sibling, 'after')
+  return keyBetween(sibling.orderKey, next?.orderKey ?? null)
+}
+
+const orderKeyBeforeSibling = async (tx: Tx, sibling: BlockData): Promise<string> => {
+  const previous = await tx.adjacentSibling(sibling, 'before')
+  return keyBetween(previous?.orderKey ?? null, sibling.orderKey)
 }
 
 /** Compute the order_key for inserting under `parentId` at a given
@@ -235,10 +246,7 @@ export const createSiblingAbove = defineMutator<SiblingArgs, string>({
   describe: ({siblingId}) => `create sibling above ${siblingId}`,
   apply: async (tx, args) => {
     const sibling = await requireBlock(tx, args.siblingId)
-    const orderKey = await orderKeyForInsert(tx, sibling.parentId, sibling.workspaceId, {
-      kind: 'before',
-      siblingId: args.siblingId,
-    })
+    const orderKey = await orderKeyBeforeSibling(tx, sibling)
     return tx.create({
       id: args.id,
       workspaceId: sibling.workspaceId,
@@ -259,10 +267,7 @@ export const createSiblingBelow = defineMutator<SiblingArgs, string>({
   describe: ({siblingId}) => `create sibling below ${siblingId}`,
   apply: async (tx, args) => {
     const sibling = await requireBlock(tx, args.siblingId)
-    const orderKey = await orderKeyForInsert(tx, sibling.parentId, sibling.workspaceId, {
-      kind: 'after',
-      siblingId: args.siblingId,
-    })
+    const orderKey = await orderKeyAfterSibling(tx, sibling)
     return tx.create({
       id: args.id,
       workspaceId: sibling.workspaceId,
