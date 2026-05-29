@@ -14,7 +14,7 @@
     "dev": "vite",
     "compile": "tsc -b && node packages/agent-cli/scripts/build-kernel-types.mjs && chmod +x packages/agent-cli/dist/cli.js packages/agent-cli/dist/server.js",
     "build": "yarn run compile && vite build && node scripts/inject-sw-build-id.mjs",
-    "lint": "eslint .",
+    "lint": "eslint . --cache --cache-location node_modules/.cache/eslint/ --cache-strategy content",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -26,7 +26,7 @@
     "db:runtime": "node scripts/container-runtime.mjs",
     "db:runtime:apple": "node scripts/container-runtime.mjs apple",
     "check:db": "node scripts/check-db.mjs",
-    "check": "yarn run compile && yarn run lint && yarn run test && yarn run check:sync-config && yarn run check:rpc-projections && yarn run check:no-service-role",
+    "check": "node scripts/check.mjs",
     "agent:server": "node packages/agent-cli/dist/server.js",
     "agent": "node packages/agent-cli/dist/cli.js",
     "bench": "vite-node scripts/bench/index.ts"
