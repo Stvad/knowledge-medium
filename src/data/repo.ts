@@ -241,7 +241,9 @@ const changedRefSchemaNames = (
     .sort()
 }
 
-const PROPERTY_CHILDREN_BACKFILL_BATCH_SIZE = 25
+const PROPERTY_CHILDREN_BACKFILL_TARGET_INSERT_ROWS = 400
+const PROPERTY_CHILDREN_BACKFILL_SCAN_BATCH_SIZE = 100
+const PROPERTY_CHILDREN_BACKFILL_ROWS_PER_PROPERTY = 2
 const PROPERTY_CHILDREN_STORAGE_WRITE_RETRY_BATCH_SIZE = 5
 const PROPERTY_CHILDREN_STORAGE_WRITE_RETRY_DELAY_MS = 25
 
@@ -304,6 +306,11 @@ const countMatchingProperties = (
   (sum, block) => sum + Object.keys(block.properties).filter(name => schemas.has(name)).length,
   0,
 )
+
+const estimatePropertyChildInsertRows = (
+  blocks: readonly BlockData[],
+  schemas: ReadonlyMap<string, AnyPropertySchema>,
+): number => countMatchingProperties(blocks, schemas) * PROPERTY_CHILDREN_BACKFILL_ROWS_PER_PROPERTY
 
 type DbMetricName = 'getAll' | 'getOptional' | 'get' | 'execute' | 'writeTransaction'
 type DbMetricsSnapshot = Readonly<Record<DbMetricName, ReturnType<DbMetrics['snapshot']>[string]>>
@@ -401,12 +408,15 @@ interface PropertyChildrenBackfillFailureLogArgs {
   workspaceId: string
   scope: ChangeScope
   batchCount: number
-  batchSize: number
+  parentBatchSize: number | null
+  targetInsertRows: number
+  scanBatchSize: number
   retryBatchSize: number | null
   retryIndex?: number
   retryCount?: number
   blocks: number
   properties: number
+  estimatedInsertRows: number
   processed: number
   firstId: string | null
   lastId: string | null
@@ -1629,6 +1639,52 @@ export class Repo {
     return rows.map(parseBlockRow)
   }
 
+  private async propertyChildrenBackfillCandidateBatch(args: {
+    workspaceId: string
+    schemas: readonly AnyPropertySchema[]
+    schemaMap: ReadonlyMap<string, AnyPropertySchema>
+    afterId: string
+    parentBatchSize: number | null
+    targetInsertRows: number
+    scanBatchSize: number
+  }): Promise<BlockData[]> {
+    if (args.parentBatchSize !== null) {
+      return this.propertyChildrenBackfillCandidates(
+        args.workspaceId,
+        args.schemas,
+        args.afterId,
+        args.parentBatchSize,
+      )
+    }
+
+    const out: BlockData[] = []
+    let cursor = args.afterId
+    let estimatedRows = 0
+    for (;;) {
+      const candidates = await this.propertyChildrenBackfillCandidates(
+        args.workspaceId,
+        args.schemas,
+        cursor,
+        args.scanBatchSize,
+      )
+      if (candidates.length === 0) break
+
+      for (const candidate of candidates) {
+        const candidateRows = estimatePropertyChildInsertRows([candidate], args.schemaMap)
+        if (out.length > 0 && estimatedRows + candidateRows > args.targetInsertRows) {
+          return out
+        }
+        out.push(candidate)
+        estimatedRows += candidateRows
+        cursor = candidate.id
+        if (estimatedRows >= args.targetInsertRows) return out
+      }
+
+      if (candidates.length < args.scanBatchSize) break
+    }
+    return out
+  }
+
   private buildBulkPropertyChildrenForBackfill(
     parent: BlockData,
     names: readonly string[],
@@ -1715,12 +1771,15 @@ export class Repo {
       workspaceId: args.workspaceId,
       scope: args.scope,
       batch: args.batchCount,
-      configuredBatchSize: args.batchSize,
+      configuredParentBatchSize: args.parentBatchSize,
+      targetInsertRows: args.targetInsertRows,
+      scanBatchSize: args.scanBatchSize,
       retryBatchSize: args.retryBatchSize,
       retryIndex: args.retryIndex,
       retryCount: args.retryCount,
       blocks: args.blocks,
       properties: args.properties,
+      estimatedInsertRows: args.estimatedInsertRows,
       processedIncludingFailedBatch: args.processed,
       firstId: args.firstId,
       lastId: args.lastId,
@@ -1749,6 +1808,7 @@ export class Repo {
   async backfillPropertyChildrenFromProperties(args: {
     workspaceId?: string
     propertySchemas?: ReadonlyMap<string, AnyPropertySchema>
+    targetInsertRows?: number
     batchSize?: number
     blockIds?: Iterable<string>
     respectCompletionMarkers?: boolean
@@ -1764,7 +1824,15 @@ export class Repo {
     if (blockIds !== null) {
       return this.backfillPropertyChildrenForRows({workspaceId, propertySchemas, blockIds})
     }
-    const batchSize = Math.max(1, args.batchSize ?? PROPERTY_CHILDREN_BACKFILL_BATCH_SIZE)
+    const parentBatchSize = args.batchSize === undefined ? null : Math.max(1, args.batchSize)
+    const targetInsertRows = Math.max(
+      1,
+      args.targetInsertRows ?? PROPERTY_CHILDREN_BACKFILL_TARGET_INSERT_ROWS,
+    )
+    const scanBatchSize = Math.max(
+      1,
+      parentBatchSize ?? PROPERTY_CHILDREN_BACKFILL_SCAN_BATCH_SIZE,
+    )
     const respectCompletionMarkers = args.respectCompletionMarkers ?? true
     const logProgress = args.logProgress === true
     const startedAt = performance.now()
@@ -1777,7 +1845,8 @@ export class Repo {
       loggedStart = true
       console.info(
         `[Repo] property children migration started workspace=${workspaceId} ` +
-        `schemas=${propertySchemas.size} batchSize=${batchSize} transactionPerBatch=true`,
+        `schemas=${propertySchemas.size} parentBatchSize=${parentBatchSize ?? 'row-target'} ` +
+        `targetInsertRows=${targetInsertRows} scanBatchSize=${scanBatchSize} transactionPerBatch=true`,
       )
     }
 
@@ -1894,17 +1963,21 @@ export class Repo {
             const shouldRetryChunk =
               isRetriableStorageWriteError(retryErr) &&
               nextRetryBatchSize < chunk.length
+            const retryPropertyCount = countMatchingProperties(chunk, scopeSchemaMap)
             await this.logPropertyChildrenBackfillWriteFailure({
               err: retryErr,
               workspaceId,
               scope,
               batchCount,
-              batchSize,
+              parentBatchSize,
+              targetInsertRows,
+              scanBatchSize,
               retryBatchSize: shouldRetryChunk ? nextRetryBatchSize : null,
               retryIndex: retryIndex + 1,
               retryCount: retryChunks.length,
               blocks: chunk.length,
-              properties: countMatchingProperties(chunk, scopeSchemaMap),
+              properties: retryPropertyCount,
+              estimatedInsertRows: retryPropertyCount * PROPERTY_CHILDREN_BACKFILL_ROWS_PER_PROPERTY,
               processed,
               firstId: chunk[0]?.id ?? null,
               lastId: chunk[chunk.length - 1]?.id ?? null,
@@ -1933,12 +2006,15 @@ export class Repo {
       }
       for (;;) {
         const scanStartedAt = performance.now()
-        const candidates = await this.propertyChildrenBackfillCandidates(
+        const candidates = await this.propertyChildrenBackfillCandidateBatch({
           workspaceId,
-          schemasToScan,
+          schemas: schemasToScan,
+          schemaMap: scopeSchemaMap,
           afterId,
-          batchSize,
-        )
+          parentBatchSize,
+          targetInsertRows,
+          scanBatchSize,
+        })
         const scanMs = performance.now() - scanStartedAt
         if (candidates.length === 0) break
         afterId = candidates[candidates.length - 1]!.id
@@ -1947,6 +2023,7 @@ export class Repo {
         logStart()
 
         const propertyCount = countMatchingProperties(candidates, scopeSchemaMap)
+        const estimatedInsertRows = propertyCount * PROPERTY_CHILDREN_BACKFILL_ROWS_PER_PROPERTY
         const writeStartedAt = performance.now()
         let writeMode = 'single'
         let writeDiagnostics: PropertyChildrenBackfillWriteDiagnostics
@@ -1964,10 +2041,13 @@ export class Repo {
             workspaceId,
             scope,
             batchCount,
-            batchSize,
+            parentBatchSize,
+            targetInsertRows,
+            scanBatchSize,
             retryBatchSize: shouldRetryStorageWrite ? retryBatchSize : null,
             blocks: candidates.length,
             properties: propertyCount,
+            estimatedInsertRows,
             processed,
             firstId: candidates[0]?.id ?? null,
             lastId: afterId,
@@ -1990,7 +2070,7 @@ export class Repo {
           console.info(
             `[Repo] property children migration batch ${batchCount} ` +
             `workspace=${workspaceId} scope=${scope} blocks=${candidates.length} ` +
-            `properties=${propertyCount} writeMode=${writeMode} ` +
+            `properties=${propertyCount} estimatedInsertRows=${estimatedInsertRows} writeMode=${writeMode} ` +
             `bulkParents=${stats.bulkParents} fallbackParents=${stats.fallbackParents} ` +
             `createdFieldRows=${stats.fieldRowsCreated} createdValueRows=${stats.valueRowsCreated} ` +
             `existingFieldRows=${stats.existingFieldRows} existingValueRows=${stats.existingValueRows} ` +

@@ -230,9 +230,11 @@ describe('child-backed user properties', () => {
       }
     })()
 
-    expect(messages.some(message => message.includes('batchSize=25'))).toBe(true)
+    expect(messages.some(message => message.includes('parentBatchSize=row-target'))).toBe(true)
+    expect(messages.some(message => message.includes('targetInsertRows=400'))).toBe(true)
     const batchMessage = messages.find(message => message.includes('property children migration batch 1'))
     expect(batchMessage).toEqual(expect.stringContaining('properties=1'))
+    expect(batchMessage).toEqual(expect.stringContaining('estimatedInsertRows=2'))
     expect(batchMessage).toEqual(expect.stringContaining('writeMode=single'))
     expect(batchMessage).toEqual(expect.stringContaining('bulkParents=1'))
     expect(batchMessage).toEqual(expect.stringContaining('fallbackParents=0'))
@@ -252,6 +254,40 @@ describe('child-backed user properties', () => {
     expect(batchMessage).toEqual(expect.stringContaining('propertiesPerSecond='))
     const completeMessage = messages.find(message => message.includes('property children migration complete'))
     expect(completeMessage).toEqual(expect.stringContaining('candidatesPerSecond='))
+  })
+
+  it('uses an estimated insert-row budget for default full backfill batches', async () => {
+    env = await setup({activateWorkspace: false})
+    for (let index = 0; index < 3; index += 1) {
+      await seedLegacyPropertiesRow(env.h, `legacy-parent-${index}`, `a${index}`, {
+        [env.statusProp.name]: env.statusProp.codec.encode(`Doing ${index}`),
+      })
+    }
+
+    const messages = await (async (): Promise<string[]> => {
+      const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+      try {
+        await expect(env.repo.backfillPropertyChildrenFromProperties({
+          workspaceId: WS,
+          targetInsertRows: 4,
+          respectCompletionMarkers: false,
+          logProgress: true,
+        })).resolves.toBe(3)
+        return info.mock.calls.map(([message]) => String(message))
+      } finally {
+        info.mockRestore()
+      }
+    })()
+
+    expect(messages.some(message => message.includes('targetInsertRows=4'))).toBe(true)
+    const batchMessages = messages.filter(message => message.includes('property children migration batch'))
+    expect(batchMessages).toHaveLength(2)
+    expect(batchMessages[0]).toEqual(expect.stringContaining('blocks=2'))
+    expect(batchMessages[0]).toEqual(expect.stringContaining('properties=2'))
+    expect(batchMessages[0]).toEqual(expect.stringContaining('estimatedInsertRows=4'))
+    expect(batchMessages[1]).toEqual(expect.stringContaining('blocks=1'))
+    expect(batchMessages[1]).toEqual(expect.stringContaining('properties=1'))
+    expect(batchMessages[1]).toEqual(expect.stringContaining('estimatedInsertRows=2'))
   })
 
   it('backfills as a system migration without adding user undo entries', async () => {
@@ -333,7 +369,10 @@ describe('child-backed user properties', () => {
         expect.objectContaining({
           blocks: 2,
           properties: 2,
-          configuredBatchSize: 2,
+          configuredParentBatchSize: 2,
+          targetInsertRows: 400,
+          scanBatchSize: 2,
+          estimatedInsertRows: 4,
           retryBatchSize: 1,
           error: {name: 'Error', message: 'short write'},
           storageEstimate: null,
@@ -386,7 +425,10 @@ describe('child-backed user properties', () => {
         expect.objectContaining({
           blocks: 2,
           properties: 2,
-          configuredBatchSize: 2,
+          configuredParentBatchSize: 2,
+          targetInsertRows: 400,
+          scanBatchSize: 2,
+          estimatedInsertRows: 4,
           retryBatchSize: 1,
           error: {name: 'Error', message: 'disk I/O error'},
         }),
