@@ -63,11 +63,12 @@ A "when you add a column to a workspace-related table" section in [CONTRIBUTING.
 
 Land **option B** first — a `check:rpc-projections` script wired into `yarn check`. Concrete shape:
 
-- Tag each enumerated RPC with a comment like `-- @projects: workspace_members + email` in the migration. Script parses the comment and the following `RETURNS TABLE(...)` and asserts the columns match `WORKSPACE_MEMBER_COLUMNS` ∪ declared extras.
-- Parse `src/data/workspaceSchema.ts` and `src/data/workspaces.ts` for interface/type declarations matching `*Row` and `Rpc*Row`, assert their field sets match the relevant array + declared extras.
-- Add to `package.json:28` `check` chain alongside `check:sync-config`.
+- Source of truth: the migrations themselves. Walk `supabase/migrations/*.sql` in filename order; build a per-table column set from `CREATE TABLE` bodies, then mutate it via `ALTER TABLE ... ADD COLUMN` / `DROP COLUMN`. No new TS-side column array is required for a table to be checked — adding the column in the migration is sufficient.
+- Tag each enumerated RPC with a comment like `-- @projects: workspace_members + email` above its `CREATE OR REPLACE FUNCTION`. Script parses the comment and the following `RETURNS TABLE(...)` and asserts the columns match the migration-derived set ∪ declared extras.
+- Tag TS row interfaces / types similarly with `// @projects: <table> [+ <extra>...]`. Script checks the same way.
+- Add to `package.json` `check` chain alongside `check:sync-config`.
 
-This catches drift today, costs half a day, and uses the existing SoT without forcing a rewrite of the manually-tuned RPC bodies.
+This catches drift today, costs half a day, and uses the migrations as the single source of truth without introducing a parallel TS-side SoT that would itself need keeping in sync.
 
 Then, when the E2EE migration lands and adds 3 enumerated columns across 3 tables + 2 new RPCs, evaluate whether the projection/parser duplication has crossed the threshold where **option A** (generated row types + parsers) pays for itself. The likely answer is yes — the E2EE columns are the first non-trivial extension and the second pass will be cheaper than fighting the duplication forever. But landing A speculatively, before there's a second column-set to validate the generator against, risks over-fitting.
 
