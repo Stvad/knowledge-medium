@@ -477,41 +477,118 @@ the row that downstream consumers (queries, indexes, UI selectors) already know 
 to read. We're reusing a pattern already in the codebase, not introducing a new one.
 </p>
 
-<h2>5. Mechanism: the same-tx processor</h2>
+<h2>5. Mechanism: processors that keep cells and carriers in lockstep</h2>
 
 <p>
-A new same-tx processor watches tree mutations and re-derives the affected parent's
-<code>properties_json</code> in the same transaction. It runs for every commit that
-goes through <code>repo.tx</code> — local writes through
-<code>block.set(schema, value)</code>, and raw <code>tx.create</code> /
-<code>tx.update</code> from plugins or agents. There is no "you must go through the
-mutator" rule for local writes.
+Three same-tx processors do the work during migration. Two are permanent;
+one is scaffolding that's deleted in Phase 4.
+</p>
+
+<dl>
+  <dt><strong><code>DERIVE_REFERENCE_TARGET</code></strong> (permanent)</dt>
+  <dd>
+    Watches block content. When content trims to an exact reference shape
+    (<code>((uuid))</code> or an alias that resolves to a block id) and that
+    target is a registered property-schema block, writes the resolved schema
+    id into a dedicated <code>referenceTargetId</code> column on the row.
+    Carrier detection everywhere downstream becomes a column read
+    (<code>referenceTargetId IS NOT NULL AND resolves to a registered
+    schema</code>) instead of re-parsing content at every site. Same pattern
+    <code>references[]</code> already uses to denormalize content refs into a
+    queryable shape; we promote the carrier's primary schema reference to its
+    own column because every carrier has exactly one and the lookups are hot
+    (processor, renderer chooser, queries, backlinks all ask). Content
+    remains the source — edit it out of schema-reference shape and the
+    column clears.
+  </dd>
+
+  <dt><strong><code>PROJECT_PROPERTY_CHILDREN</code></strong> (permanent)</dt>
+  <dd>
+    Watches carrier and value-child mutations. Walks up to the carrier's
+    parent, rebuilds <code>properties_json</code> from the union of (a) legacy
+    JSON-only keys that don't yet have a matching carrier — preserved until
+    Phase 2 backfills them — and (b) keys derived from carriers. Also rebuilds
+    the parent's projected <code>references[]</code> entries with
+    <code>sourceField = schema.name</code> for ref-typed values, preserving
+    today's backlink-by-field semantics. After Phase 2 the legacy-keys side
+    of the union is empty and the projection degenerates to pure derivation.
+  </dd>
+
+  <dt><strong><code>MATERIALIZE_PROPERTY_CHILDREN</code></strong> (migration scaffolding — deleted in Phase 4)</dt>
+  <dd>
+    Watches the parent's <code>properties_json</code>. For each key that gains
+    a value and doesn't yet have a matching carrier, creates the carrier +
+    value-children. For each key that disappears, deletes the corresponding
+    carrier subtree. This is the bidirectional half: legacy writes through
+    <code>tx.update({properties})</code> stay correct because materialize
+    synthesizes the carriers behind them. Both write paths
+    (<code>block.set</code> targeting carriers and <code>tx.update</code>
+    targeting the cell) produce the same end state. The processor exists
+    purely to bridge the old write path during the migration; once Phase 4
+    lands and the legacy write path is gone, materialize has no triggering
+    writes and is deleted.
+  </dd>
+</dl>
+
+<p>
+Loop-avoidance is the natural consequence of idempotent derivation: each
+processor's write is a no-op when the output it would emit already matches
+the input. A round-trip (legacy <code>tx.update({properties})</code> writes
+the cell → materialize creates the carrier → project re-derives the cell →
+output equals input → no further write) terminates in one pass. The same
+holds the other direction: <code>block.set</code> creates the carrier →
+project derives the cell → materialize observes a cell that already has the
+key the carrier represents → no-op.
+</p>
+
+<h3>Sync-arrival entry point</h3>
+
+<p>
+<code>rowEventsTail</code> applies PowerSync-replicated rows directly to the
+local SQLite store without opening a <code>repo.tx</code>, so the same-tx
+processors do not fire on inbound replication. Without a second path, an
+inbound carrier-only mutation from another client lands as a tree change
+with no corresponding rebuild of the local parent's
+<code>properties_json</code>, and the cell stays stale on the receiving
+client until some other local write retouches the parent.
 </p>
 
 <p>
-Sync arrivals are the exception and need an explicit second entry point.
-<code>rowEventsTail</code> applies PowerSync-replicated rows directly to the local
-SQLite store without opening a <code>repo.tx</code>, so the same-tx processor does
-not fire on inbound replication. Without a second path, an inbound carrier-only
-mutation from another client lands as a tree change with no corresponding rebuild
-of the local parent's <code>properties_json</code>, and the cell stays stale on the
-receiving client until some other local write retouches the parent. Cell-vs-carrier
-drift across clients also surfaces here: if both clients write to the same parent,
-the carrier rows merge cleanly per-row but the cell's LWW resolution can land on a
-view that doesn't reflect the merged carriers.
+Fix: <code>rowEventsTail.onRowsAccepted</code> schedules a
+<strong>post-sync derivation pass</strong> via
+<code>requestIdleCallback</code> (with a 2s timeout fallback) that runs
+<code>PROJECT_PROPERTY_CHILDREN</code>'s derivation function over the
+touched parents, batched. The pass writes through a local tx tagged
+<code>source: 'sync-derive'</code>. The pass is idempotent — re-running it
+on a parent whose cell already matches the derivation is a no-op.
 </p>
 
-<p>
-Fix: add a <strong>post-sync derivation handler</strong> on the
-<code>rowEventsTail</code> path that runs the same derivation logic the same-tx
-processor uses, scoped to inbound rows. For each inbound row event whose subject
-is a carrier or value-child, walk up the same one or two levels as the same-tx
-processor, rebuild the parent's <code>properties_json</code>, and write it locally
-in a synthetic tx tagged <code>source: 'sync-derive'</code> so the result is
-indistinguishable from a sync arrival to downstream subscribers (and so it doesn't
-re-replicate). The derivation function itself is shared with the same-tx processor;
-only the trigger and tx-context differ.
-</p>
+<div class="callout warn">
+  <strong>Upload-filter change required.</strong> Today's upload trigger in
+  <code>src/data/internals/clientSchema.ts</code> enqueues every row update
+  where <code>tx_context.source IS NOT NULL</code>, so a tx tagged
+  <code>'sync-derive'</code> would upload the derived cell back to the
+  server. Correctness still holds (derivation is deterministic, so all
+  clients land on the same cell), but bandwidth doubles during sync drains.
+  Phase 0 extends the trigger to exclude the new source value — either by
+  flipping the predicate from "non-null" to an explicit allowlist of
+  user-intent sources, or by adding <code>'sync-derive'</code> to an
+  explicit excludelist. Pick one before Phase 1 ships.
+</div>
+
+<div class="callout good">
+  <strong>Denoted-value rule.</strong> Mutations deep in a value-child's
+  subtree — a comment under a long-text field, a sub-bullet under a status
+  value — do <em>not</em> invalidate the parent's
+  <code>properties_json</code>. The project processor reads value-child
+  <em>content / parentId / deleted</em> and the carrier's
+  <em>referenceTargetId / parentId / deleted</em>; everything below the
+  value-child is part of the user's authored tree but not part of the
+  derivation. Without this rule the processor turns into a reactive query
+  engine — any edit anywhere in a value-child's descendants forces a
+  parent rebuild, write amp explodes, and "carrier values can contain rich
+  content" becomes a footgun.
+</div>
 
 <figure>
   <div class="frame">
@@ -586,7 +663,7 @@ only the trigger and tx-context differ.
       <text class="label-small" x="20" y="290">Same transaction — readers never see drift between carriers and cell.</text>
     </svg>
   </div>
-  <figcaption><span class="fig-id">Fig. 3</span>Derivation flow on a value-child mutation. Carrier-child mutations walk up one level instead of two; sync arrivals run the same path.</figcaption>
+  <figcaption><span class="fig-id">Fig. 3</span><code>PROJECT_PROPERTY_CHILDREN</code>'s flow on a value-child mutation. Carrier-child mutations walk up one level instead of two; sync arrivals run the same derivation through the post-sync pass. The materialize processor runs the same shape in the opposite direction.</figcaption>
 </figure>
 
 <p>
@@ -602,11 +679,12 @@ Walk-up logic for any changed row <em>C</em>:
 </ul>
 
 <p>
-The derivation reads carrier-child content (the <code>((schema-id))</code>), resolves
-the schema via <code>UserSchemasService.getSchemaForBlockId</code>, walks
-value-children in orderKey order, hands their content to
-<code>schema.codec.decode</code>, then writes the parent's <code>properties_json</code>
-(and the parent's projected <code>references[]</code> entries, with
+The derivation reads the carrier's resolved schema (via the
+<code>referenceTargetId</code> column +
+<code>UserSchemasService.getSchemaForBlockId</code>), walks value-children
+in orderKey order, hands their content to <code>schema.codec.decode</code>,
+then writes the parent's <code>properties_json</code> (and the parent's
+projected <code>references[]</code> entries with
 <code>sourceField = schema.name</code>) in the same transaction.
 </p>
 
@@ -696,11 +774,13 @@ The rules the processor and renderer share, stated once:
 
 <dl>
   <dt><strong>Carrier recognition.</strong></dt>
-  <dd>A child of P is a carrier iff its trimmed content matches
-    <code>^\(\((uuid)\)\)$</code> AND the uuid resolves to a registered
-    property-schema block. No other recognition path; no separate
-    <code>fieldOf</code> property. The schema link rides the existing
-    <code>references[]</code> pipeline.</dd>
+  <dd>A child of P is a carrier iff its <code>referenceTargetId</code> column
+    is non-null AND resolves to a registered property-schema block. The
+    column is derived by <code>DERIVE_REFERENCE_TARGET</code> from the block's
+    own content — when content trims to <code>((uuid))</code> or an alias that
+    resolves to a schema block id, the column gets populated. Detection is a
+    column read, not a content parse; resolution logic lives in one place
+    (the derive processor) instead of at every detection site.</dd>
 
   <dt><strong>Value decoding.</strong></dt>
   <dd>Walk the carrier's value-children in orderKey order. For scalar codecs:
@@ -838,21 +918,26 @@ that readers see; carriers and values become its source.
   <div class="phase">
     <div class="num">0</div>
     <div class="body">
-      <div class="name">Same-tx processor, shadow mode</div>
+      <div class="name">Processors and column ship in shadow</div>
       <p>
-        Ship the carrier-recognition logic, the derivation processor, and the
-        post-sync derivation handler (see section 5). Both write to a <em>shadow</em>
-        column (<code>properties_json_v2</code>) instead of
-        <code>properties_json</code>. Diff the two and log mismatches —
-        <strong>scoped to rows that already have at least one carrier child</strong>,
-        so legacy JSON-only rows (the entire pre-backfill population) don't generate
-        noise. Validation in this phase comes from manually-created carriers in dev /
-        staging and from the test suite; the production diff stays quiet by design
+        Ship the <code>referenceTargetId</code> column +
+        <code>DERIVE_REFERENCE_TARGET</code> processor, the
+        <code>PROJECT_PROPERTY_CHILDREN</code> processor, the
+        <code>MATERIALIZE_PROPERTY_CHILDREN</code> processor, the
+        <code>rowEventsTail.onRowsAccepted</code> post-sync derivation pass,
+        and the upload-filter change that excludes
+        <code>source: 'sync-derive'</code> from replication. Project writes
+        to a <em>shadow</em> column (<code>properties_json_v2</code>)
+        instead of <code>properties_json</code>. Diff the two and log
+        mismatches — <strong>scoped to rows that already have at least one
+        carrier child</strong>, so legacy JSON-only rows don't generate noise.
+        Validation in this phase comes from manually-created carriers in dev /
+        staging and the test suite; production diffing stays quiet by design
         until Phase 1 starts producing real carrier writes.
       </p>
-      <p class="deliv">Deliverable: processor lands, dark-rolls in production, zero
-        user-visible change. Mismatches on carrier-bearing rows surface bugs before
-        the cutover.</p>
+      <p class="deliv">Deliverable: all three processors land, dark-roll in
+        production, zero user-visible change. Mismatches on carrier-bearing
+        rows surface bugs before the cutover.</p>
     </div>
   </div>
 
@@ -862,13 +947,34 @@ that readers see; carriers and values become its source.
       <div class="name">Write path: <code>block.set</code> creates carriers</div>
       <p>
         Upgrade <code>block.set(schema, value)</code> (and
-        <code>tx.setProperty</code>) to find-or-create a carrier-child and write
-        value-children, instead of writing the JSON cell directly. The processor
-        derives the cell. Existing readers — <code>block.get</code>, the typed-query
-        compiler, the panel — keep reading the cell, unaware.
+        <code>tx.setProperty</code>) to find-or-create a carrier child and
+        write value-children, instead of writing the JSON cell directly. The
+        project processor derives the cell.
       </p>
-      <p class="deliv">Deliverable: every new property write goes through carriers.
-        Old data still lives in JSON cells until backfill.</p>
+      <div class="callout warn">
+        <strong>Phase 1 derivation must merge with legacy JSON-only keys.</strong>
+        Before backfill, a block can have a mix of carrier-backed keys (newly
+        written) and JSON-only keys (legacy data). Project's derivation is
+        the union of (a) existing <code>properties_json</code> keys with no
+        matching carrier and (b) keys derived from carriers — last-wins for
+        keys that exist in both. Without this rule, calling
+        <code>block.set(status, "done")</code> on a legacy block with
+        <code>{priority, assignee}</code> in the cell drops
+        <code>priority</code> and <code>assignee</code> on the next project
+        pass. After Phase 2 backfill, the legacy-keys branch of the union is
+        always empty and the rule degenerates to pure derivation; the merge
+        logic can be removed in Phase 4 alongside the materialize processor.
+      </div>
+      <p>
+        Existing readers — <code>block.get</code>, the typed-query compiler,
+        the panel — keep reading the cell, unaware. Legacy
+        <code>tx.update({properties})</code> writes from plugins / agents
+        keep working too, because materialize synthesizes carriers behind
+        them.
+      </p>
+      <p class="deliv">Deliverable: every new property write goes through
+        carriers. Old data still lives in JSON cells until backfill; the
+        merge rule preserves it on the legacy-mix path.</p>
     </div>
   </div>
 
@@ -908,18 +1014,21 @@ that readers see; carriers and values become its source.
   <div class="phase">
     <div class="num">4</div>
     <div class="body">
-      <div class="name">Panel sunset, cell becomes pure derivation</div>
+      <div class="name">Panel sunset, scaffolding removed</div>
       <p>
         Remove the panel feature flag. Delete <code>BlockProperties.tsx</code>,
         <code>propertyPanel/*</code>, the synthetic-rows machinery,
         <code>AddPropertyForm</code>. Direct writes to
-        <code>tx.update({properties})</code> are deprecated and route through a
-        compatibility shim that creates carriers (or get removed if no callers
-        remain).
+        <code>tx.update({properties})</code> get removed or rewritten as
+        carrier-writes; once no callers remain, delete
+        <code>MATERIALIZE_PROPERTY_CHILDREN</code> and the project
+        processor's legacy-merge branch — both exist solely to bridge the old
+        write path during the migration.
       </p>
-      <p class="deliv">Deliverable: one source of truth (carriers), one read path
-        (JSON cell as derived index), one rendering surface (the tree). Net code
-        deletion.</p>
+      <p class="deliv">Deliverable: one source of truth (carriers), one
+        permanent processor pair (derive + project), one rendering surface
+        (the tree). Net code deletion: the panel surface, the materialize
+        processor, the legacy-merge branch.</p>
     </div>
   </div>
 
@@ -988,6 +1097,29 @@ Concrete risks to monitor:
     answer; the UX needs explicit "X fields not found in destination workspace"
     affordance in the paste confirmation. Belongs in Phase 3.
   </li>
+  <li>
+    <strong>Hot-read regression on kernel properties.</strong> Today's
+    <code>block.get('types')</code> /
+    <code>block.peekProperty(isCollapsedProp)</code> reads are sync against
+    <code>properties_json</code> in cache, and fire on every render of
+    <code>DefaultBlockRenderer</code>. With user-defined properties moving to
+    carriers, kernel hot-path properties (<code>types</code>,
+    <code>system:collapsed</code>, focus / selection UI-state) stay in the JSON
+    cell — they're not user-facing properties and don't need block-y affordances.
+    But "the cell stays current under project derivation" is a write-path claim;
+    the read path stays identical to today, so the risk is bounded to "did
+    the processor pipeline regress p99 write latency, and does that show up in
+    the perceived sync-to-screen latency for typed blocks." Bake-off against a
+    realistic workspace before locking Phase 1.
+  </li>
+  <li>
+    <strong>Upload-filter coordination.</strong> The Phase 0 trigger change
+    (excluding <code>source: 'sync-derive'</code> from upload) needs to land
+    before Phase 1's first carrier write, or sync-derived cells double-upload.
+    Not a correctness bug — derivation is deterministic across clients — but
+    it bloats sync traffic during convergence. Schema migration ordering:
+    upload-filter trigger first, then carrier writes.
+  </li>
 </ul>
 
 <hr>
@@ -995,9 +1127,15 @@ Concrete risks to monitor:
 <p class="footer-note">
 This is a planning document, not an authoritative spec. Open questions worth
 revisiting before Phase 1: exact storage of carrier orderKeys (preserve from
-prior cell-key order on backfill?), the schema-block-id reference resolution path
-for the processor when the schema block isn't yet hydrated in cache, and the
-shape of the slash-command UI that replaces <code>AddPropertyForm</code>.
+prior cell-key order on backfill?); the schema-block-id resolution path for
+the processor when the schema block isn't yet hydrated in cache; the shape
+of the slash-command UI that replaces <code>AddPropertyForm</code>; and the
+ordering of the upload-filter schema change relative to Phase 0 ship.
+A guardrail for adjacent work during the migration: new code should write
+through <code>block.set(schema, value)</code> targeting carriers, not raw
+<code>tx.update({properties})</code>. The materialize scaffolding makes the
+raw path correct during Phase 1–3, but it goes away in Phase 4; any caller
+still writing raw cells at that point will silently stop persisting.
 </p>
 
 </main>
