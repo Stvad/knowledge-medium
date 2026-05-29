@@ -220,6 +220,7 @@ describe('DefaultBlockRenderer paste handling', () => {
       'first\nsecond',
       repo.block('block-1'),
       repo,
+      {topLevelBlockId: 'root'},
     )
   })
 

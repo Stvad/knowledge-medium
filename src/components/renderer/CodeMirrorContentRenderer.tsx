@@ -4,7 +4,7 @@ import { EditorView } from '@codemirror/view'
 import { createMinimalMarkdownConfig } from '@/utils/codemirror.js'
 import { BlockEditor } from '@/components/BlockEditor.js'
 import { useUIStateBlock } from '@/data/globalState.js'
-import { focusBlock } from '@/data/properties.js'
+import { focusBlock, topLevelBlockIdProp } from '@/data/properties.js'
 import { pasteMultilineText } from '@/utils/paste.js'
 import { useRepo } from '@/context/repo.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
@@ -57,7 +57,9 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     const text = e.clipboardData?.getData('text/plain')
     if (text?.includes('\n')) {
       e.preventDefault()
-      const pasted = await pasteMultilineText(text, block, repo)
+      const pasted = await pasteMultilineText(text, block, repo, {
+        topLevelBlockId: uiStateBlock.peekProperty(topLevelBlockIdProp),
+      })
       const renderScopeId = typeof blockContext.renderScopeId === 'string'
         ? blockContext.renderScopeId
         : undefined

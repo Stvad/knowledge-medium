@@ -1,72 +1,160 @@
-import { ChangeScope } from '@/data/api'
+import { ChangeScope, type BlockData } from '@/data/api'
 import { Block } from '../data/block'
 import type { Repo } from '../data/repo'
-import { parseMarkdownToBlocks } from '@/utils/markdownParser.js'
+import { isCollapsedProp } from '@/data/properties.js'
+import { parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser.js'
 import { keysBetween } from '../data/orderKey.ts'
 
-/** Paste markdown text as a sibling subtree relative to a target
- *  block. The target's parent receives the new tree as children;
- *  position controls whether the paste lands before or after the
- *  target.
+type PastePosition = 'before' | 'after'
+type PastePlacement = 'visible' | 'sibling'
+
+interface PasteOptions {
+  position?: PastePosition
+  /** The currently rendered outline root. Paste uses this to avoid
+   *  creating siblings outside a zoomed panel's visible subtree. */
+  topLevelBlockId?: string
+  /** `visible` follows outline navigation semantics; `sibling` keeps
+   *  range paste before/after the selected range unless that would
+   *  leave the visible subtree. */
+  placement?: PastePlacement
+}
+
+interface ExistingParentInsertion {
+  lower: string | null
+  upper: string | null
+}
+
+const isBlankContent = (content: string): boolean => content.trim().length === 0
+
+const isCollapsed = (properties: Record<string, unknown>): boolean => {
+  const raw = properties[isCollapsedProp.name]
+  return raw === undefined ? isCollapsedProp.defaultValue : isCollapsedProp.codec.decode(raw)
+}
+
+const insertionForFirstChild = (
+  firstExistingOrderKey: string | undefined,
+): ExistingParentInsertion => ({
+  lower: null,
+  upper: firstExistingOrderKey ?? null,
+})
+
+const insertionForSiblingRun = (
+  siblings: BlockData[],
+  targetId: string,
+  position: PastePosition,
+): ExistingParentInsertion => {
+  const ix = siblings.findIndex(s => s.id === targetId)
+  if (ix < 0) throw new Error(`paste target ${targetId} not found among siblings`)
+
+  return position === 'after'
+    ? {
+      lower: siblings[ix]?.orderKey ?? null,
+      upper: siblings[ix + 1]?.orderKey ?? null,
+    }
+    : {
+      lower: siblings[ix - 1]?.orderKey ?? null,
+      upper: siblings[ix]?.orderKey ?? null,
+    }
+}
+
+/** Paste markdown text into the outline around a target block.
  *
  *  Rewrites parsed blocks into one `repo.tx`:
- *   - Root-level parsed blocks (no parentId) get adopted under
- *     `target.parent` with order keys computed to land before/after
- *     the target.
+ *   - Empty targets absorb the first pasted root.
+ *   - Root-level parsed blocks become visible siblings or first
+ *     children depending on paste placement, expansion, and zoom.
  *   - Non-root parsed blocks keep their `parentId` (intra-paste tree
- *     structure) and use the parser-generated order keys.
+ *     structure), except children of an absorbed root become children
+ *     of the target.
  *
- *  Returns the Block facades of the new root-level pasted blocks. */
+ *  Returns the Block facades of the root-level pasted blocks in the
+ *  resulting visible paste scope. */
 export async function pasteMultilineText(
   pastedText: string,
   pasteTarget: Block,
   repo: Repo,
-  {position = 'after'}: {position?: 'before' | 'after'} = {},
+  {
+    position = 'after',
+    topLevelBlockId,
+    placement = 'visible',
+  }: PasteOptions = {},
 ): Promise<Block[]> {
   const targetData = pasteTarget.peek() ?? await pasteTarget.load()
   if (!targetData) return []
-  const parentId = targetData.parentId
-  if (!parentId) {
-    // Pasting under a root block isn't supported here — nothing to
-    // become a sibling of. Caller should re-target to a child.
-    return []
-  }
 
   const parsed = parseMarkdownToBlocks(pastedText)
   if (parsed.length === 0) return []
 
-  const rootCount = parsed.reduce((n, b) => n + (b.parentId ? 0 : 1), 0)
+  const parsedRoots = parsed.filter(block => !block.parentId)
 
   const rootBlocks: Block[] = []
   await repo.tx(async tx => {
-    // Compute order keys for the new root-level siblings between the
-    // target and its before/after neighbour. Earlier versions just
-    // suffixed the target's order_key (e.g. `${baseKey}~a0`), which
-    // always sorts AFTER the target lexicographically — so 'before'
-    // silently inserted after the target. Read the actual neighbours
-    // and use keysBetween so 'before' lands above the target.
-    const siblings = await tx.childrenOf(parentId, targetData.workspaceId)
-    const ix = siblings.findIndex(s => s.id === pasteTarget.id)
-    const lower = position === 'after'
-      ? siblings[ix]?.orderKey ?? null
-      : siblings[ix - 1]?.orderKey ?? null
-    const upper = position === 'after'
-      ? siblings[ix + 1]?.orderKey ?? null
-      : siblings[ix]?.orderKey ?? null
-    const rootKeys = rootCount > 0 ? keysBetween(lower, upper, rootCount) : []
+    const target = await tx.get(pasteTarget.id)
+    if (!target) return
 
-    let rootIndex = 0
-    for (const block of parsed) {
-      const isRoot = !block.parentId
-      const orderKey = isRoot ? rootKeys[rootIndex++] : block.orderKey
+    const targetChildren = await tx.childrenOf(target.id, target.workspaceId)
+    const targetIsTopLevel = topLevelBlockId === target.id
+    const targetHasVisibleChildren = targetChildren.length > 0 && !isCollapsed(target.properties)
+    const rootsAsChildren = targetIsTopLevel ||
+      target.parentId === null ||
+      (placement === 'visible' && position === 'after' && targetHasVisibleChildren)
+    const rootParentId = rootsAsChildren ? target.id : target.parentId
+    if (!rootParentId) return
+
+    const rootInsertion = rootsAsChildren
+      ? insertionForFirstChild(targetChildren[0]?.orderKey)
+      : insertionForSiblingRun(
+        await tx.childrenOf(rootParentId, target.workspaceId),
+        target.id,
+        position,
+      )
+
+    const absorbedRoot = isBlankContent(target.content) ? parsedRoots[0] : undefined
+    if (absorbedRoot) {
+      await tx.update(target.id, {content: absorbedRoot.content})
+      rootBlocks.push(repo.block(target.id))
+    }
+
+    const blocksToCreate = parsed.filter(block => block.id !== absorbedRoot?.id)
+    const createdParsedIds = new Set(blocksToCreate.map(block => block.id))
+    const finalParentId = (block: ParsedBlock): string => {
+      if (!block.parentId) return rootParentId
+      if (block.parentId === absorbedRoot?.id) return target.id
+      return block.parentId
+    }
+
+    const existingParentGroups = new Map<string, ParsedBlock[]>()
+    for (const block of blocksToCreate) {
+      const parentId = finalParentId(block)
+      if (createdParsedIds.has(parentId)) continue
+      const group = existingParentGroups.get(parentId) ?? []
+      group.push(block)
+      existingParentGroups.set(parentId, group)
+    }
+
+    const orderKeysByParsedId = new Map<string, string>()
+    for (const [parentId, blocks] of existingParentGroups) {
+      const insertion = parentId === rootParentId
+        ? rootInsertion
+        : insertionForFirstChild(
+          parentId === target.id
+            ? targetChildren[0]?.orderKey
+            : (await tx.childrenOf(parentId, target.workspaceId))[0]?.orderKey,
+        )
+      const keys = keysBetween(insertion.lower, insertion.upper, blocks.length)
+      blocks.forEach((block, index) => orderKeysByParsedId.set(block.id, keys[index]))
+    }
+
+    for (const block of blocksToCreate) {
+      const parentId = finalParentId(block)
       const id = await tx.create({
         id: block.id,
-        workspaceId: targetData.workspaceId,
-        parentId: isRoot ? parentId : block.parentId!,
-        orderKey,
+        workspaceId: target.workspaceId,
+        parentId,
+        orderKey: orderKeysByParsedId.get(block.id) ?? block.orderKey,
         content: block.content,
       })
-      if (isRoot) rootBlocks.push(repo.block(id))
+      if (!block.parentId) rootBlocks.push(repo.block(id))
     }
   }, {scope: ChangeScope.BlockDefault, description: 'paste multiline text'})
 
@@ -76,7 +164,7 @@ export async function pasteMultilineText(
 export async function pasteFromClipboard(
   pasteTarget: Block,
   repo: Repo,
-  options: {position?: 'before' | 'after'} = {},
+  options: PasteOptions = {},
 ): Promise<Block[]> {
   const text = await navigator.clipboard.readText()
   if (!text) return []

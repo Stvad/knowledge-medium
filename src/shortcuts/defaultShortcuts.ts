@@ -898,7 +898,11 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         let pasted: Block[] = []
         await withMoveTransition(async () => {
-          pasted = await pasteFromClipboard(target, repo, {position: 'after'})
+          pasted = await pasteFromClipboard(target, repo, {
+            position: 'after',
+            placement: 'sibling',
+            topLevelBlockId: uiStateBlock.peekProperty(topLevelBlockIdProp),
+          })
         })
         if (pasted[0]) {
           await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
@@ -920,7 +924,11 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         let pasted: Block[] = []
         await withMoveTransition(async () => {
-          pasted = await pasteFromClipboard(target, repo, {position: 'before'})
+          pasted = await pasteFromClipboard(target, repo, {
+            position: 'before',
+            placement: 'sibling',
+            topLevelBlockId: uiStateBlock.peekProperty(topLevelBlockIdProp),
+          })
         })
         if (pasted[0]) {
           await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)

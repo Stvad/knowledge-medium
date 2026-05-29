@@ -270,7 +270,10 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
       id: 'paste_after',
       description: 'Paste from clipboard after current block',
       handler: async ({block, uiStateBlock, renderScopeId}: BlockShortcutDependencies) => {
-        const pasted = await pasteFromClipboard(block, repo, {position: 'after'})
+        const pasted = await pasteFromClipboard(block, repo, {
+          position: 'after',
+          topLevelBlockId: uiStateBlock.peekProperty(topLevelBlockIdProp),
+        })
         if (pasted[0]) void focusBlock(uiStateBlock, pasted[0].id, {renderScopeId})
       },
       defaultBinding: {
@@ -281,7 +284,10 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
       id: 'paste_before',
       description: 'Paste from clipboard before current block',
       handler: async ({block, uiStateBlock, renderScopeId}: BlockShortcutDependencies) => {
-        const pasted = await pasteFromClipboard(block, repo, {position: 'before'})
+        const pasted = await pasteFromClipboard(block, repo, {
+          position: 'before',
+          topLevelBlockId: uiStateBlock.peekProperty(topLevelBlockIdProp),
+        })
         if (pasted[0]) void focusBlock(uiStateBlock, pasted[0].id, {renderScopeId})
       },
       defaultBinding: {

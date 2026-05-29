@@ -462,12 +462,14 @@ export function DefaultBlockRenderer(
       e.preventDefault()
       const pastedText = e.clipboardData.getData('text/plain')
 
-      const pasted = await pasteMultilineText(pastedText, block, repo)
+      const pasted = await pasteMultilineText(pastedText, block, repo, {
+        topLevelBlockId,
+      })
       if (pasted[0]) {
         void focusBlock(uiStateBlock, pasted[0].id, {renderScopeId})
       }
     },
-    [block, blockContext.renderScopeId, repo, uiStateBlock],
+    [block, blockContext.renderScopeId, repo, topLevelBlockId, uiStateBlock],
   )
 
   // Content slot: the content surface div + its surface props + the
