@@ -529,7 +529,7 @@ describe('child-backed user properties', () => {
     }
   })
 
-  it('runs the startup migration when schemas become available for the active workspace', async () => {
+  it('defers the startup migration until schema bootstrap is marked ready', async () => {
     env = await setup({registerStatusProp: false})
     await seedLegacyPropertiesRow(env.h, 'legacy-parent', 'a0', {
       [env.statusProp.name]: env.statusProp.codec.encode('Doing'),
@@ -537,7 +537,10 @@ describe('child-backed user properties', () => {
 
     env.repo.setRuntimeContributions(propertySchemasFacet, 'test', [env.statusProp])
     await env.repo.__drainPropertyChildrenBackfillForTesting()
+    await expect(rawLiveChildren(env.h, 'legacy-parent')).resolves.toEqual([])
 
+    env.repo.markPropertyChildrenBackfillSchemasReady(WS)
+    await env.repo.__drainPropertyChildrenBackfillForTesting()
     const children = await rawLiveChildren(env.h, 'legacy-parent')
     expect(children).toHaveLength(1)
     expect(children[0]!).toMatchObject({
@@ -552,6 +555,8 @@ describe('child-backed user properties', () => {
   it('coalesces queued full backfills to the latest schema snapshot', async () => {
     env = await setup({registerStatusProp: false, activateWorkspace: false})
     env.repo.setActiveWorkspaceId(WS)
+    env.repo.markPropertyChildrenBackfillSchemasReady(WS)
+    await env.repo.__drainPropertyChildrenBackfillForTesting()
     const firstProp = defineProperty<string>('coalesce:first', {
       codec: codecs.string,
       defaultValue: '',

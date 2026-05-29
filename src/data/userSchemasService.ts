@@ -30,6 +30,12 @@ export interface AddSchemaArgs {
   config?: unknown
 }
 
+export interface UserSchemasServiceStartOptions {
+  /** Fired once the workspace-pinned subscription publishes its first
+   *  user-data property schema bucket. */
+  onInitialPublish?: () => void
+}
+
 export class UserSchemasService {
   /** Single source of truth for the user-data bucket. Both the
    *  subscription rebuild and `appendUserSchema` assign to this field
@@ -81,7 +87,7 @@ export class UserSchemasService {
     return this.blockIdToSchema.get(blockId)
   }
 
-  start(): () => void {
+  start(options: UserSchemasServiceStartOptions = {}): () => void {
     if (this.subscriptionDisposer) {
       throw new Error('[UserSchemasService] already started')
     }
@@ -96,6 +102,7 @@ export class UserSchemasService {
       throw new Error('[UserSchemasService] no active workspace at start()')
     }
 
+    let initialPublishSent = false
     const rebuildFromBlocks = (blocks: readonly Block[]) => {
       this.latestBlocks = blocks
       const presets = this.repo.valuePresets
@@ -119,6 +126,10 @@ export class UserSchemasService {
       this.nameToBlockId = nextNameToBlockId
       this.blockIdToSchema = nextBlockIdToSchema
       this.repo.setRuntimeContributions(propertySchemasFacet, USER_DATA_SOURCE_ID, this.contributions)
+      if (!initialPublishSent) {
+        initialPublishSent = true
+        options.onInitialPublish?.()
+      }
       for (const reproject of reprojects) {
         void this.repo.reprojectPropertyValueChildren({
           ...reproject,

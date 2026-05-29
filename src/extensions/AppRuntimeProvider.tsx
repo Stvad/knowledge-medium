@@ -60,6 +60,7 @@ export function AppRuntimeProvider({
   [baseExtensions, overrides, safeMode, runtimeContext])
 
   const [runtime, setRuntime] = useState(baseRuntime)
+  const [runtimeBootstrapped, setRuntimeBootstrapped] = useState(false)
 
   // Sync state-from-prop pattern: when `baseRuntime` changes (rare —
   // only on `repo` swap or generation reload) the held `runtime` must
@@ -70,11 +71,16 @@ export function AppRuntimeProvider({
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setRuntime(baseRuntime)
+    setRuntimeBootstrapped(false)
+    if (workspaceId) repo.markPropertyChildrenBackfillSchemasLoading(workspaceId)
     repo.setFacetRuntime(baseRuntime)
-  }, [baseRuntime, repo])
+  }, [baseRuntime, repo, workspaceId])
 
   useEffect(() => {
     let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setRuntimeBootstrapped(false)
+    if (workspaceId) repo.markPropertyChildrenBackfillSchemasLoading(workspaceId)
     // Wipe stale errors from the previous resolution; the loader will
     // re-report any that still apply.
     errorStore.reset()
@@ -114,9 +120,11 @@ export function AppRuntimeProvider({
           // the FacetRuntime to UI consumers, never reaching the data
           // layer's dispatch / processor surfaces.
           repo.setFacetRuntime(nextRuntime)
+          setRuntimeBootstrapped(true)
         }
       } catch (error) {
         console.error('Failed to resolve app runtime', error)
+        if (!cancelled) setRuntimeBootstrapped(true)
       }
     })()
 
@@ -184,20 +192,28 @@ export function AppRuntimeProvider({
   // on AddPropertyForm submit) so the in-memory contribution list
   // stays consistent.
   useEffect(() => {
-    if (!workspaceId) return
-    const dispose = repo.userSchemas.start()
-    return () => dispose()
-  }, [repo, workspaceId])
+    if (!workspaceId || !runtimeBootstrapped) return
+    let disposed = false
+    const dispose = repo.userSchemas.start({
+      onInitialPublish: () => {
+        if (!disposed) repo.markPropertyChildrenBackfillSchemasReady(workspaceId)
+      },
+    })
+    return () => {
+      disposed = true
+      dispose()
+    }
+  }, [repo, runtimeBootstrapped, workspaceId])
 
   // Symmetric bridge for user-defined block-type blocks → typesFacet's
   // user-data bucket (user-defined-types Phase 1). Started after
   // userSchemas because the type build path resolves
   // block-type:properties refs through UserSchemasService.
   useEffect(() => {
-    if (!workspaceId) return
+    if (!workspaceId || !runtimeBootstrapped) return
     const dispose = repo.userTypes.start()
     return () => dispose()
-  }, [repo, workspaceId])
+  }, [repo, runtimeBootstrapped, workspaceId])
 
   return (
     <AppRuntimeContextProvider value={runtime}>

@@ -862,6 +862,11 @@ export class Repo {
    *  Row-targeted sync catch-up bypasses this generation and still
    *  processes every accepted row set. */
   private propertyChildrenFullBackfillGeneration = 0
+  /** Workspace whose kernel/plugin/user schema bootstrap has completed.
+   *  Full workspace property-child migrations are intentionally held
+   *  until AppRuntimeProvider has resolved plugins and UserSchemasService
+   *  has published its first user-data bucket. */
+  private propertyChildrenBackfillReadyWorkspaceId: string | null = null
   /** Backing field for `activeWorkspaceId` (see getter/setter below). */
   private _activeWorkspaceId: string | null = null
   /** Instance discriminator for memoization keys that need to vary
@@ -1321,7 +1326,30 @@ export class Repo {
   }
 
   setActiveWorkspaceId(workspaceId: string | null): void {
+    if (workspaceId !== this._activeWorkspaceId) {
+      this.propertyChildrenBackfillReadyWorkspaceId = null
+      this.propertyChildrenFullBackfillGeneration += 1
+    }
     this._activeWorkspaceId = workspaceId
+  }
+
+  /** Release the full workspace `properties_json` -> property children
+   *  backfill after the app has resolved kernel/static/dynamic plugin
+   *  schemas and UserSchemasService has published the workspace's
+   *  initial user-data schema bucket. */
+  markPropertyChildrenBackfillSchemasReady(workspaceId: string): void {
+    if (workspaceId !== this._activeWorkspaceId) return
+    this.propertyChildrenBackfillReadyWorkspaceId = workspaceId
+    this.schedulePropertyChildrenBackfill(workspaceId)
+  }
+
+  /** Hold full property-child backfills while the app rebuilds its
+   *  schema sources. The next ready mark will schedule one full scan
+   *  against the then-current merged schema map. */
+  markPropertyChildrenBackfillSchemasLoading(workspaceId: string): void {
+    if (workspaceId !== this._activeWorkspaceId) return
+    this.propertyChildrenBackfillReadyWorkspaceId = null
+    this.propertyChildrenFullBackfillGeneration += 1
   }
 
   /** Toggle read-only mode. Wrapping the field write in a method
@@ -2566,6 +2594,9 @@ export class Repo {
 
   private schedulePropertyChildrenBackfill(workspaceId: string): void {
     if (this.isReadOnly || this._propertySchemas.size === 0) return
+    if (this.propertyChildrenBackfillReadyWorkspaceId !== workspaceId) {
+      return
+    }
     const fullGeneration = ++this.propertyChildrenFullBackfillGeneration
     this.enqueuePropertyChildrenBackfill({
       workspaceId,
