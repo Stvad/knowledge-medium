@@ -739,7 +739,12 @@ CREATE OR REPLACE FUNCTION public.create_workspace(
   SET search_path TO 'public'
   AS $$
 declare
-  v_id text := coalesce(p_workspace_id, gen_random_uuid()::text);
+  v_id        text := coalesce(p_workspace_id, gen_random_uuid()::text);
+  v_user_id   text := auth.uid()::text;
+  v_name      text := coalesce(nullif(trim(p_name), ''), 'Workspace');
+  v_now       bigint := (extract(epoch from now()) * 1000)::bigint;
+  v_workspace public.workspaces;
+  v_member    public.workspace_members;
 begin
   -- AuthZ: this RPC is SECURITY DEFINER and bypasses RLS, so it must self-guard.
   -- Reject unauthenticated callers, and bind ownership to auth.uid() rather than
@@ -757,9 +762,24 @@ begin
   if p_encryption_mode = 'e2ee' and p_workspace_id is null then
     raise exception 'create_workspace: p_workspace_id is required for e2ee workspaces';
   end if;
-  -- ... INSERT INTO workspaces (id, encryption_mode, wk_canary, ...) VALUES (v_id, ...);
-  --     INSERT workspace_members owner row keyed by auth.uid() (NOT a client arg);
-  --     RETURN the new workspace as jsonb ...
+  -- Insert the workspace with the CLIENT-CHOSEN id and the two e2ee columns.
+  -- No explicit canary guard is needed: the workspaces_wk_canary_matches_mode
+  -- CHECK (above) enforces canary-present iff e2ee AND canary well-formedness,
+  -- so a missing or garbage p_wk_canary for an e2ee create is rejected here.
+  insert into public.workspaces
+      (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary)
+    values (v_id, v_name, v_user_id, v_now, v_now, p_encryption_mode, p_wk_canary)
+    returning * into v_workspace;
+
+  -- Owner membership keyed by auth.uid() (v_user_id), never a client argument.
+  insert into public.workspace_members (id, workspace_id, user_id, role, create_time)
+    values (gen_random_uuid()::text, v_workspace.id, v_user_id, 'owner', v_now)
+    returning * into v_member;
+
+  return jsonb_build_object(
+    'workspace', to_jsonb(v_workspace),
+    'member', to_jsonb(v_member)
+  );
 end;
 $$;
 
