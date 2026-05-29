@@ -241,14 +241,15 @@ const changedRefSchemaNames = (
     .sort()
 }
 
-const PROPERTY_CHILDREN_BACKFILL_BATCH_SIZE = 400
-const PROPERTY_CHILDREN_SHORT_WRITE_RETRY_BATCH_SIZE = 100
+const PROPERTY_CHILDREN_BACKFILL_BATCH_SIZE = 25
+const PROPERTY_CHILDREN_STORAGE_WRITE_RETRY_BATCH_SIZE = 5
+const PROPERTY_CHILDREN_STORAGE_WRITE_RETRY_DELAY_MS = 25
 
 const perSecond = (count: number, ms: number): number =>
   ms <= 0 ? count * 1000 : Math.round((count / ms) * 1000)
 
-const isShortWriteError = (err: unknown): boolean =>
-  err instanceof Error && /short write/i.test(err.message)
+const isRetriableStorageWriteError = (err: unknown): boolean =>
+  err instanceof Error && /(short write|disk i\/o error)/i.test(err.message)
 
 const errorForLog = (err: unknown): {name: string; message: string} | string =>
   err instanceof Error
@@ -292,6 +293,9 @@ const chunkArray = <T,>(items: readonly T[], size: number): T[][] => {
   }
   return out
 }
+
+const delay = (ms: number): Promise<void> =>
+  new Promise(resolve => setTimeout(resolve, ms))
 
 const countMatchingProperties = (
   blocks: readonly BlockData[],
@@ -1855,6 +1859,78 @@ export class Repo {
           txTiming: txResult.timing,
         }
       }
+      const writeRetryChunks = async (
+        retryCandidates: readonly BlockData[],
+        retryBatchSize: number,
+        scanMsForBatch: number,
+        retryPath: readonly number[] = [],
+      ): Promise<PropertyChildrenBackfillWriteDiagnostics> => {
+        const retryChunks = chunkArray(retryCandidates, retryBatchSize)
+        const retryStats = createPropertyChildrenMaterializationStats()
+        const retryDbDelta = emptyDbMetricsDelta()
+        let retryTxTiming: Readonly<TxTimingDiagnostics> | null = null
+        for (let retryIndex = 0; retryIndex < retryChunks.length; retryIndex += 1) {
+          const chunk = retryChunks[retryIndex]!
+          const retryStartedAt = performance.now()
+          try {
+            const chunkDiagnostics = await writeCandidates(chunk)
+            addMaterializationStats(retryStats, chunkDiagnostics.stats)
+            addDbMetricsDelta(retryDbDelta, chunkDiagnostics.dbDelta)
+            retryTxTiming = chunkDiagnostics.txTiming
+            if (logProgress) {
+              const retryLabel = [batchCount, ...retryPath, retryIndex + 1].join('.')
+              console.info(
+                `[Repo] property children migration retry ${retryLabel}/${retryChunks.length} ` +
+                `workspace=${workspaceId} scope=${scope} blocks=${chunk.length} ` +
+                `properties=${countMatchingProperties(chunk, scopeSchemaMap)} ` +
+                `writeMs=${Math.round(performance.now() - retryStartedAt)}`,
+              )
+            }
+          } catch (retryErr) {
+            const nextRetryBatchSize = Math.max(
+              1,
+              Math.min(PROPERTY_CHILDREN_STORAGE_WRITE_RETRY_BATCH_SIZE, Math.floor(chunk.length / 2)),
+            )
+            const shouldRetryChunk =
+              isRetriableStorageWriteError(retryErr) &&
+              nextRetryBatchSize < chunk.length
+            await this.logPropertyChildrenBackfillWriteFailure({
+              err: retryErr,
+              workspaceId,
+              scope,
+              batchCount,
+              batchSize,
+              retryBatchSize: shouldRetryChunk ? nextRetryBatchSize : null,
+              retryIndex: retryIndex + 1,
+              retryCount: retryChunks.length,
+              blocks: chunk.length,
+              properties: countMatchingProperties(chunk, scopeSchemaMap),
+              processed,
+              firstId: chunk[0]?.id ?? null,
+              lastId: chunk[chunk.length - 1]?.id ?? null,
+              scanMs: scanMsForBatch,
+              writeMs: performance.now() - retryStartedAt,
+              elapsedMs: performance.now() - startedAt,
+            })
+            if (!shouldRetryChunk) throw retryErr
+            await delay(PROPERTY_CHILDREN_STORAGE_WRITE_RETRY_DELAY_MS)
+            const nestedDiagnostics = await writeRetryChunks(
+              chunk,
+              nextRetryBatchSize,
+              scanMsForBatch,
+              [...retryPath, retryIndex + 1],
+            )
+            addMaterializationStats(retryStats, nestedDiagnostics.stats)
+            addDbMetricsDelta(retryDbDelta, nestedDiagnostics.dbDelta)
+            retryTxTiming = nestedDiagnostics.txTiming
+          }
+        }
+        return {
+          stats: retryStats,
+          dbDelta: retryDbDelta,
+          txTiming: retryTxTiming,
+        }
+      }
       for (;;) {
         const scanStartedAt = performance.now()
         const candidates = await this.propertyChildrenBackfillCandidates(
@@ -1880,17 +1956,16 @@ export class Repo {
           const writeMs = performance.now() - writeStartedAt
           const retryBatchSize = Math.max(
             1,
-            Math.min(PROPERTY_CHILDREN_SHORT_WRITE_RETRY_BATCH_SIZE, Math.floor(candidates.length / 2)),
+            Math.min(PROPERTY_CHILDREN_STORAGE_WRITE_RETRY_BATCH_SIZE, Math.floor(candidates.length / 2)),
           )
+          const shouldRetryStorageWrite = isRetriableStorageWriteError(err) && retryBatchSize < candidates.length
           await this.logPropertyChildrenBackfillWriteFailure({
             err,
             workspaceId,
             scope,
             batchCount,
             batchSize,
-            retryBatchSize: isShortWriteError(err) && retryBatchSize < candidates.length
-              ? retryBatchSize
-              : null,
+            retryBatchSize: shouldRetryStorageWrite ? retryBatchSize : null,
             blocks: candidates.length,
             properties: propertyCount,
             processed,
@@ -1900,56 +1975,11 @@ export class Repo {
             writeMs,
             elapsedMs: performance.now() - startedAt,
           })
-          if (!isShortWriteError(err) || retryBatchSize >= candidates.length) throw err
+          if (!shouldRetryStorageWrite) throw err
 
-          writeMode = 'short-write-retry'
-          const retryChunks = chunkArray(candidates, retryBatchSize)
-          const retryStats = createPropertyChildrenMaterializationStats()
-          const retryDbDelta = emptyDbMetricsDelta()
-          let retryTxTiming: Readonly<TxTimingDiagnostics> | null = null
-          for (let retryIndex = 0; retryIndex < retryChunks.length; retryIndex += 1) {
-            const chunk = retryChunks[retryIndex]!
-            const retryStartedAt = performance.now()
-            try {
-              const chunkDiagnostics = await writeCandidates(chunk)
-              addMaterializationStats(retryStats, chunkDiagnostics.stats)
-              addDbMetricsDelta(retryDbDelta, chunkDiagnostics.dbDelta)
-              retryTxTiming = chunkDiagnostics.txTiming
-            } catch (retryErr) {
-              await this.logPropertyChildrenBackfillWriteFailure({
-                err: retryErr,
-                workspaceId,
-                scope,
-                batchCount,
-                batchSize,
-                retryBatchSize,
-                retryIndex: retryIndex + 1,
-                retryCount: retryChunks.length,
-                blocks: chunk.length,
-                properties: countMatchingProperties(chunk, scopeSchemaMap),
-                processed,
-                firstId: chunk[0]?.id ?? null,
-                lastId: chunk[chunk.length - 1]?.id ?? null,
-                scanMs,
-                writeMs: performance.now() - retryStartedAt,
-                elapsedMs: performance.now() - startedAt,
-              })
-              throw retryErr
-            }
-            if (logProgress) {
-              console.info(
-                `[Repo] property children migration retry ${batchCount}.${retryIndex + 1}/${retryChunks.length} ` +
-                `workspace=${workspaceId} scope=${scope} blocks=${chunk.length} ` +
-                `properties=${countMatchingProperties(chunk, scopeSchemaMap)} ` +
-                `writeMs=${Math.round(performance.now() - retryStartedAt)}`,
-              )
-            }
-          }
-          writeDiagnostics = {
-            stats: retryStats,
-            dbDelta: retryDbDelta,
-            txTiming: retryTxTiming,
-          }
+          writeMode = 'storage-write-retry'
+          await delay(PROPERTY_CHILDREN_STORAGE_WRITE_RETRY_DELAY_MS)
+          writeDiagnostics = await writeRetryChunks(candidates, retryBatchSize, scanMs)
         }
         const writeMs = performance.now() - writeStartedAt
         const batchMs = performance.now() - scanStartedAt

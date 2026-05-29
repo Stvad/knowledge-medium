@@ -230,7 +230,7 @@ describe('child-backed user properties', () => {
       }
     })()
 
-    expect(messages.some(message => message.includes('batchSize=400'))).toBe(true)
+    expect(messages.some(message => message.includes('batchSize=25'))).toBe(true)
     const batchMessage = messages.find(message => message.includes('property children migration batch 1'))
     expect(batchMessage).toEqual(expect.stringContaining('properties=1'))
     expect(batchMessage).toEqual(expect.stringContaining('writeMode=single'))
@@ -350,6 +350,107 @@ describe('child-backed user properties', () => {
 
     await expect(rawLiveChildren(env.h, 'legacy-parent-a')).resolves.toHaveLength(1)
     await expect(rawLiveChildren(env.h, 'legacy-parent-b')).resolves.toHaveLength(1)
+  })
+
+  it('retries disk I/O migration failures in smaller transactions', async () => {
+    env = await setup({activateWorkspace: false})
+    await seedLegacyPropertiesRow(env.h, 'legacy-parent-a', 'a0', {
+      [env.statusProp.name]: env.statusProp.codec.encode('Doing'),
+    })
+    await seedLegacyPropertiesRow(env.h, 'legacy-parent-b', 'a1', {
+      [env.statusProp.name]: env.statusProp.codec.encode('Done'),
+    })
+    const repoInternals = env.repo as unknown as {
+      _runAndDispatch: (...args: unknown[]) => Promise<unknown>
+    }
+    const originalRunAndDispatch = repoInternals._runAndDispatch.bind(env.repo)
+    const runAndDispatch = vi.spyOn(repoInternals, '_runAndDispatch')
+    runAndDispatch.mockImplementationOnce(async () => {
+      throw new Error('disk I/O error')
+    })
+    runAndDispatch.mockImplementation((...args) => originalRunAndDispatch(...args))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+
+    try {
+      await expect(env.repo.backfillPropertyChildrenFromProperties({
+        workspaceId: WS,
+        batchSize: 2,
+        respectCompletionMarkers: false,
+        logProgress: true,
+      })).resolves.toBe(2)
+
+      expect(runAndDispatch).toHaveBeenCalledTimes(3)
+      expect(warn).toHaveBeenCalledWith(
+        '[Repo] property children migration write failed',
+        expect.objectContaining({
+          blocks: 2,
+          properties: 2,
+          configuredBatchSize: 2,
+          retryBatchSize: 1,
+          error: {name: 'Error', message: 'disk I/O error'},
+        }),
+      )
+      const messages = info.mock.calls.map(([message]) => String(message))
+      expect(messages.some(message => message.includes('property children migration retry 1.1/2'))).toBe(true)
+      expect(messages.some(message => message.includes('writeMode=storage-write-retry'))).toBe(true)
+    } finally {
+      runAndDispatch.mockRestore()
+      warn.mockRestore()
+      info.mockRestore()
+    }
+
+    await expect(rawLiveChildren(env.h, 'legacy-parent-a')).resolves.toHaveLength(1)
+    await expect(rawLiveChildren(env.h, 'legacy-parent-b')).resolves.toHaveLength(1)
+  })
+
+  it('keeps splitting retried storage-write chunks when a smaller retry still fails', async () => {
+    env = await setup({activateWorkspace: false})
+    const ids = Array.from({length: 12}, (_, index) => `legacy-parent-${index}`)
+    for (const [index, id] of ids.entries()) {
+      await seedLegacyPropertiesRow(env.h, id, `a${String(index).padStart(2, '0')}`, {
+        [env.statusProp.name]: env.statusProp.codec.encode(`Doing ${index}`),
+      })
+    }
+    const repoInternals = env.repo as unknown as {
+      _runAndDispatch: (...args: unknown[]) => Promise<unknown>
+    }
+    const originalRunAndDispatch = repoInternals._runAndDispatch.bind(env.repo)
+    const runAndDispatch = vi.spyOn(repoInternals, '_runAndDispatch')
+    runAndDispatch
+      .mockImplementationOnce(async () => { throw new Error('disk I/O error') })
+      .mockImplementationOnce(async () => { throw new Error('disk I/O error') })
+    runAndDispatch.mockImplementation((...args) => originalRunAndDispatch(...args))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+
+    try {
+      await expect(env.repo.backfillPropertyChildrenFromProperties({
+        workspaceId: WS,
+        batchSize: 12,
+        respectCompletionMarkers: false,
+        logProgress: true,
+      })).resolves.toBe(12)
+
+      const failureLogs = warn.mock.calls
+        .filter(([message]) => String(message) === '[Repo] property children migration write failed')
+        .map(([, context]) => context as {blocks: number; retryBatchSize: number | null})
+      expect(failureLogs).toEqual([
+        expect.objectContaining({blocks: 12, retryBatchSize: 5}),
+        expect.objectContaining({blocks: 5, retryBatchSize: 2}),
+      ])
+      const messages = info.mock.calls.map(([message]) => String(message))
+      expect(messages.some(message => message.includes('property children migration retry 1.1.1/3'))).toBe(true)
+      expect(messages.some(message => message.includes('writeMode=storage-write-retry'))).toBe(true)
+    } finally {
+      runAndDispatch.mockRestore()
+      warn.mockRestore()
+      info.mockRestore()
+    }
+
+    for (const id of ids) {
+      await expect(rawLiveChildren(env.h, id)).resolves.toHaveLength(1)
+    }
   })
 
   it('runs the startup migration when schemas become available for the active workspace', async () => {
