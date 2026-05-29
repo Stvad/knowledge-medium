@@ -1207,25 +1207,47 @@ CREATE TRIGGER blocks_require_ciphertext_for_e2ee_trg
     </p>
 
     <p>
-      <strong>Rows that leave the synced stream (revoke / workspace-delete) are deferred in v1.</strong>
-      PowerSync's <code>onDiff</code> surfaces a <code>removed</code> set when rows leave the user's
-      buckets &mdash; which here is predominantly membership revoke or workspace delete, since
-      ordinary block deletes are <em>soft</em> (<code>deleted = 1</code>, the row stays in the
-      stream). Fully handling removals would mean a per-workspace local teardown: drop those rows
-      from <code>blocks</code> and their derived-index entries, plus the plaintext
-      <code>ps_crud</code>/<code>ps_crud_rejected</code> envelopes for that workspace.
-      <strong>v1 deliberately does not build that</strong> &mdash; we don't want to invent a
-      partial-workspace wipe just for revoke. Instead the revoked workspace's local rows and queue
-      entries are allowed to go stale, cleared by the next explicit Lock &amp; wipe (§6). This is
-      safe to defer: a revoked member already held the WK and the data they had synced, so revoke
-      can't retroactively protect any of it &mdash; cleanup is local hygiene, not a confidentiality
-      boundary. The one functional wrinkle of deferring &mdash; a member who is later re-invited could
-      see a pre-revoke queued edit replay when its upload retries &mdash; is a known, low-severity
-      cost we accept for v1: it's the user's own edit landing in a workspace they again belong to,
-      not a leak. Two rules hold regardless: revoke stays <strong>per-workspace</strong> and must
-      <em>never</em> escalate to §6's coarse all-workspaces wipe; and if a partial-workspace wipe is
-      ever added for another reason, we can revisit whether to adopt it for removed-row handling
-      here.
+      <strong>Rows that leave the synced stream split into two scopes: logical removal stays at
+      parity with today (v1), and only deep/secure teardown is deferred.</strong> PowerSync's
+      <code>onDiff</code> surfaces a <code>removed</code> set when rows leave the user's buckets
+      &mdash; which here is predominantly membership revoke or workspace delete, since ordinary block
+      deletes are <em>soft</em> (<code>deleted = 1</code>; the row stays in the stream and so arrives
+      as an <em>update</em>, copied through normally). A <code>removed</code> entry instead means the
+      row left the synced set entirely, so the observer <strong>hard-deletes</strong> it:
+      <code>DELETE FROM blocks WHERE id IN (…)</code> under the same <code>source = NULL</code>
+      convention as its other writes. That single delete is at parity with what PowerSync does today
+      when it hard-deletes a block on stream-exit: the source-gated upload triggers skip it (no echo
+      back up), and the <em>ungated</em> derived-index DELETE triggers
+      (<code>blocks_alias_delete</code>, <code>blocks_type_delete</code>,
+      <code>blocks_fts_delete</code>) fire and purge <code>block_aliases</code> /
+      <code>block_types</code> / <code>blocks_fts</code> automatically. PowerSync removes the
+      ciphertext from <code>blocks_synced</code> itself. So both primary copies and the
+      trigger-maintained indexes are cleaned in v1 &mdash; this is roughly the same code as the
+      insert/update copy-through branch, not new machinery, and keeping it <em>preserves</em> a
+      capability we have today rather than regressing it. <em>(One assumption to verify against the
+      PowerSync API, not assert: that <code>onDiff().removed</code> reliably reflects a true
+      stream-exit and isn't spuriously emitted during transient checkpoint churn &mdash; i.e. that it
+      is a content-diff of <code>blocks_synced</code> between ticks. If so, a removal is
+      authoritative.)</em>
+    </p>
+    <p>
+      <strong>What v1 defers is only the hardening <em>beyond</em> today's posture</strong> &mdash; the
+      "scrub every possible unencrypted artifact" complexity we don't want to invent just for revoke:
+      the workspace's plaintext <code>ps_crud</code> / <code>ps_crud_rejected</code> queue entries
+      (today also not purged on revoke, so this is pre-existing, not a new gap); physical/secure erase
+      of the freed OPFS pages (SQLite doesn't zero freed pages, so today's deletes already leave
+      recoverable remnants &mdash; true erase needs <code>VACUUM</code> / <code>secure_delete</code> /
+      DB rekey-rebuild); and any plaintext that escapes the trigger cascade (in-memory caches,
+      rendered or exported content). These go stale and are cleared by the next explicit Lock &amp;
+      wipe (§6). Deferring them is safe: a revoked member already held the WK and the data they had
+      synced, so revoke can't retroactively protect any of it &mdash; this cleanup is local hygiene,
+      not a confidentiality boundary. The one functional wrinkle &mdash; a member who is later
+      re-invited could see a pre-revoke queued edit replay when its upload retries &mdash; stems from
+      the deferred <em>queue</em> cleanup, not the row removal, and is a known, low-severity cost:
+      it's the user's own edit landing in a workspace they again belong to, not a leak. Two rules
+      hold regardless: revoke stays <strong>per-workspace</strong> and must <em>never</em> escalate to
+      §6's coarse all-workspaces wipe; and if a partial-workspace wipe is ever added for another
+      reason, the queue-entry teardown above is the natural place to fold it in.
     </p>
     <p>
       Upload is symmetric. App writes plaintext to <code>blocks</code> as today; the existing
