@@ -390,6 +390,7 @@ end $$;
 ALTER FUNCTION "public"."invite_member_by_email"("p_workspace_id" "text", "p_email" "text", "p_role" "text") OWNER TO "postgres";
 
 
+-- @projects: workspace_invitations + workspace_name
 CREATE OR REPLACE FUNCTION "public"."list_my_pending_invitations"() RETURNS TABLE("id" "text", "workspace_id" "text", "workspace_name" "text", "email" "text", "role" "text", "invited_by_user_id" "text", "create_time" bigint)
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO 'public'
@@ -413,6 +414,7 @@ $$;
 ALTER FUNCTION "public"."list_my_pending_invitations"() OWNER TO "postgres";
 
 
+-- @projects: workspace_members + email
 CREATE OR REPLACE FUNCTION "public"."list_workspace_members_with_emails"("p_workspace_id" "text") RETURNS TABLE("id" "text", "workspace_id" "text", "user_id" "text", "role" "text", "email" "text", "create_time" bigint)
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO 'public'

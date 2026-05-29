@@ -30,6 +30,7 @@ ${columns.map(c => `    ${c.definition}`).join(',\n')}
 // workspaces
 // ---------------------------------------------------------------------------
 
+// @projects: workspaces
 export interface WorkspaceRow {
   id: string
   name: string
@@ -71,6 +72,7 @@ export const parseWorkspaceRow = (row: WorkspaceRow): Workspace => ({
 // workspace_members
 // ---------------------------------------------------------------------------
 
+// @projects: workspace_members
 export interface WorkspaceMemberRow {
   id: string
   workspace_id: string
@@ -115,3 +117,22 @@ export const parseWorkspaceMemberRow = (row: WorkspaceMemberRow): WorkspaceMembe
   role: row.role as WorkspaceRole,
   createTime: row.create_time,
 })
+
+// ---------------------------------------------------------------------------
+// workspace_invitations
+//
+// Not synced via PowerSync (queried on demand through Supabase RPCs; see the
+// comment in scripts/gen-sync-config.ts). The column list is maintained here
+// as the source of truth for scripts/check-rpc-projections.ts so RETURNS
+// TABLE projections and RPC row types don't drift from the underlying DDL.
+// See docs/schema-generator-extension.md.
+// ---------------------------------------------------------------------------
+
+export const WORKSPACE_INVITATION_COLUMNS = [
+  'id',
+  'workspace_id',
+  'email',
+  'role',
+  'invited_by_user_id',
+  'create_time',
+] as const

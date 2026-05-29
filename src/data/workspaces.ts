@@ -29,6 +29,7 @@ const toNumber = (value: number | string): number =>
 // RPC payload parsing — Postgres returns numeric bigints as strings via PostgREST.
 // ---------------------------------------------------------------------------
 
+// @projects: workspaces
 type RpcWorkspaceRow = {
   id: string
   name: string
@@ -45,6 +46,7 @@ const parseRpcWorkspace = (row: RpcWorkspaceRow): Workspace => ({
   updateTime: toNumber(row.update_time),
 })
 
+// @projects: workspace_members
 type RpcWorkspaceMemberRow = {
   id: string
   workspace_id: string
@@ -61,6 +63,7 @@ const parseRpcWorkspaceMember = (row: RpcWorkspaceMemberRow): WorkspaceMembershi
   createTime: toNumber(row.create_time),
 })
 
+// @projects: workspace_invitations + workspace_name?
 type RpcWorkspaceInvitationRow = {
   id: string
   workspace_id: string
@@ -81,6 +84,7 @@ const parseRpcWorkspaceInvitation = (row: RpcWorkspaceInvitationRow): WorkspaceI
   createTime: toNumber(row.create_time),
 })
 
+// @projects: workspace_members + email
 type RpcWorkspaceMemberWithEmailRow = {
   id: string
   workspace_id: string
