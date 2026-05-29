@@ -329,6 +329,21 @@ export const isFocusedBlock = (
   return renderScopeId ? location.renderScopeId === renderScopeId : true
 }
 
+const sameFocusedBlockLocation = (
+  a: FocusedBlockLocation | undefined,
+  b: FocusedBlockLocation,
+): boolean =>
+  a?.blockId === b.blockId && a.renderScopeId === b.renderScopeId
+
+const isEditingFromProperties = (
+  properties: Record<string, unknown> | undefined,
+): boolean => {
+  const encoded = properties?.[isEditingProp.name]
+  return encoded === undefined
+    ? isEditingProp.defaultValue
+    : isEditingProp.codec.decode(encoded)
+}
+
 /** Atomically move focus to `blockId` and set the edit flag in one tx.
  *
  *  Focus is a rendered location, not just a logical block id: the
@@ -358,9 +373,14 @@ export const focusBlock = async (
     renderScopeId: renderScopeId ?? fallbackRenderScopeId,
   }
   await uiStateBlock.repo.tx(async tx => {
+    const current = targetEdit ? null : await tx.get(uiStateBlock.id)
+    const preserveCurrentEditMode = !targetEdit &&
+      sameFocusedBlockLocation(focusedBlockLocationFromProperties(current?.properties), location) &&
+      isEditingFromProperties(current?.properties)
+
     await tx.setProperty(uiStateBlock.id, focusedBlockLocationProp, location)
     await tx.setProperty(uiStateBlock.id, focusedBlockIdProp, undefined)
-    await tx.setProperty(uiStateBlock.id, isEditingProp, targetEdit)
+    await tx.setProperty(uiStateBlock.id, isEditingProp, preserveCurrentEditMode || targetEdit)
   }, {scope: ChangeScope.UiState, description: 'focus block'})
 }
 
