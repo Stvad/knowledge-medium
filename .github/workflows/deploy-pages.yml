@@ -9,6 +9,7 @@ permissions:
   contents: read
   pages: write
   id-token: write
+  attestations: write # required by actions/attest-build-provenance
 
 concurrency:
   group: pages
@@ -54,6 +55,33 @@ jobs:
 
       - name: Build
         run: yarn run build
+
+      # Build provenance / tamper-evidence for the deployed client build.
+      # This is a transparency/detection mitigation only: it lets anyone
+      # verify a served file matches what this workflow built from this
+      # commit. It does NOT prevent a targeted backdoor (that needs a
+      # runtime verifier, which is out of scope here).
+      #
+      # SHA256SUMS lists the sha256 of every file shipped to Pages and is
+      # itself published at /<repo>/SHA256SUMS. The provenance attestation
+      # below signs just this manifest; because the manifest commits to
+      # every file's hash, the signature transitively covers the whole
+      # build (the standard "signed sums" pattern).
+      #
+      # Verify, given a deployed site:
+      #   1. Fetch the served files and SHA256SUMS, then `sha256sum -c
+      #      SHA256SUMS` to confirm served bytes match the manifest.
+      #   2. Confirm the manifest's provenance (signed Sigstore attestation
+      #      logged to the public Rekor transparency log):
+      #        gh attestation verify SHA256SUMS --owner Stvad
+      #      which binds the manifest digest -> this workflow -> this commit.
+      - name: Generate SHA256SUMS manifest
+        run: cd dist && find . -type f ! -name SHA256SUMS -exec sha256sum {} \; | sort -k2 > SHA256SUMS
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/SHA256SUMS
 
       - name: Set up Pages
         uses: actions/configure-pages@v6
