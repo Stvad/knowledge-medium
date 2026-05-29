@@ -36,6 +36,11 @@ type RpcWorkspaceRow = {
   owner_user_id: string
   create_time: number | string
   update_time: number | string
+  // E2EE columns (§7). create_workspace returns the full row via to_jsonb,
+  // so the projection must list them. Not yet mapped into the domain
+  // Workspace — the paste/create flows that consume them land in a later phase.
+  encryption_mode: string
+  wk_canary: string | null
 }
 
 const parseRpcWorkspace = (row: RpcWorkspaceRow): Workspace => ({

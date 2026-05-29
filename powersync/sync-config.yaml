@@ -37,7 +37,9 @@ streams:
           workspaces.name,
           workspaces.owner_user_id,
           workspaces.create_time,
-          workspaces.update_time
+          workspaces.update_time,
+          workspaces.encryption_mode,
+          workspaces.wk_canary
         FROM public.workspaces
         WHERE workspaces.id IN user_workspaces
       - |

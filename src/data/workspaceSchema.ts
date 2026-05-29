@@ -37,6 +37,12 @@ export interface WorkspaceRow {
   owner_user_id: string
   create_time: number
   update_time: number
+  // E2EE (docs/e2ee-design.html §7). encryption_mode is a UX hint /
+  // server-feature-gating projection; wk_canary is the key-check blob a new
+  // device decrypts to validate a pasted WK (NULL for plaintext workspaces).
+  // Synced down read-only; consumed by the paste flow (§8.2) in a later phase.
+  encryption_mode: string
+  wk_canary: string | null
 }
 
 export const WORKSPACE_COLUMNS: readonly ColumnDef[] = [
@@ -45,6 +51,11 @@ export const WORKSPACE_COLUMNS: readonly ColumnDef[] = [
   {name: 'owner_user_id', definition: 'owner_user_id TEXT NOT NULL'},
   {name: 'create_time', definition: 'create_time INTEGER NOT NULL'},
   {name: 'update_time', definition: 'update_time INTEGER NOT NULL'},
+  // Mirror the server's NOT NULL DEFAULT 'none' so an upgrading device's
+  // existing rows backfill to 'none' until PowerSync replays the real value
+  // (§7). wk_canary stays nullable — NULL is correct for plaintext.
+  {name: 'encryption_mode', definition: "encryption_mode TEXT NOT NULL DEFAULT 'none'"},
+  {name: 'wk_canary', definition: 'wk_canary TEXT'},
 ]
 
 export const CREATE_WORKSPACES_TABLE_SQL = buildCreateTableSql('workspaces', WORKSPACE_COLUMNS)

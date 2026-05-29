@@ -8,15 +8,12 @@
 -- column-level privilege model (REVOKE UPDATE ... GRANT UPDATE(name,...))
 -- to keep wk_canary immutable, on the assumption that clients UPDATE
 -- public.workspaces directly via renameWorkspace. In THIS codebase they
--- do not: public.workspaces has only a SELECT policy (see the consolidated
--- migration) and ALL mutations flow through SECURITY DEFINER RPCs
--- (create_workspace / rename_workspace / delete_workspace); the PowerSync
--- upload connector hard-rejects any non-`blocks` table. So clients already
--- cannot UPDATE workspaces at all under RLS — the canary is immutable to
--- them by the existing posture, and the column-privilege dance would be
--- solving a problem that doesn't exist here. We keep a cheap
--- encryption_mode immutability trigger as defense-in-depth against a
--- future buggy RPC, and rotation (§14) is deferred to post-v1.
+-- do not: public.workspaces exposes mutations only through SECURITY
+-- DEFINER RPCs (create_workspace / delete_workspace), and the PowerSync
+-- upload connector hard-rejects any non-`blocks` table. So clients cannot
+-- write wk_canary via the normal path; we keep a cheap encryption_mode
+-- immutability trigger as defense-in-depth, and rotation (§14) — the only
+-- legitimate canary writer — is deferred to post-v1.
 --
 -- Every object is schema-qualified (public.*): the consolidated migration
 -- runs with search_path = '' and qualifies all objects, so an unqualified
@@ -73,9 +70,9 @@ alter table public.workspaces
     );
 
 -- encryption_mode immutability (defense-in-depth; mirrors the codebase's
--- "concrete function per invariant" trigger pattern). rename_workspace
--- only touches name/update_time, so this never fires in normal operation;
--- it backstops a future RPC that might try to flip the mode.
+-- "concrete function per invariant" trigger pattern). delete_workspace and
+-- the rename path never touch encryption_mode, so this never fires in
+-- normal operation; it backstops a future RPC that might try to flip mode.
 create or replace function public.workspaces_prevent_encryption_mode_change()
     returns trigger
     language plpgsql
@@ -99,10 +96,11 @@ create trigger workspaces_prevent_encryption_mode_change_trg
 -- Postgres function signatures include parameter types, so adding defaulted
 -- params would OVERLOAD rather than replace the existing create_workspace,
 -- making create_workspace('foo') ambiguous. Drop the old signature first.
+-- (Returns jsonb via to_jsonb(v_workspace), so the new e2ee columns are
+-- projected automatically — no RETURNS TABLE list to keep in sync, hence
+-- no @projects tag here.)
 drop function if exists public.create_workspace(text);
 
--- @projects: workspaces
--- @projects: workspace_members
 create function public.create_workspace(
         p_name            text,
         p_encryption_mode text default 'none',  -- 'none' | 'e2ee'
@@ -143,8 +141,8 @@ begin
         values (v_id, v_name, v_user_id, v_now, v_now, p_encryption_mode, p_wk_canary)
         returning * into v_workspace;
 
-    insert into public.workspace_members (id, workspace_id, user_id, role, create_time, update_time)
-        values (gen_random_uuid()::text, v_workspace.id, v_user_id, 'owner', v_now, v_now)
+    insert into public.workspace_members (id, workspace_id, user_id, role, create_time)
+        values (gen_random_uuid()::text, v_workspace.id, v_user_id, 'owner', v_now)
         returning * into v_member;
 
     return jsonb_build_object(
@@ -154,7 +152,7 @@ begin
 end;
 $$;
 
-grant execute on function public.create_workspace(text, text, text, text) to authenticated;
+grant execute on function public.create_workspace(text, text, text, text) to anon, authenticated, service_role;
 
 -- ── blocks: require ciphertext in e2ee workspaces ───────────────────────
 -- "The server only ever sees ciphertext for e2ee workspaces" must not rest

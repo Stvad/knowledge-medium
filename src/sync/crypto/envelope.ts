@@ -25,8 +25,10 @@ export const NONCE_BYTES = 12
 export const GCM_TAG_BYTES = 16
 
 export interface DecodedEnvelope {
-  readonly nonce: Uint8Array
-  readonly ciphertext: Uint8Array
+  // ArrayBuffer-backed (via .slice()) so they flow into WebCrypto's
+  // BufferSource params without a cast.
+  readonly nonce: Uint8Array<ArrayBuffer>
+  readonly ciphertext: Uint8Array<ArrayBuffer>
 }
 
 /** Cheap prefix check. Says nothing about whether the payload decodes —
@@ -52,8 +54,10 @@ export const decodeEnvelope = (value: string): DecodedEnvelope => {
   if (payload.length < NONCE_BYTES + GCM_TAG_BYTES) {
     throw new Error('envelope: payload too short to hold a nonce and auth tag')
   }
+  // .slice() (not .subarray()) returns fresh ArrayBuffer-backed copies, so
+  // the views are Uint8Array<ArrayBuffer> and safe to hand to WebCrypto.
   return {
-    nonce: payload.subarray(0, NONCE_BYTES),
-    ciphertext: payload.subarray(NONCE_BYTES),
+    nonce: payload.slice(0, NONCE_BYTES),
+    ciphertext: payload.slice(NONCE_BYTES),
   }
 }
