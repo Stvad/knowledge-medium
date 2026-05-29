@@ -100,6 +100,8 @@ export const parseWorkspaceRow = (row: WorkspaceRow): Workspace => ({
   ownerUserId: row.owner_user_id,
   createTime: row.create_time,
   updateTime: row.update_time,
+  encryptionMode: row.encryption_mode,
+  wkCanary: row.wk_canary,
 })
 
 // ---------------------------------------------------------------------------

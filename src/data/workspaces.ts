@@ -37,8 +37,8 @@ type RpcWorkspaceRow = {
   create_time: number | string
   update_time: number | string
   // E2EE columns (§7). create_workspace returns the full row via to_jsonb,
-  // so the projection must list them. Not yet mapped into the domain
-  // Workspace — the paste/create flows that consume them land in a later phase.
+  // so the projection must list them; parseRpcWorkspace carries them into
+  // the domain Workspace so the optimistic prime preserves the canary.
   encryption_mode: string
   wk_canary: string | null
 }
@@ -49,6 +49,8 @@ const parseRpcWorkspace = (row: RpcWorkspaceRow): Workspace => ({
   ownerUserId: row.owner_user_id,
   createTime: toNumber(row.create_time),
   updateTime: toNumber(row.update_time),
+  encryptionMode: row.encryption_mode,
+  wkCanary: row.wk_canary,
 })
 
 // @projects: workspace_members
@@ -415,10 +417,24 @@ export const getLocalMemberRole = async (
 // we always prime both rows together (and don't accidentally drift back
 // toward inlined two-step primes with synthesized member ids).
 const primeLocalWorkspace = async (repo: Repo, workspace: Workspace): Promise<void> => {
+  // Include the E2EE columns: this is INSERT OR REPLACE, so omitting them
+  // would reset encryption_mode/wk_canary to their column defaults
+  // (none/null) — nulling a synced canary in the RPC-before-sync window and
+  // making an E2EE workspace look plaintext on a fresh create until sync
+  // catches up (§7).
   await repo.db.execute(
-    `INSERT OR REPLACE INTO workspaces (id, name, owner_user_id, create_time, update_time)
-     VALUES (?, ?, ?, ?, ?)`,
-    [workspace.id, workspace.name, workspace.ownerUserId, workspace.createTime, workspace.updateTime],
+    `INSERT OR REPLACE INTO workspaces
+       (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [
+      workspace.id,
+      workspace.name,
+      workspace.ownerUserId,
+      workspace.createTime,
+      workspace.updateTime,
+      workspace.encryptionMode,
+      workspace.wkCanary,
+    ],
   )
 }
 
@@ -499,6 +515,9 @@ export const ensureLocalPersonalWorkspace = async (
     ownerUserId: userId,
     createTime: now,
     updateTime: now,
+    // Local-only personal workspace is always plaintext.
+    encryptionMode: 'none',
+    wkCanary: null,
   }
   const member: WorkspaceMembership = {
     id: memberId,

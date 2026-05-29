@@ -20,7 +20,7 @@ interface WorkspaceMemberRowResult {
 }
 
 const SELECT_WORKSPACES_SQL = `
-  SELECT id, name, owner_user_id, create_time, update_time
+  SELECT id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary
   FROM workspaces
   ORDER BY create_time ASC, id ASC
 `

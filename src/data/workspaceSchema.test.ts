@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ensureWorkspaceE2eeColumns } from './workspaceSchema.js'
+import { ensureWorkspaceE2eeColumns, parseWorkspaceRow, type WorkspaceRow } from './workspaceSchema.js'
 
 /** Minimal db stand-in: PRAGMA table_info returns `existing`, and we
  *  record every ALTER that runs. */
