@@ -5,8 +5,19 @@ import type { EditorView } from '@codemirror/view'
 import { Block } from '../../../data/block'
 import type { Repo } from '../../../data/repo'
 import type { BlockInteractionContext, ShortcutSurfaceContext } from '@/extensions/blockInteraction.js'
-import { focusedBlockLocationProp } from '@/data/properties.js'
-import { currentTimeRequestEventName, type CurrentTimeRequestEventDetail } from '../events.ts'
+import {
+  editorFocusRequestProp,
+  focusedBlockLocationProp,
+  isEditingProp,
+} from '@/data/properties.js'
+import {
+  currentTimeRequestEventName,
+  focusVideoPlayerEventName,
+  type CurrentTimeRequestEventDetail,
+  type FocusVideoPlayerEventDetail,
+  type VideoPlayerFocusStateRequestEventDetail,
+  videoPlayerFocusStateRequestEventName,
+} from '../events.ts'
 import {
   formatVideoTimestamp,
   VIDEO_PLAYER_CONTEXT,
@@ -20,6 +31,12 @@ const videoBlock = {id: 'video'} as Block
 
 const fakeBlock = <T extends object>(shape: T): Block & T =>
   Object.setPrototypeOf(shape, Block.prototype) as Block & T
+
+const requireVideoAction = (id: string) => {
+  const action = videoPlayerActions.find(candidate => candidate.id === id)
+  if (!action) throw new Error(`missing video action ${id}`)
+  return action
+}
 
 const baseContext = {
   block: noteBlock,
@@ -93,9 +110,13 @@ describe('video player actions', () => {
   it('focuses created timestamp notes in the current render scope', async () => {
     const setUiProperty = vi.fn()
     const tx = vi.fn(async (fn: (
-      tx: {setProperty: (id: string, prop: unknown, value: unknown) => Promise<void>}
+      tx: {
+        get: (id: string) => Promise<{properties: Record<string, unknown>} | null>
+        setProperty: (id: string, prop: unknown, value: unknown) => Promise<void>
+      }
     ) => Promise<void>) => {
       await fn({
+        get: async () => ({properties: {}}),
         setProperty: async (_id, prop, value) => {
           setUiProperty(prop, value)
         },
@@ -119,8 +140,7 @@ describe('video player actions', () => {
     window.addEventListener(currentTimeRequestEventName, respondWithTime)
 
     try {
-      const action = videoPlayerActions.find(candidate => candidate.id === 'video.insert_timestamp')
-      if (!action) throw new Error('missing video timestamp action')
+      const action = requireVideoAction('video.insert_timestamp')
 
       const deps: VideoPlayerShortcutDependencies = {
         block: scopedVideoBlock,
@@ -142,5 +162,82 @@ describe('video player actions', () => {
       blockId: 'note-1',
       renderScopeId: 'embed:source:video:0',
     })
+  })
+
+  it('requests player focus from the rendered video when notes have focus', async () => {
+    const action = requireVideoAction('video.toggle_focus')
+    const focusRequests: string[] = []
+    const handleFocusRequest = (event: Event) => {
+      const request = event as CustomEvent<FocusVideoPlayerEventDetail>
+      focusRequests.push(request.detail.blockId)
+      request.detail.respond(true)
+    }
+    window.addEventListener(focusVideoPlayerEventName, handleFocusRequest)
+
+    try {
+      const deps: VideoPlayerShortcutDependencies = {
+        block: fakeBlock({id: 'note'}),
+        videoBlock: fakeBlock({id: 'video'}),
+        uiStateBlock: fakeBlock({id: 'ui-state'}),
+        renderScopeId: 'embed:source:video:0',
+      }
+      await action.handler(deps, new CustomEvent('test'))
+    } finally {
+      window.removeEventListener(focusVideoPlayerEventName, handleFocusRequest)
+    }
+
+    expect(focusRequests).toEqual(['video'])
+  })
+
+  it('returns focus to the active note when the rendered video already has focus', async () => {
+    const action = requireVideoAction('video.toggle_focus')
+    const setUiProperty = vi.fn()
+    const tx = vi.fn(async (fn: (
+      tx: {setProperty: (id: string, prop: unknown, value: unknown) => Promise<void>}
+    ) => Promise<void>) => {
+      await fn({
+        setProperty: async (_id, prop, value) => {
+          setUiProperty(prop, value)
+        },
+      })
+    })
+    const uiStateBlock = fakeBlock({
+      id: 'ui-state',
+      peek: vi.fn(() => ({properties: {}})),
+      peekProperty: vi.fn((prop: unknown) =>
+        prop === editorFocusRequestProp ? 0 : undefined,
+      ),
+      repo: {isReadOnly: false, tx},
+      set: setUiProperty,
+    })
+    const scopedVideoBlock = fakeBlock({
+      id: 'video',
+      childIds: {load: vi.fn(async () => ['note'])},
+      repo: {isReadOnly: false},
+    })
+    const handleFocusStateRequest = (event: Event) => {
+      const request = event as CustomEvent<VideoPlayerFocusStateRequestEventDetail>
+      if (request.detail.blockId === 'video') request.detail.respond(true)
+    }
+    window.addEventListener(videoPlayerFocusStateRequestEventName, handleFocusStateRequest)
+
+    try {
+      const deps: VideoPlayerShortcutDependencies = {
+        block: fakeBlock({id: 'note'}),
+        videoBlock: scopedVideoBlock,
+        uiStateBlock,
+        renderScopeId: 'embed:source:video:0',
+      }
+      await action.handler(deps, new CustomEvent('test'))
+    } finally {
+      window.removeEventListener(videoPlayerFocusStateRequestEventName, handleFocusStateRequest)
+    }
+
+    expect(setUiProperty).toHaveBeenCalledWith(focusedBlockLocationProp, {
+      blockId: 'note',
+      renderScopeId: 'embed:source:video:0',
+    })
+    expect(setUiProperty).toHaveBeenCalledWith(isEditingProp, true)
+    expect(setUiProperty).toHaveBeenCalledWith(editorFocusRequestProp, 1)
   })
 })

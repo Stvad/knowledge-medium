@@ -6,7 +6,7 @@ import {
 } from '@/data/properties.js'
 import { videoPlayerViewProp } from './view.ts'
 
-const focusNewVideoNote = async (
+const focusVideoNoteChild = async (
   noteId: string,
   uiStateBlock: Block,
   renderScopeId?: string,
@@ -22,6 +22,25 @@ const focusNewVideoNote = async (
   // Ensure a newly mounted editor receives focus even if edit mode was
   // already active before notes view opened.
   requestEditorFocus(uiStateBlock)
+}
+
+export const focusVideoNote = async (
+  videoBlock: Block,
+  uiStateBlock: Block,
+  renderScopeId?: string,
+  preferredNoteId?: string,
+): Promise<string | null> => {
+  const childIds = await videoBlock.childIds.load()
+  const noteId = preferredNoteId && childIds.includes(preferredNoteId)
+    ? preferredNoteId
+    : childIds[0]
+
+  if (noteId) {
+    await focusVideoNoteChild(noteId, uiStateBlock, renderScopeId)
+    return noteId
+  }
+
+  return ensureEditableVideoNoteChild(videoBlock, uiStateBlock, renderScopeId)
 }
 
 export const ensureEditableVideoNoteChild = async (
@@ -41,7 +60,7 @@ export const ensureEditableVideoNoteChild = async (
 
   if (!newId) return null
 
-  await focusNewVideoNote(newId, uiStateBlock, renderScopeId)
+  await focusVideoNoteChild(newId, uiStateBlock, renderScopeId)
   return newId
 }
 

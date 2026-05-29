@@ -10,8 +10,12 @@ import type {
   ActionContextConfig,
   BaseShortcutDependencies,
 } from '@/shortcuts/types.js'
-import { requestCurrentTime } from './events.ts'
-import { enterVideoNotesView } from './notes.ts'
+import {
+  isVideoPlayerFocusActive,
+  requestCurrentTime,
+  requestVideoPlayerFocus,
+} from './events.ts'
+import { enterVideoNotesView, focusVideoNote } from './notes.ts'
 import { videoPlayerViewProp } from './view.ts'
 
 export const VIDEO_PLAYER_CONTEXT = 'video-player'
@@ -95,7 +99,7 @@ const createTimestampNote = async (
     position: {kind: 'first'},
   }) as string
 
-  if (newId) void focusBlock(uiStateBlock, newId, {renderScopeId})
+  if (newId) await focusBlock(uiStateBlock, newId, {renderScopeId})
 }
 
 const insertVideoTimestamp: ActionConfig = {
@@ -152,9 +156,38 @@ const toggleVideoNotesView: ActionConfig = {
   },
 }
 
+const toggleVideoFocus: ActionConfig = {
+  id: 'video.toggle_focus',
+  description: 'Switch focus between video and notes',
+  context: VIDEO_PLAYER_CONTEXT,
+  handler: async (deps) => {
+    if (!isVideoPlayerShortcutDependencies(deps)) return
+
+    if (isVideoPlayerFocusActive(deps.videoBlock.id)) {
+      const preferredNoteId = deps.block.id === deps.videoBlock.id ? undefined : deps.block.id
+      await focusVideoNote(
+        deps.videoBlock,
+        deps.uiStateBlock,
+        deps.renderScopeId,
+        preferredNoteId,
+      )
+      return
+    }
+
+    requestVideoPlayerFocus(deps.videoBlock.id)
+  },
+  defaultBinding: {
+    keys: '$mod+Shift+Space',
+    eventOptions: {
+      preventDefault: true,
+    },
+  },
+}
+
 export const videoPlayerActions: readonly ActionConfig[] = [
   insertVideoTimestamp,
   toggleVideoNotesView,
+  toggleVideoFocus,
 ]
 
 export const videoPlayerShortcutActivation: ShortcutActivationContribution = context => {

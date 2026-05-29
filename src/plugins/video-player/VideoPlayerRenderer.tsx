@@ -4,7 +4,7 @@ import {
   DefaultBlockLayout,
   DefaultBlockRenderer,
 } from '@/components/renderer/DefaultBlockRenderer.js'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties, KeyboardEvent, PointerEvent } from 'react'
 import { NestedBlockContextProvider, useBlockContext } from '@/context/block.js'
 import { useContent, usePropertyValue } from '@/hooks/block.js'
@@ -18,8 +18,12 @@ import type {
 import {
   currentTimeRequestEventName,
   CurrentTimeRequestEventDetail,
+  focusVideoPlayerEventName,
+  FocusVideoPlayerEventDetail,
   seekToEventName,
   SeekToEventDetail,
+  videoPlayerFocusStateRequestEventName,
+  VideoPlayerFocusStateRequestEventDetail,
 } from './events.ts'
 import { enterVideoNotesView } from './notes.ts'
 import { videoNotesPaneRatioProp, videoPlayerViewProp } from './view.ts'
@@ -67,12 +71,33 @@ const VideoPlayerContentRenderer = ({block}: BlockRendererProps) => {
     ? {width: '100%', height: 'auto', aspectRatio: '16 / 9'}
     : undefined
 
-  const focusPlayer = () => {
-    if (containerRef.current) {
-      containerRef.current.scrollTo()
-      // containerRef.current.focus() // todo doesn't actually transfer controls to the player =\
+  const focusPlayer = useCallback((): boolean => {
+    const focusTarget = player.current ?? containerRef.current
+    if (!focusTarget) return false
+
+    containerRef.current?.scrollIntoView({block: 'nearest'})
+    focusTarget.focus({preventScroll: true})
+    return true
+  }, [])
+
+  const hasPlayerFocus = useCallback((): boolean => {
+    const container = containerRef.current
+    const playerElement = player.current
+    const activeElement = document.activeElement
+
+    if (
+      activeElement &&
+      (
+        activeElement === playerElement ||
+        activeElement === container ||
+        Boolean(container?.contains(activeElement))
+      )
+    ) {
+      return true
     }
-  }
+
+    return Boolean(playerElement?.shadowRoot?.activeElement)
+  }, [])
 
   useEffect(() => {
     const handleSeekTo = (event: CustomEvent<SeekToEventDetail>) => {
@@ -87,7 +112,7 @@ const VideoPlayerContentRenderer = ({block}: BlockRendererProps) => {
     window.addEventListener(seekToEventName, handleSeekTo as EventListener)
 
     return () => window.removeEventListener(seekToEventName, handleSeekTo as EventListener)
-  }, [block.id])
+  }, [block.id, focusPlayer])
 
   useEffect(() => {
     const handleCurrentTimeRequest = (event: CustomEvent<CurrentTimeRequestEventDetail>) => {
@@ -103,6 +128,33 @@ const VideoPlayerContentRenderer = ({block}: BlockRendererProps) => {
       handleCurrentTimeRequest as EventListener,
     )
   }, [block.id])
+
+  useEffect(() => {
+    const handleFocusRequest = (event: CustomEvent<FocusVideoPlayerEventDetail>) => {
+      if (event.detail.blockId !== block.id) return
+      event.detail.respond(focusPlayer())
+    }
+    const handleFocusStateRequest = (
+      event: CustomEvent<VideoPlayerFocusStateRequestEventDetail>,
+    ) => {
+      if (event.detail.blockId !== block.id) return
+      event.detail.respond(hasPlayerFocus())
+    }
+
+    window.addEventListener(focusVideoPlayerEventName, handleFocusRequest as EventListener)
+    window.addEventListener(
+      videoPlayerFocusStateRequestEventName,
+      handleFocusStateRequest as EventListener,
+    )
+
+    return () => {
+      window.removeEventListener(focusVideoPlayerEventName, handleFocusRequest as EventListener)
+      window.removeEventListener(
+        videoPlayerFocusStateRequestEventName,
+        handleFocusStateRequest as EventListener,
+      )
+    }
+  }, [block.id, focusPlayer, hasPlayerFocus])
 
   return (
     <div
@@ -121,6 +173,8 @@ const VideoPlayerContentRenderer = ({block}: BlockRendererProps) => {
           src={content}
           playing={isPlaying}
           controls
+          tabIndex={0}
+          aria-label="Video player"
           width="100%"
           height="100%"
           style={notesPlayerStyle}
