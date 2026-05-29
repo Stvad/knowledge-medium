@@ -108,6 +108,12 @@ export const CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL = `
   WHERE deleted = 0
 `
 
+export const CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_blocks_workspace_nonempty_properties
+  ON blocks (workspace_id, id)
+  WHERE deleted = 0 AND properties_json <> '{}'
+`
+
 export interface BlockSchemaDb {
   execute(sql: string): Promise<unknown>
   getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>

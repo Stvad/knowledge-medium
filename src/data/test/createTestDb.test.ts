@@ -55,6 +55,7 @@ describe('createTestDb harness', () => {
     expect(names).toEqual(expect.arrayContaining([
       'idx_blocks_parent_order',
       'idx_blocks_workspace_active',
+      'idx_blocks_workspace_nonempty_properties',
     ]))
   })
 

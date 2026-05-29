@@ -290,6 +290,31 @@ describe('child-backed user properties', () => {
     expect(batchMessages[1]).toEqual(expect.stringContaining('estimatedInsertRows=2'))
   })
 
+  it('uses the non-empty properties index for full backfill candidate scans', async () => {
+    env = await setup({activateWorkspace: false})
+    await seedLegacyPropertiesRow(env.h, 'legacy-parent', 'a0', {
+      [env.statusProp.name]: env.statusProp.codec.encode('Doing'),
+    })
+
+    const plan = await env.h.db.getAll<{detail: string}>(
+      `
+        EXPLAIN QUERY PLAN
+        SELECT DISTINCT b.id
+        FROM blocks b, json_each(b.properties_json) prop
+        WHERE b.workspace_id = ?
+          AND b.deleted = 0
+          AND b.properties_json <> '{}'
+          AND b.id > ?
+          AND prop.key = ?
+        ORDER BY b.id
+        LIMIT ?
+      `,
+      [WS, '', env.statusProp.name, 30],
+    )
+    const detail = plan.map(row => row.detail).join(' | ')
+    expect(detail).toContain('idx_blocks_workspace_nonempty_properties')
+  })
+
   it('backfills as a system migration without adding user undo entries', async () => {
     env = await setup()
     await seedLegacyPropertiesRow(env.h, 'legacy-parent', 'a0', {
