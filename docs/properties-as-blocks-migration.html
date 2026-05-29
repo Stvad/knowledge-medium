@@ -1,0 +1,973 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Properties as Blocks — Migration</title>
+<style>
+  :root {
+    --fg: #1a1a1a;
+    --fg-dim: #555;
+    --fg-faint: #8a8a8a;
+    --bg: #fafaf7;
+    --panel: #fff;
+    --rule: #e3e0d8;
+    --accent: #5b3fd6;
+    --accent-bg: #ece8fb;
+    --good: #1f7a3a;
+    --good-bg: #e3f3e8;
+    --warn: #8a5a00;
+    --warn-bg: #fbf1d8;
+    --ghost: #b3aea0;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --serif: ui-serif, Georgia, "Times New Roman", serif;
+    --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fg: #ececec;
+      --fg-dim: #b6b6b6;
+      --fg-faint: #7d7d7d;
+      --bg: #1a1a1a;
+      --panel: #232323;
+      --rule: #383838;
+      --accent: #b8a8ff;
+      --accent-bg: #2a2540;
+      --good: #7ed29a;
+      --good-bg: #1d3225;
+      --warn: #e6c068;
+      --warn-bg: #322a16;
+      --ghost: #6a655a;
+    }
+  }
+  html { font-size: 16px; }
+  body {
+    font-family: var(--sans);
+    color: var(--fg);
+    background: var(--bg);
+    margin: 0;
+    padding: 0;
+    line-height: 1.55;
+  }
+  main {
+    max-width: 820px;
+    margin: 0 auto;
+    padding: 3rem 1.5rem 6rem;
+  }
+  header.doc-header {
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 1.25rem;
+    margin-bottom: 2.25rem;
+  }
+  header.doc-header h1 {
+    font-size: 1.85rem;
+    margin: 0 0 0.35rem;
+    letter-spacing: -0.01em;
+  }
+  header.doc-header .subtitle {
+    color: var(--fg-dim);
+    font-size: 1.02rem;
+    margin: 0;
+  }
+  h2 {
+    font-size: 1.32rem;
+    margin: 3rem 0 0.75rem;
+    letter-spacing: -0.005em;
+  }
+  h3 {
+    font-size: 1.06rem;
+    margin: 1.8rem 0 0.5rem;
+    color: var(--fg);
+  }
+  p { margin: 0.6rem 0 1rem; }
+  a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+  code, .mono {
+    font-family: var(--mono);
+    font-size: 0.92em;
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    padding: 0.05em 0.3em;
+  }
+  pre {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    padding: 0.85rem 1rem;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 0.86rem;
+    line-height: 1.5;
+  }
+  pre code {
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: inherit;
+  }
+
+  figure {
+    margin: 1.5rem 0 1.75rem;
+    padding: 0;
+  }
+  figure .frame {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 1.25rem 1.5rem;
+  }
+  figure figcaption {
+    font-size: 0.85rem;
+    color: var(--fg-dim);
+    margin-top: 0.5rem;
+    padding-left: 0.25rem;
+  }
+  figure figcaption .fig-id {
+    font-weight: 600;
+    color: var(--fg);
+    margin-right: 0.4em;
+  }
+
+  /* Tree diagram (HTML-based) */
+  .tree { font-family: var(--mono); font-size: 0.86rem; line-height: 1.55; }
+  .tree .row {
+    display: flex;
+    align-items: baseline;
+    gap: 0.4rem;
+  }
+  .tree .row.indent-1 { padding-left: 1.5rem; }
+  .tree .row.indent-2 { padding-left: 3.0rem; }
+  .tree .row.indent-3 { padding-left: 4.5rem; }
+  .tree .row.indent-4 { padding-left: 6.0rem; }
+  .tree .bullet { color: var(--fg-faint); }
+  .tree .ref { color: var(--accent); }
+  .tree .schema-ref { color: var(--accent); font-weight: 600; }
+  .tree .ghost { color: var(--ghost); font-style: italic; }
+  .tree .label-real { background: var(--accent-bg); color: var(--fg); padding: 0 0.4em; border-radius: 3px; font-size: 0.78em; margin-left: 0.5em; }
+  .tree .label-ghost { background: transparent; color: var(--ghost); padding: 0 0.4em; border: 1px dashed var(--ghost); border-radius: 3px; font-size: 0.78em; margin-left: 0.5em; }
+  .tree .label-note { color: var(--fg-faint); margin-left: 0.6em; font-style: italic; font-size: 0.85em; font-family: var(--sans); }
+  .tree .value { color: var(--good); }
+  .tree .props {
+    color: var(--fg-dim);
+    background: var(--bg);
+    padding: 0.05em 0.4em;
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    font-size: 0.88em;
+  }
+
+  /* Side-by-side panels */
+  .side-by-side {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+  }
+  @media (max-width: 720px) {
+    .side-by-side { grid-template-columns: 1fr; }
+  }
+  .panel-card {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 1rem 1.1rem;
+  }
+  .panel-card h4 {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin: 0 0 0.7rem;
+    color: var(--fg-dim);
+  }
+
+  /* Callouts */
+  .callout {
+    border-left: 3px solid var(--accent);
+    background: var(--accent-bg);
+    padding: 0.7rem 1rem;
+    margin: 1rem 0 1.25rem;
+    border-radius: 0 4px 4px 0;
+    font-size: 0.95rem;
+  }
+  .callout.good { border-color: var(--good); background: var(--good-bg); }
+  .callout.warn { border-color: var(--warn); background: var(--warn-bg); }
+  .callout strong { font-weight: 600; }
+
+  /* Table */
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0 1.5rem;
+    font-size: 0.93rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.55rem 0.7rem;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+  }
+  th {
+    background: var(--panel);
+    font-weight: 600;
+    font-size: 0.85rem;
+  }
+  td.col-yes { color: var(--good); font-weight: 600; }
+  td.col-no { color: var(--fg-faint); }
+  td.col-mid { color: var(--warn); font-weight: 600; }
+
+  /* Phase timeline */
+  .phases { display: flex; flex-direction: column; gap: 0.75rem; }
+  .phase {
+    display: grid;
+    grid-template-columns: 4.5rem 1fr;
+    gap: 1rem;
+    align-items: start;
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 0.9rem 1.1rem;
+  }
+  .phase .num {
+    font-family: var(--mono);
+    font-size: 1.1rem;
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .phase .body p { margin: 0.2rem 0; }
+  .phase .body .name {
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+  }
+  .phase .body .deliv {
+    font-size: 0.85rem;
+    color: var(--fg-dim);
+  }
+
+  /* Sequence diagram (SVG) */
+  svg.seq { display: block; max-width: 100%; height: auto; }
+
+  /* Misc */
+  ul, ol { margin: 0.5rem 0 1rem; padding-left: 1.4rem; }
+  ul li, ol li { margin: 0.3rem 0; }
+
+  hr {
+    border: none;
+    border-top: 1px solid var(--rule);
+    margin: 3rem 0 0;
+  }
+  .footer-note {
+    font-size: 0.82rem;
+    color: var(--fg-faint);
+    margin-top: 1.25rem;
+  }
+</style>
+</head>
+<body>
+<main>
+
+<header class="doc-header">
+  <h1>Properties as blocks</h1>
+  <p class="subtitle">
+    Migrate user-defined property values from JSON cells to first-class block children,
+    with the existing <code>properties_json</code> column kept current as a derived
+    index. A one-time read covering the target shape, the mechanism, and the migration path.
+  </p>
+</header>
+
+<h2>1. Why move</h2>
+
+<p>
+Today properties live in two parallel worlds. Property <em>schemas</em> are blocks
+(<code>'property-schema'</code> type, edited via a dedicated renderer, persisted under a
+workspace's Properties page). Property <em>values</em> are entries in a JSON cell
+(<code>BlockData.properties: Record&lt;string, unknown&gt;</code>) on the consuming block.
+Schemas get the full block treatment — refs, comments, history, sync, undo. Values
+get a row-local property bag with custom plumbing for every operation that needs to
+cross the bag boundary.
+</p>
+
+<p>
+The asymmetry leaks into a half-dozen features. Copy-paste serializes blocks and
+copies the JSON cell separately — round-tripping through markdown loses property
+data entirely. Subtree-sharing has to special-case the cell. The Roam importer
+writes both schemas and values through different code paths. Comments on a field
+value, references to a specific field's setting, embedding a single field elsewhere
+— all require new surface every time. And cross-workspace name collisions on
+schemas silently coerce or drop values instead of surfacing a visible "this schema
+isn't here" affordance.
+</p>
+
+<p>
+The motivating reframe: the user-facing properties UX <em>is</em> "fields are children
+of the block, rendered with structure" — that's what every Tana-style editor does.
+We've been emulating it with a sidecar panel because the data model said no. The
+data model can say yes.
+</p>
+
+<h2>2. The target shape</h2>
+
+<p>
+A property on a block becomes a <strong>carrier child</strong>: a regular block whose
+content is exactly a reference to a property-schema block,
+<code>((schema-id))</code>. The carrier's own children are the property's
+<strong>values</strong> — one for scalars, many for lists, ref-typed values are
+themselves block references. Same primitive everywhere.
+</p>
+
+<figure>
+  <div class="frame side-by-side">
+    <div class="panel-card">
+      <h4>Today</h4>
+      <div class="tree">
+        <div class="row"><span class="bullet">●</span><span>Plan Q1 launch</span></div>
+        <div class="row indent-1"><span class="props">properties:&nbsp;&#123; priority: 3, assignee: ref(mary), status: "in&nbsp;progress" &#125;</span></div>
+        <div class="row indent-1"><span class="bullet">●</span><span>investigate vendor X</span></div>
+        <div class="row indent-1"><span class="bullet">●</span><span>draft proposal</span></div>
+      </div>
+    </div>
+    <div class="panel-card">
+      <h4>Target</h4>
+      <div class="tree">
+        <div class="row"><span class="bullet">●</span><span>Plan Q1 launch</span></div>
+        <div class="row indent-1"><span class="bullet">●</span><span class="schema-ref">((priority))</span><span class="label-real">carrier</span></div>
+        <div class="row indent-2"><span class="bullet">●</span><span class="value">3</span></div>
+        <div class="row indent-1"><span class="bullet">●</span><span class="schema-ref">((assignee))</span><span class="label-real">carrier</span></div>
+        <div class="row indent-2"><span class="bullet">●</span><span class="ref">((mary))</span></div>
+        <div class="row indent-1"><span class="bullet">●</span><span class="schema-ref">((status))</span><span class="label-real">carrier</span></div>
+        <div class="row indent-2"><span class="bullet">●</span><span class="value">in progress</span></div>
+        <div class="row indent-1"><span class="bullet">●</span><span>investigate vendor X</span></div>
+        <div class="row indent-1"><span class="bullet">●</span><span>draft proposal</span></div>
+      </div>
+    </div>
+  </div>
+  <figcaption><span class="fig-id">Fig. 1</span>Before and after. The JSON cell collapses into carrier/value children. Regular content children sit alongside.</figcaption>
+</figure>
+
+<p>
+Three things to notice:
+</p>
+
+<ul>
+  <li>
+    Carrier content is <em>only</em> the schema reference. No "schema + value in one
+    string" — no parse ambiguity, no escaping rules.
+  </li>
+  <li>
+    Scalar versus list is just cardinality of value-children. The codec sees an array;
+    scalar codecs unwrap one element, list codecs see them all.
+  </li>
+  <li>
+    Ref-typed values reuse the block-as-reference primitive: a value-child whose
+    content is <code>((target-id))</code> is the value <em>and</em> the backlink edge
+    in one shape. The existing references index already counts these.
+  </li>
+</ul>
+
+<h2>3. The new affordances this unlocks</h2>
+
+<p>
+Putting properties on the tree gives them the same superpowers every other block
+already has. The motivation isn't symmetry for its own sake — each of these is a
+feature someone has asked for, today blocked by the JSON cell.
+</p>
+
+<figure>
+  <div class="frame">
+    <div class="tree">
+      <div class="row"><span class="bullet">●</span><span>Plan Q1 launch</span></div>
+      <div class="row indent-1"><span class="bullet">●</span><span class="schema-ref">((status))</span></div>
+      <div class="row indent-2"><span class="bullet">●</span><span class="value">in progress</span></div>
+      <div class="row indent-3"><span class="bullet">●</span><span>blocked on vendor reply — see ((thread-id))</span><span class="label-note">a comment, just a normal child of the value</span></div>
+      <div class="row indent-3"><span class="bullet">●</span><span>moved here from "planning" on Mar 4</span><span class="label-note">history note authored by the user, not metadata</span></div>
+      <div class="row indent-1"><span class="bullet">●</span><span class="schema-ref">((notes))</span></div>
+      <div class="row indent-2"><span class="bullet">●</span><span>The deadline depends on whether procurement clears ((vendor-x)) by EOQ. If not, fall back to ((vendor-y)).</span><span class="label-note">long-text value with inline wikilinks, just block content</span></div>
+    </div>
+  </div>
+  <figcaption><span class="fig-id">Fig. 2</span>Comments under a value; long-text field with inline references. Nothing new — these are just children of value blocks.</figcaption>
+</figure>
+
+<p>
+And the same model fixes a class of bugs around subtree operations:
+</p>
+
+<ul>
+  <li>
+    <strong>Copy / paste / markdown round-trip.</strong> Today the clipboard carries
+    <code>blocks: BlockData[]</code> and a separate <code>markdown</code> string; the
+    markdown side has no slot for properties at all. Carriers are blocks — they
+    serialize through the same path as any other child. Markdown export becomes
+    faithful for free.
+  </li>
+  <li>
+    <strong>Subtree sharing.</strong> A shared subtree pulls properties along
+    automatically because they're descendants. No special "also include the property
+    cell" branch.
+  </li>
+  <li>
+    <strong>Undo of a subtree delete.</strong> Existing restore plumbing covers
+    carriers. Today the JSON cell is restored by the row-level snapshot, which works,
+    but ties property restoration to row restoration in ways that limit per-field undo.
+  </li>
+  <li>
+    <strong>Cross-workspace paste.</strong> Schema references either resolve (visible
+    field) or don't (visible unresolved-ref glyph). Today the same situation silently
+    coerces or drops. Honest failure beats invisible degradation.
+  </li>
+</ul>
+
+<h2>4. Why this shape, not another</h2>
+
+<p>
+A few alternatives we walked and rejected, summarized so the choice is legible:
+</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Approach</th>
+      <th>Refs &amp; comments on fields</th>
+      <th>Sync conflict story</th>
+      <th>Read-path cost</th>
+      <th>Verdict</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Stay on JSON cell</td>
+      <td class="col-no">no</td>
+      <td class="col-no">LWW on whole cell</td>
+      <td class="col-yes">unchanged</td>
+      <td>doesn't solve the motivating problems</td>
+    </tr>
+    <tr>
+      <td>Field handles addressing JSON entries</td>
+      <td class="col-mid">partial</td>
+      <td class="col-no">still LWW on cell</td>
+      <td class="col-yes">unchanged</td>
+      <td>doesn't fix sync clobbering; partial fix</td>
+    </tr>
+    <tr>
+      <td>CRDT-typed JSON cell (Yjs/Automerge)</td>
+      <td class="col-no">no</td>
+      <td class="col-yes">field-grained</td>
+      <td class="col-yes">unchanged</td>
+      <td>layering nightmare with PowerSync; saves Yjs for content later</td>
+    </tr>
+    <tr>
+      <td>Carriers + new projection table</td>
+      <td class="col-yes">yes</td>
+      <td class="col-yes">row-per-field</td>
+      <td class="col-mid">new compiler path</td>
+      <td>more code than needed; existing JSON path works fine</td>
+    </tr>
+    <tr>
+      <td><strong>Carriers + materialize-back to JSON cell</strong></td>
+      <td class="col-yes">yes</td>
+      <td class="col-yes">row-per-field</td>
+      <td class="col-yes">unchanged</td>
+      <td><strong>chosen</strong></td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+The chosen shape mirrors the existing <code>references[]</code> pattern: the source
+of truth lives where the user writes (carrier children for properties, content
+markdown for references), and a same-tx processor maintains a denormalized cell on
+the row that downstream consumers (queries, indexes, UI selectors) already know how
+to read. We're reusing a pattern already in the codebase, not introducing a new one.
+</p>
+
+<h2>5. Mechanism: the same-tx processor</h2>
+
+<p>
+A new same-tx processor watches tree mutations and re-derives the affected parent's
+<code>properties_json</code> in the same transaction. It runs on every commit —
+local writes through <code>block.set(schema, value)</code>, raw <code>tx.create</code>
+from plugins or agents, sync arrivals from other clients. All three converge on the
+same derivation. There is no "you must go through the mutator" rule.
+</p>
+
+<figure>
+  <div class="frame">
+    <svg class="seq" viewBox="0 0 720 320" xmlns="http://www.w3.org/2000/svg">
+      <style>
+        .lane { stroke: var(--rule); stroke-dasharray: 4 3; }
+        .lane-label { font: 600 11px var(--sans); fill: var(--fg-dim); }
+        .box { fill: var(--panel); stroke: var(--rule); stroke-width: 1; }
+        .box-accent { fill: var(--accent-bg); stroke: var(--accent); stroke-width: 1; }
+        .box-good { fill: var(--good-bg); stroke: var(--good); stroke-width: 1; }
+        .label { font: 12px var(--sans); fill: var(--fg); }
+        .label-small { font: 10.5px var(--sans); fill: var(--fg-dim); }
+        .arrow { stroke: var(--fg); stroke-width: 1.2; fill: none; marker-end: url(#arr); }
+      </style>
+      <defs>
+        <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="var(--fg)"/>
+        </marker>
+      </defs>
+
+      <!-- Lanes -->
+      <line class="lane" x1="120" y1="30" x2="120" y2="305"/>
+      <line class="lane" x1="330" y1="30" x2="330" y2="305"/>
+      <line class="lane" x1="540" y1="30" x2="540" y2="305"/>
+
+      <text class="lane-label" x="120" y="22" text-anchor="middle">Writer</text>
+      <text class="lane-label" x="330" y="22" text-anchor="middle">Tx engine</text>
+      <text class="lane-label" x="540" y="22" text-anchor="middle">Processor</text>
+
+      <!-- Step 1: writer triggers a mutation -->
+      <rect class="box-accent" x="40" y="50" width="160" height="38" rx="4"/>
+      <text class="label" x="120" y="68" text-anchor="middle">tx.update(value-child)</text>
+      <text class="label-small" x="120" y="83" text-anchor="middle">"3" → "5"</text>
+
+      <line class="arrow" x1="200" y1="69" x2="248" y2="69"/>
+
+      <!-- Step 2: row event in tx -->
+      <rect class="box" x="248" y="50" width="164" height="38" rx="4"/>
+      <text class="label" x="330" y="68" text-anchor="middle">row event emitted</text>
+      <text class="label-small" x="330" y="83" text-anchor="middle">before / after snapshots</text>
+
+      <line class="arrow" x1="412" y1="69" x2="460" y2="69"/>
+
+      <!-- Step 3: processor recognizes -->
+      <rect class="box" x="460" y="50" width="200" height="58" rx="4"/>
+      <text class="label" x="560" y="68" text-anchor="middle">check parent shape</text>
+      <text class="label-small" x="560" y="83" text-anchor="middle">is parent a carrier?</text>
+      <text class="label-small" x="560" y="97" text-anchor="middle">content matches ((schema-id))?</text>
+
+      <!-- Step 4: walk up -->
+      <line class="arrow" x1="560" y1="108" x2="560" y2="140"/>
+
+      <rect class="box" x="460" y="140" width="200" height="40" rx="4"/>
+      <text class="label" x="560" y="158" text-anchor="middle">load grandparent</text>
+      <text class="label-small" x="560" y="172" text-anchor="middle">carrier's parent = the typed block</text>
+
+      <!-- Step 5: derive -->
+      <line class="arrow" x1="560" y1="180" x2="560" y2="212"/>
+
+      <rect class="box" x="460" y="212" width="200" height="56" rx="4"/>
+      <text class="label" x="560" y="231" text-anchor="middle">rebuild properties_json</text>
+      <text class="label-small" x="560" y="246" text-anchor="middle">walk carriers + values,</text>
+      <text class="label-small" x="560" y="259" text-anchor="middle">encode through codecs</text>
+
+      <!-- Step 6: write back -->
+      <line class="arrow" x1="460" y1="240" x2="412" y2="240"/>
+
+      <rect class="box-good" x="248" y="220" width="164" height="40" rx="4"/>
+      <text class="label" x="330" y="238" text-anchor="middle">tx.update(parent)</text>
+      <text class="label-small" x="330" y="252" text-anchor="middle">properties + references</text>
+
+      <text class="label-small" x="20" y="290">Same transaction — readers never see drift between carriers and cell.</text>
+    </svg>
+  </div>
+  <figcaption><span class="fig-id">Fig. 3</span>Derivation flow on a value-child mutation. Carrier-child mutations walk up one level instead of two; sync arrivals run the same path.</figcaption>
+</figure>
+
+<p>
+Walk-up logic for any changed row <em>C</em>:
+</p>
+
+<ul>
+  <li>If <em>C</em> is itself a carrier → rebuild <em>C.parent</em>'s cell.</li>
+  <li>If <em>C.parent</em> is a carrier → rebuild <em>C.parent.parent</em>'s cell.</li>
+  <li>If a row moved between parents, run derivation for both <em>before.parentId</em>
+    and <em>after.parentId</em> chains. The <code>ChangedRow</code> shape already gives
+    both sides.</li>
+</ul>
+
+<p>
+The derivation reads carrier-child content (the <code>((schema-id))</code>), resolves
+the schema via <code>UserSchemasService.getSchemaForBlockId</code>, walks
+value-children in orderKey order, hands their content to
+<code>schema.codec.decode</code>, then writes the parent's <code>properties_json</code>
+(and the parent's projected <code>references[]</code> entries, with
+<code>sourceField = schema.name</code>) in the same transaction.
+</p>
+
+<div class="callout good">
+  <strong>Determinism matters.</strong> Two clients receiving the same mutations in
+  the same order must derive byte-identical cells. Sort property keys by schema id;
+  sort projected refs the way <code>normalizeReferences</code> already does for
+  content refs. The existing canonicalization pattern carries over.
+</div>
+
+<h2>6. Ghost carriers — type-lifted fields</h2>
+
+<p>
+A block of type <code>Task</code> expects fields <code>priority</code>,
+<code>assignee</code>, <code>due-date</code> (lifted via
+<code>block-type:properties</code>). When the user adds the type but hasn't set any
+values yet, we don't materialize empty carriers in storage — that would amplify
+writes, clutter the tree, and leave orphans when types change. Instead the renderer
+projects <strong>ghost carriers</strong>: render-only slots that materialize on first
+edit.
+</p>
+
+<figure>
+  <div class="frame">
+    <div class="tree">
+      <div class="row"><span class="bullet">●</span><span>Plan Q1 launch</span><span class="label-note">type: Task</span></div>
+      <div class="row indent-1"><span class="bullet">●</span><span class="schema-ref">((priority))</span><span class="label-real">real</span></div>
+      <div class="row indent-2"><span class="bullet">●</span><span class="value">3</span></div>
+      <div class="row indent-1"><span class="bullet ghost">○</span><span class="ghost">((assignee))</span><span class="label-ghost">ghost</span><span class="label-note">expected by Task, not yet set</span></div>
+      <div class="row indent-1"><span class="bullet ghost">○</span><span class="ghost">((due-date))</span><span class="label-ghost">ghost</span><span class="label-note">expected by Task, not yet set</span></div>
+      <div class="row indent-1"><span class="bullet">●</span><span>investigate vendor X</span><span class="label-note">regular content child</span></div>
+    </div>
+  </div>
+  <figcaption><span class="fig-id">Fig. 4</span>Ghost carriers cluster between real carriers and regular content children. First keystroke materializes a real carrier + value in one transaction.</figcaption>
+</figure>
+
+<p>
+Projection rule, exactly mirroring today's <code>syntheticProperties</code> state in
+the panel:
+</p>
+
+<pre><code>renderTypedBlock(P):
+  expected   = union(typesFacet.get(t).properties for t in P.types)
+  real       = childrenOf(P) filtered to carrier shape
+  realIds    = set(carrier → schema-block-id)
+  ghosts     = expected where schema-block-id ∉ realIds
+  render(real ordered by orderKey, then ghosts in type-declared order)
+</code></pre>
+
+<p>
+Rule choices baked in:
+</p>
+
+<ul>
+  <li>
+    <strong>Ghost position</strong> — after real carriers (in their orderKey order),
+    before regular content children. Materialization picks an orderKey at the end of
+    the real-carrier cluster so the visual position is preserved.
+  </li>
+  <li>
+    <strong>Type removal</strong> — real carriers stay (they're data the user
+    entered); ghosts disappear because the renderer stops asking for them. No
+    cleanup needed.
+  </li>
+  <li>
+    <strong>Schema removed from type</strong> — real carrier stays as a plain field
+    without the "expected by type" affordance. Data persists.
+  </li>
+  <li>
+    <strong>Multi-type overlap</strong> — two types lifting the same schema dedupe
+    by schema-block-id. Field order follows the order of <code>P.types</code> for
+    grouping.
+  </li>
+  <li>
+    <strong>Materialization on focus</strong> — focusing a ghost is a UI focus, not a
+    block focus. First keystroke runs a tx that creates the carrier + value and
+    redirects <code>editorSelection</code> to the value's id in the same commit
+    (mirrors <code>focusBlock({edit: true})</code> atomicity).
+  </li>
+</ul>
+
+<h2>7. Detection rules and edge cases</h2>
+
+<p>
+The rules the processor and renderer share, stated once:
+</p>
+
+<dl>
+  <dt><strong>Carrier recognition.</strong></dt>
+  <dd>A child of P is a carrier iff its trimmed content matches
+    <code>^\(\((uuid)\)\)$</code> AND the uuid resolves to a registered
+    property-schema block. No other recognition path; no separate
+    <code>fieldOf</code> property. The schema link rides the existing
+    <code>references[]</code> pipeline.</dd>
+
+  <dt><strong>Value decoding.</strong></dt>
+  <dd>Walk the carrier's value-children in orderKey order. For scalar codecs:
+    expect one value, pass its content to <code>codec.decode</code>; multiple
+    children with a scalar codec → pick first, log diagnostic, keep extras in the
+    tree. For list / refList codecs: pass the array of contents. Refs decode
+    from <code>((target-id))</code> in the value-child's content.</dd>
+
+  <dt><strong>Decode failure.</strong></dt>
+  <dd>Log + omit from the projection. Carrier and values stay in the tree visible
+    so the user can fix them. Mirrors today's <code>tryBuildSchema</code> behavior
+    for invalid schema config.</dd>
+
+  <dt><strong>Multiple carriers for same schema on one parent.</strong></dt>
+  <dd>Pick the one with the lowest orderKey, log a diagnostic, keep the others in
+    the tree. The data isn't lost; the projection picks one. Same shape as today's
+    "duplicate key in JSON" would behave — except now the data is recoverable.</dd>
+
+  <dt><strong>Default-value vs. unset.</strong></dt>
+  <dd>Zero value-children = "carrier exists but unset" — not the same as the
+    schema's <code>defaultValue</code>. The projection omits the key from
+    <code>properties_json</code> in that case (mirror of "no key in JSON cell").
+    <code>block.get(schema)</code> still falls back to <code>defaultValue</code>;
+    no behavior change for readers.</dd>
+
+  <dt><strong>Field-projected refs into the parent.</strong></dt>
+  <dd>Today ref-typed property values surface on parent's <code>references[]</code>
+    with <code>sourceField = schema.name</code>. The processor preserves that — every
+    value-child whose content is <code>((target))</code> contributes a parent-level
+    reference entry tagged with the schema name. Backlinks-by-source-field queries
+    keep working unchanged.</dd>
+
+  <dt><strong>Carrier's own properties.</strong></dt>
+  <dd>Allowed. A carrier is a normal block; whatever it carries on
+    <code>properties_json</code> follows the same rules as any other block. The
+    renderer for carriers chooses not to surface a property panel, so in practice
+    users won't put anything there — but the model imposes no rule.</dd>
+
+  <dt><strong>Sub-structure under value children.</strong></dt>
+  <dd>Supported transparently. The codec reads value-child <em>content</em>; the
+    renderer can show value-children's children as nested content (comments,
+    elaboration). This is the new affordance — see Fig. 2.</dd>
+</dl>
+
+<h2>8. The UI shift: panel sunsets, renderers take over</h2>
+
+<p>
+The property panel exists today because properties weren't blocks. Once they are,
+the panel's job — laying out rows, dispatching to value editors, showing add/delete
+affordances — moves into block-tree rendering. The renderer chooser picks
+<code>CarrierBlockRenderer</code> for carriers; the carrier renderer dispatches
+<code>preset.Editor</code> per value-child. Value blocks are regular blocks in the
+tree, keyboard-navigable, focusable, addressable.
+</p>
+
+<div class="side-by-side">
+  <div class="panel-card">
+    <h4>Sunsets</h4>
+    <ul>
+      <li><code>BlockProperties.tsx</code> shell</li>
+      <li><code>propertyPanel/*</code> — model, sections, rows, layout, visibility</li>
+      <li>Synthetic-row state, recently-materialized flash</li>
+      <li>Hidden-fields toggle, metadata rows</li>
+      <li><code>AddPropertyForm</code> (replaced by an add-field affordance on the parent block — slash command or autocomplete)</li>
+    </ul>
+  </div>
+  <div class="panel-card">
+    <h4>Survives, reused</h4>
+    <ul>
+      <li><code>valuePresetsFacet</code> — carriers ask presets for the per-value Editor + Glyph</li>
+      <li><code>propertySchemasFacet</code> — schema registry, unchanged</li>
+      <li><code>PropertySchemaBlockRenderer</code> — schema-block editing UI, unchanged</li>
+      <li><code>resolvePropertyDisplay</code> — single resolver consumed by the carrier renderer</li>
+      <li>Type registry + <code>computeExpectedFields</code> (extracted from <code>propertyPanelSections</code>) — drives ghost projection</li>
+    </ul>
+  </div>
+</div>
+
+<p>
+The "add a field" UX changes shape. Today it's a form inside the panel; in the new
+world it's an action on the parent block — a slash command on a typed block opens
+the preset/schema autocomplete and creates a carrier + first value in one
+transaction. Same backing service (<code>UserSchemasService.addSchema</code> for
+brand-new schemas), different entry point.
+</p>
+
+<h2>9. Cross-workspace paste — the one new problem</h2>
+
+<p>
+Schema-id refs are workspace-scoped: the schema block lives in the source workspace's
+Properties page. Pasting a subtree into a different workspace means the
+<code>((schema-id))</code> in the carrier content may not resolve. Three reasonable
+strategies, in increasing aggressiveness:
+</p>
+
+<ol>
+  <li>
+    <strong>Leave dangling.</strong> Unresolved blockrefs render with the existing
+    "unresolved ref" style. The user sees there's a missing schema; they can decide
+    to recreate it or remove the carrier. Honest. <em>Default.</em>
+  </li>
+  <li>
+    <strong>Resolve-by-name on paste.</strong> Walk the pasted subtree, find carrier
+    contents, look up the source schema's name in the destination's registered
+    schemas, rewrite the ref to point at the destination's matching schema block. Only
+    safe when the destination has a schema by the same name and with an equivalent
+    codec — name match alone risks coercing into a different value type.
+  </li>
+  <li>
+    <strong>Create-on-paste.</strong> Same as (2), but also create the schema block
+    in the destination's Properties page when the name isn't there. Surfaces as
+    "this paste added 3 new fields to your workspace" — user-visible side-effect.
+  </li>
+</ol>
+
+<p>
+The problem already exists today, just invisibly. With JSON cells, properties keyed
+by a name the destination doesn't recognize fall through to the unknown-schema
+fallback path; with a same-name-different-codec schema they silently decode through
+the wrong codec. Carriers surface the mismatch — the unresolved-ref glyph is the
+signal. Pick (1) as the v1 default; (2) and (3) become explicit "import properties"
+flows triggered from a paste confirmation, not automatic.
+</p>
+
+<h2>10. Migration phases</h2>
+
+<p>
+The migration is staged so each phase is independently shippable and reversible. The
+JSON cell stays load-bearing through the whole sequence — it's the derived output
+that readers see; carriers and values become its source.
+</p>
+
+<div class="phases">
+
+  <div class="phase">
+    <div class="num">0</div>
+    <div class="body">
+      <div class="name">Same-tx processor, shadow mode</div>
+      <p>
+        Ship the carrier-recognition logic and the derivation processor. Wired into
+        the commit pipeline but writes to a <em>shadow</em> column
+        (<code>properties_json_v2</code>) instead of <code>properties_json</code>.
+        Diff the two on every commit; log mismatches.
+      </p>
+      <p class="deliv">Deliverable: processor lands, dark-rolls in production, zero
+        user-visible change. Mismatches surface bugs before the cutover.</p>
+    </div>
+  </div>
+
+  <div class="phase">
+    <div class="num">1</div>
+    <div class="body">
+      <div class="name">Write path: <code>block.set</code> creates carriers</div>
+      <p>
+        Upgrade <code>block.set(schema, value)</code> (and
+        <code>tx.setProperty</code>) to find-or-create a carrier-child and write
+        value-children, instead of writing the JSON cell directly. The processor
+        derives the cell. Existing readers — <code>block.get</code>, the typed-query
+        compiler, the panel — keep reading the cell, unaware.
+      </p>
+      <p class="deliv">Deliverable: every new property write goes through carriers.
+        Old data still lives in JSON cells until backfill.</p>
+    </div>
+  </div>
+
+  <div class="phase">
+    <div class="num">2</div>
+    <div class="body">
+      <div class="name">Backfill</div>
+      <p>
+        One-shot job per workspace: walk every block with non-empty
+        <code>properties_json</code>, materialize carrier + value children for each
+        entry. Idempotent — running it twice produces the same tree. The processor
+        re-derives the JSON cells; the diff should be zero (every key already in the
+        cell, just now backed by carriers).
+      </p>
+      <p class="deliv">Deliverable: 100% of property data lives in carriers; the JSON
+        cell is fully derived. Fall back rule: if backfill fails on a block, the JSON
+        cell stays authoritative for that block; the write path can still derive on
+        top of it (the carrier shape and the cell will agree).</p>
+    </div>
+  </div>
+
+  <div class="phase">
+    <div class="num">3</div>
+    <div class="body">
+      <div class="name">UI shift: in-tree rendering</div>
+      <p>
+        Ship <code>CarrierBlockRenderer</code>. Block trees start rendering carriers
+        and values inline. The property panel stays mounted behind a feature flag
+        as a fallback for a release or two. Slash-command on the parent block for
+        adding new fields. Ghost carriers project from the type registry.
+      </p>
+      <p class="deliv">Deliverable: users see and edit properties in the tree. Panel
+        still available via flag for users who want it during transition.</p>
+    </div>
+  </div>
+
+  <div class="phase">
+    <div class="num">4</div>
+    <div class="body">
+      <div class="name">Panel sunset, cell becomes pure derivation</div>
+      <p>
+        Remove the panel feature flag. Delete <code>BlockProperties.tsx</code>,
+        <code>propertyPanel/*</code>, the synthetic-rows machinery,
+        <code>AddPropertyForm</code>. Direct writes to
+        <code>tx.update({properties})</code> are deprecated and route through a
+        compatibility shim that creates carriers (or get removed if no callers
+        remain).
+      </p>
+      <p class="deliv">Deliverable: one source of truth (carriers), one read path
+        (JSON cell as derived index), one rendering surface (the tree). Net code
+        deletion.</p>
+    </div>
+  </div>
+
+</div>
+
+<h2>11. Risks and rollback</h2>
+
+<p>
+Each phase has a back-out:
+</p>
+
+<ul>
+  <li>
+    <strong>Phase 0:</strong> shadow column has no consumers. Remove the processor;
+    drop the column. Zero impact.
+  </li>
+  <li>
+    <strong>Phase 1:</strong> revert the <code>block.set</code> change. New writes
+    go back to JSON cells. Carriers written under the new path remain in the tree
+    as inert blocks (their <code>((schema-id))</code> content is still meaningful;
+    the panel/queries just don't read from them anymore). One-shot cleanup script
+    can collapse them back to JSON if desired.
+  </li>
+  <li>
+    <strong>Phase 2:</strong> backfill is idempotent and additive — it never
+    removes JSON cell data, only writes carriers alongside. Rollback = stop running
+    the processor and stop reading carriers; cells remain authoritative.
+  </li>
+  <li>
+    <strong>Phase 3:</strong> feature-flag drives renderer choice. Flip the flag
+    workspace-wide to fall back to the panel.
+  </li>
+  <li>
+    <strong>Phase 4:</strong> point of no return. Don't ship Phase 4 until Phase 3
+    has been stable for at least one release cycle and the shadow-mode diff log
+    from Phase 0 has been silent for the same period.
+  </li>
+</ul>
+
+<p>
+Concrete risks to monitor:
+</p>
+
+<ul>
+  <li>
+    <strong>Write amplification at parents.</strong> A parent with N fields rewrites
+    its JSON cell on every field-write. Expected to be fine (today's <code>tx.update({properties})</code>
+    is also O(N)); watch p99 tx duration during Phase 1.
+  </li>
+  <li>
+    <strong>Sync conflict resolution on the JSON cell.</strong> Two clients touching
+    different fields each rewrite the cell; the cell could LWW-clobber. The mitigation
+    is "on every inbound carrier mutation, re-derive locally" — the cell is treated
+    as output, not input, of merge. Verify with a multi-client integration test
+    during Phase 1.
+  </li>
+  <li>
+    <strong>Backfill correctness on edge schemas.</strong> Properties whose schema
+    has no registered preset, or whose codec rejects the stored encoded value,
+    won't backfill cleanly. Plan: log + skip per block, leave the JSON cell as
+    authoritative for those rows. Phase 4 cutover requires the skip list to be
+    addressable.
+  </li>
+  <li>
+    <strong>Cross-workspace paste regressions.</strong> Section 9 covers the model
+    answer; the UX needs explicit "X fields not found in destination workspace"
+    affordance in the paste confirmation. Belongs in Phase 3.
+  </li>
+</ul>
+
+<hr>
+
+<p class="footer-note">
+This is a planning document, not an authoritative spec. Open questions worth
+revisiting before Phase 1: exact storage of carrier orderKeys (preserve from
+prior cell-key order on backfill?), the schema-block-id reference resolution path
+for the processor when the schema block isn't yet hydrated in cache, and the
+shape of the slash-command UI that replaces <code>AddPropertyForm</code>.
+</p>
+
+</main>
+</body>
+</html>
