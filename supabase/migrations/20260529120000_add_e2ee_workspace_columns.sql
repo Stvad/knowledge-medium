@@ -4,16 +4,17 @@
 -- and a server-side guard that an e2ee workspace's block content columns
 -- only ever hold well-formed enc:v1: ciphertext. No new tables.
 --
--- DEVIATION FROM THE SKETCH (§7): the design sketch built an elaborate
+-- wk_canary / encryption_mode immutability: the sketch (§7) proposed a
 -- column-level privilege model (REVOKE UPDATE ... GRANT UPDATE(name,...))
--- to keep wk_canary immutable, on the assumption that clients UPDATE
--- public.workspaces directly via renameWorkspace. In THIS codebase they
--- do not: public.workspaces exposes mutations only through SECURITY
--- DEFINER RPCs (create_workspace / delete_workspace), and the PowerSync
--- upload connector hard-rejects any non-`blocks` table. So clients cannot
--- write wk_canary via the normal path; we keep a cheap encryption_mode
--- immutability trigger as defense-in-depth, and rotation (§14) — the only
--- legitimate canary writer — is deferred to post-v1.
+-- to keep wk_canary unwritable by clients. We instead enforce it with a
+-- BEFORE UPDATE trigger (below) that rejects any change to either e2ee
+-- field. This is equivalent for v1 and simpler than untangling the
+-- existing `GRANT ALL ON TABLE workspaces TO authenticated` + per-column
+-- grants in the consolidated migration. It IS necessary: workspaces has a
+-- live `workspaces_update` RLS policy for writers, so a direct PostgREST
+-- UPDATE could otherwise overwrite wk_canary. Rotation (§14) — the only
+-- legitimate later canary writer — is deferred to post-v1 and will add an
+-- authorized SECURITY DEFINER bypass when it lands.
 --
 -- Every object is schema-qualified (public.*): the consolidated migration
 -- runs with search_path = '' and qualifies all objects, so an unqualified
@@ -69,11 +70,29 @@ alter table public.workspaces
         and (encryption_mode <> 'e2ee' or public.is_enc_v1_envelope(wk_canary))
     );
 
--- encryption_mode immutability (defense-in-depth; mirrors the codebase's
--- "concrete function per invariant" trigger pattern). delete_workspace and
--- the rename path never touch encryption_mode, so this never fires in
--- normal operation; it backstops a future RPC that might try to flip mode.
-create or replace function public.workspaces_prevent_encryption_mode_change()
+-- Immutability of BOTH e2ee fields (encryption_mode AND wk_canary).
+--
+-- This is load-bearing, not just defense-in-depth: the consolidated
+-- migration keeps an RLS `workspaces_update` policy for workspace WRITERS
+-- plus `GRANT ALL ON TABLE public.workspaces TO authenticated`, so an
+-- authenticated writer CAN issue a direct UPDATE on this table (e.g. via
+-- PostgREST) that sets wk_canary. The cross-column CHECK only requires the
+-- replacement to be a well-formed envelope, so without this trigger a
+-- writer (or a compromised/buggy client) could swap in an attacker-chosen
+-- canary while keeping encryption_mode = 'e2ee', bricking every other
+-- member's unlock (§8.2 validation would forever fail) or pinning key
+-- validation to attacker-controlled data. (Thanks to the Codex review for
+-- catching this — an earlier draft wrongly assumed clients had no UPDATE
+-- path to public.workspaces.)
+--
+-- In v1 there is NO legitimate post-create writer of either field: the
+-- canary is minted once inside create_workspace (an INSERT, which this
+-- BEFORE UPDATE trigger doesn't gate), and rotation (§14) — the only
+-- legitimate later writer — is deferred to post-v1 and will run as a
+-- SECURITY DEFINER RPC that can carry an explicit bypass when added. So
+-- reject ANY change to either column. rename (name/update_time) and
+-- delete leave both untouched, so this never fires in normal operation.
+create or replace function public.workspaces_prevent_e2ee_field_change()
     returns trigger
     language plpgsql
     set search_path = ''
@@ -83,14 +102,17 @@ begin
         raise exception 'workspaces.encryption_mode is immutable (% -> %)',
             old.encryption_mode, new.encryption_mode;
     end if;
+    if old.wk_canary is distinct from new.wk_canary then
+        raise exception 'workspaces.wk_canary is immutable (rotation is a post-v1 SECURITY DEFINER path)';
+    end if;
     return new;
 end;
 $$;
 
-create trigger workspaces_prevent_encryption_mode_change_trg
+create trigger workspaces_prevent_e2ee_field_change_trg
     before update on public.workspaces
     for each row
-    execute function public.workspaces_prevent_encryption_mode_change();
+    execute function public.workspaces_prevent_e2ee_field_change();
 
 -- ── create_workspace: accept e2ee mode + canary ─────────────────────────
 -- Postgres function signatures include parameter types, so adding defaulted

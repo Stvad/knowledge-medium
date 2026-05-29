@@ -10,7 +10,9 @@ const fakeDb = (existing: string[]) => {
     execute: async (sql: string) => {
       executed.push(sql)
     },
-    getAll: async <T>(_sql: string): Promise<T[]> =>
+    // Param omitted — structural typing lets a 0-arg fn satisfy the
+    // (sql: string) signature, and an unused named param trips lint.
+    getAll: async <T>(): Promise<T[]> =>
       existing.map((name) => ({ name })) as unknown as T[],
   }
 }
