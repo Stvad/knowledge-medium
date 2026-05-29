@@ -1304,15 +1304,34 @@ CREATE TRIGGER blocks_require_ciphertext_for_e2ee_trg
             <em>not</em> removed: the observer inherits the <code>'sync'</code> caller role. A few
             stale comments referencing <code>rowEventsTail</code> (<code>block.ts</code>,
             <code>repo.ts</code>) get updated.</li>
-          <li><strong>Not removed &mdash; deliberately:</strong> the validation and derived-index
-            triggers (<code>blocks_parent_workspace_check_*</code>,
-            <code>blocks_parent_not_deleted_check_*</code>,
-            <code>block_aliases_workspace_alias_unique</code>, and the alias/type/FTS maintenance
-            triggers) stay in the schema. They are a single write path enforced by construction on
-            <em>both</em> local and sync writes; the <code>row_events</code> removal worked only
-            because it was a <em>redundant second</em> invalidation path, whereas pulling these into
-            JS would duplicate each invariant across <code>TxImpl</code> and the observer &mdash;
-            re-introducing the dual-path problem the trigger approach was built to remove.</li>
+          <li><strong>Not removed &mdash; but the two trigger families are kept for different reasons,
+            and one of them deliberately does <em>not</em> run on observer writes:</strong>
+            <ul>
+              <li>The <strong>derived-index maintenance triggers</strong> (alias/type/FTS) are
+                <em>not</em> <code>source</code>-gated, so they fire on the observer's plaintext writes
+                to <code>blocks</code> exactly as on local <code>TxImpl</code> writes. This is the
+                family that genuinely runs on both paths, and the observer relies on it to keep the
+                indexes current; pulling it into JS would duplicate maintenance across
+                <code>TxImpl</code> and the observer, re-introducing the dual-path problem the trigger
+                approach removed.</li>
+              <li>The <strong>validation triggers</strong>
+                (<code>blocks_parent_workspace_check_*</code>,
+                <code>blocks_parent_not_deleted_check_*</code>,
+                <code>block_aliases_workspace_alias_unique</code>) are gated on
+                <code>source IS NOT NULL</code> &mdash; local writes only &mdash; so they
+                <strong>do not fire on observer writes</strong> (the observer writes with
+                <code>source = NULL</code>, identical to PowerSync's CRUD-apply today). That is the
+                intended contract, not a gap. Parent/workspace integrity is still backed by the
+                server's composite FK on the plaintext <code>parent_id</code>/<code>workspace_id</code>
+                columns (unencrypted even for E2EE); parent-not-deleted is <em>deliberately</em>
+                permissive on sync (the documented strict-local / permissive-sync asymmetry &mdash; the
+                server accepts a child that lands before its parent's tombstone during cross-client
+                ordering). Re-running these in the observer would <em>regress</em> that asymmetry, not
+                close a hole. Alias-uniqueness has no server-side counterpart
+                (<code>block_aliases</code> is local-only), so cross-client alias collisions stay the
+                documented V1-latent limitation, unchanged by the observer.</li>
+            </ul>
+          </li>
         </ul>
       </li>
       <li><strong>Plus:</strong> queries are direct SQL on plaintext &mdash; no per-row decrypt
