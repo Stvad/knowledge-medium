@@ -396,22 +396,44 @@
       <tr>
         <td>Symmetric AEAD</td>
         <td>AES-256-GCM</td>
-        <td>Native in WebCrypto, no dependency. XChaCha20-Poly1305 only meaningfully wins on platforms without AES hardware.</td>
+        <td>Native in WebCrypto, no dependency. XChaCha20-Poly1305 wins on two axes &mdash; platforms
+          without AES hardware, and a 192-bit nonce that removes the random-nonce birthday bound
+          (next row) outright &mdash; but neither is decisive at our write volumes, and AES-GCM avoids
+          pulling in a crypto dependency. Revisit if the nonce budget or non-AES targets ever bind.</td>
       </tr>
       <tr>
         <td>Nonce</td>
         <td>96-bit random per ciphertext</td>
-        <td>Per-column random nonce. Reuse probability negligible at our write volumes.</td>
+        <td>Per-column random nonce. Random 96-bit nonces are birthday-bounded: NIST SP 800-38D caps a
+          single key at ~2<sup>32</sup> invocations to keep the collision probability below
+          ~2<sup>-33</sup>, where one invocation is one column-write of one block, summed across
+          <em>all</em> collaborators (who share the one WK) over the workspace's entire life. A
+          personal or small-team note workspace stays many orders of magnitude under 2<sup>32</sup>
+          (~4&nbsp;billion encryptions), so reuse is negligible &mdash; but that is the stated budget
+          and assumption, not a hand-wave: nonce reuse is catastrophic for GCM (it leaks the XOR of
+          the two plaintexts and enables forgeries via auth-key recovery). A workspace that could ever
+          approach the bound should move to a counter/deterministic nonce or the wider-nonce AEAD
+          above.</td>
       </tr>
       <tr>
         <td>AAD (associated data)</td>
-        <td><code>block_id &Vert; workspace_id &Vert; column_name &Vert; schema_version</code></td>
-        <td>Prevents the server from swapping ciphertexts between blocks, between workspaces, or between columns of the same block. <code>schema_version</code> reserves room for future format upgrades (e.g. a hierarchy migration).</td>
+        <td>length-prefixed <code>block_id &Vert; workspace_id &Vert; column_name &Vert; schema_version</code></td>
+        <td>Prevents the server from swapping ciphertexts between blocks, between workspaces, or between
+          columns of the same block. The fields must use an <strong>unambiguous canonical
+          encoding</strong> &mdash; length-prefix each field (or a delimiter byte that cannot occur in
+          any field, e.g. <code>0x1F</code>, already used for structured trigger messages in
+          <code>clientSchema.ts</code>) &mdash; so that <code>"A"&Vert;"BC"</code> and
+          <code>"AB"&Vert;"C"</code> can't alias over variable-length TEXT ids and defeat the very
+          cross-binding the AAD exists to provide. The same encoding applies to the canary's AAD
+          (§7, §8.1). <code>schema_version</code> <em>is</em> the envelope version (ciphertext-format
+          row below), so it is reconstructable at decrypt time from the <code>enc:vN:</code> tag rather
+          than stored separately; it reserves room for future format upgrades (e.g. a hierarchy
+          migration).</td>
       </tr>
       <tr>
         <td>Ciphertext format</td>
         <td><code>"enc:v1:" + base64url(nonce &Vert; ciphertext)</code></td>
-        <td>The prefix identifies the envelope <em>format</em> (version dispatch for the decrypt routine), <em>not</em> whether to decrypt &mdash; per §6 only the durable local mode pin decides that. Within a pinned-E2EE workspace every wire value must already be an <code>enc:v1:</code> envelope (§7 enforces it server-side), so here the prefix is a format tag and tamper/sanity check, never a trigger that routes a row into decrypt/error handling on its own. A plaintext-workspace value that happens to start with <code>enc:v1:</code> is therefore left untouched, and the server can't influence first-encounter behavior by adding or stripping the prefix. The <code>v1</code> reserves a clean upgrade path.</td>
+        <td>The prefix identifies the envelope <em>format</em> (version dispatch for the decrypt routine), <em>not</em> whether to decrypt &mdash; per §6 only the durable local mode pin decides that. Within a pinned-E2EE workspace every wire value must already be an <code>enc:v1:</code> envelope (§7 enforces it server-side), so here the prefix is a format tag and tamper/sanity check, never a trigger that routes a row into decrypt/error handling on its own. A plaintext-workspace value that happens to start with <code>enc:v1:</code> is therefore left untouched, and the server can't influence first-encounter behavior by adding or stripping the prefix. The <code>v1</code> reserves a clean upgrade path &mdash; and the version tag <em>is</em> the AAD's <code>schema_version</code>: the envelope carries only <code>nonce &Vert; ciphertext</code> (no separate version field), so a decryptor reconstructs the exact AAD from the prefix alone. If a future format ever needs the payload schema version to diverge from the envelope version, that value must move into the envelope so the AAD stays reconstructable.</td>
       </tr>
       <tr>
         <td>WK display/paste format</td>
@@ -622,7 +644,8 @@ CREATE TRIGGER workspaces_prevent_encryption_mode_change_trg
 -- (AEAD failure = wrong key) and confirms it's bound to this workspace
 -- (right key on the wrong workspace's canary fails the plaintext check).
 -- wk_canary format: enc:v1:base64url(nonce || ciphertext) of workspace_id
--- as the plaintext, with AAD = workspace_id || "canary" || schema_version.
+-- as the plaintext, with AAD = workspace_id || "canary" || schema_version
+-- (length-prefixed / unambiguous encoding, same as the content AAD -- §6).
 ALTER TABLE public.workspaces ADD COLUMN wk_canary TEXT;
 
 -- NULL for plaintext workspaces; required for E2EE so new devices can
@@ -651,6 +674,12 @@ ALTER TABLE public.workspaces ADD COLUMN wk_canary TEXT;
 -- legal. The 28B floor is then >= 9 full groups plus one of those terminals
 -- (>= 38 data chars; data-char count mod 4 is never 1). One shared IMMUTABLE
 -- helper keeps the canary CHECK and the blocks trigger in lockstep.
+-- ReDoS: safe here -- Postgres's regex engine is DFA-based, no backtracking.
+-- The inner {4} is fixed-width so the grammar has no ambiguous decomposition;
+-- measured linear even in V8's backtracking engine (~3ms at 200k chars). Even
+-- so, the CLIENT should not port this regex to gate server-supplied ciphertext
+-- -- it validates by base64url-decode + AEAD verify, which is the real
+-- integrity gate and has no regex surface at all.
 CREATE OR REPLACE FUNCTION public.is_enc_v1_envelope(v text)
   RETURNS boolean
   LANGUAGE sql IMMUTABLE AS $$
@@ -712,6 +741,13 @@ CREATE OR REPLACE FUNCTION public.create_workspace(
 declare
   v_id text := coalesce(p_workspace_id, gen_random_uuid()::text);
 begin
+  -- AuthZ: this RPC is SECURITY DEFINER and bypasses RLS, so it must self-guard.
+  -- Reject unauthenticated callers, and bind ownership to auth.uid() rather than
+  -- trusting any client-supplied owner id -- the workspace_members owner row
+  -- inserted below is keyed by auth.uid(), never by a function argument.
+  if auth.uid() is null then
+    raise exception 'create_workspace: authentication required';
+  end if;
   -- The e2ee canary is minted client-side binding the CLIENT-CHOSEN workspace id
   -- (it's the canary's plaintext and part of its AAD). If the server were to
   -- generate a different id, the canary/mode CHECK would still pass, but the
@@ -722,7 +758,8 @@ begin
     raise exception 'create_workspace: p_workspace_id is required for e2ee workspaces';
   end if;
   -- ... INSERT INTO workspaces (id, encryption_mode, wk_canary, ...) VALUES (v_id, ...);
-  --     INSERT owner workspace_members row; RETURN the new workspace as jsonb ...
+  --     INSERT workspace_members owner row keyed by auth.uid() (NOT a client arg);
+  --     RETURN the new workspace as jsonb ...
 end;
 $$;
 
@@ -826,7 +863,7 @@ CREATE TRIGGER blocks_require_ciphertext_for_e2ee_trg
       <li>Client generates a 32-byte WK via <code>crypto.getRandomValues</code>; encodes it as
         <code>kmp-wk-1:&lt;base32&gt;</code>.</li>
       <li>Client picks the workspace id (UUID v4), then encrypts the id with the WK (AAD =
-        <code>workspace_id || "canary" || schema_version</code>) to produce the
+        <code>workspace_id || "canary" || schema_version</code>, length-prefixed per §6) to produce the
         <code>wk_canary</code>. The canary is a known-plaintext AEAD blob that any future device
         can decrypt to validate a pasted WK, even on a workspace that has no blocks yet.</li>
       <li>Client validates the WK against the canary it just minted, then imports it as a
@@ -1554,7 +1591,13 @@ CREATE TRIGGER blocks_require_ciphertext_for_e2ee_trg
         rotation path is the dedicated <code>rotate_workspace_wk</code> RPC &mdash; SECURITY DEFINER,
         running as the table owner, the only principal with UPDATE on <code>wk_canary</code>. No
         forgeable bypass flag is involved: clients simply lack the privilege, and the RPC updates
-        the canary in the same transaction as the re-encrypt rotation token.</li>
+        the canary in the same transaction as the re-encrypt rotation token. Because it is SECURITY
+        DEFINER it bypasses both RLS <em>and</em> the column privilege &mdash; precisely so it can
+        write <code>wk_canary</code> &mdash; so it <strong>must self-authorize</strong>: its body
+        checks that <code>auth.uid()</code> is the workspace <em>owner</em> before touching the
+        canary, otherwise any authenticated caller could rotate or brick another workspace's canary.
+        The whole column-privilege design hinges on this RPC being the sole canary writer <em>and</em>
+        self-guarding.</li>
 
       <li><strong>Backfill behavior on first WK paste.</strong> The first time a device gets a
         WK for a workspace, the local plaintext-derived indexes need populating. Under Layout B
