@@ -84,11 +84,14 @@ export const decideStagingRow = (
     // snapshot overwrite it. The upload echo reconciles when it returns.
     return { kind: 'skip-stale' }
   }
-  if (local.localUpdatedAt !== null && local.localUpdatedAt > stagingUpdatedAt) {
-    // Local row is strictly newer (e.g. a fast-path edit already applied).
-    // First-writer-wins on equal stamps too — mirrors blockCache.applyIfNewer
-    // — so equality is NOT skipped here; the downstream cache LWW gate
-    // collapses an equal-stamp echo to a no-op without stranding the row.
+  if (local.localUpdatedAt !== null && local.localUpdatedAt >= stagingUpdatedAt) {
+    // Local row is at least as new as this snapshot. First-writer-wins on
+    // EQUAL stamps too, mirroring BlockCache.applyIfNewer's `<=`: a stale
+    // in-flight server read can carry different content under the same
+    // ms-stamp. Unlike the cache (in-memory, transient), the Layout B observer
+    // materializes into the persistent SQLite `blocks` table, so applying an
+    // equal-stamp snapshot would overwrite the local edit on disk and resurface
+    // it after a reload — the cache gate can't guard that write. Skip it.
     return { kind: 'skip-stale' }
   }
 

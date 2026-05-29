@@ -49,9 +49,15 @@ describe('decideStagingRow — local-edit reconciliation', () => {
     expect(action).toEqual({ kind: 'apply', decrypt: true })
   })
 
-  it('applies on equal stamps (downstream cache LWW collapses the no-op)', () => {
+  it('skips on equal stamps — first-writer-wins, mirroring the cache gate', () => {
+    // Equal ms-stamps are treated as stale, mirroring BlockCache.applyIfNewer's
+    // `<=`: a stale in-flight server read can carry DIFFERENT content under the
+    // same updated_at. Under Layout B the observer materializes into the
+    // persistent SQLite `blocks` table (not just the in-memory cache), so
+    // applying an equal-stamp snapshot would overwrite the local edit on disk
+    // and resurface it after a reload — the cache gate can't guard that write.
     const action = decideStagingRow('copy', 200, { localUpdatedAt: 200, hasPendingUpload: false })
-    expect(action).toEqual({ kind: 'apply', decrypt: false })
+    expect(action).toEqual({ kind: 'skip-stale' })
   })
 
   it('applies a first-seen row (no local copy yet)', () => {
