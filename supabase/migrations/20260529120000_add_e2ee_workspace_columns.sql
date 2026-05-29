@@ -180,6 +180,14 @@ begin
 end;
 $$;
 
+-- Pin the owner explicitly (the dropped create_workspace(text) was
+-- `OWNER TO postgres` in the consolidated baseline). SECURITY DEFINER runs as
+-- the owner, and only an owner with BYPASSRLS / table privileges can insert the
+-- workspace + owner-member rows (workspaces has no INSERT policy for callers).
+-- Don't leave it implicit at the migration role — make the definer identity a
+-- deliberate, reviewable line.
+alter function public.create_workspace(text, text, text, text) owner to postgres;
+
 grant execute on function public.create_workspace(text, text, text, text) to anon, authenticated, service_role;
 
 -- ── blocks: require ciphertext in e2ee workspaces ───────────────────────
