@@ -90,7 +90,12 @@ describe('materializeStagingRows — copy-through (plaintext workspace)', () => 
       { getMaterializability: constMat('copy'), getCek: noKey },
     )
 
-    expect(out.applied.map(r => r.id)).toEqual(['b1'])
+    expect(out.applied).toEqual(['b1'])
+    // before/after snapshot is captured for the invalidation layer.
+    expect(out.snapshots.get('b1')).toMatchObject({
+      before: null,
+      after: { id: 'b1', content: 'plain text' },
+    })
     expect(await allBlocks()).toEqual([
       { id: 'b1', content: 'plain text', properties_json: '{"alias":["Inbox"]}', updated_at: 1700000000000 },
     ])
@@ -132,7 +137,7 @@ describe('materializeStagingRows — decrypt (e2ee workspace with WK)', () => {
       { getMaterializability: constMat('decrypt'), getCek },
     )
 
-    expect(out.applied.map(r => r.id)).toEqual(['enc1'])
+    expect(out.applied).toEqual(['enc1'])
     const rows = await env.db.getAll<{ content: string; properties_json: string }>(
       'SELECT content, properties_json FROM blocks WHERE id = ?', ['enc1'],
     )
@@ -211,7 +216,7 @@ describe('materializeStagingRows — skip-stale (local edit must win)', () => {
       { getMaterializability: constMat('copy'), getCek: noKey },
     )
 
-    expect(out.applied.map(r => r.id)).toEqual(['b1'])
+    expect(out.applied).toEqual(['b1'])
     expect((await allBlocks())[0]!.content).toBe('new from server')
   })
 })
@@ -231,6 +236,10 @@ describe('materializeStagingRows — removed (stream-exit)', () => {
     )
 
     expect(out.deleted).toEqual(['b1'])
+    expect(out.snapshots.get('b1')).toMatchObject({
+      before: { id: 'b1', content: 'goodbye' },
+      after: null,
+    })
     expect(await allBlocks()).toEqual([])
     const aliases = await env.db.getAll('SELECT alias FROM block_aliases')
     expect(aliases).toEqual([])

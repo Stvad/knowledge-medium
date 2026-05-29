@@ -29,8 +29,10 @@
 
 import {
   BLOCK_STORAGE_COLUMNS,
+  parseBlockRow,
   type BlockRow,
 } from '@/data/blockSchema.js'
+import type { BlockData } from '@/data/api'
 import type { PowerSyncDb } from '@/data/internals/commitPipeline.js'
 import { decideStagingRow, type Materializability } from './reconcile.js'
 import { decodeFromWire, type GetCek } from '../transform.js'
@@ -57,6 +59,11 @@ const UPSERT_BLOCK_SQL = `
 
 const DELETE_BLOCK_SQL = 'DELETE FROM blocks WHERE id = ?'
 
+// Full pre-write row, both for the LWW gate (updated_at) and for the
+// invalidation `before` snapshot the observer emits (parent-edge / plugin
+// channels need the prior parent_id, content, properties, etc.).
+const SELECT_BLOCK_BY_ID_SQL = `SELECT ${COLUMN_NAMES.join(', ')} FROM blocks WHERE id = ?`
+
 const blockRowParams = (row: BlockRow): unknown[] =>
   COLUMN_NAMES.map(name => row[name])
 
@@ -80,11 +87,21 @@ export interface StagingChange {
   readonly removed: readonly string[]
 }
 
-/** What the pass did, per id. Used by tests and (later) by the invalidation
- *  layer, which needs the applied/deleted plaintext rows to notify on. */
+/** Before/after pair for a row the pass changed. Sides are full `BlockData`;
+ *  the slim `ChangeSnapshotSide` the invalidation rules see is a structural
+ *  subset, so this map feeds `snapshotsToChangeNotification` directly. */
+export interface SyncSnapshot {
+  readonly before: BlockData | null
+  readonly after: BlockData | null
+}
+
+/** What the pass did. `snapshots` carries the before/after for every applied
+ *  (after set) and deleted (after null) row — the observer's invalidation
+ *  layer consumes it; the id lists are for tests and bookkeeping. */
 export interface MaterializeOutcome {
-  /** Decoded plaintext rows written to `blocks`. */
-  readonly applied: readonly BlockRow[]
+  readonly snapshots: ReadonlyMap<string, SyncSnapshot>
+  /** Ids materialized into `blocks` (decrypted or copied). */
+  readonly applied: readonly string[]
   /** Ids left in staging (workspace not materializable yet). */
   readonly deferred: readonly string[]
   /** Ids skipped because a newer/pending local edit wins. */
@@ -151,12 +168,13 @@ export const materializeStagingRows = async (
     candidates.push({ plaintext, stagingUpdatedAt: row.updated_at, materializability })
   }
 
-  const applied: BlockRow[] = []
+  const snapshots = new Map<string, SyncSnapshot>()
+  const applied: string[] = []
   const skippedStale: string[] = []
   const deleted: string[] = []
 
   if (candidates.length === 0 && change.removed.length === 0) {
-    return { applied, deferred, skippedStale, deleted }
+    return { snapshots, applied, deferred, skippedStale, deleted }
   }
 
   await db.writeTransaction(async tx => {
@@ -167,10 +185,8 @@ export const materializeStagingRows = async (
 
     for (const candidate of candidates) {
       const { plaintext, stagingUpdatedAt, materializability } = candidate
-      const localRow = await tx.getOptional<{ updated_at: number }>(
-        'SELECT updated_at FROM blocks WHERE id = ?',
-        [plaintext.id],
-      )
+      // The before-row read is also the LWW gate's local state — one read.
+      const beforeRow = await tx.getOptional<BlockRow>(SELECT_BLOCK_BY_ID_SQL, [plaintext.id])
       const pending = await tx.getOptional<{ one: number }>(
         `SELECT 1 AS one FROM ps_crud
           WHERE json_extract(data, '$.id') = ?
@@ -179,12 +195,16 @@ export const materializeStagingRows = async (
         [plaintext.id],
       )
       const action = decideStagingRow(materializability, stagingUpdatedAt, {
-        localUpdatedAt: localRow?.updated_at ?? null,
+        localUpdatedAt: beforeRow?.updated_at ?? null,
         hasPendingUpload: pending !== null,
       })
       if (action.kind === 'apply') {
         await tx.execute(UPSERT_BLOCK_SQL, blockRowParams(plaintext))
-        applied.push(plaintext)
+        applied.push(plaintext.id)
+        snapshots.set(plaintext.id, {
+          before: beforeRow ? parseBlockRow(beforeRow) : null,
+          after: parseBlockRow(plaintext),
+        })
       } else {
         // 'skip-stale' (defer was filtered out before decode).
         skippedStale.push(plaintext.id)
@@ -192,10 +212,13 @@ export const materializeStagingRows = async (
     }
 
     for (const id of change.removed) {
+      const beforeRow = await tx.getOptional<BlockRow>(SELECT_BLOCK_BY_ID_SQL, [id])
       await tx.execute(DELETE_BLOCK_SQL, [id])
       deleted.push(id)
+      // Only a row that actually existed locally has anything to invalidate.
+      if (beforeRow) snapshots.set(id, { before: parseBlockRow(beforeRow), after: null })
     }
   })
 
-  return { applied, deferred, skippedStale, deleted }
+  return { snapshots, applied, deferred, skippedStale, deleted }
 }
