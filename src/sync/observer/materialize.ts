@@ -64,8 +64,31 @@ const DELETE_BLOCK_SQL = 'DELETE FROM blocks WHERE id = ?'
 // channels need the prior parent_id, content, properties, etc.).
 const SELECT_BLOCK_BY_ID_SQL = `SELECT ${COLUMN_NAMES.join(', ')} FROM blocks WHERE id = ?`
 
+const PENDING_UPLOAD_SQL = `
+  SELECT 1 AS one FROM ps_crud
+   WHERE json_extract(data, '$.id') = ?
+     AND json_extract(data, '$.type') = 'blocks'
+   LIMIT 1
+`
+
 const blockRowParams = (row: BlockRow): unknown[] =>
   COLUMN_NAMES.map(name => row[name])
+
+/** Read-only surface both the auto-commit DB and an open `TxDb` satisfy, so
+ *  the reconcile reads can run either outside the write tx (Phase 1 pre-gate)
+ *  or inside it (Phase 2 authoritative re-check). */
+type Reader = {
+  getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
+}
+
+/** True if PowerSync's upload queue holds an unsent local edit for this id. */
+const hasPendingUpload = async (db: Reader, id: string): Promise<boolean> =>
+  (await db.getOptional<{ one: number }>(PENDING_UPLOAD_SQL, [id])) !== null
+
+const localUpdatedAt = async (db: Reader, id: string): Promise<number | null> =>
+  (await db.getOptional<{ updated_at: number }>(
+    'SELECT updated_at FROM blocks WHERE id = ?', [id],
+  ))?.updated_at ?? null
 
 /** Resolve how a workspace's rows can be materialized right now. The policy
  *  (pin lookup, WK presence, §6 quarantine) is injected; the observer core
@@ -124,10 +147,15 @@ const buildInClause = (count: number): string =>
  * `blocks`, leave non-materializable rows staged, skip rows a local edit
  * should win, and hard-delete rows that left the synced set.
  *
- * Decryption (CPU/async) happens BEFORE the write transaction so the write
- * lock is held only for the brief reconcile-and-write window. The local/remote
- * merge read (`ps_crud` + `updated_at`) happens INSIDE the transaction so it's
- * consistent with the write.
+ * Two phases. Phase 1 (outside the write tx) resolves materializability, runs
+ * the staleness gate, and decrypts ONLY the rows that pass it — so a stale
+ * (and possibly undecryptable: tampered, opened with the wrong key) ciphertext
+ * we're going to skip anyway never reaches `decodeFromWire` and can't abort
+ * the batch. Phase 2 (inside the write tx) re-runs the gate authoritatively
+ * before writing: the two write transactions are serialized, but the Phase-1
+ * reads are not in the lock, so a local edit can land in between and must
+ * still win. Keeping decrypt out of the lock also keeps the write window
+ * short.
  */
 export const materializeStagingRows = async (
   db: PowerSyncDb,
@@ -136,9 +164,8 @@ export const materializeStagingRows = async (
 ): Promise<MaterializeOutcome> => {
   const { getMaterializability, getCek } = deps
   const deferred: string[] = []
+  const skippedStale: string[] = []
 
-  // ── Read the staged rows and resolve + decode the materializable ones,
-  //    all outside the write transaction. ──
   const stagingRows = change.upserted.length === 0
     ? []
     : await db.getAll<BlockRow>(
@@ -156,11 +183,21 @@ export const materializeStagingRows = async (
     return resolved
   }
 
+  // ── Phase 1 (outside the write tx): decide, then decrypt only survivors. ──
   const candidates: ApplyCandidate[] = []
   for (const row of stagingRows) {
     const materializability = await resolveMaterializability(row.workspace_id)
     if (materializability === 'defer') {
       deferred.push(row.id)
+      continue
+    }
+    const action = decideStagingRow(materializability, row.updated_at, {
+      localUpdatedAt: await localUpdatedAt(db, row.id),
+      hasPendingUpload: await hasPendingUpload(db, row.id),
+    })
+    if (action.kind !== 'apply') {
+      // Skip-stale BEFORE decrypt: a stale ciphertext never gets decoded.
+      skippedStale.push(row.id)
       continue
     }
     const mode = materializability === 'decrypt' ? 'e2ee' : 'none'
@@ -170,13 +207,13 @@ export const materializeStagingRows = async (
 
   const snapshots = new Map<string, SyncSnapshot>()
   const applied: string[] = []
-  const skippedStale: string[] = []
   const deleted: string[] = []
 
   if (candidates.length === 0 && change.removed.length === 0) {
     return { snapshots, applied, deferred, skippedStale, deleted }
   }
 
+  // ── Phase 2 (inside the write tx): authoritative re-gate, then write. ──
   await db.writeTransaction(async tx => {
     // Bracket the writes in a source-NULL tx_context so the upload triggers
     // skip them. NULL is already the resting state between local txns, but
@@ -187,16 +224,9 @@ export const materializeStagingRows = async (
       const { plaintext, stagingUpdatedAt, materializability } = candidate
       // The before-row read is also the LWW gate's local state — one read.
       const beforeRow = await tx.getOptional<BlockRow>(SELECT_BLOCK_BY_ID_SQL, [plaintext.id])
-      const pending = await tx.getOptional<{ one: number }>(
-        `SELECT 1 AS one FROM ps_crud
-          WHERE json_extract(data, '$.id') = ?
-            AND json_extract(data, '$.type') = 'blocks'
-          LIMIT 1`,
-        [plaintext.id],
-      )
       const action = decideStagingRow(materializability, stagingUpdatedAt, {
         localUpdatedAt: beforeRow?.updated_at ?? null,
-        hasPendingUpload: pending !== null,
+        hasPendingUpload: await hasPendingUpload(tx, plaintext.id),
       })
       if (action.kind === 'apply') {
         await tx.execute(UPSERT_BLOCK_SQL, blockRowParams(plaintext))
@@ -206,7 +236,7 @@ export const materializeStagingRows = async (
           after: parseBlockRow(plaintext),
         })
       } else {
-        // 'skip-stale' (defer was filtered out before decode).
+        // A local edit landed between Phase 1 and the lock — it wins.
         skippedStale.push(plaintext.id)
       }
     }

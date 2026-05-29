@@ -206,6 +206,30 @@ describe('materializeStagingRows — skip-stale (local edit must win)', () => {
     expect((await allBlocks())[0]!.content).toBe('newer local')
   })
 
+  it('skips a stale e2ee row WITHOUT decrypting it (undecryptable stale ciphertext cannot abort the batch)', async () => {
+    const key = await importWorkspaceKey(generateWorkspaceKeyBytes())
+    const getCek: GetCek = async () => key
+    // Local row is newer than the staging snapshot.
+    await seedLocalBlock(blockData({ id: 'x', workspaceId: 'ws-e2ee', content: 'local', updatedAt: 500 }))
+    // Staging holds *undecryptable* ciphertext — decodeFromWire would throw if
+    // ever called — but the row is stale, so it must be skipped before decrypt.
+    const stale = blockData({ id: 'x', workspaceId: 'ws-e2ee', updatedAt: 200 })
+    await stageRow(stale, stagingCiphertextParams(stale, {
+      content: 'enc:v1:not-real-ciphertext',
+      properties_json: 'enc:v1:not-real-ciphertext',
+      references_json: 'enc:v1:not-real-ciphertext',
+    }))
+
+    const out = await materializeStagingRows(
+      env.db,
+      { upserted: ['x'], removed: [] },
+      { getMaterializability: constMat('decrypt'), getCek },
+    )
+
+    expect(out.skippedStale).toEqual(['x'])
+    expect((await allBlocks())[0]!.content).toBe('local')
+  })
+
   it('applies when the staging snapshot is strictly newer and nothing is pending', async () => {
     await seedLocalBlock(blockData({ content: 'old', updatedAt: 200 }))
     await stageRow(blockData({ content: 'new from server', updatedAt: 300 }))
