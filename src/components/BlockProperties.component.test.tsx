@@ -557,6 +557,7 @@ describe('BlockProperties component', () => {
         content: 'Aliased target content',
         properties: {
           [aliasesProp.name]: aliasesProp.codec.encode(['Target Alias']),
+          [typesProp.name]: typesProp.codec.encode(['reviewer']),
         },
       })
       await tx.create({
@@ -565,6 +566,16 @@ describe('BlockProperties component', () => {
         parentId: null,
         orderKey: 'b1',
         content: 'Recent target content',
+        properties: {
+          [typesProp.name]: typesProp.codec.encode(['reviewer']),
+        },
+      })
+      await tx.create({
+        id: 'target-unrelated',
+        workspaceId: 'ws-1',
+        parentId: null,
+        orderKey: 'b2',
+        content: 'Unrelated target content',
       })
     }, {scope: ChangeScope.BlockDefault, description: 'create target alias'})
 
@@ -590,6 +601,7 @@ describe('BlockProperties component', () => {
     expect(listbox.classList.contains('fixed')).toBe(true)
     expect(await screen.findByRole('option', {name: /Target Alias/})).toBeTruthy()
     expect(await screen.findByRole('option', {name: /Recent target content/})).toBeTruthy()
+    expect(screen.queryByRole('option', {name: /Unrelated target content/})).toBeNull()
   })
 
   it('stores a searched ref target and renders it as a block embed', async () => {
@@ -600,6 +612,9 @@ describe('BlockProperties component', () => {
         parentId: null,
         orderKey: 'b0',
         content: 'Target ref block',
+        properties: {
+          [typesProp.name]: typesProp.codec.encode(['reviewer']),
+        },
       })
     }, {scope: ChangeScope.BlockDefault, description: 'create target ref'})
 
@@ -643,6 +658,9 @@ describe('BlockProperties component', () => {
         parentId: null,
         orderKey: 'b0',
         content: 'Related target block',
+        properties: {
+          [typesProp.name]: typesProp.codec.encode(['related']),
+        },
       })
     }, {scope: ChangeScope.BlockDefault, description: 'create related target'})
 

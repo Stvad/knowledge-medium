@@ -16,6 +16,7 @@ import {
   blockTypePropertiesProp,
 } from '@/data/properties.js'
 import { propertyEditorOverridesFacet, valuePresetsFacet } from '@/data/facets.js'
+import type { Block } from '@/data/block.js'
 import { Input } from '@/components/ui/input.js'
 import { Button } from '@/components/ui/button.js'
 import { PropertyShapeGlyph } from '@/components/propertyPanel/shapeUi.js'
@@ -28,10 +29,28 @@ import {
 import type { BlockRenderer, BlockRendererProps } from '@/types.js'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
 
+export const writeBlockTypeLabel = async (
+  block: Block,
+  currentLabel: string,
+  currentContent: string,
+  next: string,
+): Promise<void> => {
+  if (next === currentLabel && next === currentContent) return
+  await block.repo.tx(async tx => {
+    if (next !== currentLabel) {
+      await tx.setProperty(block.id, blockTypeLabelProp, next)
+    }
+    if (next !== currentContent) {
+      await tx.update(block.id, {content: next})
+    }
+  }, {scope: ChangeScope.BlockDefault, description: 'edit block-type label'})
+}
+
 const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererProps) => {
   const data = useHandle(block, {
     selector: d => d ? {
       id: d.id,
+      content: d.content,
       properties: d.properties,
       deleted: d.deleted,
     } : undefined,
@@ -92,9 +111,9 @@ const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererProps) =>
   }
 
   const writeLabel = useCallback(async (next: string) => {
-    if (next === label) return
-    await block.set(blockTypeLabelProp, next)
-  }, [block, label])
+    const currentContent = data?.content ?? ''
+    await writeBlockTypeLabel(block, label, currentContent, next)
+  }, [block, data?.content, label])
 
   const writeDescription = useCallback(async (next: string) => {
     if (next === description) return

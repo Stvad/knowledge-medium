@@ -66,12 +66,7 @@ const filterByTargetTypes = async (
     candidate,
     matches: await blockMatchesTargetTypes(repo, candidate.id, targetTypes),
   })))
-  const filtered = checks.filter(check => check.matches).map(check => check.candidate)
-  // Target types are advisory metadata for the picker. Some existing
-  // reference targets, especially deterministic alias/date targets, may
-  // predate type materialization; do not turn a useful search result
-  // into an empty menu just because the target lacks the expected type.
-  return filtered.length > 0 ? filtered : [...candidates]
+  return checks.filter(check => check.matches).map(check => check.candidate)
 }
 
 const searchReferenceCandidates = async (
