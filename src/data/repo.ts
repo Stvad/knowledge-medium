@@ -242,7 +242,6 @@ const changedRefSchemaNames = (
 }
 
 const PROPERTY_CHILDREN_BACKFILL_TARGET_INSERT_ROWS = 190
-const PROPERTY_CHILDREN_BACKFILL_SCAN_BATCH_SIZE = 50
 const PROPERTY_CHILDREN_BACKFILL_ROWS_PER_PROPERTY = 2
 const PROPERTY_CHILDREN_STORAGE_WRITE_RETRY_BATCH_SIZE = 5
 const PROPERTY_CHILDREN_STORAGE_WRITE_RETRY_DELAY_MS = 25
@@ -299,18 +298,9 @@ const chunkArray = <T,>(items: readonly T[], size: number): T[][] => {
 const delay = (ms: number): Promise<void> =>
   new Promise(resolve => setTimeout(resolve, ms))
 
-const countMatchingProperties = (
-  blocks: readonly BlockData[],
-  schemas: ReadonlyMap<string, AnyPropertySchema>,
-): number => blocks.reduce(
-  (sum, block) => sum + Object.keys(block.properties).filter(name => schemas.has(name)).length,
-  0,
-)
-
-const estimatePropertyChildInsertRows = (
-  blocks: readonly BlockData[],
-  schemas: ReadonlyMap<string, AnyPropertySchema>,
-): number => countMatchingProperties(blocks, schemas) * PROPERTY_CHILDREN_BACKFILL_ROWS_PER_PROPERTY
+const countCandidateRefProperties = (
+  candidates: readonly PropertyChildrenBackfillCandidateRef[],
+): number => candidates.reduce((sum, candidate) => sum + candidate.propertyCount, 0)
 
 const propertyChildrenBackfillSchemaClauses = (schemas: readonly AnyPropertySchema[]): string[] =>
   schemas.map(() => `
@@ -361,6 +351,11 @@ interface RunAndDispatchControls {
 interface PropertyChildrenFallbackParent {
   readonly parent: BlockData
   readonly names: readonly string[]
+}
+
+interface PropertyChildrenBackfillCandidateRef {
+  readonly id: string
+  readonly propertyCount: number
 }
 
 const metricDelta = (
@@ -436,7 +431,6 @@ interface PropertyChildrenBackfillFailureLogArgs {
   batchCount: number
   parentBatchSize: number | null
   targetInsertRows: number
-  scanBatchSize: number
   retryBatchSize: number | null
   retryIndex?: number
   retryCount?: number
@@ -1621,97 +1615,58 @@ export class Repo {
     return row?.count ?? 0
   }
 
-  private async propertyChildrenBackfillCandidates(
+  private async propertyChildrenBackfillCandidateRefs(
     workspaceId: string,
     schemas: readonly AnyPropertySchema[],
-    afterId: string,
-    limit: number,
-  ): Promise<BlockData[]> {
+  ): Promise<PropertyChildrenBackfillCandidateRef[]> {
     if (schemas.length === 0) return []
     const clauses = propertyChildrenBackfillSchemaClauses(schemas)
     const params = propertyChildrenBackfillSchemaParams(schemas)
-    const rows = await this.db.getAll<BlockRow>(
+    const rows = await this.db.getAll<{id: string; property_count: number}>(
       `
-        SELECT DISTINCT ${buildQualifiedBlockColumnsSql('b')}
+        SELECT b.id, COUNT(*) AS property_count
         FROM blocks b, json_each(b.properties_json) prop
         WHERE b.workspace_id = ?
           AND b.deleted = 0
           AND b.properties_json <> '{}'
-          AND b.id > ?
           AND (${clauses.join(' OR ')})
+        GROUP BY b.id
         ORDER BY b.id
-        LIMIT ?
-      `,
-      [workspaceId, afterId, ...params, limit],
-    )
-    return rows.map(parseBlockRow)
-  }
-
-  private async countPendingPropertyChildrenBackfillProperties(
-    workspaceId: string,
-    schemas: readonly AnyPropertySchema[],
-  ): Promise<number> {
-    if (schemas.length === 0) return 0
-    const clauses = propertyChildrenBackfillSchemaClauses(schemas)
-    const params = propertyChildrenBackfillSchemaParams(schemas)
-    const row = await this.db.getOptional<{count: number}>(
-      `
-        SELECT COUNT(*) AS count
-        FROM blocks b, json_each(b.properties_json) prop
-        WHERE b.workspace_id = ?
-          AND b.deleted = 0
-          AND b.properties_json <> '{}'
-          AND (${clauses.join(' OR ')})
       `,
       [workspaceId, ...params],
     )
-    return row?.count ?? 0
+    return rows.map(row => ({id: row.id, propertyCount: row.property_count}))
   }
 
-  private async propertyChildrenBackfillCandidateBatch(args: {
-    workspaceId: string
-    schemas: readonly AnyPropertySchema[]
-    schemaMap: ReadonlyMap<string, AnyPropertySchema>
-    afterId: string
+  private propertyChildrenBackfillCandidateBatch(args: {
+    candidates: readonly PropertyChildrenBackfillCandidateRef[]
+    startIndex: number
     parentBatchSize: number | null
     targetInsertRows: number
-    scanBatchSize: number
-  }): Promise<BlockData[]> {
+  }): {batch: PropertyChildrenBackfillCandidateRef[]; nextIndex: number} {
     if (args.parentBatchSize !== null) {
-      return this.propertyChildrenBackfillCandidates(
-        args.workspaceId,
-        args.schemas,
-        args.afterId,
-        args.parentBatchSize,
-      )
-    }
-
-    const out: BlockData[] = []
-    let cursor = args.afterId
-    let estimatedRows = 0
-    for (;;) {
-      const candidates = await this.propertyChildrenBackfillCandidates(
-        args.workspaceId,
-        args.schemas,
-        cursor,
-        args.scanBatchSize,
-      )
-      if (candidates.length === 0) break
-
-      for (const candidate of candidates) {
-        const candidateRows = estimatePropertyChildInsertRows([candidate], args.schemaMap)
-        if (out.length > 0 && estimatedRows + candidateRows > args.targetInsertRows) {
-          return out
-        }
-        out.push(candidate)
-        estimatedRows += candidateRows
-        cursor = candidate.id
-        if (estimatedRows >= args.targetInsertRows) return out
+      const nextIndex = Math.min(args.candidates.length, args.startIndex + args.parentBatchSize)
+      return {
+        batch: args.candidates.slice(args.startIndex, nextIndex),
+        nextIndex,
       }
-
-      if (candidates.length < args.scanBatchSize) break
     }
-    return out
+
+    const out: PropertyChildrenBackfillCandidateRef[] = []
+    let estimatedRows = 0
+    let nextIndex = args.startIndex
+    while (nextIndex < args.candidates.length) {
+      const candidate = args.candidates[nextIndex]!
+      const candidateRows = candidate.propertyCount * PROPERTY_CHILDREN_BACKFILL_ROWS_PER_PROPERTY
+      if (out.length > 0 && estimatedRows + candidateRows > args.targetInsertRows) {
+        break
+      }
+      out.push(candidate)
+      estimatedRows += candidateRows
+      nextIndex += 1
+      if (estimatedRows >= args.targetInsertRows) break
+    }
+    return {batch: out, nextIndex}
   }
 
   private buildBulkPropertyChildrenForBackfill(
@@ -1802,7 +1757,6 @@ export class Repo {
       batch: args.batchCount,
       configuredParentBatchSize: args.parentBatchSize,
       targetInsertRows: args.targetInsertRows,
-      scanBatchSize: args.scanBatchSize,
       retryBatchSize: args.retryBatchSize,
       retryIndex: args.retryIndex,
       retryCount: args.retryCount,
@@ -1858,10 +1812,6 @@ export class Repo {
       1,
       args.targetInsertRows ?? PROPERTY_CHILDREN_BACKFILL_TARGET_INSERT_ROWS,
     )
-    const scanBatchSize = Math.max(
-      1,
-      parentBatchSize ?? PROPERTY_CHILDREN_BACKFILL_SCAN_BATCH_SIZE,
-    )
     const respectCompletionMarkers = args.respectCompletionMarkers ?? true
     const logProgress = args.logProgress === true
     const startedAt = performance.now()
@@ -1874,21 +1824,34 @@ export class Repo {
     const scopePlans: Array<{
       scope: ChangeScope
       schemasToScan: AnyPropertySchema[]
+      candidates: PropertyChildrenBackfillCandidateRef[]
       pendingProperties: number
+      stagingMs: number
     }> = []
     for (const [scope, scopeSchemas] of schemasByScope(propertySchemas.values())) {
       const schemasToScan = respectCompletionMarkers
         ? await this.schemasPendingPropertyChildrenBackfill(workspaceId, scopeSchemas)
         : scopeSchemas
       if (schemasToScan.length === 0) continue
-      const pendingProperties = await this.countPendingPropertyChildrenBackfillProperties(
+      const stagingStartedAt = performance.now()
+      const candidates = await this.propertyChildrenBackfillCandidateRefs(
         workspaceId,
         schemasToScan,
       )
-      scopePlans.push({scope, schemasToScan, pendingProperties})
+      const stagingMs = performance.now() - stagingStartedAt
+      const pendingProperties = countCandidateRefProperties(candidates)
+      scopePlans.push({scope, schemasToScan, candidates, pendingProperties, stagingMs})
     }
     const totalPendingProperties = scopePlans.reduce(
       (sum, plan) => sum + plan.pendingProperties,
+      0,
+    )
+    const totalStagedCandidates = scopePlans.reduce(
+      (sum, plan) => sum + plan.candidates.length,
+      0,
+    )
+    const totalStagingMs = scopePlans.reduce(
+      (sum, plan) => sum + plan.stagingMs,
       0,
     )
 
@@ -1898,16 +1861,21 @@ export class Repo {
       console.info(
         `[Repo] property children migration started workspace=${workspaceId} ` +
         `schemas=${propertySchemas.size} parentBatchSize=${parentBatchSize ?? 'row-target'} ` +
-        `targetInsertRows=${targetInsertRows} scanBatchSize=${scanBatchSize} ` +
-        `pendingProperties=${totalPendingProperties} transactionPerBatch=true`,
+        `targetInsertRows=${targetInsertRows} candidateSource=memory ` +
+        `stagedCandidates=${totalStagedCandidates} pendingProperties=${totalPendingProperties} ` +
+        `stagingMs=${Math.round(totalStagingMs)} transactionPerBatch=true`,
       )
     }
 
-    for (const {scope, schemasToScan, pendingProperties: scopePendingProperties} of scopePlans) {
+    for (const {
+      scope,
+      schemasToScan,
+      candidates: stagedCandidates,
+      pendingProperties: scopePendingProperties,
+    } of scopePlans) {
       const scopeSchemaMap = new Map(schemasToScan.map(schema => [schema.name, schema]))
-      let afterId = ''
       const writeCandidates = async (
-        batchCandidates: readonly BlockData[],
+        batchCandidates: readonly PropertyChildrenBackfillCandidateRef[],
       ): Promise<PropertyChildrenBackfillWriteDiagnostics> => {
         const stats = createPropertyChildrenMaterializationStats()
         const dbBefore = this.dbMetrics.snapshot() as DbMetricsSnapshot
@@ -1981,7 +1949,7 @@ export class Repo {
         }
       }
       const writeRetryChunks = async (
-        retryCandidates: readonly BlockData[],
+        retryCandidates: readonly PropertyChildrenBackfillCandidateRef[],
         retryBatchSize: number,
         scanMsForBatch: number,
         retryPath: readonly number[] = [],
@@ -2003,7 +1971,7 @@ export class Repo {
               console.info(
                 `[Repo] property children migration retry ${retryLabel}/${retryChunks.length} ` +
                 `workspace=${workspaceId} scope=${scope} blocks=${chunk.length} ` +
-                `properties=${countMatchingProperties(chunk, scopeSchemaMap)} ` +
+                `properties=${countCandidateRefProperties(chunk)} ` +
                 `writeMs=${Math.round(performance.now() - retryStartedAt)}`,
               )
             }
@@ -2015,7 +1983,7 @@ export class Repo {
             const shouldRetryChunk =
               isRetriableStorageWriteError(retryErr) &&
               nextRetryBatchSize < chunk.length
-            const retryPropertyCount = countMatchingProperties(chunk, scopeSchemaMap)
+            const retryPropertyCount = countCandidateRefProperties(chunk)
             await this.logPropertyChildrenBackfillWriteFailure({
               err: retryErr,
               workspaceId,
@@ -2023,7 +1991,6 @@ export class Repo {
               batchCount,
               parentBatchSize,
               targetInsertRows,
-              scanBatchSize,
               retryBatchSize: shouldRetryChunk ? nextRetryBatchSize : null,
               retryIndex: retryIndex + 1,
               retryCount: retryChunks.length,
@@ -2056,25 +2023,27 @@ export class Repo {
           txTiming: retryTxTiming,
         }
       }
+      let candidateIndex = 0
       for (;;) {
         const scanStartedAt = performance.now()
-        const candidates = await this.propertyChildrenBackfillCandidateBatch({
-          workspaceId,
-          schemas: schemasToScan,
-          schemaMap: scopeSchemaMap,
-          afterId,
+        const {
+          batch: candidates,
+          nextIndex,
+        } = this.propertyChildrenBackfillCandidateBatch({
+          candidates: stagedCandidates,
+          startIndex: candidateIndex,
           parentBatchSize,
           targetInsertRows,
-          scanBatchSize,
         })
         const scanMs = performance.now() - scanStartedAt
         if (candidates.length === 0) break
-        afterId = candidates[candidates.length - 1]!.id
+        candidateIndex = nextIndex
+        const lastId = candidates[candidates.length - 1]!.id
         processed += candidates.length
         batchCount += 1
         logStart()
 
-        const propertyCount = countMatchingProperties(candidates, scopeSchemaMap)
+        const propertyCount = countCandidateRefProperties(candidates)
         const estimatedInsertRows = propertyCount * PROPERTY_CHILDREN_BACKFILL_ROWS_PER_PROPERTY
         const writeStartedAt = performance.now()
         let writeMode = 'single'
@@ -2095,14 +2064,13 @@ export class Repo {
             batchCount,
             parentBatchSize,
             targetInsertRows,
-            scanBatchSize,
             retryBatchSize: shouldRetryStorageWrite ? retryBatchSize : null,
             blocks: candidates.length,
             properties: propertyCount,
             estimatedInsertRows,
             processed,
             firstId: candidates[0]?.id ?? null,
-            lastId: afterId,
+            lastId,
             scanMs,
             writeMs,
             elapsedMs: performance.now() - startedAt,
@@ -2142,7 +2110,7 @@ export class Repo {
             `txSameTxRows=${txTiming?.sameTxChangedRows ?? 0} txSnapshots=${txTiming?.snapshotCount ?? 0} ` +
             `sameTxProcessors=${formatSameTxProcessorTimings(txTiming)} ` +
             `dbDelta=${formatDbMetricDelta(dbDelta)} ` +
-            `processed=${processed} lastId=${afterId} ` +
+            `processed=${processed} lastId=${lastId} ` +
             `processedProperties=${processedProperties} materializedProperties=${materializedProperties} ` +
             `pendingProperties=${totalPendingProperties} scopePendingProperties=${scopePendingProperties} ` +
             `remainingProperties=${remainingProperties} elapsedMs=${Math.round(elapsedMs)} ` +
@@ -2672,7 +2640,7 @@ export class Repo {
     schemas: readonly AnyPropertySchema[],
   ): Promise<void> {
     for (const schema of schemas) {
-      const [candidate] = await this.propertyChildrenBackfillCandidates(workspaceId, [schema], '', 1)
+      const [candidate] = await this.propertyChildrenBackfillCandidateRefs(workspaceId, [schema])
       if (candidate !== undefined) continue
       await this.setPropertyChildrenBackfillMarker(propertyChildrenBackfillMarkerKey(workspaceId, schema))
     }

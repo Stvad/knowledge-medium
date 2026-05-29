@@ -232,7 +232,10 @@ describe('child-backed user properties', () => {
 
     expect(messages.some(message => message.includes('parentBatchSize=row-target'))).toBe(true)
     expect(messages.some(message => message.includes('targetInsertRows=190'))).toBe(true)
+    expect(messages.some(message => message.includes('candidateSource=memory'))).toBe(true)
+    expect(messages.some(message => message.includes('stagedCandidates=1'))).toBe(true)
     expect(messages.some(message => message.includes('pendingProperties=1'))).toBe(true)
+    expect(messages.some(message => message.includes('stagingMs='))).toBe(true)
     const batchMessage = messages.find(message => message.includes('property children migration batch 1'))
     expect(batchMessage).toEqual(expect.stringContaining('properties=1'))
     expect(batchMessage).toEqual(expect.stringContaining('estimatedInsertRows=2'))
@@ -404,7 +407,6 @@ describe('child-backed user properties', () => {
           properties: 2,
           configuredParentBatchSize: 2,
           targetInsertRows: 190,
-          scanBatchSize: 2,
           estimatedInsertRows: 4,
           retryBatchSize: 1,
           error: {name: 'Error', message: 'short write'},
@@ -460,7 +462,6 @@ describe('child-backed user properties', () => {
           properties: 2,
           configuredParentBatchSize: 2,
           targetInsertRows: 190,
-          scanBatchSize: 2,
           estimatedInsertRows: 4,
           retryBatchSize: 1,
           error: {name: 'Error', message: 'disk I/O error'},
