@@ -114,6 +114,16 @@ const authorPageTypesProp = defineProperty<readonly string[]>('readwise:authorPa
   defaultValue: [],
   changeScope: ChangeScope.BlockDefault,
 })
+const documentPageTypesProp = defineProperty<readonly string[]>('readwise:documentPageTypes', {
+  codec: codecs.refList({ targetTypes: [BLOCK_TYPE_TYPE] }),
+  defaultValue: [],
+  changeScope: ChangeScope.BlockDefault,
+})
+const highlightTypesProp = defineProperty<readonly string[]>('readwise:highlightTypes', {
+  codec: codecs.refList({ targetTypes: [BLOCK_TYPE_TYPE] }),
+  defaultValue: [],
+  changeScope: ChangeScope.BlockDefault,
+})
 // purely a UI hint — the source of truth is localStorage. We mirror it so the
 // settings page can render a "Connected" pill without subscribing to storage.
 const connectedHintProp = defineProperty<boolean>('readwise:connectedHint', {
@@ -244,7 +254,8 @@ const readwisePrefsType = defineBlockType({
   properties: [
     lastSyncedAtProp, syncSinceProp,
     pageTitleTemplateProp, bookTemplateProp, highlightTemplateProp,
-    autoSyncIntervalProp, authorPageTypesProp, connectedHintProp,
+    autoSyncIntervalProp, authorPageTypesProp, documentPageTypesProp,
+    highlightTypesProp, connectedHintProp,
   ],
 })
 const readwiseLibraryType = defineBlockType({
@@ -825,6 +836,22 @@ const optionalNumber = (value: unknown): number | undefined =>
 const sameJson = (a: unknown, b: unknown): boolean =>
   JSON.stringify(a) === JSON.stringify(b)
 
+const normalizedConfiguredTypeIds = (typeIds: readonly string[]): string[] =>
+  [...new Set(typeIds.map(cleanText).filter((id): id is string => Boolean(id)))]
+
+const addConfiguredTypes = async (
+  tx: any,
+  repo: any,
+  blockId: string,
+  typeIds: readonly string[],
+  typeSnapshot: any,
+) => {
+  for (const typeId of normalizedConfiguredTypeIds(typeIds)) {
+    if (!typeSnapshot.types.has(typeId)) continue
+    await repo.addTypeInTx(tx, blockId, typeId, {}, typeSnapshot)
+  }
+}
+
 type ManagedPropertyEntry<T = any> = readonly [PropertySchema<T>, T | undefined]
 
 const applyManagedProperties = async (
@@ -889,11 +916,7 @@ const lookupOrCreateAuthorPage = async (
 
   const ensured = await ensureAliasTarget(tx, repo, name, workspaceId, typeSnapshot)
   if (ensured.inserted) {
-    const uniqueTypeIds = new Set(authorPageTypeIds.map(cleanText).filter((id): id is string => Boolean(id)))
-    for (const typeId of uniqueTypeIds) {
-      if (!typeSnapshot.types.has(typeId)) continue
-      await repo.addTypeInTx(tx, ensured.id, typeId, {}, typeSnapshot)
-    }
+    await addConfiguredTypes(tx, repo, ensured.id, authorPageTypeIds, typeSnapshot)
   }
   return ensured.id
 }
@@ -1126,6 +1149,8 @@ const syncBookToBlocks = async (
   bookTemplate: string,
   highlightTemplate: string,
   authorPageTypeIds: readonly string[],
+  documentPageTypeIds: readonly string[],
+  highlightTypeIds: readonly string[],
   reviewDateIso: string,
 ) => {
   const bookId = pluginBlockId(workspaceId, READWISE_NS, `book:${book.user_book_id}`)
@@ -1158,6 +1183,7 @@ const syncBookToBlocks = async (
     }
     await repo.addTypeInTx(tx, bookId, PAGE_TYPE, { [aliasesProp.name]: [title] }, typeSnapshot)
     await repo.addTypeInTx(tx, bookId, READWISE_DOCUMENT_TYPE, {}, typeSnapshot)
+    await addConfiguredTypes(tx, repo, bookId, documentPageTypeIds, typeSnapshot)
     await mergeSourceOwnedAlias(tx, bookId, existing?.content, title)
     const authorPageId = await lookupOrCreateAuthorPage(
       tx,
@@ -1234,6 +1260,7 @@ const syncBookToBlocks = async (
         }
       }
       await repo.addTypeInTx(tx, hId, READWISE_HIGHLIGHT_TYPE, {}, typeSnapshot)
+      await addConfiguredTypes(tx, repo, hId, highlightTypeIds, typeSnapshot)
       await applyManagedProperties(tx, hId, HIGHLIGHT_PROPERTY_SCHEMAS, highlightPropertyEntries(book, h))
       if (reviewDateBlock) {
         await ensureHighlightReviewState(tx, hId, reviewDateBlock.id)
@@ -1288,6 +1315,8 @@ const runSync = async (repo: any, { silent = false } = {}) => {
   const bookTemplate = prefs.get(bookTemplateProp)
   const highlightTemplate = prefs.get(highlightTemplateProp)
   const authorPageTypeIds = prefs.get(authorPageTypesProp)
+  const documentPageTypeIds = prefs.get(documentPageTypesProp)
+  const highlightTypeIds = prefs.get(highlightTypesProp)
   const reviewDateIso = reviewDateIsoForSync(new Date())
 
   let progress = silent ? null : showProgress('Readwise: fetching…')
@@ -1306,7 +1335,8 @@ const runSync = async (repo: any, { silent = false } = {}) => {
         progress.update(`Readwise: ${bookCount} books, ${highlightCount} highlights…`)
         await syncBookToBlocks(
           repo, workspaceId, rootId, book,
-          pageTitleTemplate, bookTemplate, highlightTemplate, authorPageTypeIds, reviewDateIso,
+          pageTitleTemplate, bookTemplate, highlightTemplate,
+          authorPageTypeIds, documentPageTypeIds, highlightTypeIds, reviewDateIso,
         )
       }
     } while (pageCursor)
@@ -1579,6 +1609,14 @@ const authorPageTypesEditor = definePropertyEditorOverride<readonly string[]>({
   name: authorPageTypesProp.name,
   label: 'New author page types',
 })
+const documentPageTypesEditor = definePropertyEditorOverride<readonly string[]>({
+  name: documentPageTypesProp.name,
+  label: 'Document page types',
+})
+const highlightTypesEditor = definePropertyEditorOverride<readonly string[]>({
+  name: highlightTypesProp.name,
+  label: 'Highlight types',
+})
 
 // ---------------------------------------------------------------------------
 // wiring
@@ -1599,6 +1637,8 @@ export default [
   propertySchemasFacet.of(highlightTemplateProp, { source }),
   propertySchemasFacet.of(autoSyncIntervalProp, { source }),
   propertySchemasFacet.of(authorPageTypesProp, { source }),
+  propertySchemasFacet.of(documentPageTypesProp, { source }),
+  propertySchemasFacet.of(highlightTypesProp, { source }),
   propertySchemasFacet.of(connectedHintProp, { source }),
   ...IMPORTED_PROPERTY_SCHEMAS.map(schema => propertySchemasFacet.of(schema, { source })),
 
@@ -1610,6 +1650,8 @@ export default [
   propertyEditorOverridesFacet.of(highlightTemplateEditor, { source }),
   propertyEditorOverridesFacet.of(autoSyncEditor, { source }),
   propertyEditorOverridesFacet.of(authorPageTypesEditor, { source }),
+  propertyEditorOverridesFacet.of(documentPageTypesEditor, { source }),
+  propertyEditorOverridesFacet.of(highlightTypesEditor, { source }),
 
   appMountsFacet.of({ id: 'readwise.setup-dialog', component: ReadwiseSetupDialog }, { source }),
   appEffectsFacet.of(autoSyncEffect, { source }),
