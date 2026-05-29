@@ -1229,17 +1229,55 @@ CREATE TRIGGER blocks_require_ciphertext_for_e2ee_trg
         it. Add JS observer wiring at the sync boundary
         (universal, with ps_crud / updated_at reconciliation per the callout above);
         encrypt-on-upload in the connector hook. The observer invalidates directly (reusing
-        <code>snapshotsToChangeNotification</code>), so <strong>remove the three
-        <code>row_events</code> triggers + table and <code>rowEventsTail.ts</code></strong>; the
-        remaining trigger code in <code>clientSchema.ts</code> (aliases, types, FTS, upload-routing,
-        validation) and plugins is untouched (they fire on plaintext writes to <code>blocks</code> as
-        today). Update <code>blockUploadPatchJsonSql</code> in
+        <code>snapshotsToChangeNotification</code>), so the <code>row_events</code> path is retired
+        &mdash; see the removals list below for exactly what goes and what deliberately stays. Update
+        <code>blockUploadPatchJsonSql</code> in
         <code>clientSchema.ts</code> to <em>unconditionally</em> include <code>workspace_id</code>
         in every PATCH envelope &mdash; the current trigger emits only changed columns, so a
         content-only edit reaches <code>uploadData</code> without <code>workspace_id</code>, and
         the encryption hook needs that field to look up the WK and construct AAD. Always-emit is
         a few bytes of wire overhead per PATCH; the alternative (have the hook read the local row
         before encrypting) adds a DB round-trip per upload.</li>
+      <li><strong>What this removes from the existing data layer</strong> (the subtractive half &mdash;
+        because <code>blocks</code> stops being PowerSync-managed once the stream targets
+        <code>blocks_synced</code>):
+        <ul>
+          <li><strong><code>blocks</code> leaves <code>withRawTables</code></strong>
+            (<code>repoProvider.ts</code>, and the test harness in <code>createTestDb.ts</code>). No
+            stream targets it anymore, so PowerSync no longer manages it and the registration is
+            vestigial &mdash; <code>blocks</code> becomes a plain local table written only by
+            <code>TxImpl</code> (local edits) and the observer (sync).</li>
+          <li><strong>The guarded-UPSERT apparatus in <code>blockSchema.ts</code> goes:</strong>
+            <code>BLOCKS_RAW_TABLE.put</code>'s <code>ON CONFLICT … WHERE &lt;diff&gt;</code> and the
+            builders that exist only to feed it &mdash; <code>BLOCK_SYNC_ASSIGNMENTS</code>,
+            <code>BLOCK_SYNC_DIFF_PREDICATES</code>, <code>formatSqlOrList</code>. The new
+            <code>blocks_synced</code> raw table carries no triggers, so its <code>put</code> is a
+            plain <code>INSERT OR REPLACE</code>. <strong>Retained:</strong>
+            <code>BLOCK_STORAGE_COLUMNS</code> / <code>CREATE_BLOCKS_TABLE_SQL</code> (reused for the
+            <code>blocks_synced</code> column shape) and the read helpers
+            <code>SELECT_BLOCK_COLUMNS_SQL</code> / <code>buildQualifiedBlockColumnsSql</code> (they
+            read plaintext <code>blocks</code>, unaffected). Two already-dead exports here &mdash;
+            <code>UPSERT_BLOCK_SQL</code>, <code>buildBlockCrudJsonSql</code> &mdash; can go
+            independently of this work.</li>
+          <li><strong>The <code>row_events</code> path</strong> (3 triggers + table + indexes and
+            <code>rowEventsTail.ts</code>, per the callout above), plus the <code>triggerTxIdSql</code>
+            helper in <code>clientSchema.ts</code> that only those triggers use
+            (<code>tx_context.tx_id</code> itself stays &mdash; <code>command_events</code> uses it).
+            <code>ApplyIfNewerSource = 'sync' | 'hydrate'</code> in <code>blockCache.ts</code> is
+            <em>not</em> removed: the observer inherits the <code>'sync'</code> caller role. A few
+            stale comments referencing <code>rowEventsTail</code> (<code>block.ts</code>,
+            <code>repo.ts</code>) get updated.</li>
+          <li><strong>Not removed &mdash; deliberately:</strong> the validation and derived-index
+            triggers (<code>blocks_parent_workspace_check_*</code>,
+            <code>blocks_parent_not_deleted_check_*</code>,
+            <code>block_aliases_workspace_alias_unique</code>, and the alias/type/FTS maintenance
+            triggers) stay in the schema. They are a single write path enforced by construction on
+            <em>both</em> local and sync writes; the <code>row_events</code> removal worked only
+            because it was a <em>redundant second</em> invalidation path, whereas pulling these into
+            JS would duplicate each invariant across <code>TxImpl</code> and the observer &mdash;
+            re-introducing the dual-path problem the trigger approach was built to remove.</li>
+        </ul>
+      </li>
       <li><strong>Plus:</strong> queries are direct SQL on plaintext &mdash; no per-row decrypt
         cost at query time, no UDF latency.</li>
       <li><strong>Minus:</strong> two writes per <em>every</em> block download (staging, then
