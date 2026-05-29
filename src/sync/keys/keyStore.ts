@@ -74,7 +74,7 @@ export class IndexedDbWorkspaceKeyStore implements WorkspaceKeyStore {
 
   private openDb(): Promise<IDBDatabase> {
     if (!this.dbPromise) {
-      this.dbPromise = new Promise((resolve, reject) => {
+      this.dbPromise = new Promise<IDBDatabase>((resolve, reject) => {
         const request = indexedDB.open(DB_NAME, DB_VERSION)
         request.onupgradeneeded = () => {
           const db = request.result
@@ -84,6 +84,13 @@ export class IndexedDbWorkspaceKeyStore implements WorkspaceKeyStore {
         }
         request.onsuccess = () => resolve(request.result)
         request.onerror = () => reject(request.error)
+      }).catch((err: unknown) => {
+        // Don't cache a rejected open: a transient failure (storage pressure, a
+        // racing version upgrade) would otherwise wedge every later get/put on
+        // this instance forever. Clear the handle so the next call retries a
+        // fresh open; the backup-required model tolerates a missed read.
+        this.dbPromise = null
+        throw err
       })
     }
     return this.dbPromise
