@@ -430,9 +430,12 @@
       workspace is E2EE <em>for this client</em> iff the client holds a durable local pin marking it
       so &mdash; a pin set the first time a WK validates against the workspace's <code>wk_canary</code>,
       never by the server. <code>workspaces.encryption_mode</code> is a server-maintained projection
-      (§7) consulted only as a UX hint (which prompt to show first), with <strong>zero security
-      weight</strong>. Because no server-supplied field sits in the security path, there is nothing
-      for a hostile server to flip and the downgrade attack has no target. The three rules below
+      (§7) with <strong>zero downgrade authority</strong>: the durable pin, never this flag, decides
+      whether decrypted content is treated as authoritative and whether plaintext writes are allowed.
+      The flag is consulted only in the direction that <em>fails safe</em> &mdash; an unpinned
+      membership the server marks <code>e2ee</code> is held key-required until a WK validates
+      (rule 3a), which can only <em>add</em> a key prompt, never authorize plaintext &mdash; so a
+      hostile server flipping it achieves at most a lockout, never a downgrade. The three rules below
       are corollaries of this one principle, not separate defenses bolted on top of a trusted flag.
       <br><br>
       <strong>1. The authority is a durable local mode pin &mdash; separate from the WK, which is
@@ -473,7 +476,7 @@
       <em>lock</em> action only; revoke/workspace-delete is a separate, per-workspace concern that
       v1 defers (§9.2) and that must never trigger this wipe. On next use,
       plaintext workspaces re-sync and render as usual; an <code>e2ee</code>-pinned workspace
-      re-enters the quarantine (rule 3) read-only until its WK is re-pasted &mdash; so the wipe never
+      re-enters its locked read-only state (rule 3) until its WK is re-pasted &mdash; so the wipe never
       downgrades, and the plaintext-confirmation path is still <strong>not</strong> offered for a
       pinned workspace. v1 deliberately does <em>not</em> support clearing one workspace's WK while
       you keep using others: that per-workspace selectivity is what forces chasing scattered
@@ -481,8 +484,8 @@
       <em>non-destructive</em> lock (drop the key, data stays sealed rather than wiped) is a post-v1
       option via at-rest encryption &mdash; §14.
       The pin is local and earned by decrypting the canary, so the server's
-      <code>encryption_mode</code> still carries zero authority &mdash; the authority is the durable
-      pin, not the server flag and not the ephemeral key.
+      <code>encryption_mode</code> still carries zero downgrade authority &mdash; the mode authority is
+      the durable pin, not the server flag and not the ephemeral key.
       <br><br>
       <strong>2. The <code>enc:v1:</code> prefix is not self-authorizing, and the check belongs at
       the wire boundary.</strong> A hostile server could strip the prefix and serve attacker-chosen
@@ -500,26 +503,44 @@
     </div>
 
     <div class="warn">
-      <strong>3. The only genuinely-uncertain case: a membership the client has never pinned.</strong>
+      <strong>3. The genuinely-uncertain case: a never-pinned membership the server marks
+      <code>none</code>.</strong>
       Once a workspace is pinned (rule 1) its mode is settled locally and the rules above govern it
       &mdash; including the "locked" state of an <code>e2ee</code> pin whose WK was cleared, which is
-      <strong>read-only and offers only "paste WK," never a downgrade.</strong> The remaining gap is a
-      membership the client has <em>never</em> pinned &mdash; a brand-new device or reinstall &mdash;
-      where it cannot yet know cryptographically whether the workspace is encrypted and must not ask
-      the server (an active server can present an existing E2EE workspace as plaintext, accept
-      plaintext writes before the user is prompted for a key, and exfiltrate new content). One rule
-      closes that window:
+      <strong>read-only and offers only "paste WK," never a downgrade.</strong> For a membership the
+      client has <em>never</em> pinned &mdash; a brand-new device, reinstall, or freshly accepted
+      invite &mdash; the server's <code>encryption_mode</code> is the only signal available, and it is
+      trustworthy in exactly one direction.
       <br><br>
-      <strong>Any unpinned workspace membership is quarantined as encryption-uncertain.</strong> It
-      renders read-only with a banner, and <strong>no local writes are permitted</strong> until
-      resolved. Two resolution paths, each of which sets the durable pin: (a) paste a WK that
-      validates against <code>wk_canary</code> &rarr; pin <code>e2ee</code>; (b) explicitly confirm
-      "this workspace is plaintext" &rarr; pin <code>plaintext</code>. The plaintext-confirmation
-      path exists <em>only</em> here, for never-pinned memberships &mdash; it is unreachable once a
-      pin exists, which is exactly what makes clearing a WK safe.
+      <strong>Trust "e2ee," distrust "none."</strong> Acting on <code>encryption_mode = 'e2ee'</code>
+      can only make the client <em>stricter</em>: it demands a WK before rendering or writing anything
+      (fail-closed). The worst a hostile server gains by falsely flagging a plaintext workspace
+      <code>e2ee</code> is a lockout &mdash; a pasted WK won't validate against a real or forged canary
+      &mdash; which is a denial of service we can't prevent against a hostile server anyway, and which
+      never leaks or accepts plaintext. Acting on <code>encryption_mode = 'none'</code>, by contrast,
+      would make the client <em>laxer</em> &mdash; render server plaintext and accept plaintext writes
+      &mdash; which is exactly the downgrade a hostile server wants. So the field is trusted only in
+      the direction that fails safe, which splits the never-pinned case in two:
       <br><br>
-      This rule covers every entry point where a membership first becomes visible locally without a
-      pre-existing pin:
+      <strong>(a) Server says <code>e2ee</code> &rarr; key-required (happy path).</strong> Render
+      nothing and prompt "this workspace needs its key"; the user pastes a WK, and validating it
+      against <code>wk_canary</code> (§8.2) sets the <code>e2ee</code> pin. One resolution path, no
+      "this is plaintext" option &mdash; the server has positively (and safely) told us it's
+      encrypted, so we just prompt for the key before loading.
+      <br><br>
+      <strong>(b) Server says <code>none</code> &rarr; encryption-uncertain quarantine.</strong> This
+      is the one case the server can't resolve for us: a real plaintext workspace and a hostile
+      downgrade of an <code>e2ee</code> one look identical. Render read-only with a banner,
+      <strong>no local writes</strong>, and offer <em>both</em> resolutions, each of which sets the
+      durable pin: paste a WK that validates against <code>wk_canary</code> &rarr; pin
+      <code>e2ee</code> (this is what defeats a downgrade lie); or explicitly confirm "this workspace
+      is plaintext" &rarr; pin <code>plaintext</code>. The plaintext-confirmation path exists
+      <em>only</em> here &mdash; never-pinned <em>and</em> server-says-<code>none</code> &mdash; which
+      is what keeps it unreachable once a pin exists and makes clearing a WK safe.
+      <br><br>
+      This first-encounter handling governs every entry point where a membership first becomes visible
+      locally without a pre-existing pin (the rollout bullet is the one deliberate, bootstrap-only
+      exception that trusts the server's <code>none</code>):
       <ul>
         <li><strong>Self-create on this device:</strong> both create paths resolve immediately
           inside the create RPC, so the quarantine window is effectively zero. The plaintext create
@@ -527,13 +548,14 @@
           workspaces would enter quarantine on creation, contradicting the "behave as today"
           premise. The E2EE create flow (§8.1) generates the WK and validates it against the canary
           it just minted.</li>
-        <li><strong>Accept invitation on this device:</strong> the accept flow (§8.3) leaves the
-          workspace encryption-uncertain pending the user's resolution (paste WK or confirm
-          plaintext). Brief quarantine while the user acts.</li>
+        <li><strong>Accept invitation on this device:</strong> a shared E2EE workspace reports
+          <code>e2ee</code>, so the accept flow (§8.3) takes branch (a) &mdash; prompt for the
+          out-of-band WK before loading. Only a server claiming the shared workspace is plaintext
+          drops it into branch (b)'s quarantine.</li>
         <li><strong>Existing membership encountered on a new device or after reinstall:</strong>
-          the membership row arrives via sync without going through accept_invitation and there's
-          no local pin. Same rule &mdash; the user pastes their WK (if E2EE) or confirms plaintext
-          before any local writes.</li>
+          the membership row arrives via sync without going through <code>accept_invitation</code>
+          and there's no local pin. Same split &mdash; branch (a) prompts for the WK when the server
+          says <code>e2ee</code> (§8.2), branch (b) quarantines when it says <code>none</code>.</li>
         <li><strong>Pre-existing memberships on the rollout release &mdash; trust the server, build
           nothing.</strong> The first release that introduces mode pins finds every pre-existing
           workspace unpinned. We initialize those pins <em>directly from the server's
@@ -850,13 +872,17 @@ CREATE TRIGGER blocks_require_ciphertext_for_e2ee_trg
         themselves</strong> &mdash; Signal, in person, sealed envelope, encrypted email, password
         manager share, whatever they trust for this contact. The app does not transmit the WK
         through its own server channel.</li>
-      <li>Collaborator accepts the invitation server-side as today. The accept flow locally marks
-        the workspace as <em>encryption-uncertain</em> (per §6's first-encounter rule) &mdash;
-        read-only with a banner asking the user to resolve. Two resolution paths in the UI:
-        paste the WK from out-of-band (pins to E2EE), or explicitly confirm "this is a plaintext
-        workspace" (pins to plaintext). No local writes until one of those happens. This is the
-        defense against a hostile server claiming a shared E2EE workspace is plaintext on the
-        collaborator's first sync.</li>
+      <li>Collaborator accepts the invitation server-side as today. Because the shared workspace is
+        E2EE the server reports <code>encryption_mode = 'e2ee'</code>, so per §6 rule 3 the
+        collaborator takes the <em>key-required</em> happy path (branch a): read-only with a "paste
+        the key you were sent" prompt, no local writes until the out-of-band WK validates against
+        <code>wk_canary</code> (which sets the e2ee pin). There is no "this is plaintext" option here
+        &mdash; the server has positively told us it's encrypted, and trusting that direction only
+        fails closed (a key prompt), never down. The downgrade defense is the other branch: if a
+        hostile server instead claimed this shared workspace was <em>plaintext</em>, the collaborator
+        would be a never-pinned + server-says-<code>none</code> membership, land in branch (b)'s
+        encryption-uncertain quarantine, and could still paste the out-of-band WK to defeat the
+        lie.</li>
     </ol>
 
     <div class="warn">
@@ -1069,13 +1095,14 @@ CREATE TRIGGER blocks_require_ciphertext_for_e2ee_trg
       the test.</strong> Because the blocks stream is retargeted globally, the observer drains
       <em>every</em> workspace's rows out of <code>blocks_synced</code>: plaintext workspaces by
       copy-through (no key needed), E2EE workspaces by decrypt. The only rows it must leave staged
-      are the ones it can't turn into plaintext yet &mdash; an E2EE-pinned workspace whose WK isn't
-      loaded ("locked", §6), or an encryption-uncertain workspace (§6 rule 3). A
+      are the ones it can't turn into plaintext yet &mdash; a workspace we treat as E2EE but whose WK
+      isn't loaded (a "locked" pin, §6, <em>or</em> the never-pinned key-required state where the
+      server says <code>e2ee</code>, rule 3a), or an encryption-uncertain workspace (rule 3b). A
       <strong>plaintext</strong>-pinned workspace has no WK by design, so a naive "skip any row
       whose workspace has no WK loaded" would strand its rows in staging forever and the
       app-visible table would never hydrate. Concrete behavior: skip a staging row only when its
-      workspace is E2EE-pinned-without-WK <em>or</em> encryption-uncertain; otherwise apply it
-      immediately (decrypt for E2EE-with-WK, copy-through for plaintext). A drain pass re-processes
+      workspace is E2EE-without-WK (locked or key-required) <em>or</em> encryption-uncertain;
+      otherwise apply it immediately (decrypt for E2EE-with-WK, copy-through for plaintext). A drain pass re-processes
       a workspace's staged rows whenever it becomes materializable &mdash; on WK paste (E2EE) or on
       plaintext confirmation (a never-pinned workspace the user resolves as plaintext).
     </p>
