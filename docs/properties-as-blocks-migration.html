@@ -481,10 +481,36 @@ to read. We're reusing a pattern already in the codebase, not introducing a new 
 
 <p>
 A new same-tx processor watches tree mutations and re-derives the affected parent's
-<code>properties_json</code> in the same transaction. It runs on every commit —
-local writes through <code>block.set(schema, value)</code>, raw <code>tx.create</code>
-from plugins or agents, sync arrivals from other clients. All three converge on the
-same derivation. There is no "you must go through the mutator" rule.
+<code>properties_json</code> in the same transaction. It runs for every commit that
+goes through <code>repo.tx</code> — local writes through
+<code>block.set(schema, value)</code>, and raw <code>tx.create</code> /
+<code>tx.update</code> from plugins or agents. There is no "you must go through the
+mutator" rule for local writes.
+</p>
+
+<p>
+Sync arrivals are the exception and need an explicit second entry point.
+<code>rowEventsTail</code> applies PowerSync-replicated rows directly to the local
+SQLite store without opening a <code>repo.tx</code>, so the same-tx processor does
+not fire on inbound replication. Without a second path, an inbound carrier-only
+mutation from another client lands as a tree change with no corresponding rebuild
+of the local parent's <code>properties_json</code>, and the cell stays stale on the
+receiving client until some other local write retouches the parent. Cell-vs-carrier
+drift across clients also surfaces here: if both clients write to the same parent,
+the carrier rows merge cleanly per-row but the cell's LWW resolution can land on a
+view that doesn't reflect the merged carriers.
+</p>
+
+<p>
+Fix: add a <strong>post-sync derivation handler</strong> on the
+<code>rowEventsTail</code> path that runs the same derivation logic the same-tx
+processor uses, scoped to inbound rows. For each inbound row event whose subject
+is a carrier or value-child, walk up the same one or two levels as the same-tx
+processor, rebuild the parent's <code>properties_json</code>, and write it locally
+in a synthetic tx tagged <code>source: 'sync-derive'</code> so the result is
+indistinguishable from a sync arrival to downstream subscribers (and so it doesn't
+re-replicate). The derivation function itself is shared with the same-tx processor;
+only the trigger and tx-context differ.
 </p>
 
 <figure>
@@ -814,13 +840,19 @@ that readers see; carriers and values become its source.
     <div class="body">
       <div class="name">Same-tx processor, shadow mode</div>
       <p>
-        Ship the carrier-recognition logic and the derivation processor. Wired into
-        the commit pipeline but writes to a <em>shadow</em> column
-        (<code>properties_json_v2</code>) instead of <code>properties_json</code>.
-        Diff the two on every commit; log mismatches.
+        Ship the carrier-recognition logic, the derivation processor, and the
+        post-sync derivation handler (see section 5). Both write to a <em>shadow</em>
+        column (<code>properties_json_v2</code>) instead of
+        <code>properties_json</code>. Diff the two and log mismatches —
+        <strong>scoped to rows that already have at least one carrier child</strong>,
+        so legacy JSON-only rows (the entire pre-backfill population) don't generate
+        noise. Validation in this phase comes from manually-created carriers in dev /
+        staging and from the test suite; the production diff stays quiet by design
+        until Phase 1 starts producing real carrier writes.
       </p>
       <p class="deliv">Deliverable: processor lands, dark-rolls in production, zero
-        user-visible change. Mismatches surface bugs before the cutover.</p>
+        user-visible change. Mismatches on carrier-bearing rows surface bugs before
+        the cutover.</p>
     </div>
   </div>
 
