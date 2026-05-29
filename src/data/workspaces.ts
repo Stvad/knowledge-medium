@@ -332,13 +332,13 @@ export const listWorkspaceMembersWithEmails = async (
 // ---------------------------------------------------------------------------
 
 const SELECT_LOCAL_WORKSPACES_SQL = `
-  SELECT id, name, owner_user_id, create_time, update_time
+  SELECT id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary
   FROM workspaces
   ORDER BY create_time ASC, id ASC
 `
 
 const SELECT_LOCAL_WORKSPACE_BY_ID_SQL = `
-  SELECT id, name, owner_user_id, create_time, update_time
+  SELECT id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary
   FROM workspaces
   WHERE id = ?
   LIMIT 1
