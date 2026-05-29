@@ -235,7 +235,10 @@ const changedRefSchemaNames = (
     .sort()
 }
 
-const PROPERTY_CHILDREN_BACKFILL_BATCH_SIZE = 200
+const PROPERTY_CHILDREN_BACKFILL_BATCH_SIZE = 400
+
+const perSecond = (count: number, ms: number): number =>
+  ms <= 0 ? count * 1000 : Math.round((count / ms) * 1000)
 
 const schemasByScope = (
   schemas: Iterable<AnyPropertySchema>,
@@ -1500,18 +1503,21 @@ export class Repo {
       const scopeSchemaMap = new Map(schemasToScan.map(schema => [schema.name, schema]))
       let afterId = ''
       for (;;) {
+        const scanStartedAt = performance.now()
         const candidates = await this.propertyChildrenBackfillCandidates(
           workspaceId,
           schemasToScan,
           afterId,
           batchSize,
         )
+        const scanMs = performance.now() - scanStartedAt
         if (candidates.length === 0) break
         afterId = candidates[candidates.length - 1]!.id
         processed += candidates.length
         batchCount += 1
         logStart()
 
+        const writeStartedAt = performance.now()
         await this.tx(async tx => {
           for (const candidate of candidates) {
             const live = await tx.get(candidate.id)
@@ -1523,11 +1529,15 @@ export class Repo {
           scope,
           description: 'backfill property children from properties_json',
         })
+        const writeMs = performance.now() - writeStartedAt
+        const batchMs = performance.now() - scanStartedAt
         if (logProgress) {
           console.info(
             `[Repo] property children migration batch ${batchCount} ` +
             `workspace=${workspaceId} scope=${scope} blocks=${candidates.length} ` +
-            `processed=${processed} lastId=${afterId}`,
+            `processed=${processed} lastId=${afterId} ` +
+            `scanMs=${Math.round(scanMs)} writeMs=${Math.round(writeMs)} ` +
+            `batchMs=${Math.round(batchMs)} candidatesPerSecond=${perSecond(candidates.length, batchMs)}`,
           )
         }
       }
@@ -1536,9 +1546,11 @@ export class Repo {
       }
     }
     if (logProgress && loggedStart) {
+      const totalMs = performance.now() - startedAt
       console.info(
         `[Repo] property children migration complete workspace=${workspaceId} ` +
-        `processed=${processed} batches=${batchCount} ms=${Math.round(performance.now() - startedAt)}`,
+        `processed=${processed} batches=${batchCount} ms=${Math.round(totalMs)} ` +
+        `candidatesPerSecond=${perSecond(processed, totalMs)}`,
       )
     }
     return processed

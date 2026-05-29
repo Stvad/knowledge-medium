@@ -211,6 +211,35 @@ describe('child-backed user properties', () => {
     ])
   })
 
+  it('logs migration batch timing and throughput', async () => {
+    env = await setup({activateWorkspace: false})
+    await seedLegacyPropertiesRow(env.h, 'legacy-parent', 'a0', {
+      [env.statusProp.name]: env.statusProp.codec.encode('Doing'),
+    })
+    const messages = await (async (): Promise<string[]> => {
+      const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+      try {
+        await env.repo.backfillPropertyChildrenFromProperties({
+          workspaceId: WS,
+          respectCompletionMarkers: false,
+          logProgress: true,
+        })
+        return info.mock.calls.map(([message]) => String(message))
+      } finally {
+        info.mockRestore()
+      }
+    })()
+
+    expect(messages.some(message => message.includes('batchSize=400'))).toBe(true)
+    const batchMessage = messages.find(message => message.includes('property children migration batch 1'))
+    expect(batchMessage).toEqual(expect.stringContaining('scanMs='))
+    expect(batchMessage).toEqual(expect.stringContaining('writeMs='))
+    expect(batchMessage).toEqual(expect.stringContaining('batchMs='))
+    expect(batchMessage).toEqual(expect.stringContaining('candidatesPerSecond='))
+    const completeMessage = messages.find(message => message.includes('property children migration complete'))
+    expect(completeMessage).toEqual(expect.stringContaining('candidatesPerSecond='))
+  })
+
   it('runs the startup migration when schemas become available for the active workspace', async () => {
     env = await setup({registerStatusProp: false})
     await seedLegacyPropertiesRow(env.h, 'legacy-parent', 'a0', {
