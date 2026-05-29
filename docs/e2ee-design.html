@@ -578,20 +578,46 @@
           the membership row arrives via sync without going through <code>accept_invitation</code>
           and there's no local pin. Same split &mdash; branch (a) prompts for the WK when the server
           says <code>e2ee</code> (§8.2), branch (b) quarantines when it says <code>none</code>.</li>
-        <li><strong>Pre-existing memberships on the rollout release &mdash; trust the server, build
-          nothing.</strong> The first release that introduces mode pins finds every pre-existing
-          workspace unpinned. We initialize those pins <em>directly from the server's
-          <code>encryption_mode</code></em> (all <code>none</code> at this point) &mdash; the one
-          place the design trusts that field. This is safe because the rollout is a
-          <strong>coordinated bootstrap</strong>: we're alpha with a handful of clients, so we simply
-          require that everyone updates before any E2EE workspace is created. At that moment no E2EE
-          workspace exists, so there's nothing for the server to misrepresent. No seed heuristics, no
-          confirmation prompts, no staggered-rollout handling &mdash; we don't build rollout-specific
-          machinery we can avoid by coordinating the update order. If coordination ever broke a
-          late-upgrading device could mis-pin; that's an accepted alpha limitation, not something
-          engineered around. Crucially the trust is scoped to <em>this one bootstrap</em>: the
-          steady-state entry points above (new device, new invite) keep the full pin / quarantine /
-          wire-check defense, so a <em>later</em> server compromise is still contained.</li>
+        <li><strong>Pre-existing memberships on the rollout release &mdash; trust the server once,
+          during the upgrade, gated outside the wiped DB.</strong> The first release that introduces
+          mode pins finds every pre-existing workspace unpinned. We initialize those pins <em>directly
+          from the server's <code>encryption_mode</code></em> (all <code>none</code> at this point)
+          &mdash; the one place the design trusts that field. This is safe because the rollout is a
+          <strong>coordinated bootstrap</strong>: we're alpha with a handful of clients, so we require
+          everyone updates before any E2EE workspace is created. At that moment no E2EE workspace
+          exists, so there's nothing for the server to misrepresent. No seed heuristics, no
+          confirmation prompts, no staggered-rollout handling.
+          <br><br>
+          <strong>The seed must fire exactly once and never re-fire &mdash; in particular not after a
+          §6 Lock &amp; wipe</strong>, which recreates an empty SQLite DB while E2EE workspaces may by
+          then exist. A DB-resident "seeded" marker (a schema-state / version row in the SQLite file,
+          or the like) would be erased by the wipe and let the seed re-run on the empty DB &mdash; at
+          which point a hostile server could present an unpinned <code>e2ee</code> membership as
+          <code>none</code> and win a durable plaintext pin. Two properties prevent that, and this
+          gating &mdash; not the prose above &mdash; is the load-bearing part of the bullet:
+          <ul>
+            <li><strong>Gated in localStorage, version-keyed &mdash; not in the wiped DB.</strong> The
+              "pins seeded" marker lives in the same wipe-surviving localStorage as the pins
+              themselves (rule 1), and the seed is a one-time migration keyed to the pre-pin &rarr;
+              pin-aware app-version transition. It is <em>never</em> triggered by "DB is empty" or
+              "membership unpinned," so a recreated DB can't re-arm it.</li>
+            <li><strong>Fallback is quarantine, never re-seed.</strong> Outside that one upgrade, an
+              unpinned membership <em>always</em> takes the steady-state path above &mdash; branch (a)
+              for server-says-<code>e2ee</code>, branch (b) quarantine for
+              server-says-<code>none</code>. The server-trusting seed is unreachable thereafter, so
+              even if the marker were somehow lost the worst case is a quarantine prompt, not a silent
+              plaintext pin.</li>
+          </ul>
+          This is what closes the post-wipe downgrade: pins survive the wipe in localStorage, so a
+          membership that <em>was</em> pinned re-syncs already pinned (an <code>e2ee</code> pin
+          re-enters locked read-only until its WK is re-pasted, rule 3), and a genuinely-new unpinned
+          <code>e2ee</code> membership the server tries to pass off as <code>none</code> lands in
+          branch (b) quarantine &mdash; neither path reaches the seed. If coordination ever broke
+          during the <em>initial</em> upgrade a late-upgrading device could mis-pin; that's an accepted
+          alpha limitation of the one-time bootstrap, not a standing exposure. The trust is scoped to
+          <em>this one upgrade</em>: the steady-state entry points (new device, new invite) keep the
+          full pin / quarantine / wire-check defense, so a <em>later</em> server compromise &mdash; or
+          any post-wipe re-sync &mdash; stays contained.</li>
       </ul>
       The cost is one resolution step per workspace per new device &mdash; not free, but the
       alternative is silently accepting attacker plaintext on a workspace the user has every reason
