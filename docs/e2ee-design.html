@@ -1,0 +1,1811 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>End-to-End Encryption Design</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --fg: #171717;
+      --muted: #5f6368;
+      --line: #d6d9de;
+      --code: #f5f6f8;
+      --accent: #0f766e;
+      --accent-soft: #d1faf2;
+      --warn: #b45309;
+      --warn-soft: #fef3c7;
+      --reject: #9f1239;
+      --reject-soft: #ffe4e6;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --fg: #e8eaed;
+        --muted: #a8adb4;
+        --line: #343941;
+        --code: #20242a;
+        --accent: #5eead4;
+        --accent-soft: #134e4a;
+        --warn: #fbbf24;
+        --warn-soft: #422006;
+        --reject: #fda4af;
+        --reject-soft: #4c0519;
+      }
+    }
+
+    body {
+      margin: 0;
+      color: var(--fg);
+      background: Canvas;
+      line-height: 1.55;
+    }
+
+    main {
+      max-width: 880px;
+      margin: 0 auto;
+      padding: 40px 24px 56px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 2rem;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin: 36px 0 8px;
+      font-size: 1.3rem;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 4px;
+    }
+
+    h3 {
+      margin: 24px 0 6px;
+      font-size: 1.05rem;
+    }
+
+    p {
+      margin: 0 0 14px;
+    }
+
+    ul, ol {
+      margin: 0 0 16px 20px;
+      padding: 0;
+    }
+
+    li {
+      margin-bottom: 4px;
+    }
+
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    }
+
+    code {
+      padding: 0.08rem 0.25rem;
+      border-radius: 4px;
+      background: var(--code);
+      font-size: 0.92em;
+    }
+
+    pre {
+      overflow-x: auto;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--code);
+      font-size: 0.88em;
+      line-height: 1.5;
+    }
+
+    pre code {
+      padding: 0;
+      background: transparent;
+    }
+
+    .lede {
+      color: var(--muted);
+      font-size: 1.05rem;
+    }
+
+    .decision {
+      border-left: 3px solid var(--accent);
+      padding: 10px 14px;
+      background: var(--accent-soft);
+      border-radius: 0 6px 6px 0;
+      margin: 12px 0 18px;
+    }
+
+    .decision strong {
+      color: var(--accent);
+    }
+
+    .warn {
+      border-left: 3px solid var(--warn);
+      padding: 10px 14px;
+      background: var(--warn-soft);
+      border-radius: 0 6px 6px 0;
+      margin: 12px 0 18px;
+    }
+
+    .reject {
+      border-left: 3px solid var(--reject);
+      padding: 10px 14px;
+      background: var(--reject-soft);
+      border-radius: 0 6px 6px 0;
+      margin: 12px 0 18px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0 20px;
+      font-size: 0.95em;
+    }
+
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 8px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      font-weight: 600;
+      color: var(--muted);
+      font-size: 0.85em;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    figure {
+      margin: 18px 0 22px;
+      padding: 0;
+    }
+
+    figcaption {
+      color: var(--muted);
+      font-size: 0.9em;
+      margin-top: 6px;
+      text-align: center;
+    }
+
+    svg {
+      display: block;
+      margin: 0 auto;
+      max-width: 100%;
+      height: auto;
+    }
+
+    .diagram {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      background: var(--code);
+    }
+
+    .toc {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px 22px;
+      background: var(--code);
+      margin: 20px 0 28px;
+    }
+
+    .toc ol {
+      margin: 6px 0 0 18px;
+    }
+
+    .toc li {
+      margin-bottom: 2px;
+    }
+
+    .toc a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    .toc a:hover {
+      text-decoration: underline;
+    }
+
+    .meta {
+      color: var(--muted);
+      font-size: 0.9em;
+      margin: -4px 0 24px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>End-to-End Encryption Design</h1>
+    <p class="meta">Status: sketch / not yet committed to. Discussion artifact.</p>
+    <p class="lede">
+      Per-workspace opt-in E2EE with user-managed workspace keys. Supabase and the network see
+      only ciphertext for content in encrypted workspaces; plaintext workspaces remain fully
+      server-readable and keep all current and future server-side features. The user holds the
+      key, types/pastes it on each device, and shares it with collaborators over whatever channel
+      they trust.
+    </p>
+
+    <div class="toc">
+      <strong>Contents</strong>
+      <ol>
+        <li><a href="#goals">Goals &amp; non-goals</a></li>
+        <li><a href="#threat">Threat model</a></li>
+        <li><a href="#current">Why the current architecture is friendly to this</a></li>
+        <li><a href="#shape">Design shape</a></li>
+        <li><a href="#wk">Workspace key: shape, lifecycle, and storage</a></li>
+        <li><a href="#crypto">Cryptographic choices</a></li>
+        <li><a href="#schema">Schema additions</a></li>
+        <li><a href="#flows">User-visible flows</a></li>
+        <li><a href="#seam">Sync boundary &amp; per-column encryption</a></li>
+        <li><a href="#duality">Mode-by-mode behavior</a></li>
+        <li><a href="#prep">Architectural prep that pays off regardless</a></li>
+        <li><a href="#rejected">Considered &amp; rejected</a></li>
+        <li><a href="#hierarchy">Adding the hierarchy later (if needed)</a></li>
+        <li><a href="#open">Open questions</a></li>
+        <li><a href="#tradeoffs">Tradeoffs we're accepting</a></li>
+      </ol>
+    </div>
+
+    <h2 id="goals">1. Goals &amp; non-goals</h2>
+
+    <h3>Goals</h3>
+    <ul>
+      <li>Workspace owner can mark a workspace as <strong>end-to-end encrypted</strong> at creation. Mode is immutable thereafter.</li>
+      <li>For E2EE workspaces, Supabase (and anyone with DB access) sees only ciphertext for
+        <code>blocks.content</code>, <code>blocks.properties_json</code>, <code>blocks.references_json</code>.</li>
+      <li>Plaintext workspaces remain bit-identical to today &mdash; same schema, same RLS, same
+        access to server-side features (current and future).</li>
+      <li>Multi-device: a user can decrypt their E2EE workspaces on any device they sign in on by
+        pasting the workspace key once per device.</li>
+      <li>Sharing: an owner can give another user access by sending them the workspace key over
+        whatever channel they trust (Signal, in person, encrypted email, etc.).</li>
+    </ul>
+
+    <h3>Non-goals (for v1)</h3>
+    <ul>
+      <li>Hiding metadata (workspace structure, block tree shape, edit timing, who-edited-what).</li>
+      <li>Defense against a compromised local device. OS-level disk encryption is the right tool;
+        OPFS already gives per-origin isolation.</li>
+      <li>Cryptographic verification of authorship (signed writes). Useful later, not in scope now.</li>
+      <li>Server-mediated key delivery. The app deliberately does not transmit workspace keys
+        through its own server channel &mdash; the user picks the channel. This eliminates an
+        entire class of MITM concerns at the cost of one extra step at share time.</li>
+      <li>Account recovery without the user's workspace key. Lost key = lost data; the UI surfaces
+        this clearly at create time.</li>
+      <li>Server-side features over encrypted workspaces (search, AI, embeddings). They simply
+        don't apply.</li>
+    </ul>
+
+    <h2 id="threat">2. Threat model</h2>
+    <p>
+      The threat we're addressing is the most common one users actually ask about: <em>"can the
+      hosting provider read my notes?"</em> Concretely, in v1:
+    </p>
+    <ul>
+      <li><strong>In scope</strong>: passive or active attacker with full read access to the
+        Supabase Postgres, the PowerSync replica, network traffic to/from Supabase, and Supabase
+        logs/backups. They must not learn the contents of E2EE-workspace blocks.</li>
+      <li><strong>Out of scope</strong>: attacker who controls the user's browser at runtime (they
+        can read decrypted data and exfiltrate the key); attacker who can compromise the client
+        build pipeline (they can ship a backdoored client); attacker who can perform traffic
+        analysis on edit patterns; attacker who can intercept the user's chosen out-of-band
+        channel for sharing the workspace key (that's a property of the channel, not of this
+        system).</li>
+    </ul>
+    <p>
+      Notably, the user-managed key model means active attackers on the server gain very little
+      power over confidentiality: the server never sees a workspace key in any form, so there's
+      nothing to substitute, MITM, or extract. The attacker can serve ciphertext rows or refuse
+      to serve them; they can't read them.
+    </p>
+
+    <h2 id="current">3. Why the current architecture is friendly to this</h2>
+    <p>
+      The codebase is already structured in a way that makes E2EE tractable rather than invasive:
+    </p>
+    <ul>
+      <li><strong>Server is blind storage today.</strong> RLS policies filter by workspace membership,
+        not content. No <code>tsvector</code>, no <code>pg_trgm</code>, no AI/embeddings, no
+        webhooks read block content.</li>
+      <li><strong>Workspace is already the RLS boundary.</strong> Per-workspace key material maps
+        cleanly onto a unit that already exists.</li>
+      <li><strong>Per-user OPFS SQLite</strong> via <code>kmp-v6-&lt;user_id&gt;.db</code> gives
+        physical isolation between users on a shared device.</li>
+      <li><strong>PowerSync upload compaction</strong> already coalesces edits per block, which
+        keeps wire overhead low independent of encoding.</li>
+      <li><strong>Client-side edit log</strong> already exists (<code>tx_context</code>,
+        <code>command_events</code>) &mdash; useful if we ever need to
+        move history off the server for encrypted workspaces.</li>
+    </ul>
+
+    <h2 id="shape">4. Design shape</h2>
+
+    <p>Three properties drive the design:</p>
+    <ol>
+      <li><strong>Per-workspace opt-in.</strong> One user can have plaintext and E2EE workspaces
+        side by side on the same device, in the same local DB.</li>
+      <li><strong>Per-column encryption with the existing schema.</strong> Encrypt the three
+        content columns in place rather than consolidating them into one opaque payload. Preserves
+        PowerSync column-level PATCH granularity, keeps plaintext workspaces bit-identical, and
+        avoids a schema migration that would touch every workspace.</li>
+      <li><strong>User-managed workspace key.</strong> Each E2EE workspace has a single symmetric
+        key. The user is responsible for storing it and transmitting it to collaborators. The
+        server has no role in key management &mdash; no key store, no key wrapping, no
+        per-user identity material.</li>
+    </ol>
+
+    <div class="decision">
+      <strong>Decision.</strong> v1 ships the simple model: one symmetric workspace key (WK) per
+      encrypted workspace, generated client-side, surfaced to the user once at create, stored by
+      the user (password manager, paper, etc.), and pasted on additional devices. Sharing is
+      out-of-band. No server-side key store, no asymmetric crypto, no KDF, no recovery codes.
+    </div>
+
+    <h2 id="wk">5. Workspace key: shape, lifecycle, and storage</h2>
+
+    <p>
+      The workspace key (WK) is the only secret in the entire design.
+    </p>
+
+    <table>
+      <tr><th>Property</th><th>Value</th></tr>
+      <tr><td>Material</td><td>256 random bits, generated client-side via
+        <code>crypto.getRandomValues</code>.</td></tr>
+      <tr><td>Lifetime</td><td>One per workspace, generated at workspace create. Stable for the
+        life of the workspace unless explicitly rotated.</td></tr>
+      <tr><td>User-facing format</td><td><code>kmp-wk-1:&lt;base32(32 bytes)&gt;</code> &mdash;
+        61-character paste-friendly string (52 unpadded base32 chars + 9-char prefix). The
+        <code>1</code> reserves a clean upgrade path.</td></tr>
+      <tr><td>Where it lives</td><td>(a) the user's password manager / backup of their choice;
+        (b) on each device the user has pasted it on, as a <strong>non-extractable WebCrypto
+        <code>CryptoKey</code> in IndexedDB</strong>, keyed by <code>(user_id, workspace_id)</code>.
+        Non-extractable means JS can <em>use</em> the key
+        (<code>crypto.subtle.encrypt</code>/<code>decrypt</code>) but <code>exportKey</code> throws,
+        so a script that gets onto the origin (XSS, a hostile extension) can't read the key bytes
+        out and exfiltrate them &mdash; the worst it can do is use the key while the page is open
+        (decrypt-and-leak plaintext), not steal it for offline, forever decryption. The raw bytes
+        therefore exist only transiently: once at generation (shown for backup) and once at paste
+        (imported, then discarded). IndexedDB rather than localStorage because localStorage holds
+        strings only &mdash; it can't store a non-extractable <code>CryptoKey</code>, and raw key
+        bytes in localStorage are readable by any origin script. Cross-tab propagation uses
+        <code>BroadcastChannel</code> instead of the <code>storage</code> event; IndexedDB can be
+        evicted under storage pressure, which is fine because the model already requires the user to
+        keep a backup. Never the server, in any form.</td></tr>
+      <tr><td>Validation on paste</td><td>Decrypt <code>workspaces.wk_canary</code> and verify
+        the plaintext equals the workspace id. Works on empty workspaces (no blocks needed).
+        AEAD failure or plaintext mismatch &rarr; reject with "that key doesn't decrypt this
+        workspace's data." See §7 (canary column) and §8.2 (paste flow).</td></tr>
+    </table>
+
+    <p>
+      The UI shows the WK exactly once, at create time, with prominent "save this somewhere safe
+      &mdash; there is no recovery" copy and a recommendation to paste it into a password manager.
+      A confirmation step ("type the last 6 characters") ensures the user actually saw it rather
+      than dismissing the dialog.
+    </p>
+
+    <h2 id="crypto">6. Cryptographic choices</h2>
+
+    <table>
+      <tr><th>Concern</th><th>Choice</th><th>Why</th></tr>
+      <tr>
+        <td>Symmetric AEAD</td>
+        <td>AES-256-GCM</td>
+        <td>Native in WebCrypto, no dependency. XChaCha20-Poly1305 wins on two axes &mdash; platforms
+          without AES hardware, and a 192-bit nonce that removes the random-nonce birthday bound
+          (next row) outright &mdash; but neither is decisive at our write volumes, and AES-GCM avoids
+          pulling in a crypto dependency. Revisit if the nonce budget or non-AES targets ever bind.</td>
+      </tr>
+      <tr>
+        <td>Nonce</td>
+        <td>96-bit random per ciphertext</td>
+        <td>Per-column random nonce. Random 96-bit nonces are birthday-bounded: NIST SP 800-38D caps a
+          single key at ~2<sup>32</sup> invocations to keep the collision probability below
+          ~2<sup>-33</sup>, where one invocation is one column-write of one block, summed across
+          <em>all</em> collaborators (who share the one WK) over the workspace's entire life. A
+          personal or small-team note workspace stays many orders of magnitude under 2<sup>32</sup>
+          (~4&nbsp;billion encryptions), so reuse is negligible &mdash; but that is the stated budget
+          and assumption, not a hand-wave: nonce reuse is catastrophic for GCM (it leaks the XOR of
+          the two plaintexts and enables forgeries via auth-key recovery). A workspace that could ever
+          approach the bound should move to a counter/deterministic nonce or the wider-nonce AEAD
+          above.</td>
+      </tr>
+      <tr>
+        <td>AAD (associated data)</td>
+        <td>length-prefixed <code>block_id &Vert; workspace_id &Vert; column_name &Vert; schema_version</code></td>
+        <td>Prevents the server from swapping ciphertexts between blocks, between workspaces, or between
+          columns of the same block. The fields must use an <strong>unambiguous canonical
+          encoding</strong> &mdash; length-prefix each field (or a delimiter byte that cannot occur in
+          any field, e.g. <code>0x1F</code>, already used for structured trigger messages in
+          <code>clientSchema.ts</code>) &mdash; so that <code>"A"&Vert;"BC"</code> and
+          <code>"AB"&Vert;"C"</code> can't alias over variable-length TEXT ids and defeat the very
+          cross-binding the AAD exists to provide. The same encoding applies to the canary's AAD
+          (§7, §8.1). <code>schema_version</code> <em>is</em> the envelope version (ciphertext-format
+          row below), so it is reconstructable at decrypt time from the <code>enc:vN:</code> tag rather
+          than stored separately; it reserves room for future format upgrades (e.g. a hierarchy
+          migration).</td>
+      </tr>
+      <tr>
+        <td>Ciphertext format</td>
+        <td><code>"enc:v1:" + base64url(nonce &Vert; ciphertext)</code></td>
+        <td>The prefix identifies the envelope <em>format</em> (version dispatch for the decrypt routine), <em>not</em> whether to decrypt &mdash; per §6 only the durable local mode pin decides that. Within a pinned-E2EE workspace every wire value must already be an <code>enc:v1:</code> envelope (§7 enforces it server-side), so here the prefix is a format tag and tamper/sanity check, never a trigger that routes a row into decrypt/error handling on its own. A plaintext-workspace value that happens to start with <code>enc:v1:</code> is therefore left untouched, and the server can't influence first-encounter behavior by adding or stripping the prefix. The <code>v1</code> reserves a clean upgrade path &mdash; and the version tag <em>is</em> the AAD's <code>schema_version</code>: the envelope carries only <code>nonce &Vert; ciphertext</code> (no separate version field), so a decryptor reconstructs the exact AAD from the prefix alone. If a future format ever needs the payload schema version to diverge from the envelope version, that value must move into the envelope so the AAD stays reconstructable.</td>
+      </tr>
+      <tr>
+        <td>WK display/paste format</td>
+        <td><code>kmp-wk-1:&lt;base32&gt;</code></td>
+        <td>Base32 (Crockford or RFC 4648 without padding) is paste-friendly across messaging apps and looks reasonable on paper. The <code>kmp-wk-1:</code> prefix makes mis-pasted keys identifiable.</td>
+      </tr>
+      <tr>
+        <td>KDF</td>
+        <td>None &mdash; the WK <em>is</em> the key.</td>
+        <td>No passphrase in v1, so no derivation. If the hierarchy is added later (§13), Argon2id over the user's vault passphrase is the right primitive.</td>
+      </tr>
+    </table>
+
+    <div class="decision">
+      <strong>Mode authority is local and cryptographically earned, not a server flag.</strong> A
+      workspace is E2EE <em>for this client</em> iff the client holds a durable local pin marking it
+      so &mdash; a pin set the first time a WK validates against the workspace's <code>wk_canary</code>,
+      never by the server. <code>workspaces.encryption_mode</code> is a server-maintained projection
+      (§7) with <strong>zero downgrade authority</strong>: the durable pin, never this flag, decides
+      whether decrypted content is treated as authoritative and whether plaintext writes are allowed.
+      The flag is consulted only in the direction that <em>fails safe</em> &mdash; an unpinned
+      membership the server marks <code>e2ee</code> is held key-required until a WK validates
+      (rule 3a), which can only <em>add</em> a key prompt, never authorize plaintext &mdash; so a
+      hostile server flipping it achieves at most a lockout, never a downgrade. The three rules below
+      are corollaries of this one principle, not separate defenses bolted on top of a trusted flag.
+      <br><br>
+      <strong>1. The authority is a durable local mode pin &mdash; separate from the WK, which is
+      only decrypt material.</strong> The client keeps a per-<code>(user, workspace)</code> <em>mode
+      pin</em> in localStorage (<code>e2ee</code> | <code>plaintext</code>) &mdash; separate from the
+      WK store (§5, now IndexedDB) and <strong>not</strong> wiped by the Lock &amp; wipe action
+      (below). The pin is set once and is
+      locally immutable thereafter (mirroring §7's server-side immutability): a workspace pins to
+      <code>e2ee</code> the moment a WK first validates against its canary &mdash; at create (§8.1)
+      or first paste (§8.2) &mdash; and pins to <code>plaintext</code> on a plaintext create or
+      explicit confirmation. The WK is <em>decrypt material only</em>: transient, stored separately,
+      and never the record of mode. <strong>Locking is a deliberate, coarse, user-only action in
+      v1.</strong> "Lock &amp; wipe local data" is the <em>only</em> thing that performs the
+      destructive whole-DB wipe, and it is gated behind explicit confirmation and clear "this erases
+      all local data on this device &mdash; you'll re-download and re-paste your keys" warnings.
+      <strong>Nothing automatic triggers it</strong> &mdash; not a sync event, not a membership
+      revoke, not sign-out. (Revoke in particular must never escalate to this wipe: it concerns one
+      workspace, and the wipe is all-workspaces &mdash; see §9.2.) It is distinct from sign-out (it
+      keeps you signed in; it isn't a logout). It flushes the upload queue first so unsynced edits
+      aren't lost; if the flush can't complete (offline, or an edit the server permanently rejects)
+      it <strong>warns the user</strong> that locking now would discard unsynced edits and lets them
+      choose &mdash; reconnect and retry, or proceed and lose them &mdash; rather than silently doing
+      nothing or silently dropping work. It then drops <em>all</em> WKs and <strong>wipes the whole
+      local SQLite DB file</strong> rather than enumerating tables. The file holds every
+      plaintext-bearing surface &mdash; the <code>blocks</code> table, the derived indexes
+      (<code>block_aliases</code>/<code>block_types</code>/<code>blocks_fts</code>), the
+      <code>blocks_synced</code> staging, and PowerSync's <code>ps_crud</code> /
+      <code>ps_crud_rejected</code> queues (whose envelopes hold pre-encryption plaintext, §9.2)
+      &mdash; so deleting the file is <strong>exhaustive by construction</strong>: there's no
+      per-surface checklist to keep complete, which is the right shape given how many times that
+      checklist grew under review. (This maps onto PowerSync's supported clear-and-resync path, not
+      a hack.) Two things live <em>outside</em> the file and are handled separately: the in-memory
+      <code>BlockCache</code> and other live JS state, cleared the simplest way &mdash; a forced page
+      reload after the wipe (a fresh boot re-opens the recreated DB and re-syncs; run the actual file
+      delete on that next boot, before the DB is opened, so wa-sqlite isn't holding the OPFS file
+      when it's removed) &mdash; and the durable pins (in localStorage, deliberately preserved so
+      each workspace's mode stays known). Note this coarse file-wipe is the
+      <em>lock</em> action only; revoke/workspace-delete is a separate, per-workspace concern that
+      v1 defers (§9.2) and that must never trigger this wipe. On next use,
+      plaintext workspaces re-sync and render as usual; an <code>e2ee</code>-pinned workspace
+      re-enters its locked read-only state (rule 3) until its WK is re-pasted &mdash; so the wipe never
+      downgrades, and the plaintext-confirmation path is still <strong>not</strong> offered for a
+      pinned workspace. v1 deliberately does <em>not</em> support clearing one workspace's WK while
+      you keep using others: that per-workspace selectivity is what forces chasing scattered
+      plaintext across every local surface, and the coarse wipe sidesteps it. A
+      <em>non-destructive</em> lock (drop the key, data stays sealed rather than wiped) is a post-v1
+      option via at-rest encryption &mdash; §14.
+      The pin is local and earned by decrypting the canary, so the server's
+      <code>encryption_mode</code> still carries zero downgrade authority &mdash; the mode authority is
+      the durable pin, not the server flag and not the ephemeral key.
+      <br><br>
+      <strong>2. The <code>enc:v1:</code> prefix is not self-authorizing, and the check belongs at
+      the wire boundary.</strong> A hostile server could strip the prefix and serve attacker-chosen
+      plaintext, so the prefix never decides whether a row should be encrypted &mdash; the pin does.
+      For a workspace pinned <code>e2ee</code> (rule 1), every <em>server-origin</em> value must
+      carry <code>enc:v1:</code> on the three content columns; a wire value missing it is treated as
+      tampering (reject, surface a warning). "Server-origin" is the scope that matters: under Layout
+      B (§9.2) the check sits where ciphertext actually appears &mdash; the observer ingesting
+      <code>blocks_synced</code>, plus the upload/decrypt boundary &mdash; <strong>not</strong> at
+      <code>parseBlockRow</code> over the app-visible <code>blocks</code> table, which by design holds
+      <em>decrypted plaintext</em> for E2EE workspaces (and plaintext local edits until
+      <code>uploadData</code> encrypts them). Demanding the prefix on <code>blocks</code> would
+      reject every legitimate decrypted row and break rendering. The server's mode and the prefix are
+      both untrusted; the local pin decides whether to demand a prefix at the boundary.
+    </div>
+
+    <div class="warn">
+      <strong>3. The genuinely-uncertain case: a never-pinned membership the server marks
+      <code>none</code>.</strong>
+      Once a workspace is pinned (rule 1) its mode is settled locally and the rules above govern it
+      &mdash; including the "locked" state of an <code>e2ee</code> pin whose WK was cleared, which is
+      <strong>read-only and offers only "paste WK," never a downgrade.</strong> For a membership the
+      client has <em>never</em> pinned &mdash; a brand-new device, reinstall, or freshly accepted
+      invite &mdash; the server's <code>encryption_mode</code> is the only signal available, and it is
+      trustworthy in exactly one direction.
+      <br><br>
+      <strong>Trust "e2ee," distrust "none."</strong> Acting on <code>encryption_mode = 'e2ee'</code>
+      can only make the client <em>stricter</em>: it demands a WK before rendering or writing anything
+      (fail-closed). The worst a hostile server gains by falsely flagging a plaintext workspace
+      <code>e2ee</code> is a lockout &mdash; a pasted WK won't validate against a real or forged canary
+      &mdash; which is a denial of service we can't prevent against a hostile server anyway, and which
+      never leaks or accepts plaintext. Acting on <code>encryption_mode = 'none'</code>, by contrast,
+      would make the client <em>laxer</em> &mdash; render server plaintext and accept plaintext writes
+      &mdash; which is exactly the downgrade a hostile server wants. So the field is trusted only in
+      the direction that fails safe, which splits the never-pinned case in two:
+      <br><br>
+      <strong>(a) Server says <code>e2ee</code> &rarr; key-required (happy path).</strong> Render
+      nothing and prompt "this workspace needs its key"; the user pastes a WK, and validating it
+      against <code>wk_canary</code> (§8.2) sets the <code>e2ee</code> pin. One resolution path, no
+      "this is plaintext" option &mdash; the server has positively (and safely) told us it's
+      encrypted, so we just prompt for the key before loading.
+      <br><br>
+      <strong>(b) Server says <code>none</code> &rarr; encryption-uncertain quarantine.</strong> This
+      is the one case the server can't resolve for us: a real plaintext workspace and a hostile
+      downgrade of an <code>e2ee</code> one look identical. Render read-only with a banner,
+      <strong>no local writes</strong>, and offer <em>both</em> resolutions, each of which sets the
+      durable pin: paste a WK that validates against <code>wk_canary</code> &rarr; pin
+      <code>e2ee</code> (this is what defeats a downgrade lie); or explicitly confirm "this workspace
+      is plaintext" &rarr; pin <code>plaintext</code>. The plaintext-confirmation path exists
+      <em>only</em> here &mdash; never-pinned <em>and</em> server-says-<code>none</code> &mdash; which
+      is what keeps it unreachable once a pin exists and makes clearing a WK safe.
+      <br><br>
+      This first-encounter handling governs every entry point where a membership first becomes visible
+      locally without a pre-existing pin (the rollout bullet is the one deliberate, bootstrap-only
+      exception that trusts the server's <code>none</code>):
+      <ul>
+        <li><strong>Self-create on this device:</strong> both create paths resolve immediately
+          inside the create RPC, so the quarantine window is effectively zero. The plaintext create
+          flow (existing today) confirms plaintext on success &mdash; otherwise plaintext
+          workspaces would enter quarantine on creation, contradicting the "behave as today"
+          premise. The E2EE create flow (§8.1) generates the WK and validates it against the canary
+          it just minted.</li>
+        <li><strong>Accept invitation on this device:</strong> a shared E2EE workspace reports
+          <code>e2ee</code>, so the accept flow (§8.3) takes branch (a) &mdash; prompt for the
+          out-of-band WK before loading. Only a server claiming the shared workspace is plaintext
+          drops it into branch (b)'s quarantine.</li>
+        <li><strong>Existing membership encountered on a new device or after reinstall:</strong>
+          the membership row arrives via sync without going through <code>accept_invitation</code>
+          and there's no local pin. Same split &mdash; branch (a) prompts for the WK when the server
+          says <code>e2ee</code> (§8.2), branch (b) quarantines when it says <code>none</code>.</li>
+        <li><strong>Pre-existing memberships on the rollout release &mdash; trust the server once,
+          during the upgrade, gated outside the wiped DB.</strong> The first release that introduces
+          mode pins finds every pre-existing workspace unpinned. We initialize those pins <em>directly
+          from the server's <code>encryption_mode</code></em> (all <code>none</code> at this point)
+          &mdash; the one place the design trusts that field. This is safe because the rollout is a
+          <strong>coordinated bootstrap</strong>: we're alpha with a handful of clients, so we require
+          everyone updates before any E2EE workspace is created. At that moment no E2EE workspace
+          exists, so there's nothing for the server to misrepresent. No seed heuristics, no
+          confirmation prompts, no staggered-rollout handling.
+          <br><br>
+          <strong>The seed must fire exactly once and never re-fire &mdash; in particular not after a
+          §6 Lock &amp; wipe</strong>, which recreates an empty SQLite DB while E2EE workspaces may by
+          then exist. A DB-resident "seeded" marker (a schema-state / version row in the SQLite file,
+          or the like) would be erased by the wipe and let the seed re-run on the empty DB &mdash; at
+          which point a hostile server could present an unpinned <code>e2ee</code> membership as
+          <code>none</code> and win a durable plaintext pin. Two properties prevent that, and this
+          gating &mdash; not the prose above &mdash; is the load-bearing part of the bullet:
+          <ul>
+            <li><strong>Gated in localStorage, version-keyed &mdash; not in the wiped DB.</strong> The
+              "pins seeded" marker lives in the same wipe-surviving localStorage as the pins
+              themselves (rule 1), and the seed is a one-time migration keyed to the pre-pin &rarr;
+              pin-aware app-version transition. It is <em>never</em> triggered by "DB is empty" or
+              "membership unpinned," so a recreated DB can't re-arm it.</li>
+            <li><strong>Fallback is quarantine, never re-seed.</strong> Outside that one upgrade, an
+              unpinned membership <em>always</em> takes the steady-state path above &mdash; branch (a)
+              for server-says-<code>e2ee</code>, branch (b) quarantine for
+              server-says-<code>none</code>. The server-trusting seed is unreachable thereafter, so
+              even if the marker were somehow lost the worst case is a quarantine prompt, not a silent
+              plaintext pin.</li>
+          </ul>
+          This is what closes the post-wipe downgrade: pins survive the wipe in localStorage, so a
+          membership that <em>was</em> pinned re-syncs already pinned (an <code>e2ee</code> pin
+          re-enters locked read-only until its WK is re-pasted, rule 3), and a genuinely-new unpinned
+          <code>e2ee</code> membership the server tries to pass off as <code>none</code> lands in
+          branch (b) quarantine &mdash; neither path reaches the seed. If coordination ever broke
+          during the <em>initial</em> upgrade a late-upgrading device could mis-pin; that's an accepted
+          alpha limitation of the one-time bootstrap, not a standing exposure. The trust is scoped to
+          <em>this one upgrade</em>: the steady-state entry points (new device, new invite) keep the
+          full pin / quarantine / wire-check defense, so a <em>later</em> server compromise &mdash; or
+          any post-wipe re-sync &mdash; stays contained.</li>
+      </ul>
+      The cost is one resolution step per workspace per new device &mdash; not free, but the
+      alternative is silently accepting attacker plaintext on a workspace the user has every reason
+      to believe is encrypted.
+    </div>
+
+    <h2 id="schema">7. Schema additions</h2>
+
+    <p>One small migration. No changes to <code>blocks</code> columns; no new tables.</p>
+
+    <pre><code>-- Every object below is schema-qualified (public.*). The repo's migrations run
+-- with an empty search_path (the consolidated initial migration sets
+-- search_path = '' and qualifies all objects), so an unqualified DROP/CREATE/
+-- ALTER/GRANT would not resolve when this sketch is copied into a migration.
+--
+-- encryption_mode is a server-side PROJECTION of canary presence, not the
+-- source of truth: per §6, a client decides "E2EE" from holding a validated
+-- WK, never from this column. It exists for server-side feature gating and
+-- as a UX hint; the CHECK below keeps it in lockstep with wk_canary. It is
+-- an immutable property of a workspace once set.
+ALTER TABLE public.workspaces ADD COLUMN encryption_mode TEXT
+  NOT NULL DEFAULT 'none'
+  CHECK (encryption_mode IN ('none', 'e2ee'));
+
+-- Per-column immutability trigger, matching the existing
+-- blocks_prevent_workspace_change() pattern in the consolidated
+-- migration (concrete function per invariant, not a generic helper).
+CREATE OR REPLACE FUNCTION public.workspaces_prevent_encryption_mode_change()
+  RETURNS trigger
+  LANGUAGE plpgsql AS $$
+begin
+  if OLD.encryption_mode is distinct from NEW.encryption_mode then
+    raise exception 'workspaces.encryption_mode is immutable (% -> %)',
+      OLD.encryption_mode, NEW.encryption_mode;
+  end if;
+  return NEW;
+end;
+$$;
+
+CREATE TRIGGER workspaces_prevent_encryption_mode_change_trg
+  BEFORE UPDATE ON public.workspaces
+  FOR EACH ROW
+  EXECUTE FUNCTION public.workspaces_prevent_encryption_mode_change();
+
+-- create_workspace accepts encryption_mode and a key-check canary
+-- so we can validate pasted WKs even on workspaces that have no
+-- block rows yet (freshly invited or just-created E2EE workspaces).
+-- The canary is an AEAD-encrypted known plaintext (the workspace id);
+-- decrypting it with the candidate WK both authenticates the key
+-- (AEAD failure = wrong key) and confirms it's bound to this workspace
+-- (right key on the wrong workspace's canary fails the plaintext check).
+-- wk_canary format: enc:v1:base64url(nonce || ciphertext) of workspace_id
+-- as the plaintext, with AAD = workspace_id || "canary" || schema_version
+-- (length-prefixed / unambiguous encoding, same as the content AAD -- §6).
+ALTER TABLE public.workspaces ADD COLUMN wk_canary TEXT;
+
+-- NULL for plaintext workspaces; required for E2EE so new devices can
+-- validate a pasted WK before any blocks exist. Two-way (biconditional)
+-- cross-column CHECK: a canary is present iff the mode is e2ee. The
+-- forward direction stops an e2ee row with no canary; the reverse stops a
+-- 'none' row that still carries a canary (e.g. a caller passing the
+-- default mode plus p_wk_canary), which would otherwise let server-side
+-- gating and client prompts misclassify a "plaintext" workspace given
+-- that later sections treat wk_canary IS NULL as the plaintext signal.
+-- Presence alone isn't enough: an e2ee canary (and every E2EE content column,
+-- see the blocks trigger below) must be a syntactically well-formed enc:v1:
+-- AEAD envelope, not merely a prefixed string. Otherwise p_wk_canary =>
+-- 'anything' or content => 'enc:v1:My plaintext note' is accepted -- the
+-- former leaves the workspace unrecoverable (§8.2 can never validate a WK
+-- against it), the latter leaves the server storing readable plaintext. The
+-- server can't prove the bytes are real ciphertext (it has no key), but it can
+-- require the envelope SHAPE: enc:v1: + a *decodable* base64url payload of at
+-- least nonce(12B)+tag(16B) = 28B. A bare {38,} length floor isn't enough: it
+-- still admits payloads that can't decode -- a data-char count of len%4==1
+-- (e.g. 41 chars) is impossible in base64, and stray padding (40 data chars
+-- then '==') is malformed -- so §8.2 clients would fail to decrypt and the
+-- workspace/block would be just as unrecoverable as a missing canary. So
+-- enforce the base64url group grammar: every 4 chars -> 3 bytes, with only a
+-- 2-char (->1B, optional '==') or 3-char (->2B, optional '=') final group
+-- legal. The 28B floor is then >= 9 full groups plus one of those terminals
+-- (>= 38 data chars; data-char count mod 4 is never 1). One shared IMMUTABLE
+-- helper keeps the canary CHECK and the blocks trigger in lockstep.
+-- ReDoS: safe here -- Postgres's regex engine is DFA-based, no backtracking.
+-- The inner {4} is fixed-width so the grammar has no ambiguous decomposition;
+-- measured linear even in V8's backtracking engine (~3ms at 200k chars). Even
+-- so, the CLIENT should not port this regex to gate server-supplied ciphertext
+-- -- it validates by base64url-decode + AEAD verify, which is the real
+-- integrity gate and has no regex surface at all.
+CREATE OR REPLACE FUNCTION public.is_enc_v1_envelope(v text)
+  RETURNS boolean
+  LANGUAGE sql IMMUTABLE AS $$
+  SELECT v ~ '^enc:v1:([A-Za-z0-9_-]{4}){9,}([A-Za-z0-9_-]{4}|[A-Za-z0-9_-]{2}(==)?|[A-Za-z0-9_-]{3}=?)$'
+$$;
+
+ALTER TABLE public.workspaces
+  ADD CONSTRAINT workspaces_wk_canary_matches_mode
+  CHECK (
+    (encryption_mode = 'e2ee') = (wk_canary IS NOT NULL)
+    AND (encryption_mode &lt;&gt; 'e2ee' OR public.is_enc_v1_envelope(wk_canary))
+  );
+
+-- Immutable after create: an editor with write access to the workspaces row
+-- could otherwise replace the canary and brick WK validation for other
+-- members. Enforce this with COLUMN-LEVEL PRIVILEGE, not a trigger bypass.
+-- A session GUC (an earlier SET LOCAL kmp.rotating_wk approach) is forgeable:
+-- any caller who can run SQL as the authenticated role can set it to 'on'
+-- before updating wk_canary, so it cannot scope a bypass to a single RPC.
+-- Instead make wk_canary (and encryption_mode) unwritable by client roles:
+REVOKE UPDATE ON public.workspaces FROM anon, authenticated;
+GRANT  UPDATE (name, update_time) ON public.workspaces TO authenticated;
+-- Grant UPDATE only on the columns clients legitimately write — name and
+-- update_time (renameWorkspace in src/data/workspaces.ts updates both, and the
+-- existing migration already column-grants both) — and omit wk_canary and
+-- encryption_mode. Any client UPDATE that sets wk_canary now
+-- fails with "permission denied for column wk_canary" — direct updates
+-- outside the RPC are impossible, enforced by the privilege system rather
+-- than a forgeable session flag. The sole writer of wk_canary is the
+-- dedicated rotate_workspace_wk RPC (§14): SECURITY DEFINER, running as the
+-- table owner, so it retains column UPDATE while ordinary callers do not.
+-- (This also makes encryption_mode immutable to clients, demoting the
+-- prevent-encryption_mode-change trigger above to defense-in-depth. Client
+-- upload paths must not include wk_canary/encryption_mode in their PATCH
+-- column set, or PostgREST/PowerSync writes will be rejected.)
+
+-- Postgres function signatures include parameter count/types, so a new
+-- create_workspace with extra defaulted params would *overload* the
+-- existing create_workspace(p_name text) rather than replace it — and
+-- create_workspace('foo') would then be ambiguous. Drop the old signature
+-- explicitly, then create the new one and grant it.
+DROP FUNCTION IF EXISTS public.create_workspace(text);
+
+CREATE OR REPLACE FUNCTION public.create_workspace(
+    p_name             text,
+    p_encryption_mode  text DEFAULT 'none',  -- 'none' | 'e2ee'
+    p_workspace_id     text DEFAULT NULL,    -- REQUIRED for e2ee (guard below);
+                                             -- NULL falls back to server-generated
+                                             -- UUID for plaintext (current behavior)
+    p_wk_canary        text DEFAULT NULL     -- required iff p_encryption_mode = 'e2ee'
+  ) RETURNS jsonb
+  -- Carry over the existing RPC's attributes: SECURITY DEFINER is load-bearing
+  -- (workspaces has no INSERT policy for callers, so a non-definer RPC running
+  -- under the caller's RLS can't insert the workspace/member rows and creation
+  -- fails for both modes). search_path is pinned per the SECURITY DEFINER norm.
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path TO 'public'
+  AS $$
+declare
+  v_id        text := coalesce(p_workspace_id, gen_random_uuid()::text);
+  v_user_id   text := auth.uid()::text;
+  v_name      text := coalesce(nullif(trim(p_name), ''), 'Workspace');
+  v_now       bigint := (extract(epoch from now()) * 1000)::bigint;
+  v_workspace public.workspaces;
+  v_member    public.workspace_members;
+begin
+  -- AuthZ: this RPC is SECURITY DEFINER and bypasses RLS, so it must self-guard.
+  -- Reject unauthenticated callers, and bind ownership to auth.uid() rather than
+  -- trusting any client-supplied owner id -- the workspace_members owner row
+  -- inserted below is keyed by auth.uid(), never by a function argument.
+  if auth.uid() is null then
+    raise exception 'create_workspace: authentication required';
+  end if;
+  -- The e2ee canary is minted client-side binding the CLIENT-CHOSEN workspace id
+  -- (it's the canary's plaintext and part of its AAD). If the server were to
+  -- generate a different id, the canary/mode CHECK would still pass, but the
+  -- canary would never validate the WK on reload or another device (it decrypts
+  -- to the client's intended id, not the row's actual id). So e2ee MUST supply
+  -- its own id, and the row is inserted with exactly that id.
+  if p_encryption_mode = 'e2ee' and p_workspace_id is null then
+    raise exception 'create_workspace: p_workspace_id is required for e2ee workspaces';
+  end if;
+  -- Insert the workspace with the CLIENT-CHOSEN id and the two e2ee columns.
+  -- No explicit canary guard is needed: the workspaces_wk_canary_matches_mode
+  -- CHECK (above) enforces canary-present iff e2ee AND canary well-formedness,
+  -- so a missing or garbage p_wk_canary for an e2ee create is rejected here.
+  insert into public.workspaces
+      (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary)
+    values (v_id, v_name, v_user_id, v_now, v_now, p_encryption_mode, p_wk_canary)
+    returning * into v_workspace;
+
+  -- Owner membership keyed by auth.uid() (v_user_id), never a client argument.
+  insert into public.workspace_members (id, workspace_id, user_id, role, create_time)
+    values (gen_random_uuid()::text, v_workspace.id, v_user_id, 'owner', v_now)
+    returning * into v_member;
+
+  return jsonb_build_object(
+    'workspace', to_jsonb(v_workspace),
+    'member', to_jsonb(v_member)
+  );
+end;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.create_workspace(text, text, text, text)
+  TO anon, authenticated, service_role;
+
+-- Defense-in-depth: "the server only sees ciphertext for e2ee workspaces"
+-- must not rest solely on the client's upload hook. A stale client, a missed
+-- hook, or a direct PostgREST write could otherwise land plaintext in an
+-- e2ee workspace's content columns -- the blocks_write RLS policy only checks
+-- writer membership, not payload shape. Enforce it server-side: for any block
+-- whose workspace is e2ee, the three content columns must carry a well-formed
+-- enc:v1: envelope -- the same is_enc_v1_envelope() shape the canary uses, so
+-- a prefixed-but-readable value like 'enc:v1:My plaintext note' (which would
+-- still leak plaintext to the server) is rejected, not just NULL/bare values.
+-- A CHECK can't read another table, so this is a BEFORE trigger that looks the
+-- workspace up (PK lookup, cheap). The client encrypts even "empty" values, so
+-- an e2ee block never legitimately holds bare ''/{}/[].
+CREATE OR REPLACE FUNCTION public.blocks_require_ciphertext_for_e2ee()
+  RETURNS trigger
+  LANGUAGE plpgsql AS $$
+begin
+  if exists (
+    select 1 from public.workspaces w
+    where w.id = NEW.workspace_id and w.encryption_mode = 'e2ee'
+  ) and not (
+    public.is_enc_v1_envelope(NEW.content) and
+    public.is_enc_v1_envelope(NEW.properties_json) and
+    public.is_enc_v1_envelope(NEW.references_json)
+  ) then
+    raise exception 'blocks in an e2ee workspace must carry a well-formed enc:v1: envelope in all content columns';
+  end if;
+  return NEW;
+end;
+$$;
+
+CREATE TRIGGER blocks_require_ciphertext_for_e2ee_trg
+  BEFORE INSERT OR UPDATE ON public.blocks
+  FOR EACH ROW
+  EXECUTE FUNCTION public.blocks_require_ciphertext_for_e2ee();</code></pre>
+
+    <p>
+      That's the entire server-side schema change. Notably <em>not</em> added (saved for the
+      eventual hierarchy migration, §13): <code>user_vault</code>, public keys,
+      <code>workspace_members.wrapped_cek</code>, <code>workspace_invitations.wrapped_cek_for_invitee</code>.
+      The invitation RPCs (<code>invite_member_by_email</code>, <code>list_my_pending_invitations</code>,
+      <code>accept_invitation</code>) keep their existing signatures &mdash; permissions flow
+      through them, key material does not.
+    </p>
+
+    <p>
+      <strong>Sync stream learns one new column.</strong> Both
+      <code>powersync/sync-config.yaml</code> and <code>src/data/workspaceSchema.ts</code>
+      enumerate columns explicitly. The yaml is generated by <code>scripts/gen-sync-config.ts</code>
+      from the schema file, so the actual edit is to <code>WORKSPACE_COLUMNS</code> in
+      <code>workspaceSchema.ts</code>:
+    </p>
+    <ul>
+      <li>Add <code>encryption_mode</code> and <code>wk_canary</code> to
+        <code>WORKSPACE_COLUMNS</code>. Both need to reach clients: the canary for §8.2 WK
+        validation on new devices and empty workspaces (the security-critical one), and the mode
+        as the §6 UX hint that picks which resolution prompt to show first.</li>
+      <li><strong>Surface the canary through the local read path, not just store it.</strong>
+        Adding the columns to <code>WORKSPACE_COLUMNS</code> only makes PowerSync <em>store</em> them
+        in the raw table. The app's local workspace selectors
+        (<code>SELECT_LOCAL_WORKSPACES_SQL</code> / <code>SELECT_LOCAL_WORKSPACE_BY_ID_SQL</code> in
+        <code>src/data/workspaces.ts</code>) project only
+        <code>id, name, owner_user_id, create_time, update_time</code>, and the
+        <code>WorkspaceRow</code>/parse layer matches. The §8.2 paste flow must read
+        <code>wk_canary</code> (and the mode hint) before unlocking, so extend those selectors, the
+        <code>WorkspaceRow</code> type, and the parse function to carry both &mdash; otherwise the
+        security-critical canary is synced but unreachable.</li>
+      <li><strong>Local-schema migration for upgrading clients.</strong> The
+        <code>workspaces</code> table is created with <code>CREATE TABLE IF NOT EXISTS</code> in
+        <code>repoProvider.ts</code>; that's a no-op on devices where the table already exists
+        with the old column set. Editing <code>WORKSPACE_COLUMNS</code> alone would regenerate
+        the raw-table <code>put</code> SQL to reference the new columns, but PowerSync's apply
+        would then fail with a missing-column error on existing clients. Need explicit
+        <code>ALTER TABLE workspaces ADD COLUMN encryption_mode TEXT NOT NULL DEFAULT 'none'</code>
+        and <code>ALTER TABLE workspaces ADD COLUMN wk_canary TEXT</code> migrations. A
+        <code>client_schema_state</code> marker (the existing backfill-marker pattern) is the
+        steady-state fast-path skip, but it is <em>not</em> a sufficient guard on its own &mdash; the
+        ALTERs must be <strong>idempotent on column existence</strong>.
+        <code>CREATE_WORKSPACES_TABLE_SQL</code> is
+        <code>buildCreateTableSql('workspaces', WORKSPACE_COLUMNS)</code> and runs at
+        <code>repoProvider.ts:227</code>, <em>before</em> the gated backfills &mdash; so once
+        <code>WORKSPACE_COLUMNS</code> carries the two new <code>ColumnDef</code>s, a <strong>fresh
+        install or a §6 Lock &amp; wipe</strong> (which recreates the DB) creates
+        <code>workspaces</code> with <code>encryption_mode</code>/<code>wk_canary</code> already
+        present &mdash; carrying their full definitions, including the
+        <code>NOT NULL DEFAULT 'none'</code> &mdash; and with <em>no</em> marker row. A
+        marker-gated-only ALTER would then fire on that fresh DB and throw
+        <code>duplicate column name</code>, blocking startup/resync. So guard each ADD COLUMN on a
+        <code>PRAGMA table_info(workspaces)</code> existence check &mdash; add the column only when
+        absent &mdash; and write the marker afterward regardless: an upgrading device has the columns
+        missing &rarr; they're added (and the <code>DEFAULT</code> backfills existing rows, below); a
+        fresh DB has them already &rarr; the ALTERs are skipped and only the marker is recorded.
+        Either way the migration runs at most once per device and never errors.
+        <strong>Mirror the server's <code>NOT NULL DEFAULT 'none'</code> on the local
+        <code>encryption_mode</code> column.</strong> A bare <code>ADD COLUMN</code> leaves the
+        workspace rows that already exist on an upgrading device as <code>NULL</code> until
+        PowerSync happens to replay each one &mdash; and the §6 rollout seed pins pre-existing
+        workspaces from <code>encryption_mode = 'none'</code>, so those <code>NULL</code> rows
+        would be skipped and left encryption-uncertain on first boot after upgrade. The default
+        backfills existing rows to <code>'none'</code> at migration time (matching the server),
+        and later replays overwrite with the real value. <code>wk_canary</code> stays nullable
+        &mdash; <code>NULL</code> is the correct value for a plaintext workspace.</li>
+      <li>Run <code>yarn gen:sync-config</code> to refresh the yaml; <code>yarn check:sync-config</code>
+        in CI catches anyone who forgets.</li>
+    </ul>
+
+    <h2 id="flows">8. User-visible flows</h2>
+
+    <h3>8.1 Create an encrypted workspace</h3>
+    <ol>
+      <li>User clicks "Create encrypted workspace".</li>
+      <li>Client generates a 32-byte WK via <code>crypto.getRandomValues</code>; encodes it as
+        <code>kmp-wk-1:&lt;base32&gt;</code>.</li>
+      <li>Client picks the workspace id (UUID v4), then encrypts the id with the WK (AAD =
+        <code>workspace_id || "canary" || schema_version</code>, length-prefixed per §6) to produce the
+        <code>wk_canary</code>. The canary is a known-plaintext AEAD blob that any future device
+        can decrypt to validate a pasted WK, even on a workspace that has no blocks yet.</li>
+      <li>Client validates the WK against the canary it just minted, then imports it as a
+        non-extractable <code>CryptoKey</code> in IndexedDB keyed by
+        <code>(user_id, workspace_id)</code> (§5) and sets the durable mode pin for this workspace to
+        <code>e2ee</code> (§6 rule 1). The pin is a separate, WK-independent record, so future loads
+        never trust a server-supplied <code>encryption_mode = 'none'</code> and a Lock &amp; wipe
+        can't downgrade the workspace.</li>
+      <li>Client calls <code>create_workspace(p_name, p_encryption_mode='e2ee', p_workspace_id, p_wk_canary)</code>
+        with the client-chosen id so the canary's plaintext and AAD line up with the server's
+        stored row. Server inserts <code>workspaces</code> with the canary and the owner's
+        <code>workspace_members</code> row, exactly as the plaintext flow does. No WK bytes are
+        sent to the server &mdash; only the canary (which is opaque ciphertext).</li>
+      <li>UI: show the WK once with strong "save this securely &mdash; no recovery is possible"
+        copy. Recommend pasting into a password manager. Confirm-by-retype on the last 6
+        characters before dismissing.</li>
+    </ol>
+
+    <h3>8.2 Open an E2EE workspace on a new device</h3>
+    <ol>
+      <li>User signs in on device 2. PowerSync syncs encrypted block rows for workspaces they're
+        a member of.</li>
+      <li>Client checks the IndexedDB WK store at <code>(user_id, workspace_id)</code> &mdash; no WK present.</li>
+      <li>UI surfaces a "this workspace needs its key" prompt instead of rendering ciphertext.</li>
+      <li>User pastes their stored WK.</li>
+      <li>Client validates by decrypting <code>workspaces.wk_canary</code> with the candidate WK
+        and checking the result equals the workspace id. AEAD failure (wrong key) and plaintext
+        mismatch (right key, wrong workspace) both reject. Works for freshly invited / empty
+        workspaces because the canary is created at workspace-create time, not derived from
+        blocks.</li>
+      <li>On success: import the WK as a non-extractable <code>CryptoKey</code> in IndexedDB (§5) and
+        set the durable mode pin to <code>e2ee</code> (§6 rule 1; the pin is in a separate store and
+        survives a Lock &amp; wipe), then render normally. On failure: surface "that key doesn't
+        decrypt this workspace's data," let the user retry.</li>
+    </ol>
+
+    <h3>8.3 Share an E2EE workspace with another user</h3>
+    <ol>
+      <li>Owner invites the collaborator via the existing
+        <code>invite_member_by_email</code> &rarr; <code>accept_invitation</code> flow. The RPC
+        chain doesn't change; the membership row is plaintext-only metadata.</li>
+      <li>Owner sends the WK to the collaborator over <strong>a channel the user picks
+        themselves</strong> &mdash; Signal, in person, sealed envelope, encrypted email, password
+        manager share, whatever they trust for this contact. The app does not transmit the WK
+        through its own server channel.</li>
+      <li>Collaborator accepts the invitation server-side as today. Because the shared workspace is
+        E2EE the server reports <code>encryption_mode = 'e2ee'</code>, so per §6 rule 3 the
+        collaborator takes the <em>key-required</em> happy path (branch a): read-only with a "paste
+        the key you were sent" prompt, no local writes until the out-of-band WK validates against
+        <code>wk_canary</code> (which sets the e2ee pin). There is no "this is plaintext" option here
+        &mdash; the server has positively told us it's encrypted, and trusting that direction only
+        fails closed (a key prompt), never down. The downgrade defense is the other branch: if a
+        hostile server instead claimed this shared workspace was <em>plaintext</em>, the collaborator
+        would be a never-pinned + server-says-<code>none</code> membership, land in branch (b)'s
+        encryption-uncertain quarantine, and could still paste the out-of-band WK to defeat the
+        lie.</li>
+    </ol>
+
+    <div class="warn">
+      <strong>Sharing is the user's responsibility.</strong> The app does not provide an in-app
+      "send key to Bob" button on purpose. Any in-app key delivery routes through the server,
+      which would re-introduce the MITM concern that motivated this design. The "annoying" extra
+      step (using Signal / a password manager / a piece of paper) is the security property.
+    </div>
+
+    <h2 id="seam">9. Sync boundary &amp; per-column encryption</h2>
+
+    <p>
+      The encrypt/decrypt seam lives in a new module &mdash; call it
+      <code>src/sync/transform.ts</code> &mdash; that sits between the app domain and the
+      PowerSync CRUD edge. It is the single named place where "what crosses the wire" gets
+      transformed.
+    </p>
+
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 0 760 280" xmlns="http://www.w3.org/2000/svg" aria-labelledby="seam-title">
+          <title id="seam-title">Placement of the sync boundary module</title>
+          <style>
+            .stage { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.4; rx: 8; ry: 8; }
+            .stageNeutral { fill: none; stroke: var(--fg); stroke-width: 1.2; rx: 8; ry: 8; }
+            .lbl { fill: var(--fg); font: 13px ui-sans-serif, system-ui, sans-serif; text-anchor: middle; }
+            .lblSm { fill: var(--muted); font: 11px ui-sans-serif, system-ui, sans-serif; text-anchor: middle; }
+            .link { stroke: var(--fg); stroke-width: 1.4; fill: none; color: var(--fg); }
+          </style>
+          <defs>
+            <marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+            </marker>
+          </defs>
+
+          <rect class="stageNeutral" x="20" y="60" width="150" height="70"/>
+          <text class="lbl" x="95" y="90">App domain</text>
+          <text class="lblSm" x="95" y="108">repo.ts, hooks,</text>
+          <text class="lblSm" x="95" y="122">React components</text>
+
+          <line class="link" x1="170" y1="95" x2="220" y2="95" marker-end="url(#arr3)"/>
+
+          <rect class="stage" x="220" y="60" width="170" height="70"/>
+          <text class="lbl" x="305" y="86">sync/transform.ts</text>
+          <text class="lblSm" x="305" y="104">encode &harr; decode</text>
+          <text class="lblSm" x="305" y="120">(the seam)</text>
+
+          <line class="link" x1="390" y1="95" x2="440" y2="95" marker-end="url(#arr3)"/>
+
+          <rect class="stageNeutral" x="440" y="60" width="140" height="70"/>
+          <text class="lbl" x="510" y="90">PowerSync</text>
+          <text class="lblSm" x="510" y="108">CRUD &amp; local DB</text>
+
+          <line class="link" x1="580" y1="95" x2="630" y2="95" marker-end="url(#arr3)"/>
+
+          <rect class="stageNeutral" x="630" y="60" width="110" height="70"/>
+          <text class="lbl" x="685" y="90">Supabase</text>
+          <text class="lblSm" x="685" y="108">Postgres</text>
+
+          <text class="lblSm" x="305" y="170">per-workspace mode lookup</text>
+          <text class="lblSm" x="305" y="186">encrypt / decrypt columns</text>
+          <text class="lblSm" x="305" y="202">payload schema-version migration</text>
+          <text class="lblSm" x="305" y="218">getCek(workspaceId): pluggable WK lookup</text>
+
+          <line class="link" x1="305" y1="130" x2="305" y2="155" marker-end="url(#arr3)"/>
+        </svg>
+      </div>
+      <figcaption>Figure 1 &mdash; The sync boundary is one named module, not behavior scattered across <code>repo.ts</code> and <code>services/powersync.ts</code>.</figcaption>
+    </figure>
+
+    <p>
+      The seam owns two pure functions: <code>encodeForWire(block, mode, getCek)</code> and
+      <code>decodeFromWire(row, mode, getCek)</code>. They start as identity functions and grow
+      transforms over time. Today: per-workspace per-column AES-GCM. Later: schema-version
+      migration of payload shapes, redaction for share-link previews, optional compression if data
+      sizes ever justify it.
+    </p>
+
+    <div class="decision">
+      <strong>Pluggable key lookup.</strong> The seam takes <code>getCek(workspaceId)</code> as a
+      callback rather than reading any global. It returns a usable <code>CryptoKey</code> handle, not
+      raw bytes &mdash; in the simple model the implementation is "fetch the non-extractable
+      <code>CryptoKey</code> from IndexedDB at <code>(user_id, workspace_id)</code>" (§5). If the
+      hierarchy is added later (§13), the implementation becomes "look up in the in-memory
+      unwrapped-CEK map populated at vault unlock." Same call site, two implementations. This is the
+      single most important seam to get right for keeping the hierarchy migration cheap.
+    </div>
+
+    <h3 id="cols">9.1 What "per-column" actually means on the wire</h3>
+
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 0 760 280" xmlns="http://www.w3.org/2000/svg" aria-labelledby="cols-title">
+          <title id="cols-title">Per-column encryption preserves PowerSync's column-level PATCH granularity</title>
+          <style>
+            .panel { fill: none; stroke: var(--line); stroke-width: 1; rx: 6; ry: 6; }
+            .head  { fill: var(--fg); font: 12px ui-sans-serif, system-ui, sans-serif; text-anchor: start; font-weight: 600; }
+            .row   { fill: var(--fg); font: 12px ui-monospace, monospace; text-anchor: start; }
+            .rowMuted { fill: var(--muted); font: 12px ui-monospace, monospace; text-anchor: start; }
+            .caption { fill: var(--muted); font: 11px ui-sans-serif, system-ui, sans-serif; text-anchor: middle; font-style: italic; }
+            .tag { fill: var(--accent); font: 10px ui-sans-serif, system-ui, sans-serif; text-anchor: middle; font-weight: 600; }
+          </style>
+
+          <rect class="panel" x="20" y="20" width="350" height="200"/>
+          <text class="tag" x="195" y="40">PLAINTEXT WORKSPACE</text>
+          <text class="head" x="40" y="68">blocks row</text>
+          <text class="row"  x="40" y="92">id:               uuid-1</text>
+          <text class="row"  x="40" y="112">workspace_id:     ws-A</text>
+          <text class="row"  x="40" y="132">content:          "Hello world"</text>
+          <text class="row"  x="40" y="152">properties_json:  {"type":"text"}</text>
+          <text class="row"  x="40" y="172">references_json:  []</text>
+          <text class="rowMuted" x="40" y="196">&hellip; (server reads any column directly)</text>
+
+          <rect class="panel" x="390" y="20" width="350" height="200"/>
+          <text class="tag" x="565" y="40">E2EE WORKSPACE</text>
+          <text class="head" x="410" y="68">blocks row</text>
+          <text class="row"  x="410" y="92">id:               uuid-2</text>
+          <text class="row"  x="410" y="112">workspace_id:     ws-B</text>
+          <text class="row"  x="410" y="132">content:          "enc:v1:Yk3z&hellip;"</text>
+          <text class="row"  x="410" y="152">properties_json:  "enc:v1:9aPq&hellip;"</text>
+          <text class="row"  x="410" y="172">references_json:  "enc:v1:Mn1x&hellip;"</text>
+          <text class="rowMuted" x="410" y="196">&hellip; (server sees only ciphertext)</text>
+
+          <text class="caption" x="380" y="252">Same schema. Same RLS. The encoding inside the three content columns differs.</text>
+          <text class="caption" x="380" y="268">AAD binds each ciphertext to its block, workspace, column, and schema version.</text>
+        </svg>
+      </div>
+      <figcaption>Figure 2 &mdash; Per-column encryption keeps PATCH granularity: editing only <code>content</code> still PATCHes only that column. The wire <em>shape</em> is unchanged, but the sync rules are not: Layout B (§9.2) retargets the global <code>public.blocks</code> stream so these rows land in <code>blocks_synced</code>, not <code>blocks</code>.</figcaption>
+    </figure>
+
+    <p>
+      Each of the three content columns is sealed independently with its own random nonce. The
+      AAD carries the column name so the server can't silently move ciphertext from one column to
+      another and have it still decrypt as valid.
+    </p>
+
+    <h3 id="triggers">9.2 Where local plaintext lives: Layout B (staging table + observer)</h3>
+
+    <p>
+      The codebase leans heavily on SQL-side processing of content. Triggers in
+      <code>src/data/internals/clientSchema.ts</code> and
+      <code>src/plugins/references/localSchema.ts</code> maintain plaintext-derived indexes
+      (<code>block_aliases</code>, <code>block_types</code>, <code>blocks_fts</code>,
+      references-graph tables) on every write. Queries against those indexes drive core UX:
+      <code>parseReferences</code>, alias autocomplete, type filters, local FTS.
+    </p>
+
+    <div class="decision">
+      <strong>Decision: Layout B</strong> &mdash; the app-visible <code>blocks</code> table stays
+      plaintext, fed by a JS observer that decrypts a synced ciphertext mirror. Two alternatives
+      were considered and rejected. <strong>Layout A</strong> (keep ciphertext in the local
+      <code>blocks</code> table and let the derived indexes lapse) degrades alias search and local
+      FTS &mdash; core UX &mdash; so it's a non-starter. <strong>Layout C</strong> (ciphertext at
+      rest with async-UDF-decorated triggers) scatters encryption-awareness across every raw-SQL
+      site that touches a content column, an unbounded surface one author away from silently
+      breaking E2EE. Full mechanics of both, and the codebase survey that killed C, are in
+      <a href="./e2ee-rejected-alternatives.html">e2ee-rejected-alternatives.html</a>. The
+      transport-investigation box below explains why a simpler "decrypt-on-download" hook isn't
+      available &mdash; which is what forces the mirror-table shape in the first place.
+    </div>
+
+    <h4>Layout B &mdash; local plaintext via staging table + JS observer</h4>
+
+    <p>
+      The local <code>blocks</code> table holds plaintext for everything (encrypted and plaintext
+      workspaces alike). PowerSync's sync apply lands all blocks rows &mdash; for both plaintext
+      and E2EE workspaces &mdash; in a parallel <code>blocks_synced</code> staging table (the row
+      shape that matches the server). PowerSync's sync rule projects from
+      <code>public.blocks</code>, so the FROM-clause-as-row_type behavior would route everything
+      to the client <code>blocks</code> table by default; the gen-sync-config change re-targets the
+      stream's row_type to <code>blocks_synced</code>, which means <em>every</em> downloaded row
+      (plaintext or encrypted) lands in staging, not just E2EE rows.
+    </p>
+    <p>
+      A JS observer on PowerSync's change events processes every staging insert/update.
+      For rows in plaintext workspaces it copies through unchanged. For rows in E2EE workspaces
+      it decrypts the content columns with the WK and writes plaintext to <code>blocks</code>.
+      Both cases end up populating <code>blocks</code> as the app-visible table; existing triggers
+      in <code>clientSchema.ts</code> and plugins fire on plaintext writes as today &mdash; with one
+      change: the <code>row_events</code> invalidation path is retired in favor of direct observer
+      invalidation (see the callout below).
+    </p>
+    <p>
+      <strong>The observer is universal, not E2EE-only.</strong> If it only handled E2EE rows,
+      plaintext-workspace sync updates would be stuck in <code>blocks_synced</code> and never
+      reach the app's <code>blocks</code> table &mdash; breaking the requirement that plaintext
+      workspaces stay unchanged. The cost: every downloaded row pays one extra local write
+      (staging → blocks), not just E2EE rows. For typical workloads this is small; for a large
+      workspace's initial sync it's N extra writes. The dual-target alternative (Postgres view
+      partitioning E2EE workspaces, two sync rules, one mapping to <code>blocks</code> and one
+      to <code>blocks_synced</code>) avoids the cost on plaintext users at the price of more
+      Postgres-side complexity; not pursued in v1 unless profiling shows the universal-observer
+      cost matters.
+    </p>
+
+    <p>
+      <strong>The observer is a reconciler, not just a copier.</strong> Once PowerSync writes
+      only to <code>blocks_synced</code>, the app-visible <code>blocks</code> table is no longer
+      PowerSync-managed &mdash; the observer is now responsible for the local/remote merge that
+      PowerSync's CRUD machinery normally handles for raw tables. If a user has a pending local
+      edit in <code>blocks</code> (already written by <code>TxImpl</code>, queued in
+      <code>ps_crud</code> awaiting upload) and an older server snapshot arrives in staging, a
+      blind copy would overwrite the local edit. The observer needs to consult <code>ps_crud</code>
+      before each staging-row apply: if there's a pending CRUD entry for that <code>block_id</code>
+      (or the local row's <code>updated_at</code> is newer than staging's), skip the copy and let
+      the upload echo reconcile when it returns. This is the load-bearing complexity of Layout B
+      that the original "just decrypt and copy" framing understated.
+    </p>
+
+    <p>
+      <strong>Rows the observer can't yet materialize stay in staging &mdash; but "no WK" is not
+      the test.</strong> Because the blocks stream is retargeted globally, the observer drains
+      <em>every</em> workspace's rows out of <code>blocks_synced</code>: plaintext workspaces by
+      copy-through (no key needed), E2EE workspaces by decrypt. The only rows it must leave staged
+      are the ones it can't turn into plaintext yet &mdash; a workspace we treat as E2EE but whose WK
+      isn't loaded (a "locked" pin, §6, <em>or</em> the never-pinned key-required state where the
+      server says <code>e2ee</code>, rule 3a), or an encryption-uncertain workspace (rule 3b). A
+      <strong>plaintext</strong>-pinned workspace has no WK by design, so a naive "skip any row
+      whose workspace has no WK loaded" would strand its rows in staging forever and the
+      app-visible table would never hydrate. Concrete behavior: skip a staging row only when its
+      workspace is E2EE-without-WK (locked or key-required) <em>or</em> encryption-uncertain;
+      otherwise apply it immediately (decrypt for E2EE-with-WK, copy-through for plaintext). A drain pass re-processes
+      a workspace's staged rows whenever it becomes materializable &mdash; on WK paste (E2EE) or on
+      plaintext confirmation (a never-pinned workspace the user resolves as plaintext).
+    </p>
+
+    <p>
+      <strong>The observer subsumes <code>rowEventsTail</code> &mdash; it invalidates directly, and
+      the <code>row_events</code> path is removed.</strong> Today PowerSync writes synced rows
+      straight into <code>blocks</code>, bypassing JS, so the app reconstructs each change after the
+      fact: the <code>row_events</code> triggers (<code>clientSchema.ts</code>) serialize before/after
+      JSON into an audit table, and <code>rowEventsTail.ts</code> reads it back, re-parses, LWW-gates,
+      and emits the cache update + <code>handleStore.invalidate</code> notification. Under Layout B the
+      observer is the JS seam that applies <em>every</em> sync write, and it already holds both sides
+      in memory: the after (the decrypted staging row) and the before (the current <code>blocks</code>
+      row it reads for the LWW check anyway). So it can invalidate directly &mdash; reusing
+      <code>snapshotsToChangeNotification</code>, the same helper the local <code>repo.tx</code> fast
+      path uses (<code>handleStore.ts</code>) &mdash; instead of round-tripping through an audit table.
+      That makes the whole <code>row_events</code> path redundant: <strong>drop the three
+      <code>row_events</code> triggers, the <code>row_events</code> table + indexes, and
+      <code>rowEventsTail.ts</code></strong> (including its watermark / throttle-init-race /
+      drain-serialization machinery, which an <code>onDiff</code> push stream obviates). The
+      membership/order, §4.7 cycle-scan, plugin <code>collectFromRowEvent</code>, and LWW logic
+      <em>relocate</em> into the observer &mdash; they are not lost.
+    </p>
+
+    <p>
+      <strong>One LWW gate, not two.</strong> The reconciler above already consults
+      <code>ps_crud</code> / <code>updated_at</code> to decide whether a staging row may overwrite
+      <code>blocks</code>. Folding invalidation into the observer means that same decision also gates
+      the cache write and the handle notification, so the current two-gate shape (the observer's write
+      gate <em>plus</em> <code>rowEventsTail</code>'s <code>applyIfNewer(_, 'sync')</code>) collapses
+      to one &mdash; removing a class of bug where the two gates disagree mid-edit.
+    </p>
+
+    <p>
+      <strong>What this does to the guarded UPSERT.</strong> <code>BLOCKS_RAW_TABLE.put</code>'s
+      <code>INSERT ... ON CONFLICT(id) DO UPDATE ... WHERE &lt;diff&gt;</code> shape
+      (<code>blockSchema.ts</code> 116-126) was justified <em>entirely</em> by <code>row_events</code>:
+      preserving the UPDATE trigger shape so <code>before_json</code> stayed populated, and the
+      <code>WHERE</code>-diff guard suppressing no-op re-deliveries from firing UPDATE triggers. With
+      <code>row_events</code> gone, so is that justification. PowerSync now writes opaque ciphertext to
+      <code>blocks_synced</code>, which carries no triggers, so its raw-table <code>put</code> can be a
+      plain <code>INSERT OR REPLACE</code>; the observer's own write into <code>blocks</code> is driven
+      by <code>onDiff</code> (changed rows only) and skips no-ops in JS, so the WHERE-diff guard isn't
+      needed there either. The one residual reason to keep <code>ON CONFLICT DO UPDATE</code> over
+      <code>INSERT OR REPLACE</code> on <code>blocks</code> is FTS-rowid stability in the surviving
+      derived-index triggers (a DELETE+INSERT reallocates the <code>blocks_fts_rowids</code> mapping)
+      &mdash; a small, separable call, no longer entangled with invalidation correctness.
+    </p>
+
+    <p>
+      <strong>Observer writes must leave <code>tx_context.source</code> NULL.</strong> The
+      upload-routing triggers in <code>clientSchema.ts</code> enqueue any
+      <code>blocks</code> write whose <code>tx_context.source</code> is non-NULL into
+      <code>ps_crud</code> for upload. If the observer wrote through the normal repo/tx path,
+      every downloaded row would be queued back as a local edit &mdash; echo-upload loop.
+      PowerSync's existing apply path already handles this for the tables it directly manages by
+      leaving <code>source = NULL</code> (the upload triggers' <code>WHEN</code> clause checks
+      for non-NULL source). The Layout B observer must follow the same convention: bracket its
+      writes to <code>blocks</code> in a <code>tx_context</code> state where <code>source</code>
+      is NULL, so the upload triggers skip them while the side-index triggers
+      (aliases, types, FTS) still fire normally. (<code>row_events</code> is no longer among them
+      &mdash; the observer invalidates directly, above.)
+    </p>
+
+    <p>
+      <strong>Rows that leave the synced stream split into two scopes: logical removal stays at
+      parity with today (v1), and only deep/secure teardown is deferred.</strong> PowerSync's
+      <code>onDiff</code> surfaces a <code>removed</code> set when rows leave the user's buckets
+      &mdash; which here is predominantly membership revoke or workspace delete, since ordinary block
+      deletes are <em>soft</em> (<code>deleted = 1</code>; the row stays in the stream and so arrives
+      as an <em>update</em>, copied through normally). A <code>removed</code> entry instead means the
+      row left the synced set entirely, so the observer <strong>hard-deletes</strong> it:
+      <code>DELETE FROM blocks WHERE id IN (…)</code> under the same <code>source = NULL</code>
+      convention as its other writes. That single delete is at parity with what PowerSync does today
+      when it hard-deletes a block on stream-exit: the source-gated upload triggers skip it (no echo
+      back up), and the <em>ungated</em> derived-index DELETE triggers
+      (<code>blocks_alias_delete</code>, <code>blocks_type_delete</code>,
+      <code>blocks_fts_delete</code>) fire and purge <code>block_aliases</code> /
+      <code>block_types</code> / <code>blocks_fts</code> automatically. PowerSync removes the
+      ciphertext from <code>blocks_synced</code> itself. So both primary copies and the
+      trigger-maintained indexes are cleaned in v1 &mdash; this is roughly the same code as the
+      insert/update copy-through branch, not new machinery, and keeping it <em>preserves</em> a
+      capability we have today rather than regressing it. <em>(One assumption to verify against the
+      PowerSync API, not assert: that <code>onDiff().removed</code> reliably reflects a true
+      stream-exit and isn't spuriously emitted during transient checkpoint churn &mdash; i.e. that it
+      is a content-diff of <code>blocks_synced</code> between ticks. If so, a removal is
+      authoritative.)</em>
+    </p>
+    <p>
+      <strong>What v1 defers is only the hardening <em>beyond</em> today's posture</strong> &mdash; the
+      "scrub every possible unencrypted artifact" complexity we don't want to invent just for revoke:
+      the workspace's plaintext <code>ps_crud</code> / <code>ps_crud_rejected</code> queue entries
+      (today also not purged on revoke, so this is pre-existing, not a new gap); physical/secure erase
+      of the freed OPFS pages (SQLite doesn't zero freed pages, so today's deletes already leave
+      recoverable remnants &mdash; true erase needs <code>VACUUM</code> / <code>secure_delete</code> /
+      DB rekey-rebuild); and any plaintext that escapes the trigger cascade (in-memory caches,
+      rendered or exported content). These go stale and are cleared by the next explicit Lock &amp;
+      wipe (§6). Deferring them is safe: a revoked member already held the WK and the data they had
+      synced, so revoke can't retroactively protect any of it &mdash; this cleanup is local hygiene,
+      not a confidentiality boundary. The one functional wrinkle &mdash; a member who is later
+      re-invited could see a pre-revoke queued edit replay when its upload retries &mdash; stems from
+      the deferred <em>queue</em> cleanup, not the row removal, and is a known, low-severity cost:
+      it's the user's own edit landing in a workspace they again belong to, not a leak. Two rules
+      hold regardless: revoke stays <strong>per-workspace</strong> and must <em>never</em> escalate to
+      §6's coarse all-workspaces wipe; and if a partial-workspace wipe is ever added for another
+      reason, the queue-entry teardown above is the natural place to fold it in.
+    </p>
+    <p>
+      Upload is symmetric. App writes plaintext to <code>blocks</code> as today; the existing
+      upload-routing trigger captures plaintext into <code>ps_crud</code>; PowerSync's
+      <code>uploadData</code> connector hook intercepts the CRUD batch and encrypts the content
+      columns before sending to the server. "The server only ever sees ciphertext" is
+      <strong>enforced server-side, not left to client convention</strong>: the
+      <code>blocks_require_ciphertext_for_e2ee</code> trigger (§7) rejects any write to an e2ee
+      workspace's blocks whose content columns aren't <code>enc:v1:</code>, so a stale client, a
+      missed upload hook, or a direct PostgREST write can't slip plaintext past the
+      writer-membership RLS policy and store it before newer clients would reject it at the wire
+      boundary.
+    </p>
+    <ul>
+      <li><strong>What changes in code:</strong> define the <code>blocks_synced</code> raw table
+        <em>and</em> a <code>CREATE_BLOCKS_SYNCED_TABLE_SQL</code> in <code>blockSchema.ts</code>,
+        then wire both into <code>src/data/repoProvider.ts</code> &mdash; the raw-table mapping does
+        <strong>not</strong> create the local SQLite table by itself. Two registration points there:
+        add it to the <code>appSchema.withRawTables({&hellip;})</code> call (so PowerSync targets it),
+        and <code>execute()</code> the <code>CREATE TABLE</code> in DB-init alongside
+        <code>CREATE_BLOCKS_TABLE_SQL</code> (so the client table actually exists). Skip either and
+        there is no <code>blocks_synced</code> table for downloaded rows to hydrate, and the observer
+        has nothing to read. Then retarget the blocks stream's row_type to
+        <code>blocks_synced</code> &mdash; and this is a <code>scripts/gen-sync-config.ts</code>
+        <em>code</em> change, not a YAML tweak. PowerSync derives the row_type (which selects the
+        client raw table) from the sync rule's <code>FROM</code>-clause name, so the rule must read
+        <code>FROM public.blocks AS blocks_synced</code> while still selecting from the real server
+        table. But the generator currently hard-codes a single <code>table: 'public.blocks'</code>
+        that drives <em>both</em> the <code>FROM</code> clause and the column/predicate prefix, and
+        its header comment explicitly forbids aliasing the primary table. So decouple them: add a
+        separate row-type/alias field to the generator's <code>StreamQuery</code> (defaulting to the
+        table short-name for the unchanged workspaces/members streams), set it to
+        <code>blocks_synced</code> for blocks so it emits <code>FROM public.blocks AS
+        blocks_synced</code> with the projection and predicate prefixed by <code>blocks_synced</code>,
+        and update that "do not alias" header note (aliasing is now the intended mechanism for this
+        one stream). Regenerating <em>without</em> the code change keeps row_type=<code>blocks</code>,
+        so ciphertext lands in the plaintext <code>blocks</code> table and the observer never sees
+        it. Add JS observer wiring at the sync boundary
+        (universal, with ps_crud / updated_at reconciliation per the callout above);
+        encrypt-on-upload in the connector hook. The observer invalidates directly (reusing
+        <code>snapshotsToChangeNotification</code>), so the <code>row_events</code> path is retired
+        &mdash; see the removals list below for exactly what goes and what deliberately stays. Update
+        <code>blockUploadPatchJsonSql</code> in
+        <code>clientSchema.ts</code> to <em>unconditionally</em> include <code>workspace_id</code>
+        in every PATCH envelope &mdash; the current trigger emits only changed columns, so a
+        content-only edit reaches <code>uploadData</code> without <code>workspace_id</code>, and
+        the encryption hook needs that field to look up the WK and construct AAD. Always-emit is
+        a few bytes of wire overhead per PATCH; the alternative (have the hook read the local row
+        before encrypting) adds a DB round-trip per upload.</li>
+      <li><strong>What this removes from the existing data layer</strong> (the subtractive half &mdash;
+        because <code>blocks</code> stops being PowerSync-managed once the stream targets
+        <code>blocks_synced</code>):
+        <ul>
+          <li><strong><code>blocks</code> leaves <code>withRawTables</code></strong>
+            (<code>repoProvider.ts</code>, and the test harness in <code>createTestDb.ts</code>). No
+            stream targets it anymore, so PowerSync no longer manages it and the registration is
+            vestigial &mdash; <code>blocks</code> becomes a plain local table written only by
+            <code>TxImpl</code> (local edits) and the observer (sync).</li>
+          <li><strong>The guarded-UPSERT apparatus in <code>blockSchema.ts</code> goes:</strong>
+            <code>BLOCKS_RAW_TABLE.put</code>'s <code>ON CONFLICT … WHERE &lt;diff&gt;</code> and the
+            builders that exist only to feed it &mdash; <code>BLOCK_SYNC_ASSIGNMENTS</code>,
+            <code>BLOCK_SYNC_DIFF_PREDICATES</code>, <code>formatSqlOrList</code>. The new
+            <code>blocks_synced</code> raw table carries no triggers, so its <code>put</code> is a
+            plain <code>INSERT OR REPLACE</code>. <strong>Retained:</strong>
+            <code>BLOCK_STORAGE_COLUMNS</code> / <code>CREATE_BLOCKS_TABLE_SQL</code> (reused for the
+            <code>blocks_synced</code> column shape) and the read helpers
+            <code>SELECT_BLOCK_COLUMNS_SQL</code> / <code>buildQualifiedBlockColumnsSql</code> (they
+            read plaintext <code>blocks</code>, unaffected). Two already-dead exports here &mdash;
+            <code>UPSERT_BLOCK_SQL</code>, <code>buildBlockCrudJsonSql</code> &mdash; can go
+            independently of this work.</li>
+          <li><strong>The <code>row_events</code> path</strong> (3 triggers + table + indexes and
+            <code>rowEventsTail.ts</code>, per the callout above), plus the <code>triggerTxIdSql</code>
+            helper in <code>clientSchema.ts</code> that only those triggers use
+            (<code>tx_context.tx_id</code> itself stays &mdash; <code>command_events</code> uses it).
+            <code>ApplyIfNewerSource = 'sync' | 'hydrate'</code> in <code>blockCache.ts</code> is
+            <em>not</em> removed: the observer inherits the <code>'sync'</code> caller role. A few
+            stale comments referencing <code>rowEventsTail</code> (<code>block.ts</code>,
+            <code>repo.ts</code>) get updated.</li>
+          <li><strong>Not removed &mdash; but the two trigger families are kept for different reasons,
+            and one of them deliberately does <em>not</em> run on observer writes:</strong>
+            <ul>
+              <li>The <strong>derived-index maintenance triggers</strong> (alias/type/FTS) are
+                <em>not</em> <code>source</code>-gated, so they fire on the observer's plaintext writes
+                to <code>blocks</code> exactly as on local <code>TxImpl</code> writes. This is the
+                family that genuinely runs on both paths, and the observer relies on it to keep the
+                indexes current; pulling it into JS would duplicate maintenance across
+                <code>TxImpl</code> and the observer, re-introducing the dual-path problem the trigger
+                approach removed.</li>
+              <li>The <strong>validation triggers</strong>
+                (<code>blocks_parent_workspace_check_*</code>,
+                <code>blocks_parent_not_deleted_check_*</code>,
+                <code>block_aliases_workspace_alias_unique</code>) are gated on
+                <code>source IS NOT NULL</code> &mdash; local writes only &mdash; so they
+                <strong>do not fire on observer writes</strong> (the observer writes with
+                <code>source = NULL</code>, identical to PowerSync's CRUD-apply today). That is the
+                intended contract, not a gap. Parent/workspace integrity is still backed by the
+                server's composite FK on the plaintext <code>parent_id</code>/<code>workspace_id</code>
+                columns (unencrypted even for E2EE); parent-not-deleted is <em>deliberately</em>
+                permissive on sync (the documented strict-local / permissive-sync asymmetry &mdash; the
+                server accepts a child that lands before its parent's tombstone during cross-client
+                ordering). Re-running these in the observer would <em>regress</em> that asymmetry, not
+                close a hole. Alias-uniqueness has no server-side counterpart
+                (<code>block_aliases</code> is local-only), so cross-client alias collisions stay the
+                documented V1-latent limitation, unchanged by the observer.</li>
+            </ul>
+          </li>
+        </ul>
+      </li>
+      <li><strong>Plus:</strong> queries are direct SQL on plaintext &mdash; no per-row decrypt
+        cost at query time, no UDF latency.</li>
+      <li><strong>Minus:</strong> two writes per <em>every</em> block download (staging, then
+        main) &mdash; the universal-observer pattern means plaintext-workspace users pay this cost
+        too, not just E2EE users. Brief window between sync apply and observer pickup where the
+        row only exists in staging (mitigated by app code never querying
+        <code>blocks_synced</code>).</li>
+      <li><strong>Risk:</strong> PowerSync's reconciliation semantics. Since
+        <code>blocks_synced</code> is the only table PowerSync directly manages, this is contained
+        &mdash; PowerSync never sees the plaintext <code>blocks</code> table. Verify that
+        PowerSync doesn't expect its target table to be authoritative for app queries (it
+        shouldn't &mdash; raw tables are a documented pattern).</li>
+    </ul>
+
+    <div class="warn">
+      <strong>Why a mirror + observer, and not a simpler download transform.</strong> The obvious
+      question is why decryption needs a staging table and a JS observer at all &mdash; why not just
+      decrypt each row <em>as it lands locally</em>, so the local DB is plaintext and nothing else
+      changes. That per-row download transform is exactly what doesn't exist. Direct investigation
+      of <code>@powersync/web@1.38.1</code> / <code>@powersync/common@1.53.1</code> and the
+      PowerSync team's own statements:
+      <ul>
+        <li><strong>No download-side hook exists, natively or as a supported extension point.</strong>
+          <code>PowerSyncBackendConnector</code> has only <code>fetchCredentials</code> +
+          <code>uploadData</code> &mdash; no download counterpart. Sync-apply happens in the
+          Rust/SQLite core (<code>ps_oplog</code>/<code>ps_data</code> &rarr; views); there's no
+          JS callback in that path.</li>
+        <li><strong>Raw tables are static SQL only</strong> (<code>put</code>/<code>delete</code>
+          statements with a fixed parameter vocabulary), not a JS transform &mdash; and the JS
+          sync client ignores raw tables anyway
+          (<a href="https://github.com/powersync-ja/powersync-js/issues/672">powersync-js#672</a>),
+          they need the Rust sync client.</li>
+        <li><strong>The PowerSync maintainer confirmed the gap.</strong> Discussion
+          <a href="https://github.com/powersync-ja/powersync-js/discussions/864">powersync-js#864</a>
+          is this exact question; simolus3's response: a sync-internals middleware approach is
+          "hacky," "not an official feature," "probably a direction worth exploring" but
+          unroadmapped. Recommended instead: SQL transforms over JSON views (a registered
+          <code>decrypt()</code> SQL function inside <code>json_replace()</code>), or local
+          tables kept in sync via triggers &mdash; i.e. the mirror pattern.</li>
+        <li><strong>At-rest DB encryption exists</strong> (<code>WebEncryptionOptions.encryptionKey</code>,
+          wa-sqlite Multiple Ciphers) but it's the wrong threat model &mdash; it protects local
+          disk, it does not let the server hold ciphertext while the client holds plaintext.</li>
+      </ul>
+      Verdict: a true download transform is <strong>not obtainable</strong> without depending on
+      unsupported sync internals. Layout B's mirror-table + observer is the sanctioned shape, so
+      it's the design we build on rather than a fallback we settle for.
+    </div>
+
+    <p>
+      JSONB migration is no longer load-bearing for E2EE (it was only relevant for the rejected
+      Layout A's no-op trick). It remains an independently motivated perf improvement
+      (<code>docs/follow-ups.md</code>); E2EE doesn't gate on it and it doesn't gate on E2EE.
+    </p>
+
+    <h2 id="duality">10. Mode-by-mode behavior</h2>
+
+    <table>
+      <tr>
+        <th>Capability</th>
+        <th>Plaintext workspace</th>
+        <th>E2EE workspace</th>
+      </tr>
+      <tr>
+        <td>Block reads/writes</td>
+        <td>As today.</td>
+        <td>Encrypt on write, decrypt on read, both at the sync boundary.</td>
+      </tr>
+      <tr>
+        <td>RLS</td>
+        <td>Workspace membership.</td>
+        <td>Workspace membership. Unchanged.</td>
+      </tr>
+      <tr>
+        <td>PowerSync sync rules</td>
+        <td>Changed. The blocks stream's row_type retarget to <code>blocks_synced</code> is
+          global, not E2EE-only &mdash; the universal observer (§9.2) routes both plaintext and
+          encrypted workspace rows from staging to <code>blocks</code>.</td>
+        <td>Same as the plaintext column &mdash; one global retarget via
+          <code>gen-sync-config.ts</code>.</td>
+      </tr>
+      <tr>
+        <td>Invite RPC chain</td>
+        <td>Unchanged.</td>
+        <td>Unchanged. Permissions flow server-side; the WK flows out-of-band.</td>
+      </tr>
+      <tr>
+        <td><code>blocks_history</code> (server trigger)</td>
+        <td>Server-computed diffs, human-readable, queryable.</td>
+        <td>Records ciphertext diffs. Still useful for PITR / "this block changed at this time" but unreadable server-side. Acceptable degradation.</td>
+      </tr>
+      <tr>
+        <td>Future server-side features (search, AI, summaries, embeddings, share-link rendering)</td>
+        <td>Can be built. Must filter on <code>encryption_mode = 'none'</code> (equivalently
+          <code>wk_canary IS NULL</code> &mdash; the column is a projection of canary presence, §6).</td>
+        <td>Not available. The product surfaces this clearly when the user opts in.</td>
+      </tr>
+      <tr>
+        <td>Local derived indexes (<code>block_aliases</code>, <code>block_types</code>, <code>blocks_fts</code>)</td>
+        <td>Maintained automatically by triggers as today.</td>
+        <td>Fully populated, matching plaintext-workspace behavior &mdash; Layout B fills them via plaintext writes through the JS observer, so the existing triggers fire as today (§9.2).</td>
+      </tr>
+      <tr>
+        <td>Sharing / collaboration</td>
+        <td>Invite by email; server-mediated.</td>
+        <td>Invite by email (permissions) + out-of-band WK transfer (key material). The user picks the channel.</td>
+      </tr>
+      <tr>
+        <td>Recovery if key lost</td>
+        <td>n/a</td>
+        <td>None &mdash; back up the WK at create time, or it's gone.</td>
+      </tr>
+      <tr>
+        <td>Workspace mode change</td>
+        <td>Immutable.</td>
+        <td>Immutable. Migrating across modes = export + create new workspace + import.</td>
+      </tr>
+    </table>
+
+    <h2 id="prep">11. Architectural prep that pays off regardless</h2>
+
+    <p>
+      These changes have value independently of when (or whether) E2EE actually ships. They make
+      the eventual encryption work small and reversible-shaped.
+    </p>
+
+    <h3>11.1 Establish the sync boundary module (do now)</h3>
+    <p>
+      Introduce <code>src/sync/transform.ts</code> as identity
+      <code>encodeForWire</code>/<code>decodeFromWire</code>, with the
+      <code>getCek(workspaceId)</code> pluggable callback signature in place from day one.
+      Under Layout B the seam hosts the JS observer that watches PowerSync changes and decrypts
+      staging-table rows into <code>blocks</code>, plus the upload-side encrypt in the
+      <code>uploadData</code> connector hook. The
+      boundary is one named module rather than behavior scattered across <code>repo.ts</code>
+      and <code>services/powersync.ts</code>. Pure no-op refactor today; the eventual E2EE PR is a
+      focused crypto change rather than a cross-cutting refactor.
+    </p>
+
+    <h3>11.2 Drift guard: server-side content features must filter on mode (codify now)</h3>
+    <p>
+      A short repo-level note: any new server-side feature that reads <code>blocks.content</code>,
+      <code>properties_json</code>, or <code>references_json</code> must include
+      <code>workspaces.encryption_mode = 'none'</code> in its filter, or explicitly document a
+      decision to skip E2EE workspaces. The repo already has a drift-guard pattern from prior
+      design docs; this slots in.
+    </p>
+
+    <h3>11.3 JSONB migration is independent of E2EE now</h3>
+    <p>
+      The follow-up "JSONB across the data layer" has independent motivation (perf wins across
+      ~29 <code>json_extract</code>/<code>json_each</code> callsites). An earlier draft of this
+      sketch treated JSONB as a prerequisite for E2EE under Layout A; with Layout A rejected and
+      both B and C operating on plaintext at trigger time (see §9.2), that coupling is gone.
+      Pursue JSONB on its own schedule for perf reasons; E2EE doesn't gate on it.
+    </p>
+
+    <h3>11.4 Discipline rules surfaced from review iteration</h3>
+    <p>
+      Two patterns are worth carrying into future cross-cutting designs &mdash;
+      encryption-specific only incidentally.
+    </p>
+
+    <ul>
+      <li><strong>Column-add propagation.</strong> Adding a column to a workspace-related table
+        today means touching the migration, <code>workspaceSchema.ts</code>, the regenerated
+        <code>sync-config.yaml</code>, every RPC's <code>RETURNS TABLE</code> projection, every
+        RPC's parameter list (when callers need to supply the new field), TS row interfaces and
+        parse functions, and any <code>clientSchema.ts</code> triggers that reference the column.
+        A separate task is open
+        (<em>"Investigate schema-generator extensions"</em>) to extend the existing generator
+        coverage so this becomes structural rather than discipline.</li>
+
+      <li><strong>Lifecycle moments are first-class and not bundleable.</strong> Even in the
+        simple model: "user creates first encrypted workspace" and "user pastes WK on a new
+        device" are distinct moments with distinct preconditions. Name each, its preconditions,
+        and the state that comes into existence at it. Do not write "at signup" or "at first
+        launch" without specifying which event you actually mean.</li>
+    </ul>
+
+    <h2 id="rejected">12. Considered &amp; rejected</h2>
+
+    <p>
+      A one-line index of what was weighed and dropped. Full rationale for each &mdash; along with
+      the rejected storage layouts A and C (§9.2) &mdash; lives in
+      <a href="./e2ee-rejected-alternatives.html">e2ee-rejected-alternatives.html</a>.
+    </p>
+    <ul>
+      <li><strong>Storage layouts A and C</strong> (ciphertext at rest, either letting indexes
+        lapse or UDF-decorating triggers). Rejected in favor of Layout B; see §9.2 and the
+        companion doc.</li>
+      <li><strong>Single opaque <code>payload</code> column.</strong> Kills PowerSync's per-column
+        PATCH granularity and forecloses server-side features for plaintext workspaces.</li>
+      <li><strong>Passphrase-derived key hierarchy for v1.</strong> Over-budgeted for a
+        personal-leaning tool; its headline sharing benefit needs TOFU/key-transparency it doesn't
+        ship; adds a class of bugs the simple model avoids. Strictly upgradable later (§13).</li>
+      <li><strong>Application-layer compression at the sync boundary.</strong> HTTP + TOAST already
+        compress; per-row gzip on sub-1KB blocks usually grows them. The seam keeps the option open
+        but we don't exercise it.</li>
+      <li><strong>Replacing server-side <code>blocks_history</code> with a client-uploaded edit
+        log.</strong> Would degrade plaintext workspaces to slightly simplify the E2EE path; keep
+        the trigger (it records ciphertext diffs for E2EE workspaces &mdash; still PITR-useful).</li>
+      <li><strong>Full at-rest encryption of the local OPFS SQLite, for v1.</strong> v1's lock is a
+        coarse wipe (§6), so at-rest encryption isn't required to land E2EE. But it's the mechanism
+        for a non-destructive lock and for device-theft protection &mdash; tracked as a post-v1
+        option in §14, not flatly rejected.</li>
+    </ul>
+
+    <h2 id="hierarchy">13. Adding the hierarchy later (if needed)</h2>
+
+    <p>
+      The simple model and the hierarchy share the entire encryption layer. The hierarchy is
+      strictly an additive layer for storing WKs behind a passphrase and (optionally) delivering
+      them via asymmetric crypto. Nothing about the simple model forecloses the upgrade.
+    </p>
+
+    <p>Concrete migration shape, when and if usage justifies it:</p>
+
+    <ol>
+      <li><strong>Add the wrapping schema.</strong>
+        <code>ALTER TABLE workspace_members ADD COLUMN wrapped_cek BYTEA</code>;
+        <code>CREATE TABLE user_vault (...)</code> with kdf_params, wrapped_uvk, public_key,
+        wrapped_private_key. Both nullable / empty until opt-in.</li>
+      <li><strong>Per-user opt-in flow.</strong> User enters a new passphrase &rarr; derive MK
+        via Argon2id &rarr; generate UVK &rarr; generate X25519 keypair &rarr; wrap UVK with MK
+        &rarr; wrap private key with UVK &rarr; insert their <code>user_vault</code> row.</li>
+      <li><strong>Wrap existing WKs.</strong> Wrap each WK with the new UVK and write to
+        <code>workspace_members.wrapped_cek</code>. Note the non-extractable IndexedDB copy (§5)
+        can't be exported, so the bytes come from the user re-pasting each WK from their backup at
+        opt-in time; the local paste flow remains as a backup unlock path regardless.</li>
+      <li><strong>Future workspaces.</strong> The create flow now also wraps the new WK with UVK
+        and stores it. Sharing can use the pubkey-mediated handoff (with whatever TOFU /
+        key-transparency story the hierarchy migration brings).</li>
+      <li><strong>New device flow.</strong> Sign in &rarr; enter passphrase &rarr; unwrap UVK
+        &rarr; unwrap all <code>wrapped_cek</code> values &rarr; no per-workspace paste needed.
+        Falls back to per-workspace paste for workspaces where the user opted out (or for
+        workspaces predating their hierarchy adoption).</li>
+    </ol>
+
+    <p>
+      <strong>What's a one-way door:</strong> almost nothing. The encryption format is preserved
+      (the AAD includes <code>schema_version</code> for future format revs); the WK is structurally
+      identical to the hierarchy's CEK; collaborators who already received WKs out-of-band
+      continue to hold them &mdash; that knowledge persists, but it's the same threat shape as
+      any shared key.
+    </p>
+
+    <p>
+      <strong>Design seams to preserve in v1 for cheap upgrade:</strong>
+    </p>
+    <ul>
+      <li><code>schema_version</code> in the AAD (already in §6).</li>
+      <li>The sync boundary's <code>getCek(workspaceId)</code> callback signature (§9). Simple
+        model implements it as an IndexedDB <code>CryptoKey</code> lookup; hierarchy implements it as
+        an in-memory unwrapped-CEK-map read. Same call site, two implementations.</li>
+      <li>No "user has a passphrase" assumption baked anywhere upstream of the sync boundary. The
+        simple model has no user-level secrets; the hierarchy adds them. Keep the upstream layer
+        ignorant.</li>
+      <li>Don't repurpose <code>workspace_members</code> columns for crypto things. The
+        <code>wrapped_cek</code> column will land cleanly when needed.</li>
+    </ul>
+
+    <h2 id="open">14. Open questions</h2>
+
+    <ol>
+      <li><strong>WK rotation.</strong> If a workspace key is compromised (a collaborator
+        exfiltrated it, or it leaked via a backup), the owner needs to rotate. Mechanically: client
+        generates a new WK, decrypts every block with old WK and re-encrypts with new WK, also
+        regenerates <code>workspaces.wk_canary</code> under the new WK (otherwise §8.2 validation
+        would fail for anyone unlocking after rotation &mdash; the canary would still be encrypted
+        under the old WK), uploads the lot; distributes the new WK to current collaborators
+        out-of-band. The "re-encrypt all blocks" cost is real for large workspaces; worth thinking
+        through the UX (progress bar, atomic rotation token to detect mid-rotation states). The
+        canary is unwritable by client roles (§7 enforces this with column-level privilege), so the
+        rotation path is the dedicated <code>rotate_workspace_wk</code> RPC &mdash; SECURITY DEFINER,
+        running as the table owner, the only principal with UPDATE on <code>wk_canary</code>. No
+        forgeable bypass flag is involved: clients simply lack the privilege, and the RPC updates
+        the canary in the same transaction as the re-encrypt rotation token. Because it is SECURITY
+        DEFINER it bypasses both RLS <em>and</em> the column privilege &mdash; precisely so it can
+        write <code>wk_canary</code> &mdash; so it <strong>must self-authorize</strong>: its body
+        checks that <code>auth.uid()</code> is the workspace <em>owner</em> before touching the
+        canary, otherwise any authenticated caller could rotate or brick another workspace's canary.
+        The whole column-privilege design hinges on this RPC being the sole canary writer <em>and</em>
+        self-guarding.</li>
+
+      <li><strong>Backfill behavior on first WK paste.</strong> The first time a device gets a
+        WK for a workspace, the local plaintext-derived indexes need populating. Under Layout B
+        this means draining that workspace's rows from the <code>blocks_synced</code> staging
+        table through the observer. The backfill is N-block work; UX needs a progress indicator
+        for large workspaces.</li>
+
+      <li><strong>Are settings or user preferences in scope?</strong> Survey didn't surface a
+        settings table. If preferences are stored server-side and contain user content, they may
+        also need encryption &mdash; or be explicitly carved out as metadata.</li>
+
+      <li><strong>Could the <code>encryption_mode</code> enum be dropped entirely?</strong> Since a
+        workspace is E2EE iff <code>wk_canary IS NOT NULL</code> (§6), the column is a denormalized
+        projection of canary presence &mdash; strictly redundant for correctness. Keeping it buys
+        readable server-side feature-gating filters (<code>encryption_mode = 'none'</code> reads
+        better than <code>wk_canary IS NULL</code>) and headroom for a future third mode; dropping
+        it removes a column, its CHECK, its immutability trigger, and a <code>create_workspace</code>
+        param. The current design keeps it as an explicit, server-maintained column because the
+        duality thesis (§10) has server code gating on mode &mdash; but nothing in the security
+        model depends on it. Revisit if a third mode never materializes.</li>
+
+      <li><strong>Non-destructive lock via at-rest encryption (post-v1).</strong> v1's "Lock &amp;
+        wipe local data" (§6) is destructive on purpose &mdash; it wipes the local store and
+        re-syncs on unlock &mdash; which keeps the implementation a single coarse operation. The
+        nicer property ("drop the key, the data stays but is unreadable") needs the local store
+        encrypted at rest, which PowerSync's web SDK supports (wa-sqlite Multiple Ciphers /
+        <code>WebEncryptionOptions.encryptionKey</code>, per §9.2's transport box). Two decisions
+        gate it: (a) <strong>granularity</strong> &mdash; whole-DB at-rest is one key, so it gives
+        an <em>app-level</em> lock, not per-workspace; a per-workspace non-destructive lock keyed by
+        the WK would need one ATTACH'd encrypted DB file per workspace, which fights PowerSync's
+        single-DB model, caps at <code>SQLITE_MAX_ATTACHED</code> (~10), and makes cross-workspace
+        references harder; (b) <strong>key source</strong> &mdash; for the lock to be meaningful the
+        at-rest key must not be silently re-derivable (an app passphrase gives a real lock but
+        reintroduces passphrase management; a device-stored key only defends against offline device
+        theft). It is additive to, not a replacement for, Layout B's server-side per-column
+        encryption.</li>
+    </ol>
+
+    <h2 id="tradeoffs">15. Tradeoffs we're accepting</h2>
+
+    <ul>
+      <li><strong>Metadata leak.</strong> Block tree shape (<code>parent_id</code>), order
+        (<code>order_key</code>), edit timing, authorship, deletion flag, and per-column "which
+        column changed" are all visible to the server. Acceptable for the stated threat model.</li>
+      <li><strong>No server-side features for E2EE workspaces, ever.</strong> Search, AI,
+        summaries, server-rendered share links. This is a real product cost; the opt-in toggle is
+        the user surfacing it explicitly.</li>
+      <li><strong>Lost WK = lost data.</strong> No recovery in v1. The UI surfaces this loudly at
+        create time; users who need recovery can store the WK in multiple places themselves.</li>
+      <li><strong>Sharing requires an out-of-band channel.</strong> This is a deliberate
+        non-goal, not a defect &mdash; an in-app share button would re-introduce the MITM concern.
+        Users pick Signal, password-manager share, paper, whatever.</li>
+      <li><strong>Pasting WK on each new device.</strong> One extra step per workspace per device.
+        Tolerable for small N; if N grows past ~5 per user, that's the signal to add the
+        hierarchy (§13).</li>
+      <li><strong>Ciphertext-diff history</strong> for E2EE workspaces.</li>
+      <li><strong>Local index side-tables contain plaintext-derived data.</strong>
+        <code>block_aliases.alias</code>, FTS trigrams, etc. are plaintext on local disk &mdash; as
+        is the app-visible <code>blocks</code> table itself under Layout B (only PowerSync's
+        <code>blocks_synced</code> staging holds ciphertext locally). Irrelevant for threat model A
+        (server can't read content); relevant only if the threat model is later broadened to
+        local-disk attackers, in which case OS disk encryption or the app-level at-rest encryption
+        tracked in §14 is the answer (OS encryption alone doesn't give the "drop the key to lock"
+        property, since its key is always present while the user is logged in).</li>
+      <li><strong>Client-trust required &mdash; the residual the web-delivery model can't fully
+        close.</strong> The code that holds the keys is re-fetched from the server on every load, and
+        the root HTML that would anchor any integrity check is itself server-served &mdash; so there is
+        no in-band trust root, and a backdoored build can exfiltrate keys or plaintext. This is
+        inherent to <em>all</em> browser-delivered E2EE, not specific to this design. It splits into
+        three cases whose mitigations are graded &mdash; none a full solution:
+        <ul>
+          <li><strong>Passive / data-at-rest</strong> (DB dump, backup leak, curious operator,
+            subpoena): <strong>fully defeated</strong> &mdash; the server only ever holds ciphertext
+            plus the canary. This is the guarantee the whole design buys, and it holds regardless of
+            the build problem.</li>
+          <li><strong>Active, broad</strong> (backdoor everyone): <strong>detectable, not
+            prevented</strong> &mdash; via open source + reproducible builds + published build hashes /
+            signed provenance (e.g. a Sigstore/Rekor attestation emitted from CI). A bad build becomes
+            observable to anyone auditing the delivered artifact.</li>
+          <li><strong>Active, targeted</strong> (clean code to auditors, backdoored code to one user):
+            <strong>the hard residual</strong> &mdash; only an out-of-band verifier that checks the
+            <em>actually-delivered</em> bytes (a "Code Verify"&ndash;style browser extension, or a
+            native client with a signed, reviewed update channel) meaningfully addresses it.
+            Documented as future, not solved.</li>
+        </ul>
+        What the design already leans on: keys are <strong>non-extractable
+        <code>CryptoKey</code>s</strong> (§5) &mdash; a backdoored load can still <em>use</em> the
+        handle to decrypt live, but can't dump raw key bytes, narrowing the attack to a noisy live
+        session; and the <strong>code host is separate from the data host</strong> &mdash; the
+        adversary that <em>is</em> in scope (§2: full read access to the Supabase/PowerSync backend)
+        does not control code delivery (static hosting), so it structurally can't mount this attack at
+        all. Cheap bar-raisers we can add: a strict <strong>CSP</strong> with a locked
+        <code>connect-src</code> (constrains exfiltration to the first party &mdash; weak against a
+        malicious first party, since the server sets it, but cuts off third-party supply-chain paths),
+        and publishing build hashes / provenance from CI (tracked separately). Net:
+        <strong>strong</strong> against the passive threat the design targets,
+        <strong>detection</strong> against broad tampering, and an honest <strong>residual</strong>
+        against a targeted backdoor.</li>
+    </ul>
+
+    <p class="meta" style="margin-top:36px;">
+      This is a sketch, not a commitment. The architectural prep work in §11 (sync boundary, drift
+      guard, JSONB) is the recommended starting point regardless of whether we proceed with
+      §5&ndash;§9 on a specific timeline.
+    </p>
+  </main>
+</body>
+</html>
