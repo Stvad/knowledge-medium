@@ -1,4 +1,4 @@
-import { ChangeScope, type BlockData } from '@/data/api'
+import { ChangeScope, type BlockData, type Tx } from '@/data/api'
 import { Block } from '../data/block'
 import type { Repo } from '../data/repo'
 import { isCollapsedProp } from '@/data/properties.js'
@@ -24,11 +24,49 @@ interface ExistingParentInsertion {
   upper: string | null
 }
 
+interface RootDestination {
+  rootParentId: string
+  rootInsertion: ExistingParentInsertion
+  targetChildren: BlockData[]
+}
+
+export interface EditModePasteSelection {
+  from: number
+  to?: number
+}
+
+export interface EditModeMultilinePastePlan {
+  parsed: ParsedBlock[]
+  absorbedRoot: ParsedBlock
+  targetContent: string
+  focusOffsetInTarget: number
+  suffix: string
+}
+
+export interface EditModeMultilinePasteResult {
+  pasted: Block[]
+  focusBlock: Block
+  focusOffset: number
+}
+
 const isBlankContent = (content: string): boolean => content.trim().length === 0
 
 const isCollapsed = (properties: Record<string, unknown>): boolean => {
   const raw = properties[isCollapsedProp.name]
   return raw === undefined ? isCollapsedProp.defaultValue : isCollapsedProp.codec.decode(raw)
+}
+
+const editorContentForFirstPastedLine = (
+  pastedText: string,
+  fallback: string,
+): string => {
+  const line = pastedText.split('\n').find(item => item.trim().length > 0)
+  if (line === undefined) return fallback
+
+  const bullet = line.trim().match(/^[-*+]\s+(.*)$/)
+  if (bullet) return bullet[1]
+
+  return line.replace(/\r$/, '')
 }
 
 const insertionForFirstChild = (
@@ -55,6 +93,65 @@ const insertionForSiblingRun = (
       lower: siblings[ix - 1]?.orderKey ?? null,
       upper: siblings[ix]?.orderKey ?? null,
     }
+}
+
+const resolveRootDestination = async (
+  tx: Tx,
+  target: BlockData,
+  {
+    position,
+    topLevelBlockId,
+    placement,
+  }: Required<Pick<PasteOptions, 'position' | 'placement'>> & Pick<PasteOptions, 'topLevelBlockId'>,
+): Promise<RootDestination> => {
+  const targetChildren = await tx.childrenOf(target.id, target.workspaceId)
+  const targetIsTopLevel = topLevelBlockId === target.id
+  const targetHasVisibleChildren = targetChildren.length > 0 && !isCollapsed(target.properties)
+  const rootsAsChildren = targetIsTopLevel ||
+    target.parentId === null ||
+    (placement === 'visible' && position === 'after' && targetHasVisibleChildren)
+  const rootParentId = rootsAsChildren ? target.id : target.parentId
+  if (!rootParentId) throw new Error(`paste target ${target.id} has no visible insertion parent`)
+
+  const rootInsertion = rootsAsChildren
+    ? insertionForFirstChild(targetChildren[0]?.orderKey)
+    : insertionForSiblingRun(
+      await tx.childrenOf(rootParentId, target.workspaceId),
+      target.id,
+      position,
+    )
+
+  return {rootParentId, rootInsertion, targetChildren}
+}
+
+export const planEditModeMultilinePaste = (
+  pastedText: string,
+  currentContent: string,
+  selection: EditModePasteSelection,
+): EditModeMultilinePastePlan | null => {
+  const parsed = parseMarkdownToBlocks(pastedText)
+  const absorbedRoot = parsed.find(block => !block.parentId)
+  if (!absorbedRoot) return null
+
+  const from = Math.max(0, Math.min(selection.from, currentContent.length))
+  const to = Math.max(from, Math.min(selection.to ?? selection.from, currentContent.length))
+  const prefix = currentContent.slice(0, from)
+  const suffix = currentContent.slice(to)
+  const createsAdditionalBlocks = parsed.some(block => block.id !== absorbedRoot.id)
+  const contentBeforeStructuralBreak = `${prefix}${editorContentForFirstPastedLine(
+    pastedText,
+    absorbedRoot.content,
+  )}`
+
+  return {
+    parsed,
+    absorbedRoot,
+    targetContent: createsAdditionalBlocks
+      ? contentBeforeStructuralBreak
+      : `${contentBeforeStructuralBreak}${suffix}`,
+    focusOffsetInTarget: contentBeforeStructuralBreak.length,
+    suffix: createsAdditionalBlocks ? suffix : '',
+  }
 }
 
 /** Paste markdown text into the outline around a target block.
@@ -92,22 +189,11 @@ export async function pasteMultilineText(
     const target = await tx.get(pasteTarget.id)
     if (!target) return
 
-    const targetChildren = await tx.childrenOf(target.id, target.workspaceId)
-    const targetIsTopLevel = topLevelBlockId === target.id
-    const targetHasVisibleChildren = targetChildren.length > 0 && !isCollapsed(target.properties)
-    const rootsAsChildren = targetIsTopLevel ||
-      target.parentId === null ||
-      (placement === 'visible' && position === 'after' && targetHasVisibleChildren)
-    const rootParentId = rootsAsChildren ? target.id : target.parentId
-    if (!rootParentId) return
-
-    const rootInsertion = rootsAsChildren
-      ? insertionForFirstChild(targetChildren[0]?.orderKey)
-      : insertionForSiblingRun(
-        await tx.childrenOf(rootParentId, target.workspaceId),
-        target.id,
-        position,
-      )
+    const {rootParentId, rootInsertion, targetChildren} = await resolveRootDestination(tx, target, {
+      position,
+      topLevelBlockId,
+      placement,
+    })
 
     const absorbedRoot = isBlankContent(target.content) ? parsedRoots[0] : undefined
     if (absorbedRoot) {
@@ -159,6 +245,81 @@ export async function pasteMultilineText(
   }, {scope: ChangeScope.BlockDefault, description: 'paste multiline text'})
 
   return rootBlocks
+}
+
+export async function pasteEditModeMultilineText(
+  plan: EditModeMultilinePastePlan,
+  pasteTarget: Block,
+  repo: Repo,
+  options: Pick<PasteOptions, 'topLevelBlockId'> = {},
+): Promise<EditModeMultilinePasteResult | null> {
+  const rootBlocks: Block[] = []
+  let focusBlock = pasteTarget
+  let focusOffset = plan.focusOffsetInTarget
+
+  await repo.tx(async tx => {
+    const target = await tx.get(pasteTarget.id)
+    if (!target) return
+
+    const {rootParentId, rootInsertion, targetChildren} = await resolveRootDestination(tx, target, {
+      position: 'after',
+      topLevelBlockId: options.topLevelBlockId,
+      placement: 'sibling',
+    })
+
+    await tx.update(target.id, {content: plan.targetContent})
+    rootBlocks.push(repo.block(target.id))
+
+    const blocksToCreate = plan.parsed.filter(block => block.id !== plan.absorbedRoot.id)
+    const createdParsedIds = new Set(blocksToCreate.map(block => block.id))
+    const finalParentId = (block: ParsedBlock): string => {
+      if (!block.parentId) return rootParentId
+      if (block.parentId === plan.absorbedRoot.id) return target.id
+      return block.parentId
+    }
+
+    const existingParentGroups = new Map<string, ParsedBlock[]>()
+    for (const block of blocksToCreate) {
+      const parentId = finalParentId(block)
+      if (createdParsedIds.has(parentId)) continue
+      const group = existingParentGroups.get(parentId) ?? []
+      group.push(block)
+      existingParentGroups.set(parentId, group)
+    }
+
+    const orderKeysByParsedId = new Map<string, string>()
+    for (const [parentId, blocks] of existingParentGroups) {
+      const insertion = parentId === rootParentId
+        ? rootInsertion
+        : insertionForFirstChild(
+          parentId === target.id
+            ? targetChildren[0]?.orderKey
+            : (await tx.childrenOf(parentId, target.workspaceId))[0]?.orderKey,
+        )
+      const keys = keysBetween(insertion.lower, insertion.upper, blocks.length)
+      blocks.forEach((block, index) => orderKeysByParsedId.set(block.id, keys[index]))
+    }
+
+    const lastCreatedBlock = blocksToCreate.at(-1)
+    for (const block of blocksToCreate) {
+      const parentId = finalParentId(block)
+      const isFocusBlock = block.id === lastCreatedBlock?.id
+      const id = await tx.create({
+        id: block.id,
+        workspaceId: target.workspaceId,
+        parentId,
+        orderKey: orderKeysByParsedId.get(block.id) ?? block.orderKey,
+        content: isFocusBlock ? `${block.content}${plan.suffix}` : block.content,
+      })
+      if (!block.parentId) rootBlocks.push(repo.block(id))
+      if (isFocusBlock) {
+        focusBlock = repo.block(id)
+        focusOffset = block.content.length
+      }
+    }
+  }, {scope: ChangeScope.BlockDefault, description: 'paste multiline text at editor selection'})
+
+  return {pasted: rootBlocks, focusBlock, focusOffset}
 }
 
 export async function pasteFromClipboard(

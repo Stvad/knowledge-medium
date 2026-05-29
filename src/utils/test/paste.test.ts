@@ -5,7 +5,11 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { isCollapsedProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
-import { pasteMultilineText } from '@/utils/paste'
+import {
+  pasteEditModeMultilineText,
+  pasteMultilineText,
+  planEditModeMultilinePaste,
+} from '@/utils/paste'
 
 const WS = 'ws-1'
 
@@ -152,5 +156,75 @@ describe('pasteMultilineText', () => {
 
     expect(await childContents('root')).toEqual(['Parent', 'Pasted', 'Sibling'])
     expect(await childContents('parent')).toEqual(['Old child'])
+  })
+})
+
+describe('pasteEditModeMultilineText', () => {
+  it('merges the first line at the caret and moves the suffix to the last pasted block', async () => {
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('target', 'hello world', 'root', 'a0')
+    await createBlock('next', 'Next', 'root', 'a1')
+
+    const plan = planEditModeMultilinePaste('alpha\nbeta', 'hello world', {
+      from: 'hello '.length,
+      to: 'hello '.length,
+    })
+    expect(plan?.targetContent).toBe('hello alpha')
+
+    const result = await pasteEditModeMultilineText(
+      plan!,
+      env.repo.block('target'),
+      env.repo,
+      {topLevelBlockId: 'root'},
+    )
+
+    expect(env.repo.block('target').peek()?.content).toBe('hello alpha')
+    expect(await childContents('root')).toEqual(['hello alpha', 'betaworld', 'Next'])
+    expect(result?.focusBlock.id).not.toBe('target')
+    expect(result?.focusOffset).toBe('beta'.length)
+  })
+
+  it('parents children of the first pasted root under the edited block', async () => {
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('target', 'prefix ', 'root', 'a0')
+    await createBlock('next', 'Next', 'root', 'a1')
+
+    const plan = planEditModeMultilinePaste('- Parent\n  - Child\n- Sibling', 'prefix ', {
+      from: 'prefix '.length,
+      to: 'prefix '.length,
+    })
+
+    const result = await pasteEditModeMultilineText(
+      plan!,
+      env.repo.block('target'),
+      env.repo,
+      {topLevelBlockId: 'root'},
+    )
+
+    expect(env.repo.block('target').peek()?.content).toBe('prefix Parent')
+    expect(await childContents('target')).toEqual(['Child'])
+    expect(await childContents('root')).toEqual(['prefix Parent', 'Sibling', 'Next'])
+    expect(result?.focusBlock.peek()?.content).toBe('Sibling')
+  })
+
+  it('keeps remaining lines visible when editing the zoomed top-level block', async () => {
+    await createBlock('workspace-root', 'Workspace root', null, 'a0')
+    await createBlock('page', 'Page', 'workspace-root', 'a0')
+    await createBlock('existing', 'Existing', 'page', 'a0')
+
+    const plan = planEditModeMultilinePaste(' title\nchild', 'Page', {
+      from: 'Page'.length,
+      to: 'Page'.length,
+    })
+
+    await pasteEditModeMultilineText(
+      plan!,
+      env.repo.block('page'),
+      env.repo,
+      {topLevelBlockId: 'page'},
+    )
+
+    expect(await childContents('workspace-root')).toEqual(['Page title'])
+    expect(await childContents('page')).toEqual(['child', 'Existing'])
   })
 })
