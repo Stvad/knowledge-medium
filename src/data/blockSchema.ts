@@ -100,16 +100,6 @@ export const CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL = `
   WHERE deleted = 0
 `
 
-export const UPSERT_BLOCK_SQL = `
-  INSERT INTO blocks (
-${formatSqlList(BLOCK_COLUMN_NAMES, 4)}
-  ) VALUES (${BLOCK_COLUMN_NAMES.map(() => '?').join(', ')})
-  ON CONFLICT(id) DO UPDATE SET
-${formatSqlList(BLOCK_SYNC_ASSIGNMENTS, 4)}
-  WHERE
-${formatSqlOrList(BLOCK_SYNC_DIFF_PREDICATES, 4)}
-`
-
 const powerSyncParamForColumn = (columnName: BlockColumnName): PendingStatementParameter =>
   columnName === 'id' ? 'Id' : {Column: columnName}
 
@@ -142,12 +132,6 @@ ${formatSqlOrList(BLOCK_SYNC_DIFF_PREDICATES, 8)}
     params: ['Id'],
   },
 } satisfies RawTableType
-
-export const buildBlockCrudJsonSql = (rowRef: string) => `
-  json_object(
-${formatSqlList(BLOCK_SYNC_COLUMN_NAMES.map(columnName => `'${columnName}', ${rowRef}.${columnName}`), 4)}
-  )
-`
 
 type BlockSnapshotJsonField = {
   readonly key: keyof BlockData
