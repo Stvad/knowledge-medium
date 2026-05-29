@@ -1629,6 +1629,7 @@ export class Repo {
         FROM blocks b, json_each(b.properties_json) prop
         WHERE b.workspace_id = ?
           AND b.deleted = 0
+          AND b.properties_json <> '{}'
           AND b.id > ?
           AND (${clauses.join(' OR ')})
         ORDER BY b.id
@@ -1868,7 +1869,11 @@ export class Repo {
           const candidateIds = batchCandidates.map(candidate => candidate.id)
           stats.liveParentBatchReads += candidateIds.length > 0 ? 1 : 0
           const liveParents = await txImpl.liveRowsForKnownIds(workspaceId, candidateIds)
-          const fieldIds = schemasToScan.map(schema => schema.fieldId)
+          const fieldIds = Array.from(new Set(liveParents.flatMap(parent =>
+            Object.keys(parent.properties)
+              .map(name => scopeSchemaMap.get(name)?.fieldId)
+              .filter((fieldId): fieldId is string => fieldId !== undefined),
+          )))
           stats.existingFieldBatchReads += liveParents.length > 0 && fieldIds.length > 0 ? 1 : 0
           const existingFieldRows = await txImpl.livePropertyFieldRowsForKnownParents(
             workspaceId,
