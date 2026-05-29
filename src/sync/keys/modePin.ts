@@ -89,21 +89,29 @@ export const setModePin = (
   localStorage.setItem(pinStorageKey(userId, workspaceId), mode)
 }
 
-/** True once the one-time rollout seed (below) has run for this user at
- *  `version`. Per-user so a second account in the same browser profile
- *  still seeds its own pre-existing memberships. */
-export const arePinsSeeded = (userId: string, version: string): boolean => {
+// The rollout seed (below) fires once per (user, device) at the pre-pin ->
+// pin-aware transition. This marker value is a FIXED constant, deliberately NOT
+// the running app version: a value that changed per release would re-arm the
+// seed on every upgrade and re-open the server-trusting downgrade window for
+// new unpinned memberships (§6). Bump it only for a deliberate, audited re-seed
+// migration — never wire it to the app version.
+const ROLLOUT_SEED_VERSION = '1'
+
+/** True once the one-time rollout seed (below) has run for this user. Per-user
+ *  so a second account in the same browser profile still seeds its own
+ *  pre-existing memberships. */
+export const arePinsSeeded = (userId: string): boolean => {
   if (!hasLocalStorage()) return false
   try {
-    return localStorage.getItem(seededMarkerKey(userId)) === version
+    return localStorage.getItem(seededMarkerKey(userId)) === ROLLOUT_SEED_VERSION
   } catch {
     return false
   }
 }
 
-const markPinsSeeded = (userId: string, version: string): void => {
+const markPinsSeeded = (userId: string): void => {
   if (!hasLocalStorage()) return
-  localStorage.setItem(seededMarkerKey(userId), version)
+  localStorage.setItem(seededMarkerKey(userId), ROLLOUT_SEED_VERSION)
 }
 
 export interface SeedEntry {
@@ -121,24 +129,23 @@ export interface SeedEntry {
  * there is nothing for the server to misrepresent.
  *
  * Safety properties this enforces:
- *   - keyed to `(userId, version)` (the pre-pin → pin-aware app-version
- *     transition) and stored in wipe-surviving localStorage, so a §6 wipe
- *     that recreates an empty SQLite DB can NOT re-arm it; it fires at
- *     most once per (user, device);
+ *   - keyed to the user + a FIXED `ROLLOUT_SEED_VERSION` constant (the pre-pin →
+ *     pin-aware transition, NOT the per-release app version) and stored in
+ *     wipe-surviving localStorage, so a §6 wipe that recreates an empty SQLite
+ *     DB can NOT re-arm it; it fires at most once per (user, device);
  *   - per-user marker, so a different account signing into the same
  *     browser profile still seeds its own memberships;
  *   - never seeds over an existing pin, so a membership that was already
  *     pinned (and re-synced after a wipe) keeps its pin.
  *
  * `entries` are the signed-in user's memberships. Returns the number of
- * pins written. No-op (returns 0) if already seeded for this user+version.
+ * pins written. No-op (returns 0) if already seeded for this user.
  */
 export const seedModePinsOnce = (
   userId: string,
-  version: string,
   entries: readonly SeedEntry[],
 ): number => {
-  if (arePinsSeeded(userId, version)) return 0
+  if (arePinsSeeded(userId)) return 0
   let written = 0
   for (const entry of entries) {
     if (getModePin(userId, entry.workspaceId) === null) {
@@ -146,6 +153,6 @@ export const seedModePinsOnce = (
       written++
     }
   }
-  markPinsSeeded(userId, version)
+  markPinsSeeded(userId)
   return written
 }
