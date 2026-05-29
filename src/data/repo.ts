@@ -1462,6 +1462,7 @@ export class Repo {
     batchSize?: number
     blockIds?: Iterable<string>
     respectCompletionMarkers?: boolean
+    logProgress?: boolean
   } = {}): Promise<number> {
     if (this.isReadOnly) return 0
     const workspaceId = args.workspaceId ?? this.activeWorkspaceId
@@ -1475,7 +1476,20 @@ export class Repo {
     }
     const batchSize = Math.max(1, args.batchSize ?? PROPERTY_CHILDREN_BACKFILL_BATCH_SIZE)
     const respectCompletionMarkers = args.respectCompletionMarkers ?? true
+    const logProgress = args.logProgress === true
+    const startedAt = performance.now()
+    let loggedStart = false
+    let batchCount = 0
     let processed = 0
+
+    const logStart = () => {
+      if (!logProgress || loggedStart) return
+      loggedStart = true
+      console.info(
+        `[Repo] property children migration started workspace=${workspaceId} ` +
+        `schemas=${propertySchemas.size} batchSize=${batchSize} transactionPerBatch=true`,
+      )
+    }
 
     for (const [scope, scopeSchemas] of schemasByScope(propertySchemas.values())) {
       const schemasToScan = respectCompletionMarkers
@@ -1495,6 +1509,8 @@ export class Repo {
         if (candidates.length === 0) break
         afterId = candidates[candidates.length - 1]!.id
         processed += candidates.length
+        batchCount += 1
+        logStart()
 
         await this.tx(async tx => {
           for (const candidate of candidates) {
@@ -1507,10 +1523,23 @@ export class Repo {
           scope,
           description: 'backfill property children from properties_json',
         })
+        if (logProgress) {
+          console.info(
+            `[Repo] property children migration batch ${batchCount} ` +
+            `workspace=${workspaceId} scope=${scope} blocks=${candidates.length} ` +
+            `processed=${processed} lastId=${afterId}`,
+          )
+        }
       }
       if (respectCompletionMarkers) {
         await this.markCompletedPropertyChildrenBackfills(workspaceId, schemasToScan)
       }
+    }
+    if (logProgress && loggedStart) {
+      console.info(
+        `[Repo] property children migration complete workspace=${workspaceId} ` +
+        `processed=${processed} batches=${batchCount} ms=${Math.round(performance.now() - startedAt)}`,
+      )
     }
     return processed
   }
@@ -1939,6 +1968,7 @@ export class Repo {
     this.enqueuePropertyChildrenBackfill({
       workspaceId,
       propertySchemas: this._propertySchemas,
+      logProgress: true,
       warningPrefix: '[Repo] property children migration failed',
     })
   }
@@ -1960,6 +1990,7 @@ export class Repo {
     workspaceId: string
     propertySchemas: ReadonlyMap<string, AnyPropertySchema>
     blockIds?: readonly string[]
+    logProgress?: boolean
     warningPrefix: string
   }): void {
     const next = this.propertyChildrenBackfillChain
@@ -1968,6 +1999,7 @@ export class Repo {
         await this.backfillPropertyChildrenFromProperties({
           workspaceId: args.workspaceId,
           propertySchemas: args.propertySchemas,
+          logProgress: args.logProgress,
           ...(args.blockIds ? {blockIds: args.blockIds} : {}),
         })
       })
