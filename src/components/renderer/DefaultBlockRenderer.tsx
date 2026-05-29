@@ -13,7 +13,7 @@ import {
 } from '@/data/properties.js'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.js'
 import { CodeMirrorContentRenderer } from '@/components/renderer/CodeMirrorContentRenderer.js'
-import { useRef, ClipboardEvent, useMemo } from 'react'
+import { useRef, ClipboardEvent, useMemo, useState } from 'react'
 import { Block } from '../../data/block'
 import {
   useUIStateProperty,
@@ -111,7 +111,15 @@ export function BulletDot({withChildrenIndicator = false}: { withChildrenIndicat
   )
 }
 
-const BlockBullet = ({block}: { block: Block }) => {
+const BlockBullet = ({
+  block,
+  showHiddenPropertyChildren,
+  setShowHiddenPropertyChildren,
+}: {
+  block: Block
+  showHiddenPropertyChildren: boolean
+  setShowHiddenPropertyChildren: (value: boolean) => void
+}) => {
   const repo = useRepo()
   const {panelId} = useBlockContext()
   const [showProperties, setShowProperties] = usePropertyValue(block, showPropertiesProp)
@@ -169,6 +177,12 @@ const BlockBullet = ({block}: { block: Block }) => {
             onSelect={() => setShowProperties(!showProperties)}
           >
             {showProperties ? 'Hide' : 'Show'} Properties
+          </ContextMenuItem>
+          <ContextMenuItem
+            className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
+            onSelect={() => setShowHiddenPropertyChildren(!showHiddenPropertyChildren)}
+          >
+            {showHiddenPropertyChildren ? 'Hide' : 'Show'} Hidden Fields
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenuPortal>
@@ -359,6 +373,7 @@ export function DefaultBlockRenderer(
   const [topLevelBlockId] = useUIStateProperty(topLevelBlockIdProp)
   const shellRef = useRef<HTMLDivElement | null>(null)
   const contentContainerRef = useRef<HTMLDivElement | null>(null)
+  const [showHiddenPropertyChildren, setShowHiddenPropertyChildren] = useState(false)
   const isTopLevel = useIsFocalRender(block)
 
   // Stable per-block resolver context — doesn't change on focus/edit/
@@ -513,9 +528,14 @@ export function DefaultBlockRenderer(
 
   const ChildrenSlot = useMemo<ComponentType>(() => {
     return function BlockChildrenSlot() {
-      return <BlockChildren block={block}/>
+      return (
+        <BlockChildren
+          block={block}
+          includeHiddenPropertyChildren={showHiddenPropertyChildren}
+        />
+      )
     }
-  }, [block])
+  }, [block, showHiddenPropertyChildren])
 
   const FooterSlot = useMemo<ComponentType>(() => {
     return function BlockFooterSlot() {
@@ -547,7 +567,11 @@ export function DefaultBlockRenderer(
         <>
           <div className="block-controls flex items-center">
             {!isMobile && <ExpandButton block={block}/>}
-            <BlockBullet block={block}/>
+            <BlockBullet
+              block={block}
+              showHiddenPropertyChildren={showHiddenPropertyChildren}
+              setShowHiddenPropertyChildren={setShowHiddenPropertyChildren}
+            />
           </div>
           {isMobile && hasChildren && (
             <div className="absolute right-0 top-0 z-10">
@@ -557,7 +581,7 @@ export function DefaultBlockRenderer(
         </>
       )
     }
-  }, [block])
+  }, [block, showHiddenPropertyChildren])
 
   const HeaderSlot = useMemo<ComponentType>(() => {
     return function BlockHeaderSlot() {

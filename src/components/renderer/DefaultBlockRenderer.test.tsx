@@ -101,6 +101,13 @@ const contentOnlyLayout: BlockLayout = ({Content, shellProps}) => (
   </div>
 )
 
+const controlsAndContentLayout: BlockLayout = ({Controls, Content, shellProps}) => (
+  <div {...shellProps}>
+    <Controls />
+    <Content />
+  </div>
+)
+
 const TestContentRenderer = ({block}: BlockRendererProps) => (
   <div>{block.id}</div>
 )
@@ -149,6 +156,7 @@ describe('DefaultBlockRenderer paste handling', () => {
         dispatchEvent: vi.fn(),
       })),
     })
+    Element.prototype.scrollIntoView = vi.fn()
 
     h = await createTestDb()
     let now = 1700_000_000_000
@@ -298,6 +306,27 @@ describe('DefaultBlockRenderer paste handling', () => {
     const remountedShell = document.querySelector<HTMLElement>('[data-block-id="block-1"][data-editing="false"]')
     expect(remountedShell).not.toBe(firstShell)
     await waitFor(() => expect(document.activeElement).toBe(remountedShell))
+  })
+
+  it('keeps hidden-field reveal in the bullet context menu instead of an inline child row', async () => {
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <ActiveContextsProvider>
+          <DefaultBlockRenderer
+            block={repo.block('block-1')}
+            ContentRenderer={TestContentRenderer}
+            LayoutRenderer={controlsAndContentLayout}
+          />
+        </ActiveContextsProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+    const bullet = document.querySelector<HTMLElement>('.bullet-link')
+    expect(bullet).toBeTruthy()
+
+    fireEvent.contextMenu(bullet!)
+    expect(await screen.findByRole('menuitem', {name: 'Show Hidden Fields'})).toBeTruthy()
+    expect(screen.queryByRole('button', {name: /Show hidden fields/i})).toBeNull()
   })
 
   it('hides fields declared hidden by property UI unless the caller opts into all children', async () => {
