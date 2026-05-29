@@ -46,3 +46,31 @@ describe('ensureWorkspaceE2eeColumns', () => {
     expect(db.executed[0]).toContain('ADD COLUMN wk_canary')
   })
 })
+
+describe('parseWorkspaceRow — E2EE columns', () => {
+  const baseRow: WorkspaceRow = {
+    id: 'ws-1',
+    name: 'WS',
+    owner_user_id: 'u-1',
+    create_time: 1,
+    update_time: 2,
+    encryption_mode: 'none',
+    wk_canary: null,
+  }
+
+  it('carries encryption_mode / wk_canary into the domain object (not dropped)', () => {
+    const parsed = parseWorkspaceRow({
+      ...baseRow,
+      encryption_mode: 'e2ee',
+      wk_canary: 'enc:v1:abc',
+    })
+    expect(parsed.encryptionMode).toBe('e2ee')
+    expect(parsed.wkCanary).toBe('enc:v1:abc')
+  })
+
+  it('maps a plaintext workspace to none / null', () => {
+    const parsed = parseWorkspaceRow(baseRow)
+    expect(parsed.encryptionMode).toBe('none')
+    expect(parsed.wkCanary).toBeNull()
+  })
+})

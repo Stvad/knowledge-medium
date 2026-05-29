@@ -9,6 +9,8 @@ interface WorkspaceRowResult {
   owner_user_id: string
   create_time: number
   update_time: number
+  encryption_mode: string
+  wk_canary: string | null
 }
 
 interface WorkspaceMemberRowResult {
@@ -38,6 +40,8 @@ const parseWorkspace = (row: WorkspaceRowResult): Workspace => ({
   ownerUserId: row.owner_user_id,
   createTime: row.create_time,
   updateTime: row.update_time,
+  encryptionMode: row.encryption_mode,
+  wkCanary: row.wk_canary,
 })
 
 const parseMember = (row: WorkspaceMemberRowResult): WorkspaceMembership => ({
