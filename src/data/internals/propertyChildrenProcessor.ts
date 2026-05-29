@@ -17,6 +17,61 @@ import {
 export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR_NAME = 'core.materializePropertyChildren'
 export const PROJECT_PROPERTY_CHILDREN_PROCESSOR_NAME = 'core.projectPropertyChildren'
 
+export interface PropertyChildrenMaterializationStats {
+  rowsVisited: number
+  rowsSkippedDeleted: number
+  rowsWithoutCandidateProperties: number
+  parentChildrenReads: number
+  propertiesConsidered: number
+  propertiesSkippedMissingSchema: number
+  propertiesSkippedInvalidValue: number
+  propertiesRemoved: number
+  propertiesMaterialized: number
+  existingFieldRows: number
+  duplicateFieldRows: number
+  fieldRowsCreated: number
+  fieldRowsUpdated: number
+  valueChildrenReads: number
+  existingValueRows: number
+  duplicateValueRows: number
+  valueRowsCreated: number
+  valueRowsUpdated: number
+  deleteSubtreeCalls: number
+  rowsDeleted: number
+}
+
+export const createPropertyChildrenMaterializationStats = (): PropertyChildrenMaterializationStats => ({
+  rowsVisited: 0,
+  rowsSkippedDeleted: 0,
+  rowsWithoutCandidateProperties: 0,
+  parentChildrenReads: 0,
+  propertiesConsidered: 0,
+  propertiesSkippedMissingSchema: 0,
+  propertiesSkippedInvalidValue: 0,
+  propertiesRemoved: 0,
+  propertiesMaterialized: 0,
+  existingFieldRows: 0,
+  duplicateFieldRows: 0,
+  fieldRowsCreated: 0,
+  fieldRowsUpdated: 0,
+  valueChildrenReads: 0,
+  existingValueRows: 0,
+  duplicateValueRows: 0,
+  valueRowsCreated: 0,
+  valueRowsUpdated: 0,
+  deleteSubtreeCalls: 0,
+  rowsDeleted: 0,
+})
+
+const addMaterializationStat = (
+  stats: PropertyChildrenMaterializationStats | undefined,
+  key: keyof PropertyChildrenMaterializationStats,
+  amount = 1,
+): void => {
+  if (!stats) return
+  stats[key] += amount
+}
+
 interface AffectedProjection {
   readonly parentId: string
   readonly fieldId: string
@@ -126,21 +181,41 @@ export const materializePropertyChildrenForExistingRow = async (
   row: BlockData,
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
   names: readonly string[] = Object.keys(row.properties),
+  stats?: PropertyChildrenMaterializationStats,
 ): Promise<void> => {
-  if (row.deleted) return
-  if (names.length === 0) return
+  addMaterializationStat(stats, 'rowsVisited')
+  if (row.deleted) {
+    addMaterializationStat(stats, 'rowsSkippedDeleted')
+    return
+  }
+  if (names.length === 0) {
+    addMaterializationStat(stats, 'rowsWithoutCandidateProperties')
+    return
+  }
 
+  addMaterializationStat(stats, 'parentChildrenReads')
   const children = await tx.childrenOf(row.id, undefined, {includePropertyChildren: true})
 
   for (const name of names) {
+    addMaterializationStat(stats, 'propertiesConsidered')
     const schema = propertySchemas.get(name)
-    if (!schema) continue
+    if (!schema) {
+      addMaterializationStat(stats, 'propertiesSkippedMissingSchema')
+      continue
+    }
     const matchingChildren = fieldRowsForSchema(children, schema)
     const encoded = hasOwn(row.properties, name) ? row.properties[name] : undefined
+    if (matchingChildren.length > 0) {
+      if (stats) {
+        stats.existingFieldRows++
+        stats.duplicateFieldRows += Math.max(0, matchingChildren.length - 1)
+      }
+    }
 
     if (encoded === undefined) {
+      addMaterializationStat(stats, 'propertiesRemoved')
       for (const child of matchingChildren) {
-        await deleteSubtree(tx, child.id)
+        await deleteSubtree(tx, child.id, stats)
       }
       continue
     }
@@ -148,23 +223,31 @@ export const materializePropertyChildrenForExistingRow = async (
     try {
       schema.codec.decode(encoded)
     } catch {
+      addMaterializationStat(stats, 'propertiesSkippedInvalidValue')
       continue
     }
+    addMaterializationStat(stats, 'propertiesMaterialized')
 
     const content = encodedPropertyValueToChildContent(schema, encoded)
     const [primary, ...duplicates] = matchingChildren
     if (primary) {
       const fieldContent = propertyFieldContent(schema)
       if (primary.content !== fieldContent) {
+        addMaterializationStat(stats, 'fieldRowsUpdated')
         await tx.update(primary.id, {content: fieldContent})
       }
+      addMaterializationStat(stats, 'valueChildrenReads')
       const values = await tx.childrenOf(primary.id, undefined, {includePropertyChildren: true})
       const [primaryValue, ...duplicateValues] = values
+      if (primaryValue) addMaterializationStat(stats, 'existingValueRows')
+      if (stats) stats.duplicateValueRows += duplicateValues.length
       if (primaryValue) {
         if (primaryValue.content !== content) {
+          addMaterializationStat(stats, 'valueRowsUpdated')
           await tx.update(primaryValue.id, {content})
         }
       } else {
+        addMaterializationStat(stats, 'valueRowsCreated')
         await tx.create({
           workspaceId: row.workspaceId,
           parentId: primary.id,
@@ -173,9 +256,10 @@ export const materializePropertyChildrenForExistingRow = async (
         })
       }
       for (const duplicate of duplicateValues) {
-        await deleteSubtree(tx, duplicate.id)
+        await deleteSubtree(tx, duplicate.id, stats)
       }
     } else {
+      addMaterializationStat(stats, 'fieldRowsCreated')
       const fieldRowId = await tx.create({
         workspaceId: row.workspaceId,
         parentId: row.id,
@@ -183,6 +267,7 @@ export const materializePropertyChildrenForExistingRow = async (
         orderKey: keyAtStart(null),
         content: propertyFieldContent(schema),
       })
+      addMaterializationStat(stats, 'valueRowsCreated')
       await tx.create({
         workspaceId: row.workspaceId,
         parentId: fieldRowId,
@@ -192,7 +277,7 @@ export const materializePropertyChildrenForExistingRow = async (
     }
 
     for (const child of duplicates) {
-      await deleteSubtree(tx, child.id)
+      await deleteSubtree(tx, child.id, stats)
     }
   }
 }
@@ -236,11 +321,17 @@ const materializePropertiesForChangedRow = async (
   await materializePropertyChildrenForExistingRow(tx, row.after, propertySchemas, changedNames)
 }
 
-const deleteSubtree = async (tx: Tx, id: string): Promise<void> => {
+const deleteSubtree = async (
+  tx: Tx,
+  id: string,
+  stats?: PropertyChildrenMaterializationStats,
+): Promise<void> => {
+  addMaterializationStat(stats, 'deleteSubtreeCalls')
   const children = await tx.childrenOf(id, undefined, {includePropertyChildren: true})
   for (const child of children) {
-    await deleteSubtree(tx, child.id)
+    await deleteSubtree(tx, child.id, stats)
   }
+  addMaterializationStat(stats, 'rowsDeleted')
   await tx.delete(id)
 }
 

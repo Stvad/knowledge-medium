@@ -49,15 +49,17 @@ import {
   isRefCodec,
   isRefListCodec,
 } from '@/data/api'
-import { runTx, type PowerSyncDb } from './internals/commitPipeline'
+import { runTx, type PowerSyncDb, type TxTimingDiagnostics } from './internals/commitPipeline'
 import type { BlockCache } from '@/data/blockCache'
 import { buildQualifiedBlockColumnsSql, parseBlockRow, type BlockRow } from '@/data/blockSchema'
 import { KERNEL_MUTATORS } from './internals/kernelMutators'
 import { KERNEL_PROCESSORS } from './internals/kernelProcessors'
 import { KERNEL_SAME_TX_PROCESSORS } from './internals/normalizeReferencesProcessor'
 import {
+  createPropertyChildrenMaterializationStats,
   materializePropertyChildrenForExistingRow,
   materializePropertyFieldSlotsForExistingRow,
+  type PropertyChildrenMaterializationStats,
 } from './internals/propertyChildrenProcessor'
 import { KERNEL_QUERIES } from './internals/kernelQueries'
 import { kernelInvalidationRule } from './internals/kernelInvalidation'
@@ -294,6 +296,88 @@ const countMatchingProperties = (
   (sum, block) => sum + Object.keys(block.properties).filter(name => schemas.has(name)).length,
   0,
 )
+
+type DbMetricName = 'getAll' | 'getOptional' | 'get' | 'execute' | 'writeTransaction'
+type DbMetricsSnapshot = Readonly<Record<DbMetricName, ReturnType<DbMetrics['snapshot']>[string]>>
+
+interface DbMetricDelta {
+  readonly calls: number
+  readonly ms: number
+}
+
+type DbMetricsDelta = Record<DbMetricName, DbMetricDelta>
+
+interface PropertyChildrenBackfillWriteDiagnostics {
+  readonly stats: PropertyChildrenMaterializationStats
+  readonly dbDelta: DbMetricsDelta
+  readonly txTiming: Readonly<TxTimingDiagnostics> | null
+}
+
+const metricDelta = (
+  before: DbMetricsSnapshot,
+  after: DbMetricsSnapshot,
+  key: DbMetricName,
+): DbMetricDelta => ({
+  calls: after[key].calls - before[key].calls,
+  ms: after[key].totalMs - before[key].totalMs,
+})
+
+const dbMetricsDelta = (
+  before: DbMetricsSnapshot,
+  after: DbMetricsSnapshot,
+): DbMetricsDelta => ({
+  getAll: metricDelta(before, after, 'getAll'),
+  getOptional: metricDelta(before, after, 'getOptional'),
+  get: metricDelta(before, after, 'get'),
+  execute: metricDelta(before, after, 'execute'),
+  writeTransaction: metricDelta(before, after, 'writeTransaction'),
+})
+
+const formatDbMetricDelta = (delta: DbMetricsDelta): string => {
+  const order: DbMetricName[] = ['getAll', 'getOptional', 'get', 'execute', 'writeTransaction']
+  return order
+    .map(name => `${name}:${delta[name].calls}/${Math.round(delta[name].ms)}ms`)
+    .join(',')
+}
+
+const formatSameTxProcessorTimings = (
+  timing: Readonly<TxTimingDiagnostics> | null,
+): string => {
+  if (timing === null || timing.sameTxProcessorRuns.length === 0) return 'none'
+  return timing.sameTxProcessorRuns
+    .map(run => `${run.name}:${run.changedRows}/${Math.round(run.collectMs)}ms/${Math.round(run.applyMs)}ms`)
+    .join('|')
+}
+
+const addMaterializationStats = (
+  target: PropertyChildrenMaterializationStats,
+  source: PropertyChildrenMaterializationStats,
+): void => {
+  for (const key of Object.keys(target) as Array<keyof PropertyChildrenMaterializationStats>) {
+    target[key] += source[key]
+  }
+}
+
+const addDbMetricsDelta = (
+  target: DbMetricsDelta,
+  source: DbMetricsDelta,
+): DbMetricsDelta => {
+  for (const key of Object.keys(target) as DbMetricName[]) {
+    target[key] = {
+      calls: target[key].calls + source[key].calls,
+      ms: target[key].ms + source[key].ms,
+    }
+  }
+  return target
+}
+
+const emptyDbMetricsDelta = (): DbMetricsDelta => ({
+  getAll: {calls: 0, ms: 0},
+  getOptional: {calls: 0, ms: 0},
+  get: {calls: 0, ms: 0},
+  execute: {calls: 0, ms: 0},
+  writeTransaction: {calls: 0, ms: 0},
+})
 
 interface PropertyChildrenBackfillFailureLogArgs {
   err: unknown
@@ -716,6 +800,10 @@ export class Repo {
    *  most recent `TX_LOG_CAPACITY` entries are retained; older drops
    *  are silent. Surfaces through `repo.metrics().txLog`. */
   private readonly txLog: Array<{description: string | null; ms: number}> = []
+  /** Step-level timings for the most recently completed local tx.
+   *  Migration diagnostics read this immediately after their own tx
+   *  returns so batch logs can separate user work from same-tx work. */
+  private lastTxTiming: Readonly<TxTimingDiagnostics> | null = null
   /** Active row_events tail (spec §9.3 path 2). Lazy: created on first
    *  start, replaced on subsequent starts. Tests can `dispose()` and
    *  re-`start` for deterministic flushing. */
@@ -1318,6 +1406,7 @@ export class Repo {
     // Cheaper than recording every tx; only the high-water mark wins.
     const txMs = performance.now() - txT0
     const description = opts.description ?? null
+    this.lastTxTiming = result.timing
     if (txMs > this.slowestTx.ms) {
       this.slowestTx = {description, ms: txMs}
     }
@@ -1609,18 +1698,28 @@ export class Repo {
 
       const scopeSchemaMap = new Map(schemasToScan.map(schema => [schema.name, schema]))
       let afterId = ''
-      const writeCandidates = async (batchCandidates: readonly BlockData[]): Promise<void> => {
+      const writeCandidates = async (
+        batchCandidates: readonly BlockData[],
+      ): Promise<PropertyChildrenBackfillWriteDiagnostics> => {
+        const stats = createPropertyChildrenMaterializationStats()
+        const dbBefore = this.dbMetrics.snapshot() as DbMetricsSnapshot
         await this.tx(async tx => {
           for (const candidate of batchCandidates) {
             const live = await tx.get(candidate.id)
             if (live === null || live.deleted) continue
             const names = Object.keys(live.properties).filter(name => scopeSchemaMap.has(name))
-            await materializePropertyChildrenForExistingRow(tx, live, scopeSchemaMap, names)
+            await materializePropertyChildrenForExistingRow(tx, live, scopeSchemaMap, names, stats)
           }
         }, {
           scope,
           description: 'backfill property children from properties_json',
         })
+        const dbAfter = this.dbMetrics.snapshot() as DbMetricsSnapshot
+        return {
+          stats,
+          dbDelta: dbMetricsDelta(dbBefore, dbAfter),
+          txTiming: this.lastTxTiming,
+        }
       }
       for (;;) {
         const scanStartedAt = performance.now()
@@ -1640,8 +1739,9 @@ export class Repo {
         const propertyCount = countMatchingProperties(candidates, scopeSchemaMap)
         const writeStartedAt = performance.now()
         let writeMode = 'single'
+        let writeDiagnostics: PropertyChildrenBackfillWriteDiagnostics
         try {
-          await writeCandidates(candidates)
+          writeDiagnostics = await writeCandidates(candidates)
         } catch (err) {
           const writeMs = performance.now() - writeStartedAt
           const retryBatchSize = Math.max(
@@ -1670,11 +1770,17 @@ export class Repo {
 
           writeMode = 'short-write-retry'
           const retryChunks = chunkArray(candidates, retryBatchSize)
+          const retryStats = createPropertyChildrenMaterializationStats()
+          const retryDbDelta = emptyDbMetricsDelta()
+          let retryTxTiming: Readonly<TxTimingDiagnostics> | null = null
           for (let retryIndex = 0; retryIndex < retryChunks.length; retryIndex += 1) {
             const chunk = retryChunks[retryIndex]!
             const retryStartedAt = performance.now()
             try {
-              await writeCandidates(chunk)
+              const chunkDiagnostics = await writeCandidates(chunk)
+              addMaterializationStats(retryStats, chunkDiagnostics.stats)
+              addDbMetricsDelta(retryDbDelta, chunkDiagnostics.dbDelta)
+              retryTxTiming = chunkDiagnostics.txTiming
             } catch (retryErr) {
               await this.logPropertyChildrenBackfillWriteFailure({
                 err: retryErr,
@@ -1705,17 +1811,34 @@ export class Repo {
               )
             }
           }
+          writeDiagnostics = {
+            stats: retryStats,
+            dbDelta: retryDbDelta,
+            txTiming: retryTxTiming,
+          }
         }
         const writeMs = performance.now() - writeStartedAt
         const batchMs = performance.now() - scanStartedAt
         if (logProgress) {
+          const stats = writeDiagnostics.stats
+          const dbDelta = writeDiagnostics.dbDelta
+          const txTiming = writeDiagnostics.txTiming
           console.info(
             `[Repo] property children migration batch ${batchCount} ` +
             `workspace=${workspaceId} scope=${scope} blocks=${candidates.length} ` +
             `properties=${propertyCount} writeMode=${writeMode} ` +
+            `createdFieldRows=${stats.fieldRowsCreated} createdValueRows=${stats.valueRowsCreated} ` +
+            `existingFieldRows=${stats.existingFieldRows} existingValueRows=${stats.existingValueRows} ` +
+            `parentChildrenReads=${stats.parentChildrenReads} valueChildrenReads=${stats.valueChildrenReads} ` +
+            `deletedRows=${stats.rowsDeleted} skippedInvalid=${stats.propertiesSkippedInvalidValue} ` +
+            `txUserFnMs=${Math.round(txTiming?.userFnMs ?? 0)} txSameTxMs=${Math.round(txTiming?.sameTxMs ?? 0)} ` +
+            `txSameTxRows=${txTiming?.sameTxChangedRows ?? 0} txSnapshots=${txTiming?.snapshotCount ?? 0} ` +
+            `sameTxProcessors=${formatSameTxProcessorTimings(txTiming)} ` +
+            `dbDelta=${formatDbMetricDelta(dbDelta)} ` +
             `processed=${processed} lastId=${afterId} ` +
             `scanMs=${Math.round(scanMs)} writeMs=${Math.round(writeMs)} ` +
-            `batchMs=${Math.round(batchMs)} candidatesPerSecond=${perSecond(candidates.length, batchMs)}`,
+            `batchMs=${Math.round(batchMs)} candidatesPerSecond=${perSecond(candidates.length, batchMs)} ` +
+            `propertiesPerSecond=${perSecond(propertyCount, batchMs)}`,
           )
         }
       }
