@@ -319,7 +319,7 @@
       <li><strong>PowerSync upload compaction</strong> already coalesces edits per block, which
         keeps wire overhead low independent of encoding.</li>
       <li><strong>Client-side edit log</strong> already exists (<code>tx_context</code>,
-        <code>row_events</code>, <code>command_events</code>) &mdash; useful if we ever need to
+        <code>command_events</code>) &mdash; useful if we ever need to
         move history off the server for encrypted workspaces.</li>
     </ul>
 
@@ -1061,7 +1061,9 @@ CREATE TRIGGER blocks_require_ciphertext_for_e2ee_trg
       For rows in plaintext workspaces it copies through unchanged. For rows in E2EE workspaces
       it decrypts the content columns with the WK and writes plaintext to <code>blocks</code>.
       Both cases end up populating <code>blocks</code> as the app-visible table; existing triggers
-      in <code>clientSchema.ts</code> and plugins fire on plaintext writes as today.
+      in <code>clientSchema.ts</code> and plugins fire on plaintext writes as today &mdash; with one
+      change: the <code>row_events</code> invalidation path is retired in favor of direct observer
+      invalidation (see the callout below).
     </p>
     <p>
       <strong>The observer is universal, not E2EE-only.</strong> If it only handled E2EE rows,
@@ -1108,20 +1110,48 @@ CREATE TRIGGER blocks_require_ciphertext_for_e2ee_trg
     </p>
 
     <p>
-      <strong>Observer applies must reuse the guarded-UPSERT shape, not a naive write.</strong>
-      The existing <code>BLOCKS_RAW_TABLE.put</code> in <code>src/data/blockSchema.ts</code> is
-      deliberately <code>INSERT ... ON CONFLICT(id) DO UPDATE SET ... WHERE &lt;diff&gt;</code>,
-      not <code>INSERT OR REPLACE</code>. The comment there (lines 116-126) explains why, and it
-      applies directly to the observer since the observer becomes the writer that mirrors remote
-      rows into <code>blocks</code>: (1) <code>INSERT OR REPLACE</code> fires SQLite's
-      DELETE+INSERT pair on an update, so the <code>row_events</code> trigger logs
-      <code>kind='insert'</code> with <code>before_json=NULL</code> and <code>rowEventsTail</code>
-      misclassifies a plain content edit as a child-membership change &mdash; clearing the
-      parent's child-loaded marker; (2) the <code>WHERE</code> diff guard stops re-delivered
-      identical rows from firing UPDATE triggers at all. A naive observer write reintroduces both
-      bugs (spurious invalidations, echo churn). The observer should reuse the same guarded-UPSERT
-      SQL (decrypting into the bound values first), with <code>source = NULL</code> per the next
-      point.
+      <strong>The observer subsumes <code>rowEventsTail</code> &mdash; it invalidates directly, and
+      the <code>row_events</code> path is removed.</strong> Today PowerSync writes synced rows
+      straight into <code>blocks</code>, bypassing JS, so the app reconstructs each change after the
+      fact: the <code>row_events</code> triggers (<code>clientSchema.ts</code>) serialize before/after
+      JSON into an audit table, and <code>rowEventsTail.ts</code> reads it back, re-parses, LWW-gates,
+      and emits the cache update + <code>handleStore.invalidate</code> notification. Under Layout B the
+      observer is the JS seam that applies <em>every</em> sync write, and it already holds both sides
+      in memory: the after (the decrypted staging row) and the before (the current <code>blocks</code>
+      row it reads for the LWW check anyway). So it can invalidate directly &mdash; reusing
+      <code>snapshotsToChangeNotification</code>, the same helper the local <code>repo.tx</code> fast
+      path uses (<code>handleStore.ts</code>) &mdash; instead of round-tripping through an audit table.
+      That makes the whole <code>row_events</code> path redundant: <strong>drop the three
+      <code>row_events</code> triggers, the <code>row_events</code> table + indexes, and
+      <code>rowEventsTail.ts</code></strong> (including its watermark / throttle-init-race /
+      drain-serialization machinery, which an <code>onDiff</code> push stream obviates). The
+      membership/order, §4.7 cycle-scan, plugin <code>collectFromRowEvent</code>, and LWW logic
+      <em>relocate</em> into the observer &mdash; they are not lost.
+    </p>
+
+    <p>
+      <strong>One LWW gate, not two.</strong> The reconciler above already consults
+      <code>ps_crud</code> / <code>updated_at</code> to decide whether a staging row may overwrite
+      <code>blocks</code>. Folding invalidation into the observer means that same decision also gates
+      the cache write and the handle notification, so the current two-gate shape (the observer's write
+      gate <em>plus</em> <code>rowEventsTail</code>'s <code>applyIfNewer(_, 'sync')</code>) collapses
+      to one &mdash; removing a class of bug where the two gates disagree mid-edit.
+    </p>
+
+    <p>
+      <strong>What this does to the guarded UPSERT.</strong> <code>BLOCKS_RAW_TABLE.put</code>'s
+      <code>INSERT ... ON CONFLICT(id) DO UPDATE ... WHERE &lt;diff&gt;</code> shape
+      (<code>blockSchema.ts</code> 116-126) was justified <em>entirely</em> by <code>row_events</code>:
+      preserving the UPDATE trigger shape so <code>before_json</code> stayed populated, and the
+      <code>WHERE</code>-diff guard suppressing no-op re-deliveries from firing UPDATE triggers. With
+      <code>row_events</code> gone, so is that justification. PowerSync now writes opaque ciphertext to
+      <code>blocks_synced</code>, which carries no triggers, so its raw-table <code>put</code> can be a
+      plain <code>INSERT OR REPLACE</code>; the observer's own write into <code>blocks</code> is driven
+      by <code>onDiff</code> (changed rows only) and skips no-ops in JS, so the WHERE-diff guard isn't
+      needed there either. The one residual reason to keep <code>ON CONFLICT DO UPDATE</code> over
+      <code>INSERT OR REPLACE</code> on <code>blocks</code> is FTS-rowid stability in the surviving
+      derived-index triggers (a DELETE+INSERT reallocates the <code>blocks_fts_rowids</code> mapping)
+      &mdash; a small, separable call, no longer entangled with invalidation correctness.
     </p>
 
     <p>
@@ -1135,7 +1165,8 @@ CREATE TRIGGER blocks_require_ciphertext_for_e2ee_trg
       for non-NULL source). The Layout B observer must follow the same convention: bracket its
       writes to <code>blocks</code> in a <code>tx_context</code> state where <code>source</code>
       is NULL, so the upload triggers skip them while the side-index triggers
-      (row_events, aliases, types, FTS) still fire normally.
+      (aliases, types, FTS) still fire normally. (<code>row_events</code> is no longer among them
+      &mdash; the observer invalidates directly, above.)
     </p>
 
     <p>
@@ -1197,9 +1228,12 @@ CREATE TRIGGER blocks_require_ciphertext_for_e2ee_trg
         so ciphertext lands in the plaintext <code>blocks</code> table and the observer never sees
         it. Add JS observer wiring at the sync boundary
         (universal, with ps_crud / updated_at reconciliation per the callout above);
-        encrypt-on-upload in the connector hook. Existing trigger code in
-        <code>clientSchema.ts</code> and plugins is untouched (they fire on plaintext writes to
-        <code>blocks</code> as today). Update <code>blockUploadPatchJsonSql</code> in
+        encrypt-on-upload in the connector hook. The observer invalidates directly (reusing
+        <code>snapshotsToChangeNotification</code>), so <strong>remove the three
+        <code>row_events</code> triggers + table and <code>rowEventsTail.ts</code></strong>; the
+        remaining trigger code in <code>clientSchema.ts</code> (aliases, types, FTS, upload-routing,
+        validation) and plugins is untouched (they fire on plaintext writes to <code>blocks</code> as
+        today). Update <code>blockUploadPatchJsonSql</code> in
         <code>clientSchema.ts</code> to <em>unconditionally</em> include <code>workspace_id</code>
         in every PATCH envelope &mdash; the current trigger emits only changed columns, so a
         content-only edit reaches <code>uploadData</code> without <code>workspace_id</code>, and
