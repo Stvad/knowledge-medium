@@ -28,8 +28,7 @@ import {
   type Schema,
 } from '@/data/api'
 import { SELECT_BLOCK_COLUMNS_SQL, buildQualifiedBlockColumnsSql, type BlockRow } from '@/data/blockSchema'
-import { isHiddenPropertySchema } from '@/data/propertyChildren'
-import { ANCESTORS_SQL, CHILDREN_IDS_SQL, manyAncestorsSql, SUBTREE_SQL } from './treeQueries'
+import { ANCESTORS_SQL, CHILDREN_IDS_SQL, CHILDREN_SQL, manyAncestorsSql, SUBTREE_SQL } from './treeQueries'
 import {
   assertAncestorWalkBounded,
   buildCandidatesCte,
@@ -549,40 +548,14 @@ export const manyAncestorsQuery = defineQuery<
   },
 })
 
-const hiddenPropertyFieldIds = (
-  propertySchemas: QueryCtx['repo']['propertySchemas'],
-): string[] => Array.from(propertySchemas.values())
-  .filter(isHiddenPropertySchema)
-  .map(schema => schema.fieldId)
-
-const userFacingChildrenSql = (
-  selectSql: '*' | 'id',
-  propertySchemas: QueryCtx['repo']['propertySchemas'],
-): {sql: string; params: string[]} => {
-  const hiddenFieldIds = hiddenPropertyFieldIds(propertySchemas)
-  const hiddenFilter = hiddenFieldIds.length > 0
-    ? `AND (reference_target_id IS NULL OR reference_target_id NOT IN (${hiddenFieldIds.map(() => '?').join(', ')}))`
-    : ''
-  return {
-    sql: `
-      SELECT ${selectSql} FROM blocks
-       WHERE parent_id = ? AND deleted = 0
-       ${hiddenFilter}
-       ORDER BY order_key, id
-    `,
-    params: hiddenFieldIds,
-  }
-}
-
-/** Direct children of `id`, ordered `(order_key, id)`. Hidden/system property fields are omitted. */
+/** Direct children of `id`, ordered `(order_key, id)`. */
 export const childrenQuery = defineQuery<{id: string}, BlockData[]>({
   name: 'core.children',
   argsSchema: z.object({id: z.string()}),
   resultSchema: blockDataArraySchema,
   resolve: async ({id}, ctx) => {
     ctx.depend({kind: 'parent-edge', parentId: id})
-    const query = userFacingChildrenSql('*', ctx.repo.propertySchemas)
-    const rows = await ctx.db.getAll<BlockRow>(query.sql, [id, ...query.params])
+    const rows = await ctx.db.getAll<BlockRow>(CHILDREN_SQL, [id])
     return ctx.hydrateBlocks(asBlockRows(rows))
   },
 })
@@ -597,12 +570,10 @@ export const childIdsQuery = defineQuery<{id: string; hydrate?: boolean}, string
   resolve: async ({id, hydrate = false}, ctx) => {
     ctx.depend({kind: 'parent-edge', parentId: id})
     if (!hydrate) {
-      const query = userFacingChildrenSql('id', ctx.repo.propertySchemas)
-      const rows = await ctx.db.getAll<{id: string}>(query.sql, [id, ...query.params])
+      const rows = await ctx.db.getAll<{id: string}>(CHILDREN_IDS_SQL, [id])
       return rows.map(r => r.id)
     }
-    const query = userFacingChildrenSql('*', ctx.repo.propertySchemas)
-    const rows = await ctx.db.getAll<BlockRow>(query.sql, [id, ...query.params])
+    const rows = await ctx.db.getAll<BlockRow>(CHILDREN_SQL, [id])
     // declareRowDeps:false — result is the id list; per-row deps would
     // wake the handle on content/property edits that can't change the
     // id set. Hydration here is pure cache priming for the React hooks

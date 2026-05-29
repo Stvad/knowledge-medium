@@ -105,9 +105,17 @@ const TestContentRenderer = ({block}: BlockRendererProps) => (
   <div>{block.id}</div>
 )
 
-const ChildIdsProbe = ({block}: {block: Block}) => {
-  const ids = useChildIds(block)
-  return <div data-testid="child-ids">{ids.join('|')}</div>
+const ChildIdsProbe = ({
+  block,
+  includeHiddenPropertyChildren = false,
+  testId = 'child-ids',
+}: {
+  block: Block
+  includeHiddenPropertyChildren?: boolean
+  testId?: string
+}) => {
+  const ids = useChildIds(block, {includeHiddenPropertyChildren})
+  return <div data-testid={testId}>{ids.join('|')}</div>
 }
 
 const dispatchPaste = (target: Element, text: string): Event => {
@@ -292,7 +300,7 @@ describe('DefaultBlockRenderer paste handling', () => {
     await waitFor(() => expect(document.activeElement).toBe(remountedShell))
   })
 
-  it('treats visible fields as children while hiding internal fields from the outline', async () => {
+  it('hides fields declared hidden by property UI unless the caller opts into all children', async () => {
     await repo.tx(async tx => {
       await tx.create({
         id: 'probe-parent',
@@ -321,12 +329,21 @@ describe('DefaultBlockRenderer paste handling', () => {
 
     render(
       <AppRuntimeContextProvider value={runtime}>
-        <ChildIdsProbe block={repo.block('probe-parent')} />
+        <ChildIdsProbe
+          block={repo.block('probe-parent')}
+          testId="visible-child-ids"
+        />
+        <ChildIdsProbe
+          block={repo.block('probe-parent')}
+          includeHiddenPropertyChildren
+          testId="all-child-ids"
+        />
       </AppRuntimeContextProvider>,
     )
 
     await waitFor(() => {
-      expect(screen.getByTestId('child-ids').textContent).toBe('visible-status-field')
+      expect(screen.getByTestId('visible-child-ids').textContent).toBe('visible-status-field')
+      expect(screen.getByTestId('all-child-ids').textContent).toBe('visible-status-field|hidden-show-properties-field')
     })
   })
 

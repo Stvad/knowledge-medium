@@ -1,5 +1,4 @@
 import {
-  ChangeScope,
   CodecError,
   type AnyPropertySchema,
   type BlockData,
@@ -33,23 +32,6 @@ export const isPropertyFieldInstance = (
   const fieldId = getPropertyFieldTargetId(data)
   return fieldId !== undefined && findSchemaByFieldId(propertySchemas, fieldId) !== undefined
 }
-
-export const isHiddenPropertySchema = (schema: AnyPropertySchema): boolean =>
-  schema.name.startsWith('system:') || schema.changeScope === ChangeScope.UiState
-
-export const isHiddenPropertyFieldId = (
-  fieldId: string | null | undefined,
-  propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
-): boolean => {
-  if (!fieldId) return false
-  const schema = findSchemaByFieldId(propertySchemas, fieldId)
-  return schema !== undefined && isHiddenPropertySchema(schema)
-}
-
-export const isHiddenPropertyFieldInstance = (
-  data: Pick<BlockData, 'referenceTargetId'> | null | undefined,
-  propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
-): boolean => isHiddenPropertyFieldId(getPropertyFieldTargetId(data), propertySchemas)
 
 export const propertyFieldContent = (schema: AnyPropertySchema): string =>
   referenceBlockContentForLabel(schema.name)

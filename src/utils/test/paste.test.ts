@@ -108,7 +108,10 @@ describe('pasteMultilineText', () => {
     )
 
     expect(await childContents('root')).toEqual(['Parent', 'Pasted', 'Sibling'])
-    expect(await childContents('parent')).toEqual(['Old child'])
+    // repo.query.children is the raw storage tree; the outline hides
+    // UI-hidden field rows such as system:collapsed as a presentation
+    // policy.
+    expect(await childContents('parent')).toEqual(['Old child', '[[system:collapsed]]'])
   })
 
   it('pastes on the zoomed top-level block inside the visible subtree', async () => {

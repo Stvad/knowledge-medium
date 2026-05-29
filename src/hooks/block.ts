@@ -47,7 +47,6 @@ import { propertyEditorOverridesFacet } from '@/data/facets'
 import { findSchemaByFieldId, getPropertyFieldTargetId } from '@/data/propertyChildren'
 import { useAppRuntime } from '@/extensions/runtimeContext'
 import { usePropertySchemas } from '@/hooks/propertySchemas.js'
-import { isPropertyPanelHiddenProperty } from '@/components/propertyPanel/visibility'
 
 const EMPTY_BLOCK_DATA_ARRAY: readonly BlockData[] = Object.freeze([])
 
@@ -309,18 +308,18 @@ const isHiddenPropertyChild = (
   if (!fieldId) return false
   const schema = findSchemaByFieldId(schemas, fieldId)
   if (!schema) return false
-  return isPropertyPanelHiddenProperty(schema.name, schemas, uis)
+  return uis.get(schema.name)?.hidden === true
 }
 
 /** Reactive child-id list (in `(orderKey, id)` order). Returns `[]`
  *  while the handle is loading or for a leaf block. Field rows are
- *  included as normal children except for the narrow hidden-property
- *  presentation policy shared with the property panel.
+ *  included as normal children except for property fields whose UI
+ *  declaration opts into `hidden: true`.
  *
  *  Backed by `repo.childIds(id)` rather than `repo.children(id)` —
  *  declares only a `parent-edge` dep, so unrelated child mutations
  *  (content edits, focus moves, etc.) don't invalidate the handle at
- *  all. Hidden-field filtering reads the child snapshots that the
+ *  all. UI-hidden field filtering reads the child snapshots that the
  *  hydrating query already primed into the cache.
  *
  *  Opts into `{hydrate: true}` so the loader runs the full
