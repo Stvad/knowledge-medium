@@ -61,32 +61,35 @@ const requireKey = async (
   return key
 }
 
-/** App → wire. Identity for plaintext; per-column AES-GCM seal for E2EE. */
-export const encodeForWire = async <T extends WireBlockColumns>(
+/** Apply `xform` to each of the three content columns, returning a new row
+ *  with all other columns preserved. `xform` runs under the workspace key
+ *  with each column's own AAD (§9.1). Shared by encode (seal) and decode
+ *  (open) so the column set and AAD construction live in one place. */
+const transformContentColumns = async <T extends WireBlockColumns>(
   row: T,
   mode: SyncMode,
   getCek: GetCek,
+  xform: (key: CryptoKey, value: string, aad: Uint8Array<ArrayBuffer>) => Promise<string>,
 ): Promise<T> => {
   if (mode === 'none') return row
   const key = await requireKey(getCek, row.workspace_id)
-  const out = { ...row }
+  const transformed: Partial<Record<(typeof CONTENT_COLUMNS)[number], string>> = {}
   for (const column of CONTENT_COLUMNS) {
-    out[column] = await seal(key, row[column], contentAad(row.id, row.workspace_id, column))
+    transformed[column] = await xform(key, row[column], contentAad(row.id, row.workspace_id, column))
   }
-  return out
+  return { ...row, ...transformed }
 }
 
-/** Wire → app. Identity for plaintext; per-column AES-GCM open for E2EE. */
-export const decodeFromWire = async <T extends WireBlockColumns>(
+/** App → wire. Identity for plaintext; per-column AES-GCM seal for E2EE. */
+export const encodeForWire = <T extends WireBlockColumns>(
   row: T,
   mode: SyncMode,
   getCek: GetCek,
-): Promise<T> => {
-  if (mode === 'none') return row
-  const key = await requireKey(getCek, row.workspace_id)
-  const out = { ...row }
-  for (const column of CONTENT_COLUMNS) {
-    out[column] = await open(key, row[column], contentAad(row.id, row.workspace_id, column))
-  }
-  return out
-}
+): Promise<T> => transformContentColumns(row, mode, getCek, seal)
+
+/** Wire → app. Identity for plaintext; per-column AES-GCM open for E2EE. */
+export const decodeFromWire = <T extends WireBlockColumns>(
+  row: T,
+  mode: SyncMode,
+  getCek: GetCek,
+): Promise<T> => transformContentColumns(row, mode, getCek, open)
