@@ -27,11 +27,11 @@ describe('base64url', () => {
 
   it('rejects an impossible single-char trailing group', () => {
     // len % 4 === 1 can never be produced by a real base64 encoding.
-    expect(() => base64UrlToBytes('AAAAA')).toThrow(/invalid length/)
+    expect(() => base64UrlToBytes('AAAAA')).toThrow(/invalid input/)
   })
 
-  it('rejects characters outside the alphabet', () => {
-    expect(() => base64UrlToBytes('AA+A')).toThrow(/invalid character/)
-    expect(() => base64UrlToBytes('AA=A')).toThrow(/invalid character/)
+  it('rejects characters outside the URL-safe alphabet (incl. + / =)', () => {
+    expect(() => base64UrlToBytes('AA+A')).toThrow(/invalid input/)
+    expect(() => base64UrlToBytes('AA=A')).toThrow(/invalid input/)
   })
 })

@@ -25,6 +25,6 @@ describe('base32', () => {
 
   it('rejects characters outside the alphabet', () => {
     // 0, 1, 8, 9 are not in the RFC 4648 base32 alphabet.
-    expect(() => base32ToBytes('AAAA0')).toThrow(/invalid character/)
+    expect(() => base32ToBytes('AAAA0')).toThrow(/invalid input/)
   })
 })
