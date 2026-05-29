@@ -84,6 +84,19 @@ ${formatSqlList(BLOCK_STORAGE_COLUMNS.map(column => column.definition), 6)}
   )
 `
 
+/** Layout B staging table (design doc §9.2). PowerSync's blocks stream is
+ *  retargeted to row_type `blocks_synced`, so EVERY downloaded row —
+ *  plaintext or `enc:v1:` ciphertext — lands here first; a JS observer then
+ *  materializes it into the app-visible plaintext `blocks` table. It mirrors
+ *  the `blocks` column shape (same `BLOCK_STORAGE_COLUMNS`) so a server row
+ *  hydrates without dropping fields, but carries NONE of the `blocks`
+ *  triggers — it's a passive landing zone, never read by app queries. */
+export const CREATE_BLOCKS_SYNCED_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS blocks_synced (
+${formatSqlList(BLOCK_STORAGE_COLUMNS.map(column => column.definition), 6)}
+  )
+`
+
 /** Sibling iteration index. Matches the server-side
  *  `idx_blocks_parent_order` in `supabase/migrations/<...>_initial_schema_v2.sql`.
  *  `(order_key, id)` tiebreak handles fractional-indexing-jittered key
@@ -129,6 +142,27 @@ ${formatSqlOrList(BLOCK_SYNC_DIFF_PREDICATES, 8)}
   },
   delete: {
     sql: 'DELETE FROM blocks WHERE id = ?',
+    params: ['Id'],
+  },
+} satisfies RawTableType
+
+// Layout B staging raw table (design doc §9.2). Unlike BLOCKS_RAW_TABLE, this
+// is a plain `INSERT OR REPLACE`: `blocks_synced` carries no triggers, so none
+// of the guarded-UPSERT machinery (preserving the UPDATE trigger shape for
+// `row_events`, the WHERE-diff guard suppressing no-op re-deliveries) earns its
+// keep here. PowerSync overwrites the staged ciphertext on every re-delivery;
+// the observer is what dedups no-ops, in JS, on its way into `blocks`.
+export const BLOCKS_SYNCED_RAW_TABLE = {
+  put: {
+    sql: `
+      INSERT OR REPLACE INTO blocks_synced (
+${formatSqlList(BLOCK_COLUMN_NAMES, 8)}
+      ) VALUES (${BLOCK_COLUMN_NAMES.map(() => '?').join(', ')})
+    `,
+    params: BLOCK_COLUMN_NAMES.map(powerSyncParamForColumn),
+  },
+  delete: {
+    sql: 'DELETE FROM blocks_synced WHERE id = ?',
     params: ['Id'],
   },
 } satisfies RawTableType

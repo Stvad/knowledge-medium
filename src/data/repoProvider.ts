@@ -33,7 +33,9 @@ import { PowerSyncDatabase, Schema, WASQLiteOpenFactory, WASQLiteVFS } from '@po
 import { createPowerSyncConnector, hasRemoteSyncConfig } from '@/services/powersync.js'
 import {
   BLOCKS_RAW_TABLE,
+  BLOCKS_SYNCED_RAW_TABLE,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
+  CREATE_BLOCKS_SYNCED_TABLE_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
 } from '@/data/blockSchema'
@@ -62,6 +64,7 @@ import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
 const appSchema = new Schema({})
 appSchema.withRawTables({
   blocks: BLOCKS_RAW_TABLE,
+  blocks_synced: BLOCKS_SYNCED_RAW_TABLE,
   workspaces: WORKSPACES_RAW_TABLE,
   workspace_members: WORKSPACE_MEMBERS_RAW_TABLE,
 })
@@ -221,6 +224,11 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
 
   // ── blocks + its indexes ──
   await powerSyncDb.execute(CREATE_BLOCKS_TABLE_SQL)
+  // Layout B staging table (§9.2). The raw-table mapping above tells
+  // PowerSync how to write it, but does NOT create the local SQLite table —
+  // we run the DDL ourselves, same as `blocks`. Dormant until the blocks
+  // stream is retargeted to row_type `blocks_synced` (Phase D cutover).
+  await powerSyncDb.execute(CREATE_BLOCKS_SYNCED_TABLE_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
 
