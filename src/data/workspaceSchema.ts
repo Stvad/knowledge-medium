@@ -49,6 +49,29 @@ export const WORKSPACE_COLUMNS: readonly ColumnDef[] = [
 
 export const CREATE_WORKSPACES_TABLE_SQL = buildCreateTableSql('workspaces', WORKSPACE_COLUMNS)
 
+/**
+ * Idempotent local-schema migration for the E2EE workspace columns (§7).
+ * CREATE TABLE IF NOT EXISTS is a no-op on a device whose `workspaces`
+ * table predates these columns, so add them explicitly. Guarded on column
+ * existence so a fresh install — which already has them from
+ * CREATE_WORKSPACES_TABLE_SQL — doesn't throw "duplicate column name".
+ * The NOT NULL DEFAULT 'none' backfills existing rows to plaintext until
+ * PowerSync replays each row's real value.
+ */
+export const ensureWorkspaceE2eeColumns = async (db: {
+  execute: (sql: string) => Promise<unknown>
+  getAll: <T>(sql: string) => Promise<T[]>
+}): Promise<void> => {
+  const columns = await db.getAll<{ name: string }>('PRAGMA table_info(workspaces)')
+  const present = new Set(columns.map((c) => c.name))
+  if (!present.has('encryption_mode')) {
+    await db.execute("ALTER TABLE workspaces ADD COLUMN encryption_mode TEXT NOT NULL DEFAULT 'none'")
+  }
+  if (!present.has('wk_canary')) {
+    await db.execute('ALTER TABLE workspaces ADD COLUMN wk_canary TEXT')
+  }
+}
+
 export const WORKSPACES_RAW_TABLE = {
   put: {
     sql: buildPutSql('workspaces', WORKSPACE_COLUMNS),

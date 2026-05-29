@@ -43,6 +43,7 @@ import {
   CREATE_WORKSPACE_MEMBERS_TABLE_SQL,
   WORKSPACES_RAW_TABLE,
   WORKSPACE_MEMBERS_RAW_TABLE,
+  ensureWorkspaceE2eeColumns,
 } from '@/data/workspaceSchema'
 import {
   CLIENT_SCHEMA_STATEMENTS,
@@ -225,6 +226,10 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
 
   // ── workspaces + workspace_members ──
   await powerSyncDb.execute(CREATE_WORKSPACES_TABLE_SQL)
+  // Idempotent local migration: add the E2EE columns to an existing
+  // `workspaces` table on upgrading devices (CREATE TABLE IF NOT EXISTS
+  // above is a no-op when the table already exists). §7 / e2ee-design.
+  await ensureWorkspaceE2eeColumns(powerSyncDb)
   await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
   await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_INDEX_SQL)
 
