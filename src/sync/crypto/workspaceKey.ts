@@ -33,7 +33,11 @@ export const formatWorkspaceKey = (bytes: Uint8Array): string => {
  *  Tolerates surrounding whitespace and case (users retype these). */
 export const parseWorkspaceKey = (value: string): Uint8Array<ArrayBuffer> => {
   const trimmed = value.trim()
-  if (!trimmed.startsWith(WK_PREFIX)) {
+  // Case-fold the prefix only. The base32 payload is upper-cased on decode
+  // (base32.ts), so a user who upper-cased the WHOLE backup string —
+  // `KMP-WK-1:…` — must still parse to honor the documented case tolerance;
+  // a case-sensitive `startsWith` would reject exactly that paste.
+  if (trimmed.slice(0, WK_PREFIX.length).toLowerCase() !== WK_PREFIX) {
     throw new Error('workspace key: missing kmp-wk-1: prefix')
   }
   const bytes = base32ToBytes(trimmed.slice(WK_PREFIX.length))

@@ -26,6 +26,8 @@ describe('workspace key', () => {
     expect(parseWorkspaceKey(`  ${formatted}\n`)).toEqual(bytes)
     const lowered = WK_PREFIX + formatted.slice(WK_PREFIX.length).toLowerCase()
     expect(parseWorkspaceKey(lowered)).toEqual(bytes)
+    // Upper-casing the WHOLE backup string (prefix included) still parses.
+    expect(parseWorkspaceKey(formatted.toUpperCase())).toEqual(bytes)
   })
 
   it('rejects a string without the prefix', () => {
