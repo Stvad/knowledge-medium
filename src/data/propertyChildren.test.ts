@@ -234,13 +234,16 @@ describe('child-backed user properties', () => {
     const batchMessage = messages.find(message => message.includes('property children migration batch 1'))
     expect(batchMessage).toEqual(expect.stringContaining('properties=1'))
     expect(batchMessage).toEqual(expect.stringContaining('writeMode=single'))
+    expect(batchMessage).toEqual(expect.stringContaining('bulkParents=1'))
+    expect(batchMessage).toEqual(expect.stringContaining('fallbackParents=0'))
     expect(batchMessage).toEqual(expect.stringContaining('createdFieldRows=1'))
     expect(batchMessage).toEqual(expect.stringContaining('createdValueRows=1'))
-    expect(batchMessage).toEqual(expect.stringContaining('parentChildrenReads=1'))
+    expect(batchMessage).toEqual(expect.stringContaining('parentChildrenReads=0'))
     expect(batchMessage).toEqual(expect.stringContaining('txUserFnMs='))
-    expect(batchMessage).toEqual(expect.stringContaining('txSameTxMs='))
+    expect(batchMessage).toEqual(expect.stringContaining('txSameTxMs=0'))
+    expect(batchMessage).toEqual(expect.stringContaining('txSameTxRows=0'))
     expect(batchMessage).toEqual(expect.stringContaining('txSnapshots='))
-    expect(batchMessage).toEqual(expect.stringContaining('sameTxProcessors='))
+    expect(batchMessage).toEqual(expect.stringContaining('sameTxProcessors=none'))
     expect(batchMessage).toEqual(expect.stringContaining('dbDelta='))
     expect(batchMessage).toEqual(expect.stringContaining('scanMs='))
     expect(batchMessage).toEqual(expect.stringContaining('writeMs='))
@@ -251,6 +254,51 @@ describe('child-backed user properties', () => {
     expect(completeMessage).toEqual(expect.stringContaining('candidatesPerSecond='))
   })
 
+  it('backfills as a system migration without adding user undo entries', async () => {
+    env = await setup()
+    await seedLegacyPropertiesRow(env.h, 'legacy-parent', 'a0', {
+      [env.statusProp.name]: env.statusProp.codec.encode('Doing'),
+    })
+
+    await env.repo.backfillPropertyChildrenFromProperties({
+      workspaceId: WS,
+      batchSize: 1,
+      respectCompletionMarkers: false,
+    })
+
+    const [field] = await rawLiveChildren(env.h, 'legacy-parent')
+    expect(field).toMatchObject({
+      content: '[[status]]',
+      reference_target_id: env.statusProp.fieldId,
+    })
+    const [value] = await rawLiveChildren(env.h, field!.id)
+    expect(value).toMatchObject({content: 'Doing'})
+
+    await expect(env.repo.undo(ChangeScope.BlockDefault)).resolves.toBe(false)
+    await expect(rawLiveChildren(env.h, 'legacy-parent')).resolves.toHaveLength(1)
+
+    const rowEvents = await env.h.db.getAll<{kind: string; source: string; tx_id: string | null}>(
+      `
+        SELECT kind, source, tx_id
+        FROM row_events
+        WHERE block_id IN (?, ?)
+        ORDER BY id
+      `,
+      [field!.id, value!.id],
+    )
+    expect(rowEvents).toEqual([
+      {kind: 'create', source: 'user', tx_id: expect.any(String)},
+      {kind: 'create', source: 'user', tx_id: expect.any(String)},
+    ])
+
+    const queuedUploads = await env.h.db.getAll<{tx_id: number | null; data: string}>(
+      `SELECT tx_id, data FROM ps_crud ORDER BY id`,
+    )
+    expect(queuedUploads).toHaveLength(2)
+    expect(new Set(queuedUploads.map(row => row.tx_id))).toHaveLength(1)
+    expect(queuedUploads.map(row => JSON.parse(row.data).id)).toEqual([field!.id, value!.id])
+  })
+
   it('logs short-write context and retries the failed migration batch in smaller transactions', async () => {
     env = await setup({activateWorkspace: false})
     await seedLegacyPropertiesRow(env.h, 'legacy-parent-a', 'a0', {
@@ -259,12 +307,15 @@ describe('child-backed user properties', () => {
     await seedLegacyPropertiesRow(env.h, 'legacy-parent-b', 'a1', {
       [env.statusProp.name]: env.statusProp.codec.encode('Done'),
     })
-    const originalTx = env.repo.tx.bind(env.repo)
-    const tx = vi.spyOn(env.repo, 'tx')
-    tx.mockImplementationOnce(async () => {
+    const repoInternals = env.repo as unknown as {
+      _runAndDispatch: (...args: unknown[]) => Promise<unknown>
+    }
+    const originalRunAndDispatch = repoInternals._runAndDispatch.bind(env.repo)
+    const runAndDispatch = vi.spyOn(repoInternals, '_runAndDispatch')
+    runAndDispatch.mockImplementationOnce(async () => {
       throw new Error('short write')
     })
-    tx.mockImplementation(originalTx)
+    runAndDispatch.mockImplementation((...args) => originalRunAndDispatch(...args))
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const info = vi.spyOn(console, 'info').mockImplementation(() => {})
 
@@ -276,7 +327,7 @@ describe('child-backed user properties', () => {
         logProgress: true,
       })).resolves.toBe(2)
 
-      expect(tx).toHaveBeenCalledTimes(3)
+      expect(runAndDispatch).toHaveBeenCalledTimes(3)
       expect(warn).toHaveBeenCalledWith(
         '[Repo] property children migration write failed',
         expect.objectContaining({
@@ -292,7 +343,7 @@ describe('child-backed user properties', () => {
         message.includes('property children migration retry 1.1/2'),
       )).toBe(true)
     } finally {
-      tx.mockRestore()
+      runAndDispatch.mockRestore()
       warn.mockRestore()
       info.mockRestore()
     }

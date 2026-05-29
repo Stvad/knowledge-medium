@@ -116,8 +116,11 @@ import type { InvalidationRule } from './invalidation'
 import { KERNEL_PROPERTY_SCHEMAS, getBlockTypes, typesProp } from './properties'
 import {
   propertiesEqual,
+  encodedPropertyValueToChildContent,
   propertyChildContentToEncodedValue,
+  propertyFieldContent,
 } from './propertyChildren'
+import { keyAtStart } from './orderKey'
 import { KERNEL_TYPE_CONTRIBUTIONS } from './blockTypes'
 import { propertiesPageBlockId } from './propertiesPage'
 import { typesPageBlockId } from './typesPage'
@@ -212,6 +215,7 @@ const mergeLiftedSchemas = (
 
 const KERNEL_TYPES = new Map(KERNEL_TYPE_CONTRIBUTIONS.map(t => [t.id, t]))
 const KERNEL_PROPERTY_SCHEMA_MAP = new Map(KERNEL_PROPERTY_SCHEMAS.map(s => [s.name, s]))
+const NO_SAME_TX_PROCESSORS: ReadonlyMap<string, AnySameTxProcessor> = new Map()
 
 /** Bounded ring of recent tx entries surfaced via `repo.metrics().txLog`.
  *  Sized to comfortably cover a cold-start window (a few dozen txs) so
@@ -311,6 +315,15 @@ interface PropertyChildrenBackfillWriteDiagnostics {
   readonly stats: PropertyChildrenMaterializationStats
   readonly dbDelta: DbMetricsDelta
   readonly txTiming: Readonly<TxTimingDiagnostics> | null
+}
+
+interface RunAndDispatchControls {
+  readonly sameTxProcessors?: ReadonlyMap<string, AnySameTxProcessor>
+}
+
+interface PropertyChildrenFallbackParent {
+  readonly parent: BlockData
+  readonly names: readonly string[]
 }
 
 const metricDelta = (
@@ -800,10 +813,6 @@ export class Repo {
    *  most recent `TX_LOG_CAPACITY` entries are retained; older drops
    *  are silent. Surfaces through `repo.metrics().txLog`. */
   private readonly txLog: Array<{description: string | null; ms: number}> = []
-  /** Step-level timings for the most recently completed local tx.
-   *  Migration diagnostics read this immediately after their own tx
-   *  returns so batch logs can separate user work from same-tx work. */
-  private lastTxTiming: Readonly<TxTimingDiagnostics> | null = null
   /** Active row_events tail (spec §9.3 path 2). Lazy: created on first
    *  start, replaced on subsequent starts. Tests can `dispose()` and
    *  re-`start` for deterministic flushing. */
@@ -1366,6 +1375,7 @@ export class Repo {
   private async _runAndDispatch<R>(
     fn: (tx: Tx) => Promise<R>,
     opts: RepoTxOptions,
+    controls: RunAndDispatchControls = {},
   ) {
     const txT0 = performance.now()
     let result
@@ -1383,7 +1393,7 @@ export class Repo {
         now: this.now,
         mutators: this.mutators,
         processors: this.processors,
-        sameTxProcessors: this.sameTxProcessors,
+        sameTxProcessors: controls.sameTxProcessors ?? this.sameTxProcessors,
         propertySchemas: this._propertySchemas,
       })
     } catch (err) {
@@ -1406,7 +1416,6 @@ export class Repo {
     // Cheaper than recording every tx; only the high-water mark wins.
     const txMs = performance.now() - txT0
     const description = opts.description ?? null
-    this.lastTxTiming = result.timing
     if (txMs > this.slowestTx.ms) {
       this.slowestTx = {description, ms: txMs}
     }
@@ -1616,6 +1625,84 @@ export class Repo {
     return rows.map(parseBlockRow)
   }
 
+  private buildBulkPropertyChildrenForBackfill(
+    parent: BlockData,
+    names: readonly string[],
+    schemas: ReadonlyMap<string, AnyPropertySchema>,
+    stats: PropertyChildrenMaterializationStats,
+  ): BlockData[] {
+    stats.rowsVisited += 1
+    if (parent.deleted) {
+      stats.rowsSkippedDeleted += 1
+      return []
+    }
+    if (names.length === 0) {
+      stats.rowsWithoutCandidateProperties += 1
+      return []
+    }
+
+    const out: BlockData[] = []
+    for (const name of names) {
+      stats.propertiesConsidered += 1
+      const schema = schemas.get(name)
+      if (!schema) {
+        stats.propertiesSkippedMissingSchema += 1
+        continue
+      }
+      const encoded = Object.prototype.hasOwnProperty.call(parent.properties, name)
+        ? parent.properties[name]
+        : undefined
+      if (encoded === undefined) {
+        stats.propertiesRemoved += 1
+        continue
+      }
+      try {
+        schema.codec.decode(encoded)
+      } catch {
+        stats.propertiesSkippedInvalidValue += 1
+        continue
+      }
+
+      const now = this.now()
+      const fieldRowId = this.newId()
+      const valueRowId = this.newId()
+      const base = {
+        workspaceId: parent.workspaceId,
+        orderKey: keyAtStart(null),
+        properties: {},
+        references: [],
+        createdAt: now,
+        updatedAt: now,
+        createdBy: this.user.id,
+        updatedBy: this.user.id,
+        deleted: false,
+      } satisfies Omit<BlockData, 'id' | 'parentId' | 'referenceTargetId' | 'content'>
+
+      out.push({
+        ...base,
+        id: fieldRowId,
+        parentId: parent.id,
+        referenceTargetId: schema.fieldId,
+        content: propertyFieldContent(schema),
+      })
+      out.push({
+        ...base,
+        id: valueRowId,
+        parentId: fieldRowId,
+        referenceTargetId: null,
+        content: encodedPropertyValueToChildContent(schema, encoded),
+      })
+      stats.propertiesMaterialized += 1
+      stats.fieldRowsCreated += 1
+      stats.valueRowsCreated += 1
+    }
+    if (out.length > 0) {
+      stats.bulkParents += 1
+      stats.bulkRowsInserted += out.length
+    }
+    return out
+  }
+
   private async logPropertyChildrenBackfillWriteFailure(
     args: PropertyChildrenBackfillFailureLogArgs,
   ): Promise<void> {
@@ -1703,22 +1790,69 @@ export class Repo {
       ): Promise<PropertyChildrenBackfillWriteDiagnostics> => {
         const stats = createPropertyChildrenMaterializationStats()
         const dbBefore = this.dbMetrics.snapshot() as DbMetricsSnapshot
-        await this.tx(async tx => {
-          for (const candidate of batchCandidates) {
-            const live = await tx.get(candidate.id)
-            if (live === null || live.deleted) continue
-            const names = Object.keys(live.properties).filter(name => scopeSchemaMap.has(name))
-            await materializePropertyChildrenForExistingRow(tx, live, scopeSchemaMap, names, stats)
+        const txResult = await this._runAndDispatch(async tx => {
+          const txImpl = tx as TxImpl
+          const candidateIds = batchCandidates.map(candidate => candidate.id)
+          stats.liveParentBatchReads += candidateIds.length > 0 ? 1 : 0
+          const liveParents = await txImpl.liveRowsForKnownIds(workspaceId, candidateIds)
+          const fieldIds = schemasToScan.map(schema => schema.fieldId)
+          stats.existingFieldBatchReads += liveParents.length > 0 && fieldIds.length > 0 ? 1 : 0
+          const existingFieldRows = await txImpl.livePropertyFieldRowsForKnownParents(
+            workspaceId,
+            liveParents.map(parent => parent.id),
+            fieldIds,
+          )
+          const existingTargetsByParent = new Map<string, Set<string>>()
+          for (const fieldRow of existingFieldRows) {
+            if (fieldRow.parentId === null || fieldRow.referenceTargetId === null) continue
+            let targets = existingTargetsByParent.get(fieldRow.parentId)
+            if (!targets) {
+              targets = new Set()
+              existingTargetsByParent.set(fieldRow.parentId, targets)
+            }
+            targets.add(fieldRow.referenceTargetId)
+          }
+
+          const bulkRows: BlockData[] = []
+          const fallbackParents: PropertyChildrenFallbackParent[] = []
+          for (const parent of liveParents) {
+            const names = Object.keys(parent.properties).filter(name => scopeSchemaMap.has(name))
+            const existingTargets = existingTargetsByParent.get(parent.id)
+            const needsFallback = existingTargets !== undefined && names.some(name => {
+              const schema = scopeSchemaMap.get(name)
+              return schema !== undefined && existingTargets.has(schema.fieldId)
+            })
+            if (needsFallback) {
+              stats.fallbackParents += 1
+              fallbackParents.push({parent, names})
+            } else {
+              bulkRows.push(...this.buildBulkPropertyChildrenForBackfill(parent, names, scopeSchemaMap, stats))
+            }
+          }
+
+          if (bulkRows.length > 0) {
+            stats.bulkInsertStatements += await txImpl.insertKnownValidRowsForBackfill(bulkRows)
+          }
+          for (const fallback of fallbackParents) {
+            await materializePropertyChildrenForExistingRow(
+              tx,
+              fallback.parent,
+              scopeSchemaMap,
+              fallback.names,
+              stats,
+            )
           }
         }, {
           scope,
           description: 'backfill property children from properties_json',
+        }, {
+          sameTxProcessors: NO_SAME_TX_PROCESSORS,
         })
         const dbAfter = this.dbMetrics.snapshot() as DbMetricsSnapshot
         return {
           stats,
           dbDelta: dbMetricsDelta(dbBefore, dbAfter),
-          txTiming: this.lastTxTiming,
+          txTiming: txResult.timing,
         }
       }
       for (;;) {
@@ -1827,9 +1961,12 @@ export class Repo {
             `[Repo] property children migration batch ${batchCount} ` +
             `workspace=${workspaceId} scope=${scope} blocks=${candidates.length} ` +
             `properties=${propertyCount} writeMode=${writeMode} ` +
+            `bulkParents=${stats.bulkParents} fallbackParents=${stats.fallbackParents} ` +
             `createdFieldRows=${stats.fieldRowsCreated} createdValueRows=${stats.valueRowsCreated} ` +
             `existingFieldRows=${stats.existingFieldRows} existingValueRows=${stats.existingValueRows} ` +
+            `liveParentBatchReads=${stats.liveParentBatchReads} existingFieldBatchReads=${stats.existingFieldBatchReads} ` +
             `parentChildrenReads=${stats.parentChildrenReads} valueChildrenReads=${stats.valueChildrenReads} ` +
+            `bulkRowsInserted=${stats.bulkRowsInserted} bulkInsertStatements=${stats.bulkInsertStatements} ` +
             `deletedRows=${stats.rowsDeleted} skippedInvalid=${stats.propertiesSkippedInvalidValue} ` +
             `txUserFnMs=${Math.round(txTiming?.userFnMs ?? 0)} txSameTxMs=${Math.round(txTiming?.sameTxMs ?? 0)} ` +
             `txSameTxRows=${txTiming?.sameTxChangedRows ?? 0} txSnapshots=${txTiming?.snapshotCount ?? 0} ` +

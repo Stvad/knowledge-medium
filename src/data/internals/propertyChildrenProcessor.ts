@@ -21,7 +21,13 @@ export interface PropertyChildrenMaterializationStats {
   rowsVisited: number
   rowsSkippedDeleted: number
   rowsWithoutCandidateProperties: number
+  liveParentBatchReads: number
+  existingFieldBatchReads: number
   parentChildrenReads: number
+  bulkParents: number
+  fallbackParents: number
+  bulkRowsInserted: number
+  bulkInsertStatements: number
   propertiesConsidered: number
   propertiesSkippedMissingSchema: number
   propertiesSkippedInvalidValue: number
@@ -44,7 +50,13 @@ export const createPropertyChildrenMaterializationStats = (): PropertyChildrenMa
   rowsVisited: 0,
   rowsSkippedDeleted: 0,
   rowsWithoutCandidateProperties: 0,
+  liveParentBatchReads: 0,
+  existingFieldBatchReads: 0,
   parentChildrenReads: 0,
+  bulkParents: 0,
+  fallbackParents: 0,
+  bulkRowsInserted: 0,
+  bulkInsertStatements: 0,
   propertiesConsidered: 0,
   propertiesSkippedMissingSchema: 0,
   propertiesSkippedInvalidValue: 0,

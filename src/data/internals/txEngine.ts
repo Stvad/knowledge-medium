@@ -215,6 +215,20 @@ const SELECT_PARENT_SQL =
 const SELECT_PARENT_WORKSPACE_SQL =
   `SELECT workspace_id FROM blocks WHERE id = ?`
 const INSERT_SQL = `INSERT INTO blocks (${COLUMN_LIST}) VALUES (${COLUMN_PLACEHOLDERS})`
+const BULK_INSERT_ROWS_PER_STATEMENT = 200
+
+const chunkArray = <T,>(items: readonly T[], size: number): T[][] => {
+  const out: T[][] = []
+  for (let index = 0; index < items.length; index += size) {
+    out.push(items.slice(index, index + size))
+  }
+  return out
+}
+
+const bulkInsertSql = (rowCount: number): string => {
+  const rowPlaceholders = Array.from({length: rowCount}, () => `(${COLUMN_PLACEHOLDERS})`).join(', ')
+  return `INSERT INTO blocks (${COLUMN_LIST}) VALUES ${rowPlaceholders}`
+}
 
 export class TxImpl implements Tx {
   readonly meta: TxMeta
@@ -554,6 +568,74 @@ export class TxImpl implements Tx {
   async parentOf(childId: string): Promise<BlockData | null> {
     const row = await this.ctx.txDb.getOptional<BlockRow>(SELECT_PARENT_SQL, [childId])
     return row === null ? null : parseBlockRow(row)
+  }
+
+  async liveRowsForKnownIds(workspaceId: string, ids: readonly string[]): Promise<BlockData[]> {
+    if (ids.length === 0) return []
+    const out: BlockData[] = []
+    for (const chunk of chunkArray(ids, 400)) {
+      const placeholders = chunk.map(() => '?').join(', ')
+      const rows = await this.ctx.txDb.getAll<BlockRow>(
+        `SELECT ${COLUMN_LIST}
+         FROM blocks
+         WHERE workspace_id = ?
+           AND deleted = 0
+           AND id IN (${placeholders})`,
+        [workspaceId, ...chunk],
+      )
+      out.push(...rows.map(parseBlockRow))
+    }
+    return out
+  }
+
+  async livePropertyFieldRowsForKnownParents(
+    workspaceId: string,
+    parentIds: readonly string[],
+    fieldIds: readonly string[],
+  ): Promise<BlockData[]> {
+    if (parentIds.length === 0 || fieldIds.length === 0) return []
+    const out: BlockData[] = []
+    for (const parentChunk of chunkArray(parentIds, 400)) {
+      const parentPlaceholders = parentChunk.map(() => '?').join(', ')
+      const fieldPlaceholders = fieldIds.map(() => '?').join(', ')
+      const rows = await this.ctx.txDb.getAll<BlockRow>(
+        `SELECT ${COLUMN_LIST}
+         FROM blocks
+         WHERE workspace_id = ?
+           AND deleted = 0
+           AND parent_id IN (${parentPlaceholders})
+           AND reference_target_id IN (${fieldPlaceholders})`,
+        [workspaceId, ...parentChunk, ...fieldIds],
+      )
+      out.push(...rows.map(parseBlockRow))
+    }
+    return out
+  }
+
+  /** Bulk insert rows whose parent/workspace validity has already been
+   *  established by the caller's migration query. This still runs
+   *  inside repo.tx, so SQLite triggers produce row_events and ps_crud
+   *  upload envelopes, and snapshots are recorded for cache/invalidation
+   *  after commit. It deliberately skips per-row `tx.create` parent
+   *  SELECTs and collapses many INSERTs into fewer statements. */
+  async insertKnownValidRowsForBackfill(rows: readonly BlockData[]): Promise<number> {
+    if (rows.length === 0) return 0
+    let statements = 0
+    for (const row of rows) {
+      this.checkWorkspace(row.workspaceId)
+    }
+    for (const chunk of chunkArray(rows, BULK_INSERT_ROWS_PER_STATEMENT)) {
+      await this.ctx.txDb.execute(
+        bulkInsertSql(chunk.length),
+        chunk.flatMap(row => blockToRowParams(row)),
+      )
+      this.pinWorkspace(chunk[0]!.workspaceId)
+      for (const row of chunk) {
+        recordWrite(this.ctx.snapshots, row.id, null, row)
+      }
+      statements += 1
+    }
+    return statements
   }
 
   async aliasLookup(alias: string, workspaceId: string): Promise<BlockData | null> {
