@@ -1,5 +1,6 @@
 verification:
 - use `yarn run check` for verification unless otherwise stated
+- bridge/server tests that bind `127.0.0.1` fail in the Codex sandbox with `listen EPERM`; run `yarn run check` or those specific tests with elevated permissions
 
 secret handling:
 - do not read `.env`, `.env.*`, or other local secret files unless the user explicitly asks for it

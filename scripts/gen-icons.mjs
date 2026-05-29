@@ -1,4 +1,3 @@
-/* eslint-disable */
 /**
  * Generates raster PNG icons for the PWA manifest.
  *
