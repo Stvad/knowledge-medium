@@ -901,6 +901,11 @@ export class Repo {
     if (this.rowEventsTail) await this.rowEventsTail.flush()
   }
 
+  /** Test-only: wait for queued schema-aware property-child migration work. */
+  async __drainPropertyChildrenBackfillForTesting(): Promise<void> {
+    await this.propertyChildrenBackfillChain
+  }
+
   /** Frozen snapshot of internal data-layer counters + timings
    *  (perf-baseline follow-up #4). Returns four subsections:
    *
@@ -1103,7 +1108,6 @@ export class Repo {
 
   setActiveWorkspaceId(workspaceId: string | null): void {
     this._activeWorkspaceId = workspaceId
-    if (workspaceId !== null) this.schedulePropertyChildrenBackfill(workspaceId)
   }
 
   /** Toggle read-only mode. Wrapping the field write in a method
@@ -1113,6 +1117,9 @@ export class Repo {
    *  this flag; UserPrefs writes pass through but stop uploading. */
   setReadOnly(value: boolean): void {
     this.isReadOnly = value
+    if (!value && this._activeWorkspaceId !== null) {
+      this.schedulePropertyChildrenBackfill(this._activeWorkspaceId)
+    }
   }
 
   /** Run a transactional session. Spec §3, §10. */
@@ -1929,27 +1936,11 @@ export class Repo {
 
   private schedulePropertyChildrenBackfill(workspaceId: string): void {
     if (this.isReadOnly || this._propertySchemas.size === 0) return
-    const propertySchemas = this._propertySchemas
-    const run = () => {
-      const next = this.propertyChildrenBackfillChain
-        .catch(() => {})
-        .then(async () => {
-          await this.backfillPropertyChildrenFromProperties({
-            workspaceId,
-            propertySchemas,
-          })
-        })
-      this.propertyChildrenBackfillChain = next.catch(err => {
-        const reason = err instanceof Error ? err.message : String(err)
-        console.warn(`[Repo] property children backfill failed: ${reason}`)
-      })
-    }
-    const idle = (globalThis as {requestIdleCallback?: (cb: () => void, opts?: {timeout: number}) => void}).requestIdleCallback
-    if (typeof idle === 'function') {
-      idle(run, {timeout: 2000})
-    } else {
-      setTimeout(run, 0)
-    }
+    this.enqueuePropertyChildrenBackfill({
+      workspaceId,
+      propertySchemas: this._propertySchemas,
+      warningPrefix: '[Repo] property children migration failed',
+    })
   }
 
   private schedulePropertyChildrenBackfillForRows(
@@ -1957,19 +1948,33 @@ export class Repo {
     rowIds: readonly string[],
   ): void {
     if (this.isReadOnly || this._propertySchemas.size === 0 || rowIds.length === 0) return
-    const propertySchemas = this._propertySchemas
+    this.enqueuePropertyChildrenBackfill({
+      workspaceId,
+      propertySchemas: this._propertySchemas,
+      blockIds: rowIds,
+      warningPrefix: '[Repo] property children sync backfill failed',
+    })
+  }
+
+  private enqueuePropertyChildrenBackfill(args: {
+    workspaceId: string
+    propertySchemas: ReadonlyMap<string, AnyPropertySchema>
+    blockIds?: readonly string[]
+    warningPrefix: string
+  }): void {
     const next = this.propertyChildrenBackfillChain
       .catch(() => {})
       .then(async () => {
         await this.backfillPropertyChildrenFromProperties({
-          workspaceId,
-          propertySchemas,
-          blockIds: rowIds,
+          workspaceId: args.workspaceId,
+          propertySchemas: args.propertySchemas,
+          ...(args.blockIds ? {blockIds: args.blockIds} : {}),
         })
       })
-    this.propertyChildrenBackfillChain = next.catch(err => {
+    this.propertyChildrenBackfillChain = next
+    void next.catch(err => {
       const reason = err instanceof Error ? err.message : String(err)
-      console.warn(`[Repo] property children sync backfill failed: ${reason}`)
+      console.warn(`${args.warningPrefix}: ${reason}`)
     })
   }
 

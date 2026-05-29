@@ -967,7 +967,7 @@ export const CLEAR_REPROJECT_REF_MARKER_SQL = `
  *  parent `properties_json` into Tana-style field/value children. Sync
  *  arrivals still run row-targeted catch-up; these markers only stop
  *  repeated full workspace scans once the local DB is caught up. */
-export const PROPERTY_CHILDREN_BACKFILL_MARKER_PREFIX = 'property_children_backfill:v1:'
+export const PROPERTY_CHILDREN_BACKFILL_MARKER_PREFIX = 'property_children_backfill:v2:'
 
 export const SELECT_PROPERTY_CHILDREN_BACKFILL_MARKERS_SQL = `
   SELECT key FROM client_schema_state WHERE key LIKE '${PROPERTY_CHILDREN_BACKFILL_MARKER_PREFIX}%'
@@ -1131,4 +1131,3 @@ export const runAnalyzeIfDue = async (
   await db.execute(RECORD_ANALYZE_DONE_SQL, [nowMs])
   return true
 }
-

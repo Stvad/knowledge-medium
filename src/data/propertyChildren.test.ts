@@ -211,6 +211,26 @@ describe('child-backed user properties', () => {
     ])
   })
 
+  it('runs the startup migration when schemas become available for the active workspace', async () => {
+    env = await setup({registerStatusProp: false})
+    await seedLegacyPropertiesRow(env.h, 'legacy-parent', 'a0', {
+      [env.statusProp.name]: env.statusProp.codec.encode('Doing'),
+    })
+
+    env.repo.setRuntimeContributions(propertySchemasFacet, 'test', [env.statusProp])
+    await env.repo.__drainPropertyChildrenBackfillForTesting()
+
+    const children = await rawLiveChildren(env.h, 'legacy-parent')
+    expect(children).toHaveLength(1)
+    expect(children[0]!).toMatchObject({
+      content: '[[status]]',
+      reference_target_id: env.statusProp.fieldId,
+    })
+    await expect(rawLiveChildren(env.h, children[0]!.id)).resolves.toMatchObject([
+      {content: 'Doing', reference_target_id: null},
+    ])
+  })
+
   it('marks full backfills complete while row-targeted sync catch-up bypasses the marker', async () => {
     env = await setup({activateWorkspace: false})
     await seedLegacyPropertiesRow(env.h, 'legacy-parent', 'a0', {
