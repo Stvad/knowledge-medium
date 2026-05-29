@@ -55,28 +55,34 @@ describe('rollout pin seed', () => {
   const V = 'v1'
 
   it('seeds unpinned memberships from the server mode, once', () => {
-    const written = seedModePinsOnce(V, [
-      { userId: USER, workspaceId: WS_A, serverMode: 'plaintext' },
-    ])
+    const written = seedModePinsOnce(USER, V, [{ workspaceId: WS_A, serverMode: 'plaintext' }])
     expect(written).toBe(1)
     expect(getModePin(USER, WS_A)).toBe('plaintext')
-    expect(arePinsSeeded(V)).toBe(true)
+    expect(arePinsSeeded(USER, V)).toBe(true)
   })
 
-  it('never re-fires once seeded for a version (post-wipe safety)', () => {
-    seedModePinsOnce(V, [{ userId: USER, workspaceId: WS_A, serverMode: 'plaintext' }])
+  it('never re-fires once seeded for this user+version (post-wipe safety)', () => {
+    seedModePinsOnce(USER, V, [{ workspaceId: WS_A, serverMode: 'plaintext' }])
     // Simulate a later attempt (e.g. after a wipe recreated the DB): the
     // marker survives in localStorage, so the seed must not run again.
-    const written = seedModePinsOnce(V, [
-      { userId: USER, workspaceId: WS_B, serverMode: 'plaintext' },
-    ])
+    const written = seedModePinsOnce(USER, V, [{ workspaceId: WS_B, serverMode: 'plaintext' }])
     expect(written).toBe(0)
     expect(getModePin(USER, WS_B)).toBeNull()
   })
 
   it('does not overwrite an existing pin', () => {
     setModePin(USER, WS_A, 'e2ee')
-    seedModePinsOnce(V, [{ userId: USER, workspaceId: WS_A, serverMode: 'plaintext' }])
+    seedModePinsOnce(USER, V, [{ workspaceId: WS_A, serverMode: 'plaintext' }])
     expect(getModePin(USER, WS_A)).toBe('e2ee')
+  })
+
+  it('still seeds a second user in the same browser profile (per-user marker)', () => {
+    // localStorage is shared across accounts in a profile; user-1 seeding
+    // must NOT block user-2's rollout seed (the bug a global marker caused).
+    seedModePinsOnce(USER, V, [{ workspaceId: WS_A, serverMode: 'plaintext' }])
+    expect(arePinsSeeded('user-2', V)).toBe(false)
+    const written = seedModePinsOnce('user-2', V, [{ workspaceId: WS_A, serverMode: 'plaintext' }])
+    expect(written).toBe(1)
+    expect(getModePin('user-2', WS_A)).toBe('plaintext')
   })
 })

@@ -24,8 +24,13 @@
 // These deliberately live in localStorage so they SURVIVE a §6 Lock &
 // wipe (which clears the SQLite DB and the IndexedDB workspace keys, but
 // must leave each workspace's mode known so the wipe can't downgrade).
+//
+// localStorage is shared across all accounts in a browser profile (only
+// the SQLite DB is per-user, via kmp-v6-<user_id>.db), so BOTH the pins
+// and the rollout-seed marker are keyed by user id — otherwise a second
+// account signing into the same profile would collide with the first.
 const E2EE_MODE_PIN_PREFIX = 'kmp-e2ee-mode:'
-const E2EE_PINS_SEEDED_KEY = 'kmp-e2ee-pins-seeded'
+const E2EE_PINS_SEEDED_PREFIX = 'kmp-e2ee-pins-seeded:'
 
 export type ModePin = 'e2ee' | 'plaintext'
 
@@ -44,6 +49,9 @@ const hasLocalStorage = (): boolean => {
 // can never make two distinct (user, workspace) pairs alias one key.
 const pinStorageKey = (userId: string, workspaceId: string): string =>
   `${E2EE_MODE_PIN_PREFIX}${encodeURIComponent(userId)}:${encodeURIComponent(workspaceId)}`
+
+const seededMarkerKey = (userId: string): string =>
+  `${E2EE_PINS_SEEDED_PREFIX}${encodeURIComponent(userId)}`
 
 /** The pinned mode for this (user, workspace) on this device, or null if
  *  never pinned. */
@@ -81,23 +89,24 @@ export const setModePin = (
   localStorage.setItem(pinStorageKey(userId, workspaceId), mode)
 }
 
-/** True once the one-time rollout seed (below) has run for `version`. */
-export const arePinsSeeded = (version: string): boolean => {
+/** True once the one-time rollout seed (below) has run for this user at
+ *  `version`. Per-user so a second account in the same browser profile
+ *  still seeds its own pre-existing memberships. */
+export const arePinsSeeded = (userId: string, version: string): boolean => {
   if (!hasLocalStorage()) return false
   try {
-    return localStorage.getItem(E2EE_PINS_SEEDED_KEY) === version
+    return localStorage.getItem(seededMarkerKey(userId)) === version
   } catch {
     return false
   }
 }
 
-const markPinsSeeded = (version: string): void => {
+const markPinsSeeded = (userId: string, version: string): void => {
   if (!hasLocalStorage()) return
-  localStorage.setItem(E2EE_PINS_SEEDED_KEY, version)
+  localStorage.setItem(seededMarkerKey(userId), version)
 }
 
 export interface SeedEntry {
-  readonly userId: string
   readonly workspaceId: string
   /** The server's `encryption_mode` for this membership at seed time. */
   readonly serverMode: ModePin
@@ -105,35 +114,38 @@ export interface SeedEntry {
 
 /**
  * One-time rollout seed (§6 "Pre-existing memberships on the rollout
- * release"). On the first pin-aware release every pre-existing workspace
- * is unpinned; we initialize those pins directly from the server's
- * `encryption_mode` — the ONE place the design trusts that field —
- * because at that moment no E2EE workspace exists yet, so there is
- * nothing for the server to misrepresent.
+ * release"), scoped to one user. On the first pin-aware release every
+ * pre-existing workspace is unpinned; we initialize those pins directly
+ * from the server's `encryption_mode` — the ONE place the design trusts
+ * that field — because at that moment no E2EE workspace exists yet, so
+ * there is nothing for the server to misrepresent.
  *
  * Safety properties this enforces:
- *   - keyed to `version` (the pre-pin → pin-aware app-version transition)
- *     and stored in wipe-surviving localStorage, so a §6 wipe that
- *     recreates an empty SQLite DB can NOT re-arm it; it fires at most
- *     once per device;
+ *   - keyed to `(userId, version)` (the pre-pin → pin-aware app-version
+ *     transition) and stored in wipe-surviving localStorage, so a §6 wipe
+ *     that recreates an empty SQLite DB can NOT re-arm it; it fires at
+ *     most once per (user, device);
+ *   - per-user marker, so a different account signing into the same
+ *     browser profile still seeds its own memberships;
  *   - never seeds over an existing pin, so a membership that was already
  *     pinned (and re-synced after a wipe) keeps its pin.
  *
- * Returns the number of pins written. No-op (returns 0) if already seeded
- * for this version.
+ * `entries` are the signed-in user's memberships. Returns the number of
+ * pins written. No-op (returns 0) if already seeded for this user+version.
  */
 export const seedModePinsOnce = (
+  userId: string,
   version: string,
   entries: readonly SeedEntry[],
 ): number => {
-  if (arePinsSeeded(version)) return 0
+  if (arePinsSeeded(userId, version)) return 0
   let written = 0
   for (const entry of entries) {
-    if (getModePin(entry.userId, entry.workspaceId) === null) {
-      setModePin(entry.userId, entry.workspaceId, entry.serverMode)
+    if (getModePin(userId, entry.workspaceId) === null) {
+      setModePin(userId, entry.workspaceId, entry.serverMode)
       written++
     }
   }
-  markPinsSeeded(version)
+  markPinsSeeded(userId, version)
   return written
 }
