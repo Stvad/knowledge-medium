@@ -232,12 +232,64 @@ describe('child-backed user properties', () => {
 
     expect(messages.some(message => message.includes('batchSize=400'))).toBe(true)
     const batchMessage = messages.find(message => message.includes('property children migration batch 1'))
+    expect(batchMessage).toEqual(expect.stringContaining('properties=1'))
+    expect(batchMessage).toEqual(expect.stringContaining('writeMode=single'))
     expect(batchMessage).toEqual(expect.stringContaining('scanMs='))
     expect(batchMessage).toEqual(expect.stringContaining('writeMs='))
     expect(batchMessage).toEqual(expect.stringContaining('batchMs='))
     expect(batchMessage).toEqual(expect.stringContaining('candidatesPerSecond='))
     const completeMessage = messages.find(message => message.includes('property children migration complete'))
     expect(completeMessage).toEqual(expect.stringContaining('candidatesPerSecond='))
+  })
+
+  it('logs short-write context and retries the failed migration batch in smaller transactions', async () => {
+    env = await setup({activateWorkspace: false})
+    await seedLegacyPropertiesRow(env.h, 'legacy-parent-a', 'a0', {
+      [env.statusProp.name]: env.statusProp.codec.encode('Doing'),
+    })
+    await seedLegacyPropertiesRow(env.h, 'legacy-parent-b', 'a1', {
+      [env.statusProp.name]: env.statusProp.codec.encode('Done'),
+    })
+    const originalTx = env.repo.tx.bind(env.repo)
+    const tx = vi.spyOn(env.repo, 'tx')
+    tx.mockImplementationOnce(async () => {
+      throw new Error('short write')
+    })
+    tx.mockImplementation(originalTx)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+
+    try {
+      await expect(env.repo.backfillPropertyChildrenFromProperties({
+        workspaceId: WS,
+        batchSize: 2,
+        respectCompletionMarkers: false,
+        logProgress: true,
+      })).resolves.toBe(2)
+
+      expect(tx).toHaveBeenCalledTimes(3)
+      expect(warn).toHaveBeenCalledWith(
+        '[Repo] property children migration write failed',
+        expect.objectContaining({
+          blocks: 2,
+          properties: 2,
+          configuredBatchSize: 2,
+          retryBatchSize: 1,
+          error: {name: 'Error', message: 'short write'},
+          storageEstimate: null,
+        }),
+      )
+      expect(info.mock.calls.map(([message]) => String(message)).some(message =>
+        message.includes('property children migration retry 1.1/2'),
+      )).toBe(true)
+    } finally {
+      tx.mockRestore()
+      warn.mockRestore()
+      info.mockRestore()
+    }
+
+    await expect(rawLiveChildren(env.h, 'legacy-parent-a')).resolves.toHaveLength(1)
+    await expect(rawLiveChildren(env.h, 'legacy-parent-b')).resolves.toHaveLength(1)
   })
 
   it('runs the startup migration when schemas become available for the active workspace', async () => {

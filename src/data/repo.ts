@@ -236,9 +236,83 @@ const changedRefSchemaNames = (
 }
 
 const PROPERTY_CHILDREN_BACKFILL_BATCH_SIZE = 400
+const PROPERTY_CHILDREN_SHORT_WRITE_RETRY_BATCH_SIZE = 100
 
 const perSecond = (count: number, ms: number): number =>
   ms <= 0 ? count * 1000 : Math.round((count / ms) * 1000)
+
+const isShortWriteError = (err: unknown): boolean =>
+  err instanceof Error && /short write/i.test(err.message)
+
+const errorForLog = (err: unknown): {name: string; message: string} | string =>
+  err instanceof Error
+    ? {name: err.name, message: err.message}
+    : String(err)
+
+interface StorageEstimateLog {
+  usage?: number
+  quota?: number
+  usageRatio?: number
+  error?: string
+}
+
+const browserStorageEstimateForLog = async (): Promise<StorageEstimateLog | null> => {
+  if (typeof navigator === 'undefined' || typeof navigator.storage?.estimate !== 'function') {
+    return null
+  }
+  try {
+    const estimate = await navigator.storage.estimate()
+    const out: StorageEstimateLog = {}
+    if (typeof estimate.usage === 'number') out.usage = estimate.usage
+    if (typeof estimate.quota === 'number') out.quota = estimate.quota
+    if (
+      typeof estimate.usage === 'number' &&
+      typeof estimate.quota === 'number' &&
+      estimate.quota > 0
+    ) {
+      out.usageRatio = Number((estimate.usage / estimate.quota).toFixed(4))
+    }
+    return out
+  } catch (err) {
+    const error = errorForLog(err)
+    return {error: typeof error === 'string' ? error : error.message}
+  }
+}
+
+const chunkArray = <T,>(items: readonly T[], size: number): T[][] => {
+  const out: T[][] = []
+  for (let index = 0; index < items.length; index += size) {
+    out.push(items.slice(index, index + size))
+  }
+  return out
+}
+
+const countMatchingProperties = (
+  blocks: readonly BlockData[],
+  schemas: ReadonlyMap<string, AnyPropertySchema>,
+): number => blocks.reduce(
+  (sum, block) => sum + Object.keys(block.properties).filter(name => schemas.has(name)).length,
+  0,
+)
+
+interface PropertyChildrenBackfillFailureLogArgs {
+  err: unknown
+  workspaceId: string
+  scope: ChangeScope
+  batchCount: number
+  batchSize: number
+  retryBatchSize: number | null
+  retryIndex?: number
+  retryCount?: number
+  blocks: number
+  properties: number
+  processed: number
+  firstId: string | null
+  lastId: string | null
+  scanMs: number
+  writeMs: number
+  elapsedMs: number
+}
 
 const schemasByScope = (
   schemas: Iterable<AnyPropertySchema>,
@@ -1453,6 +1527,39 @@ export class Repo {
     return rows.map(parseBlockRow)
   }
 
+  private async logPropertyChildrenBackfillWriteFailure(
+    args: PropertyChildrenBackfillFailureLogArgs,
+  ): Promise<void> {
+    const dbMetrics = this.dbMetrics.snapshot()
+    console.warn('[Repo] property children migration write failed', {
+      workspaceId: args.workspaceId,
+      scope: args.scope,
+      batch: args.batchCount,
+      configuredBatchSize: args.batchSize,
+      retryBatchSize: args.retryBatchSize,
+      retryIndex: args.retryIndex,
+      retryCount: args.retryCount,
+      blocks: args.blocks,
+      properties: args.properties,
+      processedIncludingFailedBatch: args.processed,
+      firstId: args.firstId,
+      lastId: args.lastId,
+      scanMs: Math.round(args.scanMs),
+      writeMs: Math.round(args.writeMs),
+      elapsedMs: Math.round(args.elapsedMs),
+      error: errorForLog(args.err),
+      storageEstimate: await browserStorageEstimateForLog(),
+      db: {
+        get: dbMetrics.get,
+        getAll: dbMetrics.getAll,
+        execute: dbMetrics.execute,
+        writeTransaction: dbMetrics.writeTransaction,
+      },
+      slowestTx: this.slowestTx,
+      txLogTail: this.txLog.slice(-5),
+    })
+  }
+
   /** Materialize field/value child rows for historical rows that still
    *  only have registered values in `properties_json`. This is the
    *  migration path for data from before Tana-style fields: the JSON
@@ -1502,6 +1609,19 @@ export class Repo {
 
       const scopeSchemaMap = new Map(schemasToScan.map(schema => [schema.name, schema]))
       let afterId = ''
+      const writeCandidates = async (batchCandidates: readonly BlockData[]): Promise<void> => {
+        await this.tx(async tx => {
+          for (const candidate of batchCandidates) {
+            const live = await tx.get(candidate.id)
+            if (live === null || live.deleted) continue
+            const names = Object.keys(live.properties).filter(name => scopeSchemaMap.has(name))
+            await materializePropertyChildrenForExistingRow(tx, live, scopeSchemaMap, names)
+          }
+        }, {
+          scope,
+          description: 'backfill property children from properties_json',
+        })
+      }
       for (;;) {
         const scanStartedAt = performance.now()
         const candidates = await this.propertyChildrenBackfillCandidates(
@@ -1517,24 +1637,82 @@ export class Repo {
         batchCount += 1
         logStart()
 
+        const propertyCount = countMatchingProperties(candidates, scopeSchemaMap)
         const writeStartedAt = performance.now()
-        await this.tx(async tx => {
-          for (const candidate of candidates) {
-            const live = await tx.get(candidate.id)
-            if (live === null || live.deleted) continue
-            const names = Object.keys(live.properties).filter(name => scopeSchemaMap.has(name))
-            await materializePropertyChildrenForExistingRow(tx, live, scopeSchemaMap, names)
+        let writeMode = 'single'
+        try {
+          await writeCandidates(candidates)
+        } catch (err) {
+          const writeMs = performance.now() - writeStartedAt
+          const retryBatchSize = Math.max(
+            1,
+            Math.min(PROPERTY_CHILDREN_SHORT_WRITE_RETRY_BATCH_SIZE, Math.floor(candidates.length / 2)),
+          )
+          await this.logPropertyChildrenBackfillWriteFailure({
+            err,
+            workspaceId,
+            scope,
+            batchCount,
+            batchSize,
+            retryBatchSize: isShortWriteError(err) && retryBatchSize < candidates.length
+              ? retryBatchSize
+              : null,
+            blocks: candidates.length,
+            properties: propertyCount,
+            processed,
+            firstId: candidates[0]?.id ?? null,
+            lastId: afterId,
+            scanMs,
+            writeMs,
+            elapsedMs: performance.now() - startedAt,
+          })
+          if (!isShortWriteError(err) || retryBatchSize >= candidates.length) throw err
+
+          writeMode = 'short-write-retry'
+          const retryChunks = chunkArray(candidates, retryBatchSize)
+          for (let retryIndex = 0; retryIndex < retryChunks.length; retryIndex += 1) {
+            const chunk = retryChunks[retryIndex]!
+            const retryStartedAt = performance.now()
+            try {
+              await writeCandidates(chunk)
+            } catch (retryErr) {
+              await this.logPropertyChildrenBackfillWriteFailure({
+                err: retryErr,
+                workspaceId,
+                scope,
+                batchCount,
+                batchSize,
+                retryBatchSize,
+                retryIndex: retryIndex + 1,
+                retryCount: retryChunks.length,
+                blocks: chunk.length,
+                properties: countMatchingProperties(chunk, scopeSchemaMap),
+                processed,
+                firstId: chunk[0]?.id ?? null,
+                lastId: chunk[chunk.length - 1]?.id ?? null,
+                scanMs,
+                writeMs: performance.now() - retryStartedAt,
+                elapsedMs: performance.now() - startedAt,
+              })
+              throw retryErr
+            }
+            if (logProgress) {
+              console.info(
+                `[Repo] property children migration retry ${batchCount}.${retryIndex + 1}/${retryChunks.length} ` +
+                `workspace=${workspaceId} scope=${scope} blocks=${chunk.length} ` +
+                `properties=${countMatchingProperties(chunk, scopeSchemaMap)} ` +
+                `writeMs=${Math.round(performance.now() - retryStartedAt)}`,
+              )
+            }
           }
-        }, {
-          scope,
-          description: 'backfill property children from properties_json',
-        })
+        }
         const writeMs = performance.now() - writeStartedAt
         const batchMs = performance.now() - scanStartedAt
         if (logProgress) {
           console.info(
             `[Repo] property children migration batch ${batchCount} ` +
             `workspace=${workspaceId} scope=${scope} blocks=${candidates.length} ` +
+            `properties=${propertyCount} writeMode=${writeMode} ` +
             `processed=${processed} lastId=${afterId} ` +
             `scanMs=${Math.round(scanMs)} writeMs=${Math.round(writeMs)} ` +
             `batchMs=${Math.round(batchMs)} candidatesPerSecond=${perSecond(candidates.length, batchMs)}`,
