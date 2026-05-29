@@ -858,7 +858,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       context: ActionContextTypes.MULTI_SELECT_MODE,
       handler: ({uiStateBlock}) => copySelectedBlocksToClipboard(uiStateBlock, repo),
       defaultBinding: {
-        keys: '$mod+c',
+        keys: ['$mod+c', 'y'],
         eventOptions: {
           preventDefault: true,
         },

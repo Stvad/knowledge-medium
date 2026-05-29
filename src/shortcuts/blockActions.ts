@@ -305,7 +305,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     icon: Copy,
     handler: ({block}: BlockShortcutDependencies) => copyBlockToClipboard(block),
     defaultBinding: {
-      keys: '$mod+c',
+      keys: ['$mod+c', 'y'],
       eventOptions: {preventDefault: true},
     },
   }
