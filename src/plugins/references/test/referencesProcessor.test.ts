@@ -368,6 +368,10 @@ describe('parseReferences — schema-swap reprojection', () => {
     let released = false
     let markerBeforeRelease = false
     let markerAfterRelease = false
+    // Resolves only once the scan callback has captured its release fn (see
+    // the swap-mid-scan test for why gating on `intercepted` is racy).
+    let scanParked!: () => void
+    const scanParkedPromise = new Promise<void>(resolve => { scanParked = resolve })
     const getAllSpy = vi.spyOn(env.h.db, 'getAll').mockImplementation(async <T,>(
       sql: string,
       params?: unknown[],
@@ -375,7 +379,10 @@ describe('parseReferences — schema-swap reprojection', () => {
       if (!intercepted && sql.includes('json_each(b.properties_json) prop')) {
         intercepted = true
         const rows = await originalGetAll<T>(sql, params)
-        await new Promise<void>(resolve => { releaseScan = resolve })
+        await new Promise<void>(resolve => {
+          releaseScan = resolve
+          scanParked()
+        })
         return rows
       }
       return originalGetAll<T>(sql, params)
@@ -413,7 +420,9 @@ describe('parseReferences — schema-swap reprojection', () => {
       await env.repo.awaitProcessors()
 
       await vi.advanceTimersByTimeAsync(1)
-      await vi.waitFor(() => { expect(intercepted).toBe(true) })
+      // Wait for reprojection-1 to park inside its SELECT (release fn
+      // captured), not merely to have entered the spy.
+      await scanParkedPromise
 
       env.repo.setFacetRuntime(runtimeWithoutReviewer())
       await vi.advanceTimersByTimeAsync(1)
@@ -463,6 +472,13 @@ describe('parseReferences — schema-swap reprojection', () => {
     const originalGetAll = env.h.db.getAll.bind(env.h.db)
     let releaseScan: (() => void) | null = null
     let intercepted = false
+    // Resolves only once the scan callback has captured its release fn, so
+    // the test can wait for `releaseScan` to be a function before calling
+    // it. Gating on `intercepted` alone is racy: it flips true before the
+    // `await originalGetAll` resolves, so under load the test could reach
+    // `releaseScan!()` while it was still null.
+    let scanParked!: () => void
+    const scanParkedPromise = new Promise<void>(resolve => { scanParked = resolve })
     const getAllSpy = vi.spyOn(env.h.db, 'getAll').mockImplementation(async <T,>(
       sql: string,
       params?: unknown[],
@@ -470,7 +486,10 @@ describe('parseReferences — schema-swap reprojection', () => {
       if (!intercepted && sql.includes('json_each(b.properties_json) prop')) {
         intercepted = true
         const rows = await originalGetAll<T>(sql, params)
-        await new Promise<void>(resolve => { releaseScan = resolve })
+        await new Promise<void>(resolve => {
+          releaseScan = resolve
+          scanParked()
+        })
         return rows
       }
       return originalGetAll<T>(sql, params)
@@ -478,8 +497,9 @@ describe('parseReferences — schema-swap reprojection', () => {
 
     try {
       env.repo.setFacetRuntime(runtimeWithReviewer())
-      // Wait for reprojection-1 to enter its SELECT.
-      await vi.waitFor(() => { expect(intercepted).toBe(true) })
+      // Wait for reprojection-1 to actually park inside its SELECT (release
+      // fn captured), not merely to have entered the spy.
+      await scanParkedPromise
       // Now race: drop another setFacetRuntime that adds approver.
       // Pre-fix, this would invalidate reprojection-1's snapshot and
       // cause the bail.
