@@ -312,6 +312,32 @@ const estimatePropertyChildInsertRows = (
   schemas: ReadonlyMap<string, AnyPropertySchema>,
 ): number => countMatchingProperties(blocks, schemas) * PROPERTY_CHILDREN_BACKFILL_ROWS_PER_PROPERTY
 
+const propertyChildrenBackfillSchemaClauses = (schemas: readonly AnyPropertySchema[]): string[] =>
+  schemas.map(() => `
+    (
+      prop.key = ?
+      AND NOT EXISTS (
+        SELECT 1
+        FROM blocks field
+        WHERE field.workspace_id = b.workspace_id
+          AND field.parent_id = b.id
+          AND field.deleted = 0
+          AND field.reference_target_id = ?
+          AND EXISTS (
+            SELECT 1
+            FROM blocks value
+            WHERE value.workspace_id = field.workspace_id
+              AND value.parent_id = field.id
+              AND value.deleted = 0
+          )
+      )
+    )
+  `)
+
+const propertyChildrenBackfillSchemaParams = (
+  schemas: readonly AnyPropertySchema[],
+): unknown[] => schemas.flatMap(schema => [schema.name, schema.fieldId])
+
 type DbMetricName = 'getAll' | 'getOptional' | 'get' | 'execute' | 'writeTransaction'
 type DbMetricsSnapshot = Readonly<Record<DbMetricName, ReturnType<DbMetrics['snapshot']>[string]>>
 
@@ -1602,27 +1628,8 @@ export class Repo {
     limit: number,
   ): Promise<BlockData[]> {
     if (schemas.length === 0) return []
-    const clauses = schemas.map(() => `
-      (
-        prop.key = ?
-        AND NOT EXISTS (
-          SELECT 1
-          FROM blocks field
-          WHERE field.workspace_id = b.workspace_id
-            AND field.parent_id = b.id
-            AND field.deleted = 0
-            AND field.reference_target_id = ?
-            AND EXISTS (
-              SELECT 1
-              FROM blocks value
-              WHERE value.workspace_id = field.workspace_id
-                AND value.parent_id = field.id
-                AND value.deleted = 0
-            )
-        )
-      )
-    `)
-    const params = schemas.flatMap(schema => [schema.name, schema.fieldId])
+    const clauses = propertyChildrenBackfillSchemaClauses(schemas)
+    const params = propertyChildrenBackfillSchemaParams(schemas)
     const rows = await this.db.getAll<BlockRow>(
       `
         SELECT DISTINCT ${buildQualifiedBlockColumnsSql('b')}
@@ -1638,6 +1645,27 @@ export class Repo {
       [workspaceId, afterId, ...params, limit],
     )
     return rows.map(parseBlockRow)
+  }
+
+  private async countPendingPropertyChildrenBackfillProperties(
+    workspaceId: string,
+    schemas: readonly AnyPropertySchema[],
+  ): Promise<number> {
+    if (schemas.length === 0) return 0
+    const clauses = propertyChildrenBackfillSchemaClauses(schemas)
+    const params = propertyChildrenBackfillSchemaParams(schemas)
+    const row = await this.db.getOptional<{count: number}>(
+      `
+        SELECT COUNT(*) AS count
+        FROM blocks b, json_each(b.properties_json) prop
+        WHERE b.workspace_id = ?
+          AND b.deleted = 0
+          AND b.properties_json <> '{}'
+          AND (${clauses.join(' OR ')})
+      `,
+      [workspaceId, ...params],
+    )
+    return row?.count ?? 0
   }
 
   private async propertyChildrenBackfillCandidateBatch(args: {
@@ -1840,6 +1868,29 @@ export class Repo {
     let loggedStart = false
     let batchCount = 0
     let processed = 0
+    let processedProperties = 0
+    let materializedProperties = 0
+
+    const scopePlans: Array<{
+      scope: ChangeScope
+      schemasToScan: AnyPropertySchema[]
+      pendingProperties: number
+    }> = []
+    for (const [scope, scopeSchemas] of schemasByScope(propertySchemas.values())) {
+      const schemasToScan = respectCompletionMarkers
+        ? await this.schemasPendingPropertyChildrenBackfill(workspaceId, scopeSchemas)
+        : scopeSchemas
+      if (schemasToScan.length === 0) continue
+      const pendingProperties = await this.countPendingPropertyChildrenBackfillProperties(
+        workspaceId,
+        schemasToScan,
+      )
+      scopePlans.push({scope, schemasToScan, pendingProperties})
+    }
+    const totalPendingProperties = scopePlans.reduce(
+      (sum, plan) => sum + plan.pendingProperties,
+      0,
+    )
 
     const logStart = () => {
       if (!logProgress || loggedStart) return
@@ -1847,16 +1898,12 @@ export class Repo {
       console.info(
         `[Repo] property children migration started workspace=${workspaceId} ` +
         `schemas=${propertySchemas.size} parentBatchSize=${parentBatchSize ?? 'row-target'} ` +
-        `targetInsertRows=${targetInsertRows} scanBatchSize=${scanBatchSize} transactionPerBatch=true`,
+        `targetInsertRows=${targetInsertRows} scanBatchSize=${scanBatchSize} ` +
+        `pendingProperties=${totalPendingProperties} transactionPerBatch=true`,
       )
     }
 
-    for (const [scope, scopeSchemas] of schemasByScope(propertySchemas.values())) {
-      const schemasToScan = respectCompletionMarkers
-        ? await this.schemasPendingPropertyChildrenBackfill(workspaceId, scopeSchemas)
-        : scopeSchemas
-      if (schemasToScan.length === 0) continue
-
+    for (const {scope, schemasToScan, pendingProperties: scopePendingProperties} of scopePlans) {
       const scopeSchemaMap = new Map(schemasToScan.map(schema => [schema.name, schema]))
       let afterId = ''
       const writeCandidates = async (
@@ -2068,6 +2115,14 @@ export class Repo {
         }
         const writeMs = performance.now() - writeStartedAt
         const batchMs = performance.now() - scanStartedAt
+        processedProperties += propertyCount
+        materializedProperties += writeDiagnostics.stats.propertiesMaterialized
+        const elapsedMs = performance.now() - startedAt
+        const remainingProperties = Math.max(0, totalPendingProperties - processedProperties)
+        const cumulativePropertiesPerSecond = perSecond(processedProperties, elapsedMs)
+        const etaMs = cumulativePropertiesPerSecond > 0
+          ? Math.round((remainingProperties / cumulativePropertiesPerSecond) * 1000)
+          : null
         if (logProgress) {
           const stats = writeDiagnostics.stats
           const dbDelta = writeDiagnostics.dbDelta
@@ -2088,6 +2143,10 @@ export class Repo {
             `sameTxProcessors=${formatSameTxProcessorTimings(txTiming)} ` +
             `dbDelta=${formatDbMetricDelta(dbDelta)} ` +
             `processed=${processed} lastId=${afterId} ` +
+            `processedProperties=${processedProperties} materializedProperties=${materializedProperties} ` +
+            `pendingProperties=${totalPendingProperties} scopePendingProperties=${scopePendingProperties} ` +
+            `remainingProperties=${remainingProperties} elapsedMs=${Math.round(elapsedMs)} ` +
+            `cumulativePropertiesPerSecond=${cumulativePropertiesPerSecond} etaMs=${etaMs ?? 'unknown'} ` +
             `scanMs=${Math.round(scanMs)} writeMs=${Math.round(writeMs)} ` +
             `batchMs=${Math.round(batchMs)} candidatesPerSecond=${perSecond(candidates.length, batchMs)} ` +
             `propertiesPerSecond=${perSecond(propertyCount, batchMs)}`,
@@ -2102,8 +2161,11 @@ export class Repo {
       const totalMs = performance.now() - startedAt
       console.info(
         `[Repo] property children migration complete workspace=${workspaceId} ` +
-        `processed=${processed} batches=${batchCount} ms=${Math.round(totalMs)} ` +
-        `candidatesPerSecond=${perSecond(processed, totalMs)}`,
+        `processed=${processed} processedProperties=${processedProperties} ` +
+        `materializedProperties=${materializedProperties} pendingProperties=${totalPendingProperties} ` +
+        `batches=${batchCount} ms=${Math.round(totalMs)} ` +
+        `candidatesPerSecond=${perSecond(processed, totalMs)} ` +
+        `cumulativePropertiesPerSecond=${perSecond(processedProperties, totalMs)}`,
       )
     }
     return processed

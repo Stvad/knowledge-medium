@@ -232,6 +232,7 @@ describe('child-backed user properties', () => {
 
     expect(messages.some(message => message.includes('parentBatchSize=row-target'))).toBe(true)
     expect(messages.some(message => message.includes('targetInsertRows=190'))).toBe(true)
+    expect(messages.some(message => message.includes('pendingProperties=1'))).toBe(true)
     const batchMessage = messages.find(message => message.includes('property children migration batch 1'))
     expect(batchMessage).toEqual(expect.stringContaining('properties=1'))
     expect(batchMessage).toEqual(expect.stringContaining('estimatedInsertRows=2'))
@@ -247,6 +248,12 @@ describe('child-backed user properties', () => {
     expect(batchMessage).toEqual(expect.stringContaining('txSnapshots='))
     expect(batchMessage).toEqual(expect.stringContaining('sameTxProcessors=none'))
     expect(batchMessage).toEqual(expect.stringContaining('dbDelta='))
+    expect(batchMessage).toEqual(expect.stringContaining('processedProperties=1'))
+    expect(batchMessage).toEqual(expect.stringContaining('materializedProperties=1'))
+    expect(batchMessage).toEqual(expect.stringContaining('remainingProperties=0'))
+    expect(batchMessage).toEqual(expect.stringContaining('elapsedMs='))
+    expect(batchMessage).toEqual(expect.stringContaining('cumulativePropertiesPerSecond='))
+    expect(batchMessage).toEqual(expect.stringContaining('etaMs=0'))
     expect(batchMessage).toEqual(expect.stringContaining('scanMs='))
     expect(batchMessage).toEqual(expect.stringContaining('writeMs='))
     expect(batchMessage).toEqual(expect.stringContaining('batchMs='))
@@ -254,6 +261,7 @@ describe('child-backed user properties', () => {
     expect(batchMessage).toEqual(expect.stringContaining('propertiesPerSecond='))
     const completeMessage = messages.find(message => message.includes('property children migration complete'))
     expect(completeMessage).toEqual(expect.stringContaining('candidatesPerSecond='))
+    expect(completeMessage).toEqual(expect.stringContaining('cumulativePropertiesPerSecond='))
   })
 
   it('uses an estimated insert-row budget for default full backfill batches', async () => {
