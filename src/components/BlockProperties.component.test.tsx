@@ -599,7 +599,7 @@ describe('BlockProperties component', () => {
     const listbox = await screen.findByRole('listbox')
     expect(listbox.parentElement).toBe(document.body)
     expect(listbox.classList.contains('fixed')).toBe(true)
-    expect(await screen.findAllByRole('option', {name: /Target Alias/})).toHaveLength(2)
+    expect(await screen.findAllByRole('option', {name: /Target Alias/})).toHaveLength(1)
     expect(await screen.findByRole('option', {name: /Recent target content/})).toBeTruthy()
     expect(screen.queryByRole('option', {name: /Unrelated target content/})).toBeNull()
   })

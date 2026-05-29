@@ -103,6 +103,12 @@ const jsonValuesEqual = (a: unknown, b: unknown): boolean =>
 const updatePatchChangesBlock = (before: BlockData, patch: BlockDataPatch): boolean => {
   if (patch.content !== undefined && patch.content !== before.content) return true
   if (
+    patch.referenceTargetId !== undefined &&
+    patch.referenceTargetId !== before.referenceTargetId
+  ) {
+    return true
+  }
+  if (
     patch.references !== undefined &&
     !jsonValuesEqual(before.references, normalizeReferences(patch.references))
   ) {
@@ -204,8 +210,6 @@ const SELECT_PREVIOUS_ROOT_SIBLING_SQL =
      AND (order_key < ? OR (order_key = ? AND id < ?))
    ORDER BY order_key DESC, id DESC
    LIMIT 1`
-const SELECT_CONTENT_ROOT_SIBLINGS_SQL =
-  `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id IS NULL AND deleted = 0 AND reference_target_id IS NULL AND workspace_id = ? ORDER BY order_key, id`
 const SELECT_PARENT_SQL =
   `SELECT p.* FROM blocks AS c JOIN blocks AS p ON p.id = c.parent_id WHERE c.id = ? AND p.deleted = 0`
 const SELECT_PARENT_WORKSPACE_SQL =

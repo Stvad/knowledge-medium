@@ -431,6 +431,7 @@ describe('DefaultBlockRenderer paste handling', () => {
     expect(input).toHaveAttribute('type', 'number')
 
     fireEvent.change(input, {target: {value: '5'}})
+    fireEvent.blur(input)
 
     await waitFor(() => {
       expect(repo.cache.getSnapshot('block-1')?.properties[priorityProp.name]).toBe(5)
