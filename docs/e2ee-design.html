@@ -885,9 +885,25 @@ CREATE TRIGGER blocks_require_ciphertext_for_e2ee_trg
         the raw-table <code>put</code> SQL to reference the new columns, but PowerSync's apply
         would then fail with a missing-column error on existing clients. Need explicit
         <code>ALTER TABLE workspaces ADD COLUMN encryption_mode TEXT NOT NULL DEFAULT 'none'</code>
-        and <code>ALTER TABLE workspaces ADD COLUMN wk_canary TEXT</code> migrations, gated on a
-        marker in <code>client_schema_state</code> following the existing
-        backfill-marker pattern, so they run exactly once per device on schema upgrade.
+        and <code>ALTER TABLE workspaces ADD COLUMN wk_canary TEXT</code> migrations. A
+        <code>client_schema_state</code> marker (the existing backfill-marker pattern) is the
+        steady-state fast-path skip, but it is <em>not</em> a sufficient guard on its own &mdash; the
+        ALTERs must be <strong>idempotent on column existence</strong>.
+        <code>CREATE_WORKSPACES_TABLE_SQL</code> is
+        <code>buildCreateTableSql('workspaces', WORKSPACE_COLUMNS)</code> and runs at
+        <code>repoProvider.ts:227</code>, <em>before</em> the gated backfills &mdash; so once
+        <code>WORKSPACE_COLUMNS</code> carries the two new <code>ColumnDef</code>s, a <strong>fresh
+        install or a §6 Lock &amp; wipe</strong> (which recreates the DB) creates
+        <code>workspaces</code> with <code>encryption_mode</code>/<code>wk_canary</code> already
+        present &mdash; carrying their full definitions, including the
+        <code>NOT NULL DEFAULT 'none'</code> &mdash; and with <em>no</em> marker row. A
+        marker-gated-only ALTER would then fire on that fresh DB and throw
+        <code>duplicate column name</code>, blocking startup/resync. So guard each ADD COLUMN on a
+        <code>PRAGMA table_info(workspaces)</code> existence check &mdash; add the column only when
+        absent &mdash; and write the marker afterward regardless: an upgrading device has the columns
+        missing &rarr; they're added (and the <code>DEFAULT</code> backfills existing rows, below); a
+        fresh DB has them already &rarr; the ALTERs are skipped and only the marker is recorded.
+        Either way the migration runs at most once per device and never errors.
         <strong>Mirror the server's <code>NOT NULL DEFAULT 'none'</code> on the local
         <code>encryption_mode</code> column.</strong> A bare <code>ADD COLUMN</code> leaves the
         workspace rows that already exist on an upgrading device as <code>NULL</code> until
