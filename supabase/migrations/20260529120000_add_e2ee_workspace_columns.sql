@@ -98,12 +98,18 @@ create or replace function public.workspaces_prevent_e2ee_field_change()
     set search_path = ''
     as $$
 begin
+    -- errcode 23514 (check_violation) on both raises: a PERMANENT SQLSTATE, so
+    -- if a stale/buggy client ever PATCHes these columns through the upload
+    -- queue the client classifier quarantines the tx instead of retrying the
+    -- generic P0001 forever. See the same note on blocks_require_ciphertext_for_e2ee.
     if old.encryption_mode is distinct from new.encryption_mode then
         raise exception 'workspaces.encryption_mode is immutable (% -> %)',
-            old.encryption_mode, new.encryption_mode;
+            old.encryption_mode, new.encryption_mode
+            using errcode = 'check_violation';
     end if;
     if old.wk_canary is distinct from new.wk_canary then
-        raise exception 'workspaces.wk_canary is immutable (rotation is a post-v1 SECURITY DEFINER path)';
+        raise exception 'workspaces.wk_canary is immutable (rotation is a post-v1 SECURITY DEFINER path)'
+            using errcode = 'check_violation';
     end if;
     return new;
 end;
@@ -198,7 +204,14 @@ begin
         public.is_enc_v1_envelope(new.properties_json) and
         public.is_enc_v1_envelope(new.references_json)
     ) then
-        raise exception 'blocks in an e2ee workspace must carry a well-formed enc:v1: envelope in all content columns';
+        -- errcode 23514 (check_violation): a PERMANENT SQLSTATE. The client
+        -- upload classifier (src/services/uploadErrorClassifier.ts) treats
+        -- 23xxx/42xxx/P0002 as permanent and everything else as transient. A
+        -- bare RAISE returns the generic P0001, which would be retried forever
+        -- and jam the upload queue; a 23xxx lets the per-tx fallback quarantine
+        -- the offending write in ps_crud_rejected and drain the rest.
+        raise exception 'blocks in an e2ee workspace must carry a well-formed enc:v1: envelope in all content columns'
+            using errcode = 'check_violation';
     end if;
     return new;
 end;
