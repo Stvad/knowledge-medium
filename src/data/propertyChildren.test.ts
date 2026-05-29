@@ -549,6 +549,48 @@ describe('child-backed user properties', () => {
     ])
   })
 
+  it('coalesces queued full backfills to the latest schema snapshot', async () => {
+    env = await setup({registerStatusProp: false, activateWorkspace: false})
+    env.repo.setActiveWorkspaceId(WS)
+    const firstProp = defineProperty<string>('coalesce:first', {
+      codec: codecs.string,
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+      fieldId: 'field-coalesce-first',
+    })
+    const secondProp = defineProperty<string>('coalesce:second', {
+      codec: codecs.string,
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+      fieldId: 'field-coalesce-second',
+    })
+    const backfill = vi.spyOn(env.repo, 'backfillPropertyChildrenFromProperties')
+      .mockResolvedValue(0)
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+
+    try {
+      env.repo.setRuntimeContributions(propertySchemasFacet, 'test', [firstProp])
+      env.repo.setRuntimeContributions(propertySchemasFacet, 'test', [firstProp, secondProp])
+
+      await env.repo.__drainPropertyChildrenBackfillForTesting()
+
+      expect(backfill).toHaveBeenCalledTimes(1)
+      const args = backfill.mock.calls[0]?.[0]
+      if (args === undefined) throw new Error('expected queued full backfill args')
+      expect(args.workspaceId).toBe(WS)
+      expect(args.logProgress).toBe(true)
+      expect(args.blockIds).toBeUndefined()
+      expect(args.propertySchemas?.get(firstProp.name)?.fieldId).toBe(firstProp.fieldId)
+      expect(args.propertySchemas?.get(secondProp.name)?.fieldId).toBe(secondProp.fieldId)
+      expect(info.mock.calls.some(([message]) =>
+        String(message).includes('property children migration skipped stale request'),
+      )).toBe(true)
+    } finally {
+      backfill.mockRestore()
+      info.mockRestore()
+    }
+  })
+
   it('marks full backfills complete while row-targeted sync catch-up bypasses the marker', async () => {
     env = await setup({activateWorkspace: false})
     await seedLegacyPropertiesRow(env.h, 'legacy-parent', 'a0', {

@@ -856,6 +856,12 @@ export class Repo {
    *  all request catch-up; a single chain prevents duplicate write
    *  transactions from racing each other. */
   private propertyChildrenBackfillChain: Promise<void> = Promise.resolve()
+  /** Latest full-workspace property-child backfill request. Runtime
+   *  schema contributions can rebuild several times during cold start;
+   *  only the newest full scan should run after any active work drains.
+   *  Row-targeted sync catch-up bypasses this generation and still
+   *  processes every accepted row set. */
+  private propertyChildrenFullBackfillGeneration = 0
   /** Backing field for `activeWorkspaceId` (see getter/setter below). */
   private _activeWorkspaceId: string | null = null
   /** Instance discriminator for memoization keys that need to vary
@@ -2560,9 +2566,11 @@ export class Repo {
 
   private schedulePropertyChildrenBackfill(workspaceId: string): void {
     if (this.isReadOnly || this._propertySchemas.size === 0) return
+    const fullGeneration = ++this.propertyChildrenFullBackfillGeneration
     this.enqueuePropertyChildrenBackfill({
       workspaceId,
-      propertySchemas: this._propertySchemas,
+      getPropertySchemas: () => this._propertySchemas,
+      fullGeneration,
       logProgress: true,
       warningPrefix: '[Repo] property children migration failed',
     })
@@ -2583,7 +2591,9 @@ export class Repo {
 
   private enqueuePropertyChildrenBackfill(args: {
     workspaceId: string
-    propertySchemas: ReadonlyMap<string, AnyPropertySchema>
+    propertySchemas?: ReadonlyMap<string, AnyPropertySchema>
+    getPropertySchemas?: () => ReadonlyMap<string, AnyPropertySchema>
+    fullGeneration?: number
     blockIds?: readonly string[]
     logProgress?: boolean
     warningPrefix: string
@@ -2591,9 +2601,24 @@ export class Repo {
     const next = this.propertyChildrenBackfillChain
       .catch(() => {})
       .then(async () => {
+        if (
+          args.fullGeneration !== undefined &&
+          args.fullGeneration !== this.propertyChildrenFullBackfillGeneration
+        ) {
+          if (args.logProgress === true) {
+            console.info(
+              `[Repo] property children migration skipped stale request ` +
+              `workspace=${args.workspaceId} generation=${args.fullGeneration} ` +
+              `latestGeneration=${this.propertyChildrenFullBackfillGeneration}`,
+            )
+          }
+          return
+        }
+        const propertySchemas = args.getPropertySchemas?.() ?? args.propertySchemas
+        if (propertySchemas === undefined || propertySchemas.size === 0) return
         await this.backfillPropertyChildrenFromProperties({
           workspaceId: args.workspaceId,
-          propertySchemas: args.propertySchemas,
+          propertySchemas,
           logProgress: args.logProgress,
           ...(args.blockIds ? {blockIds: args.blockIds} : {}),
         })
