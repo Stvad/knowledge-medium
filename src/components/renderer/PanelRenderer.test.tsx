@@ -8,6 +8,7 @@ import type { Block } from '@/data/block'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import {
+  activePanelIdProp,
   focusedBlockIdProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
@@ -101,22 +102,32 @@ const setup = async (): Promise<Harness> => {
   repo.setActiveWorkspaceId(WS)
   const runtime = resolveFacetRuntimeSync([])
 
-  await repo.tx(async tx => {
-    await tx.create({
-      id: 'page-a',
-      workspaceId: WS,
-      parentId: null,
-      orderKey: 'a0',
-      content: 'Page A',
-    })
-    await tx.create({
-      id: 'panel-a',
-      workspaceId: WS,
-      parentId: null,
-      orderKey: 'a1',
-      content: 'Panel A',
-      properties: {
-        [topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('page-a'),
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'layout-session',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        content: 'Layout session',
+        properties: {
+          [activePanelIdProp.name]: activePanelIdProp.codec.encode('panel-a'),
+        },
+      })
+      await tx.create({
+        id: 'page-a',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a1',
+        content: 'Page A',
+      })
+      await tx.create({
+        id: 'panel-a',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a2',
+        content: 'Panel A',
+        properties: {
+          [topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('page-a'),
       },
     })
   }, {scope: ChangeScope.BlockDefault, description: 'create panel renderer fixture'})
@@ -155,6 +166,24 @@ describe('PanelRenderer', () => {
         </BlockContextProvider>
       </AppRuntimeContextProvider>,
     )
+
+  const renderPanelInLayoutSession = async (activePanelId: string) => {
+    await env.repo.block('layout-session').set(activePanelIdProp, activePanelId)
+
+    return render(
+      <AppRuntimeContextProvider value={env.runtime}>
+        <BlockContextProvider
+          initialValue={{
+            layoutBoundary: true,
+            layoutSessionBlockId: 'layout-session',
+            panelId: env.panel.id,
+          }}
+        >
+          <PanelRenderer block={env.panel}/>
+        </BlockContextProvider>
+      </AppRuntimeContextProvider>,
+    )
+  }
 
   it('constrains content inside a wide scroll surface', async () => {
     renderPanel(true)
@@ -200,6 +229,14 @@ describe('PanelRenderer', () => {
       }),
       true,
     )
+  })
+
+  it('does not activate multi-select shortcuts for an inactive panel selection', async () => {
+    selectionStore.set({selectedBlockIds: ['page-a'], anchorBlockId: 'page-a'})
+    await renderPanelInLayoutSession('panel-b')
+    await screen.findByTestId('panel-top-level-block')
+
+    expect(vi.mocked(useActionContext).mock.calls.length).toBe(0)
   })
 
   it('captures legacy focused block ids as scoped locations for history snapshots', async () => {
