@@ -215,7 +215,7 @@ const SELECT_PARENT_SQL =
 const SELECT_PARENT_WORKSPACE_SQL =
   `SELECT workspace_id FROM blocks WHERE id = ?`
 const INSERT_SQL = `INSERT INTO blocks (${COLUMN_LIST}) VALUES (${COLUMN_PLACEHOLDERS})`
-const BULK_INSERT_ROWS_PER_STATEMENT = 400
+const BULK_INSERT_ROWS_PER_STATEMENT = 200
 
 const chunkArray = <T,>(items: readonly T[], size: number): T[][] => {
   const out: T[][] = []

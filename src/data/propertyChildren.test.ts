@@ -231,7 +231,7 @@ describe('child-backed user properties', () => {
     })()
 
     expect(messages.some(message => message.includes('parentBatchSize=row-target'))).toBe(true)
-    expect(messages.some(message => message.includes('targetInsertRows=400'))).toBe(true)
+    expect(messages.some(message => message.includes('targetInsertRows=200'))).toBe(true)
     const batchMessage = messages.find(message => message.includes('property children migration batch 1'))
     expect(batchMessage).toEqual(expect.stringContaining('properties=1'))
     expect(batchMessage).toEqual(expect.stringContaining('estimatedInsertRows=2'))
@@ -370,7 +370,7 @@ describe('child-backed user properties', () => {
           blocks: 2,
           properties: 2,
           configuredParentBatchSize: 2,
-          targetInsertRows: 400,
+          targetInsertRows: 200,
           scanBatchSize: 2,
           estimatedInsertRows: 4,
           retryBatchSize: 1,
@@ -426,7 +426,7 @@ describe('child-backed user properties', () => {
           blocks: 2,
           properties: 2,
           configuredParentBatchSize: 2,
-          targetInsertRows: 400,
+          targetInsertRows: 200,
           scanBatchSize: 2,
           estimatedInsertRows: 4,
           retryBatchSize: 1,
