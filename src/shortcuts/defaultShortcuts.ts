@@ -67,7 +67,14 @@ import {
 } from '@/utils/panelLayoutProjection.js'
 import { ensureMetricsConsoleHook } from '@/data/metricsConsoleHook.js'
 import { showProgress } from '@/utils/toast.js'
-import { downloadBlob, exportRawSqliteDb, importRawSqliteDb } from '@/utils/exportSqliteDb.js'
+import {
+  chooseRawSqliteExportFile,
+  downloadBlob,
+  exportRawSqliteDb,
+  exportRawSqliteDbToFile,
+  importRawSqliteDb,
+  rawSqliteDbExportFilename,
+} from '@/utils/exportSqliteDb.js'
 import { focusPropertyRow } from '@/utils/propertyNavigation.js'
 import { reloadInSafeMode } from '@/utils/safeMode.js'
 import { outlineRenderScopeId } from '@/utils/renderScope.js'
@@ -406,11 +413,25 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       description: 'Download raw SQLite database (.db)',
       context: ActionContextTypes.GLOBAL,
       handler: async () => {
+        const suggestedFilename = rawSqliteDbExportFilename(repo)
+        let destination: FileSystemFileHandle | undefined
+        try {
+          destination = await chooseRawSqliteExportFile(suggestedFilename)
+        } catch (err) {
+          if (err instanceof DOMException && err.name === 'AbortError') return
+          console.warn('[export-db] save picker unavailable; falling back to browser download:', err)
+        }
+
         const banner = showProgress('Exporting SQLite database…')
         try {
-          const {blob, filename} = await exportRawSqliteDb(repo)
-          downloadBlob(blob, filename)
-          banner.done(`Exported ${filename} (${(blob.size / 1024 / 1024).toFixed(1)} MiB)`)
+          if (destination) {
+            const {filename, size} = await exportRawSqliteDbToFile(repo, destination)
+            banner.done(`Exported ${filename} (${(size / 1024 / 1024).toFixed(1)} MiB)`)
+          } else {
+            const {blob, filename, cleanup} = await exportRawSqliteDb(repo)
+            downloadBlob(blob, filename, cleanup)
+            banner.done(`Exported ${filename} (${(blob.size / 1024 / 1024).toFixed(1)} MiB)`)
+          }
         } catch (err) {
           console.error('[export-db] failed:', err)
           banner.fail(`SQLite export failed: ${err instanceof Error ? err.message : String(err)}`)

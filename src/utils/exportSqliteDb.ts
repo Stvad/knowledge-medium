@@ -1,36 +1,118 @@
 /**
- * Download / replace the raw `.db` snapshot of the live PowerSync
- * SQLite database.
+ * Download / replace a raw `.db` image for the current user's
+ * PowerSync SQLite database.
  *
- * With OPFSCoopSyncVFS the database is a real file at OPFS root, so we
- * just read it directly. The journal mode is rollback (`delete`) — see
- * the WAL note in repoProvider.ts — so the .db file is the
- * authoritative state and nothing has to be checkpointed first.
+ * With OPFSCoopSyncVFS the database is a real file at OPFS root. Export
+ * must not hand that live file directly to the browser download stack:
+ * on large databases the app/sync writer can change the file while
+ * Chrome is still reading it. The reliable path is to hold PowerSync's
+ * adapter lock while streaming the current .db image to either a user
+ * chosen file (Chrome File System Access API) or an OPFS temp snapshot.
  *
- * Import is the reverse: close the live PowerSync DB to release the
- * OPFS sync access handle, overwrite the user's .db file with the
- * supplied bytes, then ask the caller to reload so the new file is
- * opened cleanly. The simple "replace whole DB" semantics — same user
- * keeps using the same dbFilename, we just swap what's inside.
+ * Import validates a tiny header first, streams the selected file into
+ * OPFS staging while the live DB is still intact, then closes PowerSync
+ * and replaces the current user's .db from that staging file.
  */
 
 import type { Repo } from '../data/repo'
 import { dbFilenameForUser } from '@/data/repoProvider'
 
-export async function exportRawSqliteDb(repo: Repo): Promise<{ blob: Blob; filename: string }> {
+export interface RawSqliteDbBlobExport {
+  blob: Blob
+  filename: string
+  cleanup?: () => Promise<void>
+}
+
+export interface RawSqliteDbFileExport {
+  filename: string
+  size: number
+}
+
+interface PowerSyncReadLockDb {
+  readLock<T>(callback: (db: unknown) => Promise<T>): Promise<T>
+}
+
+interface SaveFilePickerOptions {
+  suggestedName?: string
+  types?: Array<{
+    description?: string
+    accept: Record<string, string[]>
+  }>
+}
+
+type WindowWithSaveFilePicker = typeof globalThis & {
+  showSaveFilePicker?: (options?: SaveFilePickerOptions) => Promise<FileSystemFileHandle>
+}
+
+export function rawSqliteDbExportFilename(repo: Repo, now = Date.now()): string {
+  const dbFilename = dbFilenameForUser(repo.user.id)
+  return `${dbFilename.replace(/\.db$/, '')}-export-${now}.db`
+}
+
+export async function chooseRawSqliteExportFile(
+  filename: string,
+): Promise<FileSystemFileHandle | undefined> {
+  const picker = (globalThis as WindowWithSaveFilePicker).showSaveFilePicker
+  if (!picker) return undefined
+  return picker({
+    suggestedName: filename,
+    types: [{
+      description: 'SQLite database',
+      accept: {
+        'application/vnd.sqlite3': ['.db', '.sqlite', '.sqlite3'],
+        'application/octet-stream': ['.db'],
+      },
+    }],
+  })
+}
+
+export async function exportRawSqliteDbToFile(
+  repo: Repo,
+  destinationHandle: FileSystemFileHandle,
+): Promise<RawSqliteDbFileExport> {
   const userId = repo.user.id
   const dbFilename = dbFilenameForUser(userId)
+  const filename = destinationHandle.name || rawSqliteDbExportFilename(repo)
 
   const root = await navigator.storage.getDirectory()
   const fileHandle = await root.getFileHandle(dbFilename)
-  const blob = await fileHandle.getFile()
+  const size = await withPowerSyncReadLock(repo, async () => {
+    const sourceFile = await fileHandle.getFile()
+    await pipeBlobToFileHandle(sourceFile, destinationHandle)
+    return sourceFile.size
+  })
 
-  const ts = Date.now()
-  const downloadFilename = `${dbFilename.replace(/\.db$/, '')}-export-${ts}.db`
-  return { blob, filename: downloadFilename }
+  return {filename, size}
 }
 
-export function downloadBlob(blob: Blob, filename: string): void {
+export async function exportRawSqliteDb(repo: Repo): Promise<RawSqliteDbBlobExport> {
+  const userId = repo.user.id
+  const dbFilename = dbFilenameForUser(userId)
+  const filename = rawSqliteDbExportFilename(repo)
+  const snapshotName = tempOpfsFilename(dbFilename, 'export-snapshot')
+
+  const root = await navigator.storage.getDirectory()
+  const sourceHandle = await root.getFileHandle(dbFilename)
+  const snapshotHandle = await root.getFileHandle(snapshotName, {create: true})
+
+  await withPowerSyncReadLock(repo, async () => {
+    const sourceFile = await sourceHandle.getFile()
+    await pipeBlobToFileHandle(sourceFile, snapshotHandle)
+  })
+
+  const blob = await snapshotHandle.getFile()
+  return {
+    blob,
+    filename,
+    cleanup: () => removeEntryIfExists(root, snapshotName),
+  }
+}
+
+export function downloadBlob(
+  blob: Blob,
+  filename: string,
+  cleanup?: () => void | Promise<void>,
+): void {
   const url = URL.createObjectURL(blob)
   try {
     const a = document.createElement('a')
@@ -43,6 +125,16 @@ export function downloadBlob(blob: Blob, filename: string): void {
     // Revoke after the click microtask finishes so the browser has a
     // chance to start the download.
     setTimeout(() => URL.revokeObjectURL(url), 0)
+    if (cleanup) {
+      // Blob URLs do not expose download completion. This fallback path is
+      // only for browsers without showSaveFilePicker; keep the snapshot
+      // around long enough for a large download to start and finish.
+      setTimeout(() => {
+        void Promise.resolve(cleanup()).catch(error => {
+          console.warn('[export-db] failed to clean export snapshot:', error)
+        })
+      }, 60 * 60 * 1000)
+    }
   }
 }
 
@@ -61,14 +153,13 @@ const SQLITE_MAGIC = new Uint8Array([
  * init opens the new file.
  */
 export async function importRawSqliteDb(repo: Repo, file: File): Promise<void> {
-  const buffer = await file.arrayBuffer()
-
   // Cheap header check so a wrong-file selection fails before we
   // tear down the live database.
-  if (buffer.byteLength < SQLITE_MAGIC.length) {
+  if (file.size < SQLITE_MAGIC.length) {
     throw new Error('Selected file is too small to be a SQLite database.')
   }
-  const head = new Uint8Array(buffer, 0, SQLITE_MAGIC.length)
+  const headerBuffer = await file.slice(0, SQLITE_MAGIC.length).arrayBuffer()
+  const head = new Uint8Array(headerBuffer)
   for (let i = 0; i < SQLITE_MAGIC.length; i++) {
     if (head[i] !== SQLITE_MAGIC[i]) {
       throw new Error('Selected file is not a SQLite database (missing magic header).')
@@ -77,32 +168,69 @@ export async function importRawSqliteDb(repo: Repo, file: File): Promise<void> {
 
   const userId = repo.user.id
   const dbFilename = dbFilenameForUser(userId)
-
-  // Release the OPFS sync access handle the worker holds on the .db
-  // file; without this, createWritable() throws NoModificationAllowedError.
-  await repo.db.close()
+  const stagingName = tempOpfsFilename(dbFilename, 'import-staging')
 
   const root = await navigator.storage.getDirectory()
+  const stagingHandle = await root.getFileHandle(stagingName, {create: true})
 
-  // Rollback-journal mode normally deletes -journal on clean close and
-  // we don't run WAL, but be defensive — a leftover sibling from a
-  // crashed prior session would be replayed against the freshly
-  // imported DB and silently corrupt it.
-  for (const suffix of ['-journal', '-wal']) {
-    try {
-      await root.removeEntry(dbFilename + suffix)
-    } catch (err) {
-      if (!(err instanceof DOMException && err.name === 'NotFoundError')) {
-        throw err
-      }
+  try {
+    await pipeBlobToFileHandle(file, stagingHandle)
+
+    // Release the OPFS sync access handle the worker holds on the .db
+    // file; without this, createWritable() throws NoModificationAllowedError.
+    await repo.db.close()
+
+    // Rollback-journal mode normally deletes -journal on clean close and
+    // we don't run native SQLite WAL, but be defensive — a leftover sibling
+    // from a crashed prior session would be replayed against the freshly
+    // imported DB and silently corrupt it.
+    for (const suffix of ['-journal', '-wal', '-shm']) {
+      await removeEntryIfExists(root, dbFilename + suffix)
+    }
+
+    const replacement = await stagingHandle.getFile()
+    const fileHandle = await root.getFileHandle(dbFilename, {create: true})
+    await pipeBlobToFileHandle(replacement, fileHandle)
+  } finally {
+    await removeEntryIfExists(root, stagingName)
+  }
+}
+
+const withPowerSyncReadLock = async <T,>(repo: Repo, callback: () => Promise<T>): Promise<T> => {
+  const db = repo.db as unknown as Partial<PowerSyncReadLockDb>
+  if (typeof db.readLock !== 'function') {
+    throw new Error('PowerSync database does not expose readLock; cannot safely snapshot live SQLite DB.')
+  }
+  return db.readLock(async () => callback())
+}
+
+const pipeBlobToFileHandle = async (
+  blob: Blob,
+  fileHandle: FileSystemFileHandle,
+): Promise<void> => {
+  const writable = await fileHandle.createWritable({keepExistingData: false})
+  await blob.stream().pipeTo(writable)
+}
+
+const removeEntryIfExists = async (
+  root: FileSystemDirectoryHandle,
+  name: string,
+): Promise<void> => {
+  try {
+    await root.removeEntry(name)
+  } catch (err) {
+    if (!(err instanceof DOMException && err.name === 'NotFoundError')) {
+      throw err
     }
   }
+}
 
-  const fileHandle = await root.getFileHandle(dbFilename, { create: true })
-  const writable = await fileHandle.createWritable({ keepExistingData: false })
-  try {
-    await writable.write(buffer)
-  } finally {
-    await writable.close()
+const tempOpfsFilename = (dbFilename: string, purpose: string): string =>
+  `.${dbFilename}.${purpose}-${Date.now()}-${randomId()}.tmp`
+
+const randomId = (): string => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
   }
+  return Math.random().toString(36).slice(2)
 }
