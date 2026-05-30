@@ -142,6 +142,40 @@ interface ApplyCandidate {
 const buildInClause = (count: number): string =>
   Array.from({ length: count }, () => '?').join(', ')
 
+// Max ids per `WHERE id IN (...)` staging read. SQLite caps bound parameters
+// (SQLITE_MAX_VARIABLE_NUMBER — 999 on older builds, 32766 since 3.32); a large
+// initial sync or a long observer-down backlog can queue far more changed ids
+// than that. One oversized IN read would throw before any row materialized,
+// and since the queue is only consumed AFTER a successful pass, the batch would
+// wedge and every retry refail. 500 stays well under the old floor.
+const STAGING_READ_CHUNK = 500
+
+/** Read staging rows for `ids` in bounded chunks so the IN-clause never exceeds
+ *  SQLite's bound-parameter limit. Missing ids (already removed) are simply
+ *  absent from the result. */
+const readStagingRows = async (
+  db: PowerSyncDb,
+  ids: readonly string[],
+  chunkSize: number,
+): Promise<BlockRow[]> => {
+  const out: BlockRow[] = []
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const chunk = ids.slice(i, i + chunkSize)
+    const rows = await db.getAll<BlockRow>(
+      `SELECT ${COLUMN_NAMES.join(', ')} FROM blocks_synced
+        WHERE id IN (${buildInClause(chunk.length)})`,
+      chunk,
+    )
+    out.push(...rows)
+  }
+  return out
+}
+
+/** Tunables (batch sizing). Defaults are production values; tests override. */
+export interface MaterializeOptions {
+  readonly readChunkSize?: number
+}
+
 /**
  * Process one staging-table delta: decrypt/copy materializable rows into
  * `blocks`, leave non-materializable rows staged, skip rows a local edit
@@ -161,18 +195,14 @@ export const materializeStagingRows = async (
   db: PowerSyncDb,
   change: StagingChange,
   deps: MaterializeDeps,
+  options: MaterializeOptions = {},
 ): Promise<MaterializeOutcome> => {
   const { getMaterializability, getCek } = deps
+  const readChunkSize = options.readChunkSize ?? STAGING_READ_CHUNK
   const deferred: string[] = []
   const skippedStale: string[] = []
 
-  const stagingRows = change.upserted.length === 0
-    ? []
-    : await db.getAll<BlockRow>(
-        `SELECT ${COLUMN_NAMES.join(', ')} FROM blocks_synced
-          WHERE id IN (${buildInClause(change.upserted.length)})`,
-        [...change.upserted],
-      )
+  const stagingRows = await readStagingRows(db, change.upserted, readChunkSize)
 
   const materializabilityByWs = new Map<string, Materializability>()
   const resolveMaterializability = async (workspaceId: string): Promise<Materializability> => {

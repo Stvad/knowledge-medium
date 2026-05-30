@@ -245,6 +245,24 @@ describe('materializeStagingRows — skip-stale (local edit must win)', () => {
   })
 })
 
+describe('materializeStagingRows — chunked staging reads', () => {
+  it('materializes more ids than the IN-clause chunk size (no bound-parameter overflow)', async () => {
+    const ids = Array.from({ length: 5 }, (_, i) => `c${i}`)
+    for (const id of ids) await stageRow(blockData({ id, content: `v-${id}` }))
+
+    const out = await materializeStagingRows(
+      env.db,
+      { upserted: ids, removed: [] },
+      { getMaterializability: constMat('copy'), getCek: noKey },
+      { readChunkSize: 2 }, // 5 ids → 3 chunks (2, 2, 1)
+    )
+
+    expect([...out.applied].sort()).toEqual(ids)
+    const rows = await env.db.getAll<{ id: string }>('SELECT id FROM blocks ORDER BY id')
+    expect(rows.map(r => r.id)).toEqual(ids)
+  })
+})
+
 describe('materializeStagingRows — removed (stream-exit)', () => {
   it('hard-deletes the local row and cleans its derived indexes, with no echo', async () => {
     await seedLocalBlock(blockData({ content: 'goodbye', properties: { alias: ['Gone'] } }))
