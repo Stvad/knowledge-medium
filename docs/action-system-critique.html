@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Action system — architectural critique</title>
+<style>
+  body { font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         max-width: 980px; margin: 2rem auto; padding: 0 1.25rem; color: #1f2328; }
+  h1 { font-size: 1.6rem; margin-bottom: .25rem; }
+  h2 { font-size: 1.15rem; margin-top: 2rem; border-bottom: 1px solid #d0d7de; padding-bottom: .25rem; }
+  h3 { font-size: 1rem; margin-top: 1.25rem; }
+  code, pre { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; }
+  pre { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px;
+        padding: .75rem .9rem; overflow-x: auto; }
+  code { background: #f6f8fa; padding: .1em .3em; border-radius: 3px; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+  th, td { border: 1px solid #d0d7de; padding: .5rem .65rem; vertical-align: top; text-align: left; }
+  th { background: #f6f8fa; }
+  .keep { color: #1a7f37; }
+  .keep::before { content: "✓ "; font-weight: 700; }
+  .weak { color: #cf222e; }
+  .weak::before { content: "✗ "; font-weight: 700; }
+  ul.tight { margin: .4rem 0; }
+  .note { background: #fff8c5; border-left: 4px solid #d4a72c; padding: .6rem .85rem;
+          border-radius: 4px; margin: 1rem 0; }
+  .axes { background: #ddf4ff; border-left: 4px solid #0969da; padding: .6rem .85rem;
+          border-radius: 4px; margin: 1rem 0; }
+  .verdict { background: #dafbe1; border-left: 4px solid #1a7f37; padding: .75rem 1rem;
+             border-radius: 4px; margin: 1.5rem 0; }
+  .prio td:first-child { font-weight: 600; white-space: nowrap; }
+  .p1 { background: #fff1f0; } .p2 { background: #fffbe6; } .p3 { background: #f0fdf4; }
+  small { color: #57606a; }
+  .filepath { color: #57606a; font-size: 11.5px; }
+</style>
+</head>
+<body>
+
+<h1>Action system — architectural critique</h1>
+<small>Fresh-eyes review of <code>src/shortcuts/</code> + the action facets — 2026-05-30</small>
+
+<p>Written alongside <code>docs/shortcut-context-precedence.html</code>. That doc fixes one bug
+(double-fire) and adds one knob (precedence). This doc steps back and asks the broader question the
+precedence work surfaced: <strong>is the action system's shape right, or are we patching a model that
+wants restructuring?</strong> It is a critique + target shape, not an implementation plan. No code
+changes proposed here.</p>
+
+<div class="note">
+<strong>Bias check up front.</strong> This system is <em>not</em> in bad shape. The facet contribution
+model is genuinely good and most of the friction is concentrated in two places (resolution and the
+transform pipeline). The honest recommendation (bottom) is "two surgical refactors, leave the rest
+alone" — not a rewrite. Flagging this so the list of weaknesses below isn't read as a teardown.
+</div>
+
+<h2>The model in one screen</h2>
+<ul class="tight">
+  <li><strong>Actions</strong> (<code>ActionConfig</code>) are contributed via <code>actionsFacet</code>
+      (<span class="filepath">core.ts:158</span>). Each carries <code>id</code>, <code>context</code>,
+      <code>handler</code>, optional <code>defaultBinding</code>, <code>canRun</code>, <code>icon</code>.
+      ~23 files contribute.</li>
+  <li><strong>Contexts</strong> (<code>ActionContextConfig</code>) via <code>actionContextsFacet</code>
+      (<span class="filepath">core.ts:225</span>); 6 call sites. A context is both an
+      <em>activation scope</em> and a <em>typed dependency bundle</em> (via
+      <code>validateDependencies</code>).</li>
+  <li><strong>Activation</strong> is React-lifecycle-driven: blocks call
+      <code>useActionContextActivations</code> (<span class="filepath">useActionContext.ts:17</span>),
+      which <code>activate()</code>s on mount/effect and <code>deactivate()</code>s on cleanup. The active
+      set is an insertion-ordered <code>Map</code> (<span class="filepath">ActiveContexts.tsx</span>).
+      27 surface-activation references.</li>
+  <li><strong>Transform pipeline:</strong> <code>actionOverridesFacet</code> → <code>actionDecoratorsFacet</code>
+      → <code>keybindingOverridesFacet</code>, composed in <code>getEffectiveActions</code>
+      (<span class="filepath">effectiveActions.ts:66</span>).</li>
+  <li><strong>Dispatch</strong> happens three ways: keyboard (per-action <code>window</code> listeners in
+      <code>HotkeyReconciler</code>), <code>runActionById</code> (module singleton), and
+      <code>useRunAction</code> (React hook). The latter two share <code>getActiveActionById</code>; the
+      keyboard path does not.</li>
+</ul>
+
+<h2>What's good — keep it</h2>
+<ul class="tight">
+  <li class="keep"><strong>Facet-based contribution.</strong> Actions, contexts, overrides, decorators all
+      flow through facets — plugins compose without editing core, no circular deps. This is the load-bearing
+      strength; nothing below proposes touching it.</li>
+  <li class="keep"><strong>Decorators that wrap rather than fork.</strong> Extending an action's
+      <code>canRun</code>/handler without owning the definition (e.g.
+      <span class="filepath">srs-rescheduling/rescheduleDecorator.ts</span>) is the right shape for
+      cross-plugin extension.</li>
+  <li class="keep"><strong>Per-action install/uninstall.</strong> Each action owning its subscription makes
+      activation changes cheap (no global teardown). Worth preserving even if the listener model changes.</li>
+  <li class="keep"><strong>Typed dependency map.</strong> <code>ShortcutDependenciesMap</code> keyed by
+      context type is a clean way to give handlers the right inputs.</li>
+</ul>
+
+<h2>Weaknesses — grouped by theme</h2>
+
+<h3>1. Resolution is implemented three times and the keyboard one disagrees</h3>
+<p>"Given an active set, which action handles X?" is answered in three places:</p>
+<ul class="tight">
+  <li><code>runActionById</code> → the module dispatcher installed by HotkeyReconciler
+      (<span class="filepath">HotkeyReconciler.tsx:174</span>) → <code>getActiveActionById</code>
+      (last-activated-context wins).</li>
+  <li><code>useRunAction</code> (<span class="filepath">runAction.ts:54</span>) → also
+      <code>getActiveActionById</code>, but re-implements the deps-lookup/throw around it.</li>
+  <li>The keyboard path → <strong>no resolution at all</strong>; every active action installs its own
+      listener, so collisions double-fire (the bug the precedence doc fixes).</li>
+</ul>
+<p class="weak">There is no single "resolve event → action" function. The keyboard path and the dispatch
+path have <em>different</em> semantics (double-fire vs single-winner) for what is conceptually one question.
+Precedence (priority/modal) then has to be taught to each path separately. <strong>This is the deepest
+structural issue and the one the precedence work half-forces us to confront.</strong></p>
+
+<h3>2. Three overlapping transform mechanisms</h3>
+<p><code>ActionOverride</code>, <code>ActionDecorator</code>, and <code>keybindingOverridesFacet</code> all
+rewrite the action list, with subtle, undocumented differences:</p>
+<table>
+<tr><th>Mechanism</th><th>Can drop an action?</th><th>Cross-action visibility?</th><th>Ordering</th></tr>
+<tr><td><code>ActionOverride.apply</code></td><td>yes (<code>→ null</code>)</td><td>no</td><td>1st</td></tr>
+<tr><td><code>ActionDecorator.decorate</code></td><td><strong>no</strong> (<code>→ ActionConfig</code>)</td><td>no</td><td>2nd</td></tr>
+<tr><td><code>keybindingOverridesFacet</code></td><td>strips chord, not action</td><td>yes (collision rule)</td><td>3rd (final)</td></tr>
+</table>
+<ul class="tight">
+  <li class="weak"><strong>Override vs decorator asymmetry is arbitrary.</strong> Both are
+      "(action) → action" transforms; only one may return <code>null</code>
+      (<span class="filepath">types.ts:164 vs 170</span>). A plugin that wants to <em>conditionally remove</em>
+      an action must use override; one that wants to <em>extend</em> it uses decorator — but nothing names
+      that distinction, so the choice is folklore.</li>
+  <li class="weak"><strong>Two ways to suppress, neither obvious.</strong> The user's "skip decorators"
+      (no-op the handler) and a hypothetical <code>override → null</code> (drop the action) both "disable"
+      an action, with totally different consequences (handler-still-listed-but-inert vs gone-from-palette).
+      No guidance on which to reach for.</li>
+  <li class="weak"><strong>The <code>'*'</code> wildcard</strong> (<span class="filepath">effectiveActions.ts:27</span>)
+      is a back-door for set-wise transforms bolted onto a per-action API — used once, for the keybinding
+      bridge, and easy to misuse.</li>
+</ul>
+
+<h3>3. <code>canRun</code> looks authoritative but is presentational</h3>
+<p><code>canRun</code> reads like a guard, but it gates only UI surfaces (palette, swipe menu); the keyboard
+and <code>runActionById</code> paths never call it (<span class="filepath">types.ts:148–156</span> spells this
+out, but the name fights the doc).</p>
+<ul class="tight">
+  <li class="weak">The user's skip-decorators exist <em>because</em> there's no dispatch-level "should this
+      run?" — they fake one by mutating the handler. A real predicate-at-dispatch (the precedence doc's
+      Option D) is the missing concept <code>canRun</code> appears to promise but doesn't deliver.</li>
+  <li class="weak">Name implies authority it doesn't have. <code>isApplicableForDisplay</code> would be honest;
+      or make it actually gate dispatch and the skip-decorator pattern evaporates.</li>
+</ul>
+
+<h3>4. Precedence is incidental because activation order is React-lifecycle order</h3>
+<p>The active set's order is whatever sequence <code>useEffect</code> activations fired in
+(<span class="filepath">ActiveContexts.tsx:86–97</span>). "Latest-activated wins" therefore inherits
+mount/effect ordering as its precedence signal — which is why the new-surface case resolves backwards
+(surface mounts early, normal-mode activates on click). The precedence doc adds an explicit
+<code>priority</code> to escape this, which is the right patch — but the underlying smell is
+<strong>using a lifecycle artifact as a semantic ordering</strong>.</p>
+
+<h3>5. The <code>runActionById</code> module singleton</h3>
+<p><code>runAction.ts</code> holds a module-level <code>dispatcher</code> var set by HotkeyReconciler on
+mount and nulled on unmount. It works, but: it's global mutable state, it throws if called before mount,
+and it couples "can I dispatch an action" to "is this one React component mounted." For a system whose whole
+point is decoupled contribution, the dispatch entry point being a singleton side-channel is a wart.</p>
+
+<h3>6. Context conflates scope and dependency-bundle</h3>
+<p>An <code>ActionContextConfig</code> is simultaneously (a) an activation scope that gates install, (b) a
+modal/precedence tier, and (c) a typed dependency carrier (<code>validateDependencies</code> +
+<code>ShortcutDependenciesMap</code>). These mostly co-vary, but the conflation shows up as type friction:
+<code>as never</code> / <code>as ActionConfig</code> casts in the override/decorator pipeline
+(<span class="filepath">effectiveActions.ts:52,57</span>) and the <code>bivarianceHack</code> in
+<code>ActionHandler</code> (<span class="filepath">types.ts:126</span>). The generics are being fought rather
+than expressing the model.</p>
+
+<h2>The unifying idea: one resolution core</h2>
+<div class="axes">
+Most of the weaknesses above (1, 3, 4, partly 5) are the same shape: <strong>there is no single place that
+owns "active set + event → which action runs."</strong> Resolution is smeared across per-action listeners,
+two dispatch helpers, a presentational predicate, and an implicit lifecycle ordering. The high-leverage
+refactor is to introduce <em>one</em> resolver and route every path through it:
+<pre><code>resolve(activeSet, event | actionId): ActionConfig | null
+  // single comparator: (priority desc, activation-recency desc)
+  // single canonicalization of chords
+  // single place to add modal / declinable / future tiers</code></pre>
+Keyboard dispatch, <code>runActionById</code>, and <code>useRunAction</code> all call it. Precedence,
+canonicalization, modal, and (if chosen) declinable fall-through become properties of the resolver, defined
+once, instead of being re-taught to each path. This is also exactly what the precedence doc's "shared
+comparator, used by both paths" bullet is reaching for — generalized.
+</div>
+
+<h2>What's worth doing — prioritized</h2>
+<table class="prio">
+<tr><th>Priority</th><th>Change</th><th>Why / payoff</th></tr>
+<tr><td class="p1">P1</td>
+  <td>Single resolution core; route keyboard + both dispatch helpers through it
+      (subsumes the precedence doc's comparator + the double-fire fix)</td>
+  <td>Kills the keyboard/dispatch divergence (weakness 1), gives precedence/canonicalization/modal one home,
+      makes Option D a localized change later instead of a rewrite. Highest leverage.</td></tr>
+<tr><td class="p1">P1</td>
+  <td>Decide <code>canRun</code>'s identity: either rename to a display-only name, or split into
+      <code>isVisible</code> (UI) + <code>canDispatch</code> (gate)</td>
+  <td>Removes the reason skip-decorators exist (weakness 3). Cheap, clarifies a contract people already misuse.</td></tr>
+<tr><td class="p2">P2</td>
+  <td>Unify the transform pipeline: one <code>(action) → action | null</code> transform type with a
+      documented phase, fold decorator/override into it; keep keybinding-override as the one cross-action pass</td>
+  <td>Ends the override/decorator asymmetry and the "which do I use?" folklore (weakness 2). Medium risk —
+      touches every contributor, so worth a codemod.</td></tr>
+<tr><td class="p3">P3</td>
+  <td>Replace the <code>runActionById</code> singleton with a runtime-scoped service obtained from context</td>
+  <td>Removes global mutable state + mount-coupling (weakness 5). Mostly mechanical; low urgency.</td></tr>
+<tr><td class="p3">P3</td>
+  <td>Tidy context generics (drop the <code>as never</code>/<code>bivarianceHack</code> by modeling
+      scope vs deps separately, or accept and document them)</td>
+  <td>Cosmetic/type-hygiene (weakness 6). Only worth it if touching the area anyway.</td></tr>
+</table>
+
+<h2>Explicitly NOT worth doing</h2>
+<ul class="tight">
+  <li><strong>Don't replace facets</strong> with a registry/event-bus. The contribution model is the part
+      that works; churning it buys nothing.</li>
+  <li><strong>Don't collapse contexts into a flat keymap.</strong> The scope concept earns its keep
+      (modal, dependency typing, per-surface activation). The problem is resolution <em>across</em> contexts,
+      not contexts themselves.</li>
+  <li><strong>Don't chase the type-generics cleanup on its own.</strong> Real but low-value; bundle it into
+      P1/P2 or skip.</li>
+</ul>
+
+<div class="verdict">
+<strong>Bottom line.</strong> The action system is fundamentally sound; the friction is concentrated in
+<em>resolution</em> (smeared across three paths with inconsistent semantics) and the <em>transform pipeline</em>
+(three overlapping mechanisms with arbitrary differences). The single highest-value move is <strong>P1: a
+single resolution core</strong> — and the precedence work in PR #57 is the natural first slice of it, if we
+build that change as "introduce the resolver" rather than "add a dedup to the loop." If we only ever do one
+thing here, do that. The rest (canRun identity, pipeline unification) are worthwhile follow-ups, not
+prerequisites. No rewrite warranted.
+</div>
+
+<h2>Relationship to PR #57 (precedence)</h2>
+<p>PR #57 stays docs-only and ships the narrow precedence model. This critique argues its "shared comparator
+used by both paths" recommendation is the <em>seed</em> of P1 above — so when precedence is implemented, it's
+worth spending the marginal effort to land it <em>as</em> the resolution core (one <code>resolve()</code> the
+keyboard and dispatch paths share) rather than as a dedup bolted onto the install loop. Same user-visible
+outcome; pays down weakness 1 instead of deepening it. That's an implementation-time decision, recorded here
+so it isn't lost.</p>
+
+</body>
+</html>
