@@ -487,11 +487,18 @@ const blockUploadDiffPredicateSql = BLOCK_UPLOAD_COLUMNS
   .map(column => `OLD.${column.name} IS NOT NEW.${column.name}`)
   .join('\n    OR ')
 
+// workspace_id is emitted UNCONDITIONALLY (not gated on OLD IS NOT NEW): the
+// Phase D encrypt-on-upload hook needs it on EVERY PATCH to look up the
+// workspace key and build the per-column AAD, but a content-only edit wouldn't
+// otherwise change workspace_id and so would omit it. A self-write of the
+// unchanged workspace_id is a harmless no-op server-side. The remaining columns
+// stay change-gated to keep PATCHes column-narrow.
 const blockUploadPatchJsonSql = () => `
       json_remove(
         json_set(
           '{}',
-${BLOCK_UPLOAD_COLUMNS.map(column =>
+          '$.workspace_id', NEW.workspace_id,
+${BLOCK_UPLOAD_COLUMNS.filter(column => column.name !== 'workspace_id').map(column =>
   `          CASE WHEN OLD.${column.name} IS NOT NEW.${column.name} THEN '$.${column.name}' ELSE '$.__noop' END, ${column.jsonValue('NEW')}`,
 ).join(',\n')}
         ),

@@ -390,7 +390,7 @@ describe('upload-routing triggers', () => {
     expect(JSON.parse(crud[0].data)).toMatchObject({op: 'PATCH', id: 'b1'})
   })
 
-  it('forwards only changed columns in UPDATE PATCH payloads', () => {
+  it('forwards changed columns plus the always-present workspace_id in PATCH payloads', () => {
     h.insertBlock({
       id: 'b1',
       content: 'old',
@@ -407,21 +407,25 @@ describe('upload-routing triggers', () => {
 
     const payload = JSON.parse(h.psCrud()[0].data)
     expect(payload).toMatchObject({op: 'PATCH', type: 'blocks', id: 'b1'})
+    // workspace_id is always emitted (even on a content-only edit) so the
+    // encrypt-on-upload hook can look up the WK + build AAD; the rest are
+    // change-gated.
     expect(payload.data).toEqual({
+      workspace_id: 'ws1',
       content: 'new',
       updated_at: 1700000999000,
       updated_by: 'user-2',
     })
   })
 
-  it('keeps explicit nulls in changed UPDATE PATCH payloads', () => {
+  it('keeps explicit nulls in changed UPDATE PATCH payloads (alongside workspace_id)', () => {
     h.insertBlock({id: 'b1', parent_id: 'old-parent'})
     h.setTxContext({txId: 'tx-1', txSeq: 5151, userId: 'user-1', scope: 'block-default', source: 'user'})
     h.updateBlock('b1', {parent_id: null})
     h.clearTxContext()
 
     const payload = JSON.parse(h.psCrud()[0].data)
-    expect(payload.data).toEqual({parent_id: null})
+    expect(payload.data).toEqual({workspace_id: 'ws1', parent_id: null})
   })
 
   it('does not queue an empty PATCH for no-op UPDATE statements', () => {
