@@ -24,6 +24,18 @@ describe('getSyncIndicatorView', () => {
     expect(view.title).toContain('3 local changes queued for upload')
   })
 
+  it('labels capped pending counts as lower bounds', () => {
+    const view = getSyncIndicatorView({
+      ...baseInput,
+      pendingChanges: 1000,
+      pendingChangesApproximate: true,
+    })
+
+    expect(view.state).toBe('pending')
+    expect(view.pendingLabel).toBe('1000+')
+    expect(view.title).toContain('1000+ local changes queued for upload')
+  })
+
   it('shows download progress while preserving the pending count badge', () => {
     const view = getSyncIndicatorView({
       ...baseInput,

@@ -21,6 +21,7 @@ export interface SyncIndicatorInput {
   uploading: boolean
   downloading: boolean
   pendingChanges: number
+  pendingChangesApproximate?: boolean
   /** Count of rows in `ps_crud_rejected` — writes the server permanently
    *  refused (FK, RLS, 4xx). Sync may still be working for new writes;
    *  these are unfinished business that needs manual retry or dismissal.
@@ -43,15 +44,17 @@ export interface SyncIndicatorView {
   spinning: boolean
 }
 
-const formatPendingLabel = (count: number): string | null => {
+const formatPendingLabel = (count: number, approximate = false): string | null => {
   if (count <= 0) return null
+  if (approximate) return `${count}+`
   if (count > 999) return '999+'
   return String(count)
 }
 
-const formatChangeCount = (count: number): string => {
-  if (count === 1) return '1 local change'
-  return `${count} local changes`
+const formatChangeCount = (count: number, approximate = false): string => {
+  const countLabel = approximate ? `${count}+` : String(count)
+  if (count === 1 && !approximate) return '1 local change'
+  return `${countLabel} local changes`
 }
 
 const clampProgressPercent = (fraction: number | null | undefined): number | null => {
@@ -64,11 +67,16 @@ const formatLastSyncedAt = (date: Date | undefined): string | null => {
   return `Last synced ${date.toLocaleString()}.`
 }
 
-const appendPendingTitle = (title: string, pendingChanges: number, localOnly = false): string => {
+const appendPendingTitle = (
+  title: string,
+  pendingChanges: number,
+  localOnly = false,
+  approximate = false,
+): string => {
   if (pendingChanges <= 0) return title
   const suffix = localOnly
-    ? `${formatChangeCount(pendingChanges)} stored locally.`
-    : `${formatChangeCount(pendingChanges)} queued for upload.`
+    ? `${formatChangeCount(pendingChanges, approximate)} stored locally.`
+    : `${formatChangeCount(pendingChanges, approximate)} queued for upload.`
   return `${title} ${suffix}`
 }
 
@@ -90,13 +98,14 @@ export const getSyncIndicatorView = ({
   uploading,
   downloading,
   pendingChanges,
+  pendingChangesApproximate = false,
   rejectedChanges = 0,
   downloadFraction,
   errorMessage,
   lastSyncedAt,
 }: SyncIndicatorInput): SyncIndicatorView => {
   const progressPercent = clampProgressPercent(downloadFraction)
-  const pendingLabel = formatPendingLabel(pendingChanges)
+  const pendingLabel = formatPendingLabel(pendingChanges, pendingChangesApproximate)
 
   if (localOnly) {
     return {
@@ -104,7 +113,7 @@ export const getSyncIndicatorView = ({
       tone: 'local',
       icon: 'hard-drive',
       label: 'Local only',
-      title: appendPendingTitle('Remote sync is disabled.', pendingChanges, true),
+      title: appendPendingTitle('Remote sync is disabled.', pendingChanges, true, pendingChangesApproximate),
       pendingLabel,
       progressPercent: null,
       spinning: false,
@@ -117,7 +126,12 @@ export const getSyncIndicatorView = ({
       tone: 'error',
       icon: 'alert',
       label: 'Sync issue',
-      title: appendPendingTitle(`Sync needs attention: ${errorMessage}`, pendingChanges),
+      title: appendPendingTitle(
+        `Sync needs attention: ${errorMessage}`,
+        pendingChanges,
+        false,
+        pendingChangesApproximate,
+      ),
       pendingLabel,
       progressPercent: null,
       spinning: false,
@@ -135,6 +149,8 @@ export const getSyncIndicatorView = ({
           ? 'Downloading remote changes.'
           : `Downloading remote changes: ${progressPercent}%.`,
         pendingChanges,
+        false,
+        pendingChangesApproximate,
       ),
       pendingLabel,
       progressPercent,
@@ -148,7 +164,7 @@ export const getSyncIndicatorView = ({
       tone: 'active',
       icon: 'sync',
       label: 'Uploading',
-      title: appendPendingTitle('Uploading local changes.', pendingChanges),
+      title: appendPendingTitle('Uploading local changes.', pendingChanges, false, pendingChangesApproximate),
       pendingLabel,
       progressPercent: null,
       spinning: true,
@@ -164,6 +180,8 @@ export const getSyncIndicatorView = ({
       title: appendPendingTitle(
         connected ? 'Waiting to upload.' : 'Waiting for a sync connection.',
         pendingChanges,
+        false,
+        pendingChangesApproximate,
       ),
       pendingLabel,
       progressPercent: null,

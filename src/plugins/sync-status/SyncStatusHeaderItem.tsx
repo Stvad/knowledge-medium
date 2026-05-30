@@ -21,11 +21,22 @@ import {
   type SyncIndicatorIcon,
   type SyncIndicatorTone,
 } from './model.ts'
+import {
+  formatPendingChanges,
+  uploadQueueCountCap,
+  uploadQueueExactCountSql,
+  uploadQueuePreviewCountSql,
+} from './queueCounts.ts'
 import { RejectionDialog } from './RejectionDialog.tsx'
 
 interface UploadQueueCountRow {
   count: number
 }
+
+const uploadQueuePreviewThrottleMs = 1_000
+const rejectedCountSql = 'SELECT COUNT(*) AS count FROM ps_crud_rejected'
+
+type SyncStatus = ReturnType<typeof useStatus>
 
 // Theme-aware tones. `success` reads `--success` (per-theme green
 // hue) rather than `--primary` so warm-primary palettes like
@@ -53,13 +64,6 @@ const iconByName = {
   check: CloudCheck,
 } satisfies Record<SyncIndicatorIcon, typeof CircleAlert>
 
-const formatPendingChanges = (count: number, localOnly: boolean): string => {
-  if (count <= 0) return 'No unsynced changes'
-  const noun = count === 1 ? 'change' : 'changes'
-  const suffix = localOnly ? 'stored locally' : 'queued for upload'
-  return `${count} ${noun} ${suffix}`
-}
-
 const formatLastSyncedAt = (date: Date | undefined): string => {
   if (!date) return 'Not synced yet'
   return date.toLocaleString()
@@ -68,25 +72,95 @@ const formatLastSyncedAt = (date: Date | undefined): string => {
 export function SyncStatusHeaderItem() {
   const localOnly = useIsLocalOnly()
   const status = useStatus()
-  const queue = useQuery<UploadQueueCountRow>(
-    'SELECT COUNT(*) AS count FROM ps_crud',
-    [],
-    {reportFetching: false},
-  )
   const rejected = useQuery<UploadQueueCountRow>(
-    'SELECT COUNT(*) AS count FROM ps_crud_rejected',
+    rejectedCountSql,
     [],
     {reportFetching: false},
   )
-  const pendingChanges = Number(queue.data[0]?.count ?? 0)
   const rejectedCount = Number(rejected.data[0]?.count ?? 0)
-  const [dialogOpen, setDialogOpen] = useState(false)
-  const dataFlow = status.dataFlowStatus
   const errorMessage =
-    queue.error?.message ??
-    dataFlow.uploadError?.message ??
-    dataFlow.downloadError?.message ??
+    rejected.error?.message ??
+    status.dataFlowStatus.uploadError?.message ??
+    status.dataFlowStatus.downloadError?.message ??
     null
+
+  if (localOnly) {
+    return (
+      <SyncStatusHeaderContent
+        localOnly={localOnly}
+        status={status}
+        pendingChanges={0}
+        pendingChangesApproximate={false}
+        rejectedCount={rejectedCount}
+        errorMessage={errorMessage}
+      />
+    )
+  }
+
+  return (
+    <RemoteSyncStatusHeaderContent
+      status={status}
+      rejectedCount={rejectedCount}
+      baseErrorMessage={errorMessage}
+    />
+  )
+}
+
+interface RemoteSyncStatusHeaderContentProps {
+  status: SyncStatus
+  rejectedCount: number
+  baseErrorMessage: string | null
+}
+
+function RemoteSyncStatusHeaderContent({
+  status,
+  rejectedCount,
+  baseErrorMessage,
+}: RemoteSyncStatusHeaderContentProps) {
+  const queue = useQuery<UploadQueueCountRow>(
+    uploadQueuePreviewCountSql,
+    [],
+    {
+      reportFetching: false,
+      throttleMs: uploadQueuePreviewThrottleMs,
+    },
+  )
+  const previewCount = Number(queue.data[0]?.count ?? 0)
+  const pendingChangesApproximate = previewCount > uploadQueueCountCap
+  const pendingChanges = pendingChangesApproximate ? uploadQueueCountCap : previewCount
+
+  return (
+    <SyncStatusHeaderContent
+      localOnly={false}
+      status={status}
+      pendingChanges={pendingChanges}
+      pendingChangesApproximate={pendingChangesApproximate}
+      rejectedCount={rejectedCount}
+      errorMessage={queue.error?.message ?? baseErrorMessage}
+    />
+  )
+}
+
+interface SyncStatusHeaderContentProps {
+  localOnly: boolean
+  status: SyncStatus
+  pendingChanges: number
+  pendingChangesApproximate: boolean
+  rejectedCount: number
+  errorMessage: string | null
+}
+
+function SyncStatusHeaderContent({
+  localOnly,
+  status,
+  pendingChanges,
+  pendingChangesApproximate,
+  rejectedCount,
+  errorMessage,
+}: SyncStatusHeaderContentProps) {
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [detailsOpen, setDetailsOpen] = useState(false)
+  const dataFlow = status.dataFlowStatus
   const view = getSyncIndicatorView({
     localOnly,
     connected: status.connected,
@@ -95,6 +169,7 @@ export function SyncStatusHeaderItem() {
     uploading: Boolean(dataFlow.uploading),
     downloading: Boolean(dataFlow.downloading),
     pendingChanges,
+    pendingChangesApproximate,
     rejectedChanges: rejectedCount,
     downloadFraction: status.downloadProgress?.downloadedFraction ?? null,
     errorMessage,
@@ -104,7 +179,7 @@ export function SyncStatusHeaderItem() {
 
   return (
     <>
-      <DropdownMenu>
+      <DropdownMenu open={detailsOpen} onOpenChange={setDetailsOpen}>
         <DropdownMenuTrigger asChild>
           <button
             type="button"
@@ -129,7 +204,17 @@ export function SyncStatusHeaderItem() {
             </div>
             <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
               <div className="text-muted-foreground">Unsynced</div>
-              <div className="text-right">{formatPendingChanges(pendingChanges, localOnly)}</div>
+              <div className="text-right">
+                {detailsOpen ? (
+                  <UploadQueueDetails
+                    localOnly={localOnly}
+                    previewCount={pendingChanges}
+                    previewApproximate={pendingChangesApproximate}
+                  />
+                ) : (
+                  formatPendingChanges(pendingChanges, localOnly, pendingChangesApproximate)
+                )}
+              </div>
               {view.progressPercent !== null && (
                 <>
                   <div className="text-muted-foreground">Progress</div>
@@ -162,4 +247,36 @@ export function SyncStatusHeaderItem() {
       <RejectionDialog open={dialogOpen} onOpenChange={setDialogOpen}/>
     </>
   )
+}
+
+interface UploadQueueDetailsProps {
+  localOnly: boolean
+  previewCount: number
+  previewApproximate: boolean
+}
+
+function UploadQueueDetails({
+  localOnly,
+  previewCount,
+  previewApproximate,
+}: UploadQueueDetailsProps) {
+  const queue = useQuery<UploadQueueCountRow>(
+    uploadQueueExactCountSql,
+    [],
+    {
+      reportFetching: false,
+      runQueryOnce: true,
+    },
+  )
+  const exactCount = queue.data[0]?.count
+
+  if (queue.error) {
+    return 'Unable to count unsynced changes'
+  }
+
+  if (exactCount === undefined) {
+    return formatPendingChanges(previewCount, localOnly, previewApproximate)
+  }
+
+  return formatPendingChanges(Number(exactCount), localOnly)
 }
