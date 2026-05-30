@@ -129,6 +129,10 @@ export interface MaterializeOutcome {
   readonly deferred: readonly string[]
   /** Ids skipped because a newer/pending local edit wins. */
   readonly skippedStale: readonly string[]
+  /** Ids whose ciphertext could not be decrypted (corrupt / tampered /
+   *  well-formed-but-invalid). Left staged; deliberately do NOT wedge the
+   *  drain so the rest of the batch still materializes. */
+  readonly quarantined: readonly string[]
   /** Ids hard-deleted from `blocks`. */
   readonly deleted: readonly string[]
 }
@@ -201,6 +205,7 @@ export const materializeStagingRows = async (
   const readChunkSize = options.readChunkSize ?? STAGING_READ_CHUNK
   const deferred: string[] = []
   const skippedStale: string[] = []
+  const quarantined: string[] = []
 
   const stagingRows = await readStagingRows(db, change.upserted, readChunkSize)
 
@@ -231,7 +236,22 @@ export const materializeStagingRows = async (
       continue
     }
     const mode = materializability === 'decrypt' ? 'e2ee' : 'none'
-    const plaintext = await decodeFromWire(row, mode, getCek)
+    let plaintext: BlockRow
+    try {
+      plaintext = await decodeFromWire(row, mode, getCek)
+    } catch (err) {
+      // Undecryptable despite a well-formed `enc:v1:` envelope (the server can
+      // only validate envelope SHAPE, so corrupt/tampered bytes or a direct
+      // writer can produce this; a key race can too). Quarantine THIS row so it
+      // can't wedge the whole drain — the batch continues, later valid rows
+      // still materialize, and the watermark advances past it. It stays as
+      // ciphertext in staging (never shown) and re-materializes if the server
+      // re-uploads valid bytes or a drainWorkspace re-pass runs. Plaintext
+      // copy-through never reaches here (decodeFromWire is identity for 'none').
+      console.warn(`[materializeStagingRows] quarantined undecryptable block ${row.id}:`, err)
+      quarantined.push(row.id)
+      continue
+    }
     candidates.push({ plaintext, stagingUpdatedAt: row.updated_at, materializability })
   }
 
@@ -240,7 +260,7 @@ export const materializeStagingRows = async (
   const deleted: string[] = []
 
   if (candidates.length === 0 && change.removed.length === 0) {
-    return { snapshots, applied, deferred, skippedStale, deleted }
+    return { snapshots, applied, deferred, skippedStale, quarantined, deleted }
   }
 
   // ── Phase 2 (inside the write tx): authoritative re-gate, then write. ──
@@ -280,5 +300,5 @@ export const materializeStagingRows = async (
     }
   })
 
-  return { snapshots, applied, deferred, skippedStale, deleted }
+  return { snapshots, applied, deferred, skippedStale, quarantined, deleted }
 }

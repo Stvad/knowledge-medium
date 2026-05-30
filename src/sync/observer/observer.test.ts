@@ -178,33 +178,37 @@ describe('blocksSyncedObserver — defer + drainWorkspace', () => {
 })
 
 describe('blocksSyncedObserver — robustness', () => {
-  it('keeps the queue intact when a drain fails, and retries successfully', async () => {
-    const plain = data({ id: 'e1', workspaceId: 'ws-e2ee', content: 'retryme' })
-    // Encrypt with a known key, but withhold it from the observer at first.
+  it('quarantines an undecryptable row without wedging the rest of the batch', async () => {
     const key = await importWorkspaceKey(generateWorkspaceKeyBytes())
-    const wire = await encodeForWire(
-      {
-        id: plain.id, workspace_id: plain.workspaceId, content: plain.content,
-        properties_json: JSON.stringify(plain.properties),
-        references_json: JSON.stringify(plain.references),
-      },
-      'e2ee', async () => key,
-    )
-    await put(plain, stagingCiphertextParams(plain, wire))
+    const wrongKey = await importWorkspaceKey(generateWorkspaceKeyBytes())
+    const enc = (k: CryptoKey, d: BlockData) =>
+      encodeForWire(
+        {
+          id: d.id, workspace_id: d.workspaceId, content: d.content,
+          properties_json: JSON.stringify(d.properties),
+          references_json: JSON.stringify(d.references),
+        },
+        'e2ee', async () => k,
+      )
 
-    // Claim 'decrypt' but hand back no key first → decode throws mid-drain.
-    let available: CryptoKey | null = null
-    const getCek: GetCek = async () => available
-    const { observer } = start({ getMaterializability: constMat('decrypt'), getCek })
+    const good = data({ id: 'good', workspaceId: 'ws-e2ee', content: 'readable' })
+    const bad = data({ id: 'bad', workspaceId: 'ws-e2ee', content: 'unreadable' })
+    await put(good, stagingCiphertextParams(good, await enc(key, good)))
+    // A well-formed envelope sealed under a DIFFERENT key → AEAD verification
+    // fails. One such row must not block the rest of the drain.
+    await put(bad, stagingCiphertextParams(bad, await enc(wrongKey, bad)))
 
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { observer } = start({ getMaterializability: constMat('decrypt'), getCek: async () => key })
     await observer.flush()
-    expect(await blocks()).toEqual([]) // failed to decrypt
-    expect(await queueLen()).toBe(1) // NOT consumed — the change is still queued
+    warn.mockRestore()
 
-    // The key arrives; the retry drains the still-queued change.
-    available = key
-    await observer.flush()
-    expect(await blocks()).toEqual([{ id: 'e1', content: 'retryme' }])
+    // The good row materialized; the bad row was quarantined (skipped); the
+    // queue fully drained — no wedge, no infinite-retry head-of-line block.
+    // (The quarantine contract itself — out.quarantined — is asserted at the
+    // materialize unit level.)
+    expect(await blocks()).toEqual([{ id: 'good', content: 'readable' }])
+    expect(await queueLen()).toBe(0)
   })
 
   it('survives a restart: a queued change persists for a fresh observer (durable queue)', async () => {

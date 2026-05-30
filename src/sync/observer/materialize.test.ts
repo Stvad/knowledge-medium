@@ -14,7 +14,7 @@
  * the source-gating and trigger interactions are the real ones.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   BLOCKS_SYNCED_RAW_TABLE,
   BLOCK_STORAGE_COLUMNS,
@@ -242,6 +242,42 @@ describe('materializeStagingRows — skip-stale (local edit must win)', () => {
 
     expect(out.applied).toEqual(['b1'])
     expect((await allBlocks())[0]!.content).toBe('new from server')
+  })
+})
+
+describe('materializeStagingRows — quarantine (undecryptable)', () => {
+  it('quarantines a row whose ciphertext fails AEAD, still applying a valid sibling', async () => {
+    const key = await importWorkspaceKey(generateWorkspaceKeyBytes())
+    const wrongKey = await importWorkspaceKey(generateWorkspaceKeyBytes())
+    const enc = (k: CryptoKey, d: BlockData) =>
+      encodeForWire(
+        {
+          id: d.id, workspace_id: d.workspaceId, content: d.content,
+          properties_json: JSON.stringify(d.properties),
+          references_json: JSON.stringify(d.references),
+        },
+        'e2ee', async () => k,
+      )
+
+    const good = blockData({ id: 'good', workspaceId: 'ws-e2ee', content: 'ok' })
+    const bad = blockData({ id: 'bad', workspaceId: 'ws-e2ee', content: 'corrupt' })
+    await stageRow(good, stagingCiphertextParams(good, await enc(key, good)))
+    // 'bad' is a well-formed enc:v1: envelope, but sealed under a DIFFERENT key,
+    // so AEAD verification fails when opened with `key` — what a tampered or
+    // direct-writer row looks like.
+    await stageRow(bad, stagingCiphertextParams(bad, await enc(wrongKey, bad)))
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const out = await materializeStagingRows(
+      env.db,
+      { upserted: ['good', 'bad'], removed: [] },
+      { getMaterializability: constMat('decrypt'), getCek: async () => key },
+    )
+    warn.mockRestore()
+
+    expect(out.applied).toEqual(['good'])
+    expect(out.quarantined).toEqual(['bad']) // skipped, not thrown
+    expect(await env.db.getAll('SELECT id FROM blocks ORDER BY id')).toEqual([{ id: 'good' }])
   })
 })
 
