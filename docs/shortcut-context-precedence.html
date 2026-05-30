@@ -151,9 +151,14 @@ it changes the recommendation.
       <code>priority: number</code> (Model C) as non-local and full of magic-number cliffs. That critique
       still stands — and it's <em>specifically about per-binding numbers</em>. Context-level precedence
       (one number per context, ~9 of them) dodges it.</li>
-  <li><strong>Teach the conflict UI about intentional shadowing.</strong> <code>findKeybindingConflicts</code>
-      (<span class="filepath">keybindingConflicts.ts</span>) will flag a deliberately-shadowed chord as a
-      collision. Whatever we ship, the UI should render "shadowed by X while active," not "conflict."</li>
+  <li><strong>Teach the conflict UI about intentional shadowing — but broaden its overlap model first.</strong>
+      Subtle: <code>findKeybindingConflicts</code> today won't even <em>see</em> the surface-vs-<code>normal-mode</code>
+      shadow. Its <code>contextsOverlap</code> (<span class="filepath">keybindingConflicts.ts:34</span>) is
+      <code>a === b || a === 'global' || b === 'global'</code> — two <em>different non-global</em> contexts are
+      treated as non-overlapping, so a high-priority surface shadowing <code>normal-mode</code> on the same chord
+      is never returned as a conflict. So there is nothing to "relabel" until the conflict model is extended to
+      consider cross-context, priority-aware overlap (feed it activation/priority metadata). The relabel is the
+      <em>second</em> step; broadening detection is the first.</li>
 </ul>
 <p class="meh" style="list-style:none">Where the old doc constrains wrongly: it framed the choice as
 modal-vs-additive and scoped selective precedence out as a "known limit." The report <em>is</em> that
@@ -388,8 +393,12 @@ everywhere" need, the clean tool is letting <code>ActionDecorator.decorate</code
   <li><strong>Equal-priority fragility persists.</strong> When two same-priority contexts activate off one
       focus event, the tiebreak is incidental timing. Acceptable for stacked modes; if a real case wants
       determinism, that's the moment to reconsider — not now.</li>
-  <li><strong>Conflict-UI follow-up.</strong> Extend <code>findKeybindingConflicts</code> to mark
-      priority-shadowed chords as intentional rather than warnings. Can ship after the core change.</li>
+  <li><strong>Conflict-UI follow-up (two steps, in order).</strong> (1) Broaden
+      <code>findKeybindingConflicts</code>' <code>contextsOverlap</code> (<span class="filepath">keybindingConflicts.ts:34</span>)
+      so two different non-global contexts that can co-activate are considered overlapping — today they aren't, so
+      cross-context shadows are invisible to it. (2) Then mark priority-shadowed chords as intentional ("shadowed
+      by X while active") rather than warnings. Both can ship after the core change; step 1 is a prerequisite for
+      step 2 doing anything.</li>
   <li><strong>Granularity escape hatch.</strong> If an in-repo same-key-vs-sequence case ever needs B's
       action-targeted suppression, add it then as a narrow supplement — don't pre-build it.</li>
 </ul>
