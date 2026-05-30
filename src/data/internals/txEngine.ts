@@ -68,7 +68,6 @@ import { SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL } from './kernelQueries'
 import type { BlockCache } from '@/data/blockCache'
 import { keyAtStart } from '@/data/orderKey'
 import {
-  getPropertyFieldTargetId,
   isPropertyFieldInstance,
   propertyFieldContent,
   propertyValueToChildContent,
@@ -179,6 +178,13 @@ const COLUMN_PLACEHOLDERS = COLUMN_NAMES.map(() => '?').join(', ')
 const SELECT_BY_ID_SQL = `SELECT ${COLUMN_LIST} FROM blocks WHERE id = ?`
 const SELECT_CHILDREN_SQL =
   `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id`
+const SELECT_PROPERTY_FIELD_CHILD_SQL =
+  `SELECT ${COLUMN_LIST} FROM blocks
+   WHERE workspace_id = ?
+     AND parent_id = ?
+     AND reference_target_id = ?
+     AND deleted = 0
+   ORDER BY order_key, id`
 /** Root-level siblings (parent_id IS NULL). When a tx has pinned a
  *  workspace, scope to that workspace so `tx.childrenOf(null)` doesn't
  *  spill across workspaces — important for single-workspace-per-tx
@@ -454,9 +460,9 @@ export class TxImpl implements Tx {
   ): Promise<void> {
     const before = await this.requireExisting(id)
     this.checkWorkspace(before.workspaceId)
-    await this.writePropertyValueChild(before, schema, value, opts)
     const encoded = schema.codec.encode(value)
     if (jsonValuesEqual(before.properties[schema.name], encoded)) return
+    await this.writePropertyValueChild(before, schema, value, opts)
     const properties = {...before.properties, [schema.name]: encoded}
     const after: BlockData = {
       ...before,
@@ -862,8 +868,11 @@ export class TxImpl implements Tx {
     opts: TxWriteOpts | undefined,
   ): Promise<void> {
     const content = propertyValueToChildContent(schema, value)
-    const children = await this.childrenOf(parent.id, undefined, {includePropertyChildren: true})
-    const existing = children.find(child => getPropertyFieldTargetId(child) === schema.fieldId)
+    const fieldRows = await this.ctx.txDb.getAll<BlockRow>(
+      SELECT_PROPERTY_FIELD_CHILD_SQL,
+      [parent.workspaceId, parent.id, schema.fieldId],
+    )
+    const existing = fieldRows.length > 0 ? parseBlockRow(fieldRows[0]!) : undefined
 
     if (existing) {
       if (existing.content !== propertyFieldContent(schema)) {
