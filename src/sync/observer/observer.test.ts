@@ -5,7 +5,7 @@
  * materialize → invalidate, plus the drain's race/failure/restart robustness.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams } from '@/data/blockSchema'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -14,7 +14,7 @@ import type { GetMaterializability } from './materialize.js'
 import { encodeForWire, type GetCek } from '../transform.js'
 import { generateWorkspaceKeyBytes, importWorkspaceKey } from '../crypto/workspaceKey.js'
 import type { ChangeNotification } from '@/data/internals/handleStore'
-import type { BlockData } from '@/data/api'
+import type { BlockData, CycleDetectedEvent } from '@/data/api'
 
 const data = (o: Partial<BlockData> = {}): BlockData => ({
   id: 'b1', workspaceId: 'ws-plain', parentId: null, orderKey: 'a0', content: 'hello',
@@ -62,6 +62,7 @@ interface Harness {
 const start = (opts: {
   getMaterializability: GetMaterializability
   getCek?: GetCek
+  onCycleDetected?: (e: CycleDetectedEvent) => void
 }): Harness => {
   const cache = new BlockCache()
   const notifications: ChangeNotification[] = []
@@ -70,6 +71,7 @@ const start = (opts: {
     cache,
     handleStore: { invalidate: (n) => notifications.push(n) },
     deps: { getMaterializability: opts.getMaterializability, getCek: opts.getCek ?? noKey },
+    onCycleDetected: opts.onCycleDetected,
     throttleMs: 5,
   })
   observers.push(observer)
@@ -226,5 +228,72 @@ describe('blocksSyncedObserver — robustness', () => {
 
     await waitFor(async () => (await blocks()).length === 1)
     expect(await blocks()).toEqual([{ id: 'b1', content: 'autopilot' }])
+  })
+})
+
+describe('blocksSyncedObserver — cycle detection (§4.7)', () => {
+  it('emits cycleDetected for a sync-applied 2-cycle (startIds cover both members)', async () => {
+    const events: CycleDetectedEvent[] = []
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { observer } = start({
+      getMaterializability: constMat('copy'),
+      onCycleDetected: e => events.push(e),
+    })
+
+    // Seed A, B (no parents) and materialize them.
+    await put(data({ id: 'A', parentId: null, updatedAt: 1 }))
+    await put(data({ id: 'B', parentId: null, updatedAt: 1 }))
+    await observer.flush()
+
+    // Two sync-applied moves close the loop: A under B, B under A (both
+    // strictly newer so they apply). The observer writes with source = NULL,
+    // so the parent-workspace invariant trigger is bypassed, exactly like
+    // PowerSync's CRUD-apply — letting the cycle form.
+    await put(data({ id: 'A', parentId: 'B', updatedAt: 2 }))
+    await put(data({ id: 'B', parentId: 'A', updatedAt: 2 }))
+    await observer.flush()
+
+    expect(events.length).toBeGreaterThanOrEqual(1)
+    const startIds = new Set<string>()
+    for (const ev of events) {
+      expect(ev.workspaceId).toBe('ws-plain')
+      expect(ev.txIdsInvolved).toEqual([]) // sync writes carry no tx_id
+      ev.startIds.forEach(id => startIds.add(id))
+    }
+    expect([...startIds].sort()).toEqual(['A', 'B'])
+    const cycleWarns = warn.mock.calls.filter(c => String(c[0]).includes('cycleDetected'))
+    expect(cycleWarns).toHaveLength(events.length)
+    warn.mockRestore()
+  })
+
+  it('does not fire when a sync-applied move does not close a loop', async () => {
+    const events: CycleDetectedEvent[] = []
+    const { observer } = start({
+      getMaterializability: constMat('copy'),
+      onCycleDetected: e => events.push(e),
+    })
+    await put(data({ id: 'A', parentId: null, updatedAt: 1 }))
+    await put(data({ id: 'B', parentId: null, updatedAt: 1 }))
+    await observer.flush()
+
+    await put(data({ id: 'B', parentId: 'A', updatedAt: 2 })) // one move, no loop
+    await observer.flush()
+
+    expect(events).toEqual([])
+  })
+
+  it('does not fire on a pure content edit', async () => {
+    const events: CycleDetectedEvent[] = []
+    const { observer } = start({
+      getMaterializability: constMat('copy'),
+      onCycleDetected: e => events.push(e),
+    })
+    await put(data({ id: 'A', parentId: null, content: 'v1', updatedAt: 1 }))
+    await observer.flush()
+
+    await put(data({ id: 'A', parentId: null, content: 'v2', updatedAt: 2 }))
+    await observer.flush()
+
+    expect(events).toEqual([])
   })
 })

@@ -28,9 +28,16 @@
  * relocated here — it lands in a follow-up before the cutover removes the tail.
  */
 
+import type { CycleDetectedEvent } from '@/data/api'
 import type { PowerSyncDb } from '@/data/internals/commitPipeline.js'
 import type { InvalidationRule } from '@/data/invalidation.js'
-import { materializeStagingRows, type MaterializeDeps } from './materialize.js'
+import { cycleScanSql } from '@/data/internals/treeQueries.js'
+import {
+  materializeStagingRows,
+  type MaterializeDeps,
+  type MaterializeOutcome,
+  type SyncSnapshot,
+} from './materialize.js'
 import {
   applySyncInvalidation,
   type SyncCache,
@@ -49,6 +56,10 @@ export interface BlocksSyncedObserverArgs {
   /** Plugin invalidation rules, read fresh each drain (plugins can register
    *  after the observer starts). */
   readonly getInvalidationRules?: () => readonly InvalidationRule[]
+  /** §4.7 cycle-detection telemetry. Fired (with a console.warn) when a
+   *  sync-applied parent_id change closes a loop — relocated from
+   *  rowEventsTail. txIdsInvolved is always empty (sync writes carry no tx_id). */
+  readonly onCycleDetected?: (event: CycleDetectedEvent) => void
   readonly throttleMs?: number
   readonly onError?: (err: unknown) => void
 }
@@ -77,10 +88,33 @@ interface QueueRow {
 const isConnectionClosedError = (err: unknown): boolean =>
   !!err && typeof err === 'object' && (err as { name?: unknown }).name === 'ConnectionClosedError'
 
+/**
+ * The §4.7 cycle-scan starting set: ids whose parent_id actually moved while
+ * the row stayed live (a fresh insert or a delete can't close a loop on its
+ * own; a content edit doesn't change reachability), grouped by the row's
+ * current workspace. Relocated from rowEventsTail's inline selection.
+ */
+export const cycleScanCandidatesByWorkspace = (
+  snapshots: ReadonlyMap<string, SyncSnapshot>,
+): Map<string, string[]> => {
+  const byWorkspace = new Map<string, string[]>()
+  for (const [id, { before, after }] of snapshots) {
+    if (!before || before.deleted) continue
+    if (!after || after.deleted) continue
+    if (before.parentId === after.parentId) continue
+    const workspaceId = after.workspaceId
+    if (!workspaceId) continue
+    const list = byWorkspace.get(workspaceId)
+    if (list) list.push(id)
+    else byWorkspace.set(workspaceId, [id])
+  }
+  return byWorkspace
+}
+
 export const startBlocksSyncedObserver = (
   args: BlocksSyncedObserverArgs,
 ): BlocksSyncedObserver => {
-  const { db, cache, handleStore, deps, getInvalidationRules } = args
+  const { db, cache, handleStore, deps, getInvalidationRules, onCycleDetected } = args
   const throttleMs = args.throttleMs ?? DEFAULT_THROTTLE_MS
   const rules = (): readonly InvalidationRule[] => getInvalidationRules?.() ?? []
   const onError = args.onError ?? ((err: unknown) => {
@@ -90,6 +124,31 @@ export const startBlocksSyncedObserver = (
   let disposed = false
   let unsubscribe: (() => void) | null = null
   let chain: Promise<void> = Promise.resolve()
+
+  /** §4.7 detection-only telemetry. One bounded, truncation-safe scan per
+   *  workspace whose parent_id mutations might have closed a loop. A scan
+   *  failure is reported but never aborts the drain (matches rowEventsTail). */
+  const runCycleScan = async (snapshots: ReadonlyMap<string, SyncSnapshot>): Promise<void> => {
+    if (!onCycleDetected) return
+    for (const [workspaceId, ids] of cycleScanCandidatesByWorkspace(snapshots)) {
+      try {
+        const hits = await db.getAll<{ start_id: string }>(cycleScanSql(ids.length), ids)
+        if (hits.length === 0) continue
+        const startIds = hits.map(hit => hit.start_id).sort()
+        console.warn(`[blocksSyncedObserver] cycleDetected ws=${workspaceId} startIds=${JSON.stringify(startIds)}`)
+        onCycleDetected({ workspaceId, startIds, txIdsInvolved: [] })
+      } catch (err) {
+        onError(err)
+      }
+    }
+  }
+
+  /** Post-materialization side effects shared by both drain paths: invalidate
+   *  cache + handles (one LWW gate), then run cycle detection. */
+  const applyOutcome = async (outcome: MaterializeOutcome): Promise<void> => {
+    applySyncInvalidation(cache, handleStore, outcome.snapshots, rules())
+    await runCycleScan(outcome.snapshots)
+  }
 
   const drainQueueOnce = async (): Promise<void> => {
     if (disposed) return
@@ -107,7 +166,7 @@ export const startBlocksSyncedObserver = (
     for (const [id, op] of opById) (op === 'upsert' ? upserted : removed).push(id)
 
     const outcome = await materializeStagingRows(db, { upserted, removed }, deps)
-    applySyncInvalidation(cache, handleStore, outcome.snapshots, rules())
+    await applyOutcome(outcome)
 
     // Consume only what we read. Rows appended mid-drain have seq > maxSeq and
     // survive for the next pass. Done last so a throw above leaves them queued.
@@ -122,7 +181,7 @@ export const startBlocksSyncedObserver = (
     )).map(row => row.id)
     if (ids.length === 0) return
     const outcome = await materializeStagingRows(db, { upserted: ids, removed: [] }, deps)
-    applySyncInvalidation(cache, handleStore, outcome.snapshots, rules())
+    await applyOutcome(outcome)
   }
 
   // Serialize all work on one chain so drains never overlap and flush() awaits
