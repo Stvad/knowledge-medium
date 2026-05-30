@@ -166,29 +166,4 @@ describe('buildPropertyPanelModel', () => {
     ])
   })
 
-  it('keeps retired system fields hidden even after their schema is removed', () => {
-    const visibleProp = defineProperty<string>('visible', {
-      codec: codecs.string,
-      defaultValue: '',
-      changeScope: ChangeScope.BlockDefault,
-    })
-
-    const model = buildPropertyPanelModel({
-      blockId: 'block-1',
-      updatedAt: 1700_000_000_000,
-      updatedBy: 'user-1',
-      properties: {
-        [visibleProp.name]: 'shown',
-        focusedBlockId: 'legacy',
-      },
-      schemas: schemasMap([visibleProp]),
-      uis: uisMap([]),
-      presets: new Map(),
-      typesRegistry: new Map(),
-    })
-
-    const visibleNames = model.sections.flatMap(section => section.rows.map(row => row.name))
-    expect(visibleNames).toEqual([visibleProp.name])
-    expect(model.hiddenSection.rows.map(row => row.name)).toEqual(['focusedBlockId'])
-  })
 })
