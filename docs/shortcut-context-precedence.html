@@ -83,6 +83,17 @@ latest-activated context wins" is <em>already the law</em> for one dispatch path
 the inconsistent one. Any fix should make the two paths agree.
 </div>
 
+<div class="note">
+<strong>But the double-fire accidentally provides one real capability: conditional fall-through.</strong>
+Because both handlers run today, a context can bind a chord, check a condition in its handler, and
+<em>no-op</em> — and the lower context's handler <em>still ran</em>. The event "fell through" by accident.
+A naïve single-winner fix <strong>removes</strong> this: if only the winner installs the chord and its
+handler bails, nothing else happens — the lower layer never had a listener. Whether that capability is
+worth keeping is the hinge between the two implementation strategies (activation-time vs fire-time
+resolution) and gets its own option below — see <a href="#declinable">Option D</a>. It is not a footnote;
+it changes the recommendation.
+</div>
+
 <h2>What we learned looking with new eyes (codebase facts)</h2>
 <table>
 <tr><th>Fact</th><th>Where</th><th>Why it matters here</th></tr>
@@ -114,9 +125,11 @@ the inconsistent one. Any fix should make the two paths agree.
 <tr>
   <td><code>eventFilter</code> is OR-only / opt-in</td>
   <td><span class="filepath">HotkeyReconciler.tsx:86–96</span></td>
-  <td>A context's filter can only <em>expand</em> what it accepts; no context can decline a chord and
-      defer it to a lower layer. <strong>This is the invariant that makes activation-time resolution
-      safe</strong> (there is never anything to "fall through" to). Load-bearing — see Open questions.</td>
+  <td>A context's filter can only <em>expand</em> what it accepts; it can pre-decide "I want this event"
+      but cannot <em>decline a chord after inspecting it and defer to a lower layer</em>. So there is no
+      <em>declarative</em> fall-through today — the only fall-through that exists is the accidental
+      handler-level one the double-fire provides. If we want declinable handling as a real feature, it has
+      to come from the dispatch model (Option D), not from <code>eventFilter</code>.</td>
 </tr>
 <tr>
   <td>The agenda plugin is <em>not</em> in this repo</td>
@@ -233,47 +246,112 @@ old doc's Model B.)</p>
       ship both.</li>
 </ul>
 
+<h3 id="declinable">Option D — Declinable resolution (fall-through)</h3>
+<p>The previous options answer "<em>who</em> wins a chord." This one answers a different, partly
+orthogonal question: "<em>when</em> does the winner get to say <em>not me — let the next layer have it</em>?"
+It's the one capability today's accidental double-fire actually provides (a higher context's handler can
+no-op and the lower one still ran), and a naïve single-winner fix silently deletes it.</p>
+
+<p>The model: dispatch consults active contexts in precedence order (whatever 0/A picks). The first that
+binds the chord runs — but its handler may report <strong>"not handled,"</strong> and dispatch then tries
+the next candidate in order. No double-fire (at most one handler ultimately acts), but conditional
+yielding works. This is the dispatch-gating sibling of <code>canRun</code>: a predicate that, when it
+declines, <em>defers</em> instead of <em>suppressing</em>.</p>
+<pre><code>// handler returns false / "not handled" => dispatch falls through to next candidate
+handler: (deps, event) =&gt; {
+  if (!surfaceWantsThisKeyRightNow(deps)) return false   // let normal-mode have it
+  doSurfaceThing(deps)
+  return true
+}</code></pre>
+<p>Precedent: Emacs (a command keymap entry of <code>nil</code> / a command that signals it didn't handle
+falls through to the next keymap), CodeMirror (a keymap <code>run</code> returning <code>false</code> tries
+the next handler). This is the standard layered-keymap escape valve.</p>
+<ul class="tight">
+  <li class="pro">Preserves the only genuine capability the double-fire gave us, but cleanly (one effect, not two).</li>
+  <li class="pro">Composes with A — precedence picks the order; decline walks down that order. They're different axes.</li>
+  <li class="pro">Lets a high-priority surface own a key <em>conditionally</em> without re-implementing the
+      lower layer's behavior for the cases it wants to pass through.</li>
+  <li class="con"><strong>Forces fire-time resolution.</strong> The winner is now per-<em>event</em> (depends on what
+      handlers return), so you can't pre-resolve at activation time by skipping installs. That means a real
+      dispatch coordinator — a single keydown listener that owns chord → ordered-candidates → run-until-handled —
+      replacing today's independent per-action listeners. Bigger change than the activation-time dedup.</li>
+  <li class="con">Handler contract grows a return value (<code>boolean</code> / "handled"). Existing handlers
+      return <code>void | Promise&lt;void&gt;</code>; "no return = handled" keeps them working, but async handlers
+      that want to decline must resolve to the sentinel, and "did it handle?" for an async handler is awkward
+      (you'd likely restrict decline to a synchronous pre-check).</li>
+  <li class="meh">Only worth it if surfaces actually need to <em>conditionally</em> yield a key they bind.
+      If every case is "this layer wins these keys, full stop," D is unnecessary machinery and activation-time
+      wins on simplicity.</li>
+</ul>
+
+<div class="axes">
+<strong>Two axes, not five rivals.</strong> Winner-selection (0 / A / B / C) and resolution-strategy
+(activation-time vs fire-time/declinable, i.e. whether D is in) are independent. The real choice is a
+2×2: <em>{last-wins | priority}</em> × <em>{activation-time | fire-time-declinable}</em>. <code>modal</code>
+sits above both as the "own everything, even unbound" tier and is unaffected.
+</div>
+
 <h2>Scorecard</h2>
+<p><small>0 / A / B / C are winner-selection rules; D is a resolution-strategy that layers on top of
+any of them. The column shows D combined with priority (A) since that's the live candidate.</small></p>
 <table class="scorecard">
-<tr><th></th><th>0 · last-wins</th><th>A · priority</th><th>B · supersedes</th><th>C · shadowChordsFrom</th></tr>
-<tr><td>Closes double-fire</td><td class="win">yes</td><td class="win">yes</td><td class="win">yes</td><td class="win">yes</td></tr>
-<tr><td>Fixes early/late inversion</td><td class="lose">no</td><td class="win">yes</td><td class="win">yes</td><td class="win">yes</td></tr>
-<tr><td>Additive for non-bound keys</td><td class="win">yes</td><td class="win">yes</td><td class="win">yes</td><td class="win">yes</td></tr>
-<tr><td>New config surface</td><td class="win">none</td><td class="meh">1 number</td><td class="lose">nested map</td><td class="meh">1 list</td></tr>
-<tr><td>Avoids host-name coupling</td><td class="win">yes</td><td class="win">yes</td><td class="lose">no</td><td class="lose">no</td></tr>
-<tr><td>Handles <code>d</code> vs <code>d d</code></td><td class="lose">n/a</td><td class="meh">no*</td><td class="win">yes</td><td class="meh">no*</td></tr>
-<tr><td>Reads locally (1 file)</td><td class="lose">no (timing)</td><td class="win">yes</td><td class="win">yes</td><td class="meh">mostly</td></tr>
+<tr><th></th><th>0 · last-wins</th><th>A · priority</th><th>B · supersedes</th><th>C · shadowChordsFrom</th><th>D · declinable (+A)</th></tr>
+<tr><td>Closes double-fire</td><td class="win">yes</td><td class="win">yes</td><td class="win">yes</td><td class="win">yes</td><td class="win">yes</td></tr>
+<tr><td>Fixes early/late inversion</td><td class="lose">no</td><td class="win">yes</td><td class="win">yes</td><td class="win">yes</td><td class="win">yes</td></tr>
+<tr><td>Additive for non-bound keys</td><td class="win">yes</td><td class="win">yes</td><td class="win">yes</td><td class="win">yes</td><td class="win">yes</td></tr>
+<tr><td>Conditional fall-through</td><td class="lose">no</td><td class="lose">no</td><td class="lose">no</td><td class="lose">no</td><td class="win">yes</td></tr>
+<tr><td>New config surface</td><td class="win">none</td><td class="meh">1 number</td><td class="lose">nested map</td><td class="meh">1 list</td><td class="meh">1 number + handler return</td></tr>
+<tr><td>Avoids host-name coupling</td><td class="win">yes</td><td class="win">yes</td><td class="lose">no</td><td class="lose">no</td><td class="win">yes</td></tr>
+<tr><td>Handles <code>d</code> vs <code>d d</code></td><td class="lose">n/a</td><td class="meh">no*</td><td class="win">yes</td><td class="meh">no*</td><td class="meh">no*</td></tr>
+<tr><td>Implementation cost</td><td class="win">dedup in loop</td><td class="win">dedup in loop</td><td class="win">dedup in loop</td><td class="win">dedup in loop</td><td class="lose">new dispatch coordinator</td></tr>
+<tr><td>Reads locally (1 file)</td><td class="lose">no (timing)</td><td class="win">yes</td><td class="win">yes</td><td class="meh">mostly</td><td class="win">yes</td></tr>
 </table>
 <p><small>* exact-chord granularity; no in-repo case needs cross-granularity shadowing today.</small></p>
 
 <div class="verdict">
-<strong>Recommendation: Option 0 as the default + Option A as the escape hatch.</strong>
-<ol style="margin:.5rem 0 0">
-  <li><strong>Fix the double-fire</strong> by installing a single winner per chord in the existing
-      reconcile loop. This alone is most of the value and is unambiguously a bug fix.</li>
-  <li><strong>Winner = shared comparator</strong> <code>(priority desc, then activation-recency desc)</code>,
-      factored once and used by <em>both</em> the keyboard dedup and <code>getActiveActionById</code>, so the
-      two dispatch paths can't diverge.</li>
-  <li><strong><code>priority?: number</code></strong> on <code>ActionContextConfig</code>, default <code>0</code>.
-      The reporting surface sets it above <code>normal-mode</code>; the 8 skip-decorators collapse to one line.</li>
-  <li><strong>Keep <code>modal</code></strong> as the extreme tier (own all chords, even unbound). Conceptually
-      "very high priority + suppress the rest."</li>
-  <li><strong>Drop B and C.</strong> C is A with coupling. B is suppression, not precedence — keep it in
-      reserve only if a real same-key, action-targeted, cross-granularity case appears in-repo (none today).</li>
-</ol>
-Skip-decorators were the wrong layer: imperative no-ops fighting the architecture, and <code>canRun</code>
-can't gate dispatch anyway. If a genuine static "remove this action everywhere" need arises, the clean tool
-is letting <code>ActionDecorator.decorate</code> return <code>null</code> (parity with
-<code>ActionOverride.apply</code>) — a separate concern from precedence.
+<strong>Recommendation hinges on one question: do surfaces need to <em>conditionally</em> yield a chord
+they bind?</strong>
+<p style="margin:.5rem 0">Common to both answers: fix the double-fire (single winner per chord), winner =
+shared comparator <code>(priority desc, then activation-recency desc)</code> used by <em>both</em> the keyboard
+path and <code>getActiveActionById</code>, add <code>priority?: number</code> (default <code>0</code>) so the
+reporting surface outranks <code>normal-mode</code> and the 8 skip-decorators collapse to one line, and keep
+<code>modal</code> as the extreme tier. Drop B (suppression, not precedence; name-coupled) and C (A with coupling).</p>
+<p style="margin:.5rem 0"><strong>If NO — every case is "this layer wins these keys, full stop":</strong>
+ship <strong>A + activation-time</strong> resolution (dedup in the reconcile loop that already runs). Smallest
+change; no handler-contract churn. This is the default recommendation absent evidence otherwise.</p>
+<p style="margin:.5rem 0 0"><strong>If YES — a surface wants to own a key sometimes and pass it through
+otherwise:</strong> ship <strong>A + D (fire-time, declinable)</strong>. Costs a real dispatch coordinator and
+a handler return value, but it's the clean version of the capability the double-fire gives us by accident, and
+retrofitting it later means redoing the dispatch path. <em>This is the open decision for the reader</em> — see
+the question at the top of Open questions.</p>
+</div>
+
+<div class="note">
+Skip-decorators were the wrong layer regardless: imperative no-ops fighting the architecture, and
+<code>canRun</code> can't gate dispatch anyway. Note that <strong>Option D is the principled replacement for
+exactly what the skip-decorators were faking</strong> — "run my handler, decide it doesn't apply, let the host
+act" is precisely conditional fall-through, done in dispatch instead of by mutating the action catalog. If the
+8 decorators are <em>unconditional</em> no-ops (always suppress host), A alone replaces them; if any are
+<em>conditional</em> (suppress host only sometimes), that's the in-repo evidence that D is needed. <strong>Worth
+auditing those decorators before deciding.</strong> Separately, for a genuine static "remove this action
+everywhere" need, the clean tool is letting <code>ActionDecorator.decorate</code> return <code>null</code>
+(parity with <code>ActionOverride.apply</code>).
 </div>
 
 <h2>Open questions / risks</h2>
 <ul class="tight">
-  <li><strong>The <code>eventFilter</code> invariant is load-bearing.</strong> Activation-time resolution
-      is correct <em>only because</em> no context can decline-and-defer a chord. If someone later writes a
-      filter meant to scope a chord down and hand it to a lower layer, pre-resolution breaks (the loser is
-      already uninstalled) and you'd need fire-time resolution. Document this next to the dedup so a future
-      reader knows what they'd be voiding.</li>
+  <li><strong>THE decision: is conditional fall-through (Option D) needed?</strong> Everything else is
+      settled; this isn't. Decider: audit the 8 skip-decorators on the user's surface. If they always no-op the
+      host action when the surface is active → unconditional → A alone suffices, ship activation-time. If any
+      no-op the host <em>only under a condition</em> (and otherwise want the host to run) → that's conditional
+      fall-through in disguise → ship D (fire-time). Picking activation-time and discovering a conditional case
+      later is a dispatch-path rewrite, so decide this deliberately, not by default.</li>
+  <li><strong>The <code>eventFilter</code> invariant is load-bearing for activation-time.</strong> Pre-resolution
+      is correct <em>only because</em> no context can decline-and-defer a chord today. If we ship activation-time
+      and someone later writes a filter (or handler) meant to scope a chord down and hand it to a lower layer,
+      pre-resolution breaks (the loser is already uninstalled). That's the same wall as the D question — Option D
+      <em>is</em> the supported way to do declinable handling. Document the invariant next to the dedup so a future
+      reader knows shipping declinable handling means moving to fire-time, not bolting onto the filter.</li>
   <li><strong>Chord canonicalization.</strong> Grouping by chord needs the same normalization
       <code>keybindingConflicts.ts</code> already does (alternatives like <code>['$mod+z','ctrl+z']</code>,
       code-form chords). Reuse it; don't reinvent. (Not unique to this approach — any single-winner scheme
@@ -287,16 +365,32 @@ is letting <code>ActionDecorator.decorate</code> return <code>null</code> (parit
       action-targeted suppression, add it then as a narrow supplement — don't pre-build it.</li>
 </ul>
 
-<h2>Rough surface area (if we proceed with 0 + A)</h2>
+<h2>Rough surface area</h2>
+<p><strong>Shared by both strategies (A core):</strong></p>
 <ul class="tight">
   <li><code>types.ts</code> — add <code>priority?: number</code> to <code>ActionContextConfig</code> (+ doc comment).</li>
   <li><code>effectiveActions.ts</code> — extract <code>compareContexts</code>; rewrite
       <code>getActiveActionById</code> to use it.</li>
+</ul>
+<p><strong>If activation-time (A only):</strong></p>
+<ul class="tight">
   <li><code>HotkeyReconciler.tsx</code> — per-chord dedup in the install loop using the shared comparator;
-      document the <code>eventFilter</code> invariant.</li>
+      install only the winner; document the <code>eventFilter</code> invariant.</li>
   <li>Tests — higher-priority context wins a same-key collision even when activated earlier; deactivating it
       restores the lower binding; equal priority falls back to last-wins; <code>modal</code> still suppresses
       non-colliding chords; <code>global</code> survives.</li>
+</ul>
+<p><strong>If fire-time (A + D):</strong></p>
+<ul class="tight">
+  <li><code>types.ts</code> — widen <code>ActionHandler</code> return to allow a "not handled" sentinel
+      (e.g. <code>boolean</code>; <code>void</code> = handled, for back-compat). Decide async semantics
+      (likely: decline must be a synchronous decision).</li>
+  <li><code>HotkeyReconciler.tsx</code> — replace independent per-action <code>window</code> listeners with a
+      single keydown/keyup coordinator: one listener per phase that maps the event's chord to candidates in
+      precedence order and runs until one reports handled. Preserve <code>withRecoveredLetterKey</code>,
+      <code>shouldHandleEvent</code>, hold-binding handling, and <code>eventOptions</code> precedence.</li>
+  <li>Tests — all of the activation-time tests, plus: a declining winner falls through to the next candidate;
+      a handling winner suppresses the rest; decline order respects priority then recency.</li>
 </ul>
 <p><small>Per repo testing guidance: no tests that merely re-state default binding strings.</small></p>
 
