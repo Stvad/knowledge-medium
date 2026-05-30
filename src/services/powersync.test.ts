@@ -14,12 +14,17 @@ import {
   __applyBlockPatchesRpcForTest,
   __applyCompactedBlockOperationsForTest,
   __compactBlockCrudEntriesForTest,
+  __encryptUploadOpsForTest,
   __orderedBlockUpsertsForTest,
   __uploadTransactionsWithFallbackForTest,
   type BlockUploadSink,
   type CompactedBlockOperation,
+  type GetWorkspaceMode,
   type UploadDeps,
 } from './powersync'
+import type { GetCek } from '@/sync/transform'
+import { generateWorkspaceKeyBytes, importWorkspaceKey } from '@/sync/crypto/workspaceKey'
+import { hasEnvelopePrefix } from '@/sync/crypto/envelope'
 
 const put = (
   clientId: number,
@@ -258,7 +263,74 @@ const collectCalls = () => {
   return {applyOperations, recordRejection}
 }
 
+describe('encryptUploadOps (encrypt-on-upload)', () => {
+  const create = (id: string, payload: Record<string, unknown>): CompactedBlockOperation =>
+    ({kind: 'create', id, payload: {id, ...payload}, order: 0})
+  const patchOp = (id: string, payload: Record<string, unknown>): CompactedBlockOperation =>
+    ({kind: 'patch', id, payload, order: 0})
+
+  it('is identity for plaintext workspaces and passes deletes through', async () => {
+    const getCek: GetCek = async () => null
+    const ops: CompactedBlockOperation[] = [
+      create('a', {workspace_id: 'w', content: 'hi'}),
+      {kind: 'delete', id: 'b', order: 1},
+    ]
+    const out = await __encryptUploadOpsForTest(ops, () => 'none', getCek)
+    expect(out).toEqual(ops)
+  })
+
+  it('seals content columns for e2ee creates and patches, leaving id + workspace_id clear', async () => {
+    const key = await importWorkspaceKey(generateWorkspaceKeyBytes())
+    const getCek: GetCek = async () => key
+    const getMode: GetWorkspaceMode = () => 'e2ee'
+
+    const out = await __encryptUploadOpsForTest(
+      [
+        create('a', {workspace_id: 'w', content: 'plain', properties_json: '{}', references_json: '[]'}),
+        patchOp('b', {workspace_id: 'w', content: 'edit'}),
+      ],
+      getMode, getCek,
+    )
+
+    const c = out[0] as Extract<CompactedBlockOperation, {kind: 'create'}>
+    expect(c.payload.id).toBe('a')
+    expect(c.payload.workspace_id).toBe('w')
+    expect(hasEnvelopePrefix(c.payload.content as string)).toBe(true)
+    expect(hasEnvelopePrefix(c.payload.properties_json as string)).toBe(true)
+
+    const p = out[1] as Extract<CompactedBlockOperation, {kind: 'patch'}>
+    expect(hasEnvelopePrefix(p.payload.content as string)).toBe(true)
+  })
+
+  it('passes through an op missing workspace_id (cannot be e2ee-routed)', async () => {
+    const getCek: GetCek = async () => { throw new Error('getCek must not be called') }
+    const ops: CompactedBlockOperation[] = [patchOp('a', {content: 'x'})]
+    const out = await __encryptUploadOpsForTest(ops, () => 'e2ee', getCek)
+    expect(out).toEqual(ops)
+  })
+})
+
 describe('uploadTransactionsWithFallback', () => {
+  it('applies encryptOps to the compacted batch before handing it to applyOperations', async () => {
+    const {applyOperations, recordRejection} = collectCalls()
+    // encryptOps returns its own transformed ops; assert those exact ops are
+    // what applyOperations receives (i.e. encryption sits in the pipeline).
+    const sealed: CompactedBlockOperation[] = [
+      {kind: 'create', id: 'b1', order: 0, payload: {id: 'b1', workspace_id: 'w', content: 'SEALED'}},
+    ]
+    const encryptOps = vi.fn(async () => sealed)
+    const tx = fakeTx(1, [new CrudEntry(1, UpdateType.PUT, 'blocks', 'b1', 1, {workspace_id: 'w', content: 'plain'})])
+
+    await __uploadTransactionsWithFallbackForTest(
+      fakeDb,
+      [tx] as unknown as CrudTransaction[],
+      {applyOperations, recordRejection, encryptOps},
+    )
+
+    expect(encryptOps).toHaveBeenCalledTimes(1)
+    expect(applyOperations.mock.calls[0]![1]).toBe(sealed)
+  })
+
   it('happy path: applies one batched call and completes the last tx (drains the whole batch)', async () => {
     // The fast path is unchanged from the original handler — one
     // compaction across all txs, one Supabase round trip, mark the
