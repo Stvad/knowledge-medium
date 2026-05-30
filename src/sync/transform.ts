@@ -93,3 +93,35 @@ export const decodeFromWire = <T extends WireBlockColumns>(
   mode: SyncMode,
   getCek: GetCek,
 ): Promise<T> => transformContentColumns(row, mode, getCek, open)
+
+/**
+ * Encrypt the content columns PRESENT in an upload payload — app → wire for the
+ * Layout B upload path (§9.2). Unlike {@link encodeForWire}, which takes a full
+ * `WireBlockColumns` row, this seals only whichever of the three content
+ * columns appear, so a CREATE (full row) seals all three while a content-only
+ * PATCH seals just `content`. Identifiers and metadata columns
+ * (parent_id, order_key, timestamps, …) are passed through in the clear.
+ *
+ * `id` and `workspaceId` (always present on every PATCH per the upload trigger)
+ * drive the per-column AAD, identical to {@link encodeForWire}'s binding, so a
+ * row sealed on upload opens cleanly when {@link decodeFromWire} processes the
+ * full downloaded row. Identity for plaintext.
+ */
+export const encryptUploadColumns = async (
+  id: string,
+  workspaceId: string,
+  payload: Record<string, unknown>,
+  mode: SyncMode,
+  getCek: GetCek,
+): Promise<Record<string, unknown>> => {
+  if (mode === 'none') return payload
+  const key = await requireKey(getCek, workspaceId)
+  const out: Record<string, unknown> = { ...payload }
+  for (const column of CONTENT_COLUMNS) {
+    const value = out[column]
+    if (typeof value === 'string') {
+      out[column] = await seal(key, value, contentAad(id, workspaceId, column))
+    }
+  }
+  return out
+}
