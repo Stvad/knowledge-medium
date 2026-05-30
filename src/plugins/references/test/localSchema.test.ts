@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite'
 import {
   BLOCK_STORAGE_COLUMNS,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
+  CREATE_BLOCKS_SYNCED_TABLE_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
 } from '@/data/blockSchema'
@@ -77,6 +78,9 @@ const setupDb = (): TestDb => {
   `)
 
   db.exec(CREATE_BLOCKS_TABLE_SQL)
+  // Layout B staging table — the blocks_synced change-capture triggers in
+  // CLIENT_SCHEMA_STATEMENTS attach to it, so it must exist first.
+  db.exec(CREATE_BLOCKS_SYNCED_TABLE_SQL)
   db.exec(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   db.exec(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
   for (const stmt of CLIENT_SCHEMA_STATEMENTS) db.exec(stmt)
