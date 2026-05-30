@@ -9,7 +9,7 @@ import {
   isCollapsedProp,
   focusBlock,
   isEditingProp,
-  peekFocusedBlockId,
+  peekFocusedBlockLocation,
   requestEditorFocus,
   setIsEditing,
   showPropertiesProp,
@@ -128,10 +128,10 @@ export const extendSelectionDown = async (uiStateBlock: Block, repo: Repo) => {
   const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
   if (!topLevelBlockId) return
 
-  const focusedBlockId = peekFocusedBlockId(uiStateBlock)
-  if (!focusedBlockId) return
+  const focusedId = peekFocusedBlockLocation(uiStateBlock)?.blockId
+  if (!focusedId) return
 
-  const nextBlock = await nextVisibleBlock(repo.block(focusedBlockId), topLevelBlockId)
+  const nextBlock = await nextVisibleBlock(repo.block(focusedId), topLevelBlockId)
   if (!nextBlock) return
 
   await extendSelection(nextBlock.id, uiStateBlock, repo)
@@ -141,10 +141,10 @@ export const extendSelectionUp = async (uiStateBlock: Block, repo: Repo) => {
   const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
   if (!topLevelBlockId) return
 
-  const focusedBlockId = peekFocusedBlockId(uiStateBlock)
-  if (!focusedBlockId) return
+  const focusedId = peekFocusedBlockLocation(uiStateBlock)?.blockId
+  if (!focusedId) return
 
-  const prevBlock = await previousVisibleBlock(repo.block(focusedBlockId), topLevelBlockId)
+  const prevBlock = await previousVisibleBlock(repo.block(focusedId), topLevelBlockId)
   if (!prevBlock) return
 
   await extendSelection(prevBlock.id, uiStateBlock, repo)

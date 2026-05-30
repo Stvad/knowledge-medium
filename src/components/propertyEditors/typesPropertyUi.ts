@@ -6,7 +6,6 @@ import {
   createdAtProp,
   editorFocusRequestProp,
   editorSelection,
-  focusedBlockIdProp,
   focusedBlockLocationProp,
   isCollapsedProp,
   isEditingProp,
@@ -34,7 +33,6 @@ const hiddenKernelPropertyUis = [
   editorFocusRequestProp,
   editorSelection,
   focusedBlockLocationProp,
-  focusedBlockIdProp,
   isCollapsedProp,
   isEditingProp,
   // Schema-block config is edited through the property-schema block

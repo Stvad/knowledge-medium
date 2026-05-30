@@ -136,7 +136,7 @@ Implications:
 
 Already partially shipped in step 3 as in-memory snapshots on panel-history entries. Promote to DB-backed:
 
-- `focusedBlockIdProp` — already a UiState property on panel rows. Keep.
+- `focusedBlockLocationProp` — UiState property on panel rows. It superseded the older unscoped `focusedBlockId` key.
 - `scrollTopProp` — new. UiState property on panel rows. Written debounced on scroll (after scroll-stop, ~200ms) and on `visibilitychange`. Read on mount, applied to scroll ref after layout.
 
 Reload-survival of focus + scroll is now free, since DB rows persist and `layoutSessionId` scopes them to the layout session.
@@ -153,7 +153,7 @@ Interaction with browser history (now that intra-panel nav pushes too):
   - If new block matches top of back stack: pop back, push old to forward; the matched entry's `VisitState` drives the restore.
   - If new block matches top of forward stack: pop forward, push old to back; same VisitState restore.
   - Else (stack diverged from URL — user jumped via external nav): drop the local stack, start fresh from current. VisitState for that panel is lost on this hop; not regression vs today.
-- **VisitState restoration splits like step 3 does:** `focusedBlockIdProp` is written synchronously in the same `applyCurrentUrl` tx that sets `topLevelBlockIdProp`, so the new render starts with the right cursor (no mid-render flash). `scrollTop` is queued via `panelHistory.enqueueRestore(rowId, {scrollTop})` and consumed by PanelRenderer's existing post-layout `consumeRestore` effect — scroll has to wait for the new content to lay out. This is exactly the split `goBackInPanel` already uses for chevron clicks; we extend the same write pattern to the popstate path. (`consumeRestore` doesn't need to grow new responsibilities — it stays scroll-only.)
+- **VisitState restoration splits like step 3 does:** `focusedBlockLocationProp` is written synchronously in the same `applyCurrentUrl` tx that sets `topLevelBlockIdProp`, so the new render starts with the right cursor (no mid-render flash). `scrollTop` is queued via `panelHistory.enqueueRestore(rowId, {scrollTop})` and consumed by PanelRenderer's existing post-layout `consumeRestore` effect — scroll has to wait for the new content to lay out. This is exactly the split `goBackInPanel` already uses for chevron clicks; we extend the same write pattern to the popstate path. (`consumeRestore` doesn't need to grow new responsibilities — it stays scroll-only.)
 
 This keeps step 3's "focused block + scroll restore on back" guarantee intact for the now-primary path (browser back over intra-panel nav). Promoting the stack to DB rows for cross-reload survival: deferred, same trade-off as before (matches browser tab behavior).
 
@@ -260,7 +260,7 @@ The reviewer's worry — "observer can't tell open-panel from reorder, or close 
 | Diff (prev rows → next rows) for `(workspaceId, layoutSessionId)` | History mode |
 |---|---|
 | ordered list of `topLevelBlockId`s changed (the URL-encoded view of the rows) | `pushState` |
-| only other props changed (`scrollTop`, `focusedBlockId`, …) | no URL write |
+| only other props changed (`scrollTop`, `focusedBlockLocation`, …) | no URL write |
 | computed URL already matches `location.hash` | no-op (idempotent) |
 
 (Row IDs themselves are not URL-visible — they're identity for state preservation, not part of the URL. The URL only encodes the ordered `topLevelBlockId`s.)

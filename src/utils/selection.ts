@@ -3,7 +3,6 @@ import type { Repo } from '../data/repo'
 import {
   focusedBlockLocationProp,
   isCollapsedProp,
-  peekFocusedBlockId,
   peekFocusedBlockLocation,
   selectionStateProp,
   topLevelBlockIdProp,
@@ -311,12 +310,12 @@ export async function extendSelection(
   repo: Repo,
 ): Promise<void> {
   const currentState = uiStateBlock.peekProperty(selectionStateProp)
-  const focusedBlockId = peekFocusedBlockId(uiStateBlock)
+  const focusedId = peekFocusedBlockLocation(uiStateBlock)?.blockId
   const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
 
   if (!topLevelBlockId) return
 
-  const currentAnchor = currentState?.anchorBlockId || focusedBlockId
+  const currentAnchor = currentState?.anchorBlockId || focusedId
   if (!currentAnchor) return
 
   const rangeIds = await getBlocksInRange(currentAnchor, targetBlockId, topLevelBlockId, repo)

@@ -5,7 +5,6 @@ import { ChangeScope } from '@/data/api'
 import { PANEL_STACK_TYPE, PANEL_TYPE } from '@/data/blockTypes'
 import {
   activePanelIdProp,
-  focusedBlockIdProp,
   focusedBlockLocationProp,
   scrollTopProp,
   topLevelBlockIdProp,
@@ -475,7 +474,6 @@ export const reconcilePanelRows = async (
             blockId,
             renderScopeId: outlineRenderScopeId(blockId),
           })
-          await tx.setProperty(slot.row.id, focusedBlockIdProp, undefined)
           await tx.setProperty(slot.row.id, scrollTopProp, restored?.state?.scrollTop ?? 0)
         }
       }

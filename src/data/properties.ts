@@ -46,19 +46,13 @@ export const topLevelBlockIdProp = defineProperty<string | undefined>('topLevelB
   changeScope: ChangeScope.UiState,
 })
 
-// Legacy persisted focus shape. Kept only so older ui-state rows can be
-// decoded into `focusedBlockLocationProp`; production writes clear it.
-export const focusedBlockIdProp = defineProperty<string | undefined>('focusedBlockId', {
-  codec: codecs.optionalString,
-  defaultValue: undefined,
-  changeScope: ChangeScope.UiState,
-})
-
 export interface FocusedBlockLocation {
   blockId: string
   renderScopeId: string
 }
 
+// Focus is persisted as a rendered location. Retired legacy `focusedBlockId`
+// keys are ignored so stale state cannot compete with this scoped value.
 export const focusedBlockLocationProp = defineProperty<FocusedBlockLocation | undefined>('focusedBlockLocation', {
   codec: codecs.optionalIdentity<FocusedBlockLocation>(),
   defaultValue: undefined,
@@ -296,28 +290,11 @@ export const focusedBlockLocationFromProperties = (
   properties: Record<string, unknown> | undefined,
 ): FocusedBlockLocation | undefined => {
   if (!properties) return undefined
-
-  const location = decodeFocusedBlockLocation(properties[focusedBlockLocationProp.name])
-  if (location) return location
-
-  const legacyBlockId = properties[focusedBlockIdProp.name]
-  if (typeof legacyBlockId !== 'string' || !legacyBlockId) return undefined
-  const topLevelBlockId = properties[topLevelBlockIdProp.name]
-  return {
-    blockId: legacyBlockId,
-    renderScopeId: outlineRenderScopeId(
-      typeof topLevelBlockId === 'string' && topLevelBlockId
-        ? topLevelBlockId
-        : legacyBlockId,
-    ),
-  }
+  return decodeFocusedBlockLocation(properties[focusedBlockLocationProp.name])
 }
 
 export const peekFocusedBlockLocation = (uiStateBlock: Block): FocusedBlockLocation | undefined =>
   focusedBlockLocationFromProperties(uiStateBlock.peek()?.properties)
-
-export const peekFocusedBlockId = (uiStateBlock: Block): string | undefined =>
-  peekFocusedBlockLocation(uiStateBlock)?.blockId
 
 export const isFocusedBlock = (
   uiStateBlock: Block,
@@ -379,7 +356,6 @@ export const focusBlock = async (
       isEditingFromProperties(current?.properties)
 
     await tx.setProperty(uiStateBlock.id, focusedBlockLocationProp, location)
-    await tx.setProperty(uiStateBlock.id, focusedBlockIdProp, undefined)
     await tx.setProperty(uiStateBlock.id, isEditingProp, preserveCurrentEditMode || targetEdit)
   }, {scope: ChangeScope.UiState, description: 'focus block'})
 }
@@ -410,7 +386,6 @@ export const KERNEL_PROPERTY_SCHEMAS: ReadonlyArray<PropertySchema<unknown>> = [
   isEditingProp,
   topLevelBlockIdProp,
   focusedBlockLocationProp,
-  focusedBlockIdProp,
   activePanelIdProp,
   scrollTopProp,
   editorSelection,

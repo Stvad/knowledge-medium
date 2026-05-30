@@ -9,7 +9,6 @@ import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import {
   activePanelIdProp,
-  focusedBlockIdProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
 import { BlockContextProvider } from '@/context/block'
@@ -20,7 +19,6 @@ import { BlockComponent } from '@/components/BlockComponent.js'
 import { useActionContext } from '@/shortcuts/useActionContext'
 import { ActionContextTypes } from '@/shortcuts/types'
 import { panelHistory } from '@/utils/panelHistory'
-import { outlineRenderScopeId } from '@/utils/renderScope'
 
 const repoRef = vi.hoisted(() => ({
   current: undefined as Repo | undefined,
@@ -239,14 +237,18 @@ describe('PanelRenderer', () => {
     expect(vi.mocked(useActionContext).mock.calls.length).toBe(0)
   })
 
-  it('captures legacy focused block ids as scoped locations for history snapshots', async () => {
-    await env.panel.set(focusedBlockIdProp, 'legacy-child')
+  it('ignores retired focused block ids for history snapshots', async () => {
+    await env.repo.tx(async tx => {
+      await tx.update(env.panel.id, {
+        properties: {
+          [topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('page-a'),
+          focusedBlockId: 'legacy-child',
+        },
+      })
+    }, {scope: ChangeScope.UiState, description: 'seed retired focusedBlockId'})
     renderPanel(false)
     await screen.findByTestId('panel-top-level-block')
 
-    expect(panelHistory.snapshot(env.panel.id)?.focusedLocation).toEqual({
-      blockId: 'legacy-child',
-      renderScopeId: outlineRenderScopeId('page-a'),
-    })
+    expect(panelHistory.snapshot(env.panel.id)?.focusedLocation).toBeUndefined()
   })
 })

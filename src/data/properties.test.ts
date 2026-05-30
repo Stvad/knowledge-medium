@@ -2,7 +2,13 @@
 
 import { describe, expect, it } from 'vitest'
 import type { BlockData, ChangedRow } from '@/data/api'
-import { addedTypes, removedTypes, typesProp } from '@/data/properties'
+import {
+  addedTypes,
+  focusedBlockLocationFromProperties,
+  focusedBlockLocationProp,
+  removedTypes,
+  typesProp,
+} from '@/data/properties'
 
 const blockData = (types: readonly string[]): BlockData => ({
   id: 'b1',
@@ -70,5 +76,26 @@ describe('addedTypes / removedTypes', () => {
     const r: ChangedRow = {id: 'b1', before: blockData(['task']), after}
     expect(removedTypes(r)).toEqual(['task'])
     expect(addedTypes(r)).toEqual([])
+  })
+})
+
+describe('focusedBlockLocationFromProperties', () => {
+  it('reads focusedBlockLocation from persisted properties', () => {
+    expect(focusedBlockLocationFromProperties({
+      [focusedBlockLocationProp.name]: {
+        blockId: 'current',
+        renderScopeId: 'outline:root',
+      },
+    })).toEqual({
+      blockId: 'current',
+      renderScopeId: 'outline:root',
+    })
+  })
+
+  it('ignores retired focusedBlockId state', () => {
+    expect(focusedBlockLocationFromProperties({
+      focusedBlockId: 'legacy',
+      topLevelBlockId: 'root',
+    })).toBeUndefined()
   })
 })

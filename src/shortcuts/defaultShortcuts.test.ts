@@ -12,7 +12,7 @@ import {
   focusBlock,
   focusedBlockLocationProp,
   isEditingProp,
-  peekFocusedBlockId,
+  peekFocusedBlockLocation,
   topLevelBlockIdProp,
 } from '@/data/properties'
 import { getLayoutSessionBlock, getUIStateBlock, getUserPrefsBlock } from '@/data/stateBlocks'
@@ -294,7 +294,7 @@ describe('default CodeMirror shortcuts', () => {
 
     const panelBlock = env.repo.block(panelId)
     await panelBlock.load()
-    expect(peekFocusedBlockId(panelBlock)).toBe(newNodeId)
+    expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe(newNodeId)
     expect(panelBlock.peekProperty(focusedBlockLocationProp)).toEqual({
       blockId: newNodeId,
       renderScopeId: outlineRenderScopeId('root'),
@@ -347,7 +347,7 @@ describe('default CodeMirror shortcuts', () => {
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
     expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
-    expect(peekFocusedBlockId(uiStateBlock)).toBe('next')
+    expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).toBe('next')
     expect(uiStateBlock.peekProperty(editorSelection)).toEqual({
       blockId: 'next',
       start: 0,
@@ -376,7 +376,7 @@ describe('default CodeMirror shortcuts', () => {
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
     expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
-    expect(peekFocusedBlockId(uiStateBlock)).toBe('prev')
+    expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).toBe('prev')
     expect(uiStateBlock.peekProperty(editorSelection)).toEqual({
       blockId: 'prev',
       start: 'previous'.length,
@@ -406,7 +406,7 @@ describe('default CodeMirror shortcuts', () => {
 
     expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
     expect(env.repo.block('empty').peek()?.deleted).toBe(true)
-    expect(peekFocusedBlockId(uiStateBlock)).toBe('prev')
+    expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).toBe('prev')
     expect(uiStateBlock.peekProperty(editorSelection)).toEqual({
       blockId: 'prev',
       start: 'previous'.length,
@@ -440,7 +440,7 @@ describe('default CodeMirror shortcuts', () => {
     expect(env.repo.block('current').peek()?.deleted).toBe(true)
     expect(await childIds('parent')).toEqual(['child'])
     expect(env.repo.block('child').peek()?.deleted).toBe(false)
-    expect(peekFocusedBlockId(uiStateBlock)).toBe('parent')
+    expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).toBe('parent')
     expect(uiStateBlock.peekProperty(editorSelection)).toEqual({
       blockId: 'parent',
       start: 'parent '.length,
@@ -508,7 +508,7 @@ describe('default CodeMirror shortcuts', () => {
     expect(await childIds('current')).toEqual(['child'])
     expect(editorView.state.doc.toString()).toBe('right')
     expect(editorView.state.selection.main.head).toBe(0)
-    expect(peekFocusedBlockId(uiStateBlock)).toBe('current')
+    expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).toBe('current')
     expect(uiStateBlock.peekProperty(editorSelection)).toEqual({
       blockId: 'current',
       start: 0,

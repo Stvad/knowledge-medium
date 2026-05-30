@@ -13,7 +13,6 @@ import type { BlockAction } from '@/shortcuts/blockActions.js'
 import { bindBlockActionContext } from '@/shortcuts/blockActions.js'
 import {
   activePanelIdProp,
-  focusedBlockIdProp,
   focusedBlockLocationProp,
   focusBlock,
   isEditingProp,
@@ -184,7 +183,6 @@ const crossPanelFocus = async (
       await tx.setProperty(layoutSessionId, activePanelIdProp, destPanelId)
     }
     await tx.setProperty(destPanelBlock.id, focusedBlockLocationProp, destLocation)
-    await tx.setProperty(destPanelBlock.id, focusedBlockIdProp, undefined)
     if (destPanelBlock.peekProperty(isEditingProp) === true) {
       await tx.setProperty(destPanelBlock.id, isEditingProp, false)
     }
