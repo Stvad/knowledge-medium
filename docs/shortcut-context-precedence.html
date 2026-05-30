@@ -315,7 +315,13 @@ they bind?</strong>
 shared comparator <code>(priority desc, then activation-recency desc)</code> used by <em>both</em> the keyboard
 path and <code>getActiveActionById</code>, add <code>priority?: number</code> (default <code>0</code>) so the
 reporting surface outranks <code>normal-mode</code> and the 8 skip-decorators collapse to one line, and keep
-<code>modal</code> as the extreme tier. Drop B (suppression, not precedence; name-coupled) and C (A with coupling).</p>
+<code>modal</code> as the extreme tier. <strong><code>global</code> is a reserved top tier, outside normal
+collision precedence:</strong> a <code>global</code> binding is never shadowed by a non-global one on a shared
+chord, regardless of priority or activation order. Without this carve-out the comparator violates the doc's own
+"app-wide chords must survive" requirement — <code>global</code> activates early and defaults to priority 0, so a
+later same-priority context would otherwise win Cmd+K / Escape. (<code>computeInstallableContexts</code> only
+keeps <code>global</code> in the install <em>set</em>; it does not rank it within a collision, so the dedup pass
+must special-case it.) Drop B (suppression, not precedence; name-coupled) and C (A with coupling).</p>
 <p style="margin:.5rem 0"><strong>If NO — every case is "this layer wins these keys, full stop":</strong>
 ship <strong>A + activation-time</strong> resolution (dedup in the reconcile loop that already runs). Smallest
 change; no handler-contract churn. This is the default recommendation absent evidence otherwise.</p>
@@ -352,6 +358,13 @@ everywhere" need, the clean tool is letting <code>ActionDecorator.decorate</code
       pre-resolution breaks (the loser is already uninstalled). That's the same wall as the D question — Option D
       <em>is</em> the supported way to do declinable handling. Document the invariant next to the dedup so a future
       reader knows shipping declinable handling means moving to fire-time, not bolting onto the filter.</li>
+  <li><strong>Global vs. a modal/high-priority context on the same chord.</strong> The "global is a reserved
+      top tier" rule says global never loses a collision — but that collides with the old doc's example of
+      scrub-mode's <code>Escape</code> overriding global's <code>Escape</code>. Reconcile explicitly: either
+      (a) global always wins and modal contexts must bind a <em>different</em> cancel key, or (b) global wins
+      except against an active <code>modal</code> context (modal is the one tier allowed to override global,
+      consistent with it already being the only thing global doesn't shadow). (b) is more flexible and matches
+      today's modal semantics; pick one and write it down so the dedup's global special-case is unambiguous.</li>
   <li><strong>Chord canonicalization is NOT free today.</strong> Grouping by chord needs equivalent
       bindings to compare equal — but <code>keybindingConflicts.ts</code> does <em>not</em> canonicalize;
       it buckets raw strings via <code>toChordArray</code>, so <code>Meta+K</code> vs <code>$mod+k</code>,
@@ -411,8 +424,15 @@ everywhere" need, the clean tool is letting <code>ActionDecorator.decorate</code
       single keydown/keyup coordinator: one listener per phase that maps the event's chord to candidates in
       precedence order and runs until one reports handled. Preserve <code>withRecoveredLetterKey</code>,
       <code>shouldHandleEvent</code>, hold-binding handling, and <code>eventOptions</code> precedence.</li>
+  <li><strong>Preserve sequence-chord state.</strong> A coordinator that maps each keydown's <em>current</em>
+      chord to candidates loses the multi-press sequence state machine tinykeys maintains today — the repo has
+      live sequence defaults (<code>d d</code>, <code>g g</code> in <span class="filepath">vim-normal-mode/actions.ts</span>).
+      The fire-time coordinator must keep a tinykeys (or equivalent) sequence matcher per candidate rather than
+      reduce each event to a single chord, or those bindings become unreachable. Test sequences explicitly under
+      the coordinator.</li>
   <li>Tests — all of the activation-time tests, plus: a declining winner falls through to the next candidate;
-      a handling winner suppresses the rest; decline order respects priority then recency.</li>
+      a handling winner suppresses the rest; decline order respects priority then recency; <strong>sequence
+      chords (<code>d d</code>) still fire under the coordinator</strong>.</li>
 </ul>
 <p><small>Per repo testing guidance: no tests that merely re-state default binding strings.</small></p>
 
