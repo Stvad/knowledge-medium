@@ -306,11 +306,11 @@ export const isFocusedBlock = (
   return renderScopeId ? location.renderScopeId === renderScopeId : true
 }
 
-const sameFocusedBlockLocation = (
+export const sameFocusedBlockLocation = (
   a: FocusedBlockLocation | undefined,
-  b: FocusedBlockLocation,
+  b: FocusedBlockLocation | undefined,
 ): boolean =>
-  a?.blockId === b.blockId && a.renderScopeId === b.renderScopeId
+  Boolean(a && b && a.blockId === b.blockId && a.renderScopeId === b.renderScopeId)
 
 const isEditingFromProperties = (
   properties: Record<string, unknown> | undefined,

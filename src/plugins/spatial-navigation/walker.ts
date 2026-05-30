@@ -1,5 +1,8 @@
 import { isElementProperlyVisible } from '@/utils/dom.js'
-import type { FocusedBlockLocation } from '@/data/properties.js'
+import {
+  type FocusedBlockLocation,
+  sameFocusedBlockLocation,
+} from '@/data/properties.js'
 
 /**
  * Spatial-navigation walker — pure DOM queries, no in-memory registry.
@@ -85,12 +88,6 @@ export const locationOf = (el: HTMLElement): FocusedBlockLocation | null => {
   const {blockId, renderScopeId} = el.dataset
   return blockId && renderScopeId ? {blockId, renderScopeId} : null
 }
-
-const sameLocation = (
-  a: FocusedBlockLocation | undefined,
-  b: FocusedBlockLocation | undefined,
-): boolean =>
-  Boolean(a && b && a.blockId === b.blockId && a.renderScopeId === b.renderScopeId)
 
 const isNavigable = (el: HTMLElement): boolean => {
   const surface = el.dataset.blockSurface
@@ -286,11 +283,11 @@ export const findRecoveryAnchor = (
   if (instances.length === 0) return null
 
   const hint = lastPositionByPanel.get(panelId)
-  if (!hint || !sameLocation(hint.location, forLocation)) return null
+  if (!hint || !sameFocusedBlockLocation(hint.location, forLocation)) return null
 
   const findByLocation = (location: FocusedBlockLocation | undefined): HTMLElement | undefined =>
     location
-      ? instances.find(el => sameLocation(locationOf(el) ?? undefined, location))
+      ? instances.find(el => sameFocusedBlockLocation(locationOf(el) ?? undefined, location))
       : undefined
 
   const next = findByLocation(hint.nextLocation)
@@ -327,7 +324,7 @@ export const resolveCurrentAnchor = (
   if (!panel) return null
   const instances = panelInstances(panel)
   if (instances.length === 0) return null
-  const live = instances.find(el => sameLocation(locationOf(el) ?? undefined, focusedLocation))
+  const live = instances.find(el => sameFocusedBlockLocation(locationOf(el) ?? undefined, focusedLocation))
   if (live) return live
   return findRecoveryAnchor(panelId, focusedLocation)
 }
@@ -363,12 +360,12 @@ export const locateInstance = (
   if (instances.length === 0) return null
 
   if (hints.focusedLocation) {
-    const exact = instances.find(el => sameLocation(locationOf(el) ?? undefined, hints.focusedLocation))
+    const exact = instances.find(el => sameFocusedBlockLocation(locationOf(el) ?? undefined, hints.focusedLocation))
     if (exact) return exact
   }
 
   const stored = lastPositionByPanel.get(panelId)
-  if (stored && (!hints.focusedLocation || sameLocation(stored.location, hints.focusedLocation))) {
+  if (stored && (!hints.focusedLocation || sameFocusedBlockLocation(stored.location, hints.focusedLocation))) {
     return instances[clamp(stored.index, 0, instances.length - 1)] ?? null
   }
 

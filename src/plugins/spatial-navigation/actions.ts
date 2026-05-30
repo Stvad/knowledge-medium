@@ -18,12 +18,17 @@ import {
   focusBlock,
   isEditingProp,
   peekFocusedBlockLocation,
+  sameFocusedBlockLocation,
   selectionStateProp,
   type FocusedBlockLocation,
 } from '@/data/properties'
 import { ChangeScope } from '@/data/api'
 import type { Block } from '@/data/block'
-import { validateSelectionHierarchy } from '@/utils/selection.js'
+import {
+  blockIdsInOrderedSelectionRange,
+  commitSelectionRange,
+  findBestSelectionAnchorIndex,
+} from '@/utils/selection.js'
 import {
   horizontalNeighborPanel,
   locationOf,
@@ -55,68 +60,11 @@ const currentInstance = (
   return resolveCurrentAnchor(uiStateBlock.id, focusedLocation)
 }
 
-const sameLocation = (
-  a: FocusedBlockLocation | undefined,
-  b: FocusedBlockLocation | undefined,
-): boolean =>
-  Boolean(a && b && a.blockId === b.blockId && a.renderScopeId === b.renderScopeId)
-
-const dedupe = <T,>(items: readonly T[]): T[] =>
-  Array.from(new Set(items))
-
-const rangeBetweenInstances = (
-  instances: readonly HTMLElement[],
-  anchor: HTMLElement,
-  target: HTMLElement,
-): HTMLElement[] => {
-  const anchorIndex = instances.indexOf(anchor)
-  const targetIndex = instances.indexOf(target)
-  if (anchorIndex < 0 || targetIndex < 0) return []
-  const start = Math.min(anchorIndex, targetIndex)
-  const end = Math.max(anchorIndex, targetIndex)
-  return instances.slice(start, end + 1)
-}
-
-const rangeBlockIds = (
-  instances: readonly HTMLElement[],
-  anchor: HTMLElement,
-  target: HTMLElement,
-): string[] =>
-  dedupe(
-    rangeBetweenInstances(instances, anchor, target)
-      .map(el => locationOf(el)?.blockId)
-      .filter((id): id is string => typeof id === 'string'),
-  )
-
-const findSelectionAnchorInstance = (
-  instances: readonly HTMLElement[],
-  anchorBlockId: string,
-  target: HTMLElement,
-  selectedBlockIds: readonly string[],
-  currentLocation: FocusedBlockLocation | undefined,
-): HTMLElement | null => {
-  const candidates = instances.filter(el => locationOf(el)?.blockId === anchorBlockId)
-  if (candidates.length === 0) return null
-  if (candidates.length === 1) return candidates[0]
-
-  const exactFocusedAnchor = candidates.find(el => sameLocation(locationOf(el) ?? undefined, currentLocation))
-  if (exactFocusedAnchor) return exactFocusedAnchor
-
-  const selected = new Set(selectedBlockIds)
-  const ranked = candidates
-    .map(candidate => {
-      const ids = rangeBlockIds(instances, candidate, target)
-      const overlap = ids.filter(id => selected.has(id)).length
-      const extra = ids.length - overlap
-      const missing = selectedBlockIds.filter(id => !ids.includes(id)).length
-      return {
-        candidate,
-        score: overlap * 4 - extra - missing,
-      }
-    })
-    .sort((a, b) => b.score - a.score)
-
-  return ranked[0]?.candidate ?? candidates[0]
+const locationsOf = (instances: readonly HTMLElement[]): FocusedBlockLocation[] | null => {
+  const locations = instances.map(locationOf)
+  return locations.every((location): location is FocusedBlockLocation => Boolean(location))
+    ? locations
+    : null
 }
 
 const extendSelectionToSpatialTarget = async (
@@ -137,28 +85,25 @@ const extendSelectionToSpatialTarget = async (
   if (!anchorBlockId) return false
 
   const instances = panelInstances(panel)
-  const anchor = findSelectionAnchorInstance(
-    instances,
+  const orderedLocations = locationsOf(instances)
+  if (!orderedLocations) return false
+  const targetIndex = instances.indexOf(target)
+  const anchorIndex = findBestSelectionAnchorIndex(orderedLocations, {
     anchorBlockId,
-    target,
-    currentState?.selectedBlockIds ?? [],
+    targetIndex,
+    selectedBlockIds: currentState?.selectedBlockIds,
     currentLocation,
-  )
-  if (!anchor) return false
+  })
+  if (anchorIndex < 0) return false
 
-  const rangeIds = rangeBlockIds(instances, anchor, target)
-  if (rangeIds.length === 0) return false
-  const selectedBlockIds = await validateSelectionHierarchy(rangeIds, uiStateBlock.repo)
-
-  await uiStateBlock.repo.tx(async tx => {
-    await tx.setProperty(uiStateBlock.id, selectionStateProp, {
-      selectedBlockIds,
-      anchorBlockId,
-    })
-    await tx.setProperty(uiStateBlock.id, focusedBlockLocationProp, targetLocation)
-    await tx.setProperty(uiStateBlock.id, isEditingProp, false)
-  }, {scope: ChangeScope.UiState, description: 'spatial-navigation extend selection'})
-  return true
+  return commitSelectionRange({
+    uiStateBlock,
+    anchorBlockId,
+    targetLocation,
+    selectedBlockIds: blockIdsInOrderedSelectionRange(orderedLocations, anchorIndex, targetIndex),
+    clearEditing: true,
+    description: 'spatial-navigation extend selection',
+  })
 }
 
 const extendSelectionVertical = async (
@@ -176,7 +121,7 @@ const extendSelectionVertical = async (
 
   const currentLocation = locationOf(current)
   if (!currentLocation) return false
-  if (!sameLocation(currentLocation, focusedLocation)) {
+  if (!sameFocusedBlockLocation(currentLocation, focusedLocation)) {
     await extendSelectionToSpatialTarget(deps, current)
     return true
   }

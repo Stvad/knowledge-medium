@@ -1,13 +1,17 @@
 import { Block } from '../data/block'
 import type { Repo } from '../data/repo'
 import {
+  type FocusedBlockLocation,
   focusedBlockLocationProp,
+  isEditingProp,
   isCollapsedProp,
   peekFocusedBlockLocation,
+  sameFocusedBlockLocation,
   selectionStateProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
 import { outlineRenderScopeId } from '@/utils/renderScope'
+import { ChangeScope } from '@/data/api'
 
 /** True if `block` is collapsed *and* the caller cares (i.e. it isn't
  *  the panel's top-level block — the top always exposes children even
@@ -235,6 +239,107 @@ export async function validateSelectionHierarchy(
   return Array.from(validatedIds)
 }
 
+const uniqueBlockIds = (ids: readonly string[]): string[] =>
+  Array.from(new Set(ids))
+
+export const blockIdsInOrderedSelectionRange = (
+  orderedLocations: readonly FocusedBlockLocation[],
+  anchorIndex: number,
+  targetIndex: number,
+): string[] => {
+  if (
+    anchorIndex < 0 ||
+    targetIndex < 0 ||
+    anchorIndex >= orderedLocations.length ||
+    targetIndex >= orderedLocations.length
+  ) return []
+
+  const start = Math.min(anchorIndex, targetIndex)
+  const end = Math.max(anchorIndex, targetIndex)
+  return uniqueBlockIds(
+    orderedLocations.slice(start, end + 1).map(location => location.blockId),
+  )
+}
+
+export const findBestSelectionAnchorIndex = (
+  orderedLocations: readonly FocusedBlockLocation[],
+  options: {
+    anchorBlockId: string
+    targetIndex: number
+    selectedBlockIds?: readonly string[]
+    currentLocation?: FocusedBlockLocation
+  },
+): number => {
+  const {
+    anchorBlockId,
+    targetIndex,
+    selectedBlockIds = [],
+    currentLocation,
+  } = options
+  if (targetIndex < 0 || targetIndex >= orderedLocations.length) return -1
+
+  const candidates = orderedLocations
+    .map((location, index) => ({location, index}))
+    .filter(({location}) => location.blockId === anchorBlockId)
+  if (candidates.length === 0) return -1
+  if (candidates.length === 1) return candidates[0].index
+
+  const focusedCandidate = candidates.find(({location}) =>
+    sameFocusedBlockLocation(location, currentLocation),
+  )
+  if (focusedCandidate) return focusedCandidate.index
+
+  const selected = new Set(selectedBlockIds)
+  const ranked = candidates
+    .map(({index}) => {
+      const ids = blockIdsInOrderedSelectionRange(orderedLocations, index, targetIndex)
+      const overlap = ids.filter(id => selected.has(id)).length
+      const extra = ids.length - overlap
+      const missing = selectedBlockIds.filter(id => !ids.includes(id)).length
+      return {
+        index,
+        score: overlap * 4 - extra - missing,
+      }
+    })
+    .sort((a, b) => b.score - a.score)
+
+  return ranked[0]?.index ?? candidates[0].index
+}
+
+export async function commitSelectionRange(
+  options: {
+    uiStateBlock: Block
+    anchorBlockId: string
+    targetLocation: FocusedBlockLocation
+    selectedBlockIds: readonly string[]
+    clearEditing?: boolean
+    description?: string
+  },
+): Promise<boolean> {
+  const {
+    uiStateBlock,
+    anchorBlockId,
+    targetLocation,
+    selectedBlockIds,
+    clearEditing = false,
+    description = 'extend selection',
+  } = options
+  if (selectedBlockIds.length === 0) return false
+
+  const validatedIds = await validateSelectionHierarchy([...selectedBlockIds], uiStateBlock.repo)
+  await uiStateBlock.repo.tx(async tx => {
+    await tx.setProperty(uiStateBlock.id, selectionStateProp, {
+      selectedBlockIds: validatedIds,
+      anchorBlockId,
+    })
+    await tx.setProperty(uiStateBlock.id, focusedBlockLocationProp, targetLocation)
+    if (clearEditing) {
+      await tx.setProperty(uiStateBlock.id, isEditingProp, false)
+    }
+  }, {scope: ChangeScope.UiState, description})
+  return true
+}
+
 /** Walk visible blocks from `startBlockId` toward `endBlockId` using
  *  the relative-navigation primitives. Direction is auto-detected by
  *  trying forward first, then backward — endpoints are interchangeable
@@ -320,13 +425,14 @@ export async function extendSelection(
 
   const rangeIds = await getBlocksInRange(currentAnchor, targetBlockId, topLevelBlockId, repo)
 
-  await uiStateBlock.set(selectionStateProp, {
-    selectedBlockIds: rangeIds,
-    anchorBlockId: currentAnchor,
-  })
   const currentLocation = peekFocusedBlockLocation(uiStateBlock)
-  await uiStateBlock.set(focusedBlockLocationProp, {
-    blockId: targetBlockId,
-    renderScopeId: currentLocation?.renderScopeId ?? outlineRenderScopeId(topLevelBlockId),
+  await commitSelectionRange({
+    uiStateBlock,
+    anchorBlockId: currentAnchor,
+    targetLocation: {
+      blockId: targetBlockId,
+      renderScopeId: currentLocation?.renderScopeId ?? outlineRenderScopeId(topLevelBlockId),
+    },
+    selectedBlockIds: rangeIds,
   })
 }
