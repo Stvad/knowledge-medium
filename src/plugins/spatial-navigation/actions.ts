@@ -5,6 +5,7 @@ import {
 import type { AppExtension } from '@/extensions/facet.js'
 import {
   ActionConfig,
+  type BaseShortcutDependencies,
   type ActionDecorator,
   ActionContextTypes,
   type BlockShortcutDependencies,
@@ -17,13 +18,16 @@ import {
   focusBlock,
   isEditingProp,
   peekFocusedBlockLocation,
+  selectionStateProp,
   type FocusedBlockLocation,
 } from '@/data/properties'
 import { ChangeScope } from '@/data/api'
 import type { Block } from '@/data/block'
+import { validateSelectionHierarchy } from '@/utils/selection.js'
 import {
   horizontalNeighborPanel,
   locationOf,
+  panelOf,
   panelInstances,
   resolveCurrentAnchor,
   verticalNeighbor,
@@ -49,6 +53,138 @@ const currentInstance = (
     ? {blockId: block.id, renderScopeId: deps.renderScopeId}
     : peekFocusedBlockLocation(uiStateBlock)
   return resolveCurrentAnchor(uiStateBlock.id, focusedLocation)
+}
+
+const sameLocation = (
+  a: FocusedBlockLocation | undefined,
+  b: FocusedBlockLocation | undefined,
+): boolean =>
+  Boolean(a && b && a.blockId === b.blockId && a.renderScopeId === b.renderScopeId)
+
+const dedupe = <T,>(items: readonly T[]): T[] =>
+  Array.from(new Set(items))
+
+const rangeBetweenInstances = (
+  instances: readonly HTMLElement[],
+  anchor: HTMLElement,
+  target: HTMLElement,
+): HTMLElement[] => {
+  const anchorIndex = instances.indexOf(anchor)
+  const targetIndex = instances.indexOf(target)
+  if (anchorIndex < 0 || targetIndex < 0) return []
+  const start = Math.min(anchorIndex, targetIndex)
+  const end = Math.max(anchorIndex, targetIndex)
+  return instances.slice(start, end + 1)
+}
+
+const rangeBlockIds = (
+  instances: readonly HTMLElement[],
+  anchor: HTMLElement,
+  target: HTMLElement,
+): string[] =>
+  dedupe(
+    rangeBetweenInstances(instances, anchor, target)
+      .map(el => locationOf(el)?.blockId)
+      .filter((id): id is string => typeof id === 'string'),
+  )
+
+const findSelectionAnchorInstance = (
+  instances: readonly HTMLElement[],
+  anchorBlockId: string,
+  target: HTMLElement,
+  selectedBlockIds: readonly string[],
+  currentLocation: FocusedBlockLocation | undefined,
+): HTMLElement | null => {
+  const candidates = instances.filter(el => locationOf(el)?.blockId === anchorBlockId)
+  if (candidates.length === 0) return null
+  if (candidates.length === 1) return candidates[0]
+
+  const exactFocusedAnchor = candidates.find(el => sameLocation(locationOf(el) ?? undefined, currentLocation))
+  if (exactFocusedAnchor) return exactFocusedAnchor
+
+  const selected = new Set(selectedBlockIds)
+  const ranked = candidates
+    .map(candidate => {
+      const ids = rangeBlockIds(instances, candidate, target)
+      const overlap = ids.filter(id => selected.has(id)).length
+      const extra = ids.length - overlap
+      const missing = selectedBlockIds.filter(id => !ids.includes(id)).length
+      return {
+        candidate,
+        score: overlap * 4 - extra - missing,
+      }
+    })
+    .sort((a, b) => b.score - a.score)
+
+  return ranked[0]?.candidate ?? candidates[0]
+}
+
+const extendSelectionToSpatialTarget = async (
+  deps: BaseShortcutDependencies,
+  target: HTMLElement,
+): Promise<boolean> => {
+  const {uiStateBlock} = deps
+  if (!uiStateBlock) return false
+
+  const targetLocation = locationOf(target)
+  if (!targetLocation) return false
+  const panel = panelOf(target)
+  if (!panel || panel.dataset.panelId !== uiStateBlock.id) return true
+
+  const currentState = uiStateBlock.peekProperty(selectionStateProp)
+  const currentLocation = peekFocusedBlockLocation(uiStateBlock)
+  const anchorBlockId = currentState?.anchorBlockId ?? currentLocation?.blockId
+  if (!anchorBlockId) return false
+
+  const instances = panelInstances(panel)
+  const anchor = findSelectionAnchorInstance(
+    instances,
+    anchorBlockId,
+    target,
+    currentState?.selectedBlockIds ?? [],
+    currentLocation,
+  )
+  if (!anchor) return false
+
+  const rangeIds = rangeBlockIds(instances, anchor, target)
+  if (rangeIds.length === 0) return false
+  const selectedBlockIds = await validateSelectionHierarchy(rangeIds, uiStateBlock.repo)
+
+  await uiStateBlock.repo.tx(async tx => {
+    await tx.setProperty(uiStateBlock.id, selectionStateProp, {
+      selectedBlockIds,
+      anchorBlockId,
+    })
+    await tx.setProperty(uiStateBlock.id, focusedBlockLocationProp, targetLocation)
+    await tx.setProperty(uiStateBlock.id, isEditingProp, false)
+  }, {scope: ChangeScope.UiState, description: 'spatial-navigation extend selection'})
+  return true
+}
+
+const extendSelectionVertical = async (
+  deps: BaseShortcutDependencies,
+  direction: 'up' | 'down',
+): Promise<boolean> => {
+  const {uiStateBlock} = deps
+  if (!uiStateBlock) return false
+  if (typeof document === 'undefined') return false
+
+  const focusedLocation = peekFocusedBlockLocation(uiStateBlock)
+  if (!focusedLocation) return false
+  const current = resolveCurrentAnchor(uiStateBlock.id, focusedLocation)
+  if (!current) return false
+
+  const currentLocation = locationOf(current)
+  if (!currentLocation) return false
+  if (!sameLocation(currentLocation, focusedLocation)) {
+    await extendSelectionToSpatialTarget(deps, current)
+    return true
+  }
+
+  const next = verticalNeighbor(current, direction)
+  if (!next) return true
+  await extendSelectionToSpatialTarget(deps, next)
+  return true
 }
 
 /**
@@ -217,23 +353,43 @@ const verticalDecorator = (
   actionId: 'move_down' | 'move_up',
   direction: 'down' | 'up',
   description: string,
-): ActionDecorator<typeof ActionContextTypes.NORMAL_MODE> => ({
+): ActionDecorator => ({
   actionId,
   context: ActionContextTypes.NORMAL_MODE,
   decorate: action => ({
     ...action,
     description,
-    handler: async (deps, trigger) => {
-      if (await moveVertical(deps, direction)) return
-      await action.handler(deps, trigger)
+    handler: async (deps, trigger, dispatch) => {
+      if (await moveVertical(deps as BlockShortcutDependencies, direction)) return
+      await action.handler(deps, trigger, dispatch)
     },
   }),
 })
 
-export function getSpatialNavigationActionDecorators(): ActionDecorator<typeof ActionContextTypes.NORMAL_MODE>[] {
+const selectionVerticalDecorator = (
+  actionId: 'extend_selection_down' | 'extend_selection_up' | 'multi_select.extend_selection_down' | 'multi_select.extend_selection_up',
+  context: typeof ActionContextTypes.NORMAL_MODE | typeof ActionContextTypes.MULTI_SELECT_MODE,
+  direction: 'down' | 'up',
+): ActionDecorator => ({
+  actionId,
+  context,
+  decorate: action => ({
+    ...action,
+    handler: async (deps, trigger, dispatch) => {
+      if (await extendSelectionVertical(deps, direction)) return
+      await action.handler(deps, trigger, dispatch)
+    },
+  }),
+})
+
+export function getSpatialNavigationActionDecorators(): ActionDecorator[] {
   return [
     verticalDecorator('move_down', 'down', 'Move focus down (next block, then stack-sibling panel below)'),
     verticalDecorator('move_up', 'up', 'Move focus up (previous block, then stack-sibling panel above)'),
+    selectionVerticalDecorator('extend_selection_down', ActionContextTypes.NORMAL_MODE, 'down'),
+    selectionVerticalDecorator('extend_selection_up', ActionContextTypes.NORMAL_MODE, 'up'),
+    selectionVerticalDecorator('multi_select.extend_selection_down', ActionContextTypes.MULTI_SELECT_MODE, 'down'),
+    selectionVerticalDecorator('multi_select.extend_selection_up', ActionContextTypes.MULTI_SELECT_MODE, 'up'),
   ]
 }
 
