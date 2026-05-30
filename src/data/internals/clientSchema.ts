@@ -380,18 +380,28 @@ export const CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL = `
 // (BLOCKS_SYNCED_RAW_TABLE) directly against `blocks_synced`, and those normal
 // INSERT/DELETE statements fire the AFTER triggers below — the SAME mechanism
 // the row_events triggers rely on for sync-applied writes to the live `blocks`
-// table (the production sync-invalidation path). The queue is a COALESCING,
-// id-keyed work-queue (not an append log): the observer drains only the
-// pending set and deletes the exact (id, op) rows it processed.
+// table (the production sync-invalidation path).
+//
+// APPEND-ONLY LOG keyed by a monotonic `seq`, drained with the proven
+// row_events watermark pattern: the observer reads rows up to MAX(seq),
+// processes them, then `DELETE … WHERE seq <= <that max>`. This is robust to
+// the two things a coalescing id-keyed table is NOT:
+//   - Drain race: a delivery that lands mid-drain gets a higher seq, so the
+//     watermark delete can't remove its signal (an id-keyed REPLACE would have
+//     overwritten the very row being processed and lost the newer change).
+//   - Partial failure: if processing throws, the delete is never reached, so
+//     the rows stay queued and retry on the next tick / next startup.
+// Coalescing still happens, in JS at drain time (latest op per id wins), so a
+// hot row is materialized once per batch, not once per delivery.
 //
 //   - INSERT trigger → 'upsert'. The raw put is `INSERT OR REPLACE`, so a
-//     re-delivery of an existing id fires DELETE then INSERT; `REPLACE INTO`
-//     leaves the final op as 'upsert', never a stranded 'delete'. (No UPDATE
+//     re-delivery of an existing id fires DELETE then INSERT, appending a
+//     'delete' then a higher-seq 'upsert' that wins the dedup. (No UPDATE
 //     trigger: PowerSync never issues a bare UPDATE against the raw table.)
 //   - DELETE trigger → 'delete'. A real stream-exit (membership revoke /
-//     workspace delete) supersedes any un-drained 'upsert' for that id, and is
-//     captured DURABLY so a removal that lands while the observer is down is
-//     still drained on next startup.
+//     workspace delete) appends a higher-seq 'delete' that supersedes an
+//     un-drained 'upsert', and is captured DURABLY so a removal that lands
+//     while the observer is down is still drained on next startup.
 //
 // No source-gating: these are not upload triggers, so they fire on both sync
 // and (the rare) local writes to the staging table. blocks_synced itself
@@ -400,8 +410,9 @@ export const CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL = `
 
 export const CREATE_BLOCKS_SYNCED_CHANGES_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS blocks_synced_changes (
-    id TEXT PRIMARY KEY NOT NULL,
-    op TEXT NOT NULL CHECK (op IN ('upsert', 'delete'))
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    id  TEXT NOT NULL,
+    op  TEXT NOT NULL CHECK (op IN ('upsert', 'delete'))
   )
 `
 
@@ -409,7 +420,7 @@ export const CREATE_BLOCKS_SYNCED_CHANGES_INSERT_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS blocks_synced_changes_insert
   AFTER INSERT ON blocks_synced
   BEGIN
-    INSERT OR REPLACE INTO blocks_synced_changes (id, op) VALUES (NEW.id, 'upsert');
+    INSERT INTO blocks_synced_changes (id, op) VALUES (NEW.id, 'upsert');
   END
 `
 
@@ -417,7 +428,7 @@ export const CREATE_BLOCKS_SYNCED_CHANGES_DELETE_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS blocks_synced_changes_delete
   AFTER DELETE ON blocks_synced
   BEGIN
-    INSERT OR REPLACE INTO blocks_synced_changes (id, op) VALUES (OLD.id, 'delete');
+    INSERT INTO blocks_synced_changes (id, op) VALUES (OLD.id, 'delete');
   END
 `
 
