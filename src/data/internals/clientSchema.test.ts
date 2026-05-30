@@ -31,6 +31,7 @@ import {
   BLOCKS_RAW_TABLE,
   BLOCK_STORAGE_COLUMNS,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
+  CREATE_BLOCKS_SYNCED_TABLE_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
 } from '@/data/blockSchema'
@@ -144,6 +145,9 @@ const setupDb = (): TestDb => {
 
   // The blocks table (built from the same column list as production).
   db.exec(CREATE_BLOCKS_TABLE_SQL)
+  // Layout B staging table — the blocks_synced change-capture triggers in
+  // CLIENT_SCHEMA_STATEMENTS attach to it, so it must exist first.
+  db.exec(CREATE_BLOCKS_SYNCED_TABLE_SQL)
   db.exec(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   db.exec(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
 
@@ -207,11 +211,12 @@ describe('client schema bootstrap', () => {
   it('creates the documented set of client-schema triggers', () => {
     // CLIENT_SCHEMA_TRIGGER_NAMES covers triggers on `blocks` (the
     // bulk of them — row_events, upload routing, workspace
-    // invariants, side-index maintenance) AND on `block_aliases`
-    // (the uniqueness-enforcement trigger). Query against both
-    // tables so the inventory test catches additions on either side.
+    // invariants, side-index maintenance), on `block_aliases`
+    // (the uniqueness-enforcement trigger), and on `blocks_synced`
+    // (the Layout B change-capture triggers). Query against all three
+    // tables so the inventory test catches additions on any side.
     const triggers = (h.db
-      .prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name IN ('blocks', 'block_aliases') ORDER BY name")
+      .prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name IN ('blocks', 'block_aliases', 'blocks_synced') ORDER BY name")
       .all() as Array<{name: string}>)
       .map(r => r.name)
     expect(triggers.sort()).toEqual([...CLIENT_SCHEMA_TRIGGER_NAMES].sort())

@@ -372,6 +372,56 @@ export const CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL = `
 `
 
 // ============================================================================
+// blocks_synced change-capture queue (Layout B, design doc §9.2) — the
+// observer's O(delta) detection signal, replacing an O(N) re-scan of the whole
+// staging table on every startup/tick.
+//
+// PowerSync's sync-apply runs the raw-table put/delete statements
+// (BLOCKS_SYNCED_RAW_TABLE) directly against `blocks_synced`, and those normal
+// INSERT/DELETE statements fire the AFTER triggers below — the SAME mechanism
+// the row_events triggers rely on for sync-applied writes to the live `blocks`
+// table (the production sync-invalidation path). The queue is a COALESCING,
+// id-keyed work-queue (not an append log): the observer drains only the
+// pending set and deletes the exact (id, op) rows it processed.
+//
+//   - INSERT trigger → 'upsert'. The raw put is `INSERT OR REPLACE`, so a
+//     re-delivery of an existing id fires DELETE then INSERT; `REPLACE INTO`
+//     leaves the final op as 'upsert', never a stranded 'delete'. (No UPDATE
+//     trigger: PowerSync never issues a bare UPDATE against the raw table.)
+//   - DELETE trigger → 'delete'. A real stream-exit (membership revoke /
+//     workspace delete) supersedes any un-drained 'upsert' for that id, and is
+//     captured DURABLY so a removal that lands while the observer is down is
+//     still drained on next startup.
+//
+// No source-gating: these are not upload triggers, so they fire on both sync
+// and (the rare) local writes to the staging table. blocks_synced itself
+// carries no upload routing, so this never enqueues a server write.
+// ============================================================================
+
+export const CREATE_BLOCKS_SYNCED_CHANGES_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS blocks_synced_changes (
+    id TEXT PRIMARY KEY NOT NULL,
+    op TEXT NOT NULL CHECK (op IN ('upsert', 'delete'))
+  )
+`
+
+export const CREATE_BLOCKS_SYNCED_CHANGES_INSERT_TRIGGER_SQL = `
+  CREATE TRIGGER IF NOT EXISTS blocks_synced_changes_insert
+  AFTER INSERT ON blocks_synced
+  BEGIN
+    INSERT OR REPLACE INTO blocks_synced_changes (id, op) VALUES (NEW.id, 'upsert');
+  END
+`
+
+export const CREATE_BLOCKS_SYNCED_CHANGES_DELETE_TRIGGER_SQL = `
+  CREATE TRIGGER IF NOT EXISTS blocks_synced_changes_delete
+  AFTER DELETE ON blocks_synced
+  BEGIN
+    INSERT OR REPLACE INTO blocks_synced_changes (id, op) VALUES (OLD.id, 'delete');
+  END
+`
+
+// ============================================================================
 // Upload-routing triggers (2) — fire for any LOCAL repo.tx write
 // (source IS NOT NULL). Sync-applied writes leave source = NULL and so
 // are skipped — those rows are already on the server. Every other write
@@ -986,6 +1036,7 @@ export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = [
   CREATE_PS_CRUD_REJECTED_TABLE_SQL,
   CREATE_PS_CRUD_REJECTED_REJECTED_AT_INDEX_SQL,
   CREATE_PS_CRUD_REJECTED_TX_ID_INDEX_SQL,
+  CREATE_BLOCKS_SYNCED_CHANGES_TABLE_SQL,
   DROP_BLOCKS_WORKSPACE_TYPE_INDEX_SQL,
   // 5 audit/upload triggers
   CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL,
@@ -1012,6 +1063,9 @@ export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = [
   CREATE_BLOCKS_FTS_INSERT_TRIGGER_SQL,
   CREATE_BLOCKS_FTS_UPDATE_TRIGGER_SQL,
   CREATE_BLOCKS_FTS_DELETE_TRIGGER_SQL,
+  // 2 blocks_synced change-capture triggers (Layout B observer detection)
+  CREATE_BLOCKS_SYNCED_CHANGES_INSERT_TRIGGER_SQL,
+  CREATE_BLOCKS_SYNCED_CHANGES_DELETE_TRIGGER_SQL,
 ] as const
 
 export const CLIENT_SCHEMA_TRIGGER_NAMES = [
@@ -1034,6 +1088,8 @@ export const CLIENT_SCHEMA_TRIGGER_NAMES = [
   'blocks_fts_insert',
   'blocks_fts_update',
   'blocks_fts_delete',
+  'blocks_synced_changes_insert',
+  'blocks_synced_changes_delete',
 ] as const
 
 interface ClientSchemaBootstrapDb {
