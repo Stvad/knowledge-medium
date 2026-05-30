@@ -585,6 +585,10 @@ CREATE INDEX "idx_blocks_workspace_active" ON "public"."blocks" USING "btree" ("
 
 
 
+CREATE INDEX "idx_blocks_workspace_recent_content" ON "public"."blocks" USING "btree" ("workspace_id", "updated_at" DESC, "id" ASC) WHERE (("deleted" = false) AND ("content" <> ''::"text"));
+
+
+
 CREATE INDEX "idx_blocks_workspace_with_references" ON "public"."blocks" USING "btree" ("workspace_id") WHERE (("deleted" = false) AND ("references_json" <> '[]'::"text"));
 
 
@@ -1162,7 +1166,6 @@ ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TAB
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES TO "anon";
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES TO "authenticated";
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES TO "service_role";
-
 
 
 

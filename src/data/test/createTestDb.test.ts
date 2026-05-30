@@ -56,6 +56,7 @@ describe('createTestDb harness', () => {
       'idx_blocks_parent_order',
       'idx_blocks_workspace_active',
       'idx_blocks_workspace_nonempty_properties',
+      'idx_blocks_workspace_recent_content',
     ]))
   })
 

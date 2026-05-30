@@ -34,6 +34,7 @@ import {
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
   CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL,
+  CREATE_BLOCKS_WORKSPACE_RECENT_CONTENT_INDEX_SQL,
 } from '@/data/blockSchema'
 import {
   CREATE_WORKSPACE_MEMBERS_INDEX_SQL,
@@ -150,6 +151,7 @@ const setupDb = (): TestDb => {
   db.exec(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   db.exec(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
   db.exec(CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL)
+  db.exec(CREATE_BLOCKS_WORKSPACE_RECENT_CONTENT_INDEX_SQL)
 
   // workspace_members is a sibling table; created here so tests can
   // seed membership rows. Production builds the same schema from

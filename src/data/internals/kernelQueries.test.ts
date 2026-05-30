@@ -25,7 +25,11 @@ import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { kernelDataExtension } from '../kernelDataExtension'
 import { queriesFacet } from '../facets'
 import { Repo } from '../repo'
-import { SELECT_BLOCKS_BY_CONTENT_SQL, compileBlocksContentSearchQuery } from './kernelQueries'
+import {
+  SELECT_BLOCKS_BY_CONTENT_SQL,
+  SELECT_RECENT_BLOCKS_SQL,
+  compileBlocksContentSearchQuery,
+} from './kernelQueries'
 
 const WS = 'ws-1'
 const OTHER_WS = 'ws-2'
@@ -437,6 +441,17 @@ describe('repo.query.recentBlocks', () => {
     const out = asBlocks(await env.repo.query.recentBlocks({workspaceId: WS, limit: 2}).load())
 
     expect(out.map(r => r.id)).toEqual(['c', 'b'])
+  })
+
+  it('uses the workspace recent-content index', async () => {
+    const plan = await env.h.db.getAll<{detail: string}>(
+      `EXPLAIN QUERY PLAN ${SELECT_RECENT_BLOCKS_SQL}`,
+      [WS, 50],
+    )
+    const detail = plan.map(row => row.detail).join('\n')
+
+    expect(detail).toContain('idx_blocks_workspace_recent_content')
+    expect(detail).not.toContain('USE TEMP B-TREE FOR ORDER BY')
   })
 })
 
