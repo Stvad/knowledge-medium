@@ -37,7 +37,7 @@ const setup = async (): Promise<Harness> => {
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
     registerKernelProcessors: false,
-    startRowEventsTail: false,
+    startSyncObserver: false,
   })
   repo.setActiveWorkspaceId(WS)
   repo.setFacetRuntime(resolveFacetRuntimeSync([

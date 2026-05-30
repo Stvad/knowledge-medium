@@ -9,6 +9,7 @@ import {
 } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams } from '@/data/blockSchema'
 import { typesProp } from '@/data/properties'
 import { propertySchemasFacet } from '../facets'
 import { kernelDataExtension } from '../kernelDataExtension'
@@ -558,19 +559,17 @@ describe('repo.subscribeBlocks', () => {
     })
     await vi.waitFor(() => expect(fired).toEqual([[]]))
 
-    env.repo.startRowEventsTail({initialLastId: 0, throttleMs: 0})
-    await env.h.db.execute(
-      `UPDATE tx_context SET source = NULL, tx_id = NULL, tx_seq = NULL WHERE id = 1`,
-    )
-    await env.h.db.execute(
-      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
-                            properties_json, references_json, created_at,
-                            updated_at, created_by, updated_by, deleted)
-       VALUES (?, ?, NULL, 'a0', '', ?, '[]', 0, 0, 'remote', 'remote', 0)`,
-      ['remote-todo', WS, JSON.stringify({[typesProp.name]: ['todo']})],
-    )
+    env.repo.startSyncObserver({throttleMs: 0})
+    // A brand-new typed block arrives via the sync path: staged into
+    // blocks_synced, materialized by the observer. New id ⇒ no prior local
+    // row, so no pending-upload gate to clear.
+    await env.h.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToRowParams({
+      id: 'remote-todo', workspaceId: WS, parentId: null, orderKey: 'a0',
+      content: '', properties: {[typesProp.name]: ['todo']}, references: [],
+      createdAt: 0, updatedAt: 0, createdBy: 'remote', updatedBy: 'remote', deleted: false,
+    }))
 
-    await env.repo.flushRowEventsTail()
+    await env.repo.flushSyncObserver()
     await vi.waitFor(() => expect(fired).toEqual([[], ['remote-todo']]))
     off()
   })

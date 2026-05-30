@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, type BlockReference } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams } from '@/data/blockSchema'
 import { Repo } from '@/data/repo'
 import type { Dependency } from '@/data/internals/handleStore'
 import { aliasesProp, typesProp } from '@/data/properties'
@@ -431,7 +432,7 @@ describe('backlinksDataExtension query', () => {
       `UPDATE blocks SET references_json = ? WHERE id = ?`,
       [JSON.stringify([{id: 't', alias: 't'}]), 'linker'],
     )
-    await env.repo.flushRowEventsTail()
+    await env.repo.flushSyncObserver()
 
     const handle = env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({workspaceId: WS, id: 't'})
     await handle.load()
@@ -519,23 +520,28 @@ describe('backlinksDataExtension query', () => {
     })
   })
 
-  it('re-resolves from sync-applied row events using the plugin invalidation rule', async () => {
+  it('re-resolves from a sync-applied reference edit using the plugin invalidation rule', async () => {
     await create({id: 'target'})
     await create({id: 'src'})
+    // Mark the baseline as fully synced (no pending upload), so the incoming
+    // sync edit isn't held off by the local-edit-wins gate — the state of any
+    // block old enough to be edited from another client.
+    await env.h.db.execute('DELETE FROM ps_crud')
+
     const handle = env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({workspaceId: WS, id: 'target'})
     const fired: string[][] = []
     handle.subscribe((value) => { fired.push(value) })
     await vi.waitFor(() => expect(fired.map(items => items.length)).toEqual([0]))
 
-    // Bump updated_at so the sync snapshot wins the LWW gate at the
-    // cache layer — real server-applied writes always carry a newer
-    // updated_at than what the cache already has, and the rowEventsTail
-    // only emits invalidations for sync rows the cache accepts.
-    await env.h.db.execute(
-      `UPDATE blocks SET references_json = ?, updated_at = updated_at + 1 WHERE id = ?`,
-      [JSON.stringify([{id: 'target', alias: 'T'}]), 'src'],
-    )
-    await env.repo.flushRowEventsTail()
+    // A concurrent client adds a reference src → target. It arrives via the
+    // Layout B sync path: staged into blocks_synced, materialized by the
+    // observer. A newer updated_at wins the LWW gate (real server writes do).
+    await env.h.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToRowParams({
+      id: 'src', workspaceId: WS, parentId: null, orderKey: 'key-src',
+      content: '', properties: {}, references: [{id: 'target', alias: 'T'}],
+      createdAt: 0, updatedAt: 9_000_000_000_000, createdBy: 'remote', updatedBy: 'remote', deleted: false,
+    }))
+    await env.repo.flushSyncObserver()
 
     await vi.waitFor(() => {
       expect(fired.map(items => items.length)).toEqual([0, 1])

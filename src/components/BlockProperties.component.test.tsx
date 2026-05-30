@@ -117,7 +117,7 @@ describe('BlockProperties component', () => {
       now: () => ++now,
       newId: () => `generated-${++idSeq}`,
       newTxSeq: () => ++txSeq,
-      startRowEventsTail: false,
+      startSyncObserver: false,
     })
     runtime = resolveFacetRuntimeSync([
       kernelDataExtension,

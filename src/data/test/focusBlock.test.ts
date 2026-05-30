@@ -27,7 +27,7 @@ const setup = async (): Promise<Harness> => {
     now: () => ++now,
     newId: () => crypto.randomUUID(),
     newTxSeq: () => ++txSeq,
-    startRowEventsTail: false,
+    startSyncObserver: false,
   })
   repo.setActiveWorkspaceId(WS)
 

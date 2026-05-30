@@ -36,7 +36,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PowerSyncDatabase, Schema } from '@powersync/node'
 import {
-  BLOCKS_RAW_TABLE,
   BLOCKS_SYNCED_RAW_TABLE,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
   CREATE_BLOCKS_SYNCED_TABLE_SQL,
@@ -74,8 +73,11 @@ const localSchemaContributions = resolveLocalSchemaContributions(staticDataExten
 
 const createTestSchema = (): Schema => {
   const schema = new Schema({})
+  // Layout B (design doc §9.2): production maps only `blocks_synced` as a raw
+  // table — `blocks` is a plain local table the observer materializes into —
+  // so the harness mirrors that. Tests drive sync by writing `blocks_synced`
+  // and running the observer / `materializeStagingRows`.
   schema.withRawTables({
-    blocks: BLOCKS_RAW_TABLE,
     blocks_synced: BLOCKS_SYNCED_RAW_TABLE,
     workspaces: WORKSPACES_RAW_TABLE,
     workspace_members: WORKSPACE_MEMBERS_RAW_TABLE,

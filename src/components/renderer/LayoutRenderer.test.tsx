@@ -49,7 +49,7 @@ const setup = async (): Promise<Harness> => {
     cache: new BlockCache(),
     user: USER,
     newTxSeq: () => ++txSeq,
-    startRowEventsTail: false,
+    startSyncObserver: false,
   })
   repo.setActiveWorkspaceId(WS)
   const uiState = await getUIStateBlock(repo, WS, USER, {})

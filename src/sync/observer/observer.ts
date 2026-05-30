@@ -24,8 +24,8 @@
  * materializable without a staging change: a WK paste (deferred e2ee rows) or
  * a plaintext confirmation (§8 flows call it).
  *
- * NOTE: the §4.7 cycle-scan telemetry that lived in rowEventsTail is not yet
- * relocated here — it lands in a follow-up before the cutover removes the tail.
+ * The §4.7 cycle-scan telemetry that lived in rowEventsTail is relocated here
+ * (`runCycleScan`), so the observer fully subsumes the tail's responsibilities.
  */
 
 import type { CycleDetectedEvent } from '@/data/api'

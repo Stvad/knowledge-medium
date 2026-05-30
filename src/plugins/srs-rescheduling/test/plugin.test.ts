@@ -349,7 +349,7 @@ describe('srsReschedulingPlugin', () => {
         cache: new BlockCache(),
         user: {id: 'user-1'},
         newTxSeq: () => ++txSeq,
-        startRowEventsTail: false,
+        startSyncObserver: false,
       })
       const baseSwipeRight = vi.fn(async () => undefined)
       const runtime = resolveFacetRuntimeSync([
@@ -413,7 +413,7 @@ describe('srsReschedulingPlugin', () => {
         user: {id: 'user-1'},
         newTxSeq: () => ++txSeq,
         registerKernelProcessors: false,
-        startRowEventsTail: false,
+        startSyncObserver: false,
       })
       const runtime = resolveFacetRuntimeSync([
         kernelDataExtension,
@@ -516,7 +516,7 @@ describe('srsReschedulingPlugin', () => {
         user: {id: 'user-1'},
         newTxSeq: () => ++txSeq,
         registerKernelProcessors: false,
-        startRowEventsTail: false,
+        startSyncObserver: false,
       })
       const runtime = resolveFacetRuntimeSync([
         kernelDataExtension,

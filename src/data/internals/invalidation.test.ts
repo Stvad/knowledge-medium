@@ -9,21 +9,24 @@
  *      dep-matching handles. Synchronous; covers everything users do
  *      in this tab.
  *
- *   2. row_events tail: filtered to source='sync', throttled, single
- *      Repo-level subscription. Updates the cache from after_json and
- *      walks the same handle invalidation (parent-edge dep on each
- *      sync-applied parent_id assignment). Covers PowerSync's
+ *   2. Layout B sync observer: PowerSync stages every downloaded row into
+ *      `blocks_synced`; the observer drains that queue, materializes each
+ *      into the app-visible `blocks` table (decrypt/copy), updates the
+ *      cache, and walks the same handle invalidation (parent-edge dep on
+ *      each sync-applied parent_id assignment). Covers PowerSync's
  *      CRUD-apply path, which bypasses repo.tx.
  *
  * These tests verify each path drives handle re-resolution end-to-end
- * (real Repo, real BlockCache, real DB, real LoaderHandle), and that
- * the source-filter prevents double invalidation.
+ * (real Repo, real BlockCache, real DB, real LoaderHandle). Local and sync
+ * writes land in PHYSICALLY DIFFERENT tables (`blocks` vs `blocks_synced`),
+ * so a local write can't double-fire through the sync path by construction.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams } from '@/data/blockSchema'
 import { Repo } from '../repo'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
@@ -45,7 +48,7 @@ const setup = async (
     db: h.db,
     cache,
     user: {id: 'u1'},
-    startRowEventsTail: opts.startTail ?? false, // off by default for determinism
+    startSyncObserver: opts.startTail ?? false, // off by default for determinism
   })
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
@@ -56,7 +59,7 @@ const setup = async (
 let env: Harness
 afterEach(async () => {
   if (env) {
-    env.repo.stopRowEventsTail()
+    env.repo.stopSyncObserver()
     await env.h.cleanup()
   }
 })
@@ -366,13 +369,56 @@ describe('TxEngine fast path: repo.tx → handle re-resolve', () => {
 })
 
 // ════════════════════════════════════════════════════════════════════
-// row_events tail (sync-applied invalidation)
+// Layout B sync observer (sync-applied invalidation)
 // ════════════════════════════════════════════════════════════════════
 
-describe('row_events tail: sync-applied invalidation', () => {
+describe('sync observer: sync-applied invalidation', () => {
   beforeEach(async () => { env = await setup({startTail: false}) })
 
-  it('source=sync row → handle re-resolves; cache is updated', async () => {
+  // "Newer than any local write": local creates stamp updated_at with the
+  // engine's wall clock (~1.7e12), so a sync snapshot needs a value above
+  // that to win both LWW gates (materialize + cache).
+  const NEWER = 9_000_000_000_000
+
+  /** Simulate a PowerSync sync-apply of a plaintext block: stage the row into
+   *  `blocks_synced` (firing the change-capture triggers). `flushSyncObserver()`
+   *  then materializes it into `blocks` (copy-through, source=NULL) and walks
+   *  invalidation — the Layout B path that replaces PowerSync's CRUD-apply into
+   *  `blocks`. It's an UPSERT, so re-staging the same id is an edit. */
+  const syncApply = (o: {
+    id: string
+    parentId?: string | null
+    orderKey?: string
+    content?: string
+    properties?: Record<string, unknown>
+    references?: BlockReference[]
+    workspaceId?: string
+    updatedAt?: number
+    deleted?: boolean
+  }): Promise<unknown> =>
+    env.h.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToRowParams({
+      id: o.id,
+      workspaceId: o.workspaceId ?? 'ws-1',
+      parentId: o.parentId ?? null,
+      orderKey: o.orderKey ?? 'a0',
+      content: o.content ?? '',
+      properties: o.properties ?? {},
+      references: o.references ?? [],
+      createdAt: 0,
+      updatedAt: o.updatedAt ?? 0,
+      createdBy: 'remote',
+      updatedBy: 'remote',
+      deleted: o.deleted ?? false,
+    }))
+
+  /** Simulate the server acking a block's pending local upload — PowerSync
+   *  clears `ps_crud` after a successful upload. The materialize gate
+   *  (correctly) lets an un-uploaded local edit win over an incoming sync
+   *  snapshot, so a test that sync-edits a locally-created block must first
+   *  model it as fully synced, or the gate masks the behavior under test. */
+  const markUploaded = () => env.h.db.execute('DELETE FROM ps_crud')
+
+  it('sync-applied row → handle re-resolves; cache is updated', async () => {
     await create('p')
     await create('c1', {parentId: 'p', orderKey: 'a0', content: 'one'})
     const h = env.repo.query.children({id: 'p'})
@@ -380,54 +426,34 @@ describe('row_events tail: sync-applied invalidation', () => {
     h.subscribe(v => fired.push(v))
     await vi.waitFor(() => expect(fired.length).toBe(1))
 
-    // Start the tail consuming from id=0 so we can inject sync-style
-    // events and test the path deterministically.
-    env.repo.startRowEventsTail({initialLastId: 0, throttleMs: 0})
+    env.repo.startSyncObserver({throttleMs: 0})
+    // A sync-applied insert: a brand-new child of p arrives from the server.
+    await syncApply({id: 'c2', parentId: 'p', orderKey: 'a1', content: 'remote'})
+    await env.repo.flushSyncObserver()
 
-    // Simulate a sync-applied insert by writing directly with
-    // tx_context.source = NULL (the COALESCE in the trigger tags it
-    // 'sync'). This is the closest approximation to PowerSync's
-    // CRUD-apply path in tests.
-    await env.h.db.execute(
-      `UPDATE tx_context SET source = NULL, tx_id = NULL, tx_seq = NULL WHERE id = 1`,
-    )
-    await env.h.db.execute(
-      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
-                            properties_json, references_json, created_at,
-                            updated_at, created_by, updated_by, deleted)
-       VALUES (?, 'ws-1', 'p', 'a1', 'remote', '{}', '[]', 0, 0, 'remote', 'remote', 0)`,
-      ['c2'],
-    )
-
-    await env.repo.flushRowEventsTail()
     await vi.waitFor(() => expect(fired.length).toBe(2))
-    const ids = fired[1].map(b => b.id)
-    expect(ids).toEqual(['c1', 'c2'])
+    expect(fired[1].map(b => b.id)).toEqual(['c1', 'c2'])
     expect(env.cache.getSnapshot('c2')?.content).toBe('remote')
   })
 
-  it('local writes (source=user) do NOT fire the tail (no double invalidation)', async () => {
+  it('local writes do NOT fire the sync path (no double invalidation)', async () => {
     await create('p')
     const h = env.repo.query.children({id: 'p'})
     const fired: number[] = []
     h.subscribe(v => fired.push(v.length))
     await vi.waitFor(() => expect(fired).toEqual([0]))
 
-    // Tail with initialLastId=0: would consume all row_events, but the
-    // source='sync' filter excludes the user-source rows from the
-    // earlier create('p').
-    env.repo.startRowEventsTail({initialLastId: 0, throttleMs: 0})
-    await env.repo.flushRowEventsTail() // settle the start-up read
+    env.repo.startSyncObserver({throttleMs: 0})
+    await env.repo.flushSyncObserver() // settle the start-up drain (queue empty)
 
-    // A local-write tx — source='user' — fires the engine fast path
-    // exactly once. The tail's source='sync' filter must skip the
-    // row_event the trigger wrote for this same tx.
+    // A local-write tx writes `blocks`, NOT `blocks_synced`, so it fires the
+    // engine fast path exactly once; the observer (which watches only
+    // `blocks_synced_changes`) never sees it.
     await create('c1', {parentId: 'p', orderKey: 'a0'})
-    // Wait for the engine-driven invalidation to land.
     await vi.waitFor(() => expect(fired).toEqual([0, 1]))
-    // Now flush the tail explicitly — if it produced an additional
-    // (redundant) invalidation, we'd see another fire.
-    await env.repo.flushRowEventsTail()
+    // Flush the observer explicitly — a redundant invalidation would show a
+    // third fire. None comes: local writes don't touch the staging queue.
+    await env.repo.flushSyncObserver()
     await Promise.resolve()
     await Promise.resolve()
     expect(fired).toEqual([0, 1])
@@ -438,21 +464,10 @@ describe('row_events tail: sync-applied invalidation', () => {
     const h = env.repo.query.children({id: 'p'})
     await h.load()
 
-    env.repo.startRowEventsTail({initialLastId: 0, throttleMs: 0})
+    env.repo.startSyncObserver({throttleMs: 0})
+    await syncApply({id: 'c1-remote', parentId: 'p', orderKey: 'a0'})
+    await env.repo.flushSyncObserver()
 
-    // Sync-applied insert into p.
-    await env.h.db.execute(
-      `UPDATE tx_context SET source = NULL, tx_id = NULL, tx_seq = NULL WHERE id = 1`,
-    )
-    await env.h.db.execute(
-      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
-                            properties_json, references_json, created_at,
-                            updated_at, created_by, updated_by, deleted)
-       VALUES (?, 'ws-1', 'p', 'a0', '', '{}', '[]', 0, 0, 'remote', 'remote', 0)`,
-      ['c1-remote'],
-    )
-
-    await env.repo.flushRowEventsTail()
     // The parent-edge dep on `p` matches the new child's parent_id,
     // so the load-only handle is marked stale. With no subscribers,
     // LoaderHandle defers the SQL rerun until the next load().
@@ -461,27 +476,23 @@ describe('row_events tail: sync-applied invalidation', () => {
   })
 
   it('invalidates childIds on sync-applied same-parent order_key update', async () => {
-    await create('p')
-    await create('c1', {parentId: 'p', orderKey: 'a0'})
-    await create('c2', {parentId: 'p', orderKey: 'b0'})
+    // c1, c2 arrive via sync (downloaded rows, no pending upload) — exactly
+    // how a block that can later take a winning server edit got there.
+    env.repo.startSyncObserver({throttleMs: 0})
+    await syncApply({id: 'c1', parentId: 'p', orderKey: 'a0'})
+    await syncApply({id: 'c2', parentId: 'p', orderKey: 'b0'})
+    await env.repo.flushSyncObserver()
+
     const h = env.repo.query.childIds({id: 'p', hydrate: true})
     const fired: string[][] = []
     h.subscribe(v => fired.push(v))
     await vi.waitFor(() => expect(fired).toEqual([['c1', 'c2']]))
 
-    env.repo.startRowEventsTail({initialLastId: 0, throttleMs: 0})
-    await env.h.db.execute(
-      `UPDATE tx_context SET source = NULL, tx_id = NULL, tx_seq = NULL WHERE id = 1`,
-    )
-    // Bump updated_at so the sync snapshot wins the LWW gate at the
-    // cache layer — real server-applied writes always carry a newer
-    // updated_at than what the cache already has.
-    await env.h.db.execute(
-      `UPDATE blocks SET order_key = '0', updated_at = updated_at + 1 WHERE id = ?`,
-      ['c2'],
-    )
+    // Server re-orders c2 ahead of c1. NEWER updated_at wins the LWW gate
+    // (real server-applied writes always carry a newer updated_at).
+    await syncApply({id: 'c2', parentId: 'p', orderKey: '0', updatedAt: NEWER})
+    await env.repo.flushSyncObserver()
 
-    await env.repo.flushRowEventsTail()
     await vi.waitFor(() => expect(fired).toEqual([
       ['c1', 'c2'],
       ['c2', 'c1'],
@@ -489,27 +500,21 @@ describe('row_events tail: sync-applied invalidation', () => {
   })
 
   it('does NOT re-resolve children on pure content edits (reviewer P2)', async () => {
-    await create('p')
-    await create('c1', {parentId: 'p', orderKey: 'a0', content: 'one'})
+    // c1 arrives via sync (downloaded row, no pending upload).
+    env.repo.startSyncObserver({throttleMs: 0})
+    await syncApply({id: 'c1', parentId: 'p', orderKey: 'a0', content: 'one'})
+    await env.repo.flushSyncObserver()
+
     const h = env.repo.query.children({id: 'p'})
     await h.load()
     const initial = h.peek()
 
-    env.repo.startRowEventsTail({initialLastId: 0, throttleMs: 0})
+    // Sync-applied content-only edit — same parent_id, not deleted, so
+    // membership of p's children is unchanged. NEWER updated_at passes the
+    // LWW gate (real server-applied content edits carry a newer updated_at).
+    await syncApply({id: 'c1', parentId: 'p', orderKey: 'a0', content: 'remote-edit', updatedAt: NEWER})
 
-    // Sync-applied UPDATE that touches content only — same parent_id,
-    // not deleted. Membership of p's children unchanged. Bump
-    // updated_at so the snapshot passes the cache LWW gate (real
-    // server-applied content edits always carry a newer updated_at).
-    await env.h.db.execute(
-      `UPDATE tx_context SET source = NULL, tx_id = NULL, tx_seq = NULL WHERE id = 1`,
-    )
-    await env.h.db.execute(
-      `UPDATE blocks SET content = 'remote-edit', updated_at = updated_at + 1 WHERE id = ?`,
-      ['c1'],
-    )
-
-    await env.repo.flushRowEventsTail()
+    await env.repo.flushSyncObserver()
     // The handle declares a per-row dep on each child, so the content
     // edit DOES invalidate the BlockData[] handle (row content is part
     // of its value). It should NOT, however, change the membership.
@@ -543,64 +548,18 @@ describe('row_events tail: sync-applied invalidation', () => {
     handle.subscribe((x) => fired.push(x))
     await vi.waitFor(() => expect(fired.length).toBe(1))
 
-    env.repo.startRowEventsTail({initialLastId: 0, throttleMs: 0})
-    await env.h.db.execute(
-      `UPDATE tx_context SET source = NULL, tx_id = NULL, tx_seq = NULL WHERE id = 1`,
-    )
-    await env.h.db.execute(
-      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
-                            properties_json, references_json, created_at,
-                            updated_at, created_by, updated_by, deleted)
-       VALUES (?, 'ws-1', NULL, 'a0', '', '{}', '[]', 0, 0, 'remote', 'remote', 0)`,
-      ['table-dep-row'],
-    )
-    await env.repo.flushRowEventsTail()
+    env.repo.startSyncObserver({throttleMs: 0})
+    await syncApply({id: 'table-dep-row', parentId: null, orderKey: 'a0'})
+    await env.repo.flushSyncObserver()
     await Promise.resolve()
     await Promise.resolve()
     expect(fired.length).toBe(1)
   })
 
-  it('high-watermark: only consumes new rows (id > lastId)', async () => {
-    await create('p')
-    await create('c1', {parentId: 'p', orderKey: 'a0'}) // local write — id=N
-
-    const tail = env.repo.startRowEventsTail({throttleMs: 0}) // high-watermark = MAX(id)
-    // Init runs async — flush awaits ready before reading lastId.
-    await env.repo.flushRowEventsTail()
-    const afterInit = tail.lastId()
-
-    // No further activity → second flush keeps lastId stable.
-    await env.repo.flushRowEventsTail()
-    expect(tail.lastId()).toBe(afterInit)
-  })
-
-  it('advances the watermark across local row_events without processing them', async () => {
-    await create('p')
-    const h = env.repo.query.children({id: 'p'})
-    const fired: number[] = []
-    h.subscribe(v => fired.push(v.length))
-    await vi.waitFor(() => expect(fired).toEqual([0]))
-
-    const tail = env.repo.startRowEventsTail({throttleMs: 0})
-    await env.repo.flushRowEventsTail()
-    const afterInit = tail.lastId()
-
-    await create('c1', {parentId: 'p', orderKey: 'a0'})
-    await vi.waitFor(() => expect(fired).toEqual([0, 1]))
-    const maxRow = await env.h.db.getOptional<{maxId: number | null}>(
-      `SELECT MAX(id) AS maxId FROM row_events`,
-    )
-
-    await env.repo.flushRowEventsTail()
-    await Promise.resolve()
-    await Promise.resolve()
-
-    expect(maxRow?.maxId).toBeGreaterThan(afterInit)
-    expect(tail.lastId()).toBe(maxRow?.maxId)
-    // The local row was considered for watermark purposes but not
-    // processed by the sync invalidation path, so no duplicate fire.
-    expect(fired).toEqual([0, 1])
-  })
+  // (The tail's id-watermark tests are gone: the observer drains-and-deletes
+  // its queue rather than advancing a `lastId`, and that durability — no
+  // reprocessing across restarts, coalescing re-deliveries — is pinned in
+  // observer.test.ts. Local writes never enter the queue, covered above.)
 
   it('LWW-rejected sync delivery does not invalidate handles', async () => {
     // Scenario: PowerSync upload-window replay. A local write has
@@ -617,6 +576,7 @@ describe('row_events tail: sync-applied invalidation', () => {
     // (`core.searchByContent` getting kicked off mid-load by replay
     // bursts).
     await create('A', {parentId: null, orderKey: 'a0', content: 'local-new'})
+    await markUploaded() // A is fully synced; the stale write loses on LWW, not pending
 
     // Track a handle with a per-row dep on A. After the initial load
     // it should only fire again for real changes to A.
@@ -635,37 +595,29 @@ describe('row_events tail: sync-applied invalidation', () => {
     handle.subscribe((x) => fired.push(x))
     await vi.waitFor(() => expect(fired).toEqual([1]))
 
-    env.repo.startRowEventsTail({initialLastId: 0, throttleMs: 0})
-    await env.repo.flushRowEventsTail()
+    env.repo.startSyncObserver({throttleMs: 0})
+    await env.repo.flushSyncObserver()
 
     const invalidationsBefore = env.repo.handleStore.metrics.snapshot().invalidations
 
-    // Sync replays an OLDER `updated_at` than the cache. `updated_at = 1`
-    // is well below `Date.now()` used by the local create above, so
-    // `applyIfNewer` rejects the snapshot via the LWW gate.
-    await env.h.db.execute(
-      `UPDATE tx_context SET source = NULL, tx_id = NULL, tx_seq = NULL WHERE id = 1`,
-    )
-    await env.h.db.execute(
-      `UPDATE blocks SET content = 'server-stale', updated_at = 1 WHERE id = ?`,
-      ['A'],
-    )
+    // Sync replays an OLDER `updated_at` (=1) than the local create's wall
+    // clock, so the materialize LWW gate (local.updated_at >= staging ⇒
+    // skip-stale) drops it before it ever reaches `blocks`.
+    await syncApply({id: 'A', parentId: null, orderKey: 'a0', content: 'server-stale', updatedAt: 1})
 
-    await env.repo.flushRowEventsTail()
+    await env.repo.flushSyncObserver()
     await Promise.resolve()
     await Promise.resolve()
 
-    // The row_event has before='local-new', after='server-stale' —
-    // without the LWW skip, this would fire kernel.content AND the
-    // per-row dep on A. With the skip, neither contributes to the
-    // notification, so no handle is woken and the metric is unchanged.
+    // Skip-stale ⇒ no `blocks` write, no snapshot, no invalidation: neither
+    // kernel.content nor the per-row dep on A is woken.
     expect(env.repo.handleStore.metrics.snapshot().invalidations)
       .toBe(invalidationsBefore)
     expect(fired).toEqual([1])
-    // Cache retained the local-new state (LWW rejected the stale write).
+    // Cache retained the local-new state (the stale write never landed).
     expect(env.cache.getSnapshot('A')?.content).toBe('local-new')
   })
 
 })
 
-import type { BlockData } from '@/data/api'
+import type { BlockData, BlockReference } from '@/data/api'
