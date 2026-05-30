@@ -8,10 +8,13 @@
 # surface and bucket count smaller than three independent auto streams.
 # PowerSync re-evaluates the set whenever workspace_members changes.
 #
-# IMPORTANT: do not alias the primary table in the FROM clause. PowerSync uses
-# the FROM-clause name as the row_type that maps back to the client's raw
-# table name. `FROM public.blocks b` would surface row_type='b' and the
-# client would never hydrate its `blocks` table.
+# IMPORTANT: PowerSync derives the client-side row_type from the FROM-clause
+# name. So the PRIMARY tables must NOT be aliased — `FROM public.blocks b`
+# would surface row_type='b' and a client would never hydrate its `blocks`
+# table. The one DELIBERATE exception is the Layout B `blocks_synced` twin:
+# it aliases `public.blocks AS blocks_synced` precisely to re-emit the same
+# rows under row_type='blocks_synced' for clients that stage + decrypt via the
+# observer. See the TEMPORARY note on that query in gen-sync-config.ts.
 #
 # workspace_invitations is intentionally NOT synced. Invitations are queried
 # on demand via Supabase REST + the workspace_invitations RLS policy keyed
@@ -67,4 +70,20 @@ streams:
           blocks.deleted
         FROM public.blocks
         WHERE blocks.workspace_id IN user_workspaces
+      - |
+        SELECT
+          blocks_synced.id,
+          blocks_synced.workspace_id,
+          blocks_synced.parent_id,
+          blocks_synced.order_key,
+          blocks_synced.content,
+          blocks_synced.properties_json,
+          blocks_synced.references_json,
+          blocks_synced.created_at,
+          blocks_synced.updated_at,
+          blocks_synced.created_by,
+          blocks_synced.updated_by,
+          blocks_synced.deleted
+        FROM public.blocks blocks_synced
+        WHERE blocks_synced.workspace_id IN user_workspaces
 
