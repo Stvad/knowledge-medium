@@ -42,9 +42,9 @@
  * are currently in the result; these channels close the gap for rows
  * that *could enter or leave* the result.
  *
- * The rule runs both in the fast tx path (`collectFromSnapshots`) and in
- * the row_events tail (`collectFromRowEvent`) so sync-applied writes
- * fire the same channels.
+ * The rule runs via `collectFromSnapshots` on both the fast tx path and the
+ * Layout B sync observer, so local and sync-applied writes fire the same
+ * channels from one code path.
  */
 
 import type { ChangeSnapshot, InvalidationRule } from '@/data/invalidation.js'
@@ -419,15 +419,5 @@ export const kernelInvalidationRule: InvalidationRule = {
     for (const [id, snapshot] of snapshots) {
       emitKernelInvalidations(snapshot, emit, id)
     }
-  },
-  collectFromRowEvent: ({ before, after }, emit) => {
-    // Row-event payloads expose the full BlockData; ChangeSnapshot is the
-    // slim view a rule needs. The slim shape is structurally compatible
-    // — `content` and `properties` ride along under their own names.
-    emitKernelInvalidations(
-      { before: before as ChangeSnapshot['before'], after: after as ChangeSnapshot['after'] },
-      emit,
-      before?.id ?? after?.id,
-    )
   },
 }

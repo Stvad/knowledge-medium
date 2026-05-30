@@ -45,37 +45,6 @@ export const SEED_TX_CONTEXT_ROW_SQL = `
   INSERT OR IGNORE INTO tx_context (id) VALUES (1)
 `
 
-/** Per-row audit + invalidation log. Trigger-written. tx_id = NULL for
- *  sync-applied writes (see the COALESCE / CASE in the row_events
- *  triggers below). */
-export const CREATE_ROW_EVENTS_TABLE_SQL = `
-  CREATE TABLE IF NOT EXISTS row_events (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    tx_id       TEXT,
-    block_id    TEXT NOT NULL,
-    kind        TEXT NOT NULL,
-    before_json TEXT,
-    after_json  TEXT,
-    source      TEXT NOT NULL,
-    created_at  INTEGER NOT NULL
-  )
-`
-
-export const CREATE_ROW_EVENTS_TX_INDEX_SQL = `
-  CREATE INDEX IF NOT EXISTS idx_row_events_tx
-  ON row_events (tx_id)
-`
-
-export const CREATE_ROW_EVENTS_BLOCK_INDEX_SQL = `
-  CREATE INDEX IF NOT EXISTS idx_row_events_block
-  ON row_events (block_id, created_at DESC)
-`
-
-export const CREATE_ROW_EVENTS_CREATED_INDEX_SQL = `
-  CREATE INDEX IF NOT EXISTS idx_row_events_created
-  ON row_events (created_at DESC)
-`
-
 /** Per-tx metadata. One row per `repo.tx` invocation. Sync-applied writes
  *  don't go through `repo.tx` and therefore don't produce
  *  `command_events`. */
@@ -260,130 +229,18 @@ export const CREATE_PS_CRUD_REJECTED_TX_ID_INDEX_SQL = `
 `
 
 // ============================================================================
-// Helpers used inside trigger bodies. Centralised so the SQL fragments
-// match in every trigger.
-// ============================================================================
-
-/** Snapshot a `blocks` row as JSON in domain shape (camelCase) for
- *  `row_events.{before,after}_json`. NEW / OLD references resolve at
- *  trigger time. */
-const blockJsonObjectSql = (rowRef: 'NEW' | 'OLD') => `
-      json_object(
-        'id', ${rowRef}.id,
-        'workspaceId', ${rowRef}.workspace_id,
-        'parentId', ${rowRef}.parent_id,
-        'orderKey', ${rowRef}.order_key,
-        'content', ${rowRef}.content,
-        'properties', json(${rowRef}.properties_json),
-        'references', json(${rowRef}.references_json),
-        'createdAt', ${rowRef}.created_at,
-        'updatedAt', ${rowRef}.updated_at,
-        'createdBy', ${rowRef}.created_by,
-        'updatedBy', ${rowRef}.updated_by,
-        'deleted', json(CASE WHEN ${rowRef}.deleted THEN 'true' ELSE 'false' END)
-      )
-`.trim()
-
-/** Belt-and-suspenders: tx_id is the active local tx_id only when source
- *  IS NOT NULL. Sync-applied writes leave source = NULL (no `repo.tx` is
- *  open during PowerSync's CRUD apply); without this guard a stale tx_id
- *  left in `tx_context` from the previous local tx would leak into the
- *  sync-applied row_events row. The TxEngine clears all four fields at
- *  end-of-tx; the trigger logic is the load-bearing correctness check. */
-const triggerTxIdSql = `
-      CASE
-        WHEN (SELECT source FROM tx_context WHERE id = 1) IS NULL
-          THEN NULL
-        ELSE (SELECT tx_id FROM tx_context WHERE id = 1)
-      END
-`.trim()
-
-const triggerSourceSql = `COALESCE((SELECT source FROM tx_context WHERE id = 1), 'sync')`
-
-// ============================================================================
-// row_events triggers (3) — fire for both local AND sync writes; the
-// COALESCE-to-'sync' tag distinguishes them.
-//
-// Soft-delete semantics (§4.3): tx.delete sets deleted = 1 (UPDATE), so it
-// fires the UPDATE trigger. The body inspects whether `deleted` transitioned
-// from 0 to 1 and writes kind = 'soft-delete' instead of 'update'.
-// ============================================================================
-
-export const CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL = `
-  CREATE TRIGGER IF NOT EXISTS blocks_row_event_insert
-  AFTER INSERT ON blocks
-  BEGIN
-    INSERT INTO row_events (
-      tx_id, block_id, kind, before_json, after_json, source, created_at
-    ) VALUES (
-      ${triggerTxIdSql},
-      NEW.id,
-      'create',
-      NULL,
-      ${blockJsonObjectSql('NEW')},
-      ${triggerSourceSql},
-      CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
-    );
-  END
-`
-
-export const CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL = `
-  CREATE TRIGGER IF NOT EXISTS blocks_row_event_update
-  AFTER UPDATE ON blocks
-  BEGIN
-    INSERT INTO row_events (
-      tx_id, block_id, kind, before_json, after_json, source, created_at
-    ) VALUES (
-      ${triggerTxIdSql},
-      NEW.id,
-      CASE
-        WHEN OLD.deleted = 0 AND NEW.deleted = 1 THEN 'soft-delete'
-        ELSE 'update'
-      END,
-      ${blockJsonObjectSql('OLD')},
-      ${blockJsonObjectSql('NEW')},
-      ${triggerSourceSql},
-      CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
-    );
-  END
-`
-
-/** DELETE row_event writer is reserved for hard purges. v1 ships no purge
- *  mechanism; the trigger exists for future use (e.g. a job that purges
- *  soft-deleted rows older than N days). Hard deletes do not sync —
- *  PowerSync sees the row vanish locally; soft-delete via the synced
- *  `deleted` column is what propagates "this row is gone" through sync. */
-export const CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL = `
-  CREATE TRIGGER IF NOT EXISTS blocks_row_event_delete
-  AFTER DELETE ON blocks
-  BEGIN
-    INSERT INTO row_events (
-      tx_id, block_id, kind, before_json, after_json, source, created_at
-    ) VALUES (
-      ${triggerTxIdSql},
-      OLD.id,
-      'delete',
-      ${blockJsonObjectSql('OLD')},
-      NULL,
-      ${triggerSourceSql},
-      CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
-    );
-  END
-`
-
-// ============================================================================
 // blocks_synced change-capture queue (Layout B, design doc §9.2) — the
 // observer's O(delta) detection signal, replacing an O(N) re-scan of the whole
 // staging table on every startup/tick.
 //
 // PowerSync's sync-apply runs the raw-table put/delete statements
-// (BLOCKS_SYNCED_RAW_TABLE) directly against `blocks_synced`, and those normal
-// INSERT/DELETE statements fire the AFTER triggers below — the SAME mechanism
-// the row_events triggers rely on for sync-applied writes to the live `blocks`
+// (BLOCKS_SYNCED_RAW_TABLE) directly against `blocks_synced` as ordinary SQL,
+// and those INSERT/DELETE statements fire the AFTER triggers below — the
+// signal the observer drains to materialize each change into the live `blocks`
 // table (the production sync-invalidation path).
 //
-// APPEND-ONLY LOG keyed by a monotonic `seq`, drained with the proven
-// row_events watermark pattern: the observer reads rows up to MAX(seq),
+// APPEND-ONLY LOG keyed by a monotonic `seq`, drained with a watermark
+// pattern: the observer reads rows up to MAX(seq),
 // processes them, then `DELETE … WHERE seq <= <that max>`. This is robust to
 // the two things a coalescing id-keyed table is NOT:
 //   - Drain race: a delivery that lands mid-drain gets a higher seq, so the
@@ -1036,10 +893,6 @@ export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = [
   // Tables
   CREATE_TX_CONTEXT_TABLE_SQL,
   SEED_TX_CONTEXT_ROW_SQL,
-  CREATE_ROW_EVENTS_TABLE_SQL,
-  CREATE_ROW_EVENTS_TX_INDEX_SQL,
-  CREATE_ROW_EVENTS_BLOCK_INDEX_SQL,
-  CREATE_ROW_EVENTS_CREATED_INDEX_SQL,
   CREATE_COMMAND_EVENTS_TABLE_SQL,
   CREATE_COMMAND_EVENTS_CREATED_INDEX_SQL,
   CREATE_COMMAND_EVENTS_WORKSPACE_INDEX_SQL,
@@ -1056,10 +909,7 @@ export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = [
   CREATE_PS_CRUD_REJECTED_TX_ID_INDEX_SQL,
   CREATE_BLOCKS_SYNCED_CHANGES_TABLE_SQL,
   DROP_BLOCKS_WORKSPACE_TYPE_INDEX_SQL,
-  // 5 audit/upload triggers
-  CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL,
-  CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL,
-  CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL,
+  // 2 upload-routing triggers
   CREATE_BLOCKS_UPLOAD_INSERT_TRIGGER_SQL,
   CREATE_BLOCKS_UPLOAD_UPDATE_TRIGGER_SQL,
   // 2 workspace-invariant triggers
@@ -1087,9 +937,6 @@ export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = [
 ] as const
 
 export const CLIENT_SCHEMA_TRIGGER_NAMES = [
-  'blocks_row_event_insert',
-  'blocks_row_event_update',
-  'blocks_row_event_delete',
   'blocks_upload_insert',
   'blocks_upload_update',
   'blocks_parent_workspace_check_insert',

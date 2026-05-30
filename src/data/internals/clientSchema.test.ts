@@ -8,11 +8,6 @@
  * dependency added.
  *
  * What this covers (data-layer-redesign §4.3 / §4.5 / §4.1.1):
- *   - row_events triggers fire for INSERT / UPDATE / DELETE
- *   - source COALESCE: NULL → 'sync'; 'user' passes through
- *   - tx_id belt-and-suspenders: NULL when source is NULL, even with a
- *     stale tx_id left in tx_context
- *   - soft-delete UPDATE emits kind='soft-delete'
  *   - upload-routing triggers fire on every repo.tx write (source IS NOT NULL),
  *     and skip sync-applied writes (source = NULL)
  *   - workspace-invariant triggers reject cross-workspace + dangling
@@ -28,7 +23,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
 import {
-  BLOCKS_RAW_TABLE,
   BLOCK_STORAGE_COLUMNS,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
   CREATE_BLOCKS_SYNCED_TABLE_SQL,
@@ -61,9 +55,7 @@ interface TestDb {
   insertWorkspaceMember: (overrides?: Partial<WorkspaceMemberInsert>) => void
   updateBlock: (id: string, set: Record<string, unknown>) => void
   deleteBlock: (id: string) => void
-  rowEvents: () => Array<RowEventRow>
   psCrud: () => Array<{ id: number; data: string; tx_id: number | null }>
-  rowEventCount: () => number
 }
 
 interface WorkspaceMemberInsert {
@@ -80,17 +72,6 @@ const defaultMember: WorkspaceMemberInsert = {
   user_id: 'user-1',
   role: 'owner',
   create_time: 1700000000000,
-}
-
-interface RowEventRow {
-  id: number
-  tx_id: string | null
-  block_id: string
-  kind: string
-  before_json: string | null
-  after_json: string | null
-  source: string
-  created_at: number
 }
 
 interface BlockInsert {
@@ -195,9 +176,7 @@ const setupDb = (): TestDb => {
     deleteBlock: (id) => {
       db.prepare('DELETE FROM blocks WHERE id = ?').run(id)
     },
-    rowEvents: () => db.prepare('SELECT * FROM row_events ORDER BY id').all() as unknown as RowEventRow[],
     psCrud: () => db.prepare('SELECT * FROM ps_crud ORDER BY id').all() as unknown as { id: number; data: string; tx_id: number | null }[],
-    rowEventCount: () => (db.prepare('SELECT COUNT(*) AS n FROM row_events').get() as {n: number}).n,
   }
 }
 
@@ -210,8 +189,8 @@ afterEach(() => { h.db.close() })
 describe('client schema bootstrap', () => {
   it('creates the documented set of client-schema triggers', () => {
     // CLIENT_SCHEMA_TRIGGER_NAMES covers triggers on `blocks` (the
-    // bulk of them — row_events, upload routing, workspace
-    // invariants, side-index maintenance), on `block_aliases`
+    // bulk of them — upload routing, workspace invariants, side-index
+    // maintenance), on `block_aliases`
     // (the uniqueness-enforcement trigger), and on `blocks_synced`
     // (the Layout B change-capture triggers). Query against all three
     // tables so the inventory test catches additions on any side.
@@ -253,118 +232,6 @@ describe('client schema bootstrap', () => {
       {name: 'error_message', type: 'TEXT', notnull: 0},
       {name: 'rejected_at', type: 'INTEGER', notnull: 1},
     ])
-  })
-})
-
-describe('row_events trigger — INSERT', () => {
-  it("tags source='user' and writes tx_id when local user tx is open", () => {
-    h.setTxContext({txId: 'tx-A', userId: 'user-1', scope: 'block-default', source: 'user'})
-    h.insertBlock({id: 'b1'})
-    h.clearTxContext()
-    const events = h.rowEvents()
-    expect(events).toHaveLength(1)
-    expect(events[0]).toMatchObject({block_id: 'b1', kind: 'create', source: 'user', tx_id: 'tx-A'})
-    expect(events[0].before_json).toBeNull()
-    expect(events[0].after_json).toContain('"id":"b1"')
-  })
-
-  it("tags source='user' for UI-state writes (no separate local-ephemeral sink)", () => {
-    // UI-state writes used to land with source='local-ephemeral' and
-    // bypass the upload triggers. Phase 2 dropped that distinction —
-    // every repo.tx write is tagged 'user'; the rejection quarantine
-    // catches anything the server refuses.
-    h.setTxContext({txId: 'tx-B', userId: 'user-1', scope: 'local-ui', source: 'user'})
-    h.insertBlock({id: 'b2'})
-    h.clearTxContext()
-    expect(h.rowEvents()[0]).toMatchObject({source: 'user', tx_id: 'tx-B'})
-  })
-
-  it("COALESCEs NULL source to 'sync' and ZEROES tx_id (sync apply)", () => {
-    // tx_context stays at its post-clear state: source IS NULL
-    h.insertBlock({id: 'b3'})
-    expect(h.rowEvents()[0]).toMatchObject({source: 'sync', tx_id: null})
-  })
-
-  it("belt-and-suspenders: stale tx_id with NULL source still emits tx_id=NULL", () => {
-    // Simulate the failure mode: the engine forgot to clear tx_id but did clear source.
-    h.db.exec("UPDATE tx_context SET tx_id = 'stale', source = NULL WHERE id = 1")
-    h.insertBlock({id: 'b4'})
-    expect(h.rowEvents()[0]).toMatchObject({source: 'sync', tx_id: null})
-  })
-})
-
-describe('row_events trigger — UPDATE', () => {
-  beforeEach(() => {
-    // Seed an existing row via sync so its insert event is tagged 'sync'.
-    h.insertBlock({id: 'b1'})
-  })
-
-  it("emits kind='update' for non-deleted-flip changes", () => {
-    h.setTxContext({txId: 'tx-1', userId: 'user-1', scope: 'block-default', source: 'user'})
-    h.updateBlock('b1', {content: 'edited', updated_at: 1700000999000})
-    h.clearTxContext()
-    const last = h.rowEvents().at(-1)!
-    expect(last).toMatchObject({block_id: 'b1', kind: 'update', source: 'user', tx_id: 'tx-1'})
-    expect(last.before_json).toContain('"content":""')
-    expect(last.after_json).toContain('"content":"edited"')
-  })
-
-  it("emits kind='soft-delete' for deleted 0→1 transitions", () => {
-    h.setTxContext({txId: 'tx-2', userId: 'user-1', scope: 'block-default', source: 'user'})
-    h.updateBlock('b1', {deleted: 1})
-    h.clearTxContext()
-    const last = h.rowEvents().at(-1)!
-    expect(last.kind).toBe('soft-delete')
-    expect(last.before_json).toContain('"deleted":false')
-    expect(last.after_json).toContain('"deleted":true')
-  })
-
-  it("emits kind='update' (not 'soft-delete') for already-deleted rows touched again", () => {
-    // Land the soft-delete first.
-    h.setTxContext({txId: 'tx-2', userId: 'user-1', scope: 'block-default', source: 'user'})
-    h.updateBlock('b1', {deleted: 1})
-    // Now touch the deleted row again — content edit on tombstone, kind stays 'update'.
-    h.updateBlock('b1', {content: 'posthumous'})
-    h.clearTxContext()
-    const last = h.rowEvents().at(-1)!
-    expect(last.kind).toBe('update')
-  })
-})
-
-describe('PowerSync raw-table put', () => {
-  it('does not fire UPDATE triggers for identical sync replays', () => {
-    const put = h.db.prepare(BLOCKS_RAW_TABLE.put.sql)
-    const row = {...defaultBlock, id: 'raw-put'}
-
-    put.run(...blockValues(row))
-    expect(h.rowEvents()).toHaveLength(1)
-    expect(h.rowEvents()[0]).toMatchObject({block_id: 'raw-put', kind: 'create', source: 'sync'})
-
-    put.run(...blockValues(row))
-    expect(h.rowEvents()).toHaveLength(1)
-
-    put.run(...blockValues({
-      ...row,
-      content: 'changed',
-      updated_at: row.updated_at + 1,
-    }))
-    const events = h.rowEvents()
-    expect(events).toHaveLength(2)
-    expect(events[1]).toMatchObject({block_id: 'raw-put', kind: 'update', source: 'sync'})
-    expect(events[1].before_json).toContain('"content":""')
-    expect(events[1].after_json).toContain('"content":"changed"')
-  })
-})
-
-describe('row_events trigger — DELETE', () => {
-  it("emits kind='delete' on hard delete with before snapshot only", () => {
-    h.insertBlock({id: 'b1'})
-    h.deleteBlock('b1')
-    const events = h.rowEvents()
-    const del = events.at(-1)!
-    expect(del.kind).toBe('delete')
-    expect(del.before_json).toContain('"id":"b1"')
-    expect(del.after_json).toBeNull()
   })
 })
 

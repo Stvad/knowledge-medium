@@ -1,5 +1,3 @@
-import type { BlockData } from '@/data/api'
-
 export type PluginInvalidationKeys = ReadonlySet<string> | readonly string[]
 export type PluginInvalidationMap = ReadonlyMap<string, PluginInvalidationKeys>
 
@@ -28,23 +26,12 @@ export interface ChangeSnapshot {
   after: ChangeSnapshotSide | null
 }
 
-export interface InvalidationRowEvent {
-  blockId: string
-  kind: string
-  before: BlockData | null
-  after: BlockData | null
-}
-
 export type PluginInvalidationEmit = (channel: string, key: string) => void
 
 export interface InvalidationRule {
   id: string
   collectFromSnapshots?: (
     snapshots: ReadonlyMap<string, ChangeSnapshot>,
-    emit: PluginInvalidationEmit,
-  ) => void
-  collectFromRowEvent?: (
-    event: InvalidationRowEvent,
     emit: PluginInvalidationEmit,
   ) => void
 }

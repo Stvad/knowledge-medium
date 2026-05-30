@@ -11,9 +11,10 @@
  *   1. It mirrors the `blocks` column shape exactly, so a downloaded server
  *      row hydrates without dropping fields.
  *   2. It is a PASSIVE landing zone — it carries none of the `blocks`
- *      triggers, so a write to it neither enqueues an upload (`ps_crud`) nor
- *      generates a `row_events` audit row. (If it did, every downloaded row
- *      would echo straight back up as a local edit.)
+ *      upload-routing triggers, so a write to it never enqueues an upload
+ *      (`ps_crud`). (If it did, every downloaded row would echo straight back
+ *      up as a local edit.) Its only trigger is the change-capture queue the
+ *      observer drains.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -58,13 +59,11 @@ describe('blocks_synced staging table', () => {
     expect(normalize(staged)).toEqual(normalize(blocks))
   })
 
-  it('is a passive landing zone — a write enqueues no upload and logs no row_event', async () => {
+  it('is a passive landing zone — a write enqueues no upload', async () => {
     await env.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToRowParams(fixture))
 
     const crud = await env.db.getAll('SELECT id FROM ps_crud')
     expect(crud).toHaveLength(0)
-    const events = await env.db.getAll('SELECT id FROM row_events')
-    expect(events).toHaveLength(0)
 
     // The row itself did land in staging.
     const staged = await env.db.getAll<{ id: string; content: string }>(

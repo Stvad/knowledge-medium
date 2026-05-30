@@ -2,16 +2,15 @@
 /**
  * Cutover parity (design doc §9.2, D-4 pre-flight).
  *
- * The Layout B cutover reroutes EVERY block — 100% of today's plaintext data
- * included — off the legacy `blocks` raw-table apply and onto the
- * `blocks_synced → observer → blocks` path. This pins the safety claim that
- * the two paths are observationally identical for a plaintext block: the
- * materialized `blocks` row AND every trigger-maintained derived index
- * (aliases, types, references, FTS + its rowid map) must match what the legacy
- * raw-table `put` produces. The unit tests for `materializeStagingRows` assert
- * a subset (content / properties_json / updated_at / aliases); this asserts the
- * WHOLE materialized state against the path it replaces, so the cutover is a
- * proven equivalence rather than an argument.
+ * The Layout B cutover routes EVERY block — 100% of plaintext data included —
+ * through the `blocks_synced → observer → blocks` path. This pins the safety
+ * claim that materializing a plaintext block is observationally identical to a
+ * direct write into `blocks`: the materialized row AND every trigger-maintained
+ * derived index (aliases, types, references, FTS + its rowid map) must match
+ * what a plain INSERT produces. The unit tests for `materializeStagingRows`
+ * assert a subset (content / properties_json / updated_at / aliases); this
+ * asserts the WHOLE materialized state against a direct write, so the observer
+ * path is a proven equivalence rather than an argument.
  *
  * Also pins the FTS-rowid-stability guarantee the observer's
  * `ON CONFLICT DO UPDATE` (rather than delete+insert) exists to provide.
@@ -22,8 +21,8 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
-  BLOCKS_RAW_TABLE,
   BLOCKS_SYNCED_RAW_TABLE,
+  BLOCK_STORAGE_COLUMNS,
   blockToRowParams,
 } from '@/data/blockSchema'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -80,9 +79,16 @@ const derivedState = async (db: TestDb['db'], id: string) => ({
   )).length === 1,
 })
 
-/** Legacy path: exactly the `put` PowerSync's CRUD-apply runs into `blocks`. */
-const legacyPut = (db: TestDb['db'], b: BlockData) =>
-  db.execute(BLOCKS_RAW_TABLE.put.sql, blockToRowParams(b))
+const BLOCK_COLUMN_NAMES = BLOCK_STORAGE_COLUMNS.map(c => c.name)
+const INSERT_BLOCK_SQL =
+  `INSERT INTO blocks (${BLOCK_COLUMN_NAMES.join(', ')}) ` +
+  `VALUES (${BLOCK_COLUMN_NAMES.map(() => '?').join(', ')})`
+
+/** Reference path: a plain direct write into `blocks` — the canonical
+ *  derived-index state the observer must reproduce, independent of any
+ *  particular sync-apply SQL. */
+const directWrite = (db: TestDb['db'], b: BlockData) =>
+  db.execute(INSERT_BLOCK_SQL, blockToRowParams(b))
 
 /** New path: stage into `blocks_synced`, then materialize via the observer core. */
 const stageAndMaterialize = async (db: TestDb['db'], b: BlockData) => {
@@ -99,11 +105,11 @@ let obs: TestDb
 beforeEach(async () => { ref = await createTestDb(); obs = await createTestDb() })
 afterEach(async () => { await ref.cleanup(); await obs.cleanup() })
 
-describe('cutover parity — plaintext block: observer path vs legacy raw-table apply', () => {
+describe('cutover parity — plaintext block: observer path vs a direct blocks write', () => {
   it('produces an identical blocks row and identical derived indexes', async () => {
     const block = richBlock()
 
-    await legacyPut(ref.db, block)
+    await directWrite(ref.db, block)
     const out = await stageAndMaterialize(obs.db, block)
     expect(out.applied).toEqual([block.id])
 
@@ -125,8 +131,8 @@ describe('cutover parity — plaintext block: observer path vs legacy raw-table 
     const block = richBlock()
 
     // Seed both, then remove via each path.
-    await legacyPut(ref.db, block)
-    await ref.db.execute(BLOCKS_RAW_TABLE.delete.sql, [block.id])
+    await directWrite(ref.db, block)
+    await ref.db.execute('DELETE FROM blocks WHERE id = ?', [block.id])
 
     await stageAndMaterialize(obs.db, block)
     const out = await materializeStagingRows(
