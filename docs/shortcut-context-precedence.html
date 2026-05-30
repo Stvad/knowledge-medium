@@ -352,10 +352,26 @@ everywhere" need, the clean tool is letting <code>ActionDecorator.decorate</code
       pre-resolution breaks (the loser is already uninstalled). That's the same wall as the D question — Option D
       <em>is</em> the supported way to do declinable handling. Document the invariant next to the dedup so a future
       reader knows shipping declinable handling means moving to fire-time, not bolting onto the filter.</li>
-  <li><strong>Chord canonicalization.</strong> Grouping by chord needs the same normalization
-      <code>keybindingConflicts.ts</code> already does (alternatives like <code>['$mod+z','ctrl+z']</code>,
-      code-form chords). Reuse it; don't reinvent. (Not unique to this approach — any single-winner scheme
-      needs it.)</li>
+  <li><strong>Chord canonicalization is NOT free today.</strong> Grouping by chord needs equivalent
+      bindings to compare equal — but <code>keybindingConflicts.ts</code> does <em>not</em> canonicalize;
+      it buckets raw strings via <code>toChordArray</code>, so <code>Meta+K</code> vs <code>$mod+k</code>,
+      reordered modifiers, and code-form chords would land in different buckets and install as separate
+      listeners. The only real normalizer is <code>normalizeChord</code> in
+      <span class="filepath">keybindings-settings/keyCapture.ts:205</span>, and it has limits: it maps
+      modifier aliases (<code>cmd</code>/<code>meta</code>/<code>os</code> → <code>$mod</code>) and lowercases
+      modifier names, but does <strong>not sort modifiers</strong> (so <code>Shift+$mod+k</code> vs
+      <code>$mod+Shift+k</code> still differ) and lives in a plugin, not shared infra. <strong>Action item:</strong>
+      this work must <em>add</em> a shared canonicalizer (lift/extend <code>normalizeChord</code> into
+      <code>src/shortcuts/</code>, add modifier sorting) and use it in both the dedup and ideally
+      <code>keybindingConflicts</code> — it is not a "reuse what exists" freebie.</li>
+  <li><strong>Dedup key must include <code>phase</code>, not just the chord.</strong>
+      <code>ShortcutBindingDefaults</code> supports <code>keydown</code> / <code>keyup</code> / <code>hold</code>,
+      and the repo already has phase-distinct same-key bindings that are <em>not</em> a same-event collision:
+      <code>dateScrubActions.ts</code> binds hold <code>s</code> in <code>normal-mode</code>
+      (<span class="filepath">:75</span>) and keyup <code>s</code> in <code>date-scrub</code>
+      (<span class="filepath">:90</span>). A chord-only bucket would wrongly make one shadow the other. Key the
+      winner bucket on <code>(canonical-chord, phase)</code>, and keep hold handling on its own path (it already
+      installs via a separate observer). Only same-<code>(chord, phase)</code> bindings are a real collision.</li>
   <li><strong>Equal-priority fragility persists.</strong> When two same-priority contexts activate off one
       focus event, the tiebreak is incidental timing. Acceptable for stacked modes; if a real case wants
       determinism, that's the moment to reconsider — not now.</li>
@@ -371,14 +387,20 @@ everywhere" need, the clean tool is letting <code>ActionDecorator.decorate</code
   <li><code>types.ts</code> — add <code>priority?: number</code> to <code>ActionContextConfig</code> (+ doc comment).</li>
   <li><code>effectiveActions.ts</code> — extract <code>compareContexts</code>; rewrite
       <code>getActiveActionById</code> to use it.</li>
+  <li><strong>New shared chord canonicalizer</strong> in <code>src/shortcuts/</code> — lift/extend
+      <code>normalizeChord</code> (alias-fold + lowercase modifiers + <em>sort modifiers</em>); use it in the
+      dedup and, ideally, retrofit <code>keybindingConflicts.ts</code> off it. This is net-new code, not reuse.</li>
 </ul>
 <p><strong>If activation-time (A only):</strong></p>
 <ul class="tight">
-  <li><code>HotkeyReconciler.tsx</code> — per-chord dedup in the install loop using the shared comparator;
-      install only the winner; document the <code>eventFilter</code> invariant.</li>
+  <li><code>HotkeyReconciler.tsx</code> — <code>(canonical-chord, phase)</code> dedup in the install loop using
+      the shared comparator; install only the winner per bucket; keep the hold path distinct; document the
+      <code>eventFilter</code> invariant.</li>
   <li>Tests — higher-priority context wins a same-key collision even when activated earlier; deactivating it
       restores the lower binding; equal priority falls back to last-wins; <code>modal</code> still suppresses
-      non-colliding chords; <code>global</code> survives.</li>
+      non-colliding chords; <code>global</code> survives; <strong>same key on different phases (hold <code>s</code>
+      vs keyup <code>s</code>) does NOT dedup away</strong>; alias-equivalent chords (<code>Meta+K</code> /
+      <code>$mod+k</code>) DO dedup together.</li>
 </ul>
 <p><strong>If fire-time (A + D):</strong></p>
 <ul class="tight">
