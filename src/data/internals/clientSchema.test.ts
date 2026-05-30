@@ -213,6 +213,29 @@ describe('client schema bootstrap', () => {
     }
   })
 
+  it('drops the retired row_events log + triggers on an upgraded database', () => {
+    // Simulate a DB created by a pre-D-4 release: the row_events audit log and
+    // its triggers are still installed (an additive CREATE-IF-NOT-EXISTS list
+    // wouldn't remove them on its own).
+    h.db.exec('CREATE TABLE IF NOT EXISTS row_events (id INTEGER PRIMARY KEY AUTOINCREMENT, block_id TEXT)')
+    h.db.exec('CREATE TRIGGER blocks_row_event_insert AFTER INSERT ON blocks BEGIN INSERT INTO row_events (block_id) VALUES (NEW.id); END')
+    h.db.exec('CREATE TRIGGER blocks_row_event_update AFTER UPDATE ON blocks BEGIN INSERT INTO row_events (block_id) VALUES (NEW.id); END')
+    h.db.exec('CREATE TRIGGER blocks_row_event_delete AFTER DELETE ON blocks BEGIN INSERT INTO row_events (block_id) VALUES (OLD.id); END')
+
+    // Re-running the bootstrap cleans them up.
+    for (const stmt of CLIENT_SCHEMA_STATEMENTS) h.db.exec(stmt)
+
+    const leftover = (h.db
+      .prepare("SELECT name FROM sqlite_master WHERE name = 'row_events' OR name LIKE 'blocks_row_event_%'")
+      .all() as Array<{name: string}>)
+    expect(leftover).toEqual([])
+
+    // Drop order matters: a surviving trigger over a dropped table would fail
+    // the next write with "no such table: row_events". A clean insert proves
+    // the table was dropped only after its triggers.
+    expect(() => h.insertBlock({id: 'after-cleanup'})).not.toThrow()
+  })
+
   it('creates ps_crud_rejected with the columns the upload handler writes', () => {
     // ps_crud_rejected quarantines uploads the server permanently
     // refused (FK violation, RLS denial, 4xx). The upload handler in

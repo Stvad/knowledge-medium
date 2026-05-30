@@ -45,6 +45,22 @@ export const SEED_TX_CONTEXT_ROW_SQL = `
   INSERT OR IGNORE INTO tx_context (id) VALUES (1)
 `
 
+/** D-4 retired the `row_events` audit log + its `blocks_row_event_*` triggers
+ *  (they fed the removed `rowEventsTail`). A database created by an earlier
+ *  release still has them installed, and dropping the DDL from the additive
+ *  `CREATE … IF NOT EXISTS` list below does NOT remove them. With no consumer
+ *  draining `row_events` now, the triggers would grow it without bound as the
+ *  observer materializes every sync write — so drop them on the next bootstrap.
+ *  Idempotent: a no-op on fresh installs. Triggers are dropped BEFORE the
+ *  table — a surviving trigger over a dropped table would fail the next write
+ *  with "no such table: row_events". */
+export const RETIRED_ROW_EVENTS_CLEANUP_SQL: readonly string[] = [
+  'DROP TRIGGER IF EXISTS blocks_row_event_insert',
+  'DROP TRIGGER IF EXISTS blocks_row_event_update',
+  'DROP TRIGGER IF EXISTS blocks_row_event_delete',
+  'DROP TABLE IF EXISTS row_events',
+]
+
 /** Per-tx metadata. One row per `repo.tx` invocation. Sync-applied writes
  *  don't go through `repo.tx` and therefore don't produce
  *  `command_events`. */
@@ -890,6 +906,8 @@ export const CLEAR_REPROJECT_REF_MARKER_SQL = `
 // ============================================================================
 
 export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = [
+  // Retired-schema cleanup (idempotent; no-op on fresh installs).
+  ...RETIRED_ROW_EVENTS_CLEANUP_SQL,
   // Tables
   CREATE_TX_CONTEXT_TABLE_SQL,
   SEED_TX_CONTEXT_ROW_SQL,
