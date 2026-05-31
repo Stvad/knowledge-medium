@@ -644,6 +644,40 @@ describe('core.moveVertical', () => {
     expect(await env.childIds('root')).toEqual(['s', 'P'])
   })
 
+  it('does not bury a block in a COLLAPSED previous-sibling subtree (up)', async () => {
+    // a (collapsed, hides b), c/d → move d up. a's subtree is hidden,
+    // so d must land adjacent to its parent c (between a and c), not as
+    // a's last child where it would vanish.
+    await seedTwoSubtrees()
+    await env.repo.mutate.setProperty({id: 'a', schema: isCollapsedProp, value: true})
+    const moved = await env.repo.mutate.moveVertical({id: 'd', direction: -1})
+    expect(moved).toBe(true)
+    expect(env.read('d')!.parentId).toBe('root')
+    expect(await env.childIds('root')).toEqual(['a', 'd', 'c'])
+    expect(await env.childIds('a')).toEqual(['b'])
+  })
+
+  it('does not bury a block in a COLLAPSED next-sibling subtree (down)', async () => {
+    // a/b, c (collapsed, hides d) → move b down. c's subtree is hidden,
+    // so b lands adjacent to parent a (between a and c), not inside c.
+    await seedTwoSubtrees()
+    await env.repo.mutate.setProperty({id: 'c', schema: isCollapsedProp, value: true})
+    const moved = await env.repo.mutate.moveVertical({id: 'b', direction: 1})
+    expect(moved).toBe(true)
+    expect(env.read('b')!.parentId).toBe('root')
+    expect(await env.childIds('root')).toEqual(['a', 'b', 'c'])
+    expect(await env.childIds('c')).toEqual(['d'])
+  })
+
+  it('still descends into an EXPANDED previous-sibling subtree (up)', async () => {
+    // Sanity: with a expanded, d becomes a's last child (the base case).
+    await seedTwoSubtrees()
+    await env.repo.mutate.setProperty({id: 'a', schema: isCollapsedProp, value: false})
+    const moved = await env.repo.mutate.moveVertical({id: 'd', direction: -1})
+    expect(moved).toBe(true)
+    expect(await env.childIds('a')).toEqual(['b', 'd'])
+  })
+
   it('does not move the scope root itself', async () => {
     await seedTwoSubtrees()
     const moved = await env.repo.mutate.moveVertical({id: 'a', direction: 1, scopeRootId: 'a'})

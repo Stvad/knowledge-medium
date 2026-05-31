@@ -494,10 +494,10 @@ interface MoveVerticalArgs {
 }
 
 /**
- * Move a block one step up or down in the visible outline, crossing
- * parent boundaries the way Roam / org-mode do. Within a sibling list
- * it swaps with the adjacent sibling; at the edge of a sibling list it
- * descends into the neighbouring subtree:
+ * Move a block one step up or down in the *visible* outline, crossing
+ * parent boundaries the way Roam does. Within a sibling list it swaps
+ * with the adjacent sibling; at the edge of a sibling list it descends
+ * into the neighbouring subtree:
  *
  *     a            a
  *       b            b
@@ -506,10 +506,17 @@ interface MoveVerticalArgs {
  *
  * Rules (up; down mirrors):
  *  - has a previous sibling          → swap before it (same parent);
+ *  - first child, parent has an
+ *    EXPANDED previous sibling Q     → become Q's last child;
  *  - first child, parent has a
- *    previous sibling Q              → become Q's last child;
- *  - first child, parent is first    → move just above the parent
+ *    COLLAPSED previous sibling, or
+ *    parent is itself the first      → move just above the parent
  *    child                            (under the grandparent).
+ *
+ * "Visible" is the key word: a collapsed block is one opaque row, so we
+ * never descend into a collapsed neighbour's hidden subtree (the block
+ * would vanish). In that case the block lands adjacent to its parent
+ * instead — still exactly one visible step.
  *
  * Bounded by `scopeRootId`: the scope root itself never moves, and a
  * first/last direct child of the scope root won't cross out of it.
@@ -555,14 +562,23 @@ export const moveVertical = defineMutator<MoveVerticalArgs, boolean>({
         const parentSiblings = await tx.childrenOf(parent.parentId, self.workspaceId)
         const pIdx = parentSiblings.findIndex(s => s.id === parent.id)
         const neighbourParent = up ? parentSiblings[pIdx - 1] : parentSiblings[pIdx + 1]
-        if (neighbourParent) {
+        // Only descend into the neighbour when it's expanded — descending
+        // into a collapsed subtree would hide the block. A collapsed
+        // neighbour is treated as opaque, so we fall through to the
+        // adjacent-to-parent placement below (one visible step, stays
+        // visible).
+        const neighbourExpanded = neighbourParent
+          ? !((await tx.getProperty(neighbourParent.id, isCollapsedProp)) ?? false)
+          : false
+        if (neighbourParent && neighbourExpanded) {
           return {
             parentId: neighbourParent.id,
             position: up ? {kind: 'last' as const} : {kind: 'first' as const},
           }
         }
-        // Parent is itself the first/last child: pop the block out just
-        // above/below the parent under the grandparent.
+        // No neighbour subtree to descend into (parent is itself the
+        // first/last child) or the neighbour is collapsed: pop the block
+        // out just above/below the parent under the grandparent.
         return {
           parentId: parent.parentId,
           position: up
