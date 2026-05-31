@@ -3,7 +3,7 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { useLocalStorage } from 'react-use'
 import { User } from '@/types.js'
-import { hasSupabaseAuthConfig, sessionUserToAppUser, supabase } from '@/services/supabase.js'
+import { hasSupabaseAuthConfig, readPersistedSession, sessionUserToAppUser, supabase } from '@/services/supabase.js'
 import { hasRemoteSyncConfig } from '@/services/powersync.js'
 import { Session } from '@supabase/supabase-js'
 
@@ -166,8 +166,17 @@ interface SupabaseLoginProps {
 
 function SupabaseLogin({children, onContinueLocally}: SupabaseLoginProps) {
   const client = supabase!
-  const [session, setSession] = useState<Session | null>(null)
-  const [initializing, setInitializing] = useState(true)
+  // Boot from the persisted session synchronously so an offline launch
+  // isn't blocked behind getSession()'s token refresh. When the access token
+  // is expired, getSession() refreshes before resolving — offline that
+  // retries for ~30s and then yields a null session, freezing startup and
+  // kicking the user to the login screen despite having a usable local
+  // database. Seeding initial state from the stored session lets the app
+  // load right away; the getSession() call below still runs to pick up a
+  // fresher token (or a session captured from the magic-link URL) when
+  // reachable.
+  const [session, setSession] = useState<Session | null>(() => readPersistedSession())
+  const [initializing, setInitializing] = useState(() => readPersistedSession() === null)
   const [stage, setStage] = useState<Stage>('enter-email')
   const [submitting, setSubmitting] = useState(false)
   const [email, setEmail] = useState('')
@@ -178,9 +187,25 @@ function SupabaseLogin({children, onContinueLocally}: SupabaseLoginProps) {
   useEffect(() => {
     let isMounted = true
 
-    void client.auth.getSession().then(({data}) => {
+    // We may already have booted from the persisted session (see the state
+    // initializers above); remember whether one existed so an offline
+    // getSession() failure doesn't sign the user back out.
+    const persisted = readPersistedSession()
+
+    void client.auth.getSession().then(({data, error: sessionError}) => {
       if (!isMounted) return
-      setSession(data.session ?? null)
+      if (sessionError) {
+        // Offline / transient refresh failure. Keep the persisted session
+        // we already booted with rather than signing the user out; the
+        // auto-refresh ticker reconnects us once we're back online.
+        if (!persisted) setSession(null)
+      } else {
+        setSession(data.session ?? null)
+      }
+      setInitializing(false)
+    }).catch(() => {
+      if (!isMounted) return
+      if (!persisted) setSession(null)
       setInitializing(false)
     })
 

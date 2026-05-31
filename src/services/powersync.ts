@@ -5,7 +5,7 @@ import {
   UpdateType,
   type CrudTransaction,
 } from '@powersync/common'
-import { supabase, hasSupabaseAuthConfig } from '@/services/supabase.js'
+import { supabase, hasSupabaseAuthConfig, readPersistedSession } from '@/services/supabase.js'
 import { classifyUploadError } from '@/services/uploadErrorClassifier.js'
 
 const powerSyncUrl = import.meta.env.VITE_POWERSYNC_URL?.trim()
@@ -492,22 +492,34 @@ const uploadData = async (database: AbstractPowerSyncDatabase) => {
 export const createPowerSyncConnector = (): PowerSyncBackendConnector => ({
   fetchCredentials: async () => {
     const client = assertSupabase()
-    const {data, error} = await client.auth.getSession()
 
-    if (error) {
-      throw error
+    // getSession() refreshes an expired token before resolving; offline
+    // that fails (and can hang on retries). Fall back to the last
+    // persisted session so we still hand PowerSync a token to retry the
+    // connection with once the network returns — and return null instead
+    // of throwing when there's truly nothing, so an offline boot doesn't
+    // spam the console with refresh failures.
+    let session = readPersistedSession()
+    try {
+      const {data, error} = await client.auth.getSession()
+      if (error) throw error
+      if (data.session) session = data.session
+    } catch (error) {
+      if (!session) {
+        console.debug('[powersync] fetchCredentials: no session available (offline?)', error)
+        return null
+      }
     }
 
-    const accessToken = data.session?.access_token
-    if (!accessToken || !powerSyncUrl) {
+    if (!session?.access_token || !powerSyncUrl) {
       return null
     }
 
     return {
       endpoint: powerSyncUrl,
-      token: accessToken,
-      expiresAt: data.session?.expires_at
-        ? new Date(data.session.expires_at * 1000)
+      token: session.access_token,
+      expiresAt: session.expires_at
+        ? new Date(session.expires_at * 1000)
         : undefined,
     }
   },

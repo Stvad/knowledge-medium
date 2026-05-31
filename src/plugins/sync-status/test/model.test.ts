@@ -21,7 +21,7 @@ describe('getSyncIndicatorView', () => {
     expect(view.state).toBe('pending')
     expect(view.label).toBe('Pending')
     expect(view.pendingLabel).toBe('3')
-    expect(view.title).toContain('3 local changes queued for upload')
+    expect(view.title).toContain('3 blocks changed, queued for upload')
   })
 
   it('labels capped pending counts as lower bounds', () => {
@@ -33,7 +33,7 @@ describe('getSyncIndicatorView', () => {
 
     expect(view.state).toBe('pending')
     expect(view.pendingLabel).toBe('1000+')
-    expect(view.title).toContain('1000+ local changes queued for upload')
+    expect(view.title).toContain('1000+ blocks changed, queued for upload')
   })
 
   it('shows download progress while preserving the pending count badge', () => {
@@ -62,7 +62,7 @@ describe('getSyncIndicatorView', () => {
     expect(view.state).toBe('local')
     expect(view.label).toBe('Local only')
     expect(view.pendingLabel).toBe('1')
-    expect(view.title).toContain('1 local change stored locally')
+    expect(view.title).toContain('1 block changed, stored locally')
   })
 
   it('surfaces sync errors before passive connection states', () => {

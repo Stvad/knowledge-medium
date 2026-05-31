@@ -7,7 +7,7 @@ import {
   HardDrive,
   RefreshCw,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useIsLocalOnly } from '@/components/Login.js'
 import { Button } from '@/components/ui/button.js'
 import {
@@ -35,6 +35,30 @@ interface UploadQueueCountRow {
 
 const uploadQueuePreviewThrottleMs = 1_000
 const rejectedCountSql = 'SELECT COUNT(*) AS count FROM ps_crud_rejected'
+
+// Network sync errors are noisy: a dropped connection or a token refresh
+// caught mid-flight surfaces an error for a second or two before PowerSync
+// recovers on its own. Only treat a network error as worth showing once it
+// has persisted continuously for this long; clear it immediately when it
+// resolves. (Offline is handled separately — see `SyncStatusHeaderContent`.)
+const networkErrorGraceMs = 5_000
+
+// Debounce the *appearance* of an error: surface `message` only after it has
+// stayed non-null for `delayMs`, and drop it the instant it clears. Keeps the
+// indicator from flashing on transient blips.
+function useStableError(message: string | null, delayMs: number): string | null {
+  const [stable, setStable] = useState<string | null>(null)
+  useEffect(() => {
+    if (!message) return
+    const timer = setTimeout(() => setStable(message), delayMs)
+    return () => clearTimeout(timer)
+  }, [message, delayMs])
+  // Report the error only once the debounced value has caught up with the
+  // current message — and report null immediately when the message clears.
+  // Deriving this at render (rather than clearing `stable` via a setState in
+  // the effect) keeps the indicator responsive and avoids a render cascade.
+  return stable === message ? message : null
+}
 
 type SyncStatus = ReturnType<typeof useStatus>
 
@@ -78,11 +102,10 @@ export function SyncStatusHeaderItem() {
     {reportFetching: false},
   )
   const rejectedCount = Number(rejected.data[0]?.count ?? 0)
-  const errorMessage =
-    rejected.error?.message ??
-    status.dataFlowStatus.uploadError?.message ??
-    status.dataFlowStatus.downloadError?.message ??
-    null
+  // Local-query failures (counting the rejection quarantine) are real and
+  // surfaced immediately. Network/sync errors are handled — and offline is
+  // distinguished from a genuine error — down in SyncStatusHeaderContent.
+  const localErrorMessage = rejected.error?.message ?? null
 
   if (localOnly) {
     return (
@@ -92,7 +115,7 @@ export function SyncStatusHeaderItem() {
         pendingChanges={0}
         pendingChangesApproximate={false}
         rejectedCount={rejectedCount}
-        errorMessage={errorMessage}
+        localErrorMessage={localErrorMessage}
       />
     )
   }
@@ -101,7 +124,7 @@ export function SyncStatusHeaderItem() {
     <RemoteSyncStatusHeaderContent
       status={status}
       rejectedCount={rejectedCount}
-      baseErrorMessage={errorMessage}
+      baseLocalErrorMessage={localErrorMessage}
     />
   )
 }
@@ -109,13 +132,13 @@ export function SyncStatusHeaderItem() {
 interface RemoteSyncStatusHeaderContentProps {
   status: SyncStatus
   rejectedCount: number
-  baseErrorMessage: string | null
+  baseLocalErrorMessage: string | null
 }
 
 function RemoteSyncStatusHeaderContent({
   status,
   rejectedCount,
-  baseErrorMessage,
+  baseLocalErrorMessage,
 }: RemoteSyncStatusHeaderContentProps) {
   const queue = useQuery<UploadQueueCountRow>(
     uploadQueuePreviewCountSql,
@@ -136,7 +159,7 @@ function RemoteSyncStatusHeaderContent({
       pendingChanges={pendingChanges}
       pendingChangesApproximate={pendingChangesApproximate}
       rejectedCount={rejectedCount}
-      errorMessage={queue.error?.message ?? baseErrorMessage}
+      localErrorMessage={queue.error?.message ?? baseLocalErrorMessage}
     />
   )
 }
@@ -147,7 +170,7 @@ interface SyncStatusHeaderContentProps {
   pendingChanges: number
   pendingChangesApproximate: boolean
   rejectedCount: number
-  errorMessage: string | null
+  localErrorMessage: string | null
 }
 
 function SyncStatusHeaderContent({
@@ -156,11 +179,20 @@ function SyncStatusHeaderContent({
   pendingChanges,
   pendingChangesApproximate,
   rejectedCount,
-  errorMessage,
+  localErrorMessage,
 }: SyncStatusHeaderContentProps) {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
   const dataFlow = status.dataFlowStatus
+  // A connection error while we're not connected is just "we're offline" —
+  // show the calm offline state, not a websocket error. Treat a sync error
+  // as real only while we believe we're connected, and only once it has
+  // outlived the transient-blip grace window.
+  const networkError = status.connected
+    ? (dataFlow.uploadError?.message ?? dataFlow.downloadError?.message ?? null)
+    : null
+  const stableNetworkError = useStableError(networkError, networkErrorGraceMs)
+  const errorMessage = localErrorMessage ?? stableNetworkError
   const view = getSyncIndicatorView({
     localOnly,
     connected: status.connected,
