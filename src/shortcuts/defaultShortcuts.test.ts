@@ -609,4 +609,36 @@ describe('default CodeMirror shortcuts', () => {
       vi.unstubAllGlobals()
     }
   })
+
+  it('normalizes CRLF line endings so the cursor stays inside the document', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: ''})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+
+    // Windows-style clipboard text: \r\n is normalized to \n on insert.
+    const readText = vi.fn().mockResolvedValue('one\r\ntwo\r\nthree')
+    vi.stubGlobal('navigator', {clipboard: {readText}})
+
+    try {
+      const editorView = codeMirrorEditorView('', 0)
+      const action = findEditModeAction(env.repo, 'paste_into_block_cm')
+
+      await action.handler({
+        block: env.repo.block('current'),
+        editorView,
+        uiStateBlock,
+      } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+      expect(editorView.state.doc.toString()).toBe('one\ntwo\nthree')
+      // Cursor must not run past the normalized document length.
+      expect(editorView.state.selection.main.head).toBe('one\ntwo\nthree'.length)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
 })

@@ -838,14 +838,21 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // Bail quietly instead of throwing an unhandled rejection — the
         // regular Cmd+V path stays available via the ClipboardEvent.
         if (!navigator.clipboard?.readText) return
-        let text: string
+        let rawText: string
         try {
-          text = await navigator.clipboard.readText()
+          rawText = await navigator.clipboard.readText()
         } catch (error) {
           console.error('[paste_into_block_cm] Failed to read clipboard', error)
           return
         }
-        if (!text) return
+        if (!rawText) return
+
+        // CodeMirror normalizes CRLF/CR to LF when applying the change, so
+        // normalize here too — otherwise the cursor offset below would count
+        // the stripped \r characters and could land past the document end
+        // (e.g. CRLF text copied from Windows apps), throwing "Selection
+        // points outside of document".
+        const text = rawText.replace(/\r\n?/g, '\n')
 
         const selection = editorView.state.selection.main
         editorView.dispatch({
