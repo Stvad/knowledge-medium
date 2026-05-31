@@ -78,8 +78,11 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
         selection: EditorSelection.cursor(plan.focusOffsetInTarget),
       })
 
+      const scopeRootId = typeof blockContext.scopeRootId === 'string'
+        ? blockContext.scopeRootId
+        : uiStateBlock.peekProperty(topLevelBlockIdProp)
       const result = await pasteEditModeMultilineText(plan, block, repo, {
-        topLevelBlockId: uiStateBlock.peekProperty(topLevelBlockIdProp),
+        scopeRootId,
       })
       const renderScopeId = typeof blockContext.renderScopeId === 'string'
         ? blockContext.renderScopeId

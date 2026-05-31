@@ -65,6 +65,14 @@ export const ActionContextTypes = {
 
 export interface BaseShortcutDependencies {
   uiStateBlock: Block;
+  /** Root of the visible subtree the action runs within (see
+   *  `BlockContextType.scopeRootId`). Structural and navigation
+   *  handlers use this as the surface boundary instead of reading the
+   *  panel's `topLevelBlockId`, so they behave correctly inside nested
+   *  surfaces (backlinks, embeds). Injected centrally for block
+   *  surfaces by `useShortcutSurfaceActivations`; defaults to the
+   *  panel's zoom root for the main outline. */
+  scopeRootId?: string;
 }
 
 export interface BlockShortcutDependencies  extends BaseShortcutDependencies {

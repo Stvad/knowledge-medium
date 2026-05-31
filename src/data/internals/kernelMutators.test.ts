@@ -559,23 +559,23 @@ describe('core.outdent', () => {
     expect(env.read('r')!.parentId).toBeNull()
   })
 
-  it('refuses to outdent past topLevelBlockId — direct child stays put', async () => {
+  it('refuses to outdent past scopeRootId — direct child stays put', async () => {
     // Without the boundary, A1 (a direct child of A) would normally
-    // outdent to root. Passing topLevelBlockId=A keeps A1 inside.
+    // outdent to root. Passing scopeRootId=A keeps A1 inside.
     await seedABC()
     await env.repo.mutate.createChild({parentId: 'A', id: 'A1'})
-    const moved = await env.repo.mutate.outdent({id: 'A1', topLevelBlockId: 'A'})
+    const moved = await env.repo.mutate.outdent({id: 'A1', scopeRootId: 'A'})
     expect(moved).toBe(false)
     expect(env.read('A1')!.parentId).toBe('A')
   })
 
-  it('still outdents a deeper descendant when topLevelBlockId is set', async () => {
-    // A → A1 → A1a; passing topLevelBlockId=A allows outdent of A1a
-    // (since its parent A1 ≠ topLevelBlockId).
+  it('still outdents a deeper descendant when scopeRootId is set', async () => {
+    // A → A1 → A1a; passing scopeRootId=A allows outdent of A1a
+    // (since its parent A1 ≠ scopeRootId).
     await seedABC()
     await env.repo.mutate.createChild({parentId: 'A', id: 'A1'})
     await env.repo.mutate.createChild({parentId: 'A1', id: 'A1a'})
-    const moved = await env.repo.mutate.outdent({id: 'A1a', topLevelBlockId: 'A'})
+    const moved = await env.repo.mutate.outdent({id: 'A1a', scopeRootId: 'A'})
     expect(moved).toBe(true)
     expect(env.read('A1a')!.parentId).toBe('A')
   })

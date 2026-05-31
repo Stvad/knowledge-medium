@@ -67,7 +67,7 @@ describe('pasteMultilineText', () => {
       '- Alpha\n  - Detail\n- Beta',
       env.repo.block('empty'),
       env.repo,
-      {topLevelBlockId: 'root'},
+      {scopeRootId: 'root'},
     )
 
     expect(pasted[0]?.id).toBe('empty')
@@ -86,7 +86,7 @@ describe('pasteMultilineText', () => {
       'Pasted\nSecond',
       env.repo.block('parent'),
       env.repo,
-      {topLevelBlockId: 'root'},
+      {scopeRootId: 'root'},
     )
 
     expect(await childContents('parent')).toEqual(['Pasted', 'Second', 'Old child'])
@@ -104,7 +104,7 @@ describe('pasteMultilineText', () => {
       'Pasted',
       env.repo.block('parent'),
       env.repo,
-      {topLevelBlockId: 'root'},
+      {scopeRootId: 'root'},
     )
 
     expect(await childContents('root')).toEqual(['Parent', 'Pasted', 'Sibling'])
@@ -120,7 +120,7 @@ describe('pasteMultilineText', () => {
       'Pasted',
       env.repo.block('page'),
       env.repo,
-      {topLevelBlockId: 'page'},
+      {scopeRootId: 'page'},
     )
 
     expect(await childContents('workspace-root')).toEqual(['Page'])
@@ -135,7 +135,7 @@ describe('pasteMultilineText', () => {
       'Pasted',
       env.repo.block('root'),
       env.repo,
-      {topLevelBlockId: 'root'},
+      {scopeRootId: 'root'},
     )
 
     expect(await childContents('root')).toEqual(['Pasted', 'Existing'])
@@ -151,7 +151,7 @@ describe('pasteMultilineText', () => {
       'Pasted',
       env.repo.block('parent'),
       env.repo,
-      {placement: 'sibling', topLevelBlockId: 'root'},
+      {placement: 'sibling', scopeRootId: 'root'},
     )
 
     expect(await childContents('root')).toEqual(['Parent', 'Pasted', 'Sibling'])
@@ -175,7 +175,7 @@ describe('pasteEditModeMultilineText', () => {
       plan!,
       env.repo.block('target'),
       env.repo,
-      {topLevelBlockId: 'root'},
+      {scopeRootId: 'root'},
     )
 
     expect(env.repo.block('target').peek()?.content).toBe('hello alpha')
@@ -198,7 +198,7 @@ describe('pasteEditModeMultilineText', () => {
       plan!,
       env.repo.block('target'),
       env.repo,
-      {topLevelBlockId: 'root'},
+      {scopeRootId: 'root'},
     )
 
     expect(env.repo.block('target').peek()?.content).toBe('prefix Parent')
@@ -221,7 +221,7 @@ describe('pasteEditModeMultilineText', () => {
       plan!,
       env.repo.block('page'),
       env.repo,
-      {topLevelBlockId: 'page'},
+      {scopeRootId: 'page'},
     )
 
     expect(await childContents('workspace-root')).toEqual(['Page title'])

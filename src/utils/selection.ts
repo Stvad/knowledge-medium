@@ -8,47 +8,47 @@ import {
   peekFocusedBlockLocation,
   sameFocusedBlockLocation,
   selectionStateProp,
-  topLevelBlockIdProp,
 } from '@/data/properties'
 import { outlineRenderScopeId } from '@/utils/renderScope'
 import { ChangeScope } from '@/data/api'
 
 /** True if `block` is collapsed *and* the caller cares (i.e. it isn't
- *  the panel's top-level block — the top always exposes children even
+ *  the surface's scope root — the root always exposes children even
  *  if its own collapsed flag is set). Reads the property synchronously
  *  from cache; assumes the row has been loaded. */
-const isExpanded = (block: Block, topLevelBlockId: string): boolean => {
-  if (block.id === topLevelBlockId) return true
+const isExpanded = (block: Block, scopeRootId: string): boolean => {
+  if (block.id === scopeRootId) return true
   return !(block.peekProperty(isCollapsedProp) ?? false)
 }
 
 /** Returns the next visible block in document order under
- *  `topLevelBlockId`, walking *relatively* — descend into the first
- *  child if `current` is expanded and has children, otherwise climb
- *  ancestors looking for a next sibling. Stops at the panel boundary
- *  (`topLevelBlockId`); returns null when `current` is the last
- *  visible block.
+ *  `scopeRootId` (the surface's visible-subtree root — the panel's zoom
+ *  root on the main outline, the shown block in a backlink entry, …),
+ *  walking *relatively* — descend into the first child if `current` is
+ *  expanded and has children, otherwise climb ancestors looking for a
+ *  next sibling. Stops at the scope boundary (`scopeRootId`); returns
+ *  null when `current` is the last visible block.
  *
  *  Touches O(depth) blocks (one SQL per parent's child list, all small
- *  + handle-cached) instead of materializing the panel's full
- *  visible-id list. Works correctly inside panels with arbitrary
- *  topLevelBlockId because no global "active panel" state is consulted. */
+ *  + handle-cached) instead of materializing the surface's full
+ *  visible-id list. Works correctly inside any surface with an arbitrary
+ *  scope root because no global "active panel" state is consulted. */
 export const nextVisibleBlock = async (
   current: Block,
-  topLevelBlockId: string,
+  scopeRootId: string,
 ): Promise<Block | null> => {
   const repo = current.repo
   await current.load()
 
   // Step into the first child if expanded.
-  if (isExpanded(current, topLevelBlockId)) {
+  if (isExpanded(current, scopeRootId)) {
     const childIds = await current.childIds.load()
     if (childIds.length > 0) return repo.block(childIds[0])
   }
 
-  // Climb ancestors looking for a next sibling. Stop at top-level.
+  // Climb ancestors looking for a next sibling. Stop at the scope root.
   let walker: Block = current
-  while (walker.id !== topLevelBlockId) {
+  while (walker.id !== scopeRootId) {
     const data = walker.peek()
     if (!data || data.parentId === null) return null
     const parentId = data.parentId
@@ -65,15 +65,15 @@ export const nextVisibleBlock = async (
 }
 
 /** Returns the previous visible block in document order under
- *  `topLevelBlockId`. Mirror of `nextVisibleBlock`: if `current` has a
+ *  `scopeRootId`. Mirror of `nextVisibleBlock`: if `current` has a
  *  previous sibling, descend into that sibling's last visible
- *  descendant; otherwise return the parent. Stops at `topLevelBlockId`
- *  (returns null when `current` is the panel's top-level block). */
+ *  descendant; otherwise return the parent. Stops at `scopeRootId`
+ *  (returns null when `current` is the surface's scope root). */
 export const previousVisibleBlock = async (
   current: Block,
-  topLevelBlockId: string,
+  scopeRootId: string,
 ): Promise<Block | null> => {
-  if (current.id === topLevelBlockId) return null
+  if (current.id === scopeRootId) return null
   const repo = current.repo
   await current.load()
 
@@ -90,11 +90,9 @@ export const previousVisibleBlock = async (
     // Descend into the previous sibling's last visible descendant.
     return getLastVisibleDescendant(repo.block(siblingIds[idx - 1]))
   }
-  // No previous sibling — the parent is the previous visible block,
-  // unless the parent is *above* topLevelBlockId (which we never
-  // returned next-into anyway). When current is a direct child of
-  // topLevelBlockId, parent === topLevelBlockId, which is itself the
-  // first visible block in the panel.
+  // No previous sibling — the parent is the previous visible block.
+  // When current is a direct child of scopeRootId, parent === scopeRootId,
+  // which is itself the first visible block in the surface.
   return parent
 }
 
@@ -110,8 +108,8 @@ export const previousVisibleBlock = async (
  *       removal the parent is now empty, and it's the natural place
  *       to land.
  *
- *  Returns null when `current` is the panel's `topLevelBlockId` (no
- *  meaningful target, the panel is about to be empty), or when the
+ *  Returns null when `current` is the surface's `scopeRootId` (no
+ *  meaningful target, the surface is about to be empty), or when the
  *  block is detached from the tree.
  *
  *  Mirrors `walker.findRecoveryAnchor`'s sibling-then-ancestor order
@@ -119,9 +117,9 @@ export const previousVisibleBlock = async (
  *  recovery's choice for the disappear-from-DOM case. */
 export const blockAfterSubtreeRemoval = async (
   current: Block,
-  topLevelBlockId: string,
+  scopeRootId: string,
 ): Promise<Block | null> => {
-  if (current.id === topLevelBlockId) return null
+  if (current.id === scopeRootId) return null
   const repo = current.repo
   await current.load()
   const data = current.peek()
@@ -143,25 +141,25 @@ export const blockAfterSubtreeRemoval = async (
  *  the bottom of an expanded subtree. Returns the input block if it
  *  is collapsed or has no children.
  *
- *  When `topLevelBlockId` is supplied and equals the block's id, its own
- *  `isCollapsedProp` is ignored — matches `isExpanded`'s "panel root
+ *  When `scopeRootId` is supplied and equals the block's id, its own
+ *  `isCollapsedProp` is ignored — matches `isExpanded`'s "scope root
  *  always exposes children" rule. Necessary so vim `Shift+G` (jump to
- *  last visible block) still descends from a panel whose root happens to
- *  carry a stale collapsed flag from when it was viewed as a child. Mid-
- *  walk collapsed blocks still terminate the descent so
+ *  last visible block) still descends from a scope root whose own flag
+ *  happens to carry a stale collapsed flag from when it was viewed as a
+ *  child. Mid-walk collapsed blocks still terminate the descent so
  *  `previousVisibleBlock`'s contract (don't dive into a collapsed
  *  sibling) is preserved. */
 export const getLastVisibleDescendant = async (
   block: Block,
-  topLevelBlockId?: string,
+  scopeRootId?: string,
 ): Promise<Block> => {
   const repo = block.repo
   await block.load()
   let current = block
   while (true) {
-    const isPanelRoot = current.id === topLevelBlockId
+    const isScopeRoot = current.id === scopeRootId
     const collapsed = current.peekProperty(isCollapsedProp) ?? false
-    if (collapsed && !isPanelRoot) return current
+    if (collapsed && !isScopeRoot) return current
     const childIds = await current.childIds.load()
     if (childIds.length === 0) return current
     current = repo.block(childIds[childIds.length - 1])
@@ -353,7 +351,7 @@ export async function commitSelectionRange(
 export async function getBlocksInRange(
   startBlockId: string,
   endBlockId: string,
-  topLevelBlockId: string,
+  scopeRootId: string,
   repo: Repo,
 ): Promise<string[]> {
   if (startBlockId === endBlockId) {
@@ -367,7 +365,7 @@ export async function getBlocksInRange(
     const ids: string[] = [startBlockId]
     let walker: Block | null = start
     while (walker) {
-      walker = await nextVisibleBlock(walker, topLevelBlockId)
+      walker = await nextVisibleBlock(walker, scopeRootId)
       if (!walker) return null
       ids.push(walker.id)
       if (walker.id === endBlockId) return ids
@@ -379,7 +377,7 @@ export async function getBlocksInRange(
     const ids: string[] = [startBlockId]
     let walker: Block | null = start
     while (walker) {
-      walker = await previousVisibleBlock(walker, topLevelBlockId)
+      walker = await previousVisibleBlock(walker, scopeRootId)
       if (!walker) return null
       ids.unshift(walker.id)
       if (walker.id === endBlockId) return ids
@@ -391,12 +389,12 @@ export async function getBlocksInRange(
   const range = forward ?? await collectBackward()
   if (range) return validateSelectionHierarchy(range, repo)
 
-  // Either endpoint isn't reachable from the other under the current
-  // panel; preserve the legacy fallback of returning whichever
+  // Either endpoint isn't reachable from the other within the current
+  // scope; preserve the legacy fallback of returning whichever
   // endpoints we know exist.
   console.warn(
     '[getBlocksInRange] endpoints not connected via visible navigation.',
-    {startBlockId, endBlockId, topLevelBlockId},
+    {startBlockId, endBlockId, scopeRootId},
   )
   const fallback: string[] = []
   if (start.peek()) fallback.push(startBlockId)
@@ -407,23 +405,23 @@ export async function getBlocksInRange(
 /** Extends selection to include blocks in range between current
  *  anchor and target block. Reads selection state + focus from the
  *  UI-state block (sync), computes the range against the visible
- *  document order under the active panel's top-level block, then
- *  writes the new selection state. */
+ *  document order within the surface's scope root, then writes the
+ *  new selection state. */
 export async function extendSelection(
   targetBlockId: string,
   uiStateBlock: Block,
   repo: Repo,
+  scopeRootId: string | undefined,
 ): Promise<void> {
   const currentState = uiStateBlock.peekProperty(selectionStateProp)
   const focusedId = peekFocusedBlockLocation(uiStateBlock)?.blockId
-  const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
 
-  if (!topLevelBlockId) return
+  if (!scopeRootId) return
 
   const currentAnchor = currentState?.anchorBlockId || focusedId
   if (!currentAnchor) return
 
-  const rangeIds = await getBlocksInRange(currentAnchor, targetBlockId, topLevelBlockId, repo)
+  const rangeIds = await getBlocksInRange(currentAnchor, targetBlockId, scopeRootId, repo)
 
   const currentLocation = peekFocusedBlockLocation(uiStateBlock)
   await commitSelectionRange({
@@ -431,7 +429,7 @@ export async function extendSelection(
     anchorBlockId: currentAnchor,
     targetLocation: {
       blockId: targetBlockId,
-      renderScopeId: currentLocation?.renderScopeId ?? outlineRenderScopeId(topLevelBlockId),
+      renderScopeId: currentLocation?.renderScopeId ?? outlineRenderScopeId(scopeRootId),
     },
     selectedBlockIds: rangeIds,
   })

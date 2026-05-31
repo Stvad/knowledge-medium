@@ -425,30 +425,32 @@ export const indent = defineMutator<{id: string}, void>({
 
 interface OutdentArgs {
   id: string
-  /** Optional view boundary. If `self.parentId === topLevelBlockId`,
-   *  outdent is a no-op — the block is a direct child of the current
-   *  view's root and outdenting would move it outside the visible
-   *  zoom scope (or to the workspace root for root-level views).
-   *  Returns `false` in that case so callers can fall back. */
-  topLevelBlockId?: string
+  /** Optional surface boundary — the root of the visible subtree the
+   *  caller renders (the panel's zoom root on the main outline, a
+   *  backlink entry's shown block, …). If `self.parentId === scopeRootId`,
+   *  outdent is a no-op — the block is a direct child of the surface's
+   *  root and outdenting would move it outside the visible scope (or to
+   *  the workspace root for root-level views). Returns `false` in that
+   *  case so callers can fall back. */
+  scopeRootId?: string
 }
 
 export const outdent = defineMutator<OutdentArgs, boolean>({
   name: 'core.outdent',
   argsSchema: z.object({
     id: z.string(),
-    topLevelBlockId: z.string().optional(),
+    scopeRootId: z.string().optional(),
   }),
   resultSchema: z.boolean(),
   scope: ChangeScope.BlockDefault,
   describe: ({id}) => `outdent ${id}`,
-  apply: async (tx, {id, topLevelBlockId}) => {
+  apply: async (tx, {id, scopeRootId}) => {
     const self = await requireBlock(tx, id)
     if (self.parentId === null) return false  // already at root
-    // Refuse to outdent past the current view boundary — a direct
-    // child of `topLevelBlockId` would otherwise pop out to the
-    // grandparent (or workspace root), exiting the user's zoom scope.
-    if (topLevelBlockId !== undefined && self.parentId === topLevelBlockId) return false
+    // Refuse to outdent past the surface boundary — a direct child of
+    // `scopeRootId` would otherwise pop out to the grandparent (or
+    // workspace root), exiting the visible scope.
+    if (scopeRootId !== undefined && self.parentId === scopeRootId) return false
     const parent = await requireBlock(tx, self.parentId)
     // Move under grandparent, positioned right after current parent.
     // tx.childrenOf(null) enumerates root-level siblings of the pinned

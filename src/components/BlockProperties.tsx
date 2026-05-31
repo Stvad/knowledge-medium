@@ -66,7 +66,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   const childIds = useChildIds(block)
   const uiStateBlock = useUIStateBlock()
   const runtime = useAppRuntime()
-  const {panelId} = useBlockContext()
+  const {panelId, scopeRootId: contextScopeRootId} = useBlockContext()
   const navigate = useNavigate()
   const [showHiddenFields, setShowHiddenFields] = useState(false)
   const [syntheticProperties, setSyntheticProperties] = useState<readonly SyntheticPropertyRef[]>([])
@@ -146,10 +146,12 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   }
 
   const focusAfterProperties = async () => {
-    const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
-    if (!topLevelBlockId) return
+    const scopeRootId = typeof contextScopeRootId === 'string'
+      ? contextScopeRootId
+      : uiStateBlock.peekProperty(topLevelBlockIdProp)
+    if (!scopeRootId) return
 
-    const next = await nextVisibleBlock(block, topLevelBlockId)
+    const next = await nextVisibleBlock(block, scopeRootId)
     if (!next) return
     await next.load()
     await focusBlockEditor(next, {start: 0})

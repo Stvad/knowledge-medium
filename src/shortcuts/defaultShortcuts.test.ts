@@ -344,6 +344,7 @@ describe('default CodeMirror shortcuts', () => {
       block: env.repo.block('current'),
       editorView: codeMirrorEditorView('current', 'current'.length),
       uiStateBlock,
+      scopeRootId: 'root',
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
     expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
@@ -373,6 +374,7 @@ describe('default CodeMirror shortcuts', () => {
       block: env.repo.block('current'),
       editorView: codeMirrorEditorView('current', 0),
       uiStateBlock,
+      scopeRootId: 'root',
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
     expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
@@ -402,6 +404,7 @@ describe('default CodeMirror shortcuts', () => {
       block: env.repo.block('empty'),
       editorView: emptyEditorView(),
       uiStateBlock,
+      scopeRootId: 'root',
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
     expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
@@ -433,6 +436,7 @@ describe('default CodeMirror shortcuts', () => {
       block: env.repo.block('current'),
       editorView: codeMirrorEditorView('current', 0),
       uiStateBlock,
+      scopeRootId: 'root',
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
     expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
@@ -468,6 +472,7 @@ describe('default CodeMirror shortcuts', () => {
       block: env.repo.block('current'),
       editorView: codeMirrorEditorView('current', 0),
       uiStateBlock,
+      scopeRootId: 'root',
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
     expect(trigger.preventDefault).not.toHaveBeenCalled()
@@ -496,6 +501,7 @@ describe('default CodeMirror shortcuts', () => {
       block: env.repo.block('current'),
       editorView,
       uiStateBlock,
+      scopeRootId: 'root',
     } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
 
     const rootChildren = await childIds('root')
@@ -513,5 +519,60 @@ describe('default CodeMirror shortcuts', () => {
       blockId: 'current',
       start: 0,
     })
+  })
+
+  // Scope-root behaviour: when the focused block is the root of the
+  // surface's visible subtree (e.g. a backlink entry's shown block,
+  // where scopeRootId === the block's own id) a "new block below" must
+  // land as a first child so it stays visible — a sibling would be
+  // created outside the surface. These mirror what happens for a
+  // panel's top-level block but now key off scopeRootId, so any nested
+  // surface gets the same behaviour.
+  it('creates a first child (not a sibling) when Enter is pressed at the end of a scope-root block', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'shown', content: 'shown'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await focusBlock(uiStateBlock, 'shown')
+
+    const action = findEditModeAction(env.repo, 'split_block_cm')
+    await action.handler({
+      block: env.repo.block('shown'),
+      editorView: codeMirrorEditorView('shown', 'shown'.length),
+      uiStateBlock,
+      // The shown block is its own scope root (no children yet).
+      scopeRootId: 'shown',
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    // New block lands as a child of the scope root, not a sibling under root.
+    expect(await childIds('root')).toEqual(['shown'])
+    expect(await childIds('shown')).toHaveLength(1)
+  })
+
+  it('makes Tab a no-op on a scope-root block', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'first', content: 'first'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'shown', content: 'shown'})
+
+    const uiStateBlock = env.repo.block('ui')
+    const action = findEditModeAction(env.repo, 'edit.cm.indent_block')
+    await action.handler({
+      block: env.repo.block('shown'),
+      editorView: codeMirrorEditorView('shown', 0),
+      uiStateBlock,
+      // 'shown' is the scope root even though it has a previous sibling
+      // ('first') in the real tree — indenting would escape the surface.
+      scopeRootId: 'shown',
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    // Unchanged: still a direct child of root, not reparented under 'first'.
+    expect(await childIds('root')).toEqual(['first', 'shown'])
+    expect(await childIds('first')).toEqual([])
   })
 })
