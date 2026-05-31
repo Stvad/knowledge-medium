@@ -51,12 +51,19 @@ function useStableError(message: string | null, delayMs: number): string | null 
   useEffect(() => {
     if (!message) return
     const timer = setTimeout(() => setStable(message), delayMs)
-    return () => clearTimeout(timer)
+    // Cleanup runs whenever `message` changes (including back to null), so it
+    // both cancels a not-yet-elapsed timer AND clears any previously-shown
+    // value. Resetting here is what makes a *recurring* identical error
+    // re-serve its full grace window instead of flashing instantly because
+    // `stable` still held the old string. (Done in cleanup, not the effect
+    // body, to avoid a synchronous in-effect setState.)
+    return () => {
+      clearTimeout(timer)
+      setStable(null)
+    }
   }, [message, delayMs])
-  // Report the error only once the debounced value has caught up with the
-  // current message — and report null immediately when the message clears.
-  // Deriving this at render (rather than clearing `stable` via a setState in
-  // the effect) keeps the indicator responsive and avoids a render cascade.
+  // `stable` only equals `message` once the timer has elapsed for the current
+  // continuous error; a cleared message returns null immediately.
   return stable === message ? message : null
 }
 

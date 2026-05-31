@@ -51,3 +51,51 @@ describe('readPersistedSession', () => {
     expect(await loadSession()).toBeNull()
   })
 })
+
+// isAuthCallbackUrl gates the offline persisted-session fast path: on a magic-
+// link / OAuth callback the stored session may belong to a different user, so
+// bootstrap must wait for auth-js to resolve the URL instead of mounting the
+// stale (wrong-user) session.
+describe('isAuthCallbackUrl', () => {
+  const storageKey = 'sb-proj-auth-token'
+
+  beforeEach(() => {
+    vi.resetModules()
+    vi.stubEnv('VITE_SUPABASE_URL', 'https://proj.supabase.co')
+    vi.stubEnv('VITE_SUPABASE_ANON_KEY', 'anon-key')
+    window.localStorage.clear()
+    window.history.replaceState({}, '', '/')
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    window.localStorage.clear()
+    window.history.replaceState({}, '', '/')
+  })
+
+  const check = async (url: string) => {
+    window.history.replaceState({}, '', url)
+    return (await import('./supabase.ts')).isAuthCallbackUrl()
+  }
+
+  it('is false for an ordinary URL', async () => {
+    expect(await check('/#some-block-route')).toBe(false)
+  })
+
+  it('detects an implicit-grant hash (access_token)', async () => {
+    expect(await check('/#access_token=abc&refresh_token=def&type=magiclink')).toBe(true)
+  })
+
+  it('detects an auth error_description', async () => {
+    expect(await check('/?error=access_denied&error_description=expired')).toBe(true)
+  })
+
+  it('treats a bare code param as a callback only when a code-verifier is stored', async () => {
+    // No verifier → could be an app route that happens to carry `code`; not a
+    // callback, so the offline fast path stays available.
+    expect(await check('/?code=xyz')).toBe(false)
+
+    window.localStorage.setItem(`${storageKey}-code-verifier`, 'verifier')
+    expect(await check('/?code=xyz')).toBe(true)
+  })
+})

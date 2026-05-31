@@ -168,4 +168,48 @@ describe('SyncStatusHeaderItem', () => {
       vi.useRealTimers()
     }
   })
+
+  it('re-applies the grace window when an error clears and recurs', () => {
+    vi.useFakeTimers()
+    try {
+      const erroring = {
+        ...defaultStatus(),
+        connected: true,
+        dataFlowStatus: {
+          uploading: false,
+          downloading: false,
+          uploadError: {message: 'token refresh hiccup'},
+          downloadError: null,
+        },
+      }
+      const healthy = {...defaultStatus(), connected: true}
+      mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
+
+      // First occurrence rides out its grace window and surfaces.
+      mocks.status = erroring
+      const {rerender} = render(<SyncStatusHeaderItem/>)
+      act(() => vi.advanceTimersByTime(6_000))
+      expect(screen.getByRole('button').getAttribute('aria-label'))
+        .toMatch(/needs attention/i)
+
+      // Error clears — indicator goes calm immediately.
+      mocks.status = healthy
+      rerender(<SyncStatusHeaderItem/>)
+      expect(screen.getByRole('button').getAttribute('aria-label'))
+        .not.toMatch(/needs attention/i)
+
+      // Same error recurs: it must NOT flash instantly — the grace window
+      // applies afresh (this is the regression the debounce reset guards).
+      mocks.status = erroring
+      rerender(<SyncStatusHeaderItem/>)
+      expect(screen.getByRole('button').getAttribute('aria-label'))
+        .not.toMatch(/needs attention/i)
+
+      act(() => vi.advanceTimersByTime(6_000))
+      expect(screen.getByRole('button').getAttribute('aria-label'))
+        .toMatch(/needs attention/i)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

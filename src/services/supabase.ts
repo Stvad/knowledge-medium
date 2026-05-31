@@ -62,6 +62,44 @@ export const readPersistedSession = (): Session | null => {
   }
 }
 
+// True when the current URL is a Supabase auth callback (magic-link / OTP /
+// OAuth redirect) that `detectSessionInUrl` is about to process into a NEW
+// session. Mirrors auth-js's own callback detection (`_isImplicitGrantCallback`
+// / `_isPKCECallback`): an implicit-grant hash carries `access_token` (or
+// `error_description`); a PKCE callback carries `code` AND a stored
+// `<storageKey>-code-verifier`. supabase-js reads both the query string and
+// the URL hash (hash params win), so we check both.
+//
+// The code-verifier requirement matters: this app uses hash-based routing, so
+// a bare `code` param could appear in a route. Requiring the verifier (which
+// auth-js writes only when IT initiated the PKCE flow) avoids a false positive
+// that would needlessly suppress the offline fast path.
+//
+// Bootstrap uses this to skip the persisted-session fast path: when a callback
+// is in flight the stored session may belong to a DIFFERENT user (account
+// switch / shared device), and per-user PowerSync DBs are keyed by user id —
+// rendering from the stale session would briefly mount the wrong user's local
+// data. On a callback we wait for auth-js to resolve the URL and emit
+// SIGNED_IN with the real session instead.
+export const isAuthCallbackUrl = (): boolean => {
+  if (!supabaseAuthStorageKey || typeof window === 'undefined') return false
+  const {search, hash} = window.location
+  const params = new URLSearchParams(search)
+  const hashParams = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash)
+  const has = (key: string) => params.has(key) || hashParams.has(key)
+
+  if (has('access_token') || has('error_description')) return true
+
+  if (has('code')) {
+    try {
+      return window.localStorage.getItem(`${supabaseAuthStorageKey}-code-verifier`) !== null
+    } catch {
+      return false
+    }
+  }
+  return false
+}
+
 const getUserName = (user: SupabaseAuthUser) => {
   const metadataName = typeof user.user_metadata?.name === 'string'
     ? user.user_metadata.name.trim()
