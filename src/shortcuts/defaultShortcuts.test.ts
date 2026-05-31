@@ -547,4 +547,36 @@ describe('default CodeMirror shortcuts', () => {
       vi.unstubAllGlobals()
     }
   })
+
+  it('replaces the selected range when pasting into the current block', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: 'hello world'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+
+    const readText = vi.fn().mockResolvedValue('AAA\nBBB')
+    vi.stubGlobal('navigator', {clipboard: {readText}})
+
+    try {
+      const editorView = codeMirrorEditorView('hello world', 0)
+      // Select "hello"; pasting should replace it (Roam-style).
+      editorView.dispatch({selection: {anchor: 0, head: 'hello'.length}})
+      const action = findEditModeAction(env.repo, 'paste_into_block_cm')
+
+      await action.handler({
+        block: env.repo.block('current'),
+        editorView,
+        uiStateBlock,
+      } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+      expect(editorView.state.doc.toString()).toBe('AAA\nBBB world')
+      expect(await childIds('current')).toEqual([])
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
 })
