@@ -49,6 +49,49 @@ export interface EditModeMultilinePasteResult {
   focusOffset: number
 }
 
+export type PasteChordIntent = 'split' | 'single-block'
+
+/** Classify a keydown as a paste chord. The paste `ClipboardEvent` that
+ *  follows carries no modifier state, so callers capture the intent here
+ *  (on keydown) and route the subsequent paste accordingly:
+ *   - `split` (Cmd/Ctrl+V) — multi-line text splits into a block tree.
+ *   - `single-block` (Cmd/Ctrl+Shift+V) — text drops into the current
+ *     block verbatim (Roam's "paste as plain text").
+ *  Returns null for non-paste keys. Browsers report the key as 'v' or
+ *  'V' depending on Shift, and AltGr/Option pastes are excluded. */
+export const pasteChordIntent = (
+  event: Pick<KeyboardEvent, 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'key'>,
+): PasteChordIntent | null => {
+  const isPasteChord = (event.metaKey || event.ctrlKey) && !event.altKey &&
+    (event.key === 'v' || event.key === 'V')
+  if (!isPasteChord) return null
+  return event.shiftKey ? 'single-block' : 'split'
+}
+
+export interface SingleBlockPastePlan {
+  insert: string
+  from: number
+  to: number
+  cursor: number
+}
+
+/** Plan a verbatim paste into the current block: replace the selected
+ *  range with the pasted text, keeping its newlines. CRLF/CR are
+ *  normalized to LF to match CodeMirror's own line-ending normalization,
+ *  so the resulting cursor offset can't land past the document end. */
+export const planSingleBlockPaste = (
+  pastedText: string,
+  selection: { from: number; to: number },
+): SingleBlockPastePlan => {
+  const insert = pastedText.replace(/\r\n?/g, '\n')
+  return {
+    insert,
+    from: selection.from,
+    to: selection.to,
+    cursor: selection.from + insert.length,
+  }
+}
+
 const isBlankContent = (content: string): boolean => content.trim().length === 0
 
 const isCollapsed = (properties: Record<string, unknown>): boolean => {

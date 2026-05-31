@@ -6,9 +6,11 @@ import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { isCollapsedProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
 import {
+  pasteChordIntent,
   pasteEditModeMultilineText,
   pasteMultilineText,
   planEditModeMultilinePaste,
+  planSingleBlockPaste,
 } from '@/utils/paste'
 
 const WS = 'ws-1'
@@ -226,5 +228,41 @@ describe('pasteEditModeMultilineText', () => {
 
     expect(await childContents('workspace-root')).toEqual(['Page title'])
     expect(await childContents('page')).toEqual(['child', 'Existing'])
+  })
+})
+
+describe('pasteChordIntent', () => {
+  const key = (over: Partial<KeyboardEvent>): Parameters<typeof pasteChordIntent>[0] => ({
+    metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, key: 'v', ...over,
+  })
+
+  it('classifies Cmd/Ctrl+V as a split paste', () => {
+    expect(pasteChordIntent(key({metaKey: true}))).toBe('split')
+    expect(pasteChordIntent(key({ctrlKey: true}))).toBe('split')
+  })
+
+  it('classifies Cmd/Ctrl+Shift+V as a single-block paste', () => {
+    // Browsers report the key as 'V' when Shift is held.
+    expect(pasteChordIntent(key({metaKey: true, shiftKey: true, key: 'V'}))).toBe('single-block')
+    expect(pasteChordIntent(key({ctrlKey: true, shiftKey: true, key: 'v'}))).toBe('single-block')
+  })
+
+  it('ignores non-paste keys and AltGr/Option pastes', () => {
+    expect(pasteChordIntent(key({metaKey: true, key: 'c'}))).toBeNull()
+    expect(pasteChordIntent(key({key: 'v'}))).toBeNull()
+    expect(pasteChordIntent(key({metaKey: true, altKey: true}))).toBeNull()
+  })
+})
+
+describe('planSingleBlockPaste', () => {
+  it('replaces the selected range and places the cursor after the insert', () => {
+    const plan = planSingleBlockPaste('AAA', {from: 0, to: 5})
+    expect(plan).toEqual({insert: 'AAA', from: 0, to: 5, cursor: 3})
+  })
+
+  it('normalizes CRLF/CR to LF so the cursor stays inside the document', () => {
+    const plan = planSingleBlockPaste('one\r\ntwo\rthree', {from: 2, to: 2})
+    expect(plan.insert).toBe('one\ntwo\nthree')
+    expect(plan.cursor).toBe(2 + 'one\ntwo\nthree'.length)
   })
 })
