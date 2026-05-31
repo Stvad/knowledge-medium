@@ -833,7 +833,18 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const {editorView} = deps
         if (!editorView || repo.isReadOnly) return
 
-        const text = await navigator.clipboard.readText()
+        // navigator.clipboard is undefined in non-secure (HTTP) contexts
+        // and some browsers, and readText() can reject (permission denied).
+        // Bail quietly instead of throwing an unhandled rejection — the
+        // regular Cmd+V path stays available via the ClipboardEvent.
+        if (!navigator.clipboard?.readText) return
+        let text: string
+        try {
+          text = await navigator.clipboard.readText()
+        } catch (error) {
+          console.error('[paste_into_block_cm] Failed to read clipboard', error)
+          return
+        }
         if (!text) return
 
         const selection = editorView.state.selection.main

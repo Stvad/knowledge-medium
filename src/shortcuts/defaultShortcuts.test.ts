@@ -579,4 +579,34 @@ describe('default CodeMirror shortcuts', () => {
       vi.unstubAllGlobals()
     }
   })
+
+  it('no-ops without throwing when the Clipboard API is unavailable', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: 'keep me'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+
+    // No `clipboard` on navigator — e.g. an insecure HTTP context.
+    vi.stubGlobal('navigator', {})
+
+    try {
+      const editorView = codeMirrorEditorView('keep me', 0)
+      const action = findEditModeAction(env.repo, 'paste_into_block_cm')
+
+      await expect(action.handler({
+        block: env.repo.block('current'),
+        editorView,
+        uiStateBlock,
+      } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger))
+        .resolves.toBeUndefined()
+
+      expect(editorView.state.doc.toString()).toBe('keep me')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
 })
