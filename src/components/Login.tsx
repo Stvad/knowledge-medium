@@ -209,12 +209,22 @@ function SupabaseLogin({children, onContinueLocally}: SupabaseLoginProps) {
       setInitializing(false)
     })
 
-    const {data: listener} = client.auth.onAuthStateChange((_event, next) => {
+    const {data: listener} = client.auth.onAuthStateChange((event, next) => {
       if (!isMounted) return
-      setSession(next)
       if (next) {
+        setSession(next)
         setError(null)
         setCode('')
+        return
+      }
+      // A null session here is only a real logout when it's an explicit
+      // SIGNED_OUT. Offline, Supabase also emits INITIAL_SESSION with a null
+      // session after the token refresh fails — honoring that would wipe the
+      // session we seeded from storage and bounce the user to the login
+      // screen, defeating the offline boot. Keep the persisted session in
+      // that case; a genuine sign-out still clears it.
+      if (event === 'SIGNED_OUT') {
+        setSession(null)
       }
     })
 
