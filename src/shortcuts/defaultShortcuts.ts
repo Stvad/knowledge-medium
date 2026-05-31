@@ -820,53 +820,6 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         keys: 'Backspace',
       },
     },
-    {
-      id: 'paste_into_block_cm',
-      description: 'Paste multi-line text into the current block',
-      context: ActionContextTypes.EDIT_MODE_CM,
-      // Roam's Cmd+Shift+V: drop the clipboard text into the focused
-      // block verbatim, keeping its newlines, instead of the default
-      // Cmd+V which splits multi-line text into a block tree. We insert
-      // straight into the editor; BlockEditor's debounced onChange
-      // persists the multi-line content.
-      handler: async (deps: CodeMirrorEditModeDependencies) => {
-        const {editorView} = deps
-        if (!editorView || repo.isReadOnly) return
-
-        // navigator.clipboard is undefined in non-secure (HTTP) contexts
-        // and some browsers, and readText() can reject (permission denied).
-        // Bail quietly instead of throwing an unhandled rejection — the
-        // regular Cmd+V path stays available via the ClipboardEvent.
-        if (!navigator.clipboard?.readText) return
-        let rawText: string
-        try {
-          rawText = await navigator.clipboard.readText()
-        } catch (error) {
-          console.error('[paste_into_block_cm] Failed to read clipboard', error)
-          return
-        }
-        if (!rawText) return
-
-        // CodeMirror normalizes CRLF/CR to LF when applying the change, so
-        // normalize here too — otherwise the cursor offset below would count
-        // the stripped \r characters and could land past the document end
-        // (e.g. CRLF text copied from Windows apps), throwing "Selection
-        // points outside of document".
-        const text = rawText.replace(/\r\n?/g, '\n')
-
-        const selection = editorView.state.selection.main
-        editorView.dispatch({
-          changes: {from: selection.from, to: selection.to, insert: text},
-          selection: EditorSelection.cursor(selection.from + text.length),
-        })
-      },
-      defaultBinding: {
-        keys: '$mod+Shift+v',
-        eventOptions: {
-          preventDefault: true,
-        },
-      },
-    },
     bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, indentBlock, {idPrefix: 'edit.cm'}),
     bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, outdentBlock, {idPrefix: 'edit.cm'}),
     bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, zoomInBlock, {idPrefix: 'edit.cm'}),
