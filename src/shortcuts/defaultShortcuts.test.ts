@@ -514,4 +514,37 @@ describe('default CodeMirror shortcuts', () => {
       start: 0,
     })
   })
+
+  it('pastes multi-line clipboard text into the current block verbatim instead of splitting', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: 'ab'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+
+    const readText = vi.fn().mockResolvedValue('line1\nline2')
+    vi.stubGlobal('navigator', {clipboard: {readText}})
+
+    try {
+      // Cursor between "a" and "b".
+      const editorView = codeMirrorEditorView('ab', 1)
+      const action = findEditModeAction(env.repo, 'paste_into_block_cm')
+
+      await action.handler({
+        block: env.repo.block('current'),
+        editorView,
+        uiStateBlock,
+      } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+      // Newlines land in the same editor doc; no sibling/child blocks created.
+      expect(editorView.state.doc.toString()).toBe('aline1\nline2b')
+      expect(await childIds('current')).toEqual([])
+      expect(await childIds('root')).toEqual(['current'])
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
 })
