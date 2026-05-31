@@ -63,11 +63,16 @@ const defaultStatus = () => ({
   lastSyncedAt: undefined,
 })
 
+const setDeviceOnline = (online: boolean) => {
+  Object.defineProperty(navigator, 'onLine', {configurable: true, value: online})
+}
+
 describe('SyncStatusHeaderItem', () => {
   beforeEach(() => {
     mocks.localOnly = false
     mocks.queryCalls = []
     mocks.status = defaultStatus()
+    setDeviceOnline(true)
     mocks.queryResponses = new Map([
       [rejectedCountSql, {data: [{count: 0}]}],
       [uploadQueuePreviewCountSql, {data: [{count: uploadQueueCountCap + 1}]}],
@@ -77,6 +82,7 @@ describe('SyncStatusHeaderItem', () => {
 
   afterEach(() => {
     cleanup()
+    setDeviceOnline(true)
   })
 
   it('uses the capped queue count for the always-mounted remote indicator', () => {
@@ -117,7 +123,8 @@ describe('SyncStatusHeaderItem', () => {
     expect(mocks.queryCalls.some(call => call.sql === uploadQueueExactCountSql)).toBe(true)
   })
 
-  it('shows a calm "offline" state instead of the websocket error when disconnected', () => {
+  it('shows a calm "offline" state instead of the websocket error when the device is offline', () => {
+    setDeviceOnline(false)
     mocks.status = {
       ...defaultStatus(),
       connected: false,
@@ -135,6 +142,43 @@ describe('SyncStatusHeaderItem', () => {
     const label = screen.getByRole('button').getAttribute('aria-label') ?? ''
     expect(label.toLowerCase()).toContain('offline')
     expect(label).not.toContain('WebSocket')
+  })
+
+  it('surfaces a persistent sync error when the device is online but sync is disconnected', () => {
+    // PowerSync flips connected:false during its retry loop after a real
+    // failure (bad endpoint, 401/403, server stream error). With the device
+    // online, that error is actionable and must surface — not be hidden
+    // behind a generic Offline/Connecting chip.
+    vi.useFakeTimers()
+    try {
+      setDeviceOnline(true)
+      mocks.status = {
+        ...defaultStatus(),
+        connected: false,
+        connecting: true,
+        dataFlowStatus: {
+          uploading: false,
+          downloading: false,
+          uploadError: null,
+          downloadError: {message: 'PowerSync endpoint returned 401'},
+        },
+      }
+      mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
+
+      render(<SyncStatusHeaderItem/>)
+
+      // Still within the grace window — calm.
+      expect(screen.getByRole('button').getAttribute('aria-label'))
+        .not.toMatch(/needs attention/i)
+
+      act(() => vi.advanceTimersByTime(6_000))
+
+      const label = screen.getByRole('button').getAttribute('aria-label') ?? ''
+      expect(label).toMatch(/needs attention/i)
+      expect(label).toContain('401')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('waits out the grace window before surfacing a transient sync error', () => {

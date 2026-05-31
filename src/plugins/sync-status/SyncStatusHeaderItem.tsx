@@ -67,6 +67,26 @@ function useStableError(message: string | null, delayMs: number): string | null 
   return stable === message ? message : null
 }
 
+// Tracks the device's network reachability via `navigator.onLine` +
+// online/offline events. We use this to decide whether a sync error is mere
+// connectivity noise (device offline → show the calm "Offline" chip) or an
+// actionable failure (device online but sync still failing → surface it).
+function useIsDeviceOnline(): boolean {
+  const [online, setOnline] = useState(() =>
+    typeof navigator === 'undefined' ? true : navigator.onLine,
+  )
+  useEffect(() => {
+    const update = () => setOnline(navigator.onLine)
+    window.addEventListener('online', update)
+    window.addEventListener('offline', update)
+    return () => {
+      window.removeEventListener('online', update)
+      window.removeEventListener('offline', update)
+    }
+  }, [])
+  return online
+}
+
 type SyncStatus = ReturnType<typeof useStatus>
 
 // Theme-aware tones. `success` reads `--success` (per-theme green
@@ -190,12 +210,18 @@ function SyncStatusHeaderContent({
 }: SyncStatusHeaderContentProps) {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
+  const deviceOnline = useIsDeviceOnline()
   const dataFlow = status.dataFlowStatus
-  // A connection error while we're not connected is just "we're offline" —
-  // show the calm offline state, not a websocket error. Treat a sync error
-  // as real only while we believe we're connected, and only once it has
-  // outlived the transient-blip grace window.
-  const networkError = status.connected
+  // Decide whether a sync error is worth showing. When the *device* is
+  // offline, any upload/download error is just connectivity noise — show the
+  // calm "Offline" chip, not a raw websocket/fetch error. But when the
+  // device is online and sync still fails (bad PowerSync endpoint, 401/403
+  // credentials, server-side stream failure), the error is actionable and
+  // must surface even though PowerSync flips `connected: false` during its
+  // retry loop — otherwise the chip is stuck on Offline/Connecting forever
+  // and hides the very reason sync isn't working. The grace window below
+  // still debounces transient blips in both cases.
+  const networkError = deviceOnline
     ? (dataFlow.uploadError?.message ?? dataFlow.downloadError?.message ?? null)
     : null
   const stableNetworkError = useStableError(networkError, networkErrorGraceMs)
