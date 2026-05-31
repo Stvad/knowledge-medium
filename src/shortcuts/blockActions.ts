@@ -77,32 +77,17 @@ const writeToClipboard = (text: string): void => {
   void navigator.clipboard.writeText(text)
 }
 
-/** Move `block` up (-1) or down (+1) among its siblings. Computes a
- *  new orderKey that lands between the appropriate neighbor pair so
- *  the block's position changes deterministically. No-op if the
- *  block is already at the relevant edge or if it has no parent. */
-const reorderBlock = async (repo: Repo, block: Block, direction: -1 | 1): Promise<void> => {
-  const data = block.peek() ?? await block.load()
-  if (!data || data.parentId === null) return
-
-  const siblingIds = await repo.query.childIds({id: data.parentId}).load()
-  const idx = siblingIds.indexOf(block.id)
-  if (idx === -1) return
-
-  const target = idx + direction
-  if (target < 0 || target >= siblingIds.length) return
-
-  // Target sibling we want to land before/after. For direction=-1
-  // (move up), we want to land BEFORE siblingIds[target]. For
-  // direction=+1, we want to land AFTER siblingIds[target].
-  const targetSiblingId = siblingIds[target]
-  await repo.mutate.move({
-    id: block.id,
-    parentId: data.parentId,
-    position: direction === -1
-      ? {kind: 'before', siblingId: targetSiblingId}
-      : {kind: 'after', siblingId: targetSiblingId},
-  })
+/** Move `block` one step up (-1) or down (+1) in the visible outline,
+ *  crossing parent boundaries Roam/org-style and bounded by the
+ *  surface's scope root. Delegates the tree logic to the
+ *  `core.moveVertical` mutator (one transaction, undoable as a unit). */
+const reorderBlock = async (
+  repo: Repo,
+  block: Block,
+  direction: -1 | 1,
+  scopeRootId: string | undefined,
+): Promise<void> => {
+  await repo.mutate.moveVertical({id: block.id, direction, scopeRootId})
 }
 
 export const requestEditorFocusIfEditing = (uiStateBlock: Block) => {
@@ -206,9 +191,9 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     id: 'move_block_up',
     description: 'Move block up',
     handler: async (deps: BlockShortcutDependencies) => {
-      const {block, uiStateBlock} = deps
+      const {block, uiStateBlock, scopeRootId} = deps
       if (!block) return
-      await reorderBlock(repo, block, -1)
+      await reorderBlock(repo, block, -1, scopeRootId)
       requestEditorFocusIfEditing(uiStateBlock)
     },
     defaultBinding: {
@@ -223,9 +208,9 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     id: 'move_block_down',
     description: 'Move block down',
     handler: async (deps: BlockShortcutDependencies) => {
-      const {block, uiStateBlock} = deps
+      const {block, uiStateBlock, scopeRootId} = deps
       if (!block) return
-      await reorderBlock(repo, block, 1)
+      await reorderBlock(repo, block, 1, scopeRootId)
       requestEditorFocusIfEditing(uiStateBlock)
     },
     defaultBinding: {

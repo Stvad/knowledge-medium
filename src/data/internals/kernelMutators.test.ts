@@ -581,6 +581,86 @@ describe('core.outdent', () => {
   })
 })
 
+// ──── moveVertical ────
+
+describe('core.moveVertical', () => {
+  // Shapes the user-facing example:
+  //   a / b      (a with child b)
+  //   c / d      (c with child d)
+  const seedTwoSubtrees = async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'a'})
+    await env.repo.mutate.createChild({parentId: 'a', id: 'b'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'c'})
+    await env.repo.mutate.createChild({parentId: 'c', id: 'd'})
+  }
+
+  it('swaps with the previous sibling (same parent) when one exists', async () => {
+    await seedABC()
+    const moved = await env.repo.mutate.moveVertical({id: 'B', direction: -1})
+    expect(moved).toBe(true)
+    expect(await env.childIds('root')).toEqual(['B', 'A', 'C'])
+  })
+
+  it('swaps with the next sibling (same parent) when one exists', async () => {
+    await seedABC()
+    const moved = await env.repo.mutate.moveVertical({id: 'B', direction: 1})
+    expect(moved).toBe(true)
+    expect(await env.childIds('root')).toEqual(['A', 'C', 'B'])
+  })
+
+  it('moves a first child up into the previous sibling subtree (cross-parent)', async () => {
+    // a/b, c/d → move d up → d becomes a's last child, c emptied.
+    await seedTwoSubtrees()
+    const moved = await env.repo.mutate.moveVertical({id: 'd', direction: -1})
+    expect(moved).toBe(true)
+    expect(env.read('d')!.parentId).toBe('a')
+    expect(await env.childIds('a')).toEqual(['b', 'd'])
+    expect(await env.childIds('c')).toEqual([])
+  })
+
+  it('moves a last child down into the next sibling subtree (cross-parent)', async () => {
+    // a/b, c/d → move b down → b becomes c's first child, a emptied.
+    await seedTwoSubtrees()
+    const moved = await env.repo.mutate.moveVertical({id: 'b', direction: 1})
+    expect(moved).toBe(true)
+    expect(env.read('b')!.parentId).toBe('c')
+    expect(await env.childIds('c')).toEqual(['b', 'd'])
+    expect(await env.childIds('a')).toEqual([])
+  })
+
+  it('pops a first child out above its parent when the parent is itself first', async () => {
+    // root: P/(s); move s up → s lands above P under root.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'P'})
+    await env.repo.mutate.createChild({parentId: 'P', id: 's'})
+    const moved = await env.repo.mutate.moveVertical({id: 's', direction: -1})
+    expect(moved).toBe(true)
+    expect(env.read('s')!.parentId).toBe('root')
+    expect(await env.childIds('root')).toEqual(['s', 'P'])
+  })
+
+  it('does not move the scope root itself', async () => {
+    await seedTwoSubtrees()
+    const moved = await env.repo.mutate.moveVertical({id: 'a', direction: 1, scopeRootId: 'a'})
+    expect(moved).toBe(false)
+    expect(await env.childIds('root')).toEqual(['a', 'c'])
+  })
+
+  it('does not cross a first direct child of the scope root out of scope', async () => {
+    // scopeRootId=root-like 'a': 'b' is a's only child; moving it up
+    // would escape 'a', so it no-ops.
+    await seedTwoSubtrees()
+    const moved = await env.repo.mutate.moveVertical({id: 'b', direction: -1, scopeRootId: 'a'})
+    expect(moved).toBe(false)
+    expect(env.read('b')!.parentId).toBe('a')
+  })
+})
+
 // ──── split ────
 
 describe('core.split', () => {
