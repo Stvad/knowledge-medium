@@ -12,14 +12,19 @@ import {
  *  not (as an unfiltered query would) every due card in the workspace. */
 export const UNRESOLVED_TAG_ID = 'srs-review:unresolved-tag'
 
-/** Start of *tomorrow* at local midnight. A card counts as due when its
- *  next-review daily note's date is strictly before this — i.e. today
- *  or any earlier day — independent of any time-of-day component the
- *  daily-note date might carry. */
+/** UTC midnight of the day after today's *local* calendar date. A card
+ *  counts as due when its next-review daily note's date is strictly
+ *  before this — i.e. today or any earlier day.
+ *
+ *  Daily notes store `daily-note:date` at UTC midnight of their calendar
+ *  day (`Date.parse(`${iso}T00:00:00Z`)`), so the cutoff has to be UTC
+ *  midnight too. A local-midnight cutoff would, west of UTC, encode to
+ *  later than tomorrow's UTC-midnight daily note and pull tomorrow's
+ *  cards into the deck a day early. */
 export const dueBoundary = (now: Date = new Date()): Date => {
-  const boundary = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-  boundary.setDate(boundary.getDate() + 1)
-  return boundary
+  const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  tomorrow.setDate(tomorrow.getDate() + 1)
+  return new Date(Date.UTC(tomorrow.getFullYear(), tomorrow.getMonth(), tomorrow.getDate()))
 }
 
 export interface DueCardsQueryInput {

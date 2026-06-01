@@ -5,9 +5,12 @@ import { srsNextReviewDateProp } from '@/plugins/srs-rescheduling'
 import { UNRESOLVED_TAG_ID, buildDueCardsQuery, dueBoundary } from '../dueQuery.ts'
 
 describe('dueBoundary', () => {
-  it('is the start of the day after `now`, at local midnight', () => {
+  it('is UTC midnight of the day after the local date (matching daily-note storage)', () => {
+    // Daily notes store `daily-note:date` at UTC midnight, so the cutoff
+    // must be UTC midnight of tomorrow's local date — not local
+    // midnight, which west of UTC would include tomorrow's cards.
     const boundary = dueBoundary(new Date(2026, 5, 1, 14, 30))
-    expect(boundary).toEqual(new Date(2026, 5, 2, 0, 0, 0, 0))
+    expect(boundary.toISOString()).toBe('2026-06-02T00:00:00.000Z')
   })
 })
 
