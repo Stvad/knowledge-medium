@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import {
   ArchiveX,
   CalendarClock,
@@ -122,11 +122,15 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
     void deck.set(reviewDeckStartedProp, false)
   }, [deck])
 
-  // Keyboard: space/enter reveals, 1–4 grade. Suppressed while focus is
-  // in an editable surface (the revealed answer is a live outline) so
-  // typing into a child block never fires a grade.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
+  // Keyboard: space/enter reveals, 1–4 grade. Scoped to the session's
+  // own surface via a container `onKeyDown` (not a global `window`
+  // listener) so a deck rendered in a background panel never grabs
+  // these keys while the user is interacting elsewhere — and two open
+  // decks don't fight over them. The editable-target guard additionally
+  // lets typing into the revealed answer (a live outline) through
+  // instead of firing a grade.
+  const handleKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLDivElement>) => {
       if (busy || isEditableTarget()) return
       if (!revealed) {
         if (e.key === ' ' || e.key === 'Enter') {
@@ -140,10 +144,20 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
         e.preventDefault()
         void grade(signal)
       }
+    },
+    [busy, revealed, grade],
+  )
+
+  // Focus the session surface once, when the card view first mounts, so
+  // the shortcuts are live without a click. We don't refocus per card —
+  // that would yank focus back from the reschedule sheet after it opens.
+  const focusedOnce = useRef(false)
+  const focusSessionSurface = useCallback((el: HTMLDivElement | null) => {
+    if (el && !focusedOnce.current) {
+      focusedOnce.current = true
+      el.focus()
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [busy, revealed, grade])
+  }, [])
 
   const deckLabel = tagName.trim() ? tagName.trim() : 'All due cards'
 
@@ -161,7 +175,8 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
   )
 
   // Nothing due (or the deck is still loading its first page — the
-  // effect promotes it to a session the moment cards arrive).
+  // queue is captured the moment cards arrive, promoting this to a
+  // session).
   if (queue === null) {
     return (
       <div className="mx-auto w-full max-w-2xl py-4">
@@ -190,7 +205,12 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
   }
 
   return (
-    <div className="mx-auto w-full max-w-2xl py-4">
+    <div
+      ref={focusSessionSurface}
+      tabIndex={-1}
+      onKeyDown={handleKeyDown}
+      className="mx-auto w-full max-w-2xl py-4 outline-none"
+    >
       {header}
 
       <div className="rounded-xl border bg-card p-4 shadow-sm">
