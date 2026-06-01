@@ -57,9 +57,9 @@ const setTestVisible = (el: HTMLElement, visible: boolean): void => {
   }
 }
 
-const addFocusTarget = (el: HTMLElement): HTMLElement => {
+const addVisibilityTarget = (el: HTMLElement): HTMLElement => {
   const target = document.createElement('div')
-  target.setAttribute('data-block-focus-target', 'true')
+  target.setAttribute('data-block-visibility-target', 'true')
   el.appendChild(target)
   return target
 }
@@ -585,7 +585,7 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     expect(findRecoveryAnchor('p1', {blockId: 'X', renderScopeId: 'p1:backlink:X'})).toBeNull()
   })
 
-  it('does not treat a visible ancestor shell as recoverable when its own focus target is off-screen', () => {
+  it('does not treat a visible ancestor shell as recoverable when its own visibility target is off-screen', () => {
     const panel = document.createElement('div')
     panel.setAttribute('data-panel-id', 'p1')
 
@@ -594,7 +594,7 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     parent.setAttribute('data-block-nav-item', 'true')
     parent.setAttribute('data-render-scope-id', 'p1:parent')
     parent.setAttribute('data-block-surface', 'outline')
-    const parentFocusTarget = addFocusTarget(parent)
+    const parentVisibilityTarget = addVisibilityTarget(parent)
     panel.appendChild(parent)
 
     const child = document.createElement('div')
@@ -609,7 +609,7 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     rememberInstancePosition('p1', child)
     child.remove()
     setTestVisible(parent, true)
-    setTestVisible(parentFocusTarget, false)
+    setTestVisible(parentVisibilityTarget, false)
 
     expect(findRecoveryAnchor('p1', p1Location('X'))).toBeNull()
   })

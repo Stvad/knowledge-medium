@@ -19,7 +19,7 @@ import {
  *                          `data-block-id="<block.id>"`
  *                          `data-render-scope-id="<render scope>"`
  *                          `data-block-surface="outline|backlink|breadcrumb|embedded"`
- *   Block content target:  `data-block-focus-target="true"`
+ *   Block visibility target: `data-block-visibility-target="true"`
  *
  * Direction model:
  *
@@ -38,7 +38,7 @@ import {
  *   collapsed parent becomes the natural recovery target when every
  *   child of the focused block's parent unmounts together), then
  *   positional clamp as a final fallback. Recovery is surface-local
- *   and only returns candidates whose focus target is on screen; a
+ *   and only returns candidates whose visibility target is on screen; a
  *   stale hint for some unrelated previous focus is ignored, so panels
  *   the user has never sat in won't get a misfired recovery jump.
  */
@@ -46,7 +46,7 @@ import {
 const NAV_ITEM_SELECTOR = '[data-block-nav-item="true"]'
 const PANEL_SELECTOR = '[data-panel-id]'
 const COLUMN_SELECTOR = '[data-layout-column-id]'
-const FOCUS_TARGET_SELECTOR = '[data-block-focus-target="true"]'
+const VISIBILITY_TARGET_SELECTOR = '[data-block-visibility-target="true"]'
 
 const NON_NAVIGABLE_SURFACES = new Set(['breadcrumb'])
 
@@ -80,11 +80,11 @@ interface PanelPositionHint {
 const surfaceOf = (el: HTMLElement): string | undefined =>
   el.dataset.blockSurface
 
-const focusTargetFor = (el: HTMLElement): HTMLElement =>
-  el.querySelector<HTMLElement>(FOCUS_TARGET_SELECTOR) ?? el
+const visibilityTargetFor = (el: HTMLElement): HTMLElement =>
+  el.querySelector<HTMLElement>(VISIBILITY_TARGET_SELECTOR) ?? el
 
 const isRecoveryTargetVisible = (el: HTMLElement): boolean =>
-  isElementProperlyVisible(focusTargetFor(el))
+  isElementProperlyVisible(visibilityTargetFor(el))
 
 const pickViewportFallback = (
   instances: readonly HTMLElement[],
@@ -285,7 +285,7 @@ export const rememberInstancePosition = (
  * Every tier is viewport-aware. The `BlockFocusShellDecorator` reacts
  * to a recovery write by calling `scrollIntoView` on the block content
  * target when it is off-screen; recovery must therefore only return
- * candidates whose focus target is already on screen.
+ * candidates whose visibility target is already on screen.
  *
  * Returns null when there's no stored hint about this rendered location, or when
  * the panel has no instances at all. The caller (proactive recovery)
