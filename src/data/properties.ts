@@ -219,6 +219,19 @@ export const blockTypePropertiesProp = defineProperty<readonly string[]>('block-
   changeScope: ChangeScope.BlockDefault,
 })
 
+// ──── user page kernel fields ────
+
+/** Opaque user id (the value stored in `created_by` / `updated_by`) on a
+ *  `'user'` user-page block. Gives the page a structured, queryable link
+ *  between the id and the display name (the block's content) alongside
+ *  the human-friendly alias — so attribution surfaces can resolve either
+ *  direction without parsing aliases. */
+export const userIdProp = defineProperty<string>('user:id', {
+  codec: codecs.string,
+  defaultValue: '',
+  changeScope: ChangeScope.BlockDefault,
+})
+
 /** Re-export of the canonical alias schema (defined under
  *  `@/data/internals/coreProperties.ts` so the kernel parseReferences
  *  processor can reference it without circling back through this
@@ -410,4 +423,6 @@ export const KERNEL_PROPERTY_SCHEMAS: ReadonlyArray<PropertySchema<unknown>> = [
   blockTypeLabelProp,
   blockTypeDescriptionProp,
   blockTypePropertiesProp,
+  // user page fields
+  userIdProp,
 ] as ReadonlyArray<PropertySchema<unknown>>

@@ -39,6 +39,7 @@ import {
   getUserBlock,
   requireSchemaScope,
   requireWorkspaceId,
+  userPageBlockId,
 } from '@/data/stateBlocks.js'
 export { USER_PREFS_PATH_PART } from '@/data/userPrefs.js'
 
@@ -74,6 +75,29 @@ export function useUserBlock(): Block {
   const workspaceId = requireWorkspaceId(repo, 'useUserBlock')
 
   return use(getUserBlock(repo, workspaceId, user))
+}
+
+/** Resolve a `userId` (as stored in `created_by` / `updated_by`) to its
+ *  user page: the display name plus — only when the page block actually
+ *  exists in this workspace — its block id, so callers can link to it.
+ *
+ *  Reads the user-page block's content (which the page's owning client
+ *  keeps in sync with their name) via its deterministic id, so it works
+ *  for any user whose page has synced here, not just the current one.
+ *  While the page is loading or absent (e.g. a peer who hasn't synced
+ *  yet) `name` falls back to the raw id and `blockId` is omitted — so
+ *  attribution degrades to the prior plain-text behaviour rather than
+ *  rendering a link to a block that doesn't exist. */
+export function useUserPage(userId: string): {name: string; blockId?: string} {
+  const repo = useRepo()
+  const workspaceId = requireWorkspaceId(repo, 'useUserPage')
+  const id = userPageBlockId(workspaceId, userId)
+  const block = repo.block(id)
+  return useHandle(block, {
+    selector: doc => doc
+      ? {name: doc.content || userId, blockId: id}
+      : {name: userId},
+  })
 }
 
 /** Hook to access and modify a UI-state property on the active UI-state

@@ -9,6 +9,7 @@ import {
   presetConfigProp,
   presetIdProp,
   propertyNameProp,
+  userIdProp,
 } from '@/data/properties'
 
 export const EXTENSION_TYPE = 'extension'
@@ -32,6 +33,11 @@ export const TYPES_PAGE_TYPE = 'panel:types'
 /** Marker type for the singleton Recents page — a Tana-style view of
  *  recently-edited blocks in the workspace. */
 export const RECENTS_PAGE_TYPE = 'panel:recents'
+/** Per-user "user page" type. Tagged alongside `PAGE_TYPE` (so the page
+ *  stays navigable) and carries the user's opaque id as a property,
+ *  letting `block_types`-indexed lookups enumerate users and attribution
+ *  surfaces resolve an id to its page/name. Kernel-owned. */
+export const USER_TYPE = 'user'
 
 export const KERNEL_TYPE_CONTRIBUTIONS: readonly TypeContribution[] = [
   defineBlockType({
@@ -70,5 +76,12 @@ export const KERNEL_TYPE_CONTRIBUTIONS: readonly TypeContribution[] = [
     id: RECENTS_PAGE_TYPE,
     label: 'Recents page',
     properties: [aliasesProp],
+  }),
+  defineBlockType({
+    id: USER_TYPE,
+    label: 'User',
+    // Lift aliases + id so the property panel surfaces them and the id
+    // auto-materialises when `addType('user')` runs.
+    properties: [aliasesProp, userIdProp],
   }),
 ]
