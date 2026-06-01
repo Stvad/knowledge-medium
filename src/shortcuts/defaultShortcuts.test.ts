@@ -410,7 +410,8 @@ describe('default CodeMirror shortcuts', () => {
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
     expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
-    expect(env.repo.block('empty').peek()?.deleted).toBe(true)
+    expect(env.repo.block('empty').peek()).toBeNull()
+    expect(env.repo.block('empty').peekRaw()?.deleted).toBe(true)
     expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).toBe('prev')
     expect(uiStateBlock.peekProperty(editorSelection)).toEqual({
       blockId: 'prev',
@@ -443,7 +444,8 @@ describe('default CodeMirror shortcuts', () => {
 
     expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
     expect(env.repo.block('parent').peek()?.content).toBe('parent current')
-    expect(env.repo.block('current').peek()?.deleted).toBe(true)
+    expect(env.repo.block('current').peek()).toBeNull()
+    expect(env.repo.block('current').peekRaw()?.deleted).toBe(true)
     expect(await childIds('parent')).toEqual(['child'])
     expect(env.repo.block('child').peek()?.deleted).toBe(false)
     expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).toBe('parent')
@@ -664,6 +666,7 @@ describe('default CodeMirror shortcuts', () => {
       {preventDefault: vi.fn()} as unknown as ActionTrigger,
     )
 
-    expect(env.repo.block('victim').peek()?.deleted).toBe(true)
+    expect(env.repo.block('victim').peek()).toBeNull()
+    expect(env.repo.block('victim').peekRaw()?.deleted).toBe(true)
   })
 })

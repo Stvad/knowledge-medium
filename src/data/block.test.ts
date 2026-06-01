@@ -119,6 +119,36 @@ describe('Block.data / peek (sync)', () => {
     expect(b.peek()).not.toBeNull()
     expect(b.data.id).toBe('late-arrival')
   })
+
+  it('normalizes a cached tombstone to missing on the public facade', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'deleted-row', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'gone'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await env.repo.tx(tx => tx.delete('deleted-row'), {scope: ChangeScope.BlockDefault})
+
+    const b = new Block(env.repo, 'deleted-row')
+    expect(env.cache.getSnapshot('deleted-row')?.deleted).toBe(true)
+    expect(b.peek()).toBeNull()
+    expect(b.read()).toBeNull()
+    expect(() => b.data).toThrow(BlockNotFoundError)
+  })
+
+  it('peekRaw exposes a cached tombstone for lifecycle/debug callers', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'raw-deleted-row', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'gone'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await env.repo.tx(tx => tx.delete('raw-deleted-row'), {scope: ChangeScope.BlockDefault})
+
+    const b = new Block(env.repo, 'raw-deleted-row')
+    expect(b.peek()).toBeNull()
+    expect(b.peekRaw()).toMatchObject({
+      id: 'raw-deleted-row',
+      deleted: true,
+      content: 'gone',
+    })
+  })
 })
 
 describe('Block.get / peekProperty (codec at boundary)', () => {
@@ -145,7 +175,7 @@ describe('Block.get / peekProperty (codec at boundary)', () => {
 })
 
 describe('Block.load', () => {
-  it('skips SQL when the cache already holds a snapshot (cache fast path)', async () => {
+  it('skips SQL when the cache already holds a live snapshot (cache fast path)', async () => {
     await env.repo.tx(
       tx => tx.create({id: 'cached', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
       {scope: ChangeScope.BlockDefault},
