@@ -11,12 +11,13 @@ import {
 } from 'lucide-react'
 import type { Block } from '@/data/block'
 import { useRepo } from '@/context/repo.js'
+import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { NestedBlockContextProvider } from '@/context/block.js'
 import { BlockComponent } from '@/components/BlockComponent.js'
 import { Button } from '@/components/ui/button.js'
 import { cn } from '@/lib/utils.js'
 import { showInfo } from '@/utils/toast.js'
-import { openReschedulePicker } from '@/plugins/daily-notes'
+import { hasAnyBlockDateAdapter, openReschedulePicker } from '@/plugins/daily-notes'
 import {
   formatRescheduleToastMessage,
   rescheduleBlock,
@@ -57,6 +58,7 @@ const GRADE_BY_KEY: Readonly<Record<string, SrsSignal>> = {
 
 export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) => {
   const repo = useRepo()
+  const runtime = useAppRuntime()
   const workspaceId = deck.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
   const dueCards = useDueCards(workspaceId, tagName)
 
@@ -256,15 +258,21 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
       </div>
 
       <div className="mt-3 flex items-center justify-center gap-4 text-xs text-muted-foreground">
-        <button
-          type="button"
-          className="inline-flex items-center gap-1 hover:text-foreground disabled:opacity-50"
-          onClick={reschedule}
-          disabled={busy}
-        >
-          <CalendarClock className="h-3.5 w-3.5" />
-          Reschedule
-        </button>
+        {/* Only when a date adapter can handle this card. With
+            srs-rescheduling disabled there's no adapter (and the picker
+            may not be mounted), so the control would open nothing and
+            then skip the card — hide it instead of silently no-op'ing. */}
+        {hasAnyBlockDateAdapter(runtime, repo.block(currentId)) && (
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 hover:text-foreground disabled:opacity-50"
+            onClick={reschedule}
+            disabled={busy}
+          >
+            <CalendarClock className="h-3.5 w-3.5" />
+            Reschedule
+          </button>
+        )}
         <button
           type="button"
           className="inline-flex items-center gap-1 hover:text-foreground disabled:opacity-50"

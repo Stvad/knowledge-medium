@@ -20,16 +20,28 @@ const QuestionOnlyLayout = ({Content}: BlockLayoutSlots) => (
   </div>
 )
 
+/** Answer phase: render content + the children subtree directly. We do
+ *  NOT fall back to the default layout here — its `Collapsible` only
+ *  opens for a non-collapsed or top-level block, and the review surface
+ *  is `isNestedSurface`, so a card that's collapsed in the outline would
+ *  reveal no answer at all. Rendering `Children` raw shows the answer
+ *  regardless of the card's stored collapse state. */
+const AnswerLayout = ({Content, Children}: BlockLayoutSlots) => (
+  <div className="srs-review-card-answer min-w-0">
+    <Content />
+    <Children />
+  </div>
+)
+
 export const srsReviewCardLayoutContribution: BlockLayoutContribution = ctx => {
+  // Only the card root — descendants never match (their id differs from
+  // cardId), so they keep the default layout. The card itself uses a
+  // dedicated layout for each phase rather than ever falling through to
+  // the default (which would respect collapse and could hide the answer).
   const cardId = ctx.blockContext?.[SRS_REVIEW_CARD_ID]
-  // Only the card root, and only while its answer is hidden. Once
-  // revealed we return null so the default layout renders content +
-  // children. Descendants never match (their id differs from cardId).
   if (cardId !== ctx.block.id) return null
-  if (ctx.blockContext?.[SRS_REVIEW_REVEALED]) return null
-  return {
-    id: 'srs-review.question-only',
-    label: 'SRS review question',
-    render: QuestionOnlyLayout,
-  }
+  const revealed = Boolean(ctx.blockContext?.[SRS_REVIEW_REVEALED])
+  return revealed
+    ? {id: 'srs-review.answer', label: 'SRS review answer', render: AnswerLayout}
+    : {id: 'srs-review.question-only', label: 'SRS review question', render: QuestionOnlyLayout}
 }
