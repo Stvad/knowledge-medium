@@ -63,5 +63,8 @@ describe('resolveStructuralEditPolicy', () => {
     const p = policy({scopeRootId: undefined})
     expect(p.isScopeRoot).toBe(false)
     expect(p.canIndent).toBe(true)
+    // Imperative/CLI dispatch (no surface): `O` falls back to a plain
+    // sibling-above rather than no-oping.
+    expect(p.createAbovePlacement).toBe('sibling-above')
   })
 })
