@@ -40,6 +40,7 @@ import {
   type BlockShortcutDependencies,
   type CodeMirrorEditModeDependencies,
 } from '@/shortcuts/types'
+import { createSharedBlockActions } from '@/shortcuts/blockActions'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1'}
@@ -606,5 +607,24 @@ describe('default CodeMirror shortcuts', () => {
     // Unchanged: still a direct child of root, not reparented under 'first'.
     expect(await childIds('root')).toEqual(['first', 'shown'])
     expect(await childIds('first')).toEqual([])
+  })
+
+  it('deletes a block even without a scopeRootId (non-React action runners)', async () => {
+    // scopeRootId only locates the post-delete focus target; imperative
+    // runners (agent-runtime bridge) may not supply one, but the delete
+    // itself must still happen.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'victim', content: 'x'})
+
+    const {deleteBlock} = createSharedBlockActions({repo: env.repo})
+    await deleteBlock.handler(
+      {block: env.repo.block('victim'), uiStateBlock: env.repo.block('ui')},
+      {preventDefault: vi.fn()} as unknown as ActionTrigger,
+    )
+
+    expect(env.repo.block('victim').peek()?.deleted).toBe(true)
   })
 })

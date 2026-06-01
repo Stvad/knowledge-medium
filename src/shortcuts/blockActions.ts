@@ -229,8 +229,10 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       const {block, uiStateBlock, scopeRootId} = deps
       if (!block || !uiStateBlock) return
 
-      if (!scopeRootId) return
-
+      // `scopeRootId` only locates the post-delete focus target; the
+      // delete itself doesn't need it. Don't gate the delete on it, so
+      // non-React runners that can't inject a scope (the agent-runtime
+      // bridge) still delete — they just skip focus recovery.
       // Same-depth next sibling is the natural shift-up target. When
       // `block` has descendants those vanish too, so we can't use
       // `nextVisibleBlock` (which would descend into the doomed
@@ -239,7 +241,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       // sibling → parent. This mirrors what the proactive
       // `PanelFocusRecovery` does on the DOM side, so manual deletes
       // and surprise disappearances both land on the same target.
-      const next = await blockAfterSubtreeRemoval(block, scopeRootId)
+      const next = scopeRootId ? await blockAfterSubtreeRemoval(block, scopeRootId) : null
       await withMoveTransition(async () => {
         await block.delete()
       })
