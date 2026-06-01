@@ -6,7 +6,7 @@ import type { ReactCodeMirrorRef } from '@uiw/react-codemirror'
 import { createMinimalMarkdownConfig } from '@/utils/codemirror.js'
 import { BlockEditor } from '@/components/BlockEditor.js'
 import { useUIStateBlock } from '@/data/globalState.js'
-import { editorSelection, focusBlock, topLevelBlockIdProp } from '@/data/properties.js'
+import { editorSelection, focusBlock } from '@/data/properties.js'
 import {
   pasteEditModeMultilineText,
   planEditModeMultilinePaste,
@@ -78,11 +78,8 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
         selection: EditorSelection.cursor(plan.focusOffsetInTarget),
       })
 
-      const scopeRootId = typeof blockContext.scopeRootId === 'string'
-        ? blockContext.scopeRootId
-        : uiStateBlock.peekProperty(topLevelBlockIdProp)
       const result = await pasteEditModeMultilineText(plan, block, repo, {
-        scopeRootId,
+        scopeRootId: blockContext.scopeRootId,
       })
       const renderScopeId = typeof blockContext.renderScopeId === 'string'
         ? blockContext.renderScopeId

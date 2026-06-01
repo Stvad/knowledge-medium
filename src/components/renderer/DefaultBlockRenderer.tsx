@@ -363,9 +363,7 @@ export function DefaultBlockRenderer(
   // selection toggles, so facet resolvers and the components they
   // produce keep stable identity. This is what stops UpdateIndicator
   // (and any other content decorator) from remounting on every click.
-  const scopeRootId = typeof blockContext.scopeRootId === 'string'
-    ? blockContext.scopeRootId
-    : topLevelBlockId
+  const scopeRootId = blockContext.scopeRootId
   const resolveContext = useMemo<BlockResolveContext>(() => ({
     block,
     repo,

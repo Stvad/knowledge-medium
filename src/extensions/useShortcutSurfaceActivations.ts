@@ -68,14 +68,12 @@ export function useShortcutSurfaceActivations(
   const inEditMode = useInEditMode(block.id)
   const isSelected = useIsSelected(block.id)
 
-  // Root of this surface's visible subtree. Set by every surface that
-  // mounts a block as a bounded view (panel, backlink entry, embed,
-  // breadcrumb); falls back to the panel's zoom root for the main
-  // outline. This — not topLevelBlockId — is the boundary structural
-  // and navigation handlers operate against.
-  const scopeRootId = typeof blockContext.scopeRootId === 'string'
-    ? blockContext.scopeRootId
-    : topLevelBlockId
+  // Root of this surface's visible subtree — declared by every surface
+  // that mounts a block (panel/top-level = its rendered root, backlink
+  // entry = shown block, embed = embedded block, breadcrumb = segment).
+  // This, not topLevelBlockId, is the boundary structural and navigation
+  // handlers operate against.
+  const scopeRootId = blockContext.scopeRootId
 
   const runtime = useAppRuntime()
   const resolveShortcutActivations = runtime.read(shortcutSurfaceActivationsFacet)

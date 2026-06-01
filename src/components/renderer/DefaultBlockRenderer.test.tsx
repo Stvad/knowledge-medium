@@ -17,6 +17,7 @@ import { outlineRenderScopeId } from '@/utils/renderScope'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
+import { BlockContextProvider } from '@/context/block'
 import { blockLayoutFacet, type BlockLayout } from '@/extensions/blockInteraction'
 import { defaultEditorInteractionExtension } from '@/extensions/defaultEditorInteractions'
 import { resolveFacetRuntimeSync, type FacetRuntime } from '@/extensions/facet'
@@ -181,12 +182,17 @@ describe('DefaultBlockRenderer paste handling', () => {
   const renderBlock = () =>
     render(
       <AppRuntimeContextProvider value={runtime}>
-        <ActiveContextsProvider>
-          <DefaultBlockRenderer
-            block={repo.block('block-1')}
-            ContentRenderer={TestContentRenderer}
-          />
-        </ActiveContextsProvider>
+        {/* The scope root is normally set by the panel/top-level surface
+            that mounts the block; provide it here so the paste path
+            resolves the same scopeRootId production would. */}
+        <BlockContextProvider initialValue={{scopeRootId: 'root'}}>
+          <ActiveContextsProvider>
+            <DefaultBlockRenderer
+              block={repo.block('block-1')}
+              ContentRenderer={TestContentRenderer}
+            />
+          </ActiveContextsProvider>
+        </BlockContextProvider>
       </AppRuntimeContextProvider>,
     )
 

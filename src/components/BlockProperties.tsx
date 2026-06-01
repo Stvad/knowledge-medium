@@ -17,7 +17,6 @@ import {
   editorSelection,
   requestEditorFocus,
   focusBlock,
-  topLevelBlockIdProp,
 } from '@/data/properties.js'
 import { Button } from './ui/button'
 import { nextVisibleBlock } from '@/utils/selection.js'
@@ -66,7 +65,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   const childIds = useChildIds(block)
   const uiStateBlock = useUIStateBlock()
   const runtime = useAppRuntime()
-  const {panelId, scopeRootId: contextScopeRootId, renderScopeId} = useBlockContext()
+  const {panelId, scopeRootId, renderScopeId} = useBlockContext()
   const navigate = useNavigate()
   const [showHiddenFields, setShowHiddenFields] = useState(false)
   const [syntheticProperties, setSyntheticProperties] = useState<readonly SyntheticPropertyRef[]>([])
@@ -154,9 +153,6 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   }
 
   const focusAfterProperties = async () => {
-    const scopeRootId = typeof contextScopeRootId === 'string'
-      ? contextScopeRootId
-      : uiStateBlock.peekProperty(topLevelBlockIdProp)
     if (!scopeRootId) return
 
     const next = await nextVisibleBlock(block, scopeRootId)
