@@ -11,7 +11,7 @@ import {
 } from '@/shortcuts/types.js'
 import { getBlockTypes } from '@/data/properties.js'
 import { navigateFromGlobalCommand } from '@/utils/navigation.js'
-import { SRS_SM25_TYPE } from '@/plugins/srs-rescheduling'
+import { SRS_SM25_TYPE, srsReschedulingDataExtension } from '@/plugins/srs-rescheduling'
 import { srsReviewDataExtension } from './dataExtension.ts'
 import { SrsReviewDeckRenderer } from './ReviewDeckRenderer.tsx'
 import { srsReviewCardLayoutContribution } from './reviewCardLayout.tsx'
@@ -62,6 +62,15 @@ export const srsReviewPlugin = ({repo}: {repo: Repo}): AppExtension =>
     name: 'SRS review',
     description: 'Deck-based review mode for spaced-repetition cards due today or earlier.',
   }).of([
+    // Bundle the SRS schema/type registrations. The due-cards query and
+    // archive write reference `srsNextReviewDateProp` / `srsArchivedProp`
+    // / SRS_SM25_TYPE, which only `srsReschedulingDataExtension`
+    // registers — so without this, enabling review while the
+    // `srs-rescheduling` toggle is off would make `core.typedBlocks`
+    // throw on the unregistered schemas. FacetContribution dedup is by
+    // reference, so referencing the same extension from both plugins
+    // registers each schema once when both are enabled.
+    srsReschedulingDataExtension,
     srsReviewDataExtension,
     blockRenderersFacet.of(
       {id: 'srsReviewDeck', renderer: SrsReviewDeckRenderer},
