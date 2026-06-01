@@ -616,6 +616,46 @@ describe('tx.childrenOf / tx.parentOf', () => {
   })
 })
 
+describe('tx.blocksReferencing', () => {
+  it('uses the reference index and returns each live source once inside the active tx', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: 'ref-other-workspace',
+        workspaceId: 'ws-2',
+        parentId: null,
+        orderKey: 'a0',
+        references: [{id: 'ref-target', alias: 'Target'}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'ref-target', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+      await tx.create({
+        id: 'ref-source',
+        workspaceId: 'ws-1',
+        parentId: null,
+        orderKey: 'a1',
+        references: [
+          {id: 'ref-target', alias: 'Target'},
+          {id: 'ref-target', alias: 'Other target text'},
+          {id: 'other-target', alias: 'Other'},
+        ],
+      })
+      await tx.create({
+        id: 'ref-deleted',
+        workspaceId: 'ws-1',
+        parentId: null,
+        orderKey: 'a2',
+        references: [{id: 'ref-target', alias: 'Target'}],
+      })
+      await tx.delete('ref-deleted')
+
+      const sources = await tx.blocksReferencing('ref-target', 'ws-1')
+      expect(sources.map(source => source.id)).toEqual(['ref-source'])
+    }, {scope: ChangeScope.BlockDefault})
+  })
+})
+
 describe('tx.aliasLookup', () => {
   it('finds a block by exact alias inside the user tx (read-your-own-writes)', async () => {
     await env.repo.tx(async tx => {

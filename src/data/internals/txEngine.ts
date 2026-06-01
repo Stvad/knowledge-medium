@@ -200,15 +200,13 @@ const SELECT_PARENT_SQL =
 const SELECT_PARENT_WORKSPACE_SQL =
   `SELECT workspace_id FROM blocks WHERE id = ?`
 const SELECT_BLOCKS_REFERENCING_SQL =
-  `SELECT ${COLUMN_LIST} FROM blocks
-   WHERE workspace_id = ?
-     AND deleted = 0
-     AND EXISTS (
-       SELECT 1
-       FROM json_each(references_json) AS je
-       WHERE json_extract(je.value, '$.id') = ?
-     )
-   ORDER BY order_key, id`
+  `SELECT DISTINCT ${COLUMN_NAMES.map(c => `source.${c}`).join(', ')}
+   FROM block_references br
+   JOIN blocks source ON source.id = br.source_id
+   WHERE br.workspace_id = ?
+     AND br.target_id = ?
+     AND source.deleted = 0
+   ORDER BY source.order_key, source.id`
 const INSERT_SQL = `INSERT INTO blocks (${COLUMN_LIST}) VALUES (${COLUMN_PLACEHOLDERS})`
 
 export class TxImpl implements Tx {
