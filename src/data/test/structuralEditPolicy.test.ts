@@ -20,6 +20,11 @@ describe('resolveStructuralEditPolicy', () => {
       expect(policy({hasUncollapsedChildren: true}).createBelowPlacement).toBe('child-first')
     })
 
+    it('creates a sibling above regardless of children', () => {
+      expect(policy().createAbovePlacement).toBe('sibling-above')
+      expect(policy({hasUncollapsedChildren: true}).createAbovePlacement).toBe('sibling-above')
+    })
+
     it('allows indent / outdent / merge-up', () => {
       const p = policy({parentId: 'somewhere-else'})
       expect(p).toMatchObject({canIndent: true, canOutdent: true, canMergeUp: true, isScopeRoot: false})
@@ -39,6 +44,11 @@ describe('resolveStructuralEditPolicy', () => {
       expect(root({hasUncollapsedChildren: true}).createBelowPlacement).toBe('child-first')
     })
 
+    it('creates a first child for `O` too, since a sibling above is outside the surface', () => {
+      expect(root().createAbovePlacement).toBe('child-first')
+      expect(root({hasUncollapsedChildren: true}).createAbovePlacement).toBe('child-first')
+    })
+
     it('is a no-op for indent / outdent / merge-up', () => {
       expect(root()).toMatchObject({
         isScopeRoot: true,
@@ -53,5 +63,8 @@ describe('resolveStructuralEditPolicy', () => {
     const p = policy({scopeRootId: undefined})
     expect(p.isScopeRoot).toBe(false)
     expect(p.canIndent).toBe(true)
+    // Imperative/CLI dispatch (no surface): `O` falls back to a plain
+    // sibling-above rather than no-oping.
+    expect(p.createAbovePlacement).toBe('sibling-above')
   })
 })

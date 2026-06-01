@@ -585,6 +585,45 @@ describe('default CodeMirror shortcuts', () => {
     expect(children[1]).toBe('existing')
   })
 
+  it('keeps the before-text in a scope-root block and pushes the suffix into a new first child on mid-text split', async () => {
+    // A normal mid-text split makes the before-text a preceding sibling;
+    // at the scope root that sibling is outside the surface, so the root
+    // keeps the before-text and the continuation becomes its first child.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'shown', content: 'left right'})
+    await env.repo.mutate.createChild({parentId: 'shown', id: 'existing', content: 'existing'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await focusBlock(uiStateBlock, 'shown')
+
+    const editorView = codeMirrorEditorView('left right', 'left '.length)
+    const action = findEditModeAction(env.repo, 'split_block_cm')
+    await action.handler({
+      block: env.repo.block('shown'),
+      editorView,
+      uiStateBlock,
+      scopeRootId: 'shown',
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    // Root unchanged in the parent's children; before-text stays in it.
+    expect(await childIds('root')).toEqual(['shown'])
+    expect(env.repo.block('shown').peek()?.content).toBe('left ')
+
+    // Suffix lands as the new first child, ahead of the existing child.
+    const children = await childIds('shown')
+    const suffixId = children[0]
+    expect(children).toEqual([suffixId, 'existing'])
+    expect(env.repo.block(suffixId).peek()?.content).toBe('right')
+
+    // Editor and focus follow the suffix block.
+    expect(editorView.state.doc.toString()).toBe('left ')
+    expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).toBe(suffixId)
+    expect(uiStateBlock.peekProperty(editorSelection)).toEqual({blockId: suffixId, start: 0})
+  })
+
   it('makes Tab a no-op on a scope-root block', async () => {
     await env.repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})

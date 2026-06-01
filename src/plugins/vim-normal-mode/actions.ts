@@ -243,11 +243,23 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
     }),
     bindNormal({
       id: 'create_block_above_and_edit',
-      description: 'Create block above and enter edit mode',
-      handler: async ({block, uiStateBlock, renderScopeId}: BlockShortcutDependencies) => {
-        const newId = await repo.mutate.createSiblingAbove({siblingId: block.id})
+      description: 'Create block above (or as child) and enter edit mode',
+      handler: async (deps: BlockShortcutDependencies) => {
+        const {block, uiStateBlock, scopeRootId} = deps
+        if (!block || !uiStateBlock) return
+
+        // sibling-above normally, but at the scope root (e.g. a backlink
+        // entry) a sibling above would land outside the visible surface —
+        // the "invisible block" bug — so the policy falls back to a first
+        // child, the only insertion point the surface can render. With no
+        // scope root (imperative/CLI dispatch) the policy yields
+        // 'sibling-above', preserving the plain create-above behaviour.
+        const {createAbovePlacement} = await structuralEditPolicyForBlock(block, scopeRootId)
+        const newId = createAbovePlacement === 'child-first'
+          ? await repo.mutate.createChild({parentId: block.id, position: {kind: 'first'}, revealParent: true})
+          : await repo.mutate.createSiblingAbove({siblingId: block.id})
         if (!newId) return
-        await focusBlock(uiStateBlock, newId, {edit: true, renderScopeId})
+        await focusBlock(uiStateBlock, newId, {edit: true, renderScopeId: deps.renderScopeId})
       },
       defaultBinding: {
         keys: 'Shift+o',
