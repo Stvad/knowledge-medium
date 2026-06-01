@@ -2,6 +2,7 @@ import { ChangeScope, type BlockData, type Tx } from '@/data/api'
 import { Block } from '../data/block'
 import type { Repo } from '../data/repo'
 import { isCollapsedProp } from '@/data/properties.js'
+import { revealChildren } from '@/data/internals/kernelMutators.js'
 import { parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser.js'
 import { keysBetween } from '../data/orderKey.ts'
 
@@ -113,6 +114,12 @@ const resolveRootDestination = async (
     (placement === 'visible' && position === 'after' && targetHasVisibleChildren)
   const rootParentId = rootsAsChildren ? target.id : target.parentId
   if (!rootParentId) throw new Error(`paste target ${target.id} has no visible insertion parent`)
+
+  // Placing the pasted roots as children of `target` — reveal it if
+  // collapsed so the focused paste isn't hidden inside a closed subtree
+  // (same invariant as indent / moveVertical / create-child). No-op when
+  // target is already expanded.
+  if (rootsAsChildren) await revealChildren(tx, target.id)
 
   const rootInsertion = rootsAsChildren
     ? insertionForFirstChild(targetChildren[0]?.orderKey)

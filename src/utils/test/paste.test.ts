@@ -93,6 +93,21 @@ describe('pasteMultilineText', () => {
     expect(await childContents('root')).toEqual(['Parent', 'Sibling'])
   })
 
+  it('reveals a collapsed scope-root target when pasting as its children', async () => {
+    // Pasting onto a nested scope root (scopeRootId === target.id) inserts
+    // the roots as its children; if it's collapsed they'd be hidden, so the
+    // paste must reveal it (same invariant as create-child / move).
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('sr', 'Scope root', 'root', 'a0')
+    await createBlock('existing', 'Existing', 'sr', 'a0')
+    await env.repo.mutate.setProperty({id: 'sr', schema: isCollapsedProp, value: true})
+
+    await pasteMultilineText('Alpha\nBeta', env.repo.block('sr'), env.repo, {scopeRootId: 'sr'})
+
+    expect(env.repo.block('sr').peek()?.properties[isCollapsedProp.name]).toBe(false)
+    expect(await childContents('sr')).toEqual(['Alpha', 'Beta', 'Existing'])
+  })
+
   it('pastes after a collapsed target as a visible sibling', async () => {
     await createBlock('root', 'Root', null, 'a0')
     await createBlock('parent', 'Parent', 'root', 'a0')

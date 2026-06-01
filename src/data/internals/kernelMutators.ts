@@ -120,9 +120,10 @@ const relocateBlock = async (
  *  placements that put a block *as a child of* `id` call this so the
  *  inserted/moved block can't land inside a closed subtree and vanish.
  *  The shared invariant behind indent (reparent under previous sibling),
- *  moveVertical (descend into a neighbour), and child-first create-below
- *  (vim `o` / Enter on a collapsed scope root). No-op when not collapsed. */
-const revealChildren = async (tx: Tx, id: string): Promise<void> => {
+ *  moveVertical (descend into a neighbour), child-first create-below
+ *  (vim `o` / Enter on a collapsed scope root), and paste-as-child.
+ *  No-op when not collapsed. */
+export const revealChildren = async (tx: Tx, id: string): Promise<void> => {
   if (await tx.getProperty(id, isCollapsedProp)) {
     await tx.setProperty(id, isCollapsedProp, false)
   }
