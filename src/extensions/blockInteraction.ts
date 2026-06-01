@@ -518,7 +518,7 @@ export const handleBlockSelectionClick = async (
         : null,
     })
   } else if (event.shiftKey) {
-    await extendSelection(block.id, uiStateBlock, repo, context.scopeRootId)
+    await extendSelection(block.id, uiStateBlock, repo, context.scopeRootId, !context.blockContext?.isNestedSurface)
   } else {
     await resetBlockSelection(uiStateBlock)
   }

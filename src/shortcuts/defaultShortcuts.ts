@@ -502,7 +502,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     handler: async (deps: CodeMirrorEditModeDependencies) => {
       if (cursorIsAtStart(deps.editorView)) {
         setIsEditing(deps.uiStateBlock, false)
-        await extendSelectionUp(deps.uiStateBlock, repo, deps.scopeRootId)
+        await extendSelectionUp(deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen)
       }
     },
   }
@@ -511,7 +511,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     handler: async (deps: CodeMirrorEditModeDependencies) => {
       if (cursorIsAtEnd(deps.editorView)) {
         setIsEditing(deps.uiStateBlock, false)
-        await extendSelectionDown(deps.uiStateBlock, repo, deps.scopeRootId)
+        await extendSelectionDown(deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen)
       }
     },
   }
@@ -663,7 +663,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           return
         }
 
-        const nextVisible = await nextVisibleBlock(block, scopeRootId)
+        const nextVisible = await nextVisibleBlock(block, scopeRootId, deps.scopeRootForcesOpen)
         if (!nextVisible) return
 
         await uiStateBlock.set(editorSelection, {
@@ -722,7 +722,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         trigger.preventDefault()
 
-        const nextVisible = await nextVisibleBlock(block, scopeRootId)
+        const nextVisible = await nextVisibleBlock(block, scopeRootId, deps.scopeRootForcesOpen)
         if (!nextVisible) return
 
         await uiStateBlock.set(editorSelection, {

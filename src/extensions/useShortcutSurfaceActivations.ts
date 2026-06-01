@@ -74,6 +74,11 @@ export function useShortcutSurfaceActivations(
   // This, not topLevelBlockId, is the boundary structural and navigation
   // handlers operate against.
   const scopeRootId = blockContext.scopeRootId
+  // Focal panel/top-level surfaces force-open their scope root; nested
+  // surfaces (backlink/embed) honour its collapse flag. Navigation uses
+  // this so it won't descend into a collapsed nested root's hidden
+  // children.
+  const scopeRootForcesOpen = !blockContext.isNestedSurface
 
   const runtime = useAppRuntime()
   const resolveShortcutActivations = runtime.read(shortcutSurfaceActivationsFacet)
@@ -99,7 +104,7 @@ export function useShortcutSurfaceActivations(
     // having to forward it by hand.
     }).map(activation => ({
       ...activation,
-      dependencies: {...(activation.dependencies ?? {}), scopeRootId},
+      dependencies: {...(activation.dependencies ?? {}), scopeRootId, scopeRootForcesOpen},
     })),
     [
       block,
@@ -108,6 +113,7 @@ export function useShortcutSurfaceActivations(
       types,
       topLevelBlockId,
       scopeRootId,
+      scopeRootForcesOpen,
       blockContext,
       inFocus,
       inEditMode,

@@ -65,7 +65,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   const childIds = useChildIds(block)
   const uiStateBlock = useUIStateBlock()
   const runtime = useAppRuntime()
-  const {panelId, scopeRootId, renderScopeId} = useBlockContext()
+  const {panelId, scopeRootId, renderScopeId, isNestedSurface} = useBlockContext()
   const navigate = useNavigate()
   const [showHiddenFields, setShowHiddenFields] = useState(false)
   const [syntheticProperties, setSyntheticProperties] = useState<readonly SyntheticPropertyRef[]>([])
@@ -155,7 +155,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   const focusAfterProperties = async () => {
     if (!scopeRootId) return
 
-    const next = await nextVisibleBlock(block, scopeRootId)
+    const next = await nextVisibleBlock(block, scopeRootId, !isNestedSurface)
     if (!next) return
     await next.load()
     await focusBlockEditor(next, {start: 0})

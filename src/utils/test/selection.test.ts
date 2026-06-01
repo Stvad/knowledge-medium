@@ -195,6 +195,20 @@ describe('getLastVisibleDescendant', () => {
     expect(result.id).toBe('b')
   })
 
+  it('honors a collapsed scope root when the surface does NOT force it open', async () => {
+    // A nested scope root (backlink/embed) renders its collapse flag, so
+    // navigation must not descend into its hidden children — returns the
+    // root itself rather than a child that isn't rendered.
+    await seedOutline(env.repo, [
+      {id: 'top', parentId: null, orderKey: 'a'},
+      {id: 'a', parentId: 'top', orderKey: 'b'},
+      {id: 'b', parentId: 'top', orderKey: 'c'},
+    ])
+    await env.repo.mutate.setProperty({id: 'top', schema: isCollapsedProp, value: true})
+    const result = await getLastVisibleDescendant(env.repo.block('top'), 'top', false)
+    expect(result.id).toBe('top')
+  })
+
   it('still honors the collapsed flag on entry when the id does not match topLevelBlockId', async () => {
     // Confirms the exemption is narrowly scoped to the panel root — a
     // collapsed sibling encountered mid-walk still terminates the descent.

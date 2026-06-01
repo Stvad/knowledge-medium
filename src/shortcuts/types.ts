@@ -73,6 +73,12 @@ export interface BaseShortcutDependencies {
    *  surfaces by `useShortcutSurfaceActivations`; defaults to the
    *  panel's zoom root for the main outline. */
   scopeRootId?: string;
+  /** Whether the surface force-opens its scope root regardless of the
+   *  root's own collapse flag (true for focal panel/top-level roots,
+   *  false for nested surface roots that honour collapse). Navigation
+   *  primitives use it so they don't descend into a collapsed nested
+   *  root whose children aren't rendered. Defaults to true (focal). */
+  scopeRootForcesOpen?: boolean;
 }
 
 export interface BlockShortcutDependencies  extends BaseShortcutDependencies {

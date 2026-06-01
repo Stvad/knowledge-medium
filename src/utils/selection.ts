@@ -12,12 +12,15 @@ import {
 import { outlineRenderScopeId } from '@/utils/renderScope'
 import { ChangeScope } from '@/data/api'
 
-/** True if `block` is collapsed *and* the caller cares (i.e. it isn't
- *  the surface's scope root — the root always exposes children even
- *  if its own collapsed flag is set). Reads the property synchronously
- *  from cache; assumes the row has been loaded. */
-const isExpanded = (block: Block, scopeRootId: string): boolean => {
-  if (block.id === scopeRootId) return true
+/** True if `block` is collapsed *and* the caller cares. The scope root
+ *  is treated as always-expanded ONLY when its surface force-opens it
+ *  (`scopeRootForcesOpen`) — true for a focal panel/top-level root
+ *  (rendered `open` regardless of its own collapse flag), false for a
+ *  nested surface root (backlink/embed), which honours its collapse flag
+ *  in both render and navigation. Reads the property synchronously from
+ *  cache; assumes the row has been loaded. */
+const isExpanded = (block: Block, scopeRootId: string, scopeRootForcesOpen: boolean): boolean => {
+  if (block.id === scopeRootId && scopeRootForcesOpen) return true
   return !(block.peekProperty(isCollapsedProp) ?? false)
 }
 
@@ -36,12 +39,13 @@ const isExpanded = (block: Block, scopeRootId: string): boolean => {
 export const nextVisibleBlock = async (
   current: Block,
   scopeRootId: string,
+  scopeRootForcesOpen = true,
 ): Promise<Block | null> => {
   const repo = current.repo
   await current.load()
 
   // Step into the first child if expanded.
-  if (isExpanded(current, scopeRootId)) {
+  if (isExpanded(current, scopeRootId, scopeRootForcesOpen)) {
     const childIds = await current.childIds.load()
     if (childIds.length > 0) return repo.block(childIds[0])
   }
@@ -72,6 +76,10 @@ export const nextVisibleBlock = async (
 export const previousVisibleBlock = async (
   current: Block,
   scopeRootId: string,
+  // Accepted for signature parity with `nextVisibleBlock` (so callers can
+  // treat them interchangeably). Unused: climbing toward the scope root
+  // never re-enters it, so its force-open state is irrelevant here.
+  _scopeRootForcesOpen = true,
 ): Promise<Block | null> => {
   if (current.id === scopeRootId) return null
   const repo = current.repo
@@ -141,23 +149,26 @@ export const blockAfterSubtreeRemoval = async (
  *  the bottom of an expanded subtree. Returns the input block if it
  *  is collapsed or has no children.
  *
- *  When `scopeRootId` is supplied and equals the block's id, its own
- *  `isCollapsedProp` is ignored — matches `isExpanded`'s "scope root
- *  always exposes children" rule. Necessary so vim `Shift+G` (jump to
- *  last visible block) still descends from a scope root whose own flag
- *  happens to carry a stale collapsed flag from when it was viewed as a
- *  child. Mid-walk collapsed blocks still terminate the descent so
- *  `previousVisibleBlock`'s contract (don't dive into a collapsed
- *  sibling) is preserved. */
+ *  When `scopeRootId` is supplied, equals the block's id, AND the
+ *  surface force-opens it (`scopeRootForcesOpen`), its own
+ *  `isCollapsedProp` is ignored — matches `isExpanded`'s rule. Necessary
+ *  so vim `Shift+G` (jump to last visible block) still descends from a
+ *  focal panel root whose own flag carries a stale collapsed flag from
+ *  when it was viewed as a child. A nested scope root that honours its
+ *  collapse flag (`scopeRootForcesOpen === false`) terminates the
+ *  descent instead. Mid-walk collapsed blocks still terminate the
+ *  descent so `previousVisibleBlock`'s contract (don't dive into a
+ *  collapsed sibling) is preserved. */
 export const getLastVisibleDescendant = async (
   block: Block,
   scopeRootId?: string,
+  scopeRootForcesOpen = true,
 ): Promise<Block> => {
   const repo = block.repo
   await block.load()
   let current = block
   while (true) {
-    const isScopeRoot = current.id === scopeRootId
+    const isScopeRoot = current.id === scopeRootId && scopeRootForcesOpen
     const collapsed = current.peekProperty(isCollapsedProp) ?? false
     if (collapsed && !isScopeRoot) return current
     const childIds = await current.childIds.load()
@@ -353,6 +364,7 @@ export async function getBlocksInRange(
   endBlockId: string,
   scopeRootId: string,
   repo: Repo,
+  scopeRootForcesOpen = true,
 ): Promise<string[]> {
   if (startBlockId === endBlockId) {
     return validateSelectionHierarchy([startBlockId], repo)
@@ -365,7 +377,7 @@ export async function getBlocksInRange(
     const ids: string[] = [startBlockId]
     let walker: Block | null = start
     while (walker) {
-      walker = await nextVisibleBlock(walker, scopeRootId)
+      walker = await nextVisibleBlock(walker, scopeRootId, scopeRootForcesOpen)
       if (!walker) return null
       ids.push(walker.id)
       if (walker.id === endBlockId) return ids
@@ -412,6 +424,7 @@ export async function extendSelection(
   uiStateBlock: Block,
   repo: Repo,
   scopeRootId: string | undefined,
+  scopeRootForcesOpen = true,
 ): Promise<void> {
   const currentState = uiStateBlock.peekProperty(selectionStateProp)
   const focusedId = peekFocusedBlockLocation(uiStateBlock)?.blockId
@@ -421,7 +434,7 @@ export async function extendSelection(
   const currentAnchor = currentState?.anchorBlockId || focusedId
   if (!currentAnchor) return
 
-  const rangeIds = await getBlocksInRange(currentAnchor, targetBlockId, scopeRootId, repo)
+  const rangeIds = await getBlocksInRange(currentAnchor, targetBlockId, scopeRootId, repo, scopeRootForcesOpen)
 
   const currentLocation = peekFocusedBlockLocation(uiStateBlock)
   await commitSelectionRange({
