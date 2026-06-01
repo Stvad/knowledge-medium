@@ -50,6 +50,14 @@ const orderKeyBeforeSibling = async (tx: Tx, sibling: BlockData): Promise<string
   return keyBetween(previous?.orderKey ?? null, sibling.orderKey)
 }
 
+/** Placement of a block within a parent's child list — an explicit
+ *  position used by the insert/move mutators. */
+type InsertPosition =
+  | { kind: 'first' }
+  | { kind: 'last' }
+  | { kind: 'after'; siblingId: string }
+  | { kind: 'before'; siblingId: string }
+
 /** Compute the order_key for inserting under `parentId` at a given
  *  `position`. Reads sibling list from SQL (tx.childrenOf is sorted by
  *  (order_key, id) per §11.4). `parentId === null` enumerates
@@ -61,11 +69,7 @@ const orderKeyForInsert = async (
   tx: Tx,
   parentId: string | null,
   workspaceId: string,
-  position:
-    | { kind: 'first' }
-    | { kind: 'last' }
-    | { kind: 'after'; siblingId: string }
-    | { kind: 'before'; siblingId: string },
+  position: InsertPosition,
 ): Promise<string> => {
   const siblings = await tx.childrenOf(parentId, workspaceId)
 
@@ -97,6 +101,20 @@ const positionSchema = z.discriminatedUnion('kind', [
   z.object({kind: z.literal('after'), siblingId: z.string()}),
   z.object({kind: z.literal('before'), siblingId: z.string()}),
 ])
+
+/** Re-home `block` under `parentId` at `position`, computing the order
+ *  key. The shared core of `core.move` (explicit placement) and
+ *  `moveVertical` (which computes a target then places the block) — both
+ *  funnel their final write through here. */
+const relocateBlock = async (
+  tx: Tx,
+  block: BlockData,
+  parentId: string | null,
+  position: InsertPosition,
+): Promise<void> => {
+  const orderKey = await orderKeyForInsert(tx, parentId, block.workspaceId, position)
+  await tx.move(block.id, {parentId, orderKey})
+}
 
 // ──── setContent ────
 
@@ -377,8 +395,7 @@ export const move = defineMutator<MoveArgs, void>({
     // workspace_id is immutable (server-side trigger enforces it), so
     // it's also the destination workspace.
     const self = await requireBlock(tx, args.id)
-    const orderKey = await orderKeyForInsert(tx, args.parentId, self.workspaceId, args.position)
-    await tx.move(args.id, {parentId: args.parentId, orderKey})
+    await relocateBlock(tx, self, args.parentId, args.position)
   },
 })
 
@@ -475,12 +492,6 @@ export const outdent = defineMutator<OutdentArgs, boolean>({
 })
 
 // ──── moveVertical ────
-
-type InsertPosition =
-  | { kind: 'first' }
-  | { kind: 'last' }
-  | { kind: 'after'; siblingId: string }
-  | { kind: 'before'; siblingId: string }
 
 interface MoveVerticalArgs {
   id: string
@@ -584,8 +595,7 @@ export const moveVertical = defineMutator<MoveVerticalArgs, boolean>({
         await tx.setProperty(target.parentId, isCollapsedProp, false)
       }
     }
-    const orderKey = await orderKeyForInsert(tx, target.parentId, self.workspaceId, target.position)
-    await tx.move(id, {parentId: target.parentId, orderKey})
+    await relocateBlock(tx, self, target.parentId, target.position)
     return true
   },
 })
