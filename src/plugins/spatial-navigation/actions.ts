@@ -117,7 +117,7 @@ const extendSelectionVertical = async (
   const focusedLocation = peekFocusedBlockLocation(uiStateBlock)
   if (!focusedLocation) return false
   const current = resolveCurrentAnchor(uiStateBlock.id, focusedLocation)
-  if (!current) return false
+  if (!current) return true
 
   const currentLocation = locationOf(current)
   if (!currentLocation) return false
@@ -163,8 +163,11 @@ const moveVertical = async (
 ): Promise<boolean> => {
   const {block, uiStateBlock} = deps
   if (!block || !uiStateBlock) return false
+  const expectedLocation = deps.renderScopeId
+    ? {blockId: block.id, renderScopeId: deps.renderScopeId}
+    : peekFocusedBlockLocation(uiStateBlock)
   const current = currentInstance(deps)
-  if (!current) return false
+  if (!current) return Boolean(expectedLocation)
 
   // Recovery-anchor settle: the focused block instance is gone (e.g. a
   // backlink was just rescheduled away) and `resolveCurrentAnchor`
@@ -175,9 +178,6 @@ const moveVertical = async (
   const currentLocation = locationOf(current)
   if (!currentLocation) return false
 
-  const expectedLocation = deps.renderScopeId
-    ? {blockId: block.id, renderScopeId: deps.renderScopeId}
-    : peekFocusedBlockLocation(uiStateBlock)
   if (
     expectedLocation &&
     (

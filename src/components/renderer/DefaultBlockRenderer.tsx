@@ -487,6 +487,7 @@ export function DefaultBlockRenderer(
       return (
         <div
           {...contentSurfaceProps}
+          data-block-focus-target="true"
           className={`block-content${topLevelClass}${contentSurfaceProps.className ? ` ${contentSurfaceProps.className}` : ''}`}
           ref={contentContainerRef}
         >

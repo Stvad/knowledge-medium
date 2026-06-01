@@ -223,3 +223,32 @@ describe('spatial navigation selection actions', () => {
     })
   })
 })
+
+describe('spatial navigation vertical actions', () => {
+  it('does not fall through when the focused rendered location is missing and has no safe recovery anchor', async () => {
+    buildPanelDom([{blockId: 'A', renderScopeId: 'panel:A'}])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'X', {renderScopeId: 'panel:missing:X'})
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'move_down',
+      description: 'Move down',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async () => {
+        fallback()
+      },
+    })
+
+    await action.handler({
+      block: env.repo.block('X'),
+      uiStateBlock: panel,
+      renderScopeId: 'panel:missing:X',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    expect(fallback).not.toHaveBeenCalled()
+    expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
+      blockId: 'X',
+      renderScopeId: 'panel:missing:X',
+    })
+  })
+})

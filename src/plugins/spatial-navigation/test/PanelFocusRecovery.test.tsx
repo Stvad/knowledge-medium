@@ -49,11 +49,25 @@ const buildPanelDom = (
   return panel
 }
 
+const visibleRect = () =>
+  ({
+    top: 50,
+    bottom: 1050,
+    left: 0,
+    right: 100,
+    width: 100,
+    height: 1000,
+    x: 0,
+    y: 50,
+    toJSON: () => ({}),
+  }) as DOMRect
+
 const setNavAttrs = (el: HTMLElement, blockId: string, renderScopeId = `i-${blockId}`): void => {
   el.setAttribute('data-block-nav-item', 'true')
   el.setAttribute('data-block-id', blockId)
   el.setAttribute('data-render-scope-id', renderScopeId)
   el.setAttribute('data-block-surface', 'outline')
+  el.getBoundingClientRect = visibleRect
 }
 
 const focusedLocation = (blockId: string, renderScopeId = `i-${blockId}`) => ({
