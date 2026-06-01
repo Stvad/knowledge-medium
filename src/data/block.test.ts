@@ -149,6 +149,34 @@ describe('Block.data / peek (sync)', () => {
       content: 'gone',
     })
   })
+
+  it('delete and restore transition the public facade between null and live data', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'restored-row', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'before'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    const b = env.repo.block('restored-row')
+    const seen: Array<string | null> = []
+    const unsub = b.subscribe(data => seen.push(data?.content ?? null))
+    try {
+      await env.repo.tx(tx => tx.delete('restored-row'), {scope: ChangeScope.BlockDefault})
+      expect(b.peek()).toBeNull()
+      expect(b.read()).toBeNull()
+      expect(b.peekRaw()).toMatchObject({id: 'restored-row', deleted: true})
+
+      await env.repo.tx(
+        tx => tx.restore('restored-row', {content: 'after'}),
+        {scope: ChangeScope.BlockDefault},
+      )
+      expect(b.peek()).toMatchObject({id: 'restored-row', content: 'after', deleted: false})
+      expect(b.read()).toMatchObject({id: 'restored-row', content: 'after', deleted: false})
+      expect(b.peekRaw()).toMatchObject({id: 'restored-row', content: 'after', deleted: false})
+      expect(seen).toEqual([null, 'after'])
+    } finally {
+      unsub()
+    }
+  })
 })
 
 describe('Block.get / peekProperty (codec at boundary)', () => {

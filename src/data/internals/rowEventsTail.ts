@@ -11,10 +11,11 @@
  * `source = 'sync'` (avoiding overlap with the engine fast-path), and:
  *
  *   - Reads new rows since the last consumed `id`.
- *   - Updates the BlockCache with the after_json snapshot (or evicts
- *     on hard-delete) so Block facades subscribed via cache.subscribe
- *     reflect remote changes — without this, sync writes are invisible
- *     to UI consumers that don't go through a collection handle.
+ *   - Updates the BlockCache with the after_json snapshot (or marks
+ *     the row confirmed-missing on hard-delete) so Block facades
+ *     subscribed via cache.subscribe reflect remote changes — without
+ *     this, sync writes are invisible to UI consumers that don't go
+ *     through a collection handle.
  *   - Calls `handleStore.invalidate(...)` with a `ChangeNotification`
  *     that lists `rowIds` + `parentIds` + `workspaceIds` so collection
  *     handles re-resolve. `parentIds` covers both before- and after-
@@ -204,13 +205,14 @@ export const startRowEventsTail = (args: {
       // cache state — fires the right invalidations.
       //
       // For the delete branch (rare safety net; soft-deletes arrive as
-      // UPDATEs with deleted=1 in `after`): `deleteSnapshot` returns
-      // true only if the cache was actually tracking the row. If it
-      // wasn't, no consumer can observe the deletion → skip is correct
-      // for the same reason.
+      // UPDATEs with deleted=1 in `after`): mark the id confirmed-
+      // missing. A lean childIds handle can cache membership without
+      // hydrating the row into BlockCache, so a hard-delete must still
+      // count as an accepted change on the first missing transition and
+      // invalidate parent-edge deps.
       const accepted = after
         ? cache.applyIfNewer(after as BlockData, 'sync')
-        : cache.deleteSnapshot(r.block_id)
+        : cache.markMissing(r.block_id)
       if (!accepted) continue
 
       rowIds.add(r.block_id)

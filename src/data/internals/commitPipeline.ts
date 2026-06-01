@@ -337,11 +337,14 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
   })
 
   // Step 6: post-COMMIT cache walk. Update cache to `after` per id
-  // (deepFrozen by BlockCache.setSnapshot). Outside-tx readers begin
+  // (deepFrozen by BlockCache.setSnapshot). A hard-delete drives the
+  // row to a confirmed-missing marker instead of merely evicting the
+  // snapshot so already-loaded Block facades keep observing "absent"
+  // rather than regressing to "not loaded". Outside-tx readers begin
   // observing committed state from this point.
   for (const [id, entry] of snapshots) {
     if (entry.after === null) {
-      cache.deleteSnapshot(id)
+      cache.markMissing(id)
     } else {
       cache.setSnapshot(entry.after)
     }

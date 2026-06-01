@@ -167,7 +167,8 @@ export class Block implements Handle<BlockData | null> {
   }
 
   /** Subscribe to cache mutations for this id. Listener fires with the
-   *  current `BlockData | null` (null = confirmed missing or evicted). */
+   *  current live `BlockData | null` (null = confirmed missing, cached
+   *  tombstone, or hard-deleted/missing). */
   subscribe(listener: (data: BlockData | null) => void): Unsubscribe {
     return this.repo.cache.subscribe(this.id, () => {
       const next = this.peek() ?? null

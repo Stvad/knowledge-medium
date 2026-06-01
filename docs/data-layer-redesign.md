@@ -579,7 +579,7 @@ export interface Handle<T> {
 
 Identity rule: same `(name, JSON.stringify(args))` → same handle instance. GC after `gcTime` of zero subscribers + zero in-flight loads.
 
-**Missing vs not-loaded**: `repo.block(id): Handle<BlockData | null>`. After load, `null` = confirmed missing; `peek()` returns `BlockData | null` post-load. Before any load, `peek()` returns `undefined`. `status()` distinguishes loading from loaded.
+**Missing vs not-loaded**: `repo.block(id): Handle<BlockData | null>`. `Block` is a live-row facade: `peek()`, `read()`, `load()`, and `subscribe()` never expose `deleted = 1` rows as ordinary `BlockData`. After load, `null` = no live row: confirmed missing, soft-deleted tombstone, or hard-deleted/missing. Before any load, `peek()` returns `undefined`. `status()` distinguishes loading from loaded. Lifecycle/debug code that needs the cached tombstone shape uses `peekRaw()` explicitly.
 
 For multi-result handles (`subtree`, `backlinks`, query results), the type is `Handle<BlockData[]>` — possibly empty, never null.
 
@@ -590,12 +590,15 @@ export interface Block {
   readonly id: string
   readonly repo: Repo
 
-  /** Sync; throws BlockNotLoadedError if not in cache, BlockNotFoundError if confirmed missing. */
+  /** Sync; throws BlockNotLoadedError if not in cache, BlockNotFoundError if no live row exists. */
   readonly data: BlockData
 
-  /** Soft access. */
-  peek(): BlockData | undefined | null   // undefined = not loaded; null = not found
-  load(): Promise<BlockData | null>
+  /** Live-row access. */
+  peek(): BlockData | undefined | null   // undefined = not loaded; null = no live row
+  load(): Promise<BlockData | null>      // null = missing or soft-deleted
+
+  /** Tombstone-aware cache access for lifecycle/debug paths only. */
+  peekRaw(): BlockData | undefined | null
 
   /** Sync property access via descriptor. */
   get<T>(schema: PropertySchema<T>): T                       // returns descriptor.defaultValue if absent
@@ -617,7 +620,7 @@ export interface Block {
   readonly children: LoaderHandle<BlockData[]>
   readonly parent: Block | null
 
-  subscribe(listener: (data: BlockData | null) => void): Unsubscribe
+  subscribe(listener: (data: BlockData | null) => void): Unsubscribe  // null = no live row
 
   /** Single-block write sugar — each is a 1-mutator tx.
    *  These exist because `await block.set(prop, value)` reads dramatically better
@@ -636,14 +639,22 @@ collection state (children, subtree, ancestors, backlinks) lives on
 `LoaderHandle`s registered with `HandleStore`. `BlockData` matches the
 row shape: no `childIds` field; no parent-children index on the cache.
 
-**Cache contents.** `BlockCache` holds per-id `BlockData` snapshots
-plus confirmed-missing markers. It does NOT hold a parent→children
-index, an `allChildrenLoaded` marker, or any other collection-shaped
-state — those concerns live on the `LoaderHandle`s for
-`repo.children(id)` / `repo.childIds(id)`. PowerSync sync-applied
-inserts/moves invalidate matching handles via the `parent-edge` dep
-declared by their loaders; the row_events tail produces a
-`ChangeNotification` listing `parentIds` and the `HandleStore` walks
+**Cache contents.** `BlockCache` holds raw per-id `BlockData` snapshots,
+including tombstones, plus confirmed-missing markers. The raw cache is
+intentionally lower-level than `Block`: local commits and sync row-events
+write tombstones into the cache so lifecycle/debug paths can inspect them,
+while the `Block` facade normalizes tombstones to `null` for ordinary
+readers. Hard-deletes set the confirmed-missing marker instead of merely
+evicting the snapshot, so a previously loaded block keeps observing
+"absent" rather than regressing to "not loaded".
+
+`BlockCache` does NOT hold a parent→children index, an
+`allChildrenLoaded` marker, or any other collection-shaped state — those
+concerns live on the `LoaderHandle`s for `repo.children(id)` /
+`repo.childIds(id)`. PowerSync sync-applied inserts, soft-deletes,
+restores, hard-deletes, and moves invalidate matching handles via the
+`parent-edge` dep declared by their loaders; the row_events tail produces
+a `ChangeNotification` listing `parentIds` and the `HandleStore` walks
 its inverted dep index.
 
 The full `repo.load` signature:
