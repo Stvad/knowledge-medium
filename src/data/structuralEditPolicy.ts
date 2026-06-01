@@ -9,6 +9,15 @@ import { isCollapsedProp } from './properties.js'
  */
 export type CreateBelowPlacement = 'child-first' | 'sibling-below'
 
+/**
+ * Where a "new block above" gesture (vim `O`) must place the created
+ * block so it lands somewhere the user can see.
+ *  - `child-first`: insert as the block's first child (used at the scope
+ *    root, where a sibling above would land outside the visible surface).
+ *  - `sibling-above`: insert as the previous sibling.
+ */
+export type CreateAbovePlacement = 'child-first' | 'sibling-above'
+
 export interface StructuralEditPolicyInput {
   /** Block the structural edit targets. */
   blockId: string
@@ -49,6 +58,11 @@ export interface StructuralEditPolicy {
   isScopeRoot: boolean
   /** Placement for vim `o` / Enter-at-end. */
   createBelowPlacement: CreateBelowPlacement
+  /** Placement for vim `O`. At the scope root a sibling above would land
+   *  outside the visible surface (the "invisible block" bug), so it
+   *  degenerates to a first child — the only insertion point relative to
+   *  the root the surface can actually render. */
+  createAbovePlacement: CreateAbovePlacement
   /** May Tab indent this block within the surface? */
   canIndent: boolean
   /** May Shift+Tab outdent this block within the surface? The
@@ -70,6 +84,7 @@ export const resolveStructuralEditPolicy = (
     isScopeRoot,
     createBelowPlacement:
       isScopeRoot || hasUncollapsedChildren ? 'child-first' : 'sibling-below',
+    createAbovePlacement: isScopeRoot ? 'child-first' : 'sibling-above',
     canIndent: !isScopeRoot,
     canOutdent: !isScopeRoot && parentId !== scopeRootId,
     canMergeUp: !isScopeRoot,
