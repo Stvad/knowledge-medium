@@ -66,6 +66,66 @@ So the safe window is automatic — but the rule above must hold until Phase D.
    and the Layout B cutover are present in the deployed client (and the
    retargeted sync rules are live) should any path create an e2ee workspace.
 
+## Cutover hygiene: pre-existing `blocks` rows aren't reconciled
+
+The Layout B cutover takes `blocks` out of the client's `withRawTables`
+(`repoProvider.ts`) — PowerSync stops managing `blocks` and starts managing the
+new `blocks_synced` staging table, which the observer materializes into `blocks`.
+The local DB filename is unchanged (`kmp-v6`), so an upgrading client keeps the
+`blocks` rows PowerSync wrote under the old mapping.
+
+That swap does **not** reconcile the pre-existing `blocks`. The fresh
+`blocks_synced` hydration upserts the *current* sync set into `blocks` (so
+everything you still have access to refreshes correctly), but the observer only
+*deletes* a `blocks` row when `blocks_synced` emits a DELETE — which can't happen
+for an id that was never staged. So a row lingers as a local "ghost" iff **all**
+of:
+
+- it was in `blocks` before the upgrade, **and**
+- it left the user's sync set — `workspace_id IN user_workspaces`, i.e.
+  `delete_workspace` / `remove_workspace_member`, **not** a soft-delete (those
+  sync fine as `deleted=1` rows), **and**
+- the client's first sync carrying that removal landed on the **new** build,
+  never the old one (offline/closed across the removal+upgrade, or upgraded
+  before reconnecting). If the old build synced the removal first, PowerSync
+  scrubbed `blocks` normally — no ghost.
+
+Steady-state revocation on the new build is already handled (the row drops from
+`blocks_synced` → DELETE trigger → observer removes it; see `materialize.ts`).
+**The hole is only the upgrade boundary.**
+
+Impact is local-only and bounded. The ghost is a `deleted=0` row, so it stays in
+the derived indexes (`blocks_fts` search, `block_aliases`, `block_types`) and is
+visible/editable; edits to it are **rejected** server-side and quarantined in
+`ps_crud_rejected` (they never sync). No corruption, no data loss, no effect on
+other clients. For a revoked shared workspace it's a local-retention wart — you
+keep readable copies past the point steady-state sync would have scrubbed them.
+
+We handle this with migration hygiene, **not code** — a robust reconciliation
+would have to wait for full `blocks_synced` hydration *and* exclude un-uploaded
+local rows (pending `ps_crud`, or it deletes the user's offline edits), which is
+more failure surface than this narrow corner warrants (Codex P2 on PR #56, on
+the `repoProvider.ts` raw-table swap):
+
+1. **Don't delete workspaces or remove members during the cutover rollout
+   window.** The bug requires a set-shrink; if none happens while clients are
+   straddling the swap, no ghosts can form. Trivially controllable at alpha
+   scale.
+2. **Clean-slate escape hatch (deliberate, not the default).** If a
+   guaranteed-clean local state is required, bump the DB filename version in
+   `repoProvider.ts` (`kmp-v6` → `kmp-v7`) to force a fresh local DB + full
+   re-sync. This **orphans local-only state — including the `row_events` change
+   history** — so take it consciously, not as a free reset.
+3. **Manual recovery if a ghost is seen post-cutover.** Clear that user's local
+   PowerSync storage (or bump the version per #2) to force a clean re-sync. A
+   one-time reconciliation (`DELETE FROM blocks` for ids absent from
+   `blocks_synced` after first full sync, excluding pending-upload ids) could
+   automate this later if it ever shows up in practice.
+
+This only bites at the **full cutover** (all clients on the observer, old
+`blocks` stream dropped). The dual-run validation phase doesn't hit it — it runs
+on the maintainer's own account with no membership changes.
+
 ## If the queue jams anyway
 
 If an e2ee workspace gets created before the uploader exists and a client's
