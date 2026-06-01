@@ -167,6 +167,12 @@ export interface Tx {
    *  exist. Reads SQL via the writeTransaction. */
   parentOf(childId: string): Promise<BlockData | null>
 
+  /** Live blocks in `workspaceId` whose stored references include
+   *  `targetId`. This is a core reference-column query, not the
+   *  references plugin's projection table, so kernel mutators can use
+   *  it without depending on plugin local schema. */
+  blocksReferencing(targetId: string, workspaceId: string): Promise<BlockData[]>
+
   /** Look up the live block in `workspaceId` whose `aliases` property
    *  contains the exact `alias` text. Returns null when no such block
    *  exists. Tx-aware version of the kernel `core.aliasLookup` query;

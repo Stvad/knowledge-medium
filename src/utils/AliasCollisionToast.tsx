@@ -4,10 +4,9 @@
  *     single-button toast) so the user can review what's there before
  *     deciding whether to merge.
  *   - "Merge into …" folds the rejected source into the existing block
- *     via `core.merge` with `'keepTarget'` content strategy. The
- *     property bag unions (so the colliding alias the user typed lands
- *     on the target along with the rest of the source's properties);
- *     source is soft-deleted.
+ *     via the alias-collision merge mutator. Source is soft-deleted,
+ *     target content is kept, and rename-origin metadata decides which
+ *     source alias should be rewritten to the colliding alias.
  *
  * The merge is one-click — no confirmation step — because (a) the user
  * explicitly picked "Merge" knowing what it does, (b) `repo.undo()`
@@ -19,6 +18,7 @@ import { Button } from '@/components/ui/button'
 import { navigate } from '@/utils/navigation.js'
 import { dismissToast, showError } from '@/utils/toast.js'
 import type { Repo } from '@/data/repo'
+import { ALIAS_COLLISION_MERGE_MUTATOR } from '@/plugins/alias/collisionMerge'
 
 export interface AliasCollisionToastProps {
   toastId: string | number
@@ -28,6 +28,7 @@ export interface AliasCollisionToastProps {
   conflictingBlockId: string
   conflictingBlockTitle: string
   workspaceId: string
+  dropSourceAliases?: string[]
   repo: Repo
 }
 
@@ -42,6 +43,7 @@ export const AliasCollisionToast = ({
   conflictingBlockId,
   conflictingBlockTitle,
   workspaceId,
+  dropSourceAliases,
   repo,
 }: AliasCollisionToastProps) => {
   const [pending, setPending] = useState(false)
@@ -55,10 +57,11 @@ export const AliasCollisionToast = ({
     if (pending) return
     setPending(true)
     try {
-      await repo.mutate.merge({
+      await repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
         intoId: conflictingBlockId,
         fromId: attemptedOn,
-        contentStrategy: 'keepTarget',
+        collisionAlias: alias,
+        dropSourceAliases,
       })
       // Navigate to the survivor so the user lands on something live —
       // especially important if they were viewing the source, which is

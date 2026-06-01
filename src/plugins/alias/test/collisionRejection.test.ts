@@ -139,6 +139,8 @@ describe('alias.collision — A1-style (content edit adds new claim)', () => {
     expect(caught).toBeInstanceOf(ProcessorRejection)
     expect((caught as ProcessorRejection).code).toBe('alias.collision')
     expect((caught as ProcessorRejection).meta?.alias).toBe('Existing')
+    expect((caught as ProcessorRejection).meta?.dropSourceAliases).toEqual(['mine'])
+    expect((caught as ProcessorRejection).meta?.collisionOrigin).toBe('content-rename')
 
     // Block b is unchanged — content stayed "mine", aliases stayed ["mine"].
     expect((await env.read('b'))!.content).toBe('mine')
@@ -197,6 +199,7 @@ describe('alias.collision — direct claim (no content change)', () => {
     } catch (err) { caught = err }
     expect(caught).toBeInstanceOf(ProcessorRejection)
     expect((caught as ProcessorRejection).code).toBe('alias.collision')
+    expect((caught as ProcessorRejection).meta?.dropSourceAliases).toBeUndefined()
 
     expect(await readAliases('b')).toEqual(['distinct'])
   })

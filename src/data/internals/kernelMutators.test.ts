@@ -14,7 +14,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope, ParentDeletedError, codecs, defineProperty, type BlockData } from '@/data/api'
+import { ChangeScope, ParentDeletedError, codecs, defineProperty, normalizeReferences, type BlockData } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '../repo'
@@ -828,6 +828,55 @@ describe('core.merge', () => {
       expect(env.read(id)!.parentId).toBe('a')
       expect(env.read(id)!.deleted).toBe(false)
     }
+  })
+
+  it('retargets stored backlinks and blockref syntax from source to target', async () => {
+    const intoId = '11111111-1111-4111-8111-111111111111'
+    const fromId = '22222222-2222-4222-8222-222222222222'
+    const refId = '33333333-3333-4333-8333-333333333333'
+
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'p', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+      await tx.create({
+        id: intoId,
+        workspaceId: 'ws-1',
+        parentId: 'p',
+        orderKey: 'a0',
+        content: 'Target page',
+        properties: {[aliasesProp.name]: aliasesProp.codec.encode(['Target page'])},
+      })
+      await tx.create({
+        id: fromId,
+        workspaceId: 'ws-1',
+        parentId: 'p',
+        orderKey: 'a1',
+        content: 'Source page',
+        properties: {[aliasesProp.name]: aliasesProp.codec.encode(['Source page'])},
+      })
+      await tx.create({
+        id: refId,
+        workspaceId: 'ws-1',
+        parentId: 'p',
+        orderKey: 'a2',
+        content: `Links [[Source page]] ((${fromId})) [source block](((${fromId}))) !((${fromId}))`,
+        references: [
+          {id: fromId, alias: 'Source page'},
+          {id: fromId, alias: fromId},
+        ],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    await env.repo.mutate.merge({intoId, fromId, contentStrategy: 'keepTarget'})
+
+    expect(env.read(fromId)!.deleted).toBe(true)
+    expect(env.read(intoId)!.properties[aliasesProp.name]).toEqual(['Target page', 'Source page'])
+    expect(env.read(refId)!.content).toBe(
+      `Links [[Source page]] ((${intoId})) [source block](((${intoId}))) !((${intoId}))`,
+    )
+    expect(env.read(refId)!.references).toEqual(normalizeReferences([
+      {id: intoId, alias: 'Source page'},
+      {id: intoId, alias: intoId},
+    ]))
   })
 
   describe('contentStrategy', () => {

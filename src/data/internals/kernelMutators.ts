@@ -27,8 +27,11 @@ import {
 } from '@/data/api'
 import { BlockNotFoundError } from '@/data/api'
 import { keyAtEnd, keyAtStart, keyBetween, keysBetween } from '../orderKey'
-import { mergeProperties } from './mergeProperties'
 import { isCollapsedProp } from '@/data/properties'
+import {
+  mergeBlocksInTx,
+  type ContentStrategy,
+} from './blockMerge'
 
 // ──── Common helpers ────
 
@@ -668,16 +671,7 @@ export const split = defineMutator<SplitArgs, string>({
 
 // ──── merge ────
 
-/** How target and source content are combined.
- *  - `'concat'`  → `into.content + from.content`. Default; matches the
- *    Backspace-at-block-start caller that needs zero-separator splice.
- *  - `'keepTarget'` → keep target content; fall back to source's only when
- *    target is empty (avoids silent loss in the canonical-stub-absorbs-
- *    real-page case). Used for type-aware page merges where two prose
- *    bodies don't compose meaningfully.
- *  - `{separator}` → join with an explicit string between the two.
- */
-export type ContentStrategy = 'concat' | 'keepTarget' | { separator: string }
+export type { ContentStrategy } from './blockMerge'
 
 const contentStrategySchema = z.union([
   z.literal('concat'),
@@ -694,18 +688,6 @@ interface MergeArgs {
   contentStrategy?: ContentStrategy
 }
 
-const computeMergedContent = (
-  intoContent: string,
-  fromContent: string,
-  strategy: ContentStrategy,
-): string => {
-  if (strategy === 'concat') return intoContent + fromContent
-  if (strategy === 'keepTarget') {
-    return intoContent.length > 0 ? intoContent : fromContent
-  }
-  return intoContent + strategy.separator + fromContent
-}
-
 export const merge = defineMutator<MergeArgs, void>({
   name: 'core.merge',
   argsSchema: z.object({
@@ -718,30 +700,7 @@ export const merge = defineMutator<MergeArgs, void>({
   apply: async (tx, {intoId, fromId, contentStrategy = 'concat'}) => {
     const into = await requireBlock(tx, intoId)
     const from = await requireBlock(tx, fromId)
-
-    // Re-parent `from`'s direct children under `into` at the end of
-    // its current children list. Their own descendants come along
-    // naturally — parent_id chains stay intact under SQLite's
-    // single-row updates.
-    const intoChildren = await tx.childrenOf(intoId)
-    const fromChildren = await tx.childrenOf(fromId)
-    if (fromChildren.length > 0) {
-      const keys = keysBetween(intoChildren.at(-1)?.orderKey ?? null, null, fromChildren.length)
-      for (let i = 0; i < fromChildren.length; i++) {
-        await tx.move(fromChildren[i].id, {parentId: intoId, orderKey: keys[i]})
-      }
-    }
-
-    // Soft-delete source BEFORE writing the merged property bag to the
-    // target. The alias-uniqueness trigger on `block_aliases` is keyed
-    // off live (non-deleted) rows; if source still holds an alias that
-    // the merged bag adds to the target, the property write rejects.
-    await tx.delete(fromId)
-
-    await tx.update(intoId, {
-      content: computeMergedContent(into.content, from.content, contentStrategy),
-      properties: mergeProperties(into.properties, from.properties),
-    })
+    await mergeBlocksInTx(tx, {into, from, contentStrategy})
   },
 })
 

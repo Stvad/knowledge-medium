@@ -199,6 +199,16 @@ const SELECT_PARENT_SQL =
   `SELECT p.* FROM blocks AS c JOIN blocks AS p ON p.id = c.parent_id WHERE c.id = ? AND p.deleted = 0`
 const SELECT_PARENT_WORKSPACE_SQL =
   `SELECT workspace_id FROM blocks WHERE id = ?`
+const SELECT_BLOCKS_REFERENCING_SQL =
+  `SELECT ${COLUMN_LIST} FROM blocks
+   WHERE workspace_id = ?
+     AND deleted = 0
+     AND EXISTS (
+       SELECT 1
+       FROM json_each(references_json) AS je
+       WHERE json_extract(je.value, '$.id') = ?
+     )
+   ORDER BY order_key, id`
 const INSERT_SQL = `INSERT INTO blocks (${COLUMN_LIST}) VALUES (${COLUMN_PLACEHOLDERS})`
 
 export class TxImpl implements Tx {
@@ -518,6 +528,14 @@ export class TxImpl implements Tx {
   async parentOf(childId: string): Promise<BlockData | null> {
     const row = await this.ctx.txDb.getOptional<BlockRow>(SELECT_PARENT_SQL, [childId])
     return row === null ? null : parseBlockRow(row)
+  }
+
+  async blocksReferencing(targetId: string, workspaceId: string): Promise<BlockData[]> {
+    const rows = await this.ctx.txDb.getAll<BlockRow>(
+      SELECT_BLOCKS_REFERENCING_SQL,
+      [workspaceId, targetId],
+    )
+    return rows.map(parseBlockRow)
   }
 
   async aliasLookup(alias: string, workspaceId: string): Promise<BlockData | null> {
