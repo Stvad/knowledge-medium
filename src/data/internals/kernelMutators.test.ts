@@ -223,6 +223,20 @@ describe('core.createChild', () => {
     expect(await env.childIds('root')).toEqual(['A', id, 'B', 'C'])
   })
 
+  it('reveals a collapsed parent when revealParent is set', async () => {
+    await seedABC()
+    await env.repo.mutate.setProperty({id: 'A', schema: isCollapsedProp, value: true})
+    await env.repo.mutate.createChild({parentId: 'A', id: 'A1', revealParent: true})
+    expect(env.read('A')!.properties[isCollapsedProp.name]).toBe(false)
+  })
+
+  it('leaves a collapsed parent collapsed without revealParent', async () => {
+    await seedABC()
+    await env.repo.mutate.setProperty({id: 'A', schema: isCollapsedProp, value: true})
+    await env.repo.mutate.createChild({parentId: 'A', id: 'A1'})
+    expect(env.read('A')!.properties[isCollapsedProp.name]).toBe(true)
+  })
+
   it('respects position={kind:"before", siblingId}', async () => {
     await seedABC()
     const id = await env.repo.mutate.createChild({parentId: 'root', id: 'X', content: 'before-B', position: {kind: 'before', siblingId: 'B'}})

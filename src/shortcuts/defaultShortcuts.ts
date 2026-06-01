@@ -562,6 +562,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           const newId = await repo.mutate.createChild({
             parentId: block.id,
             position: {kind: 'first'},
+            revealParent: true,
           })
           if (newId) await focusBlock(uiStateBlock, newId, {edit: true, renderScopeId: deps.renderScopeId})
         }

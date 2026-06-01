@@ -11,6 +11,7 @@ import {
   editorSelection,
   focusBlock,
   focusedBlockLocationProp,
+  isCollapsedProp,
   isEditingProp,
   peekFocusedBlockLocation,
   topLevelBlockIdProp,
@@ -550,6 +551,37 @@ describe('default CodeMirror shortcuts', () => {
     // New block lands as a child of the scope root, not a sibling under root.
     expect(await childIds('root')).toEqual(['shown'])
     expect(await childIds('shown')).toHaveLength(1)
+  })
+
+  it('reveals a COLLAPSED scope-root block when Enter creates its first child', async () => {
+    // A nested scope root (backlink/embed) isn't isTopLevel, so a
+    // collapsed root would hide the new child inside a closed
+    // Collapsible. Enter must reveal the root so the inserted+focused
+    // block is visible.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'shown', content: 'shown'})
+    await env.repo.mutate.createChild({parentId: 'shown', id: 'existing', content: 'existing'})
+    await env.repo.mutate.setProperty({id: 'shown', schema: isCollapsedProp, value: true})
+
+    const uiStateBlock = env.repo.block('ui')
+    await focusBlock(uiStateBlock, 'shown')
+
+    const action = findEditModeAction(env.repo, 'split_block_cm')
+    await action.handler({
+      block: env.repo.block('shown'),
+      editorView: codeMirrorEditorView('shown', 'shown'.length),
+      uiStateBlock,
+      scopeRootId: 'shown',
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    // Root revealed, and the new block is its first child (above 'existing').
+    expect(env.repo.block('shown').peek()?.properties[isCollapsedProp.name]).toBe(false)
+    const children = await childIds('shown')
+    expect(children).toHaveLength(2)
+    expect(children[1]).toBe('existing')
   })
 
   it('makes Tab a no-op on a scope-root block', async () => {

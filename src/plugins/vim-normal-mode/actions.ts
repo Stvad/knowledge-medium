@@ -150,7 +150,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         // the "invisible block" bug). Otherwise a sibling below.
         const {createBelowPlacement} = await structuralEditPolicyForBlock(block, scopeRootId)
         const newId = createBelowPlacement === 'child-first'
-          ? await repo.mutate.createChild({parentId: block.id, position: {kind: 'first'}})
+          ? await repo.mutate.createChild({parentId: block.id, position: {kind: 'first'}, revealParent: true})
           : await repo.mutate.createSiblingBelow({siblingId: block.id})
         if (newId) await focusBlock(uiStateBlock, newId, {edit: true, renderScopeId: deps.renderScopeId})
       },

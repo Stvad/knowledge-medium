@@ -116,6 +116,18 @@ const relocateBlock = async (
   await tx.move(block.id, {parentId, orderKey})
 }
 
+/** Reveal a block's children by clearing a collapsed flag. Structural
+ *  placements that put a block *as a child of* `id` call this so the
+ *  inserted/moved block can't land inside a closed subtree and vanish.
+ *  The shared invariant behind indent (reparent under previous sibling),
+ *  moveVertical (descend into a neighbour), and child-first create-below
+ *  (vim `o` / Enter on a collapsed scope root). No-op when not collapsed. */
+const revealChildren = async (tx: Tx, id: string): Promise<void> => {
+  if (await tx.getProperty(id, isCollapsedProp)) {
+    await tx.setProperty(id, isCollapsedProp, false)
+  }
+}
+
 // ──── setContent ────
 
 export const setContent = defineMutator<{id: string; content: string}, void>({
@@ -206,6 +218,11 @@ interface CreateChildArgs {
   /** Optional explicit id (deterministic-id callers). Engine assigns
    *  a UUID when absent. */
   id?: string
+  /** Reveal the parent if it's collapsed, so the new child is visible.
+   *  User-initiated "create child and focus it" paths (vim `o`, Enter
+   *  on a collapsed scope root) set this; programmatic child creation
+   *  leaves it off to avoid force-expanding. */
+  revealParent?: boolean
 }
 
 const createChildSchema = z.object({
@@ -215,6 +232,7 @@ const createChildSchema = z.object({
   references: z.array(z.object({id: z.string(), alias: z.string()})).optional(),
   position: positionSchema.optional(),
   id: z.string().optional(),
+  revealParent: z.boolean().optional(),
 })
 
 export const createChild = defineMutator<CreateChildArgs, string>({
@@ -226,6 +244,7 @@ export const createChild = defineMutator<CreateChildArgs, string>({
   apply: async (tx, args) => {
     const parent = await requireBlock(tx, args.parentId)
     const orderKey = await orderKeyForInsert(tx, args.parentId, parent.workspaceId, args.position ?? {kind: 'last'})
+    if (args.revealParent) await revealChildren(tx, args.parentId)
     return tx.create({
       id: args.id,
       workspaceId: parent.workspaceId,
@@ -432,9 +451,7 @@ export const indent = defineMutator<{id: string}, void>({
     const newParentChildren = await tx.childrenOf(newParent.id)
     const orderKey = keyAtEnd(newParentChildren.at(-1)?.orderKey ?? null)
     await tx.move(id, {parentId: newParent.id, orderKey})
-    if (await tx.getProperty(newParent.id, isCollapsedProp)) {
-      await tx.setProperty(newParent.id, isCollapsedProp, false)
-    }
+    await revealChildren(tx, newParent.id)
   },
 })
 
@@ -588,12 +605,9 @@ export const moveVertical = defineMutator<MoveVerticalArgs, boolean>({
 
     if (!target) return false
     // Moving INTO a neighbouring subtree (target parent ≠ current parent)
-    // reveals it if collapsed, so the block stays visible — same as
-    // `indent` does when reparenting under a collapsed new parent.
+    // reveals it if collapsed, so the block stays visible.
     if (target.parentId !== null && target.parentId !== self.parentId) {
-      if (await tx.getProperty(target.parentId, isCollapsedProp)) {
-        await tx.setProperty(target.parentId, isCollapsedProp, false)
-      }
+      await revealChildren(tx, target.parentId)
     }
     await relocateBlock(tx, self, target.parentId, target.position)
     return true
