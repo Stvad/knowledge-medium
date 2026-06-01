@@ -15,10 +15,13 @@
  */
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks.js'
 import { navigate } from '@/utils/navigation.js'
 import { dismissToast, showError } from '@/utils/toast.js'
 import type { Repo } from '@/data/repo'
 import { ALIAS_COLLISION_MERGE_MUTATOR } from '@/plugins/alias/collisionMerge'
+import { getLayoutSessionId } from '@/utils/layoutSessionId.js'
+import { retargetPanelBlockIds } from '@/utils/panelLayoutProjection.js'
 
 export interface AliasCollisionToastProps {
   toastId: string | number
@@ -63,10 +66,14 @@ export const AliasCollisionToast = ({
         collisionAlias: alias,
         dropSourceAliases,
       })
-      // Navigate to the survivor so the user lands on something live —
-      // especially important if they were viewing the source, which is
-      // now soft-deleted.
-      navigate(repo, {target: 'main', blockId: conflictingBlockId, workspaceId})
+      const uiState = await getUIStateBlock(repo, workspaceId, repo.user, {})
+      const layoutSessionBlock = await getLayoutSessionBlock(uiState, getLayoutSessionId())
+      try {
+        await retargetPanelBlockIds(repo, layoutSessionBlock, attemptedOn, conflictingBlockId)
+      } catch (error) {
+        console.error('[AliasCollisionToast] Failed to retarget panels after merge', error)
+        showError('Merge completed, but panel update failed')
+      }
       dismissToast(toastId)
     } catch (error) {
       // Surface the failure rather than disappearing silently. Leave

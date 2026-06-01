@@ -487,6 +487,41 @@ export const reconcilePanelRows = async (
   }, {scope: ChangeScope.UiState, description: 'reconcile panel layout from URL'})
 }
 
+export const retargetPanelBlockIds = async (
+  repo: Repo,
+  layoutSessionBlock: Block,
+  fromId: string,
+  toId: string,
+): Promise<void> => {
+  if (fromId === toId) return
+
+  await repo.tx(async tx => {
+    const parent = await tx.get(layoutSessionBlock.id)
+    if (!parent) {
+      throw new Error(`retargetPanelBlockIds: layout session block ${layoutSessionBlock.id} not found`)
+    }
+
+    const currentRows = await loadSubtreeRowsInTx(tx, parent)
+    const panelRows = currentRows
+      .filter(row => row.id !== layoutSessionBlock.id && !isPanelStackRow(row))
+      .filter(row => panelBlockId(row) === fromId)
+
+    for (const row of panelRows) {
+      const restored = panelHistory.reconcileUrlNavigation(row.id, {
+        blockId: fromId,
+        state: panelHistory.snapshot(row.id),
+      }, toId)
+      panelHistory.enqueueRestore(row.id, restored?.state)
+      await tx.setProperty(row.id, topLevelBlockIdProp, toId)
+      await tx.setProperty(row.id, focusedBlockLocationProp, restored?.state?.focusedLocation ?? {
+        blockId: toId,
+        renderScopeId: outlineRenderScopeId(toId),
+      })
+      await tx.setProperty(row.id, scrollTopProp, restored?.state?.scrollTop ?? 0)
+    }
+  }, {scope: ChangeScope.UiState, description: 'retarget merged panels'})
+}
+
 export interface ApplyCurrentLayoutUrlArgs {
   repo: Repo
   workspaceId: string

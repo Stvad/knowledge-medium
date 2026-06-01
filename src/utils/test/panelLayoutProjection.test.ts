@@ -8,6 +8,7 @@ import { Repo } from '@/data/repo'
 import { keysBetween } from '@/data/orderKey'
 import {
   focusedBlockLocationProp,
+  scrollTopProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
 import { outlineRenderScopeId } from '@/utils/renderScope'
@@ -18,6 +19,8 @@ import {
   layoutBlockIdsFromRows,
   layoutSlotsFromRows,
   panelBlockIds,
+  panelBlockId,
+  retargetPanelBlockIds,
 } from '@/utils/panelLayoutProjection'
 import { panelHistory } from '@/utils/panelHistory'
 
@@ -233,6 +236,79 @@ describe('applyCurrentLayoutUrl', () => {
 
     expect(result.kind).toBe('ignored')
     expect(panelBlockIds(await rows())).toEqual([])
+  })
+})
+
+describe('retargetPanelBlockIds', () => {
+  it('retargets every panel currently showing the merged source block', async () => {
+    await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: layoutSessionBlock(),
+      hash: '#ws-1/source/(s:other,source)',
+    })
+
+    const beforeRows = await layoutRows()
+    const sourceRows = beforeRows.filter(row => panelBlockId(row) === 'source')
+    expect(sourceRows).toHaveLength(2)
+
+    await retargetPanelBlockIds(env.repo, layoutSessionBlock(), 'source', 'target')
+
+    const afterRows = await layoutRows()
+    expect(layoutBlockIdsFromRows(env.layoutSessionBlockId, afterRows)).toEqual([
+      'target',
+      'other',
+      'target',
+    ])
+    expect(layoutSlotsFromRows(env.layoutSessionBlockId, afterRows)).toEqual([
+      {kind: 'leaf', blockId: 'target'},
+      {
+        kind: 'stack',
+        children: [
+          {kind: 'leaf', blockId: 'other'},
+          {kind: 'leaf', blockId: 'target'},
+        ],
+      },
+    ])
+    for (const row of sourceRows) {
+      expect(env.repo.block(row.id).peekProperty(focusedBlockLocationProp)).toEqual({
+        blockId: 'target',
+        renderScopeId: outlineRenderScopeId('target'),
+      })
+      expect(env.repo.block(row.id).peekProperty(scrollTopProp)).toBe(0)
+    }
+  })
+
+  it('uses panel-history restore state when the target is adjacent in history', async () => {
+    await createPanelRows(['source'])
+    const [row] = await rows()
+    panelHistory.push(row.id, {
+      blockId: 'target',
+      state: {
+        focusedLocation: {
+          blockId: 'target-child',
+          renderScopeId: outlineRenderScopeId('target'),
+        },
+        scrollTop: 42,
+      },
+    })
+
+    await retargetPanelBlockIds(env.repo, layoutSessionBlock(), 'source', 'target')
+
+    expect(env.repo.block(row.id).peekProperty(topLevelBlockIdProp)).toBe('target')
+    expect(env.repo.block(row.id).peekProperty(focusedBlockLocationProp)).toEqual({
+      blockId: 'target-child',
+      renderScopeId: outlineRenderScopeId('target'),
+    })
+    expect(env.repo.block(row.id).peekProperty(scrollTopProp)).toBe(42)
+    expect(panelHistory.consumeRestore(row.id)).toEqual({
+      focusedLocation: {
+        blockId: 'target-child',
+        renderScopeId: outlineRenderScopeId('target'),
+      },
+      scrollTop: 42,
+    })
+    expect(panelHistory.getSnapshot(row.id).forward.map(entry => entry.blockId)).toEqual(['source'])
   })
 })
 
