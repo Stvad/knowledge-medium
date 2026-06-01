@@ -494,33 +494,35 @@ interface MoveVerticalArgs {
 }
 
 /**
- * Move a block one step up or down in the *visible* outline, crossing
- * parent boundaries the way Roam does. Within a sibling list it swaps
- * with the adjacent sibling; at the edge of a sibling list it descends
- * into the neighbouring subtree:
+ * Move a block one step up or down in the visible outline, WITHOUT ever
+ * changing its indentation. Within a sibling list it swaps with the
+ * adjacent sibling; when it is the first/last child of its parent it
+ * moves into the neighbouring sibling subtree at the SAME depth it
+ * already had:
  *
  *     a            a
  *       b            b
- *     c     ──▶      d   (move d up → last child of c's previous sibling a)
- *       d          c
+ *         c            c
+ *     d     ──▶      e   (move e up → a's last child; e stays depth 1)
+ *       e          d
  *
  * Rules (up; down mirrors):
  *  - has a previous sibling          → swap before it (same parent);
- *  - first child, parent has an
- *    EXPANDED previous sibling Q     → become Q's last child;
  *  - first child, parent has a
- *    COLLAPSED previous sibling, or
- *    parent is itself the first      → move just above the parent
- *    child                            (under the grandparent).
+ *    previous sibling Q              → become Q's last child — same depth
+ *                                      the block already had. Q is
+ *                                      revealed if collapsed, mirroring
+ *                                      how `indent` reveals a collapsed
+ *                                      new parent;
+ *  - first child, parent is itself   → no-op. The only one-step-up slot
+ *    the first child                   would be a shallower level, and
+ *                                      moveVertical never outdents.
  *
- * "Visible" is the key word: a collapsed block is one opaque row, so we
- * never descend into a collapsed neighbour's hidden subtree (the block
- * would vanish). In that case the block lands adjacent to its parent
- * instead — still exactly one visible step.
- *
- * Bounded by `scopeRootId`: the scope root itself never moves, and a
- * first/last direct child of the scope root won't cross out of it.
- * Returns whether anything moved so callers can no-op cleanly.
+ * Indentation is invariant: every move keeps the block at its original
+ * depth, so it never pops out to / into a shallower or deeper level.
+ * Bounded by `scopeRootId`: the scope root never moves, and a first/last
+ * direct child of it won't cross out. Returns whether anything moved so
+ * callers can no-op cleanly.
  */
 export const moveVertical = defineMutator<MoveVerticalArgs, boolean>({
   name: 'core.moveVertical',
@@ -554,41 +556,34 @@ export const moveVertical = defineMutator<MoveVerticalArgs, boolean>({
             : {kind: 'after', siblingId: adjacent.id},
         })
       }
-      // Edge of the sibling list — cross into the neighbouring subtree,
-      // unless that would escape the scope.
+      // Edge of the sibling list — move into the neighbouring sibling
+      // subtree at the same depth. If the parent has no neighbouring
+      // sibling (it's itself the first/last child), the only one-step
+      // slot would be a shallower level, which would change indentation,
+      // so it's a no-op.
       return (async () => {
         if (self.parentId === scopeRootId) return null
         const parent = await requireBlock(tx, self.parentId!)
         const parentSiblings = await tx.childrenOf(parent.parentId, self.workspaceId)
         const pIdx = parentSiblings.findIndex(s => s.id === parent.id)
         const neighbourParent = up ? parentSiblings[pIdx - 1] : parentSiblings[pIdx + 1]
-        // Only descend into the neighbour when it's expanded — descending
-        // into a collapsed subtree would hide the block. A collapsed
-        // neighbour is treated as opaque, so we fall through to the
-        // adjacent-to-parent placement below (one visible step, stays
-        // visible).
-        const neighbourExpanded = neighbourParent
-          ? !((await tx.getProperty(neighbourParent.id, isCollapsedProp)) ?? false)
-          : false
-        if (neighbourParent && neighbourExpanded) {
-          return {
-            parentId: neighbourParent.id,
-            position: up ? {kind: 'last' as const} : {kind: 'first' as const},
-          }
-        }
-        // No neighbour subtree to descend into (parent is itself the
-        // first/last child) or the neighbour is collapsed: pop the block
-        // out just above/below the parent under the grandparent.
+        if (!neighbourParent) return null
         return {
-          parentId: parent.parentId,
-          position: up
-            ? {kind: 'before' as const, siblingId: parent.id}
-            : {kind: 'after' as const, siblingId: parent.id},
+          parentId: neighbourParent.id,
+          position: up ? {kind: 'last' as const} : {kind: 'first' as const},
         }
       })()
     })()
 
     if (!target) return false
+    // Moving INTO a neighbouring subtree (target parent ≠ current parent)
+    // reveals it if collapsed, so the block stays visible — same as
+    // `indent` does when reparenting under a collapsed new parent.
+    if (target.parentId !== null && target.parentId !== self.parentId) {
+      if (await tx.getProperty(target.parentId, isCollapsedProp)) {
+        await tx.setProperty(target.parentId, isCollapsedProp, false)
+      }
+    }
     const orderKey = await orderKeyForInsert(tx, target.parentId, self.workspaceId, target.position)
     await tx.move(id, {parentId: target.parentId, orderKey})
     return true

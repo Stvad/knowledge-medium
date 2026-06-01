@@ -611,14 +611,24 @@ describe('core.moveVertical', () => {
     expect(await env.childIds('root')).toEqual(['A', 'C', 'B'])
   })
 
-  it('moves a first child up into the previous sibling subtree (cross-parent)', async () => {
-    // a/b, c/d → move d up → d becomes a's last child, c emptied.
-    await seedTwoSubtrees()
-    const moved = await env.repo.mutate.moveVertical({id: 'd', direction: -1})
+  it('moves a first child up into the previous sibling subtree at the same depth', async () => {
+    // a/b/c, d/e → move e up → e becomes a's last child (depth 1, like
+    // it was under d); b keeps its own child c; d is emptied.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'a'})
+    await env.repo.mutate.createChild({parentId: 'a', id: 'b'})
+    await env.repo.mutate.createChild({parentId: 'b', id: 'c'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'd'})
+    await env.repo.mutate.createChild({parentId: 'd', id: 'e'})
+
+    const moved = await env.repo.mutate.moveVertical({id: 'e', direction: -1})
     expect(moved).toBe(true)
-    expect(env.read('d')!.parentId).toBe('a')
-    expect(await env.childIds('a')).toEqual(['b', 'd'])
-    expect(await env.childIds('c')).toEqual([])
+    expect(env.read('e')!.parentId).toBe('a')
+    expect(await env.childIds('a')).toEqual(['b', 'e'])
+    expect(await env.childIds('b')).toEqual(['c'])
+    expect(await env.childIds('d')).toEqual([])
   })
 
   it('moves a last child down into the next sibling subtree (cross-parent)', async () => {
@@ -631,51 +641,43 @@ describe('core.moveVertical', () => {
     expect(await env.childIds('a')).toEqual([])
   })
 
-  it('pops a first child out above its parent when the parent is itself first', async () => {
-    // root: P/(s); move s up → s lands above P under root.
+  it('is a no-op when the parent is itself the first child (would need to outdent)', async () => {
+    // root: P/(s); moving s up has no same-depth slot above it without
+    // outdenting, so moveVertical leaves it put (indentation invariant).
     await env.repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
     }, {scope: ChangeScope.BlockDefault})
     await env.repo.mutate.createChild({parentId: 'root', id: 'P'})
     await env.repo.mutate.createChild({parentId: 'P', id: 's'})
     const moved = await env.repo.mutate.moveVertical({id: 's', direction: -1})
-    expect(moved).toBe(true)
-    expect(env.read('s')!.parentId).toBe('root')
-    expect(await env.childIds('root')).toEqual(['s', 'P'])
+    expect(moved).toBe(false)
+    expect(env.read('s')!.parentId).toBe('P')
+    expect(await env.childIds('root')).toEqual(['P'])
   })
 
-  it('does not bury a block in a COLLAPSED previous-sibling subtree (up)', async () => {
-    // a (collapsed, hides b), c/d → move d up. a's subtree is hidden,
-    // so d must land adjacent to its parent c (between a and c), not as
-    // a's last child where it would vanish.
+  it('descends into AND expands a collapsed previous-sibling subtree (up)', async () => {
+    // a (collapsed), c/d → move d up → d becomes a's last child and a is
+    // revealed (like indenting under a collapsed bullet), so d stays
+    // visible at the same depth.
     await seedTwoSubtrees()
     await env.repo.mutate.setProperty({id: 'a', schema: isCollapsedProp, value: true})
     const moved = await env.repo.mutate.moveVertical({id: 'd', direction: -1})
     expect(moved).toBe(true)
-    expect(env.read('d')!.parentId).toBe('root')
-    expect(await env.childIds('root')).toEqual(['a', 'd', 'c'])
-    expect(await env.childIds('a')).toEqual(['b'])
+    expect(env.read('d')!.parentId).toBe('a')
+    expect(await env.childIds('a')).toEqual(['b', 'd'])
+    expect(env.read('a')!.properties[isCollapsedProp.name]).toBe(false)
   })
 
-  it('does not bury a block in a COLLAPSED next-sibling subtree (down)', async () => {
-    // a/b, c (collapsed, hides d) → move b down. c's subtree is hidden,
-    // so b lands adjacent to parent a (between a and c), not inside c.
+  it('descends into AND expands a collapsed next-sibling subtree (down)', async () => {
+    // a/b, c (collapsed) → move b down → b becomes c's first child and c
+    // is revealed.
     await seedTwoSubtrees()
     await env.repo.mutate.setProperty({id: 'c', schema: isCollapsedProp, value: true})
     const moved = await env.repo.mutate.moveVertical({id: 'b', direction: 1})
     expect(moved).toBe(true)
-    expect(env.read('b')!.parentId).toBe('root')
-    expect(await env.childIds('root')).toEqual(['a', 'b', 'c'])
-    expect(await env.childIds('c')).toEqual(['d'])
-  })
-
-  it('still descends into an EXPANDED previous-sibling subtree (up)', async () => {
-    // Sanity: with a expanded, d becomes a's last child (the base case).
-    await seedTwoSubtrees()
-    await env.repo.mutate.setProperty({id: 'a', schema: isCollapsedProp, value: false})
-    const moved = await env.repo.mutate.moveVertical({id: 'd', direction: -1})
-    expect(moved).toBe(true)
-    expect(await env.childIds('a')).toEqual(['b', 'd'])
+    expect(env.read('b')!.parentId).toBe('c')
+    expect(await env.childIds('c')).toEqual(['b', 'd'])
+    expect(env.read('c')!.properties[isCollapsedProp.name]).toBe(false)
   })
 
   it('does not move the scope root itself', async () => {
