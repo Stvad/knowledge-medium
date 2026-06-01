@@ -11,10 +11,12 @@
  *   1. It mirrors the `blocks` column shape exactly, so a downloaded server
  *      row hydrates without dropping fields.
  *   2. It is a PASSIVE landing zone — it carries none of the `blocks`
- *      upload-routing triggers, so a write to it never enqueues an upload
- *      (`ps_crud`). (If it did, every downloaded row would echo straight back
- *      up as a local edit.) Its only trigger is the change-capture queue the
- *      observer drains.
+ *      triggers, so a write to it neither enqueues an upload (`ps_crud`) nor
+ *      logs a `row_events` audit row. (If it did, every downloaded row would
+ *      echo straight back up as a local edit / a phantom history entry. The
+ *      history entry for an incoming change is written when the observer
+ *      materializes it into `blocks`, not at the staging write.) Its only
+ *      trigger is the change-capture queue the observer drains.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -59,11 +61,15 @@ describe('blocks_synced staging table', () => {
     expect(normalize(staged)).toEqual(normalize(blocks))
   })
 
-  it('is a passive landing zone — a write enqueues no upload', async () => {
+  it('is a passive landing zone — a write enqueues no upload and logs no row_event', async () => {
     await env.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToRowParams(fixture))
 
     const crud = await env.db.getAll('SELECT id FROM ps_crud')
     expect(crud).toHaveLength(0)
+    // No audit row either — row_events triggers live on `blocks`, not on the
+    // staging table; the history entry is written at materialize time.
+    const events = await env.db.getAll('SELECT id FROM row_events')
+    expect(events).toHaveLength(0)
 
     // The row itself did land in staging.
     const staged = await env.db.getAll<{ id: string; content: string }>(

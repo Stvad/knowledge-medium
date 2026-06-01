@@ -436,6 +436,32 @@ describe('sync observer: sync-applied invalidation', () => {
     expect(env.cache.getSnapshot('c2')?.content).toBe('remote')
   })
 
+  it('records the incoming change in row_events tagged source=sync (history capture)', async () => {
+    // The whole point of restoring row_events under Layout B: an INCOMING sync
+    // change must be durably recorded in the local history log. The observer's
+    // materialize writes the row into `blocks` with no tx_context open, so the
+    // audit trigger COALESCEs source → 'sync' and zeroes tx_id. command_events
+    // covers local repo.tx only, so this is the ONLY durable record of the
+    // incoming edit.
+    await create('p')
+    env.repo.startSyncObserver({throttleMs: 0})
+    await env.repo.flushSyncObserver() // settle the start-up drain
+
+    await syncApply({id: 'c-remote', parentId: 'p', orderKey: 'a0', content: 'from server', updatedAt: NEWER})
+    await env.repo.flushSyncObserver()
+
+    const events = await env.h.db.getAll<{
+      kind: string; source: string; tx_id: string | null; before_json: string | null; after_json: string | null
+    }>(
+      'SELECT kind, source, tx_id, before_json, after_json FROM row_events WHERE block_id = ? ORDER BY id',
+      ['c-remote'],
+    )
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({kind: 'create', source: 'sync', tx_id: null})
+    expect(events[0].before_json).toBeNull()
+    expect(events[0].after_json).toContain('"content":"from server"')
+  })
+
   it('local writes do NOT fire the sync path (no double invalidation)', async () => {
     await create('p')
     const h = env.repo.query.children({id: 'p'})

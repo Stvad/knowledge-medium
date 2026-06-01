@@ -8,6 +8,9 @@
  * dependency added.
  *
  * What this covers (data-layer-redesign §4.3 / §4.5 / §4.1.1):
+ *   - row_events audit/history triggers fire for both local and sync-applied
+ *     writes; source COALESCEs NULL → 'sync', 'user' passes through; tx_id is
+ *     NULL on sync apply; soft-delete UPDATE emits kind='soft-delete'
  *   - upload-routing triggers fire on every repo.tx write (source IS NOT NULL),
  *     and skip sync-applied writes (source = NULL)
  *   - workspace-invariant triggers reject cross-workspace + dangling
@@ -56,6 +59,19 @@ interface TestDb {
   updateBlock: (id: string, set: Record<string, unknown>) => void
   deleteBlock: (id: string) => void
   psCrud: () => Array<{ id: number; data: string; tx_id: number | null }>
+  rowEvents: () => Array<RowEventRow>
+  rowEventCount: () => number
+}
+
+interface RowEventRow {
+  id: number
+  tx_id: string | null
+  block_id: string
+  kind: string
+  before_json: string | null
+  after_json: string | null
+  source: string
+  created_at: number
 }
 
 interface WorkspaceMemberInsert {
@@ -177,6 +193,8 @@ const setupDb = (): TestDb => {
       db.prepare('DELETE FROM blocks WHERE id = ?').run(id)
     },
     psCrud: () => db.prepare('SELECT * FROM ps_crud ORDER BY id').all() as unknown as { id: number; data: string; tx_id: number | null }[],
+    rowEvents: () => db.prepare('SELECT * FROM row_events ORDER BY id').all() as unknown as RowEventRow[],
+    rowEventCount: () => (db.prepare('SELECT COUNT(*) AS n FROM row_events').get() as {n: number}).n,
   }
 }
 
@@ -189,8 +207,8 @@ afterEach(() => { h.db.close() })
 describe('client schema bootstrap', () => {
   it('creates the documented set of client-schema triggers', () => {
     // CLIENT_SCHEMA_TRIGGER_NAMES covers triggers on `blocks` (the
-    // bulk of them — upload routing, workspace invariants, side-index
-    // maintenance), on `block_aliases`
+    // bulk of them — row_events audit/history, upload routing, workspace
+    // invariants, side-index maintenance), on `block_aliases`
     // (the uniqueness-enforcement trigger), and on `blocks_synced`
     // (the Layout B change-capture triggers). Query against all three
     // tables so the inventory test catches additions on any side.
@@ -213,29 +231,6 @@ describe('client schema bootstrap', () => {
     }
   })
 
-  it('drops the retired row_events log + triggers on an upgraded database', () => {
-    // Simulate a DB created by a pre-D-4 release: the row_events audit log and
-    // its triggers are still installed (an additive CREATE-IF-NOT-EXISTS list
-    // wouldn't remove them on its own).
-    h.db.exec('CREATE TABLE IF NOT EXISTS row_events (id INTEGER PRIMARY KEY AUTOINCREMENT, block_id TEXT)')
-    h.db.exec('CREATE TRIGGER blocks_row_event_insert AFTER INSERT ON blocks BEGIN INSERT INTO row_events (block_id) VALUES (NEW.id); END')
-    h.db.exec('CREATE TRIGGER blocks_row_event_update AFTER UPDATE ON blocks BEGIN INSERT INTO row_events (block_id) VALUES (NEW.id); END')
-    h.db.exec('CREATE TRIGGER blocks_row_event_delete AFTER DELETE ON blocks BEGIN INSERT INTO row_events (block_id) VALUES (OLD.id); END')
-
-    // Re-running the bootstrap cleans them up.
-    for (const stmt of CLIENT_SCHEMA_STATEMENTS) h.db.exec(stmt)
-
-    const leftover = (h.db
-      .prepare("SELECT name FROM sqlite_master WHERE name = 'row_events' OR name LIKE 'blocks_row_event_%'")
-      .all() as Array<{name: string}>)
-    expect(leftover).toEqual([])
-
-    // Drop order matters: a surviving trigger over a dropped table would fail
-    // the next write with "no such table: row_events". A clean insert proves
-    // the table was dropped only after its triggers.
-    expect(() => h.insertBlock({id: 'after-cleanup'})).not.toThrow()
-  })
-
   it('creates ps_crud_rejected with the columns the upload handler writes', () => {
     // ps_crud_rejected quarantines uploads the server permanently
     // refused (FK violation, RLS denial, 4xx). The upload handler in
@@ -255,6 +250,94 @@ describe('client schema bootstrap', () => {
       {name: 'error_message', type: 'TEXT', notnull: 0},
       {name: 'rejected_at', type: 'INTEGER', notnull: 1},
     ])
+  })
+})
+
+describe('row_events trigger — INSERT', () => {
+  it("tags source='user' and writes tx_id when local user tx is open", () => {
+    h.setTxContext({txId: 'tx-A', userId: 'user-1', scope: 'block-default', source: 'user'})
+    h.insertBlock({id: 'b1'})
+    h.clearTxContext()
+    const events = h.rowEvents()
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({block_id: 'b1', kind: 'create', source: 'user', tx_id: 'tx-A'})
+    expect(events[0].before_json).toBeNull()
+    expect(events[0].after_json).toContain('"id":"b1"')
+  })
+
+  it("tags source='user' for UI-state writes (no separate local-ephemeral sink)", () => {
+    // UI-state writes used to land with source='local-ephemeral' and
+    // bypass the upload triggers. Phase 2 dropped that distinction —
+    // every repo.tx write is tagged 'user'; the rejection quarantine
+    // catches anything the server refuses.
+    h.setTxContext({txId: 'tx-B', userId: 'user-1', scope: 'local-ui', source: 'user'})
+    h.insertBlock({id: 'b2'})
+    h.clearTxContext()
+    expect(h.rowEvents()[0]).toMatchObject({source: 'user', tx_id: 'tx-B'})
+  })
+
+  it("COALESCEs NULL source to 'sync' and ZEROES tx_id (sync apply)", () => {
+    // tx_context stays at its post-clear state: source IS NULL — the shape an
+    // observer materialize of an incoming change leaves it in.
+    h.insertBlock({id: 'b3'})
+    expect(h.rowEvents()[0]).toMatchObject({source: 'sync', tx_id: null})
+  })
+
+  it("belt-and-suspenders: stale tx_id with NULL source still emits tx_id=NULL", () => {
+    // Simulate the failure mode: the engine forgot to clear tx_id but did clear source.
+    h.db.exec("UPDATE tx_context SET tx_id = 'stale', source = NULL WHERE id = 1")
+    h.insertBlock({id: 'b4'})
+    expect(h.rowEvents()[0]).toMatchObject({source: 'sync', tx_id: null})
+  })
+})
+
+describe('row_events trigger — UPDATE', () => {
+  beforeEach(() => {
+    // Seed an existing row via sync so its insert event is tagged 'sync'.
+    h.insertBlock({id: 'b1'})
+  })
+
+  it("emits kind='update' for non-deleted-flip changes", () => {
+    h.setTxContext({txId: 'tx-1', userId: 'user-1', scope: 'block-default', source: 'user'})
+    h.updateBlock('b1', {content: 'edited', updated_at: 1700000999000})
+    h.clearTxContext()
+    const last = h.rowEvents().at(-1)!
+    expect(last).toMatchObject({block_id: 'b1', kind: 'update', source: 'user', tx_id: 'tx-1'})
+    expect(last.before_json).toContain('"content":""')
+    expect(last.after_json).toContain('"content":"edited"')
+  })
+
+  it("emits kind='soft-delete' for deleted 0→1 transitions", () => {
+    h.setTxContext({txId: 'tx-2', userId: 'user-1', scope: 'block-default', source: 'user'})
+    h.updateBlock('b1', {deleted: 1})
+    h.clearTxContext()
+    const last = h.rowEvents().at(-1)!
+    expect(last.kind).toBe('soft-delete')
+    expect(last.before_json).toContain('"deleted":false')
+    expect(last.after_json).toContain('"deleted":true')
+  })
+
+  it("emits kind='update' (not 'soft-delete') for already-deleted rows touched again", () => {
+    // Land the soft-delete first.
+    h.setTxContext({txId: 'tx-2', userId: 'user-1', scope: 'block-default', source: 'user'})
+    h.updateBlock('b1', {deleted: 1})
+    // Now touch the deleted row again — content edit on tombstone, kind stays 'update'.
+    h.updateBlock('b1', {content: 'posthumous'})
+    h.clearTxContext()
+    const last = h.rowEvents().at(-1)!
+    expect(last.kind).toBe('update')
+  })
+})
+
+describe('row_events trigger — DELETE', () => {
+  it("emits kind='delete' on hard delete with before snapshot only", () => {
+    h.insertBlock({id: 'b1'})
+    h.deleteBlock('b1')
+    const events = h.rowEvents()
+    const del = events.at(-1)!
+    expect(del.kind).toBe('delete')
+    expect(del.before_json).toContain('"id":"b1"')
+    expect(del.after_json).toBeNull()
   })
 })
 
