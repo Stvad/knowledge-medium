@@ -52,8 +52,9 @@ vi.mock('@/data/globalState.ts', () => ({
     return uiStateBlockRef.current
   },
   // Attribution name resolution is exercised in globalState's own tests;
-  // here it's identity so the metadata row stays deterministic.
-  useUserName: (userId: string) => userId,
+  // here it's identity (and reports no page) so the metadata row stays
+  // deterministic and renders as plain text.
+  useUserPage: (userId: string) => ({name: userId}),
 }))
 
 vi.mock('@/utils/navigation.ts', () => ({

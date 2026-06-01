@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Block } from '../../data/block'
-import { useInFocus, usePluginPrefsProperty, useUserName } from '@/data/globalState'
+import { useInFocus, usePluginPrefsProperty, useUserPage } from '@/data/globalState'
 import { useUpdateMetadata } from '@/hooks/block.js'
 import { previousLoadTimeProp, updateIndicatorPrefsType } from './loadTimes.ts'
 
@@ -8,7 +8,7 @@ export const UpdateIndicator = ({block}: { block: Block }) => {
   const inFocus = useInFocus(block.id)
   const [previousLoadTime] = usePluginPrefsProperty(updateIndicatorPrefsType, previousLoadTimeProp)
   const updateInfo = useUpdateMetadata(block)
-  const updatedByName = useUserName(updateInfo?.updatedBy ?? '')
+  const updatedByName = useUserPage(updateInfo?.updatedBy ?? '').name
   // `seen` is a sticky ratchet — once focus has touched this block
   // we don't show the indicator again. The "set state during render"
   // idiom (https://react.dev/reference/react/useState#storing-information-from-previous-renders)
