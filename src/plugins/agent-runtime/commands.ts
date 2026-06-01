@@ -562,9 +562,9 @@ const runRuntimeAction = async (
   }
 
   const dependencies = command.dependencies ?? {}
-  const uiStateBlock = runtimeBlock(context.repo, dependencies.uiStateBlockId)
+  const realUiStateBlock = runtimeBlock(context.repo, dependencies.uiStateBlockId)
     ?? runtimeBlock(context.repo, command.uiStateBlockId)
-    ?? fakeUiStateBlock(context.repo)
+  const uiStateBlock = realUiStateBlock ?? fakeUiStateBlock(context.repo)
   const block = runtimeBlock(context.repo, dependencies.blockId)
     ?? runtimeBlock(context.repo, command.blockId)
     ?? uiStateBlock
@@ -583,11 +583,11 @@ const runRuntimeAction = async (
 
   // Imperative runner (no React context), so scopeRootId isn't injected
   // by useShortcutSurfaceActivations. Forward a caller-supplied one, else
-  // derive the panel scope from the ui-state block — the boundary the
-  // structural handlers (delete/outdent/move) expect.
+  // derive the panel scope — but only from a REAL ui-state block;
+  // `fakeUiStateBlock` is a bare {repo} with no peekProperty.
   const scopeRootId = isString(dependencies.scopeRootId)
     ? dependencies.scopeRootId
-    : uiStateBlock.peekProperty(topLevelBlockIdProp)
+    : realUiStateBlock?.peekProperty(topLevelBlockIdProp)
 
   let returned: unknown
   try {
