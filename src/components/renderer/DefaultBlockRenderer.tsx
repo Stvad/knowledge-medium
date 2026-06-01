@@ -548,7 +548,7 @@ export function DefaultBlockRenderer(
             <BlockBullet block={block}/>
           </div>
           {isMobile && hasChildren && (
-            <div className="absolute right-0 -top-1 z-10">
+            <div className="absolute right-0 top-0 z-10 flex h-6 items-center">
               <ExpandButton block={block}/>
             </div>
           )}
