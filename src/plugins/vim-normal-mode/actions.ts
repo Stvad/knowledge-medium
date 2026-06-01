@@ -35,11 +35,12 @@ const jumpVisibleBlocks = async (
   direction: 'up' | 'down',
   scopeRootForcesOpen = true,
 ) => {
-  const step = direction === 'up' ? previousVisibleBlock : nextVisibleBlock
   let current = startBlock
   let last = startBlock
   for (let i = 0; i < count; i++) {
-    const next = await step(current, scopeRootId, scopeRootForcesOpen)
+    const next = direction === 'up'
+      ? await previousVisibleBlock(current, scopeRootId)
+      : await nextVisibleBlock(current, scopeRootId, scopeRootForcesOpen)
     if (!next) break
     current = next
     last = next

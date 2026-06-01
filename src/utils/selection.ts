@@ -76,10 +76,6 @@ export const nextVisibleBlock = async (
 export const previousVisibleBlock = async (
   current: Block,
   scopeRootId: string,
-  // Accepted for signature parity with `nextVisibleBlock` (so callers can
-  // treat them interchangeably). Unused: climbing toward the scope root
-  // never re-enters it, so its force-open state is irrelevant here.
-  _scopeRootForcesOpen = true,
 ): Promise<Block | null> => {
   if (current.id === scopeRootId) return null
   const repo = current.repo
