@@ -51,6 +51,9 @@ vi.mock('@/data/globalState.ts', () => ({
     if (!uiStateBlockRef.current) throw new Error('test UI state block not initialised')
     return uiStateBlockRef.current
   },
+  // Attribution name resolution is exercised in globalState's own tests;
+  // here it's identity so the metadata row stays deterministic.
+  useUserName: (userId: string) => userId,
 }))
 
 vi.mock('@/utils/navigation.ts', () => ({
