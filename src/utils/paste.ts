@@ -2,6 +2,7 @@ import { ChangeScope, type BlockData, type Tx } from '@/data/api'
 import { Block } from '../data/block'
 import type { Repo } from '../data/repo'
 import { isCollapsedProp } from '@/data/properties.js'
+import { revealChildren } from '@/data/internals/kernelMutators.js'
 import { parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser.js'
 import { keysBetween } from '../data/orderKey.ts'
 
@@ -10,9 +11,10 @@ type PastePlacement = 'visible' | 'sibling'
 
 interface PasteOptions {
   position?: PastePosition
-  /** The currently rendered outline root. Paste uses this to avoid
-   *  creating siblings outside a zoomed panel's visible subtree. */
-  topLevelBlockId?: string
+  /** Root of the surface's visible subtree (see
+   *  `BlockContextType.scopeRootId`). Paste uses this to avoid creating
+   *  siblings outside the visible scope. */
+  scopeRootId?: string
   /** `visible` follows outline navigation semantics; `sibling` keeps
    *  range paste before/after the selected range unless that would
    *  leave the visible subtree. */
@@ -143,18 +145,24 @@ const resolveRootDestination = async (
   target: BlockData,
   {
     position,
-    topLevelBlockId,
+    scopeRootId,
     placement,
-  }: Required<Pick<PasteOptions, 'position' | 'placement'>> & Pick<PasteOptions, 'topLevelBlockId'>,
+  }: Required<Pick<PasteOptions, 'position' | 'placement'>> & Pick<PasteOptions, 'scopeRootId'>,
 ): Promise<RootDestination> => {
   const targetChildren = await tx.childrenOf(target.id, target.workspaceId)
-  const targetIsTopLevel = topLevelBlockId === target.id
+  const targetIsScopeRoot = scopeRootId === target.id
   const targetHasVisibleChildren = targetChildren.length > 0 && !isCollapsed(target.properties)
-  const rootsAsChildren = targetIsTopLevel ||
+  const rootsAsChildren = targetIsScopeRoot ||
     target.parentId === null ||
     (placement === 'visible' && position === 'after' && targetHasVisibleChildren)
   const rootParentId = rootsAsChildren ? target.id : target.parentId
   if (!rootParentId) throw new Error(`paste target ${target.id} has no visible insertion parent`)
+
+  // Placing the pasted roots as children of `target` — reveal it if
+  // collapsed so the focused paste isn't hidden inside a closed subtree
+  // (same invariant as indent / moveVertical / create-child). No-op when
+  // target is already expanded.
+  if (rootsAsChildren) await revealChildren(tx, target.id)
 
   const rootInsertion = rootsAsChildren
     ? insertionForFirstChild(targetChildren[0]?.orderKey)
@@ -215,7 +223,7 @@ export async function pasteMultilineText(
   repo: Repo,
   {
     position = 'after',
-    topLevelBlockId,
+    scopeRootId,
     placement = 'visible',
   }: PasteOptions = {},
 ): Promise<Block[]> {
@@ -234,7 +242,7 @@ export async function pasteMultilineText(
 
     const {rootParentId, rootInsertion, targetChildren} = await resolveRootDestination(tx, target, {
       position,
-      topLevelBlockId,
+      scopeRootId,
       placement,
     })
 
@@ -294,7 +302,7 @@ export async function pasteEditModeMultilineText(
   plan: EditModeMultilinePastePlan,
   pasteTarget: Block,
   repo: Repo,
-  options: Pick<PasteOptions, 'topLevelBlockId'> = {},
+  options: Pick<PasteOptions, 'scopeRootId'> = {},
 ): Promise<EditModeMultilinePasteResult | null> {
   const rootBlocks: Block[] = []
   let focusBlock = pasteTarget
@@ -306,7 +314,7 @@ export async function pasteEditModeMultilineText(
 
     const {rootParentId, rootInsertion, targetChildren} = await resolveRootDestination(tx, target, {
       position: 'after',
-      topLevelBlockId: options.topLevelBlockId,
+      scopeRootId: options.scopeRootId,
       placement: 'sibling',
     })
 

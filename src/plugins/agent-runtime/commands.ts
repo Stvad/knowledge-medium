@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom'
 import type { Repo } from '@/data/repo'
 import type { Block } from '@/data/block'
 import { ChangeScope, type BlockData, type BlockReference } from '@/data/api'
-import { aliasesProp, extensionDescriptionProp, extensionNameProp } from '@/data/properties.js'
+import { aliasesProp, extensionDescriptionProp, extensionNameProp, topLevelBlockIdProp } from '@/data/properties.js'
 import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { keyAtEnd } from '@/data/orderKey.js'
 import {
@@ -562,9 +562,9 @@ const runRuntimeAction = async (
   }
 
   const dependencies = command.dependencies ?? {}
-  const uiStateBlock = runtimeBlock(context.repo, dependencies.uiStateBlockId)
+  const realUiStateBlock = runtimeBlock(context.repo, dependencies.uiStateBlockId)
     ?? runtimeBlock(context.repo, command.uiStateBlockId)
-    ?? fakeUiStateBlock(context.repo)
+  const uiStateBlock = realUiStateBlock ?? fakeUiStateBlock(context.repo)
   const block = runtimeBlock(context.repo, dependencies.blockId)
     ?? runtimeBlock(context.repo, command.blockId)
     ?? uiStateBlock
@@ -581,6 +581,14 @@ const runRuntimeAction = async (
   const selectedBlocks = selectedBlockIds.map(id => context.repo.block(id))
   const anchorBlock = runtimeBlock(context.repo, dependencies.anchorBlockId)
 
+  // Imperative runner (no React context), so scopeRootId isn't injected
+  // by useShortcutSurfaceActivations. Forward a caller-supplied one, else
+  // derive the panel scope — but only from a REAL ui-state block;
+  // `fakeUiStateBlock` is a bare {repo} with no peekProperty.
+  const scopeRootId = isString(dependencies.scopeRootId)
+    ? dependencies.scopeRootId
+    : realUiStateBlock?.peekProperty(topLevelBlockIdProp)
+
   let returned: unknown
   try {
     returned = await action.handler({
@@ -588,6 +596,7 @@ const runRuntimeAction = async (
       block,
       selectedBlocks,
       anchorBlock,
+      scopeRootId,
     }, new CustomEvent('agent-runtime:run-action', {detail: {actionId}}))
   } catch (handlerError) {
     // Bubble up with action context so the CLI shows "which action

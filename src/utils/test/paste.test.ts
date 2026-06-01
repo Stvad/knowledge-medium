@@ -69,7 +69,7 @@ describe('pasteMultilineText', () => {
       '- Alpha\n  - Detail\n- Beta',
       env.repo.block('empty'),
       env.repo,
-      {topLevelBlockId: 'root'},
+      {scopeRootId: 'root'},
     )
 
     expect(pasted[0]?.id).toBe('empty')
@@ -88,11 +88,26 @@ describe('pasteMultilineText', () => {
       'Pasted\nSecond',
       env.repo.block('parent'),
       env.repo,
-      {topLevelBlockId: 'root'},
+      {scopeRootId: 'root'},
     )
 
     expect(await childContents('parent')).toEqual(['Pasted', 'Second', 'Old child'])
     expect(await childContents('root')).toEqual(['Parent', 'Sibling'])
+  })
+
+  it('reveals a collapsed scope-root target when pasting as its children', async () => {
+    // Pasting onto a nested scope root (scopeRootId === target.id) inserts
+    // the roots as its children; if it's collapsed they'd be hidden, so the
+    // paste must reveal it (same invariant as create-child / move).
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('sr', 'Scope root', 'root', 'a0')
+    await createBlock('existing', 'Existing', 'sr', 'a0')
+    await env.repo.mutate.setProperty({id: 'sr', schema: isCollapsedProp, value: true})
+
+    await pasteMultilineText('Alpha\nBeta', env.repo.block('sr'), env.repo, {scopeRootId: 'sr'})
+
+    expect(env.repo.block('sr').peek()?.properties[isCollapsedProp.name]).toBe(false)
+    expect(await childContents('sr')).toEqual(['Alpha', 'Beta', 'Existing'])
   })
 
   it('pastes after a collapsed target as a visible sibling', async () => {
@@ -106,7 +121,7 @@ describe('pasteMultilineText', () => {
       'Pasted',
       env.repo.block('parent'),
       env.repo,
-      {topLevelBlockId: 'root'},
+      {scopeRootId: 'root'},
     )
 
     expect(await childContents('root')).toEqual(['Parent', 'Pasted', 'Sibling'])
@@ -122,7 +137,7 @@ describe('pasteMultilineText', () => {
       'Pasted',
       env.repo.block('page'),
       env.repo,
-      {topLevelBlockId: 'page'},
+      {scopeRootId: 'page'},
     )
 
     expect(await childContents('workspace-root')).toEqual(['Page'])
@@ -137,7 +152,7 @@ describe('pasteMultilineText', () => {
       'Pasted',
       env.repo.block('root'),
       env.repo,
-      {topLevelBlockId: 'root'},
+      {scopeRootId: 'root'},
     )
 
     expect(await childContents('root')).toEqual(['Pasted', 'Existing'])
@@ -153,7 +168,7 @@ describe('pasteMultilineText', () => {
       'Pasted',
       env.repo.block('parent'),
       env.repo,
-      {placement: 'sibling', topLevelBlockId: 'root'},
+      {placement: 'sibling', scopeRootId: 'root'},
     )
 
     expect(await childContents('root')).toEqual(['Parent', 'Pasted', 'Sibling'])
@@ -177,7 +192,7 @@ describe('pasteEditModeMultilineText', () => {
       plan!,
       env.repo.block('target'),
       env.repo,
-      {topLevelBlockId: 'root'},
+      {scopeRootId: 'root'},
     )
 
     expect(env.repo.block('target').peek()?.content).toBe('hello alpha')
@@ -200,7 +215,7 @@ describe('pasteEditModeMultilineText', () => {
       plan!,
       env.repo.block('target'),
       env.repo,
-      {topLevelBlockId: 'root'},
+      {scopeRootId: 'root'},
     )
 
     expect(env.repo.block('target').peek()?.content).toBe('prefix Parent')
@@ -223,7 +238,7 @@ describe('pasteEditModeMultilineText', () => {
       plan!,
       env.repo.block('page'),
       env.repo,
-      {topLevelBlockId: 'page'},
+      {scopeRootId: 'page'},
     )
 
     expect(await childContents('workspace-root')).toEqual(['Page title'])

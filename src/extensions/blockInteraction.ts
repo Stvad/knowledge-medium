@@ -57,6 +57,12 @@ export interface BlockResolveContext {
   uiStateBlock: Block
   types: readonly string[]
   topLevelBlockId?: string
+  /** Root of the visible subtree this mount renders (see
+   *  `BlockContextType.scopeRootId`). Equals `topLevelBlockId` on the
+   *  main outline; differs in nested surfaces (a backlink entry's shown
+   *  block, an embedded block). Structural-edit and navigation handlers
+   *  consume this as the surface boundary. */
+  scopeRootId?: string
   /** Focal-on-document — `block.id === topLevelBlockId` AND the current
    *  mount is the document surface (not an embed, backlink entry, or
    *  breadcrumb preview). Populated by `useIsFocalRender(block)`; the
@@ -512,7 +518,7 @@ export const handleBlockSelectionClick = async (
         : null,
     })
   } else if (event.shiftKey) {
-    await extendSelection(block.id, uiStateBlock, repo)
+    await extendSelection(block.id, uiStateBlock, repo, context.scopeRootId, !context.blockContext?.isNestedSurface)
   } else {
     await resetBlockSelection(uiStateBlock)
   }

@@ -13,9 +13,9 @@ import {
   requestEditorFocus,
   setIsEditing,
   showPropertiesProp,
-  topLevelBlockIdProp,
   type EditorSelectionState,
 } from '@/data/properties.js'
+import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy.js'
 import {
   ActionConfig,
   ActionContextType,
@@ -77,32 +77,17 @@ const writeToClipboard = (text: string): void => {
   void navigator.clipboard.writeText(text)
 }
 
-/** Move `block` up (-1) or down (+1) among its siblings. Computes a
- *  new orderKey that lands between the appropriate neighbor pair so
- *  the block's position changes deterministically. No-op if the
- *  block is already at the relevant edge or if it has no parent. */
-const reorderBlock = async (repo: Repo, block: Block, direction: -1 | 1): Promise<void> => {
-  const data = block.peek() ?? await block.load()
-  if (!data || data.parentId === null) return
-
-  const siblingIds = await repo.query.childIds({id: data.parentId}).load()
-  const idx = siblingIds.indexOf(block.id)
-  if (idx === -1) return
-
-  const target = idx + direction
-  if (target < 0 || target >= siblingIds.length) return
-
-  // Target sibling we want to land before/after. For direction=-1
-  // (move up), we want to land BEFORE siblingIds[target]. For
-  // direction=+1, we want to land AFTER siblingIds[target].
-  const targetSiblingId = siblingIds[target]
-  await repo.mutate.move({
-    id: block.id,
-    parentId: data.parentId,
-    position: direction === -1
-      ? {kind: 'before', siblingId: targetSiblingId}
-      : {kind: 'after', siblingId: targetSiblingId},
-  })
+/** Move `block` one step up (-1) or down (+1) in the visible outline,
+ *  crossing parent boundaries Roam/org-style and bounded by the
+ *  surface's scope root. Delegates the tree logic to the
+ *  `core.moveVertical` mutator (one transaction, undoable as a unit). */
+const reorderBlock = async (
+  repo: Repo,
+  block: Block,
+  direction: -1 | 1,
+  scopeRootId: string | undefined,
+): Promise<void> => {
+  await repo.mutate.moveVertical({id: block.id, direction, scopeRootId})
 }
 
 export const requestEditorFocusIfEditing = (uiStateBlock: Block) => {
@@ -124,30 +109,38 @@ export const enterEditMode = (uiStateBlock: Block, selection?: EditorSelectionSt
   requestEditorFocus(uiStateBlock)
 }
 
-export const extendSelectionDown = async (uiStateBlock: Block, repo: Repo) => {
-  const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
-  if (!topLevelBlockId) return
+export const extendSelectionDown = async (
+  uiStateBlock: Block,
+  repo: Repo,
+  scopeRootId: string | undefined,
+  scopeRootForcesOpen = true,
+) => {
+  if (!scopeRootId) return
 
   const focusedId = peekFocusedBlockLocation(uiStateBlock)?.blockId
   if (!focusedId) return
 
-  const nextBlock = await nextVisibleBlock(repo.block(focusedId), topLevelBlockId)
+  const nextBlock = await nextVisibleBlock(repo.block(focusedId), scopeRootId, scopeRootForcesOpen)
   if (!nextBlock) return
 
-  await extendSelection(nextBlock.id, uiStateBlock, repo)
+  await extendSelection(nextBlock.id, uiStateBlock, repo, scopeRootId, scopeRootForcesOpen)
 }
 
-export const extendSelectionUp = async (uiStateBlock: Block, repo: Repo) => {
-  const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
-  if (!topLevelBlockId) return
+export const extendSelectionUp = async (
+  uiStateBlock: Block,
+  repo: Repo,
+  scopeRootId: string | undefined,
+  scopeRootForcesOpen = true,
+) => {
+  if (!scopeRootId) return
 
   const focusedId = peekFocusedBlockLocation(uiStateBlock)?.blockId
   if (!focusedId) return
 
-  const prevBlock = await previousVisibleBlock(repo.block(focusedId), topLevelBlockId)
+  const prevBlock = await previousVisibleBlock(repo.block(focusedId), scopeRootId)
   if (!prevBlock) return
 
-  await extendSelection(prevBlock.id, uiStateBlock, repo)
+  await extendSelection(prevBlock.id, uiStateBlock, repo, scopeRootId, scopeRootForcesOpen)
 }
 
 export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockActions => {
@@ -166,6 +159,11 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     id: 'indent_block',
     description: 'Indent block',
     handler: async (deps: BlockShortcutDependencies) => {
+      // No-op on a scope root: indenting it would reparent the visible
+      // root under a sibling that lives outside the surface. The
+      // mutator separately no-ops when there's no previous sibling.
+      const {canIndent} = await structuralEditPolicyForBlock(deps.block, deps.scopeRootId)
+      if (!canIndent) return
       await repo.mutate.indent({id: deps.block.id})
       requestEditorFocusIfEditing(deps.uiStateBlock)
     },
@@ -180,11 +178,16 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
   const outdentBlock: BlockAction = {
     id: 'outdent_block',
     description: 'Outdent block',
-    handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
-      const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
-      if (!topLevelBlockId) return
+    handler: async ({block, uiStateBlock, scopeRootId}: BlockShortcutDependencies) => {
+      if (!scopeRootId) return
 
-      await repo.mutate.outdent({id: block.id, topLevelBlockId})
+      // Don't outdent the scope root itself; the mutator additionally
+      // refuses when the block is a direct child of the scope root
+      // (outdenting would escape the visible subtree).
+      const {canOutdent} = await structuralEditPolicyForBlock(block, scopeRootId)
+      if (!canOutdent) return
+
+      await repo.mutate.outdent({id: block.id, scopeRootId})
       requestEditorFocusIfEditing(uiStateBlock)
     },
     defaultBinding: {
@@ -198,9 +201,9 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     id: 'move_block_up',
     description: 'Move block up',
     handler: async (deps: BlockShortcutDependencies) => {
-      const {block, uiStateBlock} = deps
+      const {block, uiStateBlock, scopeRootId} = deps
       if (!block) return
-      await reorderBlock(repo, block, -1)
+      await reorderBlock(repo, block, -1, scopeRootId)
       requestEditorFocusIfEditing(uiStateBlock)
     },
     defaultBinding: {
@@ -215,9 +218,9 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     id: 'move_block_down',
     description: 'Move block down',
     handler: async (deps: BlockShortcutDependencies) => {
-      const {block, uiStateBlock} = deps
+      const {block, uiStateBlock, scopeRootId} = deps
       if (!block) return
-      await reorderBlock(repo, block, 1)
+      await reorderBlock(repo, block, 1, scopeRootId)
       requestEditorFocusIfEditing(uiStateBlock)
     },
     defaultBinding: {
@@ -233,12 +236,13 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     description: 'Delete block',
     icon: Trash2,
     handler: async (deps: BlockShortcutDependencies) => {
-      const {block, uiStateBlock} = deps
+      const {block, uiStateBlock, scopeRootId} = deps
       if (!block || !uiStateBlock) return
 
-      const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
-      if (!topLevelBlockId) return
-
+      // `scopeRootId` only locates the post-delete focus target; the
+      // delete itself doesn't need it. Don't gate the delete on it, so
+      // non-React runners that can't inject a scope (the agent-runtime
+      // bridge) still delete — they just skip focus recovery.
       // Same-depth next sibling is the natural shift-up target. When
       // `block` has descendants those vanish too, so we can't use
       // `nextVisibleBlock` (which would descend into the doomed
@@ -247,7 +251,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       // sibling → parent. This mirrors what the proactive
       // `PanelFocusRecovery` does on the DOM side, so manual deletes
       // and surprise disappearances both land on the same target.
-      const next = await blockAfterSubtreeRemoval(block, topLevelBlockId)
+      const next = scopeRootId ? await blockAfterSubtreeRemoval(block, scopeRootId) : null
       await withMoveTransition(async () => {
         await block.delete()
       })
@@ -342,7 +346,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     id: 'extend_selection_up',
     description: 'Extend selection up',
     handler: async (deps: BlockShortcutDependencies) =>
-      await extendSelectionUp(deps.uiStateBlock, repo),
+      await extendSelectionUp(deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen),
     defaultBinding: {
       keys: 'Shift+ArrowUp',
       eventOptions: {
@@ -355,7 +359,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     id: 'extend_selection_down',
     description: 'Extend selection down',
     handler: async (deps: BlockShortcutDependencies) =>
-      await extendSelectionDown(deps.uiStateBlock, repo),
+      await extendSelectionDown(deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen),
     defaultBinding: {
       keys: 'Shift+ArrowDown',
       eventOptions: {

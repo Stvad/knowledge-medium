@@ -53,7 +53,7 @@ export function BlockEmbed({
   return (
     <BlockRefAncestorsProvider ancestor={blockId}>
       <div className="blockembed border-l-2 border-muted pl-2 my-1 bg-muted/30 rounded-r">
-        <NestedBlockContextProvider overrides={{...EMBED_CONTEXT_OVERRIDES, renderScopeId}}>
+        <NestedBlockContextProvider overrides={{...EMBED_CONTEXT_OVERRIDES, renderScopeId, scopeRootId: blockId}}>
           <BlockComponent blockId={blockId}/>
         </NestedBlockContextProvider>
       </div>

@@ -31,6 +31,7 @@ export function TopLevelRenderer({block}: BlockRendererProps) {
           overrides={{
             layoutBoundary: false,
             renderScopeId: outlineRenderScopeId(block.id),
+            scopeRootId: block.id,
           }}
         >
           <BlockComponent blockId={block.id}/>

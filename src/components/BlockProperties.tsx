@@ -17,7 +17,6 @@ import {
   editorSelection,
   requestEditorFocus,
   focusBlock,
-  topLevelBlockIdProp,
 } from '@/data/properties.js'
 import { Button } from './ui/button'
 import { nextVisibleBlock } from '@/utils/selection.js'
@@ -66,7 +65,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   const childIds = useChildIds(block)
   const uiStateBlock = useUIStateBlock()
   const runtime = useAppRuntime()
-  const {panelId} = useBlockContext()
+  const {panelId, scopeRootId, renderScopeId, isNestedSurface} = useBlockContext()
   const navigate = useNavigate()
   const [showHiddenFields, setShowHiddenFields] = useState(false)
   const [syntheticProperties, setSyntheticProperties] = useState<readonly SyntheticPropertyRef[]>([])
@@ -136,7 +135,15 @@ export function BlockProperties({block}: BlockPropertiesProps) {
       blockId: target.id,
       ...selection,
     })
-    await focusBlock(uiStateBlock, target.id, {edit: true})
+    // Keep focus in the current render scope. In a nested surface
+    // (backlink/embed) the navigation target (next visible block, etc.)
+    // is resolved within that surface's scope, so focusing without the
+    // scope id would fall back to the panel-outline copy and the editor
+    // would appear not to move.
+    await focusBlock(uiStateBlock, target.id, {
+      edit: true,
+      ...(typeof renderScopeId === 'string' ? {renderScopeId} : {}),
+    })
     requestEditorFocus(uiStateBlock)
   }
 
@@ -146,10 +153,9 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   }
 
   const focusAfterProperties = async () => {
-    const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
-    if (!topLevelBlockId) return
+    if (!scopeRootId) return
 
-    const next = await nextVisibleBlock(block, topLevelBlockId)
+    const next = await nextVisibleBlock(block, scopeRootId, !isNestedSurface)
     if (!next) return
     await next.load()
     await focusBlockEditor(next, {start: 0})

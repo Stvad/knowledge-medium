@@ -50,6 +50,14 @@ const orderKeyBeforeSibling = async (tx: Tx, sibling: BlockData): Promise<string
   return keyBetween(previous?.orderKey ?? null, sibling.orderKey)
 }
 
+/** Placement of a block within a parent's child list — an explicit
+ *  position used by the insert/move mutators. */
+type InsertPosition =
+  | { kind: 'first' }
+  | { kind: 'last' }
+  | { kind: 'after'; siblingId: string }
+  | { kind: 'before'; siblingId: string }
+
 /** Compute the order_key for inserting under `parentId` at a given
  *  `position`. Reads sibling list from SQL (tx.childrenOf is sorted by
  *  (order_key, id) per §11.4). `parentId === null` enumerates
@@ -61,11 +69,7 @@ const orderKeyForInsert = async (
   tx: Tx,
   parentId: string | null,
   workspaceId: string,
-  position:
-    | { kind: 'first' }
-    | { kind: 'last' }
-    | { kind: 'after'; siblingId: string }
-    | { kind: 'before'; siblingId: string },
+  position: InsertPosition,
 ): Promise<string> => {
   const siblings = await tx.childrenOf(parentId, workspaceId)
 
@@ -97,6 +101,33 @@ const positionSchema = z.discriminatedUnion('kind', [
   z.object({kind: z.literal('after'), siblingId: z.string()}),
   z.object({kind: z.literal('before'), siblingId: z.string()}),
 ])
+
+/** Re-home `block` under `parentId` at `position`, computing the order
+ *  key. The shared core of `core.move` (explicit placement) and
+ *  `moveVertical` (which computes a target then places the block) — both
+ *  funnel their final write through here. */
+const relocateBlock = async (
+  tx: Tx,
+  block: BlockData,
+  parentId: string | null,
+  position: InsertPosition,
+): Promise<void> => {
+  const orderKey = await orderKeyForInsert(tx, parentId, block.workspaceId, position)
+  await tx.move(block.id, {parentId, orderKey})
+}
+
+/** Reveal a block's children by clearing a collapsed flag. Structural
+ *  placements that put a block *as a child of* `id` call this so the
+ *  inserted/moved block can't land inside a closed subtree and vanish.
+ *  The shared invariant behind indent (reparent under previous sibling),
+ *  moveVertical (descend into a neighbour), child-first create-below
+ *  (vim `o` / Enter on a collapsed scope root), and paste-as-child.
+ *  No-op when not collapsed. */
+export const revealChildren = async (tx: Tx, id: string): Promise<void> => {
+  if (await tx.getProperty(id, isCollapsedProp)) {
+    await tx.setProperty(id, isCollapsedProp, false)
+  }
+}
 
 // ──── setContent ────
 
@@ -188,6 +219,11 @@ interface CreateChildArgs {
   /** Optional explicit id (deterministic-id callers). Engine assigns
    *  a UUID when absent. */
   id?: string
+  /** Reveal the parent if it's collapsed, so the new child is visible.
+   *  User-initiated "create child and focus it" paths (vim `o`, Enter
+   *  on a collapsed scope root) set this; programmatic child creation
+   *  leaves it off to avoid force-expanding. */
+  revealParent?: boolean
 }
 
 const createChildSchema = z.object({
@@ -197,6 +233,7 @@ const createChildSchema = z.object({
   references: z.array(z.object({id: z.string(), alias: z.string()})).optional(),
   position: positionSchema.optional(),
   id: z.string().optional(),
+  revealParent: z.boolean().optional(),
 })
 
 export const createChild = defineMutator<CreateChildArgs, string>({
@@ -208,6 +245,7 @@ export const createChild = defineMutator<CreateChildArgs, string>({
   apply: async (tx, args) => {
     const parent = await requireBlock(tx, args.parentId)
     const orderKey = await orderKeyForInsert(tx, args.parentId, parent.workspaceId, args.position ?? {kind: 'last'})
+    if (args.revealParent) await revealChildren(tx, args.parentId)
     return tx.create({
       id: args.id,
       workspaceId: parent.workspaceId,
@@ -377,8 +415,7 @@ export const move = defineMutator<MoveArgs, void>({
     // workspace_id is immutable (server-side trigger enforces it), so
     // it's also the destination workspace.
     const self = await requireBlock(tx, args.id)
-    const orderKey = await orderKeyForInsert(tx, args.parentId, self.workspaceId, args.position)
-    await tx.move(args.id, {parentId: args.parentId, orderKey})
+    await relocateBlock(tx, self, args.parentId, args.position)
   },
 })
 
@@ -415,9 +452,7 @@ export const indent = defineMutator<{id: string}, void>({
     const newParentChildren = await tx.childrenOf(newParent.id)
     const orderKey = keyAtEnd(newParentChildren.at(-1)?.orderKey ?? null)
     await tx.move(id, {parentId: newParent.id, orderKey})
-    if (await tx.getProperty(newParent.id, isCollapsedProp)) {
-      await tx.setProperty(newParent.id, isCollapsedProp, false)
-    }
+    await revealChildren(tx, newParent.id)
   },
 })
 
@@ -425,30 +460,32 @@ export const indent = defineMutator<{id: string}, void>({
 
 interface OutdentArgs {
   id: string
-  /** Optional view boundary. If `self.parentId === topLevelBlockId`,
-   *  outdent is a no-op — the block is a direct child of the current
-   *  view's root and outdenting would move it outside the visible
-   *  zoom scope (or to the workspace root for root-level views).
-   *  Returns `false` in that case so callers can fall back. */
-  topLevelBlockId?: string
+  /** Optional surface boundary — the root of the visible subtree the
+   *  caller renders (the panel's zoom root on the main outline, a
+   *  backlink entry's shown block, …). If `self.parentId === scopeRootId`,
+   *  outdent is a no-op — the block is a direct child of the surface's
+   *  root and outdenting would move it outside the visible scope (or to
+   *  the workspace root for root-level views). Returns `false` in that
+   *  case so callers can fall back. */
+  scopeRootId?: string
 }
 
 export const outdent = defineMutator<OutdentArgs, boolean>({
   name: 'core.outdent',
   argsSchema: z.object({
     id: z.string(),
-    topLevelBlockId: z.string().optional(),
+    scopeRootId: z.string().optional(),
   }),
   resultSchema: z.boolean(),
   scope: ChangeScope.BlockDefault,
   describe: ({id}) => `outdent ${id}`,
-  apply: async (tx, {id, topLevelBlockId}) => {
+  apply: async (tx, {id, scopeRootId}) => {
     const self = await requireBlock(tx, id)
     if (self.parentId === null) return false  // already at root
-    // Refuse to outdent past the current view boundary — a direct
-    // child of `topLevelBlockId` would otherwise pop out to the
-    // grandparent (or workspace root), exiting the user's zoom scope.
-    if (topLevelBlockId !== undefined && self.parentId === topLevelBlockId) return false
+    // Refuse to outdent past the surface boundary — a direct child of
+    // `scopeRootId` would otherwise pop out to the grandparent (or
+    // workspace root), exiting the visible scope.
+    if (scopeRootId !== undefined && self.parentId === scopeRootId) return false
     const parent = await requireBlock(tx, self.parentId)
     // Move under grandparent, positioned right after current parent.
     // tx.childrenOf(null) enumerates root-level siblings of the pinned
@@ -468,6 +505,117 @@ export const outdent = defineMutator<OutdentArgs, boolean>({
       orderKey = keyBetween(parent.orderKey, next?.orderKey ?? null)
     }
     await tx.move(id, {parentId: grandparent, orderKey})
+    return true
+  },
+})
+
+// ──── moveVertical ────
+
+interface MoveVerticalArgs {
+  id: string
+  /** -1 = up (toward the top of the visible list), +1 = down. */
+  direction: -1 | 1
+  /** Surface boundary — the root of the visible subtree (see the
+   *  `outdent` mutator and `BlockContextType.scopeRootId`). The block
+   *  never moves above/below this root, and a direct child of it won't
+   *  cross out of the scope. */
+  scopeRootId?: string
+}
+
+/**
+ * Move a block one step up or down in the visible outline, WITHOUT ever
+ * changing its indentation. Within a sibling list it swaps with the
+ * adjacent sibling; when it is the first/last child of its parent it
+ * moves into the neighbouring sibling subtree at the SAME depth it
+ * already had:
+ *
+ *     a            a
+ *       b            b
+ *         c            c
+ *     d     ──▶      e   (move e up → a's last child; e stays depth 1)
+ *       e          d
+ *
+ * Rules (up; down mirrors):
+ *  - has a previous sibling          → swap before it (same parent);
+ *  - first child, parent has a
+ *    previous sibling Q              → become Q's last child — same depth
+ *                                      the block already had. Q is
+ *                                      revealed if collapsed, mirroring
+ *                                      how `indent` reveals a collapsed
+ *                                      new parent;
+ *  - first child, parent is itself   → no-op. The only one-step-up slot
+ *    the first child                   would be a shallower level, and
+ *                                      moveVertical never outdents.
+ *
+ * Indentation is invariant: every move keeps the block at its original
+ * depth, so it never pops out to / into a shallower or deeper level.
+ * Bounded by `scopeRootId`: the scope root never moves, and a first/last
+ * direct child of it won't cross out. Returns whether anything moved so
+ * callers can no-op cleanly.
+ */
+export const moveVertical = defineMutator<MoveVerticalArgs, boolean>({
+  name: 'core.moveVertical',
+  argsSchema: z.object({
+    id: z.string(),
+    direction: z.union([z.literal(-1), z.literal(1)]),
+    scopeRootId: z.string().optional(),
+  }),
+  resultSchema: z.boolean(),
+  scope: ChangeScope.BlockDefault,
+  describe: ({id, direction}) => `move ${id} ${direction === -1 ? 'up' : 'down'}`,
+  apply: async (tx, {id, direction, scopeRootId}) => {
+    const self = await requireBlock(tx, id)
+    if (self.parentId === null) return false
+    // The scope root anchors the view; it can't move within itself.
+    if (scopeRootId !== undefined && id === scopeRootId) return false
+
+    const siblings = await tx.childrenOf(self.parentId)
+    const idx = siblings.findIndex(s => s.id === id)
+    if (idx === -1) return false
+
+    const target = await ((): Promise<{parentId: string | null; position: InsertPosition} | null> => {
+      const up = direction === -1
+      const hasAdjacentSibling = up ? idx > 0 : idx < siblings.length - 1
+      if (hasAdjacentSibling) {
+        const adjacent = siblings[up ? idx - 1 : idx + 1]
+        return Promise.resolve({
+          parentId: self.parentId,
+          position: up
+            ? {kind: 'before', siblingId: adjacent.id}
+            : {kind: 'after', siblingId: adjacent.id},
+        })
+      }
+      // Edge of the sibling list — move into the neighbouring sibling
+      // subtree at the same depth. If the parent has no neighbouring
+      // sibling (it's itself the first/last child), the only one-step
+      // slot would be a shallower level, which would change indentation,
+      // so it's a no-op.
+      return (async () => {
+        // Cross-parent moves are bounded by the visible surface, so they
+        // need a scope root. Without one (e.g. a bridge run-action with no
+        // UI context) keep the move same-parent only — the edge is a
+        // no-op, matching the previous reorder behaviour — rather than
+        // reparenting into an unbounded neighbour/page.
+        if (scopeRootId === undefined || self.parentId === scopeRootId) return null
+        const parent = await requireBlock(tx, self.parentId!)
+        const parentSiblings = await tx.childrenOf(parent.parentId, self.workspaceId)
+        const pIdx = parentSiblings.findIndex(s => s.id === parent.id)
+        const neighbourParent = up ? parentSiblings[pIdx - 1] : parentSiblings[pIdx + 1]
+        if (!neighbourParent) return null
+        return {
+          parentId: neighbourParent.id,
+          position: up ? {kind: 'last' as const} : {kind: 'first' as const},
+        }
+      })()
+    })()
+
+    if (!target) return false
+    // Moving INTO a neighbouring subtree (target parent ≠ current parent)
+    // reveals it if collapsed, so the block stays visible.
+    if (target.parentId !== null && target.parentId !== self.parentId) {
+      await revealChildren(tx, target.parentId)
+    }
+    await relocateBlock(tx, self, target.parentId, target.position)
     return true
   },
 })
@@ -617,6 +765,7 @@ export const KERNEL_MUTATORS: ReadonlyArray<AnyMutator> = [
   setOrderKey,
   indent,
   outdent,
+  moveVertical,
   split,
   merge,
 ]
@@ -640,6 +789,7 @@ declare module '@/data/api' {
     'core.setOrderKey': typeof setOrderKey
     'core.indent': typeof indent
     'core.outdent': typeof outdent
+    'core.moveVertical': typeof moveVertical
     'core.split': typeof split
     'core.merge': typeof merge
   }

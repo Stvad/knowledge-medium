@@ -131,7 +131,7 @@ describe('spatial navigation selection actions', () => {
       context: ActionContextTypes.NORMAL_MODE,
       handler: async deps => {
         fallback()
-        await extendSelectionDown(deps.uiStateBlock, env.repo)
+        await extendSelectionDown(deps.uiStateBlock, env.repo, deps.scopeRootId)
       },
     })
 
@@ -170,7 +170,7 @@ describe('spatial navigation selection actions', () => {
       context: ActionContextTypes.MULTI_SELECT_MODE,
       handler: async deps => {
         fallback()
-        await extendSelectionDown(deps.uiStateBlock, env.repo)
+        await extendSelectionDown(deps.uiStateBlock, env.repo, deps.scopeRootId)
       },
     })
 
@@ -206,7 +206,7 @@ describe('spatial navigation selection actions', () => {
       context: ActionContextTypes.MULTI_SELECT_MODE,
       handler: async deps => {
         fallback()
-        await extendSelectionDown(deps.uiStateBlock, env.repo)
+        await extendSelectionDown(deps.uiStateBlock, env.repo, deps.scopeRootId)
       },
     })
 
