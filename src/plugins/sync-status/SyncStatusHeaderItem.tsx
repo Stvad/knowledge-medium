@@ -7,7 +7,7 @@ import {
   HardDrive,
   RefreshCw,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useIsLocalOnly } from '@/components/Login.js'
 import { Button } from '@/components/ui/button.js'
 import {
@@ -35,6 +35,57 @@ interface UploadQueueCountRow {
 
 const uploadQueuePreviewThrottleMs = 1_000
 const rejectedCountSql = 'SELECT COUNT(*) AS count FROM ps_crud_rejected'
+
+// Network sync errors are noisy: a dropped connection or a token refresh
+// caught mid-flight surfaces an error for a second or two before PowerSync
+// recovers on its own. Only treat a network error as worth showing once it
+// has persisted continuously for this long; clear it immediately when it
+// resolves. (Offline is handled separately — see `SyncStatusHeaderContent`.)
+const networkErrorGraceMs = 5_000
+
+// Debounce the *appearance* of an error: surface `message` only after it has
+// stayed non-null for `delayMs`, and drop it the instant it clears. Keeps the
+// indicator from flashing on transient blips.
+function useStableError(message: string | null, delayMs: number): string | null {
+  const [stable, setStable] = useState<string | null>(null)
+  useEffect(() => {
+    if (!message) return
+    const timer = setTimeout(() => setStable(message), delayMs)
+    // Cleanup runs whenever `message` changes (including back to null), so it
+    // both cancels a not-yet-elapsed timer AND clears any previously-shown
+    // value. Resetting here is what makes a *recurring* identical error
+    // re-serve its full grace window instead of flashing instantly because
+    // `stable` still held the old string. (Done in cleanup, not the effect
+    // body, to avoid a synchronous in-effect setState.)
+    return () => {
+      clearTimeout(timer)
+      setStable(null)
+    }
+  }, [message, delayMs])
+  // `stable` only equals `message` once the timer has elapsed for the current
+  // continuous error; a cleared message returns null immediately.
+  return stable === message ? message : null
+}
+
+// Tracks the device's network reachability via `navigator.onLine` +
+// online/offline events. We use this to decide whether a sync error is mere
+// connectivity noise (device offline → show the calm "Offline" chip) or an
+// actionable failure (device online but sync still failing → surface it).
+function useIsDeviceOnline(): boolean {
+  const [online, setOnline] = useState(() =>
+    typeof navigator === 'undefined' ? true : navigator.onLine,
+  )
+  useEffect(() => {
+    const update = () => setOnline(navigator.onLine)
+    window.addEventListener('online', update)
+    window.addEventListener('offline', update)
+    return () => {
+      window.removeEventListener('online', update)
+      window.removeEventListener('offline', update)
+    }
+  }, [])
+  return online
+}
 
 type SyncStatus = ReturnType<typeof useStatus>
 
@@ -78,11 +129,10 @@ export function SyncStatusHeaderItem() {
     {reportFetching: false},
   )
   const rejectedCount = Number(rejected.data[0]?.count ?? 0)
-  const errorMessage =
-    rejected.error?.message ??
-    status.dataFlowStatus.uploadError?.message ??
-    status.dataFlowStatus.downloadError?.message ??
-    null
+  // Local-query failures (counting the rejection quarantine) are real and
+  // surfaced immediately. Network/sync errors are handled — and offline is
+  // distinguished from a genuine error — down in SyncStatusHeaderContent.
+  const localErrorMessage = rejected.error?.message ?? null
 
   if (localOnly) {
     return (
@@ -92,7 +142,7 @@ export function SyncStatusHeaderItem() {
         pendingChanges={0}
         pendingChangesApproximate={false}
         rejectedCount={rejectedCount}
-        errorMessage={errorMessage}
+        localErrorMessage={localErrorMessage}
       />
     )
   }
@@ -101,7 +151,7 @@ export function SyncStatusHeaderItem() {
     <RemoteSyncStatusHeaderContent
       status={status}
       rejectedCount={rejectedCount}
-      baseErrorMessage={errorMessage}
+      baseLocalErrorMessage={localErrorMessage}
     />
   )
 }
@@ -109,13 +159,13 @@ export function SyncStatusHeaderItem() {
 interface RemoteSyncStatusHeaderContentProps {
   status: SyncStatus
   rejectedCount: number
-  baseErrorMessage: string | null
+  baseLocalErrorMessage: string | null
 }
 
 function RemoteSyncStatusHeaderContent({
   status,
   rejectedCount,
-  baseErrorMessage,
+  baseLocalErrorMessage,
 }: RemoteSyncStatusHeaderContentProps) {
   const queue = useQuery<UploadQueueCountRow>(
     uploadQueuePreviewCountSql,
@@ -136,7 +186,7 @@ function RemoteSyncStatusHeaderContent({
       pendingChanges={pendingChanges}
       pendingChangesApproximate={pendingChangesApproximate}
       rejectedCount={rejectedCount}
-      errorMessage={queue.error?.message ?? baseErrorMessage}
+      localErrorMessage={queue.error?.message ?? baseLocalErrorMessage}
     />
   )
 }
@@ -147,7 +197,7 @@ interface SyncStatusHeaderContentProps {
   pendingChanges: number
   pendingChangesApproximate: boolean
   rejectedCount: number
-  errorMessage: string | null
+  localErrorMessage: string | null
 }
 
 function SyncStatusHeaderContent({
@@ -156,11 +206,26 @@ function SyncStatusHeaderContent({
   pendingChanges,
   pendingChangesApproximate,
   rejectedCount,
-  errorMessage,
+  localErrorMessage,
 }: SyncStatusHeaderContentProps) {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
+  const deviceOnline = useIsDeviceOnline()
   const dataFlow = status.dataFlowStatus
+  // Decide whether a sync error is worth showing. When the *device* is
+  // offline, any upload/download error is just connectivity noise — show the
+  // calm "Offline" chip, not a raw websocket/fetch error. But when the
+  // device is online and sync still fails (bad PowerSync endpoint, 401/403
+  // credentials, server-side stream failure), the error is actionable and
+  // must surface even though PowerSync flips `connected: false` during its
+  // retry loop — otherwise the chip is stuck on Offline/Connecting forever
+  // and hides the very reason sync isn't working. The grace window below
+  // still debounces transient blips in both cases.
+  const networkError = deviceOnline
+    ? (dataFlow.uploadError?.message ?? dataFlow.downloadError?.message ?? null)
+    : null
+  const stableNetworkError = useStableError(networkError, networkErrorGraceMs)
+  const errorMessage = localErrorMessage ?? stableNetworkError
   const view = getSyncIndicatorView({
     localOnly,
     connected: status.connected,

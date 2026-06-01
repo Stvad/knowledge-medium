@@ -51,10 +51,12 @@ const formatPendingLabel = (count: number, approximate = false): string | null =
   return String(count)
 }
 
+// `pendingChanges` counts distinct blocks with queued edits (see
+// queueCounts.ts), so the human-readable form is phrased in blocks.
 const formatChangeCount = (count: number, approximate = false): string => {
   const countLabel = approximate ? `${count}+` : String(count)
-  if (count === 1 && !approximate) return '1 local change'
-  return `${countLabel} local changes`
+  const noun = count === 1 && !approximate ? 'block' : 'blocks'
+  return `${countLabel} ${noun}`
 }
 
 const clampProgressPercent = (fraction: number | null | undefined): number | null => {
@@ -75,8 +77,8 @@ const appendPendingTitle = (
 ): string => {
   if (pendingChanges <= 0) return title
   const suffix = localOnly
-    ? `${formatChangeCount(pendingChanges, approximate)} stored locally.`
-    : `${formatChangeCount(pendingChanges, approximate)} queued for upload.`
+    ? `${formatChangeCount(pendingChanges, approximate)} changed, stored locally.`
+    : `${formatChangeCount(pendingChanges, approximate)} changed, queued for upload.`
   return `${title} ${suffix}`
 }
 
