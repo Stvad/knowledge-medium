@@ -10,6 +10,7 @@ import { Block } from '../data/block'
 import { useBlockContext } from '@/context/block'
 import { useChildIds, useHandle } from '@/hooks/block.js'
 import { useUIStateBlock, useUserName } from '@/data/globalState.js'
+import { userPageBlockId } from '@/data/stateBlocks.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { usePropertySchemas } from '@/hooks/propertySchemas.js'
 import { propertyEditorOverridesFacet, typesFacet, valuePresetsFacet } from '../data/facets.ts'
@@ -55,6 +56,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
     selector: data => data
       ? {
         id: data.id,
+        workspaceId: data.workspaceId,
         content: data.content,
         properties: data.properties,
         updatedAt: data.updatedAt,
@@ -116,6 +118,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
       blockId: blockData.id,
       updatedAt: blockData.updatedAt,
       updatedBy: updatedByName,
+      updatedByBlockId: userPageBlockId(blockData.workspaceId, blockData.updatedBy),
       properties,
       schemas,
       uis,

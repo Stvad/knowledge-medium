@@ -28,10 +28,11 @@ import {
   hasBlockType,
   selectionStateProp,
   showPropertiesProp,
+  userIdProp,
   type BlockSelectionState,
 } from '@/data/properties'
 import { USER_PREFS_PATH_PART } from '@/data/userPrefs.js'
-import { PAGE_TYPE } from '@/data/blockTypes.js'
+import { PAGE_TYPE, USER_TYPE } from '@/data/blockTypes.js'
 
 // ──── Deterministic-id namespaces ────
 
@@ -193,29 +194,44 @@ const ensureUserPrefsChild = (repo: Repo, parent: Block): Promise<Block> =>
 
 const dedupe = (values: readonly string[]): string[] => [...new Set(values)]
 
-/** Additively backfill the user-id alias onto an existing user page.
- *  Pages created before the id became an alias (or restored by an older
- *  client) only carry the display-name alias; this upgrades them in
- *  place on first access. Idempotent and additive — never rewrites the
- *  display-name alias or content, so a user who renamed their own page
- *  keeps that. Runs at most once per memoized (repo, workspace, user)
- *  since the caller is itself memoized; the peek skips the tx entirely
- *  once the alias is present. Best-effort: an alias-collision rejection
- *  (the id already claimed elsewhere — not expected for opaque ids) is
- *  swallowed so it can't break user-page resolution. */
-const ensureUserIdAlias = async (repo: Repo, id: string, userId: string): Promise<void> => {
-  const current = repo.block(id).peekProperty(aliasesProp) ?? []
-  if (current.includes(userId)) return
+/** Repair an existing user page to the current shape: the user id as an
+ *  alias, the `USER_TYPE` marker, and the `user:id` property. Pages
+ *  created before any of these existed (or restored by an older client)
+ *  are upgraded in place on first access. Idempotent and additive —
+ *  never rewrites the display-name alias or content, so a user who
+ *  renamed their own page keeps that. Runs at most once per memoized
+ *  (repo, workspace, user) since the caller is itself memoized; the peek
+ *  skips the tx entirely once the page is up to date. Best-effort: an
+ *  alias-collision rejection (the id already claimed elsewhere — not
+ *  expected for opaque ids) is swallowed so it can't break user-page
+ *  resolution. */
+const reconcileUserPage = async (repo: Repo, id: string, userId: string): Promise<void> => {
+  const block = repo.block(id)
+  const data = block.peek()
+  if (!data) return
+  const aliases = block.peekProperty(aliasesProp) ?? []
+  const upToDate =
+    aliases.includes(userId) &&
+    hasBlockType(data, USER_TYPE) &&
+    (block.peekProperty(userIdProp) ?? '') === userId
+  if (upToDate) return
+
+  const typeSnapshot = repo.snapshotTypeRegistries()
   try {
     await repo.tx(async tx => {
       const row = await tx.get(id)
       if (!row || row.deleted) return
-      const aliases = await tx.getProperty(id, aliasesProp)
-      if (aliases.includes(userId)) return
-      await tx.setProperty(id, aliasesProp, [...aliases, userId])
-    }, {scope: ChangeScope.UserPrefs, description: 'user-page id-alias backfill'})
+      const txAliases = await tx.getProperty(id, aliasesProp)
+      if (!txAliases.includes(userId)) {
+        await tx.setProperty(id, aliasesProp, [...txAliases, userId])
+      }
+      if ((await tx.getProperty(id, userIdProp)) !== userId) {
+        await tx.setProperty(id, userIdProp, userId)
+      }
+      await repo.addTypeInTx(tx, id, USER_TYPE, {}, typeSnapshot)
+    }, {scope: ChangeScope.UserPrefs, description: 'user-page reconcile'})
   } catch (err) {
-    console.warn(`[stateBlocks] could not backfill id alias on user page ${id}:`, err)
+    console.warn(`[stateBlocks] could not reconcile user page ${id}:`, err)
   }
 }
 
@@ -234,7 +250,7 @@ export const getUserBlock = memoize(
     const id = userPageBlockId(workspaceId, user.id)
     const live = await repo.load(id)
     if (live && !live.deleted) {
-      await ensureUserIdAlias(repo, id, user.id)
+      await reconcileUserPage(repo, id, user.id)
       return repo.block(id)
     }
 
@@ -261,6 +277,7 @@ export const getUserBlock = memoize(
       if (existing && existing.deleted) {
         await tx.restore(id, {content: displayName})
         await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: aliases}, typeSnapshot)
+        await repo.addTypeInTx(tx, id, USER_TYPE, {[userIdProp.name]: user.id}, typeSnapshot)
         return
       }
       await tx.create({
@@ -271,6 +288,7 @@ export const getUserBlock = memoize(
         content: displayName,
       })
       await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: aliases}, typeSnapshot)
+      await repo.addTypeInTx(tx, id, USER_TYPE, {[userIdProp.name]: user.id}, typeSnapshot)
     }, {scope: ChangeScope.UserPrefs})
 
     return repo.block(id)

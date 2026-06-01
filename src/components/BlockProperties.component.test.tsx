@@ -60,6 +60,10 @@ vi.mock('@/utils/navigation.ts', () => ({
   useNavigate: () => (input: unknown) => {
     navigateCallsRef.current.push(input)
   },
+  // MetadataRow's "Changed by" link uses this; record opens like navigate.
+  useOpenBlock: ({blockId}: {blockId: string}) => () => {
+    navigateCallsRef.current.push({blockId})
+  },
 }))
 
 const reviewStatusProp = defineProperty<string>('phase2:review-status', {

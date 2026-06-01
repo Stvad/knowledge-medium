@@ -38,12 +38,13 @@ import { addedTypes } from '@/data/properties'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { resolveFacetRuntimeSync } from '@/extensions/facet'
 import { Repo } from '../repo'
-import { PAGE_TYPE } from '@/data/blockTypes'
+import { PAGE_TYPE, USER_TYPE } from '@/data/blockTypes'
 import {
   aliasesProp,
   selectionStateProp,
   showPropertiesProp,
   typesProp,
+  userIdProp,
 } from '@/data/properties'
 import {
   getLayoutSessionBlock,
@@ -106,7 +107,9 @@ describe('getUserBlock', () => {
     // Both the display name and the opaque id are aliases so the page is
     // addressable either way (the id is what `updated_by` stores).
     expect(userBlock.peekProperty(aliasesProp)).toEqual(['Alice', 'user-1'])
-    expect(userBlock.peekProperty(typesProp)).toEqual([PAGE_TYPE])
+    // Navigable as a page, plus the USER_TYPE marker carrying the id.
+    expect(userBlock.peekProperty(typesProp)).toEqual([PAGE_TYPE, USER_TYPE])
+    expect(userBlock.peekProperty(userIdProp)).toBe('user-1')
 
     const events = await env.h.db.getAll<{scope: string; source: string}>(
       'SELECT scope, source FROM command_events ORDER BY created_at',
@@ -128,6 +131,7 @@ describe('getUserBlock', () => {
       const block = await getUserBlock(otherEnv.repo, WS, noNameUser)
       expect(block.peek()?.content).toBe('user-no-name')
       expect(block.peekProperty(aliasesProp)).toEqual(['user-no-name'])
+      expect(block.peekProperty(userIdProp)).toBe('user-no-name')
     } finally {
       await otherEnv.h.cleanup()
     }
@@ -148,7 +152,8 @@ describe('getUserBlock', () => {
       await fresh.repo.load(restored.id)
       expect(restored.peek()?.deleted).toBe(false)
       expect(restored.peekProperty(aliasesProp)).toEqual(['Alice', 'user-1'])
-      expect(restored.peekProperty(typesProp)).toEqual([PAGE_TYPE])
+      expect(restored.peekProperty(typesProp)).toEqual([PAGE_TYPE, USER_TYPE])
+      expect(restored.peekProperty(userIdProp)).toBe('user-1')
     } finally {
       await fresh.h.cleanup()
     }
