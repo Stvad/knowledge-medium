@@ -8,7 +8,7 @@
  *
  * Coverage:
  *   - getUserBlock: creates a parent-less user page with the user's
- *     display name as content + alias; deterministic id per
+ *     display name as content + name/id aliases; deterministic id per
  *     (workspace, user); idempotent (memoized — second call returns
  *     same promise + Block); falls back to user.id when name is
  *     undefined; restores tombstoned user page
@@ -96,14 +96,16 @@ beforeEach(async () => { env = await setup() })
 afterEach(async () => { await env.h.cleanup() })
 
 describe('getUserBlock', () => {
-  it('creates a parent-less user page with content + alias from user.name', async () => {
+  it('creates a parent-less user page with content + name/id aliases from user.name', async () => {
     const userBlock = await getUserBlock(env.repo, WS, USER)
     const data = userBlock.peek()
 
     expect(data?.parentId).toBeNull()
     expect(data?.workspaceId).toBe(WS)
     expect(data?.content).toBe('Alice')
-    expect(userBlock.peekProperty(aliasesProp)).toEqual(['Alice'])
+    // Both the display name and the opaque id are aliases so the page is
+    // addressable either way (the id is what `updated_by` stores).
+    expect(userBlock.peekProperty(aliasesProp)).toEqual(['Alice', 'user-1'])
     expect(userBlock.peekProperty(typesProp)).toEqual([PAGE_TYPE])
 
     const events = await env.h.db.getAll<{scope: string; source: string}>(
@@ -145,7 +147,7 @@ describe('getUserBlock', () => {
       // Pull current data from SQL via the fresh repo's cache.
       await fresh.repo.load(restored.id)
       expect(restored.peek()?.deleted).toBe(false)
-      expect(restored.peekProperty(aliasesProp)).toEqual(['Alice'])
+      expect(restored.peekProperty(aliasesProp)).toEqual(['Alice', 'user-1'])
       expect(restored.peekProperty(typesProp)).toEqual([PAGE_TYPE])
     } finally {
       await fresh.h.cleanup()

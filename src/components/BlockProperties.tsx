@@ -9,7 +9,7 @@ import { Eye, EyeOff } from 'lucide-react'
 import { Block } from '../data/block'
 import { useBlockContext } from '@/context/block'
 import { useChildIds, useHandle } from '@/hooks/block.js'
-import { useUIStateBlock } from '@/data/globalState.js'
+import { useUIStateBlock, useUserName } from '@/data/globalState.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { usePropertySchemas } from '@/hooks/propertySchemas.js'
 import { propertyEditorOverridesFacet, typesFacet, valuePresetsFacet } from '../data/facets.ts'
@@ -63,6 +63,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
       : undefined,
   })
   const childIds = useChildIds(block)
+  const updatedByName = useUserName(blockData?.updatedBy ?? '')
   const uiStateBlock = useUIStateBlock()
   const runtime = useAppRuntime()
   const {panelId, scopeRootId, renderScopeId, isNestedSurface} = useBlockContext()
@@ -114,7 +115,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
     ? buildPropertyPanelModel({
       blockId: blockData.id,
       updatedAt: blockData.updatedAt,
-      updatedBy: blockData.updatedBy,
+      updatedBy: updatedByName,
       properties,
       schemas,
       uis,
@@ -123,7 +124,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
       syntheticRows,
     })
     : null,
-  [blockData, presets, properties, schemas, syntheticRows, typesRegistry, uis])
+  [blockData, presets, properties, schemas, syntheticRows, typesRegistry, uis, updatedByName])
 
   if (!blockData || !model) return null
 
