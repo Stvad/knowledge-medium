@@ -44,6 +44,7 @@ export interface SiblingAnchor {
  *  but are referenced by the Tx interface. */
 import type { Mutator } from './mutator'
 import type { ScheduledArgsFor } from './processor'
+import type { SameTxEventPayload } from './sameTxProcessor'
 
 /** Transactional session. Async reads, no arbitrary queries. Spec §5.3. */
 export interface Tx {
@@ -167,12 +168,6 @@ export interface Tx {
    *  exist. Reads SQL via the writeTransaction. */
   parentOf(childId: string): Promise<BlockData | null>
 
-  /** Live blocks in `workspaceId` whose stored references include
-   *  `targetId`. This is a core reference-column query, not the
-   *  references plugin's projection table, so kernel mutators can use
-   *  it without depending on plugin local schema. */
-  blocksReferencing(targetId: string, workspaceId: string): Promise<BlockData[]>
-
   /** Look up the live block in `workspaceId` whose `aliases` property
    *  contains the exact `alias` text. Returns null when no such block
    *  exists. Tx-aware version of the kernel `core.aliasLookup` query;
@@ -199,6 +194,13 @@ export interface Tx {
     args: ScheduledArgsFor<P>,
     options?: { delayMs?: number },
   ): void
+
+  /** Emit a same-tx domain event. Event processors registered for
+   *  `name` run later in the same writeTransaction, after the user fn
+   *  returns and before commit. The tx must already have performed a
+   *  write so the event has a pinned workspace and rolls back with the
+   *  originating mutation. */
+  emitEvent<P extends string>(name: P, payload: SameTxEventPayload<P>): void
 
   readonly meta: TxMeta
 }

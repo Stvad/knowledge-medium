@@ -17,3 +17,29 @@ export interface CycleDetectedEvent {
    *  path); the field exists for completeness. */
   txIdsInvolved: string[]
 }
+
+export const CORE_BLOCK_MERGED_EVENT = 'core.blockMerged' as const
+
+export interface BlockMergeAliasRewrite {
+  fromAlias: string
+  toAlias: string
+}
+
+export interface CoreBlockMergedEvent {
+  workspaceId: string
+  /** The block whose data was folded into `intoId` and then soft-deleted. */
+  fromId: string
+  /** The block that absorbed `fromId`. */
+  intoId: string
+  /** Alias display rewrites that should be applied while retargeting
+   *  references. Empty for ordinary core merges; populated by alias
+   *  collision merges that need a dropped source alias to render as the
+   *  collision alias. */
+  aliasRewrites: readonly BlockMergeAliasRewrite[]
+}
+
+declare module './sameTxProcessor' {
+  interface SameTxEventRegistry {
+    'core.blockMerged': CoreBlockMergedEvent
+  }
+}

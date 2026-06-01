@@ -32,6 +32,8 @@ import type {
   Mutator,
   NewBlockData,
   PropertySchema,
+  SameTxEmittedEvent,
+  SameTxEventPayload,
   SiblingAnchor,
   SiblingDirection,
   Tx,
@@ -141,6 +143,9 @@ export interface TxImplContext {
    *  `repo.mutate.X` / `repo.run`. JSON-serialized into
    *  `command_events.mutator_calls` at commit time. */
   mutatorCalls: MutatorCallRecord[]
+  /** Mutable list of same-tx domain events emitted by tx primitives /
+   *  mutators. Same-tx event processors consume this list before commit. */
+  sameTxEvents: SameTxEmittedEvent[]
   /** Now provider — injected for testability (deterministic timestamps). */
   now: () => number
   /** Mutator registry snapshot (taken at tx start). For stage 1.3 the
@@ -199,14 +204,6 @@ const SELECT_PARENT_SQL =
   `SELECT p.* FROM blocks AS c JOIN blocks AS p ON p.id = c.parent_id WHERE c.id = ? AND p.deleted = 0`
 const SELECT_PARENT_WORKSPACE_SQL =
   `SELECT workspace_id FROM blocks WHERE id = ?`
-const SELECT_BLOCKS_REFERENCING_SQL =
-  `SELECT DISTINCT ${COLUMN_NAMES.map(c => `source.${c}`).join(', ')}
-   FROM block_references br
-   JOIN blocks source ON source.id = br.source_id
-   WHERE br.workspace_id = ?
-     AND br.target_id = ?
-     AND source.deleted = 0
-   ORDER BY source.order_key, source.id`
 const INSERT_SQL = `INSERT INTO blocks (${COLUMN_LIST}) VALUES (${COLUMN_PLACEHOLDERS})`
 
 export class TxImpl implements Tx {
@@ -528,14 +525,6 @@ export class TxImpl implements Tx {
     return row === null ? null : parseBlockRow(row)
   }
 
-  async blocksReferencing(targetId: string, workspaceId: string): Promise<BlockData[]> {
-    const rows = await this.ctx.txDb.getAll<BlockRow>(
-      SELECT_BLOCKS_REFERENCING_SQL,
-      [workspaceId, targetId],
-    )
-    return rows.map(parseBlockRow)
-  }
-
   async aliasLookup(alias: string, workspaceId: string): Promise<BlockData | null> {
     // Defensive: both args are required for a meaningful lookup, but a
     // bad caller passing '' would otherwise match a row whose alias
@@ -589,6 +578,11 @@ export class TxImpl implements Tx {
       args: validatedArgs,
       delayMs: options?.delayMs,
     })
+  }
+
+  emitEvent<P extends string>(name: P, payload: SameTxEventPayload<P>): void {
+    if (!this.workspacePinned) throw new WorkspaceNotPinnedError()
+    this.ctx.sameTxEvents.push({name, payload})
   }
 
   // ──── Engine-internal raw row applier (UndoManager only) ────

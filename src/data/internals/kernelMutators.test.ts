@@ -14,7 +14,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope, ParentDeletedError, codecs, defineProperty, normalizeReferences, type BlockData } from '@/data/api'
+import {
+  CORE_BLOCK_MERGED_EVENT,
+  ChangeScope,
+  ParentDeletedError,
+  codecs,
+  defineProperty,
+  type BlockData,
+  type CoreBlockMergedEvent,
+} from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '../repo'
@@ -830,53 +838,34 @@ describe('core.merge', () => {
     }
   })
 
-  it('retargets stored backlinks and blockref syntax from source to target', async () => {
-    const intoId = '11111111-1111-4111-8111-111111111111'
-    const fromId = '22222222-2222-4222-8222-222222222222'
-    const refId = '33333333-3333-4333-8333-333333333333'
+  it('emits a same-tx block-merged event after applying core merge effects', async () => {
+    const events: CoreBlockMergedEvent[] = []
+    env.repo.__setSameTxProcessorsForTesting([
+      {
+        name: 'test.mergeObserver',
+        watches: {kind: 'event', events: [CORE_BLOCK_MERGED_EVENT]},
+        apply: async (event) => {
+          events.push(...event.emittedEvents.map(e => e.payload as CoreBlockMergedEvent))
+        },
+      },
+    ])
 
-    await env.repo.tx(async tx => {
-      await tx.create({id: 'p', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
-      await tx.create({
-        id: intoId,
-        workspaceId: 'ws-1',
-        parentId: 'p',
-        orderKey: 'a0',
-        content: 'Target page',
-        properties: {[aliasesProp.name]: aliasesProp.codec.encode(['Target page'])},
-      })
-      await tx.create({
-        id: fromId,
-        workspaceId: 'ws-1',
-        parentId: 'p',
-        orderKey: 'a1',
-        content: 'Source page',
-        properties: {[aliasesProp.name]: aliasesProp.codec.encode(['Source page'])},
-      })
-      await tx.create({
-        id: refId,
-        workspaceId: 'ws-1',
-        parentId: 'p',
-        orderKey: 'a2',
-        content: `Links [[Source page]] ((${fromId})) [source block](((${fromId}))) !((${fromId}))`,
-        references: [
-          {id: fromId, alias: 'Source page'},
-          {id: fromId, alias: fromId},
-        ],
-      })
-    }, {scope: ChangeScope.BlockDefault})
-
-    await env.repo.mutate.merge({intoId, fromId, contentStrategy: 'keepTarget'})
-
-    expect(env.read(fromId)!.deleted).toBe(true)
-    expect(env.read(intoId)!.properties[aliasesProp.name]).toEqual(['Target page', 'Source page'])
-    expect(env.read(refId)!.content).toBe(
-      `Links [[Source page]] ((${intoId})) [source block](((${intoId}))) !((${intoId}))`,
+    await env.repo.tx(
+      tx => tx.create({id: 'p', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
     )
-    expect(env.read(refId)!.references).toEqual(normalizeReferences([
-      {id: intoId, alias: 'Source page'},
-      {id: intoId, alias: intoId},
-    ]))
+    await env.repo.mutate.createChild({parentId: 'p', id: 'a', content: 'A'})
+    await env.repo.mutate.createChild({parentId: 'p', id: 'b', content: 'B'})
+    await env.repo.mutate.merge({intoId: 'a', fromId: 'b', contentStrategy: 'keepTarget'})
+
+    expect(events).toEqual([{
+      workspaceId: 'ws-1',
+      fromId: 'b',
+      intoId: 'a',
+      aliasRewrites: [],
+    }])
+    expect(env.read('a')!.content).toBe('A')
+    expect(env.read('b')!.deleted).toBe(true)
   })
 
   describe('contentStrategy', () => {

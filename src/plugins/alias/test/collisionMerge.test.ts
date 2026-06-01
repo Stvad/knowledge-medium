@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { ChangeScope, normalizeReferences, type BlockData } from '@/data/api'
+import { ChangeScope, type BlockData } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
@@ -71,23 +71,9 @@ const createBlock = async (
 }
 
 describe('alias.mergeCollision', () => {
-  it('drops only the renamed-from alias and rewrites those backlinks to the collision alias', async () => {
+  it('drops only the renamed-from alias during collision merge', async () => {
     await createBlock('target', 'Existing', ['Existing'], 'a0')
     await createBlock('source', 'Partial', ['Partial', 'Other'], 'a1')
-    await env.repo.tx(
-      tx => tx.create({
-        id: 'ref',
-        workspaceId: WS,
-        parentId: null,
-        orderKey: 'a2',
-        content: 'see [[Partial]] and [[Other]]',
-        references: [
-          {id: 'source', alias: 'Partial'},
-          {id: 'source', alias: 'Other'},
-        ],
-      }),
-      {scope: ChangeScope.BlockDefault},
-    )
 
     await env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
       intoId: 'target',
@@ -99,30 +85,11 @@ describe('alias.mergeCollision', () => {
     expect(env.read('source')!.deleted).toBe(true)
     expect(env.read('target')!.content).toBe('Existing')
     expect(env.read('target')!.properties[aliasesProp.name]).toEqual(['Existing', 'Other'])
-    expect(env.read('ref')!.content).toBe('see [[Existing]] and [[Other]]')
-    expect(env.read('ref')!.references).toEqual(normalizeReferences([
-      {id: 'target', alias: 'Existing'},
-      {id: 'target', alias: 'Other'},
-    ]))
   })
 
   it('keeps all source aliases for direct alias collisions when no rename alias is supplied', async () => {
     await createBlock('target', 'Existing', ['Existing'], 'a0')
     await createBlock('source', 'Source', ['Source', 'Other'], 'a1')
-    await env.repo.tx(
-      tx => tx.create({
-        id: 'ref',
-        workspaceId: WS,
-        parentId: null,
-        orderKey: 'a2',
-        content: 'see [[Source]] and [[Other]]',
-        references: [
-          {id: 'source', alias: 'Source'},
-          {id: 'source', alias: 'Other'},
-        ],
-      }),
-      {scope: ChangeScope.BlockDefault},
-    )
 
     await env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
       intoId: 'target',
@@ -136,10 +103,5 @@ describe('alias.mergeCollision', () => {
       'Source',
       'Other',
     ])
-    expect(env.read('ref')!.content).toBe('see [[Source]] and [[Other]]')
-    expect(env.read('ref')!.references).toEqual(normalizeReferences([
-      {id: 'target', alias: 'Source'},
-      {id: 'target', alias: 'Other'},
-    ]))
   })
 })

@@ -7,6 +7,7 @@ import {
   invalidationRulesFacet,
   localSchemaFacet,
   postCommitProcessorsFacet,
+  sameTxProcessorsFacet,
 } from '@/data/facets.js'
 import { referencesDataExtension } from '../dataExtension.ts'
 import { referencesPlugin } from '../index.ts'
@@ -17,6 +18,7 @@ import {
   PARSE_REFERENCES_PROCESSOR,
 } from '../referencesProcessor.ts'
 import { RENAME_BACKLINKS_PROCESSOR } from '../renameProcessor.ts'
+import { RETARGET_MERGED_BLOCK_REFERENCES_PROCESSOR } from '../mergeRetargetProcessor.ts'
 
 describe('referencesDataExtension', () => {
   it('contributes the local reference edge index schema', () => {
@@ -36,6 +38,13 @@ describe('referencesDataExtension', () => {
       PARSE_REFERENCES_PROCESSOR,
       RENAME_BACKLINKS_PROCESSOR,
     ].sort())
+  })
+
+  it('contributes reference same-tx processors', () => {
+    const runtime = resolveFacetRuntimeSync(referencesDataExtension)
+    expect(Array.from(runtime.read(sameTxProcessorsFacet).keys())).toEqual([
+      RETARGET_MERGED_BLOCK_REFERENCES_PROCESSOR,
+    ])
   })
 })
 
