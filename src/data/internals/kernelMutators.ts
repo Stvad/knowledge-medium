@@ -591,7 +591,12 @@ export const moveVertical = defineMutator<MoveVerticalArgs, boolean>({
       // slot would be a shallower level, which would change indentation,
       // so it's a no-op.
       return (async () => {
-        if (self.parentId === scopeRootId) return null
+        // Cross-parent moves are bounded by the visible surface, so they
+        // need a scope root. Without one (e.g. a bridge run-action with no
+        // UI context) keep the move same-parent only — the edge is a
+        // no-op, matching the previous reorder behaviour — rather than
+        // reparenting into an unbounded neighbour/page.
+        if (scopeRootId === undefined || self.parentId === scopeRootId) return null
         const parent = await requireBlock(tx, self.parentId!)
         const parentSiblings = await tx.childrenOf(parent.parentId, self.workspaceId)
         const pIdx = parentSiblings.findIndex(s => s.id === parent.id)

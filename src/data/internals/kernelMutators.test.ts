@@ -637,7 +637,7 @@ describe('core.moveVertical', () => {
     await env.repo.mutate.createChild({parentId: 'root', id: 'd'})
     await env.repo.mutate.createChild({parentId: 'd', id: 'e'})
 
-    const moved = await env.repo.mutate.moveVertical({id: 'e', direction: -1})
+    const moved = await env.repo.mutate.moveVertical({id: 'e', direction: -1, scopeRootId: 'root'})
     expect(moved).toBe(true)
     expect(env.read('e')!.parentId).toBe('a')
     expect(await env.childIds('a')).toEqual(['b', 'e'])
@@ -648,7 +648,7 @@ describe('core.moveVertical', () => {
   it('moves a last child down into the next sibling subtree (cross-parent)', async () => {
     // a/b, c/d → move b down → b becomes c's first child, a emptied.
     await seedTwoSubtrees()
-    const moved = await env.repo.mutate.moveVertical({id: 'b', direction: 1})
+    const moved = await env.repo.mutate.moveVertical({id: 'b', direction: 1, scopeRootId: 'root'})
     expect(moved).toBe(true)
     expect(env.read('b')!.parentId).toBe('c')
     expect(await env.childIds('c')).toEqual(['b', 'd'])
@@ -675,7 +675,7 @@ describe('core.moveVertical', () => {
     // visible at the same depth.
     await seedTwoSubtrees()
     await env.repo.mutate.setProperty({id: 'a', schema: isCollapsedProp, value: true})
-    const moved = await env.repo.mutate.moveVertical({id: 'd', direction: -1})
+    const moved = await env.repo.mutate.moveVertical({id: 'd', direction: -1, scopeRootId: 'root'})
     expect(moved).toBe(true)
     expect(env.read('d')!.parentId).toBe('a')
     expect(await env.childIds('a')).toEqual(['b', 'd'])
@@ -687,7 +687,7 @@ describe('core.moveVertical', () => {
     // is revealed.
     await seedTwoSubtrees()
     await env.repo.mutate.setProperty({id: 'c', schema: isCollapsedProp, value: true})
-    const moved = await env.repo.mutate.moveVertical({id: 'b', direction: 1})
+    const moved = await env.repo.mutate.moveVertical({id: 'b', direction: 1, scopeRootId: 'root'})
     expect(moved).toBe(true)
     expect(env.read('b')!.parentId).toBe('c')
     expect(await env.childIds('c')).toEqual(['b', 'd'])
@@ -708,6 +708,24 @@ describe('core.moveVertical', () => {
     const moved = await env.repo.mutate.moveVertical({id: 'b', direction: -1, scopeRootId: 'a'})
     expect(moved).toBe(false)
     expect(env.read('b')!.parentId).toBe('a')
+  })
+
+  it('without a scopeRootId, the sibling-list edge is a no-op (no unbounded cross-parent)', async () => {
+    // a/b, c/d → move d up with NO scope (e.g. a bridge run-action). d is
+    // c's first child, so a cross-parent move would need a visible
+    // boundary; without one it stays put rather than reparenting.
+    await seedTwoSubtrees()
+    const moved = await env.repo.mutate.moveVertical({id: 'd', direction: -1})
+    expect(moved).toBe(false)
+    expect(env.read('d')!.parentId).toBe('c')
+  })
+
+  it('still swaps same-parent siblings without a scopeRootId', async () => {
+    // Same-parent reorder doesn't need a scope boundary.
+    await seedABC()
+    const moved = await env.repo.mutate.moveVertical({id: 'B', direction: -1})
+    expect(moved).toBe(true)
+    expect(await env.childIds('root')).toEqual(['B', 'A', 'C'])
   })
 })
 
