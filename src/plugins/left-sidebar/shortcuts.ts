@@ -33,7 +33,7 @@ export const getOrCreateShortcutsBlock = memoize(
     const shortcutsId = shortcutsBlockId(userBlock.id)
 
     const live = await repo.load(shortcutsId)
-    if (live && !live.deleted) return repo.block(shortcutsId)
+    if (live) return repo.block(shortcutsId)
 
     const journal = await getOrCreateJournalBlock(repo, userData.workspaceId)
 

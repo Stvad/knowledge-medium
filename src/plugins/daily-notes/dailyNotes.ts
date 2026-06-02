@@ -102,7 +102,7 @@ export const getOrCreateJournalBlock = async (
 ): Promise<Block> => {
   const id = journalBlockId(workspaceId)
   const live = await repo.load(id)
-  if (live && !live.deleted) {
+  if (live) {
     const aliases = stringListProperty(live.properties[aliasesProp.name])
     const needsRepair =
       !hasBlockType(live, PAGE_TYPE) ||
@@ -180,7 +180,7 @@ export const getOrCreateDailyNote = async (
   const dailyAliases = [longLabel, isoLabel]
   const dateValue = dailyNoteDateValue(iso)
   const live = await repo.load(id)
-  if (live && !live.deleted) {
+  if (live) {
     const aliases = stringListProperty(live.properties[aliasesProp.name])
     const needsRepair =
       live.parentId !== journalBlockId(workspaceId) ||

@@ -38,7 +38,6 @@ const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRendererProp
       id: d.id,
       workspaceId: d.workspaceId,
       properties: d.properties,
-      deleted: d.deleted,
     } : undefined,
   })
   const runtime = useAppRuntime()
@@ -171,7 +170,7 @@ const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRendererProp
     }
   }, [block, data, pendingDelete, performDelete, propertyName])
 
-  if (!data || data.deleted) return null
+  if (!data) return null
 
   const presetEntries = Array.from(presets.values()).sort((a, b) => a.label.localeCompare(b.label))
 

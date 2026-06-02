@@ -59,7 +59,7 @@ export const getOrCreateKernelPage = async (
   const orderKey = spec.orderKey ?? 'a0'
 
   const live = await repo.load(id)
-  if (live && !live.deleted) {
+  if (live) {
     const currentAliases = stringListProperty(live.properties[aliasesProp.name])
     const needsRepair =
       !hasBlockType(live, PAGE_TYPE) ||

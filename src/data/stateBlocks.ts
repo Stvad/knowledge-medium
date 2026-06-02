@@ -127,7 +127,7 @@ const ensureStateChild = async (
   const childId = stateChildBlockId(parent.id, namespace)
 
   const live = await repo.load(childId)
-  if (live && !live.deleted) {
+  if (live) {
     if (type && !hasBlockType(live, type.id)) {
       const typeSnapshot = snapshotIncludingType(repo, type)
       await repo.tx(async tx => {
@@ -249,7 +249,7 @@ export const getUserBlock = memoize(
   async (repo: Repo, workspaceId: string, user: User): Promise<Block> => {
     const id = userPageBlockId(workspaceId, user.id)
     const live = await repo.load(id)
-    if (live && !live.deleted) {
+    if (live) {
       await reconcileUserPage(repo, id, user.id)
       return repo.block(id)
     }
