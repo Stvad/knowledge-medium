@@ -13,6 +13,7 @@ import type { Block } from '@/data/block'
 import { useRepo } from '@/context/repo.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { appMountsFacet } from '@/extensions/core.js'
+import { getBlockTypes } from '@/data/properties.js'
 import { NestedBlockContextProvider } from '@/context/block.js'
 import { BlockComponent } from '@/components/BlockComponent.js'
 import { Button } from '@/components/ui/button.js'
@@ -24,6 +25,7 @@ import {
   reschedulePickerMount,
 } from '@/plugins/daily-notes'
 import {
+  SRS_SM25_TYPE,
   formatRescheduleToastMessage,
   rescheduleBlock,
 } from '@/plugins/srs-rescheduling'
@@ -105,12 +107,24 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
       if (!currentId || busy) return
       setBusy(true)
       try {
+        const block = repo.block(currentId)
+        // The card may have left SRS since the queue was snapshotted
+        // (e.g. its type was removed in another panel). `rescheduleBlock`
+        // re-adds SRS_SM25_TYPE to non-SRS blocks, which would silently
+        // resurrect a card the user just removed — so drop it from the
+        // session instead of grading it.
+        const data = block.peek() ?? (await block.load())
+        if (!data || !getBlockTypes(data).includes(SRS_SM25_TYPE)) {
+          showInfo('Card is no longer in spaced repetition')
+          advance()
+          return
+        }
         // Advance only when the write lands. A null result means the
-        // reschedule was refused (read-only repo, or the block is no
-        // longer an SRS card) — advancing then would mark progress and
-        // eventually "complete" while the card's due date never moved,
-        // so it'd resurface next session. Keep the card and surface it.
-        const result = await rescheduleBlock(repo.block(currentId), signal)
+        // reschedule was refused (e.g. read-only repo) — advancing then
+        // would mark progress and eventually "complete" while the card's
+        // due date never moved, so it'd resurface next session. Keep the
+        // card and surface it.
+        const result = await rescheduleBlock(block, signal)
         if (result) {
           showInfo(formatRescheduleToastMessage(result))
           advance()
