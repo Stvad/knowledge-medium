@@ -59,6 +59,22 @@ import { SRS_REVIEW_CARD_ID, SRS_REVIEW_REVEALED } from './reviewCardLayout.tsx'
 const BREADCRUMB_OVERRIDES = {isNestedSurface: true, isBreadcrumb: true}
 const EMPTY_PARENTS: readonly Block[] = []
 
+/** Today's local day key, advanced when the date rolls over. Polls once a
+ *  minute (cheap; only re-renders the minute the day changes), mirroring
+ *  `useDueCards`' midnight-aware cutoff so a deck left open overnight saves
+ *  and restores under the correct day. */
+const useTodayKey = (): string => {
+  const [key, setKey] = useState(localDayKey)
+  useEffect(() => {
+    const id = setInterval(() => {
+      const next = localDayKey()
+      setKey(prev => (prev === next ? prev : next))
+    }, 60_000)
+    return () => clearInterval(id)
+  }, [])
+  return key
+}
+
 const isInteractiveTarget = (el: HTMLElement | null): boolean => {
   if (!el) return false
   // `isContentEditable` covers CodeMirror's focusable `.cm-content`.
@@ -145,15 +161,17 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
   const workspaceId = deck.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
   const dueCards = useDueCards(workspaceId, tagName)
 
-  // Device-local, non-synced persistence of the in-progress session
-  // (frozen queue + place), so navigating away and back resumes instantly
-  // instead of re-running the due query and restarting at card one. Lives
-  // on the plugin's ui-state block — see `reviewProgressProp`.
+  // Persist the in-progress session (frozen queue + place) on the
+  // plugin's ui-state block so navigating away and back resumes instantly
+  // instead of re-running the due query and restarting at card one — see
+  // `reviewProgressProp`.
   const progressBlock = usePluginUIStateBlock(srsReviewProgressType)
   const [progress, setProgress] = useProperty(progressBlock, reviewProgressProp)
-  // Recomputed per mount; a midnight rollover between sessions invalidates
-  // a saved queue so it rebuilds from the live due set.
-  const todayKey = useMemo(() => localDayKey(), [])
+  // Today's day key, advanced on rollover (mirrors `useDueCards`' cutoff)
+  // so a session kept open past midnight saves under the new day and still
+  // restores; a memoized-once key would stamp post-midnight saves with
+  // yesterday and lose the user's place on the next visit.
+  const todayKey = useTodayKey()
 
   // Resume a saved session if one's valid for this deck/day; otherwise
   // start empty and let the live-snapshot path below capture the queue.
@@ -219,8 +237,8 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
   )
 
   // Write-through: persist the live session so it survives unmount. One
-  // object write per state change; `ChangeScope.UiState` keeps it local
-  // (no upload). Skipped until the queue is established so we never
+  // object write per state change (UI-state scope, undo-segregated from
+  // document edits). Skipped until the queue is established so we never
   // clobber a saved session with an empty one during the initial load.
   useEffect(() => {
     if (queue === null) return
