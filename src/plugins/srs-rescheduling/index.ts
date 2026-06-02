@@ -328,8 +328,9 @@ export const rescheduleBlock = async (
 
 // Mirrors `scheduleSrsProperties` which uses `Math.ceil(interval)` to
 // pick the next-review date — display rounding has to match or the
-// toast says "7d" while the date lands 8 days out.
-const formatIntervalDays = (days: number): string => {
+// toast says "7d" while the date lands 8 days out. Exported so the review
+// buttons can label their next-interval estimate the same way.
+export const formatIntervalDays = (days: number): string => {
   const ceil = Math.max(1, Math.ceil(days))
   if (ceil < 30) return `${ceil}d`
   if (ceil < 365) return `${Math.round(ceil / 30)}mo`

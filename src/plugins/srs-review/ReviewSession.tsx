@@ -15,6 +15,7 @@ import {
 import type { Block } from '@/data/block'
 import type { BlockData } from '@/data/api'
 import { useRepo } from '@/context/repo.js'
+import { useProperty } from '@/hooks/block.js'
 import { getBlockTypes } from '@/data/properties.js'
 import { NestedBlockContextProvider } from '@/context/block.js'
 import { BlockComponent } from '@/components/BlockComponent.js'
@@ -27,12 +28,15 @@ import { Breadcrumbs } from '@/plugins/breadcrumbs'
 import { openReschedulePicker } from '@/plugins/daily-notes'
 import {
   SRS_SM25_TYPE,
+  formatIntervalDays,
   formatRescheduleToastMessage,
   rescheduleBlock,
   srsArchivedProp,
+  srsFactorProp,
+  srsIntervalProp,
   srsNextReviewDateProp,
 } from '@/plugins/srs-rescheduling'
-import { SrsSignal } from '@/plugins/srs-rescheduling/scheduler.js'
+import { SrsSignal, estimateSrsIntervalDays } from '@/plugins/srs-rescheduling/scheduler.js'
 import { useDueCards } from './useDueCards.ts'
 import { archiveSrsCard } from './archive.ts'
 import { reviewDeckStartedProp } from './schema.ts'
@@ -83,6 +87,42 @@ const GRADE_BUTTONS: readonly GradeButton[] = [
   {signal: SrsSignal.GOOD, label: 'Good', hint: '3', icon: Check, className: 'text-emerald-600'},
   {signal: SrsSignal.EASY, label: 'Easy', hint: '4', icon: Sparkles, className: 'text-sky-600'},
 ]
+
+/** The four grade buttons, each labelled with the interval the card would
+ *  next be scheduled for if you picked it ("1d", "4d", "2mo", …). The
+ *  estimate reads the card's live interval/factor so it tracks edits made
+ *  elsewhere, and uses the same formatter as the post-grade toast so the
+ *  two agree. Split into its own component so the `useProperty` reads only
+ *  run for the card on screen. */
+const GradeButtons = ({card, busy, onGrade}: {
+  card: Block
+  busy: boolean
+  onGrade: (signal: SrsSignal) => void
+}) => {
+  const [interval] = useProperty(card, srsIntervalProp)
+  const [factor] = useProperty(card, srsFactorProp)
+  return (
+    <div className="grid grid-cols-4 gap-2">
+      {GRADE_BUTTONS.map(btn => (
+        <Button
+          key={btn.label}
+          type="button"
+          variant="outline"
+          className="flex h-auto flex-col gap-1 py-2"
+          disabled={busy}
+          onClick={() => onGrade(btn.signal)}
+        >
+          <btn.icon className={cn('h-4 w-4', btn.className)} />
+          <span className="text-sm font-medium">{btn.label}</span>
+          <span className="text-[11px] font-medium tabular-nums text-muted-foreground">
+            {formatIntervalDays(estimateSrsIntervalDays({interval, factor}, btn.signal))}
+          </span>
+          <span className="text-[10px] opacity-50">{btn.hint}</span>
+        </Button>
+      ))}
+    </div>
+  )
+}
 
 export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) => {
   const repo = useRepo()
@@ -361,24 +401,9 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
             Show answer
             <span className="ml-2 text-xs opacity-70">space</span>
           </Button>
-        ) : (
-          <div className="grid grid-cols-4 gap-2">
-            {GRADE_BUTTONS.map(btn => (
-              <Button
-                key={btn.label}
-                type="button"
-                variant="outline"
-                className="flex h-auto flex-col gap-1 py-2"
-                disabled={busy}
-                onClick={() => void grade(btn.signal)}
-              >
-                <btn.icon className={cn('h-4 w-4', btn.className)} />
-                <span className="text-sm font-medium">{btn.label}</span>
-                <span className="text-[10px] opacity-60">{btn.hint}</span>
-              </Button>
-            ))}
-          </div>
-        )}
+        ) : currentBlock ? (
+          <GradeButtons card={currentBlock} busy={busy} onGrade={signal => void grade(signal)} />
+        ) : null}
       </div>
 
       <div className="mt-3 flex flex-wrap items-center justify-center gap-4 text-xs text-muted-foreground">
