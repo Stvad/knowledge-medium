@@ -141,9 +141,9 @@ describe('navigate', () => {
 
     await vi.waitFor(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-a', 'b-b', 'b-c'])
+      const rows = await currentPanelRows()
+      expect(await currentActivePanelId()).toBe(rows[1].id)
     })
-    const rows = await currentPanelRows()
-    expect(await currentActivePanelId()).toBe(rows[1].id)
   })
 
   it("target 'sidebar-stack' stacks above the panel to the right", async () => {
