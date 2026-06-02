@@ -24,6 +24,7 @@ import {
   SRS_SM25_TYPE,
   formatRescheduleToastMessage,
   rescheduleBlock,
+  srsArchivedProp,
   srsNextReviewDateProp,
 } from '@/plugins/srs-rescheduling'
 import { SrsSignal } from '@/plugins/srs-rescheduling/scheduler.js'
@@ -41,17 +42,18 @@ const isEditableElement = (el: HTMLElement | null): boolean => {
 
 /** Whether a block is still a live, schedulable review card — mirrors
  *  the deck's membership conditions (`buildDueCardsQuery`): it must
- *  carry the SRS type AND a non-empty next-review date. A card can lose
- *  either in another panel after the session snapshotted its id; grading
- *  it then would re-add the type and/or write a fresh date via
- *  `rescheduleBlock`, silently resurrecting a card the user just removed
- *  from review. */
+ *  carry the SRS type AND a non-empty next-review date AND not be
+ *  archived. A card can lose any of these in another panel after the
+ *  session snapshotted its id; grading it then would re-add the type
+ *  and/or write a fresh date via `rescheduleBlock`, resurrecting a card
+ *  the user just removed from review. */
 const isLiveSrsCard = (data: BlockData): boolean => {
   if (!getBlockTypes(data).includes(SRS_SM25_TYPE)) return false
-  const raw = data.properties[srsNextReviewDateProp.name]
-  if (raw === undefined) return false
   try {
-    return srsNextReviewDateProp.codec.decode(raw).length > 0
+    const archivedRaw = data.properties[srsArchivedProp.name]
+    if (archivedRaw !== undefined && srsArchivedProp.codec.decode(archivedRaw)) return false
+    const dateRaw = data.properties[srsNextReviewDateProp.name]
+    return dateRaw !== undefined && srsNextReviewDateProp.codec.decode(dateRaw).length > 0
   } catch {
     return false
   }
