@@ -33,6 +33,12 @@ import { reviewDeckStartedProp } from './schema.ts'
 import { SRS_REVIEW_CONTEXT, type SrsReviewController } from './actions.ts'
 import { SRS_REVIEW_CARD_ID, SRS_REVIEW_REVEALED } from './reviewCardLayout.tsx'
 
+const isEditableElement = (el: HTMLElement | null): boolean => {
+  if (!el) return false
+  // `isContentEditable` covers CodeMirror's focusable `.cm-content`.
+  return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable
+}
+
 /** Whether a block is still a live, schedulable review card — mirrors
  *  the deck's membership conditions (`buildDueCardsQuery`): it must
  *  carry the SRS type AND a non-empty next-review date. A card can lose
@@ -162,10 +168,16 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
 
   // Reveal/grade run through the app's shortcut system via a dedicated
   // modal `srs-review` context (see actions.ts), not a hand-rolled key
-  // handler. The session activates that context only while its surface
-  // is focused, so a deck in a background panel — or a second open deck
-  // — never grabs Space/1-4, and the dispatcher's default event filter
-  // keeps grade keys from firing while editing the revealed answer.
+  // handler. The session activates that context only while its own
+  // (non-editor) chrome is focused, so a deck in a background panel — or
+  // a second open deck — never grabs Space/1-4.
+  //
+  // We can't rely on the dispatcher's default editable-target filter to
+  // keep grade keys out of the revealed answer's CodeMirror: EDIT_MODE_CM
+  // opts editor events back in via its own eventFilter (filters OR
+  // together), and this modal context would then shadow edit-mode and
+  // eat Enter / 1-4. So we deactivate the context whenever focus lands on
+  // an editable element instead.
   const [surfaceFocused, setSurfaceFocused] = useState(false)
   const controller = useMemo<SrsReviewController>(() => ({
     reveal: () => { if (!busy) setRevealed(true) },
@@ -178,7 +190,11 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
   }], [controller, surfaceFocused, currentId])
   useActionContextActivations(shortcutActivations)
 
-  const handleSurfaceFocus = useCallback(() => setSurfaceFocused(true), [])
+  const handleSurfaceFocus = useCallback((e: ReactFocusEvent<HTMLDivElement>) => {
+    // Active only when focus is on the session chrome, not inside the
+    // answer editor — see the context note above.
+    setSurfaceFocused(!isEditableElement(e.target as HTMLElement | null))
+  }, [])
   const handleSurfaceBlur = useCallback((e: ReactFocusEvent<HTMLDivElement>) => {
     // focusout bubbles; only treat it as leaving when focus moves
     // outside the session subtree entirely.
