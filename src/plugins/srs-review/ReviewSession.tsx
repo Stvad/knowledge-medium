@@ -9,6 +9,7 @@ import {
   Gauge,
   PartyPopper,
   RotateCcw,
+  SkipForward,
   Sparkles,
 } from 'lucide-react'
 import type { Block } from '@/data/block'
@@ -389,6 +390,15 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
         >
           <ArrowLeft className="h-3.5 w-3.5" />
           Previous
+        </button>
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 hover:text-foreground disabled:opacity-50"
+          onClick={advance}
+          disabled={busy}
+        >
+          <SkipForward className="h-3.5 w-3.5" />
+          Skip
         </button>
         <button
           type="button"
