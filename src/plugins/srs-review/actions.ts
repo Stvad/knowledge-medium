@@ -35,9 +35,10 @@ export const srsReviewActionContext: ActionContextConfig<typeof SRS_REVIEW_CONTE
   displayName: 'SRS Review',
   // Modal so the single-key reveal/grade bindings only fire while a
   // focused review session has activated this context — they never
-  // shadow typing or navigation elsewhere. Editable targets are still
-  // dropped by the dispatcher's default event filter, so grading keys
-  // don't fire while editing the revealed answer.
+  // shadow typing or navigation elsewhere. The session also deactivates
+  // the context when focus is inside the revealed answer's editor (the
+  // dispatcher's default editable filter is bypassed here because
+  // EDIT_MODE_CM opts editor events back in — see ReviewSession).
   modal: true,
   defaultEventOptions: {preventDefault: true},
   validateDependencies: isSrsReviewDependencies,
