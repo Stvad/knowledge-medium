@@ -57,6 +57,13 @@ const setTestVisible = (el: HTMLElement, visible: boolean): void => {
   }
 }
 
+const addVisibilityTarget = (el: HTMLElement): HTMLElement => {
+  const target = document.createElement('div')
+  target.setAttribute('data-block-visibility-target', 'true')
+  el.appendChild(target)
+  return target
+}
+
 interface InstanceSpec {
   blockId: string
   instance: string
@@ -382,6 +389,7 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     ])
     rememberInstancePosition('p1', findInstance('p1:Y'))
     findInstance('p1:Y').remove()
+    setTestVisible(findInstance('p1:Z'), true)
     expect(findRecoveryAnchor('p1', p1Location('Y'))?.dataset.blockId).toBe('Z')
   })
 
@@ -395,6 +403,7 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     rememberInstancePosition('p1', findInstance('p1:B'))
     findInstance('p1:B').remove()
     // B was last — no next sibling — so the recovery target is A.
+    setTestVisible(findInstance('p1:A'), true)
     expect(findRecoveryAnchor('p1', p1Location('B'))?.dataset.blockId).toBe('A')
   })
 
@@ -429,6 +438,7 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     // Collapse: parent stays, every child unmounts.
     for (const c of ['c1', 'X', 'c3']) findInstance(`p1:${c}`).remove()
 
+    setTestVisible(findInstance('p1:parent'), true)
     expect(findRecoveryAnchor('p1', p1Location('X'))?.dataset.blockId).toBe('parent')
   })
 
@@ -504,6 +514,7 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     rememberInstancePosition('p1', findInstance('p1:parent'))
     findInstance('p1:parent').remove()
 
+    setTestVisible(findInstance('p1:below'), true)
     expect(findRecoveryAnchor('p1', p1Location('parent'))?.dataset.blockId).toBe('below')
   })
 
@@ -543,7 +554,64 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     rememberInstancePosition('p1', findInstance('p1:X'))
     findInstance('p1:X').remove()
 
+    setTestVisible(findInstance('p1:parent'), true)
     expect(findRecoveryAnchor('p1', p1Location('X'))?.dataset.blockId).toBe('parent')
+  })
+
+  it('does not recover from a backlink to its enclosing outline DOM ancestor', () => {
+    const panel = document.createElement('div')
+    panel.setAttribute('data-panel-id', 'p1')
+
+    const top = document.createElement('div')
+    top.setAttribute('data-block-id', 'top')
+    top.setAttribute('data-block-nav-item', 'true')
+    top.setAttribute('data-render-scope-id', 'p1:top')
+    top.setAttribute('data-block-surface', 'outline')
+    panel.appendChild(top)
+
+    const backlink = document.createElement('div')
+    backlink.setAttribute('data-block-id', 'X')
+    backlink.setAttribute('data-block-nav-item', 'true')
+    backlink.setAttribute('data-render-scope-id', 'p1:backlink:X')
+    backlink.setAttribute('data-block-surface', 'backlink')
+    top.appendChild(backlink)
+
+    document.body.appendChild(panel)
+
+    rememberInstancePosition('p1', backlink)
+    backlink.remove()
+    setTestVisible(top, true)
+
+    expect(findRecoveryAnchor('p1', {blockId: 'X', renderScopeId: 'p1:backlink:X'})).toBeNull()
+  })
+
+  it('does not treat a visible ancestor shell as recoverable when its own visibility target is off-screen', () => {
+    const panel = document.createElement('div')
+    panel.setAttribute('data-panel-id', 'p1')
+
+    const parent = document.createElement('div')
+    parent.setAttribute('data-block-id', 'parent')
+    parent.setAttribute('data-block-nav-item', 'true')
+    parent.setAttribute('data-render-scope-id', 'p1:parent')
+    parent.setAttribute('data-block-surface', 'outline')
+    const parentVisibilityTarget = addVisibilityTarget(parent)
+    panel.appendChild(parent)
+
+    const child = document.createElement('div')
+    child.setAttribute('data-block-id', 'X')
+    child.setAttribute('data-block-nav-item', 'true')
+    child.setAttribute('data-render-scope-id', 'p1:X')
+    child.setAttribute('data-block-surface', 'outline')
+    parent.appendChild(child)
+
+    document.body.appendChild(panel)
+
+    rememberInstancePosition('p1', child)
+    child.remove()
+    setTestVisible(parent, true)
+    setTestVisible(parentVisibilityTarget, false)
+
+    expect(findRecoveryAnchor('p1', p1Location('X'))).toBeNull()
   })
 
   it('falls back to positional clamp when neighbors and ancestors are all gone', () => {
@@ -571,6 +639,7 @@ describe('findRecoveryAnchor (proactive disappear-handler)', () => {
     ])
 
     // X was at idx 1; clamp(1, 0, 1) = 1 = fresh-b.
+    setTestVisible(findInstance('p1:fresh-b'), true)
     expect(findRecoveryAnchor('p1', p1Location('X'))?.dataset.blockId).toBe('fresh-b')
   })
 })
@@ -631,7 +700,7 @@ describe('findRecoveryAnchor: viewport-aware tier 4', () => {
     expect(findRecoveryAnchor('p1', p1Location('X'))?.dataset.blockId).toBe('bottom-offscreen')
   })
 
-  it('falls back to positional clamp when no instance is in the viewport', () => {
+  it('returns null when no same-surface instance is in the viewport', () => {
     buildLayout([
       {kind: 'panel', columnId: 'c1', panel: {panelId: 'p1', instances: [
         {blockId: 'before', instance: 'p1:before'},
@@ -649,9 +718,9 @@ describe('findRecoveryAnchor: viewport-aware tier 4', () => {
       ]}},
     ])
     // No element opted into visibility; default jsdom-zero rects keep
-    // them all "not visible". The fallback returns the positional
-    // clamp so we don't strand the user with null.
-    expect(findRecoveryAnchor('p1', p1Location('X'))?.dataset.blockId).toBe('fresh-b')
+    // them all "not visible". Recovery must stay quiet rather than
+    // selecting an off-screen target that would trigger scrollIntoView.
+    expect(findRecoveryAnchor('p1', p1Location('X'))).toBeNull()
   })
 })
 
@@ -679,6 +748,7 @@ describe('resolveCurrentAnchor', () => {
     // what was asked for.
     rememberInstancePosition('p1', findInstance('p1:B'))
     findInstance('p1:B').remove()
+    setTestVisible(findInstance('p1:C'), true)
 
     expect(resolveCurrentAnchor('p1', p1Location('B'))?.dataset.blockId).toBe('C')
   })

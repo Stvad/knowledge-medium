@@ -32,7 +32,7 @@ const PANEL_ACTION_BUTTON_CLASS =
 const PANEL_HISTORY_BUTTON_CLASS =
   `${PANEL_ACTION_BUTTON_CLASS} disabled:text-muted-foreground/40 disabled:hover:bg-background/60 disabled:hover:text-muted-foreground/40`
 
-function PanelMultiSelectActionContext() {
+function PanelMultiSelectActionContext({scopeRootId}: {scopeRootId: string}) {
   const [selectionState] = useSelectionState()
   const repo = useRepo()
 
@@ -42,8 +42,12 @@ function PanelMultiSelectActionContext() {
     return {
       selectedBlocks: selectionState.selectedBlockIds.map(id => repo.block(id)),
       anchorBlock: selectionState.anchorBlockId ? repo.block(selectionState.anchorBlockId) : null,
+      // Multi-select operates over the panel's outline, so its scope
+      // root is the panel's zoom root. Forwarded to per-block structural
+      // actions (indent/outdent/delete) via applyToAllBlocksInSelection.
+      scopeRootId,
     }
-  }, [selectionState, repo])
+  }, [selectionState, repo, scopeRootId])
 
   useActionContext(
     ActionContextTypes.MULTI_SELECT_MODE,
@@ -182,6 +186,7 @@ export function PanelRenderer({block}: BlockRendererProps) {
       overrides={{
         layoutBoundary: false,
         renderScopeId: outlineRenderScopeId(topLevelBlockId),
+        scopeRootId: topLevelBlockId,
       }}
     >
       <BlockComponent blockId={topLevelBlockId}/>
@@ -195,7 +200,7 @@ export function PanelRenderer({block}: BlockRendererProps) {
       className={`panel min-w-0 max-w-full flex flex-col relative ${
         stackedPanel ? 'overflow-visible' : 'h-full flex-grow overflow-hidden'
       } ${isActivePanel ? 'panel-active' : ''}`}>
-      <PanelMultiSelectActionContext/>
+      {isActivePanel && <PanelMultiSelectActionContext scopeRootId={topLevelBlockId}/>}
       {wideScrollSurface ? (
         <div className="pointer-events-none absolute inset-x-0 top-1 z-10">
           <div className="pointer-events-none mx-auto flex w-full max-w-3xl justify-end gap-0.5">

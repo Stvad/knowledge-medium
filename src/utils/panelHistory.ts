@@ -23,7 +23,6 @@ import { useSyncExternalStore } from 'react'
 import type { Block } from '@/data/block'
 import { ChangeScope } from '@/data/api'
 import {
-  focusedBlockIdProp,
   focusedBlockLocationProp,
   type FocusedBlockLocation,
   scrollTopProp,
@@ -235,7 +234,6 @@ export const navigateInPanel = async (
         blockId,
         renderScopeId: outlineRenderScopeId(blockId),
       })
-      await tx.setProperty(panelBlock.id, focusedBlockIdProp, undefined)
       await tx.setProperty(panelBlock.id, scrollTopProp, 0)
     }, {scope: ChangeScope.UiState, description: 'navigate in panel'})
   })
@@ -264,7 +262,6 @@ export const goBackInPanel = async (panelBlock: Block): Promise<boolean> => {
         blockId: dest.blockId,
         renderScopeId: outlineRenderScopeId(dest.blockId),
       })
-      await tx.setProperty(panelBlock.id, focusedBlockIdProp, undefined)
       await tx.setProperty(panelBlock.id, scrollTopProp, dest.state?.scrollTop ?? 0)
     }, {scope: ChangeScope.UiState, description: 'panel history back'})
   })
@@ -287,7 +284,6 @@ export const goForwardInPanel = async (panelBlock: Block): Promise<boolean> => {
         blockId: dest.blockId,
         renderScopeId: outlineRenderScopeId(dest.blockId),
       })
-      await tx.setProperty(panelBlock.id, focusedBlockIdProp, undefined)
       await tx.setProperty(panelBlock.id, scrollTopProp, dest.state?.scrollTop ?? 0)
     }, {scope: ChangeScope.UiState, description: 'panel history forward'})
   })

@@ -56,7 +56,8 @@ describe('convertEmptyChildBlockToProperty', () => {
       blockId: 'parent',
       initialName: '',
     })
-    expect(repo.block('child').peek()?.deleted).toBe(true)
+    expect(repo.block('child').peek()).toBeNull()
+    expect(repo.block('child').peekRaw()?.deleted).toBe(true)
   })
 
   it('does not convert a block that owns child content', async () => {

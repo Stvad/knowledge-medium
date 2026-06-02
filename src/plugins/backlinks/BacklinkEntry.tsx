@@ -98,8 +98,13 @@ const BacklinkItemContent = ({
   const bodyOverrides = useMemo(() => ({
     ...NESTED_OVERRIDES,
     renderScopeId,
+    // The shown block is the root of this entry's visible subtree, so
+    // structural edits (o / Enter / Tab) and bounded navigation treat
+    // it like a panel's top-level block instead of restructuring the
+    // real tree around it (which lives outside the entry).
+    scopeRootId: shownBlock.id,
     ...backlinkEntryShortcutContextOverrides(shortcutController),
-  }), [renderScopeId, shortcutController])
+  }), [renderScopeId, shownBlock.id, shortcutController])
 
   return (
     <>

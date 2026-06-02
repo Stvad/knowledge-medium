@@ -95,20 +95,6 @@ Apply uniformly across every name-keyed facet — the convention should be consi
 
 **Trigger to build:** plugin authors stepping on each other's schema / mutator / processor names in the wild and the warn-and-last-wins not catching it in code review. Until then, the existing convention works for the alpha-stage plugin surface and the [docs/type-system.md §1a](docs/type-system.md) schema-lift handles the most acute case (object-identity dedup for multi-type-shared schemas means the warn fires only on real conflicts).
 
-### Block facade soft-delete contract drift between `peek` / `data` / `load`
-
-`Block`'s three read surfaces disagree on what a soft-deleted (`deleted: true`) row means:
-
-- `peek()` returns the tombstone snapshot.
-- `data` (sync getter) returns the tombstone snapshot too — including `deleted: true` — and expects callers to self-filter.
-- `load()` returns `null` for soft-deleted rows (its underlying `repo.load`'s SQL filters `WHERE deleted = 0` and side-effects `markMissing` to wipe the cache entry).
-
-The cache fast-path in [block.ts:96](src/data/block.ts:96) had to special-case tombstones (fall through to SQL when `cached.deleted`) to preserve the `null`-for-soft-deleted contract that callers like [RefPropertyEditor.tsx:54](src/components/propertyEditors/RefPropertyEditor.tsx:54)'s `blockMatchesTargetTypes` rely on (`if (!data) return false` — would silently accept a soft-deleted block as a valid ref target without that branch).
-
-Coherent shape: all three surfaces return the snapshot (incl. tombstones), callers self-filter on `.deleted` for live-only views — same as today's `data` getter. Removes the inconsistency, removes the `markMissing` side-effect that wipes a cached tombstone, and removes the cache-fast-path's tombstone special case.
-
-**Trigger to build:** the next caller that gets bitten by the inconsistency, OR a refactor that makes `markMissing`'s "wipes cached snapshot" side-effect a problem (e.g. wanting to surface the tombstone to undo flows after a soft-delete-then-load sequence). Migration cost is real — every `await block.load()` site that uses `null` as "doesn't exist for me" needs to be revisited (`!data` → `!data || data.deleted`). Manageable but not zero.
-
 ### Route swipe-quick-action invocation through the dispatcher
 
 `SwipeActionMenu.handleRun` calls `action.handler({block, uiStateBlock}, trigger)` directly — bypassing `useRunAction` / `runActionById`. The rationale is mobile-pragmatic: the swipe gesture targets blocks regardless of which one (if any) is currently focused, so requiring the action's declared context to be active upfront would mean the menu couldn't expose NORMAL_MODE actions on a non-focused block. Manufacturing `{block, uiStateBlock}` deps and invoking the handler lets the same primary-row items (copy, delete, etc.) work without first promoting the swiped block into focus.

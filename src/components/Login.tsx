@@ -3,7 +3,7 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { useLocalStorage } from 'react-use'
 import { User } from '@/types.js'
-import { hasSupabaseAuthConfig, sessionUserToAppUser, supabase } from '@/services/supabase.js'
+import { hasSupabaseAuthConfig, isAuthCallbackUrl, readPersistedSession, sessionUserToAppUser, supabase } from '@/services/supabase.js'
 import { hasRemoteSyncConfig } from '@/services/powersync.js'
 import { Session } from '@supabase/supabase-js'
 
@@ -164,10 +164,34 @@ interface SupabaseLoginProps {
   onContinueLocally: () => void
 }
 
+// Seed the first render from the persisted session for an instant offline
+// paint — UNLESS the URL is an auth callback, in which case the stored
+// session may belong to a different user (account switch / shared device)
+// and per-user PowerSync DBs are keyed by user id; we wait for auth-js to
+// resolve the callback into the real session rather than briefly mounting
+// the wrong user's local data.
+const seedSession = (): Session | null =>
+  isAuthCallbackUrl() ? null : readPersistedSession()
+
 function SupabaseLogin({children, onContinueLocally}: SupabaseLoginProps) {
   const client = supabase!
-  const [session, setSession] = useState<Session | null>(null)
-  const [initializing, setInitializing] = useState(true)
+  // `onAuthStateChange` is the single source of truth for the session.
+  // auth-js emits INITIAL_SESSION once it has recovered/refreshed from
+  // storage (online, with the real session), SIGNED_IN after a magic-link /
+  // OTP / OAuth callback resolves, and SIGNED_OUT on sign-out or a
+  // genuinely-revoked refresh token. We deliberately do NOT call
+  // getSession(): when the stored access token is past its refresh margin,
+  // getSession() (and INITIAL_SESSION) try to refresh before resolving, and
+  // offline that fails and reports a null session — which would freeze
+  // startup and bounce the user to the login screen despite a usable local
+  // database. Seeding from storage lets us paint immediately; the listener
+  // upgrades the token in the background once we're back online.
+  const [session, setSession] = useState<Session | null>(seedSession)
+  // If we seeded a session we can render right away. Otherwise wait for the
+  // first auth event (also covers the auth-callback case, where we must not
+  // paint until the real session lands). Derived from the seed once via the
+  // lazy initializer so it can't diverge from `session`.
+  const [initializing, setInitializing] = useState(() => session === null)
   const [stage, setStage] = useState<Stage>('enter-email')
   const [submitting, setSubmitting] = useState(false)
   const [email, setEmail] = useState('')
@@ -178,18 +202,26 @@ function SupabaseLogin({children, onContinueLocally}: SupabaseLoginProps) {
   useEffect(() => {
     let isMounted = true
 
-    void client.auth.getSession().then(({data}) => {
+    const {data: listener} = client.auth.onAuthStateChange((event, next) => {
       if (!isMounted) return
-      setSession(data.session ?? null)
+      // The first event of any kind means auth-js has finished its
+      // storage/URL recovery — we now have a definitive answer.
       setInitializing(false)
-    })
 
-    const {data: listener} = client.auth.onAuthStateChange((_event, next) => {
-      if (!isMounted) return
-      setSession(next)
       if (next) {
+        setSession(next)
         setError(null)
         setCode('')
+        return
+      }
+      // A null session is only a real logout when it's an explicit
+      // SIGNED_OUT (sign-out, or a non-retryable refresh failure where
+      // auth-js clears storage). Offline, auth-js also emits INITIAL_SESSION
+      // with null after the refresh fails while LEAVING the session in
+      // storage — honoring that would wipe the session we seeded and bounce
+      // the user to the login screen. Keep the seeded session in that case.
+      if (event === 'SIGNED_OUT') {
+        setSession(null)
       }
     })
 

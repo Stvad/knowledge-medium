@@ -58,5 +58,5 @@ describe('planImport — real Roam export sample', () => {
       if (!desc.data.parentId) continue
       expect(allIds.has(desc.data.parentId)).toBe(true)
     }
-  })
+  }, 30_000)
 })

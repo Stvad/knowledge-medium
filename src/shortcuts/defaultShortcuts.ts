@@ -11,7 +11,11 @@ import {
 } from './types'
 import { Block } from '@/data/block'
 import { Repo } from '@/data/repo'
-import { merge as mergeMutator } from '@/data/internals/kernelMutators'
+import {
+  merge as mergeMutator,
+  setContent as setContentMutator,
+  createChild as createChildMutator,
+} from '@/data/internals/kernelMutators'
 import { ChangeScope } from '@/data/api'
 import {
   nextVisibleBlock,
@@ -23,11 +27,11 @@ import { withMoveTransition } from '@/utils/viewTransition.js'
 import {
   activePanelIdProp,
   focusBlock,
-  isCollapsedProp,
   topLevelBlockIdProp,
   editorSelection,
   setIsEditing,
 } from '@/data/properties.js'
+import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy.js'
 import { insertExampleExtensionsUnder } from '@/extensions/exampleExtensions.js'
 import { selectionStateProp } from '@/data/properties'
 import { applyToAllBlocksInSelection, makeMultiSelect } from './utils'
@@ -67,7 +71,14 @@ import {
 } from '@/utils/panelLayoutProjection.js'
 import { ensureMetricsConsoleHook } from '@/data/metricsConsoleHook.js'
 import { showProgress } from '@/utils/toast.js'
-import { downloadBlob, exportRawSqliteDb, importRawSqliteDb } from '@/utils/exportSqliteDb.js'
+import {
+  chooseRawSqliteExportFile,
+  downloadBlob,
+  exportRawSqliteDb,
+  exportRawSqliteDbToFile,
+  importRawSqliteDb,
+  rawSqliteDbExportFilename,
+} from '@/utils/exportSqliteDb.js'
 import { focusPropertyRow } from '@/utils/propertyNavigation.js'
 import { reloadInSafeMode } from '@/utils/safeMode.js'
 import { outlineRenderScopeId } from '@/utils/renderScope.js'
@@ -102,6 +113,46 @@ const splitCodeMirrorBlockAtCursor = async (
     after: afterCursor,
   })
   return block
+}
+
+/**
+ * Mid-text split when the edited block is the *scope root* (a backlink
+ * entry, embed, or zoomed panel root). `core.split` would push the
+ * before-cursor text into a preceding sibling — which lives outside the
+ * visible surface, silently burying the first half (the same class as
+ * the "invisible block" bug for `o`/`O`). Instead the root keeps the
+ * before-text and the continuation becomes its first child, mirroring
+ * the reading order (root = first half, child = the rest).
+ *
+ * Returns the new child's id.
+ */
+const splitScopeRootIntoFirstChild = async (
+  block: Block,
+  editorView: EditorView,
+): Promise<string> => {
+  const doc = editorView.state.doc
+  const cursorPos = editorView.state.selection.main.head
+  const beforeCursor = doc.sliceString(0, cursorPos)
+  const afterCursor = doc.sliceString(cursorPos)
+  const repo = block.repo
+
+  // Re-arm the editor (and its debounced pushChange) with the prefix that
+  // stays in the root, so a later flush can't clobber the SQL we write
+  // below — same precaution as splitCodeMirrorBlockAtCursor.
+  editorView.dispatch({
+    changes: {from: 0, to: doc.length, insert: beforeCursor},
+    selection: EditorSelection.cursor(beforeCursor.length),
+  })
+
+  return repo.tx(async tx => {
+    await tx.run(setContentMutator, {id: block.id, content: beforeCursor})
+    return tx.run(createChildMutator, {
+      parentId: block.id,
+      content: afterCursor,
+      position: {kind: 'first'},
+      revealParent: true,
+    })
+  }, {scope: ChangeScope.BlockDefault, description: 'split scope root into first child'})
 }
 
 export const CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID = 'create_node_in_active_panel'
@@ -406,11 +457,25 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       description: 'Download raw SQLite database (.db)',
       context: ActionContextTypes.GLOBAL,
       handler: async () => {
+        const suggestedFilename = rawSqliteDbExportFilename(repo)
+        let destination: FileSystemFileHandle | undefined
+        try {
+          destination = await chooseRawSqliteExportFile(suggestedFilename)
+        } catch (err) {
+          if (err instanceof DOMException && err.name === 'AbortError') return
+          console.warn('[export-db] save picker unavailable; falling back to browser download:', err)
+        }
+
         const banner = showProgress('Exporting SQLite database…')
         try {
-          const {blob, filename} = await exportRawSqliteDb(repo)
-          downloadBlob(blob, filename)
-          banner.done(`Exported ${filename} (${(blob.size / 1024 / 1024).toFixed(1)} MiB)`)
+          if (destination) {
+            const {filename, size} = await exportRawSqliteDbToFile(repo, destination)
+            banner.done(`Exported ${filename} (${(size / 1024 / 1024).toFixed(1)} MiB)`)
+          } else {
+            const {blob, filename, cleanup} = await exportRawSqliteDb(repo)
+            downloadBlob(blob, filename, cleanup)
+            banner.done(`Exported ${filename} (${(blob.size / 1024 / 1024).toFixed(1)} MiB)`)
+          }
         } catch (err) {
           console.error('[export-db] failed:', err)
           banner.fail(`SQLite export failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -481,7 +546,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     handler: async (deps: CodeMirrorEditModeDependencies) => {
       if (cursorIsAtStart(deps.editorView)) {
         setIsEditing(deps.uiStateBlock, false)
-        await extendSelectionUp(deps.uiStateBlock, repo)
+        await extendSelectionUp(deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen)
       }
     },
   }
@@ -490,7 +555,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     handler: async (deps: CodeMirrorEditModeDependencies) => {
       if (cursorIsAtEnd(deps.editorView)) {
         setIsEditing(deps.uiStateBlock, false)
-        await extendSelectionDown(deps.uiStateBlock, repo)
+        await extendSelectionDown(deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen)
       }
     },
   }
@@ -510,15 +575,11 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       description: 'Split block at cursor',
       context: ActionContextTypes.EDIT_MODE_CM,
       handler: async (deps: CodeMirrorEditModeDependencies) => {
-        const {block, editorView, uiStateBlock} = deps
+        const {block, editorView, uiStateBlock, scopeRootId} = deps
         if (!block || !editorView || !uiStateBlock) return
+        if (!scopeRootId) return
 
-        const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
-        if (!topLevelBlockId) return
-        await block.load()
-        const childIds = await block.childIds.load()
-        const isCollapsed = block.peekProperty(isCollapsedProp) ?? false
-        const isTopLevel = block.id === topLevelBlockId
+        const policy = await structuralEditPolicyForBlock(block, scopeRootId)
 
         const selection = editorView.state.selection.main
         const doc = editorView.state.doc
@@ -529,35 +590,45 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           if (newId) await focusBlock(uiStateBlock, newId, {edit: true, renderScopeId: deps.renderScopeId})
         }
 
-        const blockHasChildren = childIds.length > 0
-
         // Case 1: Cursor is in middle of text
         if (cursorPos < doc.length) {
-          const blockInFocus = await splitCodeMirrorBlockAtCursor(block, editorView)
-          await uiStateBlock.set(editorSelection, {
-            blockId: blockInFocus.id,
-            start: 0,
-          })
-          await focusBlock(uiStateBlock, blockInFocus.id, {edit: true, renderScopeId: deps.renderScopeId})
+          // At the scope root a normal split would bury the before-text in
+          // an invisible preceding sibling — keep it in the root and push
+          // the continuation into a new first child instead.
+          if (policy.isScopeRoot) {
+            const childId = await splitScopeRootIntoFirstChild(block, editorView)
+            await uiStateBlock.set(editorSelection, {blockId: childId, start: 0})
+            await focusBlock(uiStateBlock, childId, {edit: true, renderScopeId: deps.renderScopeId})
+          } else {
+            const blockInFocus = await splitCodeMirrorBlockAtCursor(block, editorView)
+            await uiStateBlock.set(editorSelection, {
+              blockId: blockInFocus.id,
+              start: 0,
+            })
+            await focusBlock(uiStateBlock, blockInFocus.id, {edit: true, renderScopeId: deps.renderScopeId})
+          }
         }
-        // Case 2: Cursor is at end of text and block has children
-        else if (cursorPos === doc.length &&
-          (blockHasChildren && !isCollapsed || isTopLevel)) {
+        // Case 2: Cursor at end and the new block belongs as a first
+        // child — either the block shows children, or it's the scope
+        // root (where a sibling would land outside the surface).
+        else if (cursorPos === doc.length && policy.createBelowPlacement === 'child-first') {
           const newId = await repo.mutate.createChild({
             parentId: block.id,
             position: {kind: 'first'},
+            revealParent: true,
           })
           if (newId) await focusBlock(uiStateBlock, newId, {edit: true, renderScopeId: deps.renderScopeId})
         }
         // Repeated empty blocks creation - outdents the new block.
-        // outdent returns false if the block is at the view boundary
-        // (parent === topLevelBlockId) or already at workspace root —
-        // fall back to creating a sibling below.
+        // outdent returns false if the block is at the surface boundary
+        // (parent === scopeRootId) or already at workspace root — fall
+        // back to creating a sibling below. The scope root itself can't
+        // outdent (canOutdent false), so it falls back too.
         // Unwrapped (see indent/outdent in blockActions): the
         // root-level crossfade ghosts the shifting siblings, which
         // reads as blur. The unwrapped shift is cleaner.
         else if (editorView.state.doc.length === 0) {
-          const moved = await repo.mutate.outdent({id: block.id, topLevelBlockId})
+          const moved = policy.canOutdent && await repo.mutate.outdent({id: block.id, scopeRootId})
           if (!moved) await createSiblingBelow()
         }
         // Cursor at end, no children or they are collapsed
@@ -577,11 +648,10 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       description: 'Move to previous block when cursor is at start of CodeMirror',
       context: ActionContextTypes.EDIT_MODE_CM,
       handler: async (deps: CodeMirrorEditModeDependencies, trigger: ActionTrigger) => {
-        const {block, editorView, uiStateBlock} = deps
+        const {block, editorView, uiStateBlock, scopeRootId} = deps
         if (!block || !editorView || !uiStateBlock) return
 
-        const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
-        if (!topLevelBlockId || !isOnFirstVisualLine(editorView)) return
+        if (!scopeRootId || !isOnFirstVisualLine(editorView)) return
 
         // Capture caret x and call preventDefault BEFORE the async hop. The
         // hotkeys-js handler runs during the bubble phase but the browser's
@@ -598,7 +668,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const caretX = getCaretRect(editorView)?.left
         trigger.preventDefault()
 
-        const prevVisible = await previousVisibleBlock(block, topLevelBlockId)
+        const prevVisible = await previousVisibleBlock(block, scopeRootId)
         if (!prevVisible) return
         const data = block.peek() ?? await block.load()
         if (data?.parentId === prevVisible.id && focusPropertyRow(prevVisible.id, 'last')) {
@@ -626,11 +696,10 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       description: 'Move to next block when cursor is at end of CodeMirror',
       context: ActionContextTypes.EDIT_MODE_CM,
       handler: async (deps: CodeMirrorEditModeDependencies, trigger: ActionTrigger) => {
-        const {block, editorView, uiStateBlock} = deps
+        const {block, editorView, uiStateBlock, scopeRootId} = deps
         if (!block || !editorView || !uiStateBlock) return
 
-        const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
-        if (!topLevelBlockId || !isOnLastVisualLine(editorView)) return
+        if (!scopeRootId || !isOnLastVisualLine(editorView)) return
 
         // Capture caret x and call preventDefault BEFORE the async hop —
         // see move_up_from_cm_start for the full rationale. Without this,
@@ -647,7 +716,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           return
         }
 
-        const nextVisible = await nextVisibleBlock(block, topLevelBlockId)
+        const nextVisible = await nextVisibleBlock(block, scopeRootId, deps.scopeRootForcesOpen)
         if (!nextVisible) return
 
         await uiStateBlock.set(editorSelection, {
@@ -666,18 +735,17 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       description: 'Move to previous block when cursor is at start of CodeMirror',
       context: ActionContextTypes.EDIT_MODE_CM,
       handler: async (deps: CodeMirrorEditModeDependencies, trigger: ActionTrigger) => {
-        const {block, editorView, uiStateBlock} = deps
+        const {block, editorView, uiStateBlock, scopeRootId} = deps
         if (!block || !editorView || !uiStateBlock) return
 
         const selection = editorView.state.selection.main
         if (!(selection.empty && selection.head === 0)) return
 
-        const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
-        if (!topLevelBlockId) return
+        if (!scopeRootId) return
 
         trigger.preventDefault()
 
-        const prevVisible = await previousVisibleBlock(block, topLevelBlockId)
+        const prevVisible = await previousVisibleBlock(block, scopeRootId)
         if (!prevVisible) return
 
         const prevData = await prevVisible.load()
@@ -697,18 +765,17 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       description: 'Move to next block when cursor is at end of CodeMirror',
       context: ActionContextTypes.EDIT_MODE_CM,
       handler: async (deps: CodeMirrorEditModeDependencies, trigger: ActionTrigger) => {
-        const {block, editorView, uiStateBlock} = deps
+        const {block, editorView, uiStateBlock, scopeRootId} = deps
         if (!block || !editorView || !uiStateBlock) return
 
         const selection = editorView.state.selection.main
         if (!(selection.empty && selection.head === editorView.state.doc.length)) return
 
-        const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
-        if (!topLevelBlockId) return
+        if (!scopeRootId) return
 
         trigger.preventDefault()
 
-        const nextVisible = await nextVisibleBlock(block, topLevelBlockId)
+        const nextVisible = await nextVisibleBlock(block, scopeRootId, deps.scopeRootForcesOpen)
         if (!nextVisible) return
 
         await uiStateBlock.set(editorSelection, {
@@ -727,7 +794,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       description: 'Backspace at block start: delete empty / merge into previous (CodeMirror)',
       context: ActionContextTypes.EDIT_MODE_CM,
       handler: async (deps: CodeMirrorEditModeDependencies, trigger: ActionTrigger) => {
-        const {block, editorView, uiStateBlock} = deps
+        const {block, editorView, uiStateBlock, scopeRootId} = deps
         if (!block || !uiStateBlock || !editorView) return
 
         // Only act when the cursor is at position 0 with no selection;
@@ -735,8 +802,11 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const sel = editorView.state.selection.main
         if (!(sel.empty && sel.from === 0)) return
 
-        const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
-        if (!topLevelBlockId) return
+        if (!scopeRootId) return
+
+        // Don't merge the scope root into a block outside the surface —
+        // there's no visible previous block to merge into here.
+        const {canMergeUp} = await structuralEditPolicyForBlock(block, scopeRootId)
 
         // Live content from the editor — SQL may lag (pushChange is debounced).
         const liveContent = editorView.state.doc.toString()
@@ -744,7 +814,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // Empty block: delete it and move focus up.
         if (liveContent === '') {
           trigger.preventDefault()
-          const prevVisible = await previousVisibleBlock(block, topLevelBlockId)
+          const prevVisible = await previousVisibleBlock(block, scopeRootId)
           if (prevVisible) {
             const prevData = await prevVisible.load()
             await uiStateBlock.set(editorSelection, {
@@ -760,8 +830,12 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // Non-empty block: merge into the previous visible block (Roam-style).
         // Refuse if there is none, or if the previous visible block is the
         // panel's top-level block (don't merge into the page/view header).
-        const prevVisible = await previousVisibleBlock(block, topLevelBlockId)
-        if (!prevVisible || prevVisible.id === topLevelBlockId) return
+        // Refuse to merge the scope root upward — its previous visible
+        // block lives outside the surface.
+        if (!canMergeUp) return
+
+        const prevVisible = await previousVisibleBlock(block, scopeRootId)
+        if (!prevVisible || prevVisible.id === scopeRootId) return
 
         // Roam rule: refuse when both blocks have independent children — the
         // children would have to be reconciled in a way the user didn't ask
@@ -901,7 +975,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           pasted = await pasteFromClipboard(target, repo, {
             position: 'after',
             placement: 'sibling',
-            topLevelBlockId: uiStateBlock.peekProperty(topLevelBlockIdProp),
+            scopeRootId: deps.scopeRootId,
           })
         })
         if (pasted[0]) {
@@ -927,7 +1001,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           pasted = await pasteFromClipboard(target, repo, {
             position: 'before',
             placement: 'sibling',
-            topLevelBlockId: uiStateBlock.peekProperty(topLevelBlockIdProp),
+            scopeRootId: deps.scopeRootId,
           })
         })
         if (pasted[0]) {

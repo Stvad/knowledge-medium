@@ -8,7 +8,7 @@ import type { Block } from '@/data/block'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import {
-  focusedBlockIdProp,
+  activePanelIdProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
 import { BlockContextProvider } from '@/context/block'
@@ -19,7 +19,6 @@ import { BlockComponent } from '@/components/BlockComponent.js'
 import { useActionContext } from '@/shortcuts/useActionContext'
 import { ActionContextTypes } from '@/shortcuts/types'
 import { panelHistory } from '@/utils/panelHistory'
-import { outlineRenderScopeId } from '@/utils/renderScope'
 
 const repoRef = vi.hoisted(() => ({
   current: undefined as Repo | undefined,
@@ -101,22 +100,32 @@ const setup = async (): Promise<Harness> => {
   repo.setActiveWorkspaceId(WS)
   const runtime = resolveFacetRuntimeSync([])
 
-  await repo.tx(async tx => {
-    await tx.create({
-      id: 'page-a',
-      workspaceId: WS,
-      parentId: null,
-      orderKey: 'a0',
-      content: 'Page A',
-    })
-    await tx.create({
-      id: 'panel-a',
-      workspaceId: WS,
-      parentId: null,
-      orderKey: 'a1',
-      content: 'Panel A',
-      properties: {
-        [topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('page-a'),
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'layout-session',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        content: 'Layout session',
+        properties: {
+          [activePanelIdProp.name]: activePanelIdProp.codec.encode('panel-a'),
+        },
+      })
+      await tx.create({
+        id: 'page-a',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a1',
+        content: 'Page A',
+      })
+      await tx.create({
+        id: 'panel-a',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a2',
+        content: 'Panel A',
+        properties: {
+          [topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('page-a'),
       },
     })
   }, {scope: ChangeScope.BlockDefault, description: 'create panel renderer fixture'})
@@ -155,6 +164,24 @@ describe('PanelRenderer', () => {
         </BlockContextProvider>
       </AppRuntimeContextProvider>,
     )
+
+  const renderPanelInLayoutSession = async (activePanelId: string) => {
+    await env.repo.block('layout-session').set(activePanelIdProp, activePanelId)
+
+    return render(
+      <AppRuntimeContextProvider value={env.runtime}>
+        <BlockContextProvider
+          initialValue={{
+            layoutBoundary: true,
+            layoutSessionBlockId: 'layout-session',
+            panelId: env.panel.id,
+          }}
+        >
+          <PanelRenderer block={env.panel}/>
+        </BlockContextProvider>
+      </AppRuntimeContextProvider>,
+    )
+  }
 
   it('constrains content inside a wide scroll surface', async () => {
     renderPanel(true)
@@ -202,14 +229,26 @@ describe('PanelRenderer', () => {
     )
   })
 
-  it('captures legacy focused block ids as scoped locations for history snapshots', async () => {
-    await env.panel.set(focusedBlockIdProp, 'legacy-child')
+  it('does not activate multi-select shortcuts for an inactive panel selection', async () => {
+    selectionStore.set({selectedBlockIds: ['page-a'], anchorBlockId: 'page-a'})
+    await renderPanelInLayoutSession('panel-b')
+    await screen.findByTestId('panel-top-level-block')
+
+    expect(vi.mocked(useActionContext).mock.calls.length).toBe(0)
+  })
+
+  it('ignores retired focused block ids for history snapshots', async () => {
+    await env.repo.tx(async tx => {
+      await tx.update(env.panel.id, {
+        properties: {
+          [topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('page-a'),
+          focusedBlockId: 'legacy-child',
+        },
+      })
+    }, {scope: ChangeScope.UiState, description: 'seed retired focusedBlockId'})
     renderPanel(false)
     await screen.findByTestId('panel-top-level-block')
 
-    expect(panelHistory.snapshot(env.panel.id)?.focusedLocation).toEqual({
-      blockId: 'legacy-child',
-      renderScopeId: outlineRenderScopeId('page-a'),
-    })
+    expect(panelHistory.snapshot(env.panel.id)?.focusedLocation).toBeUndefined()
   })
 })

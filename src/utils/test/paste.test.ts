@@ -6,9 +6,11 @@ import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { isCollapsedProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
 import {
+  pasteChordIntent,
   pasteEditModeMultilineText,
   pasteMultilineText,
   planEditModeMultilinePaste,
+  planSingleBlockPaste,
 } from '@/utils/paste'
 
 const WS = 'ws-1'
@@ -67,7 +69,7 @@ describe('pasteMultilineText', () => {
       '- Alpha\n  - Detail\n- Beta',
       env.repo.block('empty'),
       env.repo,
-      {topLevelBlockId: 'root'},
+      {scopeRootId: 'root'},
     )
 
     expect(pasted[0]?.id).toBe('empty')
@@ -86,11 +88,26 @@ describe('pasteMultilineText', () => {
       'Pasted\nSecond',
       env.repo.block('parent'),
       env.repo,
-      {topLevelBlockId: 'root'},
+      {scopeRootId: 'root'},
     )
 
     expect(await childContents('parent')).toEqual(['Pasted', 'Second', 'Old child'])
     expect(await childContents('root')).toEqual(['Parent', 'Sibling'])
+  })
+
+  it('reveals a collapsed scope-root target when pasting as its children', async () => {
+    // Pasting onto a nested scope root (scopeRootId === target.id) inserts
+    // the roots as its children; if it's collapsed they'd be hidden, so the
+    // paste must reveal it (same invariant as create-child / move).
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('sr', 'Scope root', 'root', 'a0')
+    await createBlock('existing', 'Existing', 'sr', 'a0')
+    await env.repo.mutate.setProperty({id: 'sr', schema: isCollapsedProp, value: true})
+
+    await pasteMultilineText('Alpha\nBeta', env.repo.block('sr'), env.repo, {scopeRootId: 'sr'})
+
+    expect(env.repo.block('sr').peek()?.properties[isCollapsedProp.name]).toBe(false)
+    expect(await childContents('sr')).toEqual(['Alpha', 'Beta', 'Existing'])
   })
 
   it('pastes after a collapsed target as a visible sibling', async () => {
@@ -104,7 +121,7 @@ describe('pasteMultilineText', () => {
       'Pasted',
       env.repo.block('parent'),
       env.repo,
-      {topLevelBlockId: 'root'},
+      {scopeRootId: 'root'},
     )
 
     expect(await childContents('root')).toEqual(['Parent', 'Pasted', 'Sibling'])
@@ -120,7 +137,7 @@ describe('pasteMultilineText', () => {
       'Pasted',
       env.repo.block('page'),
       env.repo,
-      {topLevelBlockId: 'page'},
+      {scopeRootId: 'page'},
     )
 
     expect(await childContents('workspace-root')).toEqual(['Page'])
@@ -135,7 +152,7 @@ describe('pasteMultilineText', () => {
       'Pasted',
       env.repo.block('root'),
       env.repo,
-      {topLevelBlockId: 'root'},
+      {scopeRootId: 'root'},
     )
 
     expect(await childContents('root')).toEqual(['Pasted', 'Existing'])
@@ -151,7 +168,7 @@ describe('pasteMultilineText', () => {
       'Pasted',
       env.repo.block('parent'),
       env.repo,
-      {placement: 'sibling', topLevelBlockId: 'root'},
+      {placement: 'sibling', scopeRootId: 'root'},
     )
 
     expect(await childContents('root')).toEqual(['Parent', 'Pasted', 'Sibling'])
@@ -175,7 +192,7 @@ describe('pasteEditModeMultilineText', () => {
       plan!,
       env.repo.block('target'),
       env.repo,
-      {topLevelBlockId: 'root'},
+      {scopeRootId: 'root'},
     )
 
     expect(env.repo.block('target').peek()?.content).toBe('hello alpha')
@@ -198,7 +215,7 @@ describe('pasteEditModeMultilineText', () => {
       plan!,
       env.repo.block('target'),
       env.repo,
-      {topLevelBlockId: 'root'},
+      {scopeRootId: 'root'},
     )
 
     expect(env.repo.block('target').peek()?.content).toBe('prefix Parent')
@@ -221,10 +238,46 @@ describe('pasteEditModeMultilineText', () => {
       plan!,
       env.repo.block('page'),
       env.repo,
-      {topLevelBlockId: 'page'},
+      {scopeRootId: 'page'},
     )
 
     expect(await childContents('workspace-root')).toEqual(['Page title'])
     expect(await childContents('page')).toEqual(['child', 'Existing'])
+  })
+})
+
+describe('pasteChordIntent', () => {
+  const key = (over: Partial<KeyboardEvent>): Parameters<typeof pasteChordIntent>[0] => ({
+    metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, key: 'v', ...over,
+  })
+
+  it('classifies Cmd/Ctrl+V as a split paste', () => {
+    expect(pasteChordIntent(key({metaKey: true}))).toBe('split')
+    expect(pasteChordIntent(key({ctrlKey: true}))).toBe('split')
+  })
+
+  it('classifies Cmd/Ctrl+Shift+V as a single-block paste', () => {
+    // Browsers report the key as 'V' when Shift is held.
+    expect(pasteChordIntent(key({metaKey: true, shiftKey: true, key: 'V'}))).toBe('single-block')
+    expect(pasteChordIntent(key({ctrlKey: true, shiftKey: true, key: 'v'}))).toBe('single-block')
+  })
+
+  it('ignores non-paste keys and AltGr/Option pastes', () => {
+    expect(pasteChordIntent(key({metaKey: true, key: 'c'}))).toBeNull()
+    expect(pasteChordIntent(key({key: 'v'}))).toBeNull()
+    expect(pasteChordIntent(key({metaKey: true, altKey: true}))).toBeNull()
+  })
+})
+
+describe('planSingleBlockPaste', () => {
+  it('replaces the selected range and places the cursor after the insert', () => {
+    const plan = planSingleBlockPaste('AAA', {from: 0, to: 5})
+    expect(plan).toEqual({insert: 'AAA', from: 0, to: 5, cursor: 3})
+  })
+
+  it('normalizes CRLF/CR to LF so the cursor stays inside the document', () => {
+    const plan = planSingleBlockPaste('one\r\ntwo\rthree', {from: 2, to: 2})
+    expect(plan.insert).toBe('one\ntwo\nthree')
+    expect(plan.cursor).toBe(2 + 'one\ntwo\nthree'.length)
   })
 })

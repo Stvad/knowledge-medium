@@ -147,7 +147,7 @@ describe('Block.subscribe() — Handle contract', () => {
     off()
   })
 
-  it('returns null after the row is deleted (cache evicts/tombstones)', async () => {
+  it('returns null after the row is deleted (public facade normalizes tombstones)', async () => {
     await seed('b1', 'x')
     const b = env.repo.block('b1')
     await b.load()
@@ -155,10 +155,9 @@ describe('Block.subscribe() — Handle contract', () => {
     b.subscribe((v) => fired.push(v?.content ?? null))
 
     await env.repo.mutate.delete({id: 'b1'})
-    // After delete, snapshot is a tombstone (deleted=true) — Block sees
-    // it as a non-null BlockData with deleted=true. The exact shape
-    // post-delete is governed by the cache; the contract for subscribe
-    // is just "fires when something changes."
-    await vi.waitFor(() => expect(fired.length).toBeGreaterThan(0))
+    // The raw cache keeps the tombstone, but Block is the live-row
+    // facade and therefore notifies subscribers with null.
+    expect(b.peekRaw()?.deleted).toBe(true)
+    await vi.waitFor(() => expect(fired).toEqual([null]))
   })
 })

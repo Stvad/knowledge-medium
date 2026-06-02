@@ -3,7 +3,6 @@ import type { Block } from '../../../data/block'
 import {
   editorFocusRequestProp,
   editorSelection,
-  focusedBlockIdProp,
   focusedBlockLocationProp,
   isEditingProp,
 } from '@/data/properties.js'
@@ -83,7 +82,6 @@ describe('video notes view', () => {
       blockId: 'note-1',
       renderScopeId: 'embed:source:video-1:0',
     })
-    expect(setUiProperty).toHaveBeenCalledWith(focusedBlockIdProp, undefined)
     expect(setUiProperty).toHaveBeenCalledWith(editorSelection, {
       blockId: 'note-1',
       start: 0,

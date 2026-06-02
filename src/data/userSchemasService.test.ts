@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createElement, type JSX } from 'react'
 import { resolveFacetRuntimeSync } from '@/extensions/facet'
 import { ChangeScope, codecs, definePreset, defineProperty, type AnyValuePreset } from '@/data/api'
@@ -15,6 +15,7 @@ import type { UserSchemasService } from './userSchemasService'
 import { Repo } from './repo'
 
 const WS = 'ws-user-schemas'
+const SUBSCRIPTION_TIMEOUT_MS = 3_000
 
 interface Harness {
   h: TestDb
@@ -55,6 +56,56 @@ afterEach(async () => {
   env.dispose()
   await env.h.cleanup()
 })
+
+const waitForPropertySchemasChange = async <T,>(action: () => Promise<T>): Promise<T> => {
+  let dispose = (): void => {}
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let settled = false
+  const settle = (cb: () => void) => {
+    if (settled) return
+    settled = true
+    if (timer !== null) clearTimeout(timer)
+    dispose()
+    cb()
+  }
+  const changed = new Promise<void>((resolve, reject) => {
+    dispose = env.repo.onPropertySchemasChange(() => settle(resolve))
+    timer = setTimeout(
+      () => settle(() => reject(new Error('timed out waiting for property schema rebuild'))),
+      SUBSCRIPTION_TIMEOUT_MS,
+    )
+  })
+  try {
+    const result = await action()
+    await changed
+    return result
+  } catch (error) {
+    settle(() => {})
+    throw error
+  }
+}
+
+const createExternalSchemaBlock = async (
+  name: string,
+  presetId = 'string',
+  config: unknown = {},
+): Promise<string> => {
+  const propertiesPageId = env.repo.propertiesPageId!
+  const id = await env.repo.mutate.createChild({parentId: propertiesPageId})
+  await waitForPropertySchemasChange(async () => {
+    await env.repo.tx(async tx => {
+      await tx.update(id, {
+        properties: {
+          types: ['property-schema'],
+          'property-schema:name': name,
+          'property-schema:preset': presetId,
+          'property-schema:config': config,
+        },
+      })
+    }, {scope: ChangeScope.BlockDefault})
+  })
+  return id
+}
 
 describe('UserSchemasService.addSchema', () => {
   it('persists a property-schema block AND registers the schema synchronously', async () => {
@@ -98,39 +149,15 @@ describe('UserSchemasService subscription', () => {
   it('rebuilds the contribution list when a schema block is created externally', async () => {
     env = await setup()
     // Add the schema block directly through a tx (simulates a sync arrival).
-    const propertiesPageId = env.repo.propertiesPageId!
-    const id = await env.repo.mutate.createChild({parentId: propertiesPageId})
-    await env.repo.tx(async tx => {
-      await tx.update(id, {
-        properties: {
-          types: ['property-schema'],
-          'property-schema:name': 'tags',
-          'property-schema:preset': 'string',
-          'property-schema:config': {},
-        },
-      })
-    }, {scope: ChangeScope.BlockDefault})
-
-    // Subscription is async — wait briefly for it to fire.
-    await new Promise(resolve => setTimeout(resolve, 50))
-    expect(env.repo.propertySchemas.get('tags')?.codec.type).toBe('string')
+    await createExternalSchemaBlock('tags')
+    await vi.waitFor(() => {
+      expect(env.repo.propertySchemas.get('tags')?.codec.type).toBe('string')
+    }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
   })
 
   it('skips schemas with unknown preset ids and re-resolves when the preset shows up later', async () => {
     env = await setup()
-    const propertiesPageId = env.repo.propertiesPageId!
-    const id = await env.repo.mutate.createChild({parentId: propertiesPageId})
-    await env.repo.tx(async tx => {
-      await tx.update(id, {
-        properties: {
-          types: ['property-schema'],
-          'property-schema:name': 'priority',
-          'property-schema:preset': 'priority-preset',
-          'property-schema:config': {},
-        },
-      })
-    }, {scope: ChangeScope.BlockDefault})
-    await new Promise(resolve => setTimeout(resolve, 50))
+    await createExternalSchemaBlock('priority', 'priority-preset')
     expect(env.repo.propertySchemas.get('priority')).toBeUndefined()
 
     // Plugin loads and contributes the missing preset → schema resolves on the
@@ -187,19 +214,7 @@ describe('UserSchemasService.getSchemaForBlockId', () => {
 
   it('returns the registered schema after an external schema-block creation (subscription rebuild)', async () => {
     env = await setup()
-    const propertiesPageId = env.repo.propertiesPageId!
-    const id = await env.repo.mutate.createChild({parentId: propertiesPageId})
-    await env.repo.tx(async tx => {
-      await tx.update(id, {
-        properties: {
-          types: ['property-schema'],
-          'property-schema:name': 'tags',
-          'property-schema:preset': 'string',
-          'property-schema:config': {},
-        },
-      })
-    }, {scope: ChangeScope.BlockDefault})
-    await new Promise(resolve => setTimeout(resolve, 50))
+    const id = await createExternalSchemaBlock('tags')
 
     const resolved = env.service.getSchemaForBlockId(id)
     expect(resolved?.name).toBe('tags')
@@ -213,27 +228,16 @@ describe('UserSchemasService.getSchemaForBlockId', () => {
 
   it('drops the reverse-map entry when a block stops resolving to a schema', async () => {
     env = await setup()
-    const propertiesPageId = env.repo.propertiesPageId!
-    const id = await env.repo.mutate.createChild({parentId: propertiesPageId})
-    await env.repo.tx(async tx => {
-      await tx.update(id, {
-        properties: {
-          types: ['property-schema'],
-          'property-schema:name': 'tags',
-          'property-schema:preset': 'string',
-          'property-schema:config': {},
-        },
-      })
-    }, {scope: ChangeScope.BlockDefault})
-    await new Promise(resolve => setTimeout(resolve, 50))
+    const id = await createExternalSchemaBlock('tags')
     expect(env.service.getSchemaForBlockId(id)?.name).toBe('tags')
 
     // Blank the name — tryBuildSchema will now drop the block on the
     // next rebuild tick.
-    await env.repo.tx(async tx => {
-      await tx.setProperty(id, propertyNameProp, '')
-    }, {scope: ChangeScope.BlockDefault})
-    await new Promise(resolve => setTimeout(resolve, 50))
+    await waitForPropertySchemasChange(async () => {
+      await env.repo.tx(async tx => {
+        await tx.setProperty(id, propertyNameProp, '')
+      }, {scope: ChangeScope.BlockDefault})
+    })
 
     expect(env.service.getSchemaForBlockId(id)).toBeUndefined()
   })

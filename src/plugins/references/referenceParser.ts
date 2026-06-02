@@ -276,3 +276,29 @@ export const rewriteWikilinks = (
   }
   return cursor === 0 ? content : result + content.slice(cursor)
 }
+
+/** Replace block-ref ids in `((id))`, `!((id))`, and `[label](((id)))`
+ *  forms while preserving embed-ness and display labels. */
+export const rewriteBlockRefs = (
+  content: string,
+  fromId: string,
+  toId: string,
+): string => {
+  const normalizedFrom = fromId.toLowerCase()
+  const marks = parseBlockRefs(content)
+  if (marks.length === 0) return content
+  let result = ''
+  let cursor = 0
+  for (const mark of marks) {
+    if (mark.startIndex < cursor) continue
+    if (mark.blockId !== normalizedFrom) continue
+    result += content.slice(cursor, mark.startIndex)
+    if (mark.label !== undefined) {
+      result += renderAliasedBlockref(mark.label, toId)
+    } else {
+      result += mark.embed ? `!((${toId}))` : `((${toId}))`
+    }
+    cursor = mark.endIndex
+  }
+  return cursor === 0 ? content : result + content.slice(cursor)
+}

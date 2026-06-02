@@ -836,6 +836,31 @@ describe('invalidation', () => {
     }
   })
 
+  it('byType: soft-delete removes a matching row and restore re-adds it', async () => {
+    await create({id: 'a', type: 'note'})
+    const handle = env.repo.query.byType({workspaceId: WS, type: 'note'})
+    expect(asBlocks(await handle.load()).map(b => b.id)).toEqual(['a'])
+
+    const fired: string[][] = []
+    const unsub = handle.subscribe((value) => { fired.push(asBlocks(value).map(b => b.id)) })
+    try {
+      await env.repo.tx(tx => tx.delete('a'), {scope: ChangeScope.BlockDefault})
+      await vi.waitFor(() => {
+        expect(asBlocks(handle.peek()).map(b => b.id)).toEqual([])
+      })
+      expect(env.repo.block('a').peek()).toBeNull()
+
+      await env.repo.tx(tx => tx.restore('a'), {scope: ChangeScope.BlockDefault})
+      await vi.waitFor(() => {
+        expect(asBlocks(handle.peek()).map(b => b.id)).toEqual(['a'])
+      })
+      expect(fired).toContainEqual([])
+      expect(fired).toContainEqual(['a'])
+    } finally {
+      unsub()
+    }
+  })
+
   it('typedBlocks (where): a property change on a non-matching block invalidates', async () => {
     // `renderer` is a kernel-registered, where-queryable property —
     // pick it so we don't have to wire setFacetRuntime here.

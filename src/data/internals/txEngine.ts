@@ -32,6 +32,8 @@ import type {
   Mutator,
   NewBlockData,
   PropertySchema,
+  SameTxEmittedEvent,
+  SameTxEventPayload,
   SiblingAnchor,
   SiblingDirection,
   Tx,
@@ -141,6 +143,9 @@ export interface TxImplContext {
    *  `repo.mutate.X` / `repo.run`. JSON-serialized into
    *  `command_events.mutator_calls` at commit time. */
   mutatorCalls: MutatorCallRecord[]
+  /** Mutable list of same-tx domain events emitted by tx primitives /
+   *  mutators. Same-tx event processors consume this list before commit. */
+  sameTxEvents: SameTxEmittedEvent[]
   /** Now provider — injected for testability (deterministic timestamps). */
   now: () => number
   /** Mutator registry snapshot (taken at tx start). For stage 1.3 the
@@ -573,6 +578,11 @@ export class TxImpl implements Tx {
       args: validatedArgs,
       delayMs: options?.delayMs,
     })
+  }
+
+  emitEvent<P extends string>(name: P, payload: SameTxEventPayload<P>): void {
+    if (!this.workspacePinned) throw new WorkspaceNotPinnedError()
+    this.ctx.sameTxEvents.push({name, payload})
   }
 
   // ──── Engine-internal raw row applier (UndoManager only) ────

@@ -20,4 +20,5 @@ export const aliasPlugin: AppExtension = systemToggle({
 }).of([aliasDataExtension])
 
 export { aliasDataExtension } from './dataExtension.ts'
+export { ALIAS_COLLISION_MERGE_MUTATOR, aliasCollisionMerge } from './collisionMerge.ts'
 export { ALIAS_SYNC_PROCESSOR, aliasSyncProcessor } from './syncProcessor.ts'

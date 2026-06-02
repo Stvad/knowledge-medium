@@ -33,7 +33,12 @@ interface AliasCollisionMeta {
   conflictingBlockTitle: string
   workspaceId: string
   attemptedOn: string
+  dropSourceAliases?: string[]
+  collisionOrigin?: string
 }
+
+const isStringArray = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every(item => typeof item === 'string')
 
 const isAliasCollisionMeta = (meta: unknown): meta is AliasCollisionMeta =>
   meta !== null
@@ -43,6 +48,14 @@ const isAliasCollisionMeta = (meta: unknown): meta is AliasCollisionMeta =>
   && typeof (meta as AliasCollisionMeta).conflictingBlockTitle === 'string'
   && typeof (meta as AliasCollisionMeta).workspaceId === 'string'
   && typeof (meta as AliasCollisionMeta).attemptedOn === 'string'
+  && (
+    (meta as AliasCollisionMeta).dropSourceAliases === undefined
+    || isStringArray((meta as AliasCollisionMeta).dropSourceAliases)
+  )
+  && (
+    (meta as AliasCollisionMeta).collisionOrigin === undefined
+    || typeof (meta as AliasCollisionMeta).collisionOrigin === 'string'
+  )
 
 const truncate = (s: string, n: number): string =>
   s.length <= n ? s : `${s.slice(0, n - 1)}…`
@@ -58,7 +71,14 @@ export const surfaceProcessorRejectionFor = (repo: Repo) =>
           showError(error.message)
           return
         }
-        const {alias, attemptedOn, conflictingBlockId, conflictingBlockTitle, workspaceId} = error.meta
+        const {
+          alias,
+          attemptedOn,
+          conflictingBlockId,
+          conflictingBlockTitle,
+          workspaceId,
+          dropSourceAliases,
+        } = error.meta
         // Blank-title fallback: a block can legitimately claim an
         // alias with empty content, in which case the title would be
         // useless in the toast — fall back to showing the alias text.
@@ -75,6 +95,7 @@ export const surfaceProcessorRejectionFor = (repo: Repo) =>
             conflictingBlockId,
             conflictingBlockTitle,
             workspaceId,
+            dropSourceAliases,
             repo,
           }),
           {duration: 12000},

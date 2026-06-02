@@ -347,14 +347,19 @@ export const SwipeActionMenu = () => {
     if (!action) return false
 
     const block = repo.block(blockId)
-    const deps = {block, uiStateBlock, ...(renderScopeId ? {renderScopeId} : {})}
+    // Swipe runs actions imperatively (outside a block's React context),
+    // so scopeRootId isn't injected by useShortcutSurfaceActivations.
+    // The menu is panel-scoped and operates on the main outline, so the
+    // panel's top-level block is the scope root — the same value the
+    // structural handlers need (delete/indent/move).
+    const deps = {block, uiStateBlock, scopeRootId: topLevelBlockId, ...(renderScopeId ? {renderScopeId} : {})}
     if (action.canRun && !action.canRun(deps)) return false
 
     void Promise.resolve(action.handler(deps, trigger)).catch(error => {
       console.error(`[swipe-quick-actions] Action "${actionId}" failed`, error)
     })
     return true
-  }, [allActions, repo, uiStateBlock])
+  }, [allActions, repo, uiStateBlock, topLevelBlockId])
   const actionItems = runtime.read(quickActionItemsFacet)
   // Filter via the referenced action's `canRun` (the swipe surface is
   // presentational — semantic availability lives on the action). The
@@ -369,7 +374,7 @@ export const SwipeActionMenu = () => {
     if (!blockId) return actionItems
     const block = repo.block(blockId)
     if (!block.peek()) return actionItems
-    const deps = {block, uiStateBlock, ...(renderScopeId ? {renderScopeId} : {})}
+    const deps = {block, uiStateBlock, scopeRootId: topLevelBlockId, ...(renderScopeId ? {renderScopeId} : {})}
     return actionItems.filter(item => {
       const action = allActions.find(a => a.id === item.actionId)
       if (!action) return true
@@ -380,7 +385,7 @@ export const SwipeActionMenu = () => {
     actionItems, allActions,
     activeBlockId, activeRenderScopeId,
     previewBlockId, previewRenderScopeId,
-    repo, uiStateBlock,
+    repo, uiStateBlock, topLevelBlockId,
   ])
   const [primaryRows, overflowItems] = useMemo(() => {
     const rows = new Map<number, QuickActionItem[]>()

@@ -8,7 +8,7 @@ import { Repo } from '@/data/repo'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import {
   focusedBlockLocationProp,
-  peekFocusedBlockId,
+  peekFocusedBlockLocation,
 } from '@/data/properties'
 import { PanelFocusRecovery } from '../PanelFocusRecovery.tsx'
 import { __resetSpatialNavigationForTesting } from '../walker.ts'
@@ -49,11 +49,25 @@ const buildPanelDom = (
   return panel
 }
 
+const visibleRect = () =>
+  ({
+    top: 50,
+    bottom: 1050,
+    left: 0,
+    right: 100,
+    width: 100,
+    height: 1000,
+    x: 0,
+    y: 50,
+    toJSON: () => ({}),
+  }) as DOMRect
+
 const setNavAttrs = (el: HTMLElement, blockId: string, renderScopeId = `i-${blockId}`): void => {
   el.setAttribute('data-block-nav-item', 'true')
   el.setAttribute('data-block-id', blockId)
   el.setAttribute('data-render-scope-id', renderScopeId)
   el.setAttribute('data-block-surface', 'outline')
+  el.getBoundingClientRect = visibleRect
 }
 
 const focusedLocation = (blockId: string, renderScopeId = `i-${blockId}`) => ({
@@ -106,7 +120,7 @@ describe('PanelFocusRecovery', () => {
     render(<PanelFocusRecovery block={panelBlock}/>)
 
     // Sanity: focus is already on 'middle' and the instance is present.
-    expect(peekFocusedBlockId(panelBlock)).toBe('middle')
+    expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe('middle')
 
     // Simulate a backlink edited out so the entry no longer matches.
     panel.querySelector('[data-block-id="middle"]')!.remove()
@@ -114,7 +128,7 @@ describe('PanelFocusRecovery', () => {
     // Watchdog walks the sibling map — `last` was previously below
     // `middle`, so focus lands there.
     await waitFor(() => {
-      expect(peekFocusedBlockId(panelBlock)).toBe('last')
+      expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe('last')
     })
   })
 
@@ -135,7 +149,7 @@ describe('PanelFocusRecovery', () => {
     panel.querySelector('[data-block-id="first"]')!.remove()
 
     await waitFor(() => {
-      expect(peekFocusedBlockId(panelBlock)).toBe('middle')
+      expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe('middle')
     })
   })
 
@@ -171,7 +185,7 @@ describe('PanelFocusRecovery', () => {
     }
 
     await waitFor(() => {
-      expect(peekFocusedBlockId(panelBlock)).toBe('parent')
+      expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe('parent')
     })
   })
 
@@ -192,7 +206,7 @@ describe('PanelFocusRecovery', () => {
     // to settle.
     await new Promise(resolve => setTimeout(resolve, 350))
 
-    expect(peekFocusedBlockId(panelBlock)).toBe('never-mounted')
+    expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe('never-mounted')
   })
 
   it("deleting a parent block lands focus on the same-depth next sibling, not on the parent's first child or the previous block", async () => {
@@ -244,7 +258,7 @@ describe('PanelFocusRecovery', () => {
     panel.querySelector('[data-block-id="parent"]')!.remove()
 
     await waitFor(() => {
-      expect(peekFocusedBlockId(panelBlock)).toBe('below')
+      expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe('below')
     })
   })
 
@@ -288,7 +302,7 @@ describe('PanelFocusRecovery', () => {
     panel.querySelector('[data-block-id="X"]')!.remove()
 
     await waitFor(() => {
-      expect(peekFocusedBlockId(panelBlock)).toBe('parent')
+      expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe('parent')
     })
   })
 
@@ -301,7 +315,7 @@ describe('PanelFocusRecovery', () => {
 
     const panelBlock = env.repo.block(PANEL_ID)
     render(<PanelFocusRecovery block={panelBlock}/>)
-    expect(peekFocusedBlockId(panelBlock)).toBe('middle')
+    expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe('middle')
 
     // Simulate a tab move: the block briefly unmounts and remounts
     // under the same render scope well inside the debounce window.
@@ -315,7 +329,7 @@ describe('PanelFocusRecovery', () => {
     // Wait past the debounce window and verify no recovery write fired.
     await new Promise(resolve => setTimeout(resolve, 350))
 
-    expect(peekFocusedBlockId(panelBlock)).toBe('middle')
+    expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe('middle')
   })
 
   it('refreshes the positional hint as the user navigates between blocks', async () => {
@@ -338,7 +352,7 @@ describe('PanelFocusRecovery', () => {
     })
 
     await waitFor(() => {
-      expect(peekFocusedBlockId(panelBlock)).toBe('middle')
+      expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe('middle')
     })
   })
 })

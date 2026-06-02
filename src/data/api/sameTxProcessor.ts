@@ -9,14 +9,16 @@
  *
  * What same-tx is for: cheap, correctness-critical, single-row work
  * that must commit atomically with the originating tx — e.g.
- * reference-array normalization (currently inline in `txEngine.ts`)
- * and alias sync (content↔aliases reconciliation + alias-collision
- * rejection). Latency added here is paid by the user-commit path, so
- * it has to stay cheap.
+ * reference-array normalization and alias sync (content↔aliases
+ * reconciliation + alias-collision rejection). Latency added here is
+ * paid by the user-commit path, so it has to stay cheap.
  *
- * What same-tx is NOT for: expensive enrichment (parseReferences),
- * cross-row writes (rename rewriting backlinks across many sources),
- * delayed cleanup. Those stay post-commit per §7.1.
+ * What same-tx is NOT for: hot-path expensive enrichment
+ * (parseReferences), typing-time cross-row writes (rename rewriting
+ * backlinks across many sources), delayed cleanup. Those stay
+ * post-commit per §7.1. Rare correctness-critical domain events
+ * (e.g. merge retargeting) may still use same-tx when atomicity is
+ * worth the extra commit cost.
  *
  * Capabilities of `apply`:
  *   - Reads via `ctx.tx` — sees the live staged state of the user's
@@ -50,23 +52,51 @@ import type { ChangedRow } from './processor'
 import type { Tx } from './tx'
 import type { User } from './user'
 
-/** Plugin-augmentable registry for same-tx processor names → typed
- *  metadata. Mirrors `PostCommitProcessorRegistry` for parity even
- *  though same-tx has no `scheduledArgs` channel today. */
+/** Plugin-augmentable registry for same-tx domain event names → typed
+ *  payloads. Event emitters augment this from the module that owns the
+ *  event; processors consume the typed payload via `tx.emitEvent`.
+ *  Dynamic plugins can still emit unknown events and rely on runtime
+ *  validation inside their processors. */
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export interface SameTxProcessorRegistry { /* augmented per processor */ }
+export interface SameTxEventRegistry { /* augmented per event */ }
+
+export type SameTxEventPayload<P extends string> =
+  P extends keyof SameTxEventRegistry
+    ? SameTxEventRegistry[P]
+    : unknown
+
+export interface SameTxEmittedEvent<Name extends string = string, Payload = unknown> {
+  name: Name
+  payload: Payload
+}
+
+/** Read-only SQL surface available to same-tx processors inside the
+ *  active writeTransaction. This is intentionally narrow: plugins can
+ *  read their own local indexes with read-your-own-writes semantics, but
+ *  writes still go through `ctx.tx` so snapshots, row_events, undo, and
+ *  metadata stay coherent. */
+export interface SameTxReadDb {
+  getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
+  getAll<T>(sql: string, params?: unknown[]): Promise<T[]>
+  get<T>(sql: string, params?: unknown[]): Promise<T>
+}
 
 export type SameTxProcessor = {
   readonly name: string
-  /** Same-tx processors only support `kind: 'field'` (there is no
-   *  explicit / afterCommit channel — that's a post-commit-only
-   *  concept since the user fn can't schedule into its own
-   *  pre-commit phase). */
-  readonly watches: {
-    kind: 'field'
-    table: 'blocks'
-    fields: ReadonlyArray<keyof BlockData>
-  }
+  /** Same-tx processors can either watch block field changes or watch
+   *  explicit domain events emitted by a tx. Event watches are not
+   *  durable post-commit jobs; they run in the same pre-commit pass and
+   *  roll back with the originating tx. */
+  readonly watches:
+    | {
+        kind: 'field'
+        table: 'blocks'
+        fields: ReadonlyArray<keyof BlockData>
+      }
+    | {
+        kind: 'event'
+        events: ReadonlyArray<string>
+      }
   readonly apply: (event: SameTxEvent, ctx: SameTxCtx) => Promise<void>
 }
 
@@ -83,6 +113,9 @@ export interface SameTxEvent {
    *  staged value at the moment this processor fires (includes
    *  amendments by earlier same-tx processors in this pass). */
   changedRows: ChangedRow[]
+  /** Tx-emitted domain events matching this processor's event watch.
+   *  Empty for field-watch processors. */
+  emittedEvents: SameTxEmittedEvent[]
 }
 
 export interface SameTxCtx {
@@ -90,6 +123,9 @@ export interface SameTxCtx {
    *  state; writes amend the same tx. Throws here roll back the
    *  whole user tx via SQLite's `writeTransaction` abort. */
   tx: Tx
+  /** Read-only active-transaction SQL surface. Use this for plugin-owned
+   *  projection tables that must be queried atomically with tx writes. */
+  db: SameTxReadDb
   /** Merged property-schema registry snapshotted at tx start. */
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>
 }

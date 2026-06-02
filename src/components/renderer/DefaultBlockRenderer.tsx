@@ -363,12 +363,14 @@ export function DefaultBlockRenderer(
   // selection toggles, so facet resolvers and the components they
   // produce keep stable identity. This is what stops UpdateIndicator
   // (and any other content decorator) from remounting on every click.
+  const scopeRootId = blockContext.scopeRootId
   const resolveContext = useMemo<BlockResolveContext>(() => ({
     block,
     repo,
     uiStateBlock,
     types,
     topLevelBlockId,
+    scopeRootId,
     isTopLevel,
     blockContext,
     contentRenderers: [
@@ -387,6 +389,7 @@ export function DefaultBlockRenderer(
     uiStateBlock,
     types,
     topLevelBlockId,
+    scopeRootId,
     isTopLevel,
     blockContext,
     DefaultContentRenderer,
@@ -463,13 +466,13 @@ export function DefaultBlockRenderer(
       const pastedText = e.clipboardData.getData('text/plain')
 
       const pasted = await pasteMultilineText(pastedText, block, repo, {
-        topLevelBlockId,
+        scopeRootId,
       })
       if (pasted[0]) {
         void focusBlock(uiStateBlock, pasted[0].id, {renderScopeId})
       }
     },
-    [block, blockContext.renderScopeId, repo, topLevelBlockId, uiStateBlock],
+    [block, blockContext.renderScopeId, repo, scopeRootId, uiStateBlock],
   )
 
   // Content slot: the content surface div + its surface props + the
@@ -487,6 +490,7 @@ export function DefaultBlockRenderer(
       return (
         <div
           {...contentSurfaceProps}
+          data-block-visibility-target="true"
           className={`block-content${topLevelClass}${contentSurfaceProps.className ? ` ${contentSurfaceProps.className}` : ''}`}
           ref={contentContainerRef}
         >
@@ -548,7 +552,7 @@ export function DefaultBlockRenderer(
             <BlockBullet block={block}/>
           </div>
           {isMobile && hasChildren && (
-            <div className="absolute right-0 top-0 z-10">
+            <div className="absolute right-0 top-0 z-10 flex h-6 items-center">
               <ExpandButton block={block}/>
             </div>
           )}

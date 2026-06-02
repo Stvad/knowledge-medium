@@ -46,19 +46,13 @@ export const topLevelBlockIdProp = defineProperty<string | undefined>('topLevelB
   changeScope: ChangeScope.UiState,
 })
 
-// Legacy persisted focus shape. Kept only so older ui-state rows can be
-// decoded into `focusedBlockLocationProp`; production writes clear it.
-export const focusedBlockIdProp = defineProperty<string | undefined>('focusedBlockId', {
-  codec: codecs.optionalString,
-  defaultValue: undefined,
-  changeScope: ChangeScope.UiState,
-})
-
 export interface FocusedBlockLocation {
   blockId: string
   renderScopeId: string
 }
 
+// Focus is persisted as a rendered location. Retired legacy `focusedBlockId`
+// keys are ignored so stale state cannot compete with this scoped value.
 export const focusedBlockLocationProp = defineProperty<FocusedBlockLocation | undefined>('focusedBlockLocation', {
   codec: codecs.optionalIdentity<FocusedBlockLocation>(),
   defaultValue: undefined,
@@ -225,6 +219,19 @@ export const blockTypePropertiesProp = defineProperty<readonly string[]>('block-
   changeScope: ChangeScope.BlockDefault,
 })
 
+// ──── user page kernel fields ────
+
+/** Opaque user id (the value stored in `created_by` / `updated_by`) on a
+ *  `'user'` user-page block. Gives the page a structured, queryable link
+ *  between the id and the display name (the block's content) alongside
+ *  the human-friendly alias — so attribution surfaces can resolve either
+ *  direction without parsing aliases. */
+export const userIdProp = defineProperty<string>('user:id', {
+  codec: codecs.string,
+  defaultValue: '',
+  changeScope: ChangeScope.BlockDefault,
+})
+
 /** Re-export of the canonical alias schema (defined under
  *  `@/data/internals/coreProperties.ts` so the kernel parseReferences
  *  processor can reference it without circling back through this
@@ -296,28 +303,11 @@ export const focusedBlockLocationFromProperties = (
   properties: Record<string, unknown> | undefined,
 ): FocusedBlockLocation | undefined => {
   if (!properties) return undefined
-
-  const location = decodeFocusedBlockLocation(properties[focusedBlockLocationProp.name])
-  if (location) return location
-
-  const legacyBlockId = properties[focusedBlockIdProp.name]
-  if (typeof legacyBlockId !== 'string' || !legacyBlockId) return undefined
-  const topLevelBlockId = properties[topLevelBlockIdProp.name]
-  return {
-    blockId: legacyBlockId,
-    renderScopeId: outlineRenderScopeId(
-      typeof topLevelBlockId === 'string' && topLevelBlockId
-        ? topLevelBlockId
-        : legacyBlockId,
-    ),
-  }
+  return decodeFocusedBlockLocation(properties[focusedBlockLocationProp.name])
 }
 
 export const peekFocusedBlockLocation = (uiStateBlock: Block): FocusedBlockLocation | undefined =>
   focusedBlockLocationFromProperties(uiStateBlock.peek()?.properties)
-
-export const peekFocusedBlockId = (uiStateBlock: Block): string | undefined =>
-  peekFocusedBlockLocation(uiStateBlock)?.blockId
 
 export const isFocusedBlock = (
   uiStateBlock: Block,
@@ -329,11 +319,11 @@ export const isFocusedBlock = (
   return renderScopeId ? location.renderScopeId === renderScopeId : true
 }
 
-const sameFocusedBlockLocation = (
+export const sameFocusedBlockLocation = (
   a: FocusedBlockLocation | undefined,
-  b: FocusedBlockLocation,
+  b: FocusedBlockLocation | undefined,
 ): boolean =>
-  a?.blockId === b.blockId && a.renderScopeId === b.renderScopeId
+  Boolean(a && b && a.blockId === b.blockId && a.renderScopeId === b.renderScopeId)
 
 const isEditingFromProperties = (
   properties: Record<string, unknown> | undefined,
@@ -379,7 +369,6 @@ export const focusBlock = async (
       isEditingFromProperties(current?.properties)
 
     await tx.setProperty(uiStateBlock.id, focusedBlockLocationProp, location)
-    await tx.setProperty(uiStateBlock.id, focusedBlockIdProp, undefined)
     await tx.setProperty(uiStateBlock.id, isEditingProp, preserveCurrentEditMode || targetEdit)
   }, {scope: ChangeScope.UiState, description: 'focus block'})
 }
@@ -410,7 +399,6 @@ export const KERNEL_PROPERTY_SCHEMAS: ReadonlyArray<PropertySchema<unknown>> = [
   isEditingProp,
   topLevelBlockIdProp,
   focusedBlockLocationProp,
-  focusedBlockIdProp,
   activePanelIdProp,
   scrollTopProp,
   editorSelection,
@@ -435,4 +423,6 @@ export const KERNEL_PROPERTY_SCHEMAS: ReadonlyArray<PropertySchema<unknown>> = [
   blockTypeLabelProp,
   blockTypeDescriptionProp,
   blockTypePropertiesProp,
+  // user page fields
+  userIdProp,
 ] as ReadonlyArray<PropertySchema<unknown>>

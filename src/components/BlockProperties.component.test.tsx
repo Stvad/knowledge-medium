@@ -51,11 +51,19 @@ vi.mock('@/data/globalState.ts', () => ({
     if (!uiStateBlockRef.current) throw new Error('test UI state block not initialised')
     return uiStateBlockRef.current
   },
+  // Attribution name resolution is exercised in globalState's own tests;
+  // here it's identity (and reports no page) so the metadata row stays
+  // deterministic and renders as plain text.
+  useUserPage: (userId: string) => ({name: userId}),
 }))
 
 vi.mock('@/utils/navigation.ts', () => ({
   useNavigate: () => (input: unknown) => {
     navigateCallsRef.current.push(input)
+  },
+  // MetadataRow's "Changed by" link uses this; record opens like navigate.
+  useOpenBlock: ({blockId}: {blockId: string}) => () => {
+    navigateCallsRef.current.push({blockId})
   },
 }))
 

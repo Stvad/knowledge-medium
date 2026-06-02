@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Repo } from '@/data/repo'
 import type { Block } from '@/data/block'
 import {
-  focusedBlockIdProp,
   focusedBlockLocationProp,
   scrollTopProp,
   topLevelBlockIdProp,
@@ -76,7 +75,6 @@ describe('navigate explicit panel', () => {
           property: focusedBlockLocationProp.name,
           value: {blockId: 'next-block', renderScopeId: 'outline:next-block'},
         },
-        {blockId: 'panel-a', property: focusedBlockIdProp.name, value: undefined},
         {blockId: 'panel-a', property: scrollTopProp.name, value: 0},
       ])
     })

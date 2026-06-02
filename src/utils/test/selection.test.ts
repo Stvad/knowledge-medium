@@ -4,7 +4,12 @@ import { ChangeScope, type User } from '@/data/api'
 import { isCollapsedProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
-import { blockAfterSubtreeRemoval, getLastVisibleDescendant } from '@/utils/selection.js'
+import {
+  blockAfterSubtreeRemoval,
+  blockIdsInOrderedSelectionRange,
+  findBestSelectionAnchorIndex,
+  getLastVisibleDescendant,
+} from '@/utils/selection.js'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1'}
@@ -48,6 +53,44 @@ const seedOutline = async (
     }
   }, {scope: ChangeScope.UiState})
 }
+
+describe('ordered selection ranges', () => {
+  const locations = [
+    {blockId: 'A', renderScopeId: 'outline:A'},
+    {blockId: 'X', renderScopeId: 'backlink:1:X'},
+    {blockId: 'X', renderScopeId: 'backlink:2:X'},
+    {blockId: 'B', renderScopeId: 'outline:B'},
+  ]
+
+  it('returns unique block ids in rendered range order', () => {
+    expect(blockIdsInOrderedSelectionRange(locations, 0, 3)).toEqual(['A', 'X', 'B'])
+    expect(blockIdsInOrderedSelectionRange(locations, 3, 1)).toEqual(['X', 'B'])
+  })
+
+  it('uses the focused rendered location to disambiguate duplicate anchor blocks', () => {
+    expect(findBestSelectionAnchorIndex(locations, {
+      anchorBlockId: 'X',
+      targetIndex: 3,
+      currentLocation: {blockId: 'X', renderScopeId: 'backlink:2:X'},
+    })).toBe(2)
+  })
+
+  it('falls back to the duplicate anchor that best preserves the current selection', () => {
+    const spacedLocations = [
+      {blockId: 'A', renderScopeId: 'outline:A'},
+      {blockId: 'X', renderScopeId: 'backlink:1:X'},
+      {blockId: 'C', renderScopeId: 'outline:C'},
+      {blockId: 'X', renderScopeId: 'backlink:2:X'},
+      {blockId: 'B', renderScopeId: 'outline:B'},
+    ]
+
+    expect(findBestSelectionAnchorIndex(spacedLocations, {
+      anchorBlockId: 'X',
+      targetIndex: 4,
+      selectedBlockIds: ['X', 'B'],
+    })).toBe(3)
+  })
+})
 
 describe('blockAfterSubtreeRemoval', () => {
   it('returns the next data-sibling when one exists', async () => {
@@ -150,6 +193,20 @@ describe('getLastVisibleDescendant', () => {
     await env.repo.mutate.setProperty({id: 'top', schema: isCollapsedProp, value: true})
     const result = await getLastVisibleDescendant(env.repo.block('top'), 'top')
     expect(result.id).toBe('b')
+  })
+
+  it('honors a collapsed scope root when the surface does NOT force it open', async () => {
+    // A nested scope root (backlink/embed) renders its collapse flag, so
+    // navigation must not descend into its hidden children — returns the
+    // root itself rather than a child that isn't rendered.
+    await seedOutline(env.repo, [
+      {id: 'top', parentId: null, orderKey: 'a'},
+      {id: 'a', parentId: 'top', orderKey: 'b'},
+      {id: 'b', parentId: 'top', orderKey: 'c'},
+    ])
+    await env.repo.mutate.setProperty({id: 'top', schema: isCollapsedProp, value: true})
+    const result = await getLastVisibleDescendant(env.repo.block('top'), 'top', false)
+    expect(result.id).toBe('top')
   })
 
   it('still honors the collapsed flag on entry when the id does not match topLevelBlockId', async () => {

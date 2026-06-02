@@ -14,7 +14,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope, ParentDeletedError, codecs, defineProperty, type BlockData } from '@/data/api'
+import {
+  CORE_BLOCK_MERGED_EVENT,
+  ChangeScope,
+  ParentDeletedError,
+  codecs,
+  defineProperty,
+  type BlockData,
+  type CoreBlockMergedEvent,
+} from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '../repo'
@@ -221,6 +229,20 @@ describe('core.createChild', () => {
     await seedABC()
     const id = await env.repo.mutate.createChild({parentId: 'root', id: 'X', content: 'after-A', position: {kind: 'after', siblingId: 'A'}})
     expect(await env.childIds('root')).toEqual(['A', id, 'B', 'C'])
+  })
+
+  it('reveals a collapsed parent when revealParent is set', async () => {
+    await seedABC()
+    await env.repo.mutate.setProperty({id: 'A', schema: isCollapsedProp, value: true})
+    await env.repo.mutate.createChild({parentId: 'A', id: 'A1', revealParent: true})
+    expect(env.read('A')!.properties[isCollapsedProp.name]).toBe(false)
+  })
+
+  it('leaves a collapsed parent collapsed without revealParent', async () => {
+    await seedABC()
+    await env.repo.mutate.setProperty({id: 'A', schema: isCollapsedProp, value: true})
+    await env.repo.mutate.createChild({parentId: 'A', id: 'A1'})
+    expect(env.read('A')!.properties[isCollapsedProp.name]).toBe(true)
   })
 
   it('respects position={kind:"before", siblingId}', async () => {
@@ -559,25 +581,159 @@ describe('core.outdent', () => {
     expect(env.read('r')!.parentId).toBeNull()
   })
 
-  it('refuses to outdent past topLevelBlockId — direct child stays put', async () => {
+  it('refuses to outdent past scopeRootId — direct child stays put', async () => {
     // Without the boundary, A1 (a direct child of A) would normally
-    // outdent to root. Passing topLevelBlockId=A keeps A1 inside.
+    // outdent to root. Passing scopeRootId=A keeps A1 inside.
     await seedABC()
     await env.repo.mutate.createChild({parentId: 'A', id: 'A1'})
-    const moved = await env.repo.mutate.outdent({id: 'A1', topLevelBlockId: 'A'})
+    const moved = await env.repo.mutate.outdent({id: 'A1', scopeRootId: 'A'})
     expect(moved).toBe(false)
     expect(env.read('A1')!.parentId).toBe('A')
   })
 
-  it('still outdents a deeper descendant when topLevelBlockId is set', async () => {
-    // A → A1 → A1a; passing topLevelBlockId=A allows outdent of A1a
-    // (since its parent A1 ≠ topLevelBlockId).
+  it('still outdents a deeper descendant when scopeRootId is set', async () => {
+    // A → A1 → A1a; passing scopeRootId=A allows outdent of A1a
+    // (since its parent A1 ≠ scopeRootId).
     await seedABC()
     await env.repo.mutate.createChild({parentId: 'A', id: 'A1'})
     await env.repo.mutate.createChild({parentId: 'A1', id: 'A1a'})
-    const moved = await env.repo.mutate.outdent({id: 'A1a', topLevelBlockId: 'A'})
+    const moved = await env.repo.mutate.outdent({id: 'A1a', scopeRootId: 'A'})
     expect(moved).toBe(true)
     expect(env.read('A1a')!.parentId).toBe('A')
+  })
+})
+
+// ──── moveVertical ────
+
+describe('core.moveVertical', () => {
+  // Shapes the user-facing example:
+  //   a / b      (a with child b)
+  //   c / d      (c with child d)
+  const seedTwoSubtrees = async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'a'})
+    await env.repo.mutate.createChild({parentId: 'a', id: 'b'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'c'})
+    await env.repo.mutate.createChild({parentId: 'c', id: 'd'})
+  }
+
+  it('swaps with the previous sibling (same parent) when one exists', async () => {
+    await seedABC()
+    const moved = await env.repo.mutate.moveVertical({id: 'B', direction: -1})
+    expect(moved).toBe(true)
+    expect(await env.childIds('root')).toEqual(['B', 'A', 'C'])
+  })
+
+  it('swaps with the next sibling (same parent) when one exists', async () => {
+    await seedABC()
+    const moved = await env.repo.mutate.moveVertical({id: 'B', direction: 1})
+    expect(moved).toBe(true)
+    expect(await env.childIds('root')).toEqual(['A', 'C', 'B'])
+  })
+
+  it('moves a first child up into the previous sibling subtree at the same depth', async () => {
+    // a/b/c, d/e → move e up → e becomes a's last child (depth 1, like
+    // it was under d); b keeps its own child c; d is emptied.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'a'})
+    await env.repo.mutate.createChild({parentId: 'a', id: 'b'})
+    await env.repo.mutate.createChild({parentId: 'b', id: 'c'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'd'})
+    await env.repo.mutate.createChild({parentId: 'd', id: 'e'})
+
+    const moved = await env.repo.mutate.moveVertical({id: 'e', direction: -1, scopeRootId: 'root'})
+    expect(moved).toBe(true)
+    expect(env.read('e')!.parentId).toBe('a')
+    expect(await env.childIds('a')).toEqual(['b', 'e'])
+    expect(await env.childIds('b')).toEqual(['c'])
+    expect(await env.childIds('d')).toEqual([])
+  })
+
+  it('moves a last child down into the next sibling subtree (cross-parent)', async () => {
+    // a/b, c/d → move b down → b becomes c's first child, a emptied.
+    await seedTwoSubtrees()
+    const moved = await env.repo.mutate.moveVertical({id: 'b', direction: 1, scopeRootId: 'root'})
+    expect(moved).toBe(true)
+    expect(env.read('b')!.parentId).toBe('c')
+    expect(await env.childIds('c')).toEqual(['b', 'd'])
+    expect(await env.childIds('a')).toEqual([])
+  })
+
+  it('is a no-op when the parent is itself the first child (would need to outdent)', async () => {
+    // root: P/(s); moving s up has no same-depth slot above it without
+    // outdenting, so moveVertical leaves it put (indentation invariant).
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'P'})
+    await env.repo.mutate.createChild({parentId: 'P', id: 's'})
+    const moved = await env.repo.mutate.moveVertical({id: 's', direction: -1})
+    expect(moved).toBe(false)
+    expect(env.read('s')!.parentId).toBe('P')
+    expect(await env.childIds('root')).toEqual(['P'])
+  })
+
+  it('descends into AND expands a collapsed previous-sibling subtree (up)', async () => {
+    // a (collapsed), c/d → move d up → d becomes a's last child and a is
+    // revealed (like indenting under a collapsed bullet), so d stays
+    // visible at the same depth.
+    await seedTwoSubtrees()
+    await env.repo.mutate.setProperty({id: 'a', schema: isCollapsedProp, value: true})
+    const moved = await env.repo.mutate.moveVertical({id: 'd', direction: -1, scopeRootId: 'root'})
+    expect(moved).toBe(true)
+    expect(env.read('d')!.parentId).toBe('a')
+    expect(await env.childIds('a')).toEqual(['b', 'd'])
+    expect(env.read('a')!.properties[isCollapsedProp.name]).toBe(false)
+  })
+
+  it('descends into AND expands a collapsed next-sibling subtree (down)', async () => {
+    // a/b, c (collapsed) → move b down → b becomes c's first child and c
+    // is revealed.
+    await seedTwoSubtrees()
+    await env.repo.mutate.setProperty({id: 'c', schema: isCollapsedProp, value: true})
+    const moved = await env.repo.mutate.moveVertical({id: 'b', direction: 1, scopeRootId: 'root'})
+    expect(moved).toBe(true)
+    expect(env.read('b')!.parentId).toBe('c')
+    expect(await env.childIds('c')).toEqual(['b', 'd'])
+    expect(env.read('c')!.properties[isCollapsedProp.name]).toBe(false)
+  })
+
+  it('does not move the scope root itself', async () => {
+    await seedTwoSubtrees()
+    const moved = await env.repo.mutate.moveVertical({id: 'a', direction: 1, scopeRootId: 'a'})
+    expect(moved).toBe(false)
+    expect(await env.childIds('root')).toEqual(['a', 'c'])
+  })
+
+  it('does not cross a first direct child of the scope root out of scope', async () => {
+    // scopeRootId=root-like 'a': 'b' is a's only child; moving it up
+    // would escape 'a', so it no-ops.
+    await seedTwoSubtrees()
+    const moved = await env.repo.mutate.moveVertical({id: 'b', direction: -1, scopeRootId: 'a'})
+    expect(moved).toBe(false)
+    expect(env.read('b')!.parentId).toBe('a')
+  })
+
+  it('without a scopeRootId, the sibling-list edge is a no-op (no unbounded cross-parent)', async () => {
+    // a/b, c/d → move d up with NO scope (e.g. a bridge run-action). d is
+    // c's first child, so a cross-parent move would need a visible
+    // boundary; without one it stays put rather than reparenting.
+    await seedTwoSubtrees()
+    const moved = await env.repo.mutate.moveVertical({id: 'd', direction: -1})
+    expect(moved).toBe(false)
+    expect(env.read('d')!.parentId).toBe('c')
+  })
+
+  it('still swaps same-parent siblings without a scopeRootId', async () => {
+    // Same-parent reorder doesn't need a scope boundary.
+    await seedABC()
+    const moved = await env.repo.mutate.moveVertical({id: 'B', direction: -1})
+    expect(moved).toBe(true)
+    expect(await env.childIds('root')).toEqual(['B', 'A', 'C'])
   })
 })
 
@@ -680,6 +836,36 @@ describe('core.merge', () => {
       expect(env.read(id)!.parentId).toBe('a')
       expect(env.read(id)!.deleted).toBe(false)
     }
+  })
+
+  it('emits a same-tx block-merged event after applying core merge effects', async () => {
+    const events: CoreBlockMergedEvent[] = []
+    env.repo.__setSameTxProcessorsForTesting([
+      {
+        name: 'test.mergeObserver',
+        watches: {kind: 'event', events: [CORE_BLOCK_MERGED_EVENT]},
+        apply: async (event) => {
+          events.push(...event.emittedEvents.map(e => e.payload as CoreBlockMergedEvent))
+        },
+      },
+    ])
+
+    await env.repo.tx(
+      tx => tx.create({id: 'p', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await env.repo.mutate.createChild({parentId: 'p', id: 'a', content: 'A'})
+    await env.repo.mutate.createChild({parentId: 'p', id: 'b', content: 'B'})
+    await env.repo.mutate.merge({intoId: 'a', fromId: 'b', contentStrategy: 'keepTarget'})
+
+    expect(events).toEqual([{
+      workspaceId: 'ws-1',
+      fromId: 'b',
+      intoId: 'a',
+      aliasRewrites: [],
+    }])
+    expect(env.read('a')!.content).toBe('A')
+    expect(env.read('b')!.deleted).toBe(true)
   })
 
   describe('contentStrategy', () => {

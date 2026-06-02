@@ -9,7 +9,7 @@ import {
   activePanelIdProp,
   editorSelection,
   isEditingProp,
-  peekFocusedBlockId,
+  peekFocusedBlockLocation,
   topLevelBlockIdProp,
 } from '@/data/properties'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -128,7 +128,7 @@ describe('dailyNotesActions', () => {
     await layoutSession.load()
 
     expect(env.repo.block(newPanel!.id).peekProperty(topLevelBlockIdProp)).toBe(newBlockId)
-    expect(peekFocusedBlockId(env.repo.block(newPanel!.id))).toBe(newBlockId)
+    expect(peekFocusedBlockLocation(env.repo.block(newPanel!.id))?.blockId).toBe(newBlockId)
     expect(env.repo.block(newPanel!.id).peekProperty(editorSelection)).toEqual({
       blockId: newBlockId,
       start: 0,

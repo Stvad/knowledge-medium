@@ -33,12 +33,12 @@ export interface SyncInvalidationTarget {
 }
 
 /** The cache surface the observer writes through. */
-export type SyncCache = Pick<BlockCache, 'applyIfNewer' | 'deleteSnapshot'>
+export type SyncCache = Pick<BlockCache, 'applyIfNewer' | 'markMissing'>
 
 /**
  * Reflect a materialization pass's `snapshots` into the cache and notify
  * handles. Updates each row's cache snapshot (`applyIfNewer('sync')` for an
- * apply, `deleteSnapshot` for a removal) and, for the rows the cache accepted,
+ * apply, `markMissing` for a removal) and, for the rows the cache accepted,
  * emits one `ChangeNotification` (rowIds / parentIds / workspaceIds / plugin).
  *
  * Returns the notification that was dispatched, or null if every row was
@@ -52,9 +52,16 @@ export const applySyncInvalidation = (
 ): ChangeNotification | null => {
   const accepted = new Map<string, ChangeSnapshot>()
   for (const [id, snap] of snapshots) {
+    // Removal branch: mark the id confirmed-missing rather than merely
+    // evicting its snapshot. A lean childIds handle can cache membership
+    // without ever hydrating the row into BlockCache, so a sync-applied
+    // hard-delete must still count as accepted on the first missing
+    // transition (markMissing returns true even with no prior snapshot) and
+    // invalidate its parent-edge deps. Mirrors the fast path's post-commit
+    // cache walk (commitPipeline step 6) and the retired tail's delete branch.
     const changed = snap.after
       ? cache.applyIfNewer(snap.after, 'sync')
-      : cache.deleteSnapshot(id)
+      : cache.markMissing(id)
     if (changed) accepted.set(id, snap)
   }
   if (accepted.size === 0) return null

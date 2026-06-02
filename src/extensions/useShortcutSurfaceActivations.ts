@@ -68,6 +68,18 @@ export function useShortcutSurfaceActivations(
   const inEditMode = useInEditMode(block.id)
   const isSelected = useIsSelected(block.id)
 
+  // Root of this surface's visible subtree — declared by every surface
+  // that mounts a block (panel/top-level = its rendered root, backlink
+  // entry = shown block, embed = embedded block, breadcrumb = segment).
+  // This, not topLevelBlockId, is the boundary structural and navigation
+  // handlers operate against.
+  const scopeRootId = blockContext.scopeRootId
+  // Focal panel/top-level surfaces force-open their scope root; nested
+  // surfaces (backlink/embed) honour its collapse flag. Navigation uses
+  // this so it won't descend into a collapsed nested root's hidden
+  // children.
+  const scopeRootForcesOpen = !blockContext.isNestedSurface
+
   const runtime = useAppRuntime()
   const resolveShortcutActivations = runtime.read(shortcutSurfaceActivationsFacet)
 
@@ -78,6 +90,7 @@ export function useShortcutSurfaceActivations(
       uiStateBlock,
       types,
       topLevelBlockId,
+      scopeRootId,
       isTopLevel: block.id === topLevelBlockId && !blockContext.isNestedSurface,
       blockContext,
       inFocus,
@@ -85,13 +98,22 @@ export function useShortcutSurfaceActivations(
       isSelected,
       ...options,
       surface,
-    }),
+    // Inject the surface scope root into every activation's
+    // dependencies so handlers receive it uniformly, without each
+    // activation contribution (vim, codemirror, backlinks, plugins)
+    // having to forward it by hand.
+    }).map(activation => ({
+      ...activation,
+      dependencies: {...(activation.dependencies ?? {}), scopeRootId, scopeRootForcesOpen},
+    })),
     [
       block,
       repo,
       uiStateBlock,
       types,
       topLevelBlockId,
+      scopeRootId,
+      scopeRootForcesOpen,
       blockContext,
       inFocus,
       inEditMode,

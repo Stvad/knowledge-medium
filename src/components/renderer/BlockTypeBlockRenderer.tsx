@@ -52,7 +52,6 @@ const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererProps) =>
       id: d.id,
       content: d.content,
       properties: d.properties,
-      deleted: d.deleted,
     } : undefined,
   })
   const readOnly = block.repo.isReadOnly
@@ -188,7 +187,7 @@ const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererProps) =>
     await block.repo.mutate.delete({id: block.id})
   }, [block])
 
-  if (!data || data.deleted) return null
+  if (!data) return null
 
   return (
     <div className="w-full space-y-2 py-1">

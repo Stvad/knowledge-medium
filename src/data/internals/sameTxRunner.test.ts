@@ -125,6 +125,56 @@ describe('Same-tx runner — field-watching dispatch', () => {
   })
 })
 
+describe('Same-tx runner — event dispatch', () => {
+  it('fires event watchers inside the active tx with read-your-own-writes DB access', async () => {
+    const seenPayloads: unknown[] = []
+    const watcher: AnySameTxProcessor = {
+      name: 'test.eventWatcher',
+      watches: {kind: 'event', events: ['test.blockTouched']},
+      apply: async (event, ctx) => {
+        seenPayloads.push(...event.emittedEvents.map(e => e.payload))
+        const row = await ctx.db.get<{content: string}>(
+          'SELECT content FROM blocks WHERE id = ?',
+          ['a'],
+        )
+        await ctx.tx.update('a', {content: `${row.content} event`}, {skipMetadata: true})
+      },
+    }
+    env.repo.__setSameTxProcessorsForTesting([watcher])
+
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'a', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'start'})
+      tx.emitEvent('test.blockTouched', {id: 'a'})
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(seenPayloads).toEqual([{id: 'a'}])
+    const row = await env.h.db.get<{content: string}>(
+      'SELECT content FROM blocks WHERE id = ?',
+      ['a'],
+    )
+    expect(row.content).toBe('start event')
+  })
+
+  it('does not fire event watchers when their event was not emitted', async () => {
+    const log: FireLog = {events: []}
+    const watcher: AnySameTxProcessor = {
+      name: 'test.eventWatcher',
+      watches: {kind: 'event', events: ['test.missing']},
+      apply: async () => {
+        log.events.push({name: 'test.eventWatcher', ids: [], afterContents: []})
+      },
+    }
+    env.repo.__setSameTxProcessorsForTesting([watcher])
+
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'a', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'start'})
+      tx.emitEvent('test.other', {id: 'a'})
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(log.events).toHaveLength(0)
+  })
+})
+
 describe('Same-tx runner — amend semantics', () => {
   it('processor amendments are visible to later processors in the same pass', async () => {
     const log: FireLog = {events: []}

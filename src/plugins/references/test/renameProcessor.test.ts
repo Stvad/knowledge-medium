@@ -74,8 +74,11 @@ afterEach(async () => {
 const WS = 'ws-1'
 
 const flush = async () => {
-  await vi.advanceTimersByTimeAsync(1)
-  await env.repo.awaitProcessors()
+  for (let i = 0; i < 3; i++) {
+    await vi.advanceTimersByTimeAsync(1)
+    await env.repo.awaitProcessors()
+    await Promise.resolve()
+  }
 }
 
 const seedTarget = async (

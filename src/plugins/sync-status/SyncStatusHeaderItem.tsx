@@ -7,7 +7,7 @@ import {
   HardDrive,
   RefreshCw,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useIsLocalOnly } from '@/components/Login.js'
 import { Button } from '@/components/ui/button.js'
 import {
@@ -21,11 +21,73 @@ import {
   type SyncIndicatorIcon,
   type SyncIndicatorTone,
 } from './model.ts'
+import {
+  formatPendingChanges,
+  uploadQueueCountCap,
+  uploadQueueExactCountSql,
+  uploadQueuePreviewCountSql,
+} from './queueCounts.ts'
 import { RejectionDialog } from './RejectionDialog.tsx'
 
 interface UploadQueueCountRow {
   count: number
 }
+
+const uploadQueuePreviewThrottleMs = 1_000
+const rejectedCountSql = 'SELECT COUNT(*) AS count FROM ps_crud_rejected'
+
+// Network sync errors are noisy: a dropped connection or a token refresh
+// caught mid-flight surfaces an error for a second or two before PowerSync
+// recovers on its own. Only treat a network error as worth showing once it
+// has persisted continuously for this long; clear it immediately when it
+// resolves. (Offline is handled separately — see `SyncStatusHeaderContent`.)
+const networkErrorGraceMs = 5_000
+
+// Debounce the *appearance* of an error: surface `message` only after it has
+// stayed non-null for `delayMs`, and drop it the instant it clears. Keeps the
+// indicator from flashing on transient blips.
+function useStableError(message: string | null, delayMs: number): string | null {
+  const [stable, setStable] = useState<string | null>(null)
+  useEffect(() => {
+    if (!message) return
+    const timer = setTimeout(() => setStable(message), delayMs)
+    // Cleanup runs whenever `message` changes (including back to null), so it
+    // both cancels a not-yet-elapsed timer AND clears any previously-shown
+    // value. Resetting here is what makes a *recurring* identical error
+    // re-serve its full grace window instead of flashing instantly because
+    // `stable` still held the old string. (Done in cleanup, not the effect
+    // body, to avoid a synchronous in-effect setState.)
+    return () => {
+      clearTimeout(timer)
+      setStable(null)
+    }
+  }, [message, delayMs])
+  // `stable` only equals `message` once the timer has elapsed for the current
+  // continuous error; a cleared message returns null immediately.
+  return stable === message ? message : null
+}
+
+// Tracks the device's network reachability via `navigator.onLine` +
+// online/offline events. We use this to decide whether a sync error is mere
+// connectivity noise (device offline → show the calm "Offline" chip) or an
+// actionable failure (device online but sync still failing → surface it).
+function useIsDeviceOnline(): boolean {
+  const [online, setOnline] = useState(() =>
+    typeof navigator === 'undefined' ? true : navigator.onLine,
+  )
+  useEffect(() => {
+    const update = () => setOnline(navigator.onLine)
+    window.addEventListener('online', update)
+    window.addEventListener('offline', update)
+    return () => {
+      window.removeEventListener('online', update)
+      window.removeEventListener('offline', update)
+    }
+  }, [])
+  return online
+}
+
+type SyncStatus = ReturnType<typeof useStatus>
 
 // Theme-aware tones. `success` reads `--success` (per-theme green
 // hue) rather than `--primary` so warm-primary palettes like
@@ -53,13 +115,6 @@ const iconByName = {
   check: CloudCheck,
 } satisfies Record<SyncIndicatorIcon, typeof CircleAlert>
 
-const formatPendingChanges = (count: number, localOnly: boolean): string => {
-  if (count <= 0) return 'No unsynced changes'
-  const noun = count === 1 ? 'change' : 'changes'
-  const suffix = localOnly ? 'stored locally' : 'queued for upload'
-  return `${count} ${noun} ${suffix}`
-}
-
 const formatLastSyncedAt = (date: Date | undefined): string => {
   if (!date) return 'Not synced yet'
   return date.toLocaleString()
@@ -68,25 +123,109 @@ const formatLastSyncedAt = (date: Date | undefined): string => {
 export function SyncStatusHeaderItem() {
   const localOnly = useIsLocalOnly()
   const status = useStatus()
-  const queue = useQuery<UploadQueueCountRow>(
-    'SELECT COUNT(*) AS count FROM ps_crud',
-    [],
-    {reportFetching: false},
-  )
   const rejected = useQuery<UploadQueueCountRow>(
-    'SELECT COUNT(*) AS count FROM ps_crud_rejected',
+    rejectedCountSql,
     [],
     {reportFetching: false},
   )
-  const pendingChanges = Number(queue.data[0]?.count ?? 0)
   const rejectedCount = Number(rejected.data[0]?.count ?? 0)
+  // Local-query failures (counting the rejection quarantine) are real and
+  // surfaced immediately. Network/sync errors are handled — and offline is
+  // distinguished from a genuine error — down in SyncStatusHeaderContent.
+  const localErrorMessage = rejected.error?.message ?? null
+
+  if (localOnly) {
+    return (
+      <SyncStatusHeaderContent
+        localOnly={localOnly}
+        status={status}
+        pendingChanges={0}
+        pendingChangesApproximate={false}
+        rejectedCount={rejectedCount}
+        localErrorMessage={localErrorMessage}
+      />
+    )
+  }
+
+  return (
+    <RemoteSyncStatusHeaderContent
+      status={status}
+      rejectedCount={rejectedCount}
+      baseLocalErrorMessage={localErrorMessage}
+    />
+  )
+}
+
+interface RemoteSyncStatusHeaderContentProps {
+  status: SyncStatus
+  rejectedCount: number
+  baseLocalErrorMessage: string | null
+}
+
+function RemoteSyncStatusHeaderContent({
+  status,
+  rejectedCount,
+  baseLocalErrorMessage,
+}: RemoteSyncStatusHeaderContentProps) {
+  const queue = useQuery<UploadQueueCountRow>(
+    uploadQueuePreviewCountSql,
+    [],
+    {
+      reportFetching: false,
+      throttleMs: uploadQueuePreviewThrottleMs,
+    },
+  )
+  const previewCount = Number(queue.data[0]?.count ?? 0)
+  const pendingChangesApproximate = previewCount > uploadQueueCountCap
+  const pendingChanges = pendingChangesApproximate ? uploadQueueCountCap : previewCount
+
+  return (
+    <SyncStatusHeaderContent
+      localOnly={false}
+      status={status}
+      pendingChanges={pendingChanges}
+      pendingChangesApproximate={pendingChangesApproximate}
+      rejectedCount={rejectedCount}
+      localErrorMessage={queue.error?.message ?? baseLocalErrorMessage}
+    />
+  )
+}
+
+interface SyncStatusHeaderContentProps {
+  localOnly: boolean
+  status: SyncStatus
+  pendingChanges: number
+  pendingChangesApproximate: boolean
+  rejectedCount: number
+  localErrorMessage: string | null
+}
+
+function SyncStatusHeaderContent({
+  localOnly,
+  status,
+  pendingChanges,
+  pendingChangesApproximate,
+  rejectedCount,
+  localErrorMessage,
+}: SyncStatusHeaderContentProps) {
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [detailsOpen, setDetailsOpen] = useState(false)
+  const deviceOnline = useIsDeviceOnline()
   const dataFlow = status.dataFlowStatus
-  const errorMessage =
-    queue.error?.message ??
-    dataFlow.uploadError?.message ??
-    dataFlow.downloadError?.message ??
-    null
+  // Decide whether a sync error is worth showing. When the *device* is
+  // offline, any upload/download error is just connectivity noise — show the
+  // calm "Offline" chip, not a raw websocket/fetch error. But when the
+  // device is online and sync still fails (bad PowerSync endpoint, 401/403
+  // credentials, server-side stream failure), the error is actionable and
+  // must surface even though PowerSync flips `connected: false` during its
+  // retry loop — otherwise the chip is stuck on Offline/Connecting forever
+  // and hides the very reason sync isn't working. The grace window below
+  // still debounces transient blips in both cases.
+  const networkError = deviceOnline
+    ? (dataFlow.uploadError?.message ?? dataFlow.downloadError?.message ?? null)
+    : null
+  const stableNetworkError = useStableError(networkError, networkErrorGraceMs)
+  const errorMessage = localErrorMessage ?? stableNetworkError
   const view = getSyncIndicatorView({
     localOnly,
     connected: status.connected,
@@ -95,6 +234,7 @@ export function SyncStatusHeaderItem() {
     uploading: Boolean(dataFlow.uploading),
     downloading: Boolean(dataFlow.downloading),
     pendingChanges,
+    pendingChangesApproximate,
     rejectedChanges: rejectedCount,
     downloadFraction: status.downloadProgress?.downloadedFraction ?? null,
     errorMessage,
@@ -104,7 +244,7 @@ export function SyncStatusHeaderItem() {
 
   return (
     <>
-      <DropdownMenu>
+      <DropdownMenu open={detailsOpen} onOpenChange={setDetailsOpen}>
         <DropdownMenuTrigger asChild>
           <button
             type="button"
@@ -129,7 +269,17 @@ export function SyncStatusHeaderItem() {
             </div>
             <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
               <div className="text-muted-foreground">Unsynced</div>
-              <div className="text-right">{formatPendingChanges(pendingChanges, localOnly)}</div>
+              <div className="text-right">
+                {detailsOpen ? (
+                  <UploadQueueDetails
+                    localOnly={localOnly}
+                    previewCount={pendingChanges}
+                    previewApproximate={pendingChangesApproximate}
+                  />
+                ) : (
+                  formatPendingChanges(pendingChanges, localOnly, pendingChangesApproximate)
+                )}
+              </div>
               {view.progressPercent !== null && (
                 <>
                   <div className="text-muted-foreground">Progress</div>
@@ -162,4 +312,36 @@ export function SyncStatusHeaderItem() {
       <RejectionDialog open={dialogOpen} onOpenChange={setDialogOpen}/>
     </>
   )
+}
+
+interface UploadQueueDetailsProps {
+  localOnly: boolean
+  previewCount: number
+  previewApproximate: boolean
+}
+
+function UploadQueueDetails({
+  localOnly,
+  previewCount,
+  previewApproximate,
+}: UploadQueueDetailsProps) {
+  const queue = useQuery<UploadQueueCountRow>(
+    uploadQueueExactCountSql,
+    [],
+    {
+      reportFetching: false,
+      runQueryOnce: true,
+    },
+  )
+  const exactCount = queue.data[0]?.count
+
+  if (queue.error) {
+    return 'Unable to count unsynced changes'
+  }
+
+  if (exactCount === undefined) {
+    return formatPendingChanges(previewCount, localOnly, previewApproximate)
+  }
+
+  return formatPendingChanges(Number(exactCount), localOnly)
 }

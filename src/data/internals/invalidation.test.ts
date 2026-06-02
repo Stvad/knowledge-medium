@@ -242,6 +242,30 @@ describe('TxEngine fast path: repo.tx → handle re-resolve', () => {
     await vi.waitFor(() => expect(f2).toEqual([0, 1]))
   })
 
+  it('children and childIds handles re-resolve across child soft-delete and restore', async () => {
+    await create('p')
+    await create('c', {parentId: 'p', orderKey: 'a0'})
+    const children = env.repo.query.children({id: 'p'})
+    const childIds = env.repo.query.childIds({id: 'p'})
+    const childrenFired: string[][] = []
+    const childIdsFired: string[][] = []
+    children.subscribe(v => childrenFired.push(v.map(b => b.id)))
+    childIds.subscribe(v => childIdsFired.push(v))
+    await vi.waitFor(() => expect(childrenFired).toEqual([['c']]))
+    await vi.waitFor(() => expect(childIdsFired).toEqual([['c']]))
+
+    await env.repo.tx(tx => tx.delete('c'), {scope: ChangeScope.BlockDefault})
+    await vi.waitFor(() => expect(childrenFired).toEqual([['c'], []]))
+    await vi.waitFor(() => expect(childIdsFired).toEqual([['c'], []]))
+    expect(env.repo.block('c').peek()).toBeNull()
+    expect(env.repo.block('c').peekRaw()?.deleted).toBe(true)
+
+    await env.repo.tx(tx => tx.restore('c'), {scope: ChangeScope.BlockDefault})
+    await vi.waitFor(() => expect(childrenFired).toEqual([['c'], [], ['c']]))
+    await vi.waitFor(() => expect(childIdsFired).toEqual([['c'], [], ['c']]))
+    expect(env.repo.block('c').peek()).toMatchObject({id: 'c', deleted: false})
+  })
+
   it.each([
     ['lean', {id: 'p'}],
     ['hydrating', {id: 'p', hydrate: true}],
@@ -523,6 +547,34 @@ describe('sync observer: sync-applied invalidation', () => {
       ['c1', 'c2'],
       ['c2', 'c1'],
     ]))
+  })
+
+  it('marks sync-applied hard-deletes missing and invalidates lean childIds without a cached row', async () => {
+    await create('p')
+    await create('c', {parentId: 'p', orderKey: 'a0'})
+    const h = env.repo.query.childIds({id: 'p'})
+    expect(await h.load()).toEqual(['c'])
+
+    // Lean childIds does not need a hydrated row. Drop the tx-populated
+    // snapshot to pin the case where membership is cached but BlockCache
+    // is not tracking the child row.
+    env.cache.deleteSnapshot('c')
+    expect(env.repo.block('c').peek()).toBeUndefined()
+
+    env.repo.startSyncObserver({throttleMs: 0})
+    await env.repo.flushSyncObserver() // settle the start-up drain (queue empty)
+
+    // Sync-applied hard-delete: the row leaves the staged stream, firing the
+    // change-capture DELETE the observer drains — exactly the row the
+    // `blocks_synced_changes_delete` trigger emits. The observer reads `before`
+    // from `blocks` (the local row still there), removes it, and markMissing-es
+    // the id. markMissing counts as accepted on the first missing transition
+    // even with no cached snapshot, so the lean childIds parent-edge dep fires.
+    await env.h.db.execute(`INSERT INTO blocks_synced_changes (id, op) VALUES (?, 'delete')`, ['c'])
+    await env.repo.flushSyncObserver()
+
+    expect(env.repo.block('c').peek()).toBeNull()
+    expect(await h.load()).toEqual([])
   })
 
   it('does NOT re-resolve children on pure content edits (reviewer P2)', async () => {
