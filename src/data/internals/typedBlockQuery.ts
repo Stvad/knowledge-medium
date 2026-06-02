@@ -337,6 +337,18 @@ const compileScopedPredicate = (
   }
 }
 
+/** NULL-safe negation for `exclude` predicates. Per the documented NOR
+ *  contract ("a block matches iff none of these match"), a row is
+ *  removed only when the predicate is *definitely* true — `false` and
+ *  `unknown` survive. A scalar `where` over an unset property compiles
+ *  to `json_extract(...) = ?`, which is NULL when the property is
+ *  missing, and a bare `NOT (NULL)` is NULL — not TRUE — so it would
+ *  drop every row that never set the property (this is what silently
+ *  zeroed out the SRS due-cards decks via `exclude {archived: true}`).
+ *  `(... ) IS NOT TRUE` keeps unknown rows. Route every exclude site
+ *  through here so the trap can't reappear at a new call site. */
+const excludeNegation = (compiledSql: string): string => `(${compiledSql}) IS NOT TRUE`
+
 const dedupePredicates = (predicates: readonly BlockPredicate[] | undefined): BlockPredicate[] => {
   if (!predicates) return []
   return predicates.filter(p => {
@@ -486,16 +498,7 @@ export const buildCandidatesCte = (
   for (const predicate of excludePredicates) {
     if (!isSelfScope(predicate)) continue
     const compiled = compilePredicateAgainstRow(predicate, 'b', propertySchemas)
-    // `IS NOT TRUE` (not bare `NOT`): exclude a row only when the
-    // predicate is *definitely* true. A scalar `where` over an unset
-    // property compiles to `json_extract(...) = ?`, which is NULL when
-    // the property is missing; `NOT (NULL)` is NULL — not TRUE — so a
-    // bare `NOT` would drop every row that never set the property. The
-    // documented contract is NOR ("exclude iff a predicate matches"),
-    // and an unknown does not match, so unset rows must survive. See
-    // SRS due-cards: `exclude {archived: true}` was silently hiding
-    // every card that had never been archived.
-    clauses.push(`(${compiled.sql}) IS NOT TRUE`)
+    clauses.push(excludeNegation(compiled.sql))
     params.push(...compiled.params)
   }
 
@@ -562,12 +565,10 @@ export const compileTypedBlockQuery = (
   for (const predicate of excludePredicates) {
     if (isSelfScope(predicate)) continue
     const compiled = compileScopedPredicate(predicate, propertySchemas)
-    // `IS NOT TRUE` for the same NULL-safety reason as the self-scope
-    // exclude above. The ancestor predicate compiles to `EXISTS(...)`
-    // (always 0/1, so `IS NOT TRUE` == `NOT` here), but keeping both
-    // exclude sites identical avoids a latent trap if the shape ever
-    // changes.
-    filterClauses.push(`(${compiled.sql}) IS NOT TRUE`)
+    // The ancestor predicate compiles to `EXISTS(...)` (always 0/1, so
+    // the NULL-safety is a no-op here), but routing through the same
+    // helper keeps both exclude sites identical if the shape changes.
+    filterClauses.push(excludeNegation(compiled.sql))
     params.push(...compiled.params)
   }
 

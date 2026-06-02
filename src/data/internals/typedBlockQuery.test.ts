@@ -479,24 +479,63 @@ describe('repo.queryBlocks', () => {
     expect(ids(out)).toEqual(['open-child'])
   })
 
-  it('exclude keeps rows whose filtered property is unset (NULL is not a match)', async () => {
-    // Regression: a scalar `exclude` where compiles to
-    // `json_extract(...) = ?`, which is NULL when the property is
-    // missing. A bare `NOT (NULL)` is NULL — not TRUE — so it used to
-    // drop every row that never set the property, the opposite of the
-    // documented NOR contract ("exclude iff a predicate matches"; an
-    // unknown does not match). This is exactly how SRS due-cards lost
-    // every card that had never been archived.
-    await create({id: 'unset', types: ['todo']})
-    await create({id: 'explicit-false', types: ['todo'], properties: {[doneProp.name]: doneProp.codec.encode(false)}})
-    await create({id: 'explicit-true', types: ['todo'], properties: {[doneProp.name]: doneProp.codec.encode(true)}})
+  // The shared invariant: a predicate over a property a row never set
+  // is *unknown*, not a match — so an unset row is kept by `exclude` and
+  // dropped by `match` (the documented NOR/AND contract). Each operator
+  // seeds an unset row alongside a matching and a non-matching one and
+  // checks both sides. The `exclude` half is the regression guard for
+  // the SRS due-cards bug (a bare `NOT` dropped unset rows); covering
+  // every operator keeps the symmetric NULL trap from creeping back in
+  // through a new code path.
+  describe('match / exclude treat an unset property as not-a-match', () => {
+    const matchSelf = (predicate: object) =>
+      env.repo.queryBlocks({workspaceId: WS, types: ['todo'], match: [{scope: 'self', ...predicate}]})
+    const excludeSelf = (predicate: object) =>
+      env.repo.queryBlocks({workspaceId: WS, types: ['todo'], exclude: [{scope: 'self', ...predicate}]})
 
-    const out = await env.repo.queryBlocks({
-      workspaceId: WS,
-      types: ['todo'],
-      exclude: [{scope: 'self', where: {[doneProp.name]: true}}],
+    it('scalar string equality', async () => {
+      await create({id: 'unset', types: ['todo']})
+      await create({id: 'hit', types: ['todo'], properties: {status: 'open'}})
+      await create({id: 'miss', types: ['todo'], properties: {status: 'done'}})
+
+      expect(ids(await matchSelf({where: {status: 'open'}}))).toEqual(['hit'])
+      expect(ids(await excludeSelf({where: {status: 'open'}})).sort()).toEqual(['miss', 'unset'])
     })
-    expect(ids(out).sort()).toEqual(['explicit-false', 'unset'])
+
+    it('boolean equality (the archived shape)', async () => {
+      await create({id: 'unset', types: ['todo']})
+      await create({id: 'true-row', types: ['todo'], properties: {[doneProp.name]: doneProp.codec.encode(true)}})
+      await create({id: 'false-row', types: ['todo'], properties: {[doneProp.name]: doneProp.codec.encode(false)}})
+
+      expect(ids(await matchSelf({where: {[doneProp.name]: true}}))).toEqual(['true-row'])
+      expect(ids(await excludeSelf({where: {[doneProp.name]: true}})).sort()).toEqual(['false-row', 'unset'])
+    })
+
+    it('comparator (lt) on a number', async () => {
+      await create({id: 'unset', types: ['todo']})
+      await create({id: 'low', types: ['todo'], properties: {[priorityProp.name]: priorityProp.codec.encode(1)}})
+      await create({id: 'high', types: ['todo'], properties: {[priorityProp.name]: priorityProp.codec.encode(9)}})
+
+      expect(ids(await matchSelf({where: {[priorityProp.name]: {lt: 5}}}))).toEqual(['low'])
+      expect(ids(await excludeSelf({where: {[priorityProp.name]: {lt: 5}}})).sort()).toEqual(['high', 'unset'])
+    })
+
+    it('exists', async () => {
+      await create({id: 'unset', types: ['todo']})
+      await create({id: 'set', types: ['todo'], properties: {status: 'x'}})
+
+      expect(ids(await matchSelf({where: {status: {exists: true}}}))).toEqual(['set'])
+      expect(ids(await excludeSelf({where: {status: {exists: true}}}))).toEqual(['unset'])
+    })
+
+    it('referencedBy', async () => {
+      await create({id: 'target', types: ['todo']})
+      await create({id: 'unset', types: ['todo']}) // no references at all
+      await create({id: 'refs', types: ['todo'], references: [{id: 'target', alias: 'target', sourceField: 'body'}]})
+
+      expect(ids(await matchSelf({referencedBy: {id: 'target'}}))).toEqual(['refs'])
+      expect(ids(await excludeSelf({referencedBy: {id: 'target'}})).sort()).toEqual(['target', 'unset'])
+    })
   })
 })
 
