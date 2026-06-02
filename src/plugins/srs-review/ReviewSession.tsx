@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FocusEvent as ReactFocusEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FocusEvent as ReactFocusEvent,
+  type MouseEvent as ReactMouseEvent,
+} from 'react'
 import {
   ArchiveX,
   ArrowLeft,
@@ -8,6 +16,7 @@ import {
   ExternalLink,
   Gauge,
   PartyPopper,
+  RefreshCw,
   RotateCcw,
   SkipForward,
   Sparkles,
@@ -15,7 +24,8 @@ import {
 import type { Block } from '@/data/block'
 import type { BlockData } from '@/data/api'
 import { useRepo } from '@/context/repo.js'
-import { useProperty } from '@/hooks/block.js'
+import { useManyParents, useProperty } from '@/hooks/block.js'
+import { usePluginUIStateBlock } from '@/data/globalState.js'
 import { getBlockTypes } from '@/data/properties.js'
 import { NestedBlockContextProvider } from '@/context/block.js'
 import { BlockComponent } from '@/components/BlockComponent.js'
@@ -24,7 +34,7 @@ import { cn } from '@/lib/utils.js'
 import { showError, showInfo } from '@/utils/toast.js'
 import { useActionContextActivations } from '@/shortcuts/useActionContext.js'
 import { useBlockOpener } from '@/utils/navigation.js'
-import { Breadcrumbs } from '@/plugins/breadcrumbs'
+import { BreadcrumbList } from '@/plugins/breadcrumbs'
 import { openReschedulePicker } from '@/plugins/daily-notes'
 import {
   SRS_SM25_TYPE,
@@ -39,9 +49,15 @@ import {
 import { SrsSignal, estimateSrsIntervalDays } from '@/plugins/srs-rescheduling/scheduler.js'
 import { useDueCards } from './useDueCards.ts'
 import { archiveSrsCard } from './archive.ts'
-import { reviewDeckStartedProp } from './schema.ts'
+import { reviewDeckStartedProp, reviewProgressProp, srsReviewProgressType } from './schema.ts'
+import { localDayKey, restoreSavedSession } from './reviewProgress.ts'
 import { SRS_REVIEW_CONTEXT, type SrsReviewController } from './actions.ts'
 import { SRS_REVIEW_CARD_ID, SRS_REVIEW_REVEALED } from './reviewCardLayout.tsx'
+
+/** Breadcrumb context overrides — mirrors the breadcrumbs plugin's own
+ *  header renderer so the in-review chain renders identically. */
+const BREADCRUMB_OVERRIDES = {isNestedSurface: true, isBreadcrumb: true}
+const EMPTY_PARENTS: readonly Block[] = []
 
 const isInteractiveTarget = (el: HTMLElement | null): boolean => {
   if (!el) return false
@@ -129,19 +145,35 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
   const workspaceId = deck.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
   const dueCards = useDueCards(workspaceId, tagName)
 
-  // Freeze the queue at the first non-empty load. Grading moves a card
-  // out of `dueCards` (its next-review date jumps to the future), so
-  // walking the live list would renumber the session under the user.
-  // We snapshot ids once via the converge-during-render pattern, then
-  // read each card's live state at grade time via `repo.block(id)`.
-  const [queue, setQueue] = useState<readonly string[] | null>(null)
+  // Device-local, non-synced persistence of the in-progress session
+  // (frozen queue + place), so navigating away and back resumes instantly
+  // instead of re-running the due query and restarting at card one. Lives
+  // on the plugin's ui-state block — see `reviewProgressProp`.
+  const progressBlock = usePluginUIStateBlock(srsReviewProgressType)
+  const [progress, setProgress] = useProperty(progressBlock, reviewProgressProp)
+  // Recomputed per mount; a midnight rollover between sessions invalidates
+  // a saved queue so it rebuilds from the live due set.
+  const todayKey = useMemo(() => localDayKey(), [])
+
+  // Resume a saved session if one's valid for this deck/day; otherwise
+  // start empty and let the live-snapshot path below capture the queue.
+  // `progressBlock` is loaded by the suspending hook above, so `progress`
+  // already reflects storage on this first render.
+  const savedSession = restoreSavedSession(progress, tagName, todayKey)
+  const [queue, setQueue] = useState<readonly string[] | null>(() => savedSession?.queue ?? null)
+  const [index, setIndex] = useState(() => savedSession?.index ?? 0)
+  const [revealed, setRevealed] = useState(() => savedSession?.revealed ?? false)
+  const [busy, setBusy] = useState(false)
+
+  // Freeze the queue at the first non-empty load (a restored session is
+  // already non-null, so this is skipped for it). Grading moves a card out
+  // of `dueCards` (its next-review date jumps to the future), so walking
+  // the live list would renumber the session under the user. We snapshot
+  // ids once via the converge-during-render pattern, then read each card's
+  // live state at grade time via `repo.block(id)`.
   if (queue === null && dueCards.length > 0) {
     setQueue(dueCards.map(c => c.id))
   }
-
-  const [index, setIndex] = useState(0)
-  const [revealed, setRevealed] = useState(false)
-  const [busy, setBusy] = useState(false)
 
   const total = queue?.length ?? 0
   const currentId = queue && index < queue.length ? queue[index] : null
@@ -180,10 +212,51 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
   // honouring the shared modifier policy (plain click zooms it into the
   // main panel, shift / shift+alt open it in the sidebar / a new panel).
   const openBlock = useBlockOpener({plainClick: 'navigator'})
-  // Stable handle for the breadcrumb chain above the card.
+  // Stable handle for the card's grade-interval estimates.
   const currentBlock = useMemo(
     () => (currentId ? repo.block(currentId) : null),
     [repo, currentId],
+  )
+
+  // Write-through: persist the live session so it survives unmount. One
+  // object write per state change; `ChangeScope.UiState` keeps it local
+  // (no upload). Skipped until the queue is established so we never
+  // clobber a saved session with an empty one during the initial load.
+  useEffect(() => {
+    if (queue === null) return
+    setProgress({queue: [...queue], index, revealed, tag: tagName, day: todayKey})
+  }, [queue, index, revealed, tagName, todayKey, setProgress])
+
+  // Discard the saved session and rebuild from the live due set. Now that
+  // progress persists (navigating away no longer resets it), this is the
+  // way to start over. Setting the queue to null re-enters the
+  // live-snapshot path; clearing storage is rewritten on the next snapshot.
+  const restart = useCallback(() => {
+    setRevealed(false)
+    setIndex(0)
+    setQueue(null)
+    setProgress(null)
+  }, [setProgress])
+
+  // Batch-prefetch ancestors for the whole frozen queue in one query
+  // (`core.manyAncestors`) so each card's breadcrumb chain is already warm
+  // when it appears — a per-card `useParents` otherwise loads cold on
+  // every card and lags visibly. The frozen queue keeps the handle key
+  // stable, so advancing through cards doesn't re-query.
+  const queueBlocks = useMemo(
+    () => (queue ?? []).map(id => repo.block(id)),
+    [queue, repo],
+  )
+  const parentsByCardId = useManyParents(queueBlocks)
+  const currentParents = currentId
+    ? parentsByCardId.get(currentId) ?? EMPTY_PARENTS
+    : EMPTY_PARENTS
+  const openBreadcrumb = useBlockOpener()
+  const handleBreadcrumbClick = useCallback(
+    (e: ReactMouseEvent, parent: Block) => {
+      openBreadcrumb(e, {blockId: parent.id, workspaceId})
+    },
+    [openBreadcrumb, workspaceId],
   )
 
   const grade = useCallback(
@@ -323,9 +396,24 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
         Decks
       </Button>
       <span className="truncate text-sm font-medium text-muted-foreground">{deckLabel}</span>
-      <span className="text-xs tabular-nums text-muted-foreground">
-        {total === 0 ? '' : `${Math.min(index + 1, total)} / ${total}`}
-      </span>
+      <div className="flex items-center gap-1">
+        <span className="text-xs tabular-nums text-muted-foreground">
+          {total === 0 ? '' : `${Math.min(index + 1, total)} / ${total}`}
+        </span>
+        {queue !== null && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 text-xs"
+            onClick={restart}
+            disabled={busy}
+            title="Restart review from the cards due now"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+          </Button>
+        )}
+      </div>
     </div>
   )
 
@@ -376,8 +464,19 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
       {header}
 
       {/* Ancestor chain for the card under review, so its context isn't
-          lost outside the outline. Renders nothing for a top-level card. */}
-      {currentBlock && <Breadcrumbs block={currentBlock} />}
+          lost outside the outline. Fed from the batched prefetch above so
+          it's already warm; renders nothing for a top-level card. */}
+      {currentParents.length > 0 && (
+        <BreadcrumbList
+          parents={currentParents}
+          workspaceId={workspaceId}
+          overrides={BREADCRUMB_OVERRIDES}
+          onLinkClick={handleBreadcrumbClick}
+          className="mb-2 flex flex-wrap items-center gap-1 overflow-x-auto py-1 text-sm text-muted-foreground"
+          itemClassName="max-w-full cursor-pointer truncate no-underline"
+          separatorClassName="mx-1 text-muted-foreground/50"
+        />
+      )}
 
       <div className="rounded-xl border bg-card p-4 shadow-sm">
         <NestedBlockContextProvider
