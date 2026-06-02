@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { restoreSavedSession } from '../reviewProgress.ts'
+import { reconcileRestoredQueue, restoreSavedSession } from '../reviewProgress.ts'
 import type { ReviewProgress } from '../schema.ts'
 
 const progress = (over: Partial<ReviewProgress> = {}): ReviewProgress => ({
@@ -41,5 +41,31 @@ describe('restoreSavedSession', () => {
       index: 3,
       revealed: true,
     })
+  })
+})
+
+describe('reconcileRestoredQueue', () => {
+  const due = (...ids: string[]) => new Set(ids)
+
+  it('drops not-yet-reached cards that are no longer due', () => {
+    // At index 2, c/d/e are upcoming; d was rescheduled away (not due).
+    expect(reconcileRestoredQueue(['a', 'b', 'c', 'd', 'e'], 2, due('c', 'e')))
+      .toEqual(['a', 'b', 'c', 'e'])
+  })
+
+  it('keeps already-reviewed cards even though they are no longer due', () => {
+    // a/b were graded this session (now future-dated, absent from the due
+    // set) but precede the index — kept so Back/re-grade still works.
+    expect(reconcileRestoredQueue(['a', 'b', 'c'], 2, due('c')))
+      .toEqual(['a', 'b', 'c'])
+  })
+
+  it('returns the same reference when nothing is dropped', () => {
+    const queue = ['a', 'b', 'c']
+    expect(reconcileRestoredQueue(queue, 1, due('b', 'c'))).toBe(queue)
+  })
+
+  it('can empty the upcoming portion when nothing ahead is due', () => {
+    expect(reconcileRestoredQueue(['a', 'b', 'c'], 1, due('x'))).toEqual(['a'])
   })
 })

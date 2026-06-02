@@ -50,7 +50,7 @@ import { SrsSignal, estimateSrsIntervalDays } from '@/plugins/srs-rescheduling/s
 import { useDueCards } from './useDueCards.ts'
 import { archiveSrsCard } from './archive.ts'
 import { reviewDeckStartedProp, reviewProgressProp, srsReviewProgressType } from './schema.ts'
-import { localDayKey, restoreSavedSession } from './reviewProgress.ts'
+import { localDayKey, reconcileRestoredQueue, restoreSavedSession } from './reviewProgress.ts'
 import { SRS_REVIEW_CONTEXT, type SrsReviewController } from './actions.ts'
 import { SRS_REVIEW_CARD_ID, SRS_REVIEW_REVEALED } from './reviewCardLayout.tsx'
 
@@ -186,6 +186,10 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
   const [index, setIndex] = useState(() => savedSession?.index ?? 0)
   const [revealed, setRevealed] = useState(() => savedSession?.revealed ?? false)
   const [busy, setBusy] = useState(false)
+  // True only when this mount resumed a saved session. Captured once:
+  // `savedSession` itself flips back to non-null as soon as write-through
+  // re-persists, so it can't serve as a stable "did we restore" signal.
+  const [wasRestored] = useState(() => savedSession !== null)
 
   // Freeze the queue at the first non-empty load (a restored session is
   // already non-null, so this is skipped for it). Grading moves a card out
@@ -248,6 +252,21 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
     if (queue === null) return
     setProgress({queue: [...queue], index, revealed, tag: tagName, day: todayKey})
   }, [queue, index, revealed, tagName, todayKey, setProgress])
+
+  // Reconcile a restored session against the live due set once it loads:
+  // keep everything already reviewed (so Back/re-grade still works) but
+  // drop not-yet-reached cards that are no longer due — e.g. rescheduled
+  // on another surface since the session was saved. `useDueCards` is
+  // already running for the snapshot/refresh paths, so this needs no extra
+  // query. Runs once; an empty due set is treated as "still loading"
+  // (mirrors the snapshot guard) so we never nuke the queue mid-load.
+  const reconciledRef = useRef(false)
+  useEffect(() => {
+    if (!wasRestored || reconciledRef.current || dueCards.length === 0) return
+    reconciledRef.current = true
+    const dueIds = new Set(dueCards.map(c => c.id))
+    setQueue(prev => (prev === null ? prev : reconcileRestoredQueue(prev, index, dueIds)))
+  }, [wasRestored, dueCards, index])
 
   // Discard the saved session and rebuild from the live due set. Now that
   // progress persists (navigating away no longer resets it), this is the

@@ -31,3 +31,19 @@ export const restoreSavedSession = (
   }
   return null
 }
+
+/** Reconcile a restored queue against the live due set: keep everything
+ *  already reviewed (`< index`, so Back/re-grade still works) and drop
+ *  not-yet-reached cards (`>= index`) that are no longer due — e.g.
+ *  rescheduled on another surface since the session was saved. Returns the
+ *  same array reference when nothing was dropped so callers can skip a
+ *  needless state update. */
+export const reconcileRestoredQueue = (
+  queue: readonly string[],
+  index: number,
+  dueIds: ReadonlySet<string>,
+): readonly string[] => {
+  const upcoming = queue.slice(index).filter(id => dueIds.has(id))
+  const next = [...queue.slice(0, index), ...upcoming]
+  return next.length === queue.length ? queue : next
+}
