@@ -10,6 +10,7 @@ import {
   Sparkles,
 } from 'lucide-react'
 import type { Block } from '@/data/block'
+import type { BlockData } from '@/data/api'
 import { useRepo } from '@/context/repo.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { appMountsFacet } from '@/extensions/core.js'
@@ -28,6 +29,7 @@ import {
   SRS_SM25_TYPE,
   formatRescheduleToastMessage,
   rescheduleBlock,
+  srsNextReviewDateProp,
 } from '@/plugins/srs-rescheduling'
 import { SrsSignal } from '@/plugins/srs-rescheduling/scheduler.js'
 import { useDueCards } from './useDueCards.ts'
@@ -39,6 +41,24 @@ const isEditableTarget = (): boolean => {
   const el = document.activeElement as HTMLElement | null
   if (!el) return false
   return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable
+}
+
+/** Whether a block is still a live, schedulable review card — mirrors
+ *  the deck's membership conditions (`buildDueCardsQuery`): it must
+ *  carry the SRS type AND a non-empty next-review date. A card can lose
+ *  either in another panel after the session snapshotted its id; grading
+ *  it then would re-add the type and/or write a fresh date via
+ *  `rescheduleBlock`, silently resurrecting a card the user just removed
+ *  from review. */
+const isLiveSrsCard = (data: BlockData): boolean => {
+  if (!getBlockTypes(data).includes(SRS_SM25_TYPE)) return false
+  const raw = data.properties[srsNextReviewDateProp.name]
+  if (raw === undefined) return false
+  try {
+    return srsNextReviewDateProp.codec.decode(raw).length > 0
+  } catch {
+    return false
+  }
 }
 
 interface GradeButton {
@@ -108,13 +128,13 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
       setBusy(true)
       try {
         const block = repo.block(currentId)
-        // The card may have left SRS since the queue was snapshotted
-        // (e.g. its type was removed in another panel). `rescheduleBlock`
-        // re-adds SRS_SM25_TYPE to non-SRS blocks, which would silently
-        // resurrect a card the user just removed — so drop it from the
-        // session instead of grading it.
+        // The card may have left review since the queue was snapshotted
+        // (its type or next-review date removed in another panel).
+        // `rescheduleBlock` would re-add the type and write a fresh date,
+        // silently resurrecting a card the user just removed — so drop it
+        // from the session instead of grading it.
         const data = block.peek() ?? (await block.load())
-        if (!data || !getBlockTypes(data).includes(SRS_SM25_TYPE)) {
+        if (!data || !isLiveSrsCard(data)) {
           showInfo('Card is no longer in spaced repetition')
           advance()
           return
