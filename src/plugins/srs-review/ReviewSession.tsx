@@ -12,19 +12,13 @@ import {
 import type { Block } from '@/data/block'
 import type { BlockData } from '@/data/api'
 import { useRepo } from '@/context/repo.js'
-import { useAppRuntime } from '@/extensions/runtimeContext.js'
-import { appMountsFacet } from '@/extensions/core.js'
 import { getBlockTypes } from '@/data/properties.js'
 import { NestedBlockContextProvider } from '@/context/block.js'
 import { BlockComponent } from '@/components/BlockComponent.js'
 import { Button } from '@/components/ui/button.js'
 import { cn } from '@/lib/utils.js'
 import { showError, showInfo } from '@/utils/toast.js'
-import {
-  hasAnyBlockDateAdapter,
-  openReschedulePicker,
-  reschedulePickerMount,
-} from '@/plugins/daily-notes'
+import { openReschedulePicker } from '@/plugins/daily-notes'
 import {
   SRS_SM25_TYPE,
   formatRescheduleToastMessage,
@@ -85,7 +79,6 @@ const GRADE_BY_KEY: Readonly<Record<string, SrsSignal>> = {
 
 export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) => {
   const repo = useRepo()
-  const runtime = useAppRuntime()
   const workspaceId = deck.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
   const dueCards = useDueCards(workspaceId, tagName)
 
@@ -105,17 +98,6 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
 
   const total = queue?.length ?? 0
   const currentId = queue && index < queue.length ? queue[index] : null
-
-  // Show Reschedule only when it can actually do something: a date
-  // adapter must handle the card (gone if srs-rescheduling is off) AND
-  // the reschedule picker must be mounted (contributed by daily-notes —
-  // its adapter survives even with daily-notes off, so check the mount
-  // separately). Without both, dispatching the picker event would open
-  // nothing and `advance()` would silently skip the card.
-  const canReschedule =
-    currentId !== null &&
-    hasAnyBlockDateAdapter(runtime, repo.block(currentId)) &&
-    runtime.read(appMountsFacet).some(mount => mount.id === reschedulePickerMount.id)
 
   const advance = useCallback(() => {
     setRevealed(false)
@@ -323,20 +305,15 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
       </div>
 
       <div className="mt-3 flex items-center justify-center gap-4 text-xs text-muted-foreground">
-        {/* Hidden unless an adapter handles the card and the picker is
-            mounted — otherwise the control would open nothing and then
-            skip the card. */}
-        {canReschedule && (
-          <button
-            type="button"
-            className="inline-flex items-center gap-1 hover:text-foreground disabled:opacity-50"
-            onClick={reschedule}
-            disabled={busy}
-          >
-            <CalendarClock className="h-3.5 w-3.5" />
-            Reschedule
-          </button>
-        )}
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 hover:text-foreground disabled:opacity-50"
+          onClick={reschedule}
+          disabled={busy}
+        >
+          <CalendarClock className="h-3.5 w-3.5" />
+          Reschedule
+        </button>
         <button
           type="button"
           className="inline-flex items-center gap-1 hover:text-foreground disabled:opacity-50"

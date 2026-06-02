@@ -13,6 +13,8 @@ import { getBlockTypes } from '@/data/properties.js'
 import { navigateFromGlobalCommand } from '@/utils/navigation.js'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { SRS_SM25_TYPE, srsReschedulingDataExtension } from '@/plugins/srs-rescheduling'
+import { referencesDataExtension } from '@/plugins/references/dataExtension.js'
+import { blockTaggingDataExtension } from '@/plugins/block-tagging/dataExtension.js'
 import { srsReviewDataExtension } from './dataExtension.ts'
 import { SrsReviewDeckRenderer } from './ReviewDeckRenderer.tsx'
 import { srsReviewCardLayoutContribution } from './reviewCardLayout.tsx'
@@ -63,19 +65,17 @@ export const srsReviewPlugin = ({repo}: {repo: Repo}): AppExtension =>
     name: 'SRS review',
     description: 'Deck-based review mode for spaced-repetition cards due today or earlier.',
   }).of([
-    // Bundle the schema/type registrations the deck query depends on so
-    // SRS Review keeps working even when its source plugins' toggles are
-    // off. The due-cards query and archive write reference
-    // `srsNextReviewDateProp` / `srsArchivedProp` / SRS_SM25_TYPE (only
-    // `srsReschedulingDataExtension` registers them) and the due query's
-    // `target` predicate compares against `dailyNoteDateProp` (only
-    // `dailyNotesDataExtension` registers it) — without these,
-    // `core.typedBlocks` throws on the unregistered schemas instead of
-    // rendering the deck. FacetContribution dedup is by reference, so
-    // referencing the same extensions here registers each schema once
-    // when the source plugins are also enabled.
+    // SRS Review hard-depends on the spaced-repetition stack: the
+    // due-cards query reads the SRS and daily-note schemas, matches tags
+    // through the references index, and the picker lists tags from the
+    // block-tagging config. Bundle each dependency's data extension so
+    // the deck works whenever review is enabled; FacetContribution dedup
+    // (by reference) keeps every contribution registered exactly once
+    // when the source plugins are independently enabled too.
     srsReschedulingDataExtension,
     dailyNotesDataExtension,
+    referencesDataExtension,
+    blockTaggingDataExtension,
     srsReviewDataExtension,
     blockRenderersFacet.of(
       {id: 'srsReviewDeck', renderer: SrsReviewDeckRenderer},
