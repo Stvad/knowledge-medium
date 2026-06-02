@@ -25,7 +25,7 @@ type InviteRole = Exclude<WorkspaceRole, 'owner'>
 
 const INVITE_ROLES: ReadonlyArray<{value: InviteRole, label: string, hint: string}> = [
   {value: 'editor', label: 'Editor', hint: 'Can read and edit the workspace.'},
-  {value: 'viewer', label: 'Viewer', hint: 'Read-only access; UI navigation state stays local to their session.'},
+  {value: 'viewer', label: 'Viewer', hint: 'Read-only access; cannot modify the workspace.'},
 ]
 
 const roleSelectClassName =
