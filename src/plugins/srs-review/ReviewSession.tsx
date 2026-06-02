@@ -17,7 +17,7 @@ import { NestedBlockContextProvider } from '@/context/block.js'
 import { BlockComponent } from '@/components/BlockComponent.js'
 import { Button } from '@/components/ui/button.js'
 import { cn } from '@/lib/utils.js'
-import { showInfo } from '@/utils/toast.js'
+import { showError, showInfo } from '@/utils/toast.js'
 import {
   hasAnyBlockDateAdapter,
   openReschedulePicker,
@@ -105,11 +105,20 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
       if (!currentId || busy) return
       setBusy(true)
       try {
+        // Advance only when the write lands. A null result means the
+        // reschedule was refused (read-only repo, or the block is no
+        // longer an SRS card) — advancing then would mark progress and
+        // eventually "complete" while the card's due date never moved,
+        // so it'd resurface next session. Keep the card and surface it.
         const result = await rescheduleBlock(repo.block(currentId), signal)
-        if (result) showInfo(formatRescheduleToastMessage(result))
+        if (result) {
+          showInfo(formatRescheduleToastMessage(result))
+          advance()
+        } else {
+          showError("Couldn't reschedule this card")
+        }
       } finally {
         setBusy(false)
-        advance()
       }
     },
     [currentId, busy, repo, advance],
@@ -119,11 +128,17 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
     if (!currentId || busy) return
     setBusy(true)
     try {
-      await archiveSrsCard(repo.block(currentId))
-      showInfo('Archived')
+      // Same as grade: only advance if the archive write actually
+      // happened (false on read-only / non-SRS block).
+      const archived = await archiveSrsCard(repo.block(currentId))
+      if (archived) {
+        showInfo('Archived')
+        advance()
+      } else {
+        showError("Couldn't archive this card")
+      }
     } finally {
       setBusy(false)
-      advance()
     }
   }, [currentId, busy, repo, advance])
 
