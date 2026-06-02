@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FocusEvent as ReactFocusEvent } from 'react'
 import {
   ArchiveX,
+  ArrowLeft,
   CalendarClock,
   Check,
   ChevronLeft,
+  ExternalLink,
   Gauge,
   PartyPopper,
   RotateCcw,
@@ -19,6 +21,8 @@ import { Button } from '@/components/ui/button.js'
 import { cn } from '@/lib/utils.js'
 import { showError, showInfo } from '@/utils/toast.js'
 import { useActionContextActivations } from '@/shortcuts/useActionContext.js'
+import { useBlockOpener } from '@/utils/navigation.js'
+import { Breadcrumbs } from '@/plugins/breadcrumbs'
 import { openReschedulePicker } from '@/plugins/daily-notes'
 import {
   SRS_SM25_TYPE,
@@ -120,6 +124,27 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
     setIndex(i => i + 1)
   }, [])
 
+  // Step back to the card just reviewed (or, from the "complete" screen,
+  // the last card). The frozen queue keeps every reviewed card's id, so
+  // this only re-shows the card — it doesn't undo the grade/reschedule
+  // write that already landed; re-grading reschedules it afresh.
+  const canGoBack = queue !== null && index > 0
+  const goBack = useCallback(() => {
+    setRevealed(false)
+    // From the completion screen index === total, so step to total - 1.
+    setIndex(i => Math.max(0, Math.min(i, total) - 1))
+  }, [total])
+
+  // Open the current card on its own, outside the review surface —
+  // honouring the shared modifier policy (plain click zooms it into the
+  // main panel, shift / shift+alt open it in the sidebar / a new panel).
+  const openBlock = useBlockOpener({plainClick: 'navigator'})
+  // Stable handle for the breadcrumb chain above the card.
+  const currentBlock = useMemo(
+    () => (currentId ? repo.block(currentId) : null),
+    [repo, currentId],
+  )
+
   const grade = useCallback(
     async (signal: SrsSignal) => {
       if (!currentId || busy) return
@@ -174,13 +199,17 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
     }
   }, [currentId, busy, repo, advance])
 
-  // Hand the card to the shared reschedule sheet, then move on — the
-  // sheet writes the new date asynchronously; either way this card is
-  // dealt with for the session.
+  // Hand the card to the shared reschedule sheet. Advance only once the
+  // sheet reports a committed date — cancelling, tapping outside, or
+  // pressing Escape leaves the card in place rather than silently
+  // skipping it (the user took no action, so neither should we).
   const reschedule = useCallback(() => {
     if (!currentId) return
-    openReschedulePicker({blockId: currentId, workspaceId})
-    advance()
+    openReschedulePicker({
+      blockId: currentId,
+      workspaceId,
+      onComplete: ({rescheduled}) => { if (rescheduled) advance() },
+    })
   }, [currentId, workspaceId, advance])
 
   const changeDeck = useCallback(() => {
@@ -284,6 +313,12 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
           <p className="text-sm text-muted-foreground">
             {total} {total === 1 ? 'card' : 'cards'} reviewed.
           </p>
+          {canGoBack && (
+            <Button type="button" variant="ghost" size="sm" className="mt-1 h-7 px-2 text-xs" onClick={goBack}>
+              <ArrowLeft className="mr-1 h-3.5 w-3.5" />
+              Back to last card
+            </Button>
+          )}
         </div>
       </div>
     )
@@ -298,6 +333,10 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
       className="mx-auto w-full max-w-2xl py-4 outline-none"
     >
       {header}
+
+      {/* Ancestor chain for the card under review, so its context isn't
+          lost outside the outline. Renders nothing for a top-level card. */}
+      {currentBlock && <Breadcrumbs block={currentBlock} />}
 
       <div className="rounded-xl border bg-card p-4 shadow-sm">
         <NestedBlockContextProvider
@@ -341,7 +380,25 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
         )}
       </div>
 
-      <div className="mt-3 flex items-center justify-center gap-4 text-xs text-muted-foreground">
+      <div className="mt-3 flex flex-wrap items-center justify-center gap-4 text-xs text-muted-foreground">
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 hover:text-foreground disabled:opacity-50"
+          onClick={goBack}
+          disabled={busy || !canGoBack}
+        >
+          <ArrowLeft className="h-3.5 w-3.5" />
+          Previous
+        </button>
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 hover:text-foreground disabled:opacity-50"
+          onClick={e => openBlock(e, {blockId: currentId, workspaceId})}
+          disabled={busy}
+        >
+          <ExternalLink className="h-3.5 w-3.5" />
+          Open
+        </button>
         <button
           type="button"
           className="inline-flex items-center gap-1 hover:text-foreground disabled:opacity-50"

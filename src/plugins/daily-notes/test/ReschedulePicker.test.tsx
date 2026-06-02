@@ -119,4 +119,38 @@ describe('ReschedulePicker', () => {
     expect(top).toBeLessThan(anchorTop)
     expect(top + dialogHeight).toBeLessThanOrEqual(viewportHeight)
   })
+
+  it('reports rescheduled: true to onComplete once a date is committed', async () => {
+    render(<ReschedulePicker/>)
+    const onComplete = vi.fn()
+
+    await act(async () => {
+      openReschedulePicker({blockId: 'block-1', workspaceId: 'ws-1', onComplete})
+    })
+
+    const todayChip = await screen.findByRole('button', {hidden: true, name: 'Today'})
+    await act(async () => {
+      todayChip.click()
+    })
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalledWith({rescheduled: true}))
+    expect(mocks.adapter.setIso).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports rescheduled: false to onComplete when dismissed without committing', async () => {
+    render(<ReschedulePicker/>)
+    const onComplete = vi.fn()
+
+    await act(async () => {
+      openReschedulePicker({blockId: 'block-1', workspaceId: 'ws-1', onComplete})
+    })
+
+    const cancel = await screen.findByRole('button', {hidden: true, name: 'Cancel'})
+    await act(async () => {
+      cancel.click()
+    })
+
+    expect(onComplete).toHaveBeenCalledWith({rescheduled: false})
+    expect(mocks.adapter.setIso).not.toHaveBeenCalled()
+  })
 })

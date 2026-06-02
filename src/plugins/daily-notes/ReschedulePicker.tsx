@@ -28,6 +28,7 @@ import {
   openReschedulePickerEvent,
   type ReschedulePickerAnchorRect,
   type OpenReschedulePickerEventDetail,
+  type ReschedulePickerResult,
 } from './rescheduleEvents.ts'
 
 const DESKTOP_PANEL_MARGIN = 8
@@ -82,6 +83,8 @@ interface ActiveSession {
   initialIso: string
 }
 
+const noop = () => {}
+
 export const ReschedulePicker = () => {
   const runtime = useAppRuntime()
   const repo = useRepo()
@@ -99,8 +102,18 @@ export const ReschedulePicker = () => {
    *  the newer session. Read+write in the event handler is safe;
    *  React queues the setState that depends on it. */
   const openRequestIdRef = useRef(0)
+  /** The current opener's completion callback. Held in a ref (not state)
+   *  so `finish` stays stable and so we can guarantee it fires exactly
+   *  once — we null it out the moment we report, and re-arm it on the
+   *  next open. */
+  const onCompleteRef = useRef<(result: ReschedulePickerResult) => void>(noop)
 
-  const dismiss = useCallback(() => {
+  // Close the sheet and report the outcome to the opener. Every teardown
+  // path (commit, cancel, Escape, outside-tap, superseding open) routes
+  // through here so the callback fires exactly once per session.
+  const finish = useCallback((rescheduled: boolean) => {
+    const onComplete = onCompleteRef.current
+    onCompleteRef.current = noop
     // Bump the counter so any in-flight resolves from this session
     // become stale and won't reopen the sheet.
     openRequestIdRef.current += 1
@@ -108,7 +121,11 @@ export const ReschedulePicker = () => {
     setAnchorRect(null)
     setPreviewIso(null)
     stripDidScrollRef.current = false
+    onComplete({rescheduled})
   }, [])
+
+  // Cancel / outside-tap / Escape: closed without committing a date.
+  const dismiss = useCallback(() => finish(false), [finish])
 
   useEffect(() => {
     const handleOpen = (event: Event) => {
@@ -123,6 +140,12 @@ export const ReschedulePicker = () => {
         console.error(`[reschedule] no adapter handles block ${detail.blockId}`)
         return
       }
+
+      // A new open supersedes any still-open session: report the previous
+      // opener's callback as cancelled (it never committed) before we
+      // re-arm, so it isn't left waiting forever.
+      onCompleteRef.current({rescheduled: false})
+      onCompleteRef.current = detail.onComplete ?? noop
 
       const requestId = ++openRequestIdRef.current
 
@@ -217,10 +240,11 @@ export const ReschedulePicker = () => {
     // until the stale promise resolves).
     const committingFor = openRequestIdRef.current
     setPending(true)
+    let wrote = false
     try {
       const block = repo.block(session.blockId)
-      const ok = await session.adapter.setIso(block, iso)
-      if (!ok) {
+      wrote = await session.adapter.setIso(block, iso)
+      if (!wrote) {
         console.warn(`[reschedule] adapter ${session.adapter.id} refused write`)
       }
     } catch (error) {
@@ -238,7 +262,10 @@ export const ReschedulePicker = () => {
       return
     }
     setPending(false)
-    dismiss()
+    // Report `rescheduled` only when the date actually landed; a refused
+    // or thrown write is, for the opener's purposes, the same as a cancel
+    // (the SRS review session must not advance past a card it never moved).
+    finish(wrote)
   }
 
   const previewDate = previewIso ? fromIso(previewIso) : null
