@@ -153,4 +153,40 @@ describe('ReschedulePicker', () => {
     expect(onComplete).toHaveBeenCalledWith({rescheduled: false})
     expect(mocks.adapter.setIso).not.toHaveBeenCalled()
   })
+
+  it('reports the real outcome when dismissed while the write is still in flight', async () => {
+    // Hold the write open so we can dismiss the sheet mid-commit, then
+    // resolve it — the committed date must still be reported as success.
+    let resolveWrite: (ok: boolean) => void = () => {}
+    mocks.adapter.setIso.mockImplementationOnce(
+      () => new Promise<boolean>(resolve => { resolveWrite = resolve }),
+    )
+
+    render(<ReschedulePicker/>)
+    const onComplete = vi.fn()
+
+    await act(async () => {
+      openReschedulePicker({blockId: 'block-1', workspaceId: 'ws-1', onComplete})
+    })
+
+    const todayChip = await screen.findByRole('button', {hidden: true, name: 'Today'})
+    await act(async () => {
+      todayChip.click()
+    })
+
+    // Dismiss before the write resolves — must NOT report a premature
+    // cancel that would drop the in-flight success.
+    const cancel = await screen.findByRole('button', {hidden: true, name: 'Cancel'})
+    await act(async () => {
+      cancel.click()
+    })
+    expect(onComplete).not.toHaveBeenCalled()
+
+    await act(async () => {
+      resolveWrite(true)
+    })
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalledWith({rescheduled: true}))
+    expect(onComplete).toHaveBeenCalledTimes(1)
+  })
 })
