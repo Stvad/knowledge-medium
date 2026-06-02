@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState, type FocusEvent as ReactFocusEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FocusEvent as ReactFocusEvent } from 'react'
 import {
   ArchiveX,
   CalendarClock,
@@ -34,10 +34,15 @@ import { reviewDeckStartedProp } from './schema.ts'
 import { SRS_REVIEW_CONTEXT, type SrsReviewController } from './actions.ts'
 import { SRS_REVIEW_CARD_ID, SRS_REVIEW_REVEALED } from './reviewCardLayout.tsx'
 
-const isEditableElement = (el: HTMLElement | null): boolean => {
+const isInteractiveTarget = (el: HTMLElement | null): boolean => {
   if (!el) return false
   // `isContentEditable` covers CodeMirror's focusable `.cm-content`.
-  return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable
+  if (el.isContentEditable) return true
+  if (el.getAttribute('role') === 'button') return true
+  // Buttons/links/form controls keep their own keys (Enter/Space activate
+  // them) — the review context must not shadow that, or keyboard users
+  // couldn't operate the grade/reschedule/archive controls.
+  return ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A'].includes(el.tagName)
 }
 
 /** Whether a block is still a live, schedulable review card — mirrors
@@ -95,6 +100,20 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
 
   const total = queue?.length ?? 0
   const currentId = queue && index < queue.length ? queue[index] : null
+
+  // A finished session keeps the frozen queue, so it would otherwise show
+  // "Review complete" forever and ignore the (now reactive, midnight-
+  // aware) due query. When genuinely new cards appear — next day's cards,
+  // or ones added elsewhere — restart with those. Filtering to ids not in
+  // the finished queue avoids re-reviewing a just-graded card that's
+  // still lingering in a stale query result.
+  if (queue !== null && index >= queue.length) {
+    const fresh = dueCards.filter(card => !queue.includes(card.id))
+    if (fresh.length > 0) {
+      setQueue(fresh.map(card => card.id))
+      setIndex(0)
+    }
+  }
 
   const advance = useCallback(() => {
     setRevealed(false)
@@ -193,9 +212,10 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
   useActionContextActivations(shortcutActivations)
 
   const handleSurfaceFocus = useCallback((e: ReactFocusEvent<HTMLDivElement>) => {
-    // Active only when focus is on the session chrome, not inside the
-    // answer editor — see the context note above.
-    setSurfaceFocused(!isEditableElement(e.target as HTMLElement | null))
+    // Active only when focus is on the session chrome itself, not the
+    // answer editor or an interactive control — see the context note and
+    // `isInteractiveTarget`.
+    setSurfaceFocused(!isInteractiveTarget(e.target as HTMLElement | null))
   }, [])
   const handleSurfaceBlur = useCallback((e: ReactFocusEvent<HTMLDivElement>) => {
     // focusout bubbles; only treat it as leaving when focus moves
@@ -206,13 +226,23 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
   // Focus the session surface once, when the card view first mounts, so
   // the shortcuts are live without a click. We don't refocus per card —
   // that would yank focus back from the reschedule sheet after it opens.
+  const surfaceRef = useRef<HTMLDivElement | null>(null)
   const focusedOnce = useRef(false)
   const focusSessionSurface = useCallback((el: HTMLDivElement | null) => {
+    surfaceRef.current = el
     if (el && !focusedOnce.current) {
       focusedOnce.current = true
       el.focus()
     }
   }, [])
+
+  // On reveal, pull focus back to the surface so the grade keys (1-4) are
+  // live — whether the answer was revealed via Space or by clicking the
+  // "Show answer" button (which would otherwise leave focus on a button,
+  // where the review context is intentionally inactive).
+  useEffect(() => {
+    if (revealed) surfaceRef.current?.focus()
+  }, [revealed])
 
   const deckLabel = tagName.trim() ? tagName.trim() : 'All due cards'
 
