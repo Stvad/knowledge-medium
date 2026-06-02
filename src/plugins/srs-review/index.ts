@@ -2,7 +2,7 @@ import { ArchiveX, GraduationCap } from 'lucide-react'
 import type { Repo } from '@/data/repo'
 import type { AppExtension } from '@/extensions/facet.js'
 import { systemToggle } from '@/extensions/togglable.js'
-import { actionsFacet, blockRenderersFacet } from '@/extensions/core.js'
+import { actionContextsFacet, actionsFacet, blockRenderersFacet } from '@/extensions/core.js'
 import { blockLayoutFacet } from '@/extensions/blockInteraction.js'
 import {
   ActionConfig,
@@ -20,6 +20,7 @@ import { SrsReviewDeckRenderer } from './ReviewDeckRenderer.tsx'
 import { srsReviewCardLayoutContribution } from './reviewCardLayout.tsx'
 import { getOrCreateReviewDeck } from './deck.ts'
 import { archiveSrsCard } from './archive.ts'
+import { srsReviewActionContext, srsReviewActions } from './actions.ts'
 
 export const OPEN_SRS_REVIEW_ACTION_ID = 'open_srs_review'
 export const SRS_ARCHIVE_ACTION_ID = 'srs.archive'
@@ -84,6 +85,10 @@ export const srsReviewPlugin = ({repo}: {repo: Repo}): AppExtension =>
     blockLayoutFacet.of(srsReviewCardLayoutContribution, {source: 'srs-review'}),
     actionsFacet.of(openReviewAction(repo), {source: 'srs-review'}),
     actionsFacet.of(srsArchiveAction, {source: 'srs-review'}),
+    // In-session reveal / grade shortcuts: a dedicated modal context the
+    // review surface activates while focused (see ReviewSession).
+    actionContextsFacet.of(srsReviewActionContext, {source: 'srs-review'}),
+    srsReviewActions.map(action => actionsFacet.of(action, {source: 'srs-review'})),
   ])
 
 export {

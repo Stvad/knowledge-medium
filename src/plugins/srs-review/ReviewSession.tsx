@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { useCallback, useMemo, useRef, useState, type FocusEvent as ReactFocusEvent } from 'react'
 import {
   ArchiveX,
   CalendarClock,
@@ -18,6 +18,7 @@ import { BlockComponent } from '@/components/BlockComponent.js'
 import { Button } from '@/components/ui/button.js'
 import { cn } from '@/lib/utils.js'
 import { showError, showInfo } from '@/utils/toast.js'
+import { useActionContextActivations } from '@/shortcuts/useActionContext.js'
 import { openReschedulePicker } from '@/plugins/daily-notes'
 import {
   SRS_SM25_TYPE,
@@ -29,13 +30,8 @@ import { SrsSignal } from '@/plugins/srs-rescheduling/scheduler.js'
 import { useDueCards } from './useDueCards.ts'
 import { archiveSrsCard } from './archive.ts'
 import { reviewDeckStartedProp } from './schema.ts'
+import { SRS_REVIEW_CONTEXT, type SrsReviewController } from './actions.ts'
 import { SRS_REVIEW_CARD_ID, SRS_REVIEW_REVEALED } from './reviewCardLayout.tsx'
-
-const isEditableTarget = (): boolean => {
-  const el = document.activeElement as HTMLElement | null
-  if (!el) return false
-  return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable
-}
 
 /** Whether a block is still a live, schedulable review card — mirrors
  *  the deck's membership conditions (`buildDueCardsQuery`): it must
@@ -69,13 +65,6 @@ const GRADE_BUTTONS: readonly GradeButton[] = [
   {signal: SrsSignal.GOOD, label: 'Good', hint: '3', icon: Check, className: 'text-emerald-600'},
   {signal: SrsSignal.EASY, label: 'Easy', hint: '4', icon: Sparkles, className: 'text-sky-600'},
 ]
-
-const GRADE_BY_KEY: Readonly<Record<string, SrsSignal>> = {
-  '1': SrsSignal.AGAIN,
-  '2': SrsSignal.HARD,
-  '3': SrsSignal.GOOD,
-  '4': SrsSignal.EASY,
-}
 
 export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) => {
   const repo = useRepo()
@@ -171,31 +160,30 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
     void deck.set(reviewDeckStartedProp, false)
   }, [deck])
 
-  // Keyboard: space/enter reveals, 1–4 grade. Scoped to the session's
-  // own surface via a container `onKeyDown` (not a global `window`
-  // listener) so a deck rendered in a background panel never grabs
-  // these keys while the user is interacting elsewhere — and two open
-  // decks don't fight over them. The editable-target guard additionally
-  // lets typing into the revealed answer (a live outline) through
-  // instead of firing a grade.
-  const handleKeyDown = useCallback(
-    (e: ReactKeyboardEvent<HTMLDivElement>) => {
-      if (busy || isEditableTarget()) return
-      if (!revealed) {
-        if (e.key === ' ' || e.key === 'Enter') {
-          e.preventDefault()
-          setRevealed(true)
-        }
-        return
-      }
-      const signal = GRADE_BY_KEY[e.key]
-      if (signal !== undefined) {
-        e.preventDefault()
-        void grade(signal)
-      }
-    },
-    [busy, revealed, grade],
-  )
+  // Reveal/grade run through the app's shortcut system via a dedicated
+  // modal `srs-review` context (see actions.ts), not a hand-rolled key
+  // handler. The session activates that context only while its surface
+  // is focused, so a deck in a background panel — or a second open deck
+  // — never grabs Space/1-4, and the dispatcher's default event filter
+  // keeps grade keys from firing while editing the revealed answer.
+  const [surfaceFocused, setSurfaceFocused] = useState(false)
+  const controller = useMemo<SrsReviewController>(() => ({
+    reveal: () => { if (!busy) setRevealed(true) },
+    grade: signal => { if (revealed && !busy) void grade(signal) },
+  }), [busy, revealed, grade])
+  const shortcutActivations = useMemo(() => [{
+    context: SRS_REVIEW_CONTEXT,
+    dependencies: {controller},
+    enabled: surfaceFocused && currentId !== null,
+  }], [controller, surfaceFocused, currentId])
+  useActionContextActivations(shortcutActivations)
+
+  const handleSurfaceFocus = useCallback(() => setSurfaceFocused(true), [])
+  const handleSurfaceBlur = useCallback((e: ReactFocusEvent<HTMLDivElement>) => {
+    // focusout bubbles; only treat it as leaving when focus moves
+    // outside the session subtree entirely.
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setSurfaceFocused(false)
+  }, [])
 
   // Focus the session surface once, when the card view first mounts, so
   // the shortcuts are live without a click. We don't refocus per card —
@@ -257,7 +245,8 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
     <div
       ref={focusSessionSurface}
       tabIndex={-1}
-      onKeyDown={handleKeyDown}
+      onFocus={handleSurfaceFocus}
+      onBlur={handleSurfaceBlur}
       className="mx-auto w-full max-w-2xl py-4 outline-none"
     >
       {header}
