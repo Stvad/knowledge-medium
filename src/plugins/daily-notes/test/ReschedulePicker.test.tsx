@@ -189,4 +189,39 @@ describe('ReschedulePicker', () => {
     await waitFor(() => expect(onComplete).toHaveBeenCalledWith({rescheduled: true}))
     expect(onComplete).toHaveBeenCalledTimes(1)
   })
+
+  it('reports the original commit even if the picker is reopened before a slow write resolves', async () => {
+    let resolveWrite: (ok: boolean) => void = () => {}
+    mocks.adapter.setIso.mockImplementationOnce(
+      () => new Promise<boolean>(resolve => { resolveWrite = resolve }),
+    )
+
+    render(<ReschedulePicker/>)
+    const onCompleteA = vi.fn()
+    const onCompleteB = vi.fn()
+
+    await act(async () => {
+      openReschedulePicker({blockId: 'block-1', workspaceId: 'ws-1', onComplete: onCompleteA})
+    })
+    const todayChip = await screen.findByRole('button', {hidden: true, name: 'Today'})
+    await act(async () => {
+      todayChip.click()
+    })
+
+    // Reopen for a fresh session before the first write resolves: the
+    // earlier opener must still receive its committed outcome (not a
+    // premature cancel) and the new opener must not.
+    await act(async () => {
+      openReschedulePicker({blockId: 'block-1', workspaceId: 'ws-1', onComplete: onCompleteB})
+    })
+    expect(onCompleteA).not.toHaveBeenCalled()
+
+    await act(async () => {
+      resolveWrite(true)
+    })
+
+    await waitFor(() => expect(onCompleteA).toHaveBeenCalledWith({rescheduled: true}))
+    expect(onCompleteA).toHaveBeenCalledTimes(1)
+    expect(onCompleteB).not.toHaveBeenCalled()
+  })
 })

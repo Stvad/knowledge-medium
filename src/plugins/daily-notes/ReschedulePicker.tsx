@@ -107,48 +107,31 @@ export const ReschedulePicker = () => {
    *  once — we null it out the moment we report, and re-arm it on the
    *  next open. */
   const onCompleteRef = useRef<(result: ReschedulePickerResult) => void>(noop)
-  /** Mirrors `pending` synchronously so `dismiss` can tell, at the moment
-   *  it fires, whether a commit write is mid-flight. */
-  const pendingRef = useRef(false)
 
-  // Tear the sheet down and report the outcome to the opener. The commit
-  // path and the no-write cancel paths both route through here so the
-  // callback fires exactly once per session.
-  const finish = useCallback((rescheduled: boolean) => {
-    const onComplete = onCompleteRef.current
-    onCompleteRef.current = noop
-    pendingRef.current = false
-    // Bump the counter so any in-flight resolves from this session
-    // become stale and won't reopen the sheet.
+  // Hide the sheet and reset per-session state. Does NOT report a result:
+  // callers report (or have already reported) explicitly. Bumping the
+  // request id marks any of this session's in-flight async resolves stale
+  // so they neither reopen nor re-tear-down the sheet.
+  const teardown = useCallback(() => {
     openRequestIdRef.current += 1
     setSession(null)
     setAnchorRect(null)
     setPreviewIso(null)
     setPending(false)
     stripDidScrollRef.current = false
-    onComplete({rescheduled})
   }, [])
 
   // Cancel / outside-tap / Escape: closed without the user committing a
-  // date here.
+  // date here. Report the *current, uncommitted* opener as cancelled. If
+  // a commit already started, it took ownership of the report (nulling
+  // the ref), so this reports to a no-op and the in-flight write stays
+  // authoritative.
   const dismiss = useCallback(() => {
-    if (pendingRef.current) {
-      // A commit write is mid-flight (the user picked a date, then
-      // dismissed before `setIso` resolved). Hide the sheet now, but
-      // leave the callback armed and the request id untouched so the
-      // in-flight `commit` still reports the *real* outcome. Bumping the
-      // id here (as `finish` does) would make that commit treat its own
-      // success as stale and silently drop it — moving the card's date
-      // while telling the SRS session nothing happened, so it stays on a
-      // card it could grade/reschedule a second time.
-      setSession(null)
-      setAnchorRect(null)
-      setPreviewIso(null)
-      stripDidScrollRef.current = false
-      return
-    }
-    finish(false)
-  }, [finish])
+    const report = onCompleteRef.current
+    onCompleteRef.current = noop
+    report({rescheduled: false})
+    teardown()
+  }, [teardown])
 
   useEffect(() => {
     const handleOpen = (event: Event) => {
@@ -165,8 +148,10 @@ export const ReschedulePicker = () => {
       }
 
       // A new open supersedes any still-open session: report the previous
-      // opener's callback as cancelled (it never committed) before we
-      // re-arm, so it isn't left waiting forever.
+      // *uncommitted* opener as cancelled before we re-arm, so it isn't
+      // left waiting forever. A session whose commit already started has
+      // nulled the ref (it owns its own report), so a slow write in flight
+      // still reports its real outcome rather than this premature cancel.
       onCompleteRef.current({rescheduled: false})
       onCompleteRef.current = detail.onComplete ?? noop
 
@@ -195,9 +180,8 @@ export const ReschedulePicker = () => {
         if (openRequestIdRef.current !== requestId) return
         const initialDate = fromIso(initialIso) ?? new Date()
         // Clear any stranded `pending` from an earlier session whose
-        // commit hasn't resolved yet (its finally now no-ops because
+        // commit hasn't resolved yet (its teardown now no-ops because
         // the request id has moved on).
-        pendingRef.current = false
         setPending(false)
         setSession({
           blockId: detail.blockId,
@@ -256,14 +240,18 @@ export const ReschedulePicker = () => {
 
   const commit = async (iso: string) => {
     if (!session || pending) return
-    // Scope completion to the open-request id that was current when
-    // we started the write. If the user dismisses and reopens (or
-    // opens for a different block) while `setIso` is in flight, the
-    // older promise's `finally` would otherwise dismiss the NEW
-    // sheet and leave it with `pending = true` (buttons disabled
-    // until the stale promise resolves).
+    // Scope teardown to the open-request id that was current when we
+    // started the write. If the user dismisses and reopens (or opens for
+    // a different block) while `setIso` is in flight, the older promise
+    // would otherwise tear down the NEW sheet.
     const committingFor = openRequestIdRef.current
-    pendingRef.current = true
+    // Take ownership of the completion report the instant the write
+    // starts: capture the opener's callback and clear the shared ref so
+    // neither a later dismiss nor a reopen can fire it prematurely with a
+    // cancel — or drop it. The write outcome reported below is then
+    // authoritative no matter what the user does to the sheet meanwhile.
+    const report = onCompleteRef.current
+    onCompleteRef.current = noop
     setPending(true)
     let wrote = false
     try {
@@ -280,17 +268,19 @@ export const ReschedulePicker = () => {
       // in scope for the prototype.)
       console.error(`[reschedule] adapter ${session.adapter.id} threw on write`, error)
     }
-    if (openRequestIdRef.current !== committingFor) {
-      // A newer open happened between setPending(true) and now.
-      // Leave its state alone — its own commit/dismiss will manage
-      // pending and visibility.
-      return
-    }
     // Report `rescheduled` only when the date actually landed; a refused
     // or thrown write is, for the opener's purposes, the same as a cancel
-    // (the SRS review session must not advance past a card it never moved).
-    // `finish` clears `pending` as part of teardown.
-    finish(wrote)
+    // (the SRS review session must not advance past a card it never
+    // moved). Report to the captured callback regardless of staleness —
+    // this opener committed, so it gets its real outcome even if a newer
+    // open has since taken over the sheet.
+    report({rescheduled: wrote})
+    if (openRequestIdRef.current !== committingFor) {
+      // A newer open happened between setPending(true) and now; it owns
+      // the visible sheet, so leave its state alone.
+      return
+    }
+    teardown()
   }
 
   const previewDate = previewIso ? fromIso(previewIso) : null
