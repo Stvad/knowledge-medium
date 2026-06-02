@@ -1,17 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FocusEvent as ReactFocusEvent } from 'react'
 import {
   ArchiveX,
+  ArrowLeft,
   CalendarClock,
   Check,
   ChevronLeft,
+  ExternalLink,
   Gauge,
   PartyPopper,
   RotateCcw,
+  SkipForward,
   Sparkles,
 } from 'lucide-react'
 import type { Block } from '@/data/block'
 import type { BlockData } from '@/data/api'
 import { useRepo } from '@/context/repo.js'
+import { useProperty } from '@/hooks/block.js'
 import { getBlockTypes } from '@/data/properties.js'
 import { NestedBlockContextProvider } from '@/context/block.js'
 import { BlockComponent } from '@/components/BlockComponent.js'
@@ -19,15 +23,20 @@ import { Button } from '@/components/ui/button.js'
 import { cn } from '@/lib/utils.js'
 import { showError, showInfo } from '@/utils/toast.js'
 import { useActionContextActivations } from '@/shortcuts/useActionContext.js'
+import { useBlockOpener } from '@/utils/navigation.js'
+import { Breadcrumbs } from '@/plugins/breadcrumbs'
 import { openReschedulePicker } from '@/plugins/daily-notes'
 import {
   SRS_SM25_TYPE,
+  formatIntervalDays,
   formatRescheduleToastMessage,
   rescheduleBlock,
   srsArchivedProp,
+  srsFactorProp,
+  srsIntervalProp,
   srsNextReviewDateProp,
 } from '@/plugins/srs-rescheduling'
-import { SrsSignal } from '@/plugins/srs-rescheduling/scheduler.js'
+import { SrsSignal, estimateSrsIntervalDays } from '@/plugins/srs-rescheduling/scheduler.js'
 import { useDueCards } from './useDueCards.ts'
 import { archiveSrsCard } from './archive.ts'
 import { reviewDeckStartedProp } from './schema.ts'
@@ -79,6 +88,42 @@ const GRADE_BUTTONS: readonly GradeButton[] = [
   {signal: SrsSignal.EASY, label: 'Easy', hint: '4', icon: Sparkles, className: 'text-sky-600'},
 ]
 
+/** The four grade buttons, each labelled with the interval the card would
+ *  next be scheduled for if you picked it ("1d", "4d", "2mo", …). The
+ *  estimate reads the card's live interval/factor so it tracks edits made
+ *  elsewhere, and uses the same formatter as the post-grade toast so the
+ *  two agree. Split into its own component so the `useProperty` reads only
+ *  run for the card on screen. */
+const GradeButtons = ({card, busy, onGrade}: {
+  card: Block
+  busy: boolean
+  onGrade: (signal: SrsSignal) => void
+}) => {
+  const [interval] = useProperty(card, srsIntervalProp)
+  const [factor] = useProperty(card, srsFactorProp)
+  return (
+    <div className="grid grid-cols-4 gap-2">
+      {GRADE_BUTTONS.map(btn => (
+        <Button
+          key={btn.label}
+          type="button"
+          variant="outline"
+          className="flex h-auto flex-col gap-1 py-2"
+          disabled={busy}
+          onClick={() => onGrade(btn.signal)}
+        >
+          <btn.icon className={cn('h-4 w-4', btn.className)} />
+          <span className="text-sm font-medium">{btn.label}</span>
+          <span className="text-[11px] font-medium tabular-nums text-muted-foreground">
+            {formatIntervalDays(estimateSrsIntervalDays({interval, factor}, btn.signal))}
+          </span>
+          <span className="text-[10px] opacity-50">{btn.hint}</span>
+        </Button>
+      ))}
+    </div>
+  )
+}
+
 export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) => {
   const repo = useRepo()
   const workspaceId = deck.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
@@ -119,6 +164,27 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
     setRevealed(false)
     setIndex(i => i + 1)
   }, [])
+
+  // Step back to the card just reviewed (or, from the "complete" screen,
+  // the last card). The frozen queue keeps every reviewed card's id, so
+  // this only re-shows the card — it doesn't undo the grade/reschedule
+  // write that already landed; re-grading reschedules it afresh.
+  const canGoBack = queue !== null && index > 0
+  const goBack = useCallback(() => {
+    setRevealed(false)
+    // From the completion screen index === total, so step to total - 1.
+    setIndex(i => Math.max(0, Math.min(i, total) - 1))
+  }, [total])
+
+  // Open the current card on its own, outside the review surface —
+  // honouring the shared modifier policy (plain click zooms it into the
+  // main panel, shift / shift+alt open it in the sidebar / a new panel).
+  const openBlock = useBlockOpener({plainClick: 'navigator'})
+  // Stable handle for the breadcrumb chain above the card.
+  const currentBlock = useMemo(
+    () => (currentId ? repo.block(currentId) : null),
+    [repo, currentId],
+  )
 
   const grade = useCallback(
     async (signal: SrsSignal) => {
@@ -174,13 +240,17 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
     }
   }, [currentId, busy, repo, advance])
 
-  // Hand the card to the shared reschedule sheet, then move on — the
-  // sheet writes the new date asynchronously; either way this card is
-  // dealt with for the session.
+  // Hand the card to the shared reschedule sheet. Advance only once the
+  // sheet reports a committed date — cancelling, tapping outside, or
+  // pressing Escape leaves the card in place rather than silently
+  // skipping it (the user took no action, so neither should we).
   const reschedule = useCallback(() => {
     if (!currentId) return
-    openReschedulePicker({blockId: currentId, workspaceId})
-    advance()
+    openReschedulePicker({
+      blockId: currentId,
+      workspaceId,
+      onComplete: ({rescheduled}) => { if (rescheduled) advance() },
+    })
   }, [currentId, workspaceId, advance])
 
   const changeDeck = useCallback(() => {
@@ -284,6 +354,12 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
           <p className="text-sm text-muted-foreground">
             {total} {total === 1 ? 'card' : 'cards'} reviewed.
           </p>
+          {canGoBack && (
+            <Button type="button" variant="ghost" size="sm" className="mt-1 h-7 px-2 text-xs" onClick={goBack}>
+              <ArrowLeft className="mr-1 h-3.5 w-3.5" />
+              Back to last card
+            </Button>
+          )}
         </div>
       </div>
     )
@@ -298,6 +374,10 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
       className="mx-auto w-full max-w-2xl py-4 outline-none"
     >
       {header}
+
+      {/* Ancestor chain for the card under review, so its context isn't
+          lost outside the outline. Renders nothing for a top-level card. */}
+      {currentBlock && <Breadcrumbs block={currentBlock} />}
 
       <div className="rounded-xl border bg-card p-4 shadow-sm">
         <NestedBlockContextProvider
@@ -321,27 +401,39 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
             Show answer
             <span className="ml-2 text-xs opacity-70">space</span>
           </Button>
-        ) : (
-          <div className="grid grid-cols-4 gap-2">
-            {GRADE_BUTTONS.map(btn => (
-              <Button
-                key={btn.label}
-                type="button"
-                variant="outline"
-                className="flex h-auto flex-col gap-1 py-2"
-                disabled={busy}
-                onClick={() => void grade(btn.signal)}
-              >
-                <btn.icon className={cn('h-4 w-4', btn.className)} />
-                <span className="text-sm font-medium">{btn.label}</span>
-                <span className="text-[10px] opacity-60">{btn.hint}</span>
-              </Button>
-            ))}
-          </div>
-        )}
+        ) : currentBlock ? (
+          <GradeButtons card={currentBlock} busy={busy} onGrade={signal => void grade(signal)} />
+        ) : null}
       </div>
 
-      <div className="mt-3 flex items-center justify-center gap-4 text-xs text-muted-foreground">
+      <div className="mt-3 flex flex-wrap items-center justify-center gap-4 text-xs text-muted-foreground">
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 hover:text-foreground disabled:opacity-50"
+          onClick={goBack}
+          disabled={busy || !canGoBack}
+        >
+          <ArrowLeft className="h-3.5 w-3.5" />
+          Previous
+        </button>
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 hover:text-foreground disabled:opacity-50"
+          onClick={advance}
+          disabled={busy}
+        >
+          <SkipForward className="h-3.5 w-3.5" />
+          Skip
+        </button>
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 hover:text-foreground disabled:opacity-50"
+          onClick={e => openBlock(e, {blockId: currentId, workspaceId})}
+          disabled={busy}
+        >
+          <ExternalLink className="h-3.5 w-3.5" />
+          Open
+        </button>
         <button
           type="button"
           className="inline-flex items-center gap-1 hover:text-foreground disabled:opacity-50"

@@ -28,6 +28,7 @@ import {
   openReschedulePickerEvent,
   type ReschedulePickerAnchorRect,
   type OpenReschedulePickerEventDetail,
+  type ReschedulePickerResult,
 } from './rescheduleEvents.ts'
 
 const DESKTOP_PANEL_MARGIN = 8
@@ -82,6 +83,8 @@ interface ActiveSession {
   initialIso: string
 }
 
+const noop = () => {}
+
 export const ReschedulePicker = () => {
   const runtime = useAppRuntime()
   const repo = useRepo()
@@ -99,16 +102,36 @@ export const ReschedulePicker = () => {
    *  the newer session. Read+write in the event handler is safe;
    *  React queues the setState that depends on it. */
   const openRequestIdRef = useRef(0)
+  /** The current opener's completion callback. Held in a ref (not state)
+   *  so `finish` stays stable and so we can guarantee it fires exactly
+   *  once — we null it out the moment we report, and re-arm it on the
+   *  next open. */
+  const onCompleteRef = useRef<(result: ReschedulePickerResult) => void>(noop)
 
-  const dismiss = useCallback(() => {
-    // Bump the counter so any in-flight resolves from this session
-    // become stale and won't reopen the sheet.
+  // Hide the sheet and reset per-session state. Does NOT report a result:
+  // callers report (or have already reported) explicitly. Bumping the
+  // request id marks any of this session's in-flight async resolves stale
+  // so they neither reopen nor re-tear-down the sheet.
+  const teardown = useCallback(() => {
     openRequestIdRef.current += 1
     setSession(null)
     setAnchorRect(null)
     setPreviewIso(null)
+    setPending(false)
     stripDidScrollRef.current = false
   }, [])
+
+  // Cancel / outside-tap / Escape: closed without the user committing a
+  // date here. Report the *current, uncommitted* opener as cancelled. If
+  // a commit already started, it took ownership of the report (nulling
+  // the ref), so this reports to a no-op and the in-flight write stays
+  // authoritative.
+  const dismiss = useCallback(() => {
+    const report = onCompleteRef.current
+    onCompleteRef.current = noop
+    report({rescheduled: false})
+    teardown()
+  }, [teardown])
 
   useEffect(() => {
     const handleOpen = (event: Event) => {
@@ -123,6 +146,14 @@ export const ReschedulePicker = () => {
         console.error(`[reschedule] no adapter handles block ${detail.blockId}`)
         return
       }
+
+      // A new open supersedes any still-open session: report the previous
+      // *uncommitted* opener as cancelled before we re-arm, so it isn't
+      // left waiting forever. A session whose commit already started has
+      // nulled the ref (it owns its own report), so a slow write in flight
+      // still reports its real outcome rather than this premature cancel.
+      onCompleteRef.current({rescheduled: false})
+      onCompleteRef.current = detail.onComplete ?? noop
 
       const requestId = ++openRequestIdRef.current
 
@@ -149,7 +180,7 @@ export const ReschedulePicker = () => {
         if (openRequestIdRef.current !== requestId) return
         const initialDate = fromIso(initialIso) ?? new Date()
         // Clear any stranded `pending` from an earlier session whose
-        // commit hasn't resolved yet (its finally now no-ops because
+        // commit hasn't resolved yet (its teardown now no-ops because
         // the request id has moved on).
         setPending(false)
         setSession({
@@ -209,18 +240,24 @@ export const ReschedulePicker = () => {
 
   const commit = async (iso: string) => {
     if (!session || pending) return
-    // Scope completion to the open-request id that was current when
-    // we started the write. If the user dismisses and reopens (or
-    // opens for a different block) while `setIso` is in flight, the
-    // older promise's `finally` would otherwise dismiss the NEW
-    // sheet and leave it with `pending = true` (buttons disabled
-    // until the stale promise resolves).
+    // Scope teardown to the open-request id that was current when we
+    // started the write. If the user dismisses and reopens (or opens for
+    // a different block) while `setIso` is in flight, the older promise
+    // would otherwise tear down the NEW sheet.
     const committingFor = openRequestIdRef.current
+    // Take ownership of the completion report the instant the write
+    // starts: capture the opener's callback and clear the shared ref so
+    // neither a later dismiss nor a reopen can fire it prematurely with a
+    // cancel — or drop it. The write outcome reported below is then
+    // authoritative no matter what the user does to the sheet meanwhile.
+    const report = onCompleteRef.current
+    onCompleteRef.current = noop
     setPending(true)
+    let wrote = false
     try {
       const block = repo.block(session.blockId)
-      const ok = await session.adapter.setIso(block, iso)
-      if (!ok) {
+      wrote = await session.adapter.setIso(block, iso)
+      if (!wrote) {
         console.warn(`[reschedule] adapter ${session.adapter.id} refused write`)
       }
     } catch (error) {
@@ -231,14 +268,19 @@ export const ReschedulePicker = () => {
       // in scope for the prototype.)
       console.error(`[reschedule] adapter ${session.adapter.id} threw on write`, error)
     }
+    // Report `rescheduled` only when the date actually landed; a refused
+    // or thrown write is, for the opener's purposes, the same as a cancel
+    // (the SRS review session must not advance past a card it never
+    // moved). Report to the captured callback regardless of staleness —
+    // this opener committed, so it gets its real outcome even if a newer
+    // open has since taken over the sheet.
+    report({rescheduled: wrote})
     if (openRequestIdRef.current !== committingFor) {
-      // A newer open happened between setPending(true) and now.
-      // Leave its state alone — its own commit/dismiss will manage
-      // pending and visibility.
+      // A newer open happened between setPending(true) and now; it owns
+      // the visible sheet, so leave its state alone.
       return
     }
-    setPending(false)
-    dismiss()
+    teardown()
   }
 
   const previewDate = previewIso ? fromIso(previewIso) : null

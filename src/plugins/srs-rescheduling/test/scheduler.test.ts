@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  estimateSrsIntervalDays,
   getNewSrsParametersFromValues,
   scheduleSrsProperties,
   SrsSignal,
@@ -50,5 +51,14 @@ describe('SRS scheduler', () => {
       SrsSignal.AGAIN,
       noJitter,
     )).toEqual({interval: 1, factor: 1.3})
+  })
+
+  it('estimates the next interval per signal without jitter', () => {
+    const params = {interval: 4, factor: 2.5}
+    // AGAIN resets to 1; HARD = interval * 1.3; GOOD/EASY = interval * factor.
+    expect(estimateSrsIntervalDays(params, SrsSignal.AGAIN)).toBe(1)
+    expect(estimateSrsIntervalDays(params, SrsSignal.HARD)).toBeCloseTo(5.2)
+    expect(estimateSrsIntervalDays(params, SrsSignal.GOOD)).toBe(10)
+    expect(estimateSrsIntervalDays(params, SrsSignal.EASY)).toBe(10)
   })
 })

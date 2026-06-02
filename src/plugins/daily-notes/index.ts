@@ -271,6 +271,7 @@ export {
   openReschedulePickerEvent,
   type OpenReschedulePickerEventDetail,
   type ReschedulePickerAnchorRect,
+  type ReschedulePickerResult,
 } from './rescheduleEvents.ts'
 export {
   DATE_SCRUB_CANCEL_ACTION_ID,
