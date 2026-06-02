@@ -367,10 +367,10 @@ export const getLayoutSessionBlock = memoize(
 )
 
 /** Per-plugin ui-state sub-block under the root ui-state block. The
- *  mirror of `getPluginPrefsBlock` for state that is persistent but
- *  per-device (and therefore should NOT sync) — e.g. "what blocks did
- *  the user open recently on this device". Writes flow through
- *  `ChangeScope.UiState` so they stay out of the upload queue. */
+ *  mirror of `getPluginPrefsBlock` for persistent UI state — e.g.
+ *  "what blocks did the user open recently". Writes flow through
+ *  `ChangeScope.UiState`: not undoable, but they upload and sync
+ *  across devices like any other write. */
 export const getPluginUIStateBlock = memoize(
   async (
     repo: Repo,

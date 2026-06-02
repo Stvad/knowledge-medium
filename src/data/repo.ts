@@ -297,9 +297,10 @@ export interface RepoOptions {
   db: PowerSyncDb
   cache: BlockCache
   user: User
-  /** Read-only mode disables `BlockDefault` / `References` writes.
-   *  `UiState` stays local-only and `UserPrefs` degrades to local-only.
-   *  Default false. */
+  /** Read-only mode rejects `BlockDefault` / `References` writes
+   *  (`ReadOnlyError`). `UiState` and `UserPrefs` writes still proceed
+   *  and upload like any other write — any server-side RLS / FK
+   *  rejection lands in the upload-rejection quarantine. Default false. */
   isReadOnly?: boolean
   /** Now provider — default `Date.now`. Injected for test determinism. */
   now?: () => number
@@ -1055,8 +1056,9 @@ export class Repo {
   /** Toggle read-only mode. Wrapping the field write in a method
    *  keeps call sites that come from inside React hooks lint-clean
    *  (`react-hooks/immutability` flags direct property writes on
-   *  hook outputs). UI-state writes still pass through regardless of
-   *  this flag; UserPrefs writes pass through but stop uploading. */
+   *  hook outputs). UI-state and UserPrefs writes still pass through
+   *  and upload regardless of this flag; only `BlockDefault` /
+   *  `References` writes are rejected. */
   setReadOnly(value: boolean): void {
     this.isReadOnly = value
   }
