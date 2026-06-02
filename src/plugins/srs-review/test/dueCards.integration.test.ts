@@ -22,7 +22,7 @@ import {
   srsNextReviewDateProp,
   srsArchivedProp,
 } from '@/plugins/srs-rescheduling/schema.ts'
-import { buildDueCardsQuery } from '../dueQuery.ts'
+import { UNRESOLVED_TAG_ID, buildDueCardsQuery } from '../dueQuery.ts'
 
 const WS = 'ws-1'
 const NOW = new Date('2026-06-02T12:00:00')
@@ -138,5 +138,37 @@ describe('SRS due cards (end-to-end)', () => {
     await card('off-roam', 'dn-past')
 
     expect(await runIds({workspaceId: WS, tagBlockId: 'roam-page', now: NOW})).toEqual(['on-roam'])
+  })
+
+  it('self scope matches the card itself, not just an ancestor page', async () => {
+    // The default ancestor scope treats "card lives under page X" as a
+    // tag hit; self scope is stricter — only a card that *itself*
+    // references the tag counts.
+    await create({id: 'roam-page', types: [DAILY_NOTE_TYPE], properties: {alias: ['Roam']}})
+    await dailyNote('dn-past', '2026-05-01')
+    await create({
+      id: 'direct',
+      types: [SRS_SM25_TYPE],
+      properties: {[srsNextReviewDateProp.name]: srsNextReviewDateProp.codec.encode('dn-past')},
+      references: [
+        {id: 'dn-past', alias: 'dn-past', sourceField: srsNextReviewDateProp.name},
+        {id: 'roam-page', alias: 'Roam', sourceField: 'body'},
+      ],
+    })
+    await card('under-page-only', 'dn-past', {parentId: 'roam-page'})
+
+    expect(await runIds({workspaceId: WS, tagBlockId: 'roam-page', scope: 'self', now: NOW}))
+      .toEqual(['direct'])
+  })
+
+  it('a named-but-missing tag yields zero, not every due card', async () => {
+    // useDueCards maps an unresolvable tag name to UNRESOLVED_TAG_ID so
+    // a typo'd / not-yet-created tag page reports an empty deck instead
+    // of falling through to the unfiltered "all due" set.
+    await dailyNote('dn-past', '2026-05-01')
+    await card('c1', 'dn-past')
+    await card('c2', 'dn-past')
+
+    expect(await runIds({workspaceId: WS, tagBlockId: UNRESOLVED_TAG_ID, now: NOW})).toEqual([])
   })
 })
