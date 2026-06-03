@@ -34,6 +34,7 @@ import { cn } from '@/lib/utils.js'
 import { showError, showInfo } from '@/utils/toast.js'
 import { useActionContextActivations } from '@/shortcuts/useActionContext.js'
 import { useBlockOpener } from '@/utils/navigation.js'
+import { withMoveTransition } from '@/utils/viewTransition.js'
 import { BreadcrumbList } from '@/plugins/breadcrumbs'
 import { openReschedulePicker } from '@/plugins/daily-notes'
 import {
@@ -297,6 +298,35 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
   const currentParents = currentId
     ? parentsByCardId.get(currentId) ?? EMPTY_PARENTS
     : EMPTY_PARENTS
+
+  // Promote-in-place: a plain breadcrumb click "unfurls" that ancestor —
+  // the card surface re-renders its subtree (the card is still visible
+  // nested below) and the chain truncates to it, mirroring the backlinks
+  // entry. Modifier clicks still navigate (handled by `onLinkClick`).
+  // `shownId` defaults to the card and snaps back whenever the card
+  // changes (advance / back / skip / restart), so promotion never leaks
+  // across cards.
+  const [shownBlockId, setShownBlockId] = useState<string | null>(currentId)
+  // Snap the promoted view back to the card whenever the card changes
+  // (advance / back / skip / restart) — the "reset state on change during
+  // render" pattern, so a promotion never leaks across cards.
+  const [promotedForCard, setPromotedForCard] = useState(currentId)
+  if (promotedForCard !== currentId) {
+    setPromotedForCard(currentId)
+    setShownBlockId(currentId)
+  }
+  const shownId = shownBlockId ?? currentId
+  // The shown block's ancestors are a prefix of the card's chain, so we
+  // can slice the already-fetched parents instead of querying again.
+  const shownParents = useMemo(() => {
+    if (!shownId || shownId === currentId) return currentParents
+    const cut = currentParents.findIndex(p => p.id === shownId)
+    return cut >= 0 ? currentParents.slice(0, cut) : currentParents
+  }, [shownId, currentId, currentParents])
+  const promoteBreadcrumb = useCallback((parent: Block) => {
+    void withMoveTransition(async () => { setShownBlockId(parent.id) })
+  }, [])
+
   const openBreadcrumb = useBlockOpener()
   const handleBreadcrumbClick = useCallback(
     (e: ReactMouseEvent, parent: Block) => {
@@ -499,6 +529,11 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
     )
   }
 
+  // currentId is non-null past the guards above, so the shown surface id
+  // is always a concrete block id (the card, or a promoted ancestor).
+  const surfaceId = shownBlockId ?? currentId
+  const showingCard = surfaceId === currentId
+
   return (
     <div
       ref={focusSessionSurface}
@@ -509,14 +544,16 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
     >
       {header}
 
-      {/* Ancestor chain for the card under review, so its context isn't
-          lost outside the outline. Fed from the batched prefetch above so
-          it's already warm; renders nothing for a top-level card. */}
-      {currentParents.length > 0 && (
+      {/* Ancestor chain for the block on screen, so its context isn't lost
+          outside the outline. Fed from the batched prefetch above so it's
+          already warm; renders nothing for a top-level block. Plain click
+          unfurls a segment in place (promote); modifier clicks navigate. */}
+      {shownParents.length > 0 && (
         <BreadcrumbList
-          parents={currentParents}
+          parents={shownParents}
           workspaceId={workspaceId}
           overrides={BREADCRUMB_OVERRIDES}
+          onSelect={promoteBreadcrumb}
           onLinkClick={handleBreadcrumbClick}
           className="mb-2 flex flex-wrap items-center gap-1 overflow-x-auto py-1 text-sm text-muted-foreground"
           itemClassName="max-w-full cursor-pointer truncate no-underline"
@@ -526,17 +563,24 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
 
       <div className="rounded-xl border bg-card p-4 shadow-sm">
         <NestedBlockContextProvider
-          overrides={{
+          // While the card itself is shown, gate its answer with the review
+          // layout context. A promoted ancestor renders its full subtree
+          // normally (the card sits within it, in context).
+          overrides={showingCard ? {
             [SRS_REVIEW_CARD_ID]: currentId,
             [SRS_REVIEW_REVEALED]: revealed,
             isNestedSurface: true,
             scopeRootId: currentId,
             renderScopeId: `srs-review:${currentId}`,
+          } : {
+            isNestedSurface: true,
+            scopeRootId: surfaceId,
+            renderScopeId: `srs-review:${currentId}:${surfaceId}`,
           }}
         >
-          {/* keyed by card id so switching cards remounts the subtree
-              rather than diffing one card's outline into the next */}
-          <BlockComponent key={currentId} blockId={currentId} />
+          {/* keyed by the shown id so switching cards (or promoting) remounts
+              the subtree rather than diffing one outline into the next */}
+          <BlockComponent key={surfaceId} blockId={surfaceId} />
         </NestedBlockContextProvider>
       </div>
 
