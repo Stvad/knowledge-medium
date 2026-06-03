@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Action system — implementation plan &amp; sequencing</title>
+<style>
+  body { font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         max-width: 980px; margin: 2rem auto; padding: 0 1.25rem; color: #1f2328; }
+  h1 { font-size: 1.6rem; margin-bottom: .25rem; }
+  h2 { font-size: 1.15rem; margin-top: 2rem; border-bottom: 1px solid #d0d7de; padding-bottom: .25rem; }
+  h3 { font-size: 1rem; margin-top: 1.25rem; }
+  code, pre { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; }
+  pre { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px;
+        padding: .75rem .9rem; overflow-x: auto; }
+  code { background: #f6f8fa; padding: .1em .3em; border-radius: 3px; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+  th, td { border: 1px solid #d0d7de; padding: .5rem .65rem; vertical-align: top; text-align: left; }
+  th { background: #f6f8fa; }
+  ul.tight { margin: .4rem 0; }
+  .done { color: #1a7f37; }
+  .open { color: #cf222e; }
+  .note { background: #fff8c5; border-left: 4px solid #d4a72c; padding: .6rem .85rem;
+          border-radius: 4px; margin: 1rem 0; }
+  .axes { background: #ddf4ff; border-left: 4px solid #0969da; padding: .6rem .85rem;
+          border-radius: 4px; margin: 1rem 0; }
+  .phase { background: #f6f8fa; border: 1px solid #d0d7de; border-left: 4px solid #0969da;
+           border-radius: 4px; padding: .75rem 1rem; margin: 1rem 0; }
+  .phase h3 { margin-top: 0; }
+  .sep { background: #fdf4ff; border-left: 4px solid #8250df; padding: .75rem 1rem;
+         border-radius: 4px; margin: 1rem 0; }
+  small { color: #57606a; }
+  .filepath { color: #57606a; font-size: 11.5px; }
+  .pill { display: inline-block; font-size: 11px; font-weight: 700; padding: .05em .5em;
+          border-radius: 10px; vertical-align: middle; }
+  .pill.bug { background: #ffebe9; color: #cf222e; }
+  .pill.arch { background: #ddf4ff; color: #0969da; }
+  .pill.down { background: #fff1e5; color: #bc4c00; }
+</style>
+</head>
+<body>
+
+<h1>Action system — implementation plan &amp; sequencing</h1>
+<small>Synthesis of the precedence + critique + prior-art + input-unification discussion — 2026-05-30</small>
+
+<p>Consolidates the decisions from <code>docs/shortcut-context-precedence.html</code> (the bug + precedence
+options) and <code>docs/action-system-critique.html</code> (the architectural critique), plus the prior-art
+survey, the focus-tree activation exploration, and the downstream input-unification constraint, into one
+sequenced plan. This doc is the "what to build, in what order" — the other two are the "why."</p>
+
+<div class="axes">
+<strong>The spine: one component everything hangs off.</strong> Every thread converges on
+<code>resolve(activeSet, trigger) → action</code>. The precedence bug needs it (single winner); the critique
+names it (P1); input-unification consumes it (mouse/touch through the same path); the focus-tree model only
+changes what <em>produces</em> <code>activeSet</code>. So the plan is "build the spine, hang things off it,"
+not a list of independent fixes. <strong>Don't</strong> build the narrow dedup-in-loop fix — given a committed
+input-unification consumer, it's work that gets torn out.
+</div>
+
+<h2>Decisions ledger</h2>
+<table>
+<tr><th>Question</th><th>Decision</th><th>Status</th></tr>
+<tr><td>Is the double-fire a bug?</td><td>Yes — single winner per chord; nothing intends two actions per chord.</td><td class="done">settled</td></tr>
+<tr><td>Dedup-in-loop vs resolver core?</td><td>Resolver core. Dedup-in-loop is negative work given input unification.</td><td class="done">settled</td></tr>
+<tr><td>Activation-time (A) vs fire-time declinable (D)?</td><td>D — a named downstream consumer needs declinable dispatch (click "not mine, fall through").</td><td class="done">settled</td></tr>
+<tr><td>Precedence signal?</td><td>Context-level <strong>priority via named tiers</strong> (CodeMirror <code>Prec</code> precedent), not raw integers; not per-binding.</td><td class="done">settled</td></tr>
+<tr><td><code>global</code> on a chord collision?</td><td>Reserved top tier — never shadowed by a non-global binding.</td><td class="done">settled</td></tr>
+<tr><td><code>modal</code>?</td><td>Retained, orthogonal — "own all chords, even unbound." Above priority.</td><td class="done">settled</td></tr>
+<tr><td>Trigger type?</td><td>Normalized input descriptor (<code>{kind, modifiers, phase, role}</code>), not <code>KeyboardEvent</code>; phase/role first-class.</td><td class="done">settled</td></tr>
+<tr><td>Replace facets / flatten contexts?</td><td>No. Keep facet contribution + scoping. Unify resolution only.</td><td class="done">settled</td></tr>
+<tr><td><code>global</code> vs active <code>modal</code> on same chord (Escape)?</td><td>Lean: modal is the one tier allowed to override global. Needs explicit sign-off.</td><td class="open">OPEN</td></tr>
+<tr><td>Equal-priority determinism?</td><td>Fall back to recency for now; revisit only if a real case bites.</td><td class="open">deferred</td></tr>
+<tr><td>Full provider/DI dependency model?</td><td>Build only the caller-supplied <em>seam</em> now; full token registry deferred until "dep shapes grow faster than contexts."</td><td class="open">deferred</td></tr>
+<tr><td>Focus-tree activation model?</td><td>Separate prototype track; not a dependency of any phase below.</td><td class="open">prototype</td></tr>
+</table>
+
+<h2>Sequencing</h2>
+
+<div class="phase">
+<h3>Phase 0 — Shared canonicalizer <span class="pill arch">enabling</span></h3>
+<p><strong>What:</strong> lift <code>normalizeChord</code> (<span class="filepath">keybindings-settings/keyCapture.ts:205</span>)
+into <code>src/shortcuts/</code>, add modifier sorting, shape it as <strong>chord↔descriptor</strong> from day
+one (not chord-only). Retrofit <code>keybindingConflicts.ts</code> off it.</p>
+<p><strong>Why first:</strong> Phases 1–3 all assume canonical comparison. Cheap, no behavior change, unblocks
+everything. <span class="filepath">Addresses: precedence-doc "canonicalization is not free" review finding.</span></p>
+<p><strong>Done when:</strong> alias-equivalent chords (<code>Meta+K</code> / <code>$mod+k</code>) and
+reordered modifiers compare equal; one shared helper, used by dedup + conflict detection.</p>
+</div>
+
+<div class="phase">
+<h3>Phase 1 — Resolver core + precedence + canDispatch <span class="pill bug">closes the bug</span> <span class="pill arch">lays the spine</span></h3>
+<p><strong>What (one PR, these are genuinely coupled):</strong></p>
+<ul class="tight">
+  <li><code>resolve(activeSet, trigger) → action</code> as a <strong>fire-time, declinable coordinator</strong>
+      (precedence-doc Option D): one keydown/keyup listener, <code>trigger → ordered candidates →
+      run-until-handled</code>, replacing the N per-action <code>window</code> listeners. Route the keyboard
+      path, <code>runActionById</code>, and <code>useRunAction</code> through it.</li>
+  <li>Comparator <code>(priority desc, then activation-recency desc)</code>, <code>global</code> as reserved
+      top tier, <code>modal</code> preserved. Shared with <code>getActiveActionById</code> so the dispatch and
+      keyboard paths can't diverge.</li>
+  <li><code>priority?: number</code> (named tiers) on <code>ActionContextConfig</code> → fixes the surface
+      early/late inversion.</li>
+  <li><code>canRun</code> → <code>isVisible</code> (UI) + <code>canDispatch</code> (declinable dispatch gate).
+      <code>canDispatch</code> ships <em>with</em> the coordinator — it's what "run-until-handled" calls.</li>
+  <li><strong>Deps seam:</strong> resolve deps from <strong>{active scopes} ∪ {caller/trigger-supplied}</strong>,
+      narrowed at <em>one</em> explicit validated boundary — not active-map-only, not scattered casts.</li>
+</ul>
+<p><strong>Why coupled:</strong> the coordinator with nothing to gate is half a feature; <code>canDispatch</code>
+without the coordinator has no caller; precedence without single-winner doesn't fix the bug. Splitting them
+ships dead code in either direction.</p>
+<p><strong>Retires:</strong> the double-fire (bug); critique weakness 1 (keyboard/dispatch divergence) and the
+swipe fork's reason-to-exist; weakness 3 (canRun-as-gate); weakness 4 symptom (priority escapes lifecycle
+ordering).</p>
+<p><strong>Tests:</strong> higher-priority context wins a same-key collision even when activated earlier;
+deactivation restores the lower binding; equal priority → last-wins; <code>modal</code> suppresses
+non-colliding chords; <code>global</code> survives a modal; same key different phase (hold <code>s</code> vs
+keyup <code>s</code>) does NOT dedup; alias-equivalent chords DO dedup; a declining winner falls through to
+the next candidate; sequence chords (<code>d d</code>) still fire under the coordinator.</p>
+<p><strong>Carries the load-bearing invariant comment:</strong> resolution is correct because
+<code>eventFilter</code> only expands, never declines-and-defers — declinable handling is the supported
+fall-through, not filter scoping.</p>
+</div>
+
+<div class="phase">
+<h3>Phase 2 — Unify the transform pipeline <span class="pill arch">cleanup</span></h3>
+<p><strong>What:</strong> one erased <code>(action) → action | null</code> transform type (no <code>T</code>,
+so the cast lives at the contributor's definition site, not the pipeline); fold
+<code>ActionOverride</code> + <code>ActionDecorator</code> into it; keep <code>keybindingOverridesFacet</code>
+as the one cross-action pass. Add the genuine unbind primitive (<code>decorate → null</code>, parity with
+<code>apply</code>).</p>
+<p><strong>Why separate PR, sequenced close behind:</strong> touches every contributor → wants its own
+reviewable change + codemod. Stacking into Phase 1 makes it unreviewable.</p>
+<p><strong>Retires:</strong> weakness 2 (override/decorator asymmetry, the "which do I use?" folklore); the
+<code>as never</code> casts (weakness 6 symptom); collapses vim's skip-decorators <em>and</em> the downstream
+<code>blockSelectionClickDecoratorsFacet</code> into one mechanism.</p>
+</div>
+
+<div class="phase">
+<h3>Phase 3 — Input unification <span class="pill down">downstream branch</span></h3>
+<p><strong>What:</strong> add mouse/touch descriptor kinds to the Phase-0 matcher; migrate the ~5 input facets
+(<code>blockClickHandlersFacet</code>, <code>blockContentSurfacePropsFacet</code>,
+<code>blockGestureConflictsFacet</code>, <code>blockContentDecoratorsFacet</code>,
+<code>blockSelectionClickDecoratorsFacet</code>) onto <code>resolve()</code>; collapse swipe's
+<code>runBlockAction</code> fork back into the one path.</p>
+<p><strong>Owner:</strong> the spatial-selection branch, not this track. This plan's job through Phase 2 is to
+<em>not foreclose</em> it — which the trigger-descriptor, <code>canDispatch</code>, and caller-supplied deps
+seam decisions all ensure.</p>
+</div>
+
+<h3>Opportunistic — fold in where already touching the code (not their own phases)</h3>
+<ul class="tight">
+  <li>Conflict-UI: broaden <code>contextsOverlap</code> (<span class="filepath">keybindingConflicts.ts:34</span>)
+      to cross-context overlap <em>first</em>, then relabel priority-shadowed chords as intentional ("shadowed
+      by X while active") rather than warnings.</li>
+  <li>De-singleton <code>runActionById</code> (weakness 5) → runtime-scoped service from context.</li>
+  <li>Context generics tidy (weakness 6 residue) — only if the area's already open.</li>
+</ul>
+
+<h2>Dependency thread (why Phase 1's deps seam matters)</h2>
+<div class="note">
+The deps work has <strong>two axes</strong>: <em>typing</em> (who owns the dep type — context vs handler) and
+<em>supply</em> (who produces the value, when — pushed at activation vs provided at dispatch). "Handler-declared
+deps" only fixes typing; <strong>supply is the coherence issue.</strong> Today's push-only model means "to
+dispatch an action you must be its active context" — which is precisely why swipe's <code>runBlockAction</code>
+forks (it holds the deps but can't hand them to the dispatcher). Phase 1 builds only the <em>seam</em>
+(deps from <code>{active scopes} ∪ {caller-supplied}</code>); the full provider/capability DI model
+(scopes provide typed tokens, actions declare needs, missing token ⇒ not dispatchable ⇒ <em>that is</em>
+<code>canDispatch</code>) is deferred until a third data point or the focus-tree prototype — they are the same
+model at different levels of "derive from tree." See critique weakness 6 for the full treatment.
+</div>
+
+<h2>The separate bet — do NOT gate anything on it</h2>
+<div class="sep">
+<strong>Focus-tree activation model.</strong> Replace the flat, runtime-maintained <code>ActiveContextsMap</code>
+with an active set <em>derived from the focus/DOM tree</em>, and split the one <code>activate</code> verb into
+"establish scope" (containment, structural) vs "override" (precedence, declared). This is the genuine
+best-in-class move — it retires the timing-as-precedence <em>bug class</em> at the root (weakness 4) by killing
+the registry that can desync.
+<ul class="tight" style="margin-top:.5rem">
+  <li><strong>It does NOT fix the surface bug</strong> — the surface wants to override <em>against</em>
+      containment depth (it's the ancestor; the block is deeper), which needs the explicit priority/override
+      signal in any architecture. Structural depth alone gives the same wrong answer as last-wins.</li>
+  <li><strong>It composes with the spine, doesn't compete:</strong> it changes what <em>produces</em>
+      <code>activeSet</code>; <code>resolve()</code> consumes one either way. And the provider/capability deps
+      model is literally this model with React-context providers as the chain.</li>
+  <li><strong>Heaviest change discussed</strong> (~27 activation sites + typed-deps threading + non-focus-shaped
+      scopes like multi-select). Recommend a throwaway-branch prototype to validate deps-threading and
+      multi-select before it's a real proposal. Phase 1's <code>priority</code> already patches the bug symptom,
+      so there's no urgency.</li>
+</ul>
+</div>
+
+<h2>PR boundaries (firm)</h2>
+<ul class="tight">
+  <li><strong>Phase 1 and Phase 3 are separate PRs</strong> regardless of doc organization — "fix the
+      double-fire" and "build the unified input resolver" are different-sized commitments and reviews.</li>
+  <li>Phase 0 can ride with Phase 1 or land just ahead of it.</li>
+  <li>Phase 2 is its own PR + codemod.</li>
+  <li>This plan and the two analysis docs stay docs-only; no code in the precedence PR (#57).</li>
+</ul>
+
+<h2>One-line summary</h2>
+<p>Phase 0 (canonicalizer) → Phase 1 (resolver + precedence + canDispatch + deps seam = the bug fix, done as
+the spine) → Phase 2 (transform unification) → Phase 3 (input unification, downstream). Focus-tree rework and
+full dependency DI run as separate tracks gated on their own evidence, never blocking the spine.</p>
+
+</body>
+</html>

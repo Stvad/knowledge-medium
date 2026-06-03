@@ -93,8 +93,8 @@ alone" — not a rewrite. Flagging this so the list of weaknesses below isn't re
 
 <h2>Weaknesses — grouped by theme</h2>
 
-<h3>1. Resolution is implemented three times and the keyboard one disagrees</h3>
-<p>"Given an active set, which action handles X?" is answered in three places:</p>
+<h3>1. Resolution is implemented three four times and the keyboard one disagrees</h3>
+<p>"Given an active set, which action handles X?" is answered in <strong>four</strong> places:</p>
 <ul class="tight">
   <li><code>runActionById</code> → the module dispatcher installed by HotkeyReconciler
       (<span class="filepath">HotkeyReconciler.tsx:174</span>) → <code>getActiveActionById</code>
@@ -103,9 +103,19 @@ alone" — not a rewrite. Flagging this so the list of weaknesses below isn't re
       <code>getActiveActionById</code>, but re-implements the deps-lookup/throw around it.</li>
   <li>The keyboard path → <strong>no resolution at all</strong>; every active action installs its own
       listener, so collisions double-fire (the bug the precedence doc fixes).</li>
+  <li><strong>A plugin-level fork:</strong> swipe-quick-actions' <code>runBlockAction</code>
+      (<span class="filepath">SwipeActionMenu.tsx:340</span>) bypasses <em>all</em> of the above. It reaches
+      into <code>getEffectiveActions(runtime)</code>, <strong>hand-assembles deps</strong>
+      (<code>{block, uiStateBlock, …renderScopeId}</code>), gates on <code>canRun</code>, and calls
+      <code>action.handler(deps, trigger)</code> directly — because the dispatcher requires the action's
+      context (e.g. <code>NORMAL_MODE</code>) to be active, and a swipe gesture is its own activation with no
+      such context up. This is the worst of the four: a <em>plugin</em> re-implementing core dispatch by
+      reaching into registry internals, and it's a preview of the input-unification problem (a non-keyboard
+      trigger dispatching a block action with caller-held deps). See weakness 6 — the push-only supply model
+      is <em>why</em> it had to fork.</li>
 </ul>
-<p class="weak">There is no single "resolve event → action" function. The keyboard path and the dispatch
-path have <em>different</em> semantics (double-fire vs single-winner) for what is conceptually one question.
+<p class="weak">There is no single "resolve event → action" function. The four paths have <em>different</em>
+semantics (double-fire vs single-winner vs hand-rolled) for what is conceptually one question.
 Precedence (priority/modal) then has to be taught to each path separately. <strong>This is the deepest
 structural issue and the one the precedence work half-forces us to confront.</strong></p>
 
@@ -134,15 +144,23 @@ rewrite the action list, with subtle, undocumented differences:</p>
 </ul>
 
 <h3>3. <code>canRun</code> looks authoritative but is presentational</h3>
-<p><code>canRun</code> reads like a guard, but it gates only UI surfaces (palette, swipe menu); the keyboard
-and <code>runActionById</code> paths never call it (<span class="filepath">types.ts:148–156</span> spells this
-out, but the name fights the doc).</p>
+<p><code>canRun</code> reads like a guard, and <span class="filepath">types.ts:148–156</span> documents it as
+presentational-only — the keyboard and <code>runActionById</code> paths never call it. But the name fights
+the doc, and the contract is <strong>already violated in practice</strong>.</p>
 <ul class="tight">
-  <li class="weak">The user's skip-decorators exist <em>because</em> there's no dispatch-level "should this
-      run?" — they fake one by mutating the handler. A real predicate-at-dispatch (the precedence doc's
-      Option D) is the missing concept <code>canRun</code> appears to promise but doesn't deliver.</li>
-  <li class="weak">Name implies authority it doesn't have. <code>isApplicableForDisplay</code> would be honest;
-      or make it actually gate dispatch and the skip-decorator pattern evaporates.</li>
+  <li class="weak"><strong>The "presentational-only" invariant is already false.</strong> swipe's
+      <code>runBlockAction</code> (<span class="filepath">SwipeActionMenu.tsx:351</span>) does
+      <code>if (action.canRun &amp;&amp; !action.canRun(deps)) return false</code> — using <code>canRun</code> as
+      a real dispatch gate, not a display filter. So a plugin already needed a dispatch-level "should this run?"
+      and the only thing on hand was the presentational predicate. The precedence doc leans on
+      "<code>canRun</code> never gates dispatch"; that's a documented contract a shipping plugin breaks. Direct
+      evidence the <code>canDispatch</code> concept is missing and being faked.</li>
+  <li class="weak">The user's skip-decorators exist for the same reason — no dispatch-level gate, so they fake
+      one by mutating the handler. A real predicate-at-dispatch (the precedence doc's Option D /
+      <code>canDispatch</code>) is the missing concept <code>canRun</code> appears to promise but doesn't deliver.</li>
+  <li class="weak">Fix: split into <code>isVisible</code> (UI, presentational) + <code>canDispatch</code>
+      (real dispatch gate, declinable). Then swipe's <code>canRun</code>-as-gate, the skip-decorators, and the
+      scattered guards all collapse onto the one honest mechanism.</li>
 </ul>
 
 <h3>4. Precedence is incidental because activation order is React-lifecycle order</h3>
@@ -159,14 +177,85 @@ mount and nulled on unmount. It works, but: it's global mutable state, it throws
 and it couples "can I dispatch an action" to "is this one React component mounted." For a system whose whole
 point is decoupled contribution, the dispatch entry point being a singleton side-channel is a wart.</p>
 
-<h3>6. Context conflates scope and dependency-bundle</h3>
-<p>An <code>ActionContextConfig</code> is simultaneously (a) an activation scope that gates install, (b) a
-modal/precedence tier, and (c) a typed dependency carrier (<code>validateDependencies</code> +
-<code>ShortcutDependenciesMap</code>). These mostly co-vary, but the conflation shows up as type friction:
-<code>as never</code> / <code>as ActionConfig</code> casts in the override/decorator pipeline
-(<span class="filepath">effectiveActions.ts:52,57</span>) and the <code>bivarianceHack</code> in
-<code>ActionHandler</code> (<span class="filepath">types.ts:126</span>). The generics are being fought rather
-than expressing the model.</p>
+<h3>6. Context conflates scope and dependency-bundle — and dependency <em>supply</em> is the deeper issue</h3>
+<p>An <code>ActionContextConfig</code> (and the context identifier like <code>'normal-mode'</code>) does three
+jobs with different lifecycles: (a) an activation <strong>scope</strong> that gates install, (b) a
+<strong>precedence</strong> tier (<code>modal</code>, future <code>priority</code>), and (c) a typed
+<strong>dependency bundle</strong> (<code>validateDependencies</code> + <code>ShortcutDependenciesMap</code>).
+(a) and (b) legitimately co-vary. The smell is fusing <strong>(c) — per-activation runtime instance data —
+onto the same identifier as the static config</strong>.</p>
+
+<p>This surfaces as type friction (the symptom) and a supply limitation (the real issue).</p>
+
+<h4 style="font-size:.95rem;margin:.8rem 0 .3rem">Symptom: the variance casts</h4>
+<ul class="tight">
+  <li><code>ActiveContextsMap</code> stores the <em>widened base</em> (<code>BaseShortcutDependencies</code>),
+      because a heterogeneous "each key a different value type" map isn't expressible. <code>active.get('normal-mode')</code>
+      returns the base; the narrow type is recovered only by trusting <code>validateDependencies</code> ran.</li>
+  <li><code>override.apply(action as never)</code> (<span class="filepath">effectiveActions.ts:52,57</span>) —
+      a per-<code>T</code> transform applied over a flattened heterogeneous <code>ActionConfig[]</code>; casts
+      to <code>never</code> to silence variance.</li>
+  <li><code>bivarianceHack</code> on <code>ActionHandler</code> (<span class="filepath">types.ts:126</span>) —
+      exists purely to store <code>ActionHandler&lt;NormalMode&gt;</code> in a collection typed for the union.</li>
+  <li>Latent ceiling: deps in a type-keyed slot ⇒ you can't have two simultaneously-active instances of the
+      same context with different deps (two panels both in normal-mode, different focused blocks). Re-activation
+      overwrites. Harmless today; a real wall later.</li>
+</ul>
+
+<h4 style="font-size:.95rem;margin:.8rem 0 .3rem">The real issue: two axes — typing vs supply</h4>
+<p>"Handler-declared deps" (deps type rides with the handler, context goes back to pure scope+precedence)
+fixes <em>typing</em>. But supply is a separate axis, and it's where coherence lives:</p>
+<ul class="tight">
+  <li><strong>Typing</strong> — who owns the dep type? Context (today) vs handler.</li>
+  <li><strong>Supply</strong> — who produces the value, and when? <em>Pushed</em> at activation (today: closure
+      into the active map) vs <em>pulled/provided</em> at dispatch.</li>
+</ul>
+<p>Today is context-keyed + pushed. Because deps live in the active map, <strong>to dispatch an action you must
+be its active context</strong> — even if you already hold every dep it needs. That single constraint is what
+forces swipe's fork (weakness 1): the swipe handler has <code>block</code> and <code>uiStateBlock</code> in
+hand but no way to hand them to the dispatcher, so it bypasses dispatch entirely and calls the handler raw.
+<strong>swipe is hand-rolling the supply model the system doesn't offer.</strong></p>
+
+<h4 style="font-size:.95rem;margin:.8rem 0 .3rem">The coherent target: scopes provide typed capabilities</h4>
+<p>Active scopes become <em>providers</em> of typed tokens; actions declare what they <em>consume</em>; at
+dispatch the resolver walks active scopes in precedence order to fill each needed token:</p>
+<pre><code>activate({ scope: NORMAL_MODE, provides: { [BlockToken]: () =&gt; block } })
+{ needs: [BlockToken], handler: (deps /* {block} */, trigger) =&gt; … }
+// resolve(): pick winner → fill needs from {active scopes} ∪ {caller/trigger-supplied}
+//            a token with no provider ⇒ not dispatchable  ⇒ this IS canDispatch</code></pre>
+<p>This is, structurally, <strong>React-context-for-actions</strong>: a scoped DI container where the active
+scope stack is the provider chain and the comparator picks the winning provider. Payoffs beyond the casts:</p>
+<ul class="tight">
+  <li><strong>Staleness + ref machinery go away.</strong> Getters read fresh at dispatch, so a scope activates
+      <em>once</em> instead of re-activating on every dep-identity change — retiring much of HotkeyReconciler's
+      <code>activeRef</code>/<code>useLayoutEffect</code> dance and the staleness window.</li>
+  <li><strong><code>canDispatch</code> unifies with availability</strong> — "can it run?" = "do its needed
+      tokens resolve right now?". One mechanism replaces <code>canRun</code>-as-gate + skip-decorators + guards.</li>
+  <li><strong>Caller/trigger-supplied tokens dissolve the swipe fork</strong> — swipe supplies
+      <code>BlockToken</code> and dispatches through the one path; same seam input-unification needs for
+      mouse/touch.</li>
+  <li><strong>On the path to focus-tree, not a divergence.</strong> Providers-as-getters → providers-as-React-context;
+      "walk active scopes for a token" → "read up the tree". The focus-tree model is this model where the
+      provider chain <em>is</em> the component tree.</li>
+</ul>
+
+<h4 style="font-size:.95rem;margin:.8rem 0 .3rem">What helps vs. what's overkill</h4>
+<ul class="tight">
+  <li class="keep"><strong>Cheap, do now (Phase 1):</strong> make <code>resolve()</code>'s deps-narrowing
+      <em>one explicit validated seam</em>, and source deps from <strong>{active scopes} ∪ {caller-supplied}</strong>
+      — not active-map-only. This alone lets swipe's fork collapse back into <code>resolve()</code> and gives
+      input-unification its shape, without the full token registry.</li>
+  <li class="keep"><strong>Cheap, do at P2:</strong> design the unified transform type <em>erased</em>
+      (<code>(action) → action | null</code>, no <code>T</code>) so the cast moves from the pipeline to the
+      contributor's definition site (where <code>T</code> is known). Removes the <code>as never</code>.</li>
+  <li class="meh"><strong>Full provider/capability DI (the token registry + getters everywhere):</strong> the
+      real fix for typing <em>and</em> supply, but a rework of all ~27 activation sites. Justified only once
+      <strong>dep shapes grow faster than contexts</strong> — swipe + input are the first two data points;
+      adopt when there's a third, or when the focus-tree prototype lands (they're the same model).</li>
+</ul>
+<p>So #6 is mis-rated as pure cosmetics: the <em>casts</em> are cosmetic, but the <em>supply</em> model is the
+coherence question, and it already costs us one forked dispatch path. The P3 "model scope vs deps separately"
+is the endgame; the Phase-1 seam is the down payment that prevents building it twice.</p>
 
 <h2>The unifying idea: one resolution core</h2>
 <div class="axes">
