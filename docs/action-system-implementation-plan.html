@@ -85,6 +85,23 @@ one (not chord-only). Retrofit <code>keybindingConflicts.ts</code> off it.</p>
 everything. <span class="filepath">Addresses: precedence-doc "canonicalization is not free" review finding.</span></p>
 <p><strong>Done when:</strong> alias-equivalent chords (<code>Meta+K</code> / <code>$mod+k</code>) and
 reordered modifiers compare equal; one shared helper, used by dedup + conflict detection.</p>
+<p><strong>Files &amp; shape:</strong></p>
+<pre><code>// new: src/shortcuts/canonicalizeChord.ts
+export type ChordDescriptor = {
+  kind: 'key'                       // Phase 3 adds 'mouse' | 'touch'
+  key: string                       // canonical, e.g. 'k'
+  mods: readonly Modifier[]         // SORTED + alias-folded: cmd|meta|os → $mod
+  phase: 'keydown' | 'keyup' | 'hold'
+}
+export const canonicalizeChord = (raw: string, phase?: Phase): string  // stable string key
+export const parseChord = (raw: string): ChordDescriptor                // for matching
+</code></pre>
+<p><strong>Steps:</strong> (1) move <code>normalizeChord</code> body out of
+<span class="filepath">keybindings-settings/keyCapture.ts</span> into the new module; (2) add modifier
+<em>sorting</em> (today it folds aliases + lowercases but doesn't sort — that's the gap the review flagged);
+(3) re-export from <code>keyCapture.ts</code> so the settings UI is unchanged; (4) point
+<code>keybindingConflicts.ts</code>' <code>toChordArray</code> bucketing at the canonical key.
+Keep the descriptor shape open (the <code>kind</code> field) so Phase 3 adds variants, not a rewrite.</p>
 </div>
 
 <div class="phase">
@@ -119,6 +136,72 @@ the next candidate; sequence chords (<code>d d</code>) still fire under the coor
 <p><strong>Carries the load-bearing invariant comment:</strong> resolution is correct because
 <code>eventFilter</code> only expands, never declines-and-defers — declinable handling is the supported
 fall-through, not filter scoping.</p>
+
+<p><strong>Core signature &amp; types:</strong></p>
+<pre><code>// new: src/shortcuts/resolve.ts
+type Trigger =
+  | { kind: 'action'; actionId: string }          // runActionById / useRunAction
+  | ChordDescriptor                                // keyboard now; mouse/touch in Phase 3
+
+// pure, unit-testable, no React/DOM:
+resolve(
+  actions: readonly ActionConfig[],   // effective actions (post-transform)
+  active: ActiveContextsMap,
+  trigger: Trigger,
+): readonly ActionConfig[]            // ORDERED candidates, best-first
+
+// comparator (the single source of precedence, shared with getActiveActionById):
+compareContexts(a, b): number  // 1) modal-over-global rule  2) priority desc  3) recency desc
+</code></pre>
+<p><strong>Precedence tiers (named, not raw ints — CodeMirror <code>Prec</code> precedent):</strong>
+<code>type Priority = 'low' | 'default' | 'high'</code> on <code>ActionContextConfig</code> (default
+<code>'default'</code>). <code>global</code> = reserved top; <code>modal</code> orthogonal (own-all-chords).
+The reporting surface declares <code>'high'</code> to beat <code>normal-mode</code>. Keep the set tiny; add a
+tier only when a real case needs one.</p>
+
+<p><strong>The <code>global</code>-vs-<code>modal</code> sub-question (the "Escape case") — DECIDE before coding:</strong>
+<code>global</code> owns <code>Escape</code> (clear focus) as reserved top tier, but a modal mode (e.g. scrub)
+wants <code>Escape</code> to cancel <em>itself</em>. <strong>Recommended &amp; assumed by this plan: an active
+<code>modal</code> context may override <code>global</code> on a shared chord</strong> (consistent with modal
+already being the tier that suppresses everything else). Encode as: comparator ranks active-<code>modal</code>
+above <code>global</code>, <code>global</code> above all other tiers. If you instead want <code>global</code>
+absolutely inviolable, modals must bind a non-<code>Escape</code> cancel key — flag back before building.</p>
+
+<p><strong>File map:</strong></p>
+<ul class="tight">
+  <li><code>src/shortcuts/resolve.ts</code> — new; <code>resolve</code> + <code>compareContexts</code> (pure).</li>
+  <li><code>src/shortcuts/types.ts</code> — add <code>priority</code> to <code>ActionContextConfig</code>;
+      split <code>canRun</code> → <code>isVisible</code> + <code>canDispatch</code>; widen
+      <code>ActionHandler</code> return to allow a "not handled" sentinel (<code>boolean</code>;
+      <code>void</code> = handled, for back-compat). Decide async: declination is a synchronous decision.</li>
+  <li><code>src/shortcuts/effectiveActions.ts</code> — <code>getActiveActionById</code> calls
+      <code>compareContexts</code> (kills the divergence).</li>
+  <li><code>src/shortcuts/HotkeyReconciler.tsx</code> — <strong>the big change.</strong> Replace the
+      per-action <code>window.addEventListener</code> install loop with <em>one</em> keydown + one keyup
+      coordinator that: normalize event → <code>ChordDescriptor</code> (Phase 0) → gather candidates whose
+      <code>(chord, phase)</code> match and whose context is installable → order via <code>compareContexts</code>
+      → run until one's <code>canDispatch</code> passes and its handler returns "handled". Preserve
+      <code>withRecoveredLetterKey</code>, the existing <code>shouldHandleEvent</code> filter cascade, the
+      separate hold-binding observer, <code>eventOptions</code> (preventDefault/stopPropagation) precedence,
+      and <strong>tinykeys sequence state</strong> (<code>d d</code>, <code>g g</code>) — keep a per-candidate
+      sequence matcher; don't reduce each event to a single chord.</li>
+  <li><code>src/shortcuts/runAction.ts</code> — <code>runActionById</code>/<code>useRunAction</code> go through
+      <code>resolve(..., {kind:'action', actionId})</code> + the shared deps seam.</li>
+  <li>Call sites that pass deps: keep working via the seam (see below).</li>
+</ul>
+
+<p><strong>Deps seam (the Phase-1 slice of the dependency model):</strong> one function
+<code>resolveDeps(action, active, supplied?) → deps | null</code> that merges the action's active-context deps
+with optional <em>caller-supplied</em> deps, runs the context's <code>validateDependencies</code>, and is the
+<em>only</em> place the widened→narrow cast happens. <code>null</code> ⇒ not dispatchable (this is what
+<code>canDispatch</code>'s dep-availability check returns). Build it caller-suppliable now so swipe's
+<code>runBlockAction</code> fork can later pass <code>{block, uiStateBlock}</code> through <code>resolve()</code>
+instead of bypassing it — even though the swipe migration itself is Phase 3.</p>
+
+<p><strong>Suggested internal order within the PR:</strong> (1) <code>resolve</code> + <code>compareContexts</code>
+pure, with unit tests — no wiring; (2) <code>priority</code> type + <code>getActiveActionById</code> swap;
+(3) the <code>canRun</code> split; (4) rewrite the reconciler install loop onto the coordinator; (5)
+deps seam; (6) integration tests. Steps 1–3 are independently reviewable even within the one PR.</p>
 </div>
 
 <div class="phase">
@@ -133,6 +216,23 @@ reviewable change + codemod. Stacking into Phase 1 makes it unreviewable.</p>
 <p><strong>Retires:</strong> weakness 2 (override/decorator asymmetry, the "which do I use?" folklore); the
 <code>as never</code> casts (weakness 6 symptom); collapses vim's skip-decorators <em>and</em> the downstream
 <code>blockSelectionClickDecoratorsFacet</code> into one mechanism.</p>
+<p><strong>Shape &amp; files:</strong></p>
+<pre><code>// one type replaces ActionOverride + ActionDecorator:
+type ActionTransform = {
+  actionId: string | '*'
+  context?: ActionContextType
+  apply: (action: ActionConfig) => ActionConfig | null   // ERASED: no T → cast at def site, not pipeline
+}</code></pre>
+<ul class="tight">
+  <li><code>types.ts</code> — define <code>ActionTransform</code>; deprecate the two old types (keep aliases
+      one release for plugins).</li>
+  <li><code>extensions/core.ts</code> — collapse <code>actionOverridesFacet</code> + <code>actionDecoratorsFacet</code>
+      into one transform facet (or keep two facet ids but one type + one apply pass).</li>
+  <li><code>effectiveActions.ts</code> — single ordered transform pass; <code>null</code> drops the action
+      (the genuine unbind primitive). Document phase ordering vs the cross-action keybinding-override pass.</li>
+  <li><strong>Codemod</strong> the ~handful of existing decorators/overrides (srs-rescheduling, vim skip-decorators
+      once they exist post-Phase-1, etc.) to the new type.</li>
+</ul>
 </div>
 
 <div class="phase">
@@ -142,9 +242,21 @@ reviewable change + codemod. Stacking into Phase 1 makes it unreviewable.</p>
 <code>blockGestureConflictsFacet</code>, <code>blockContentDecoratorsFacet</code>,
 <code>blockSelectionClickDecoratorsFacet</code>) onto <code>resolve()</code>; collapse swipe's
 <code>runBlockAction</code> fork back into the one path.</p>
-<p><strong>Owner:</strong> the spatial-selection branch, not this track. This plan's job through Phase 2 is to
-<em>not foreclose</em> it — which the trigger-descriptor, <code>canDispatch</code>, and caller-supplied deps
-seam decisions all ensure.</p>
+<p><strong>Owner:</strong> the spatial-selection branch (<code>claude/shift-click-spatial-selection-SvXGG</code>),
+not this track. This plan's job through Phase 2 is to <em>not foreclose</em> it — which the trigger-descriptor,
+<code>canDispatch</code>, and caller-supplied deps seam decisions all ensure.</p>
+<p><strong>What Phase 1/0 must have left in place for this to be additive (not a rewrite):</strong></p>
+<ul class="tight">
+  <li><code>ChordDescriptor.kind</code> extensible → add <code>{kind:'mouse', button, detail, role, phase}</code>,
+      <code>{kind:'touch', …}</code>; <code>parseChord</code>/matcher branch on <code>kind</code>.</li>
+  <li><code>phase</code>/<code>role</code> already first-class on bindings → a double-click binds at
+      <code>mousedown</code> on the content node to beat native text selection (can't be keyboard-only).</li>
+  <li>The coordinator already owns dispatch → extend it to register pointer/touch listeners alongside
+      keydown/keyup, same candidate-ordering + run-until-handled path.</li>
+  <li><code>canDispatch</code> + caller-supplied deps seam → a click handler declares "this is a selection
+      gesture, not mine" by declining; swipe's <code>runBlockAction</code> collapses into <code>resolve()</code>
+      with <code>{block,…}</code> supplied.</li>
+</ul>
 </div>
 
 <h3>Opportunistic — fold in where already touching the code (not their own phases)</h3>
@@ -171,11 +283,12 @@ model at different levels of "derive from tree." See critique weakness 6 for the
 
 <h2>The separate bet — do NOT gate anything on it</h2>
 <div class="sep">
-<strong>Focus-tree activation model.</strong> Replace the flat, runtime-maintained <code>ActiveContextsMap</code>
-with an active set <em>derived from the focus/DOM tree</em>, and split the one <code>activate</code> verb into
-"establish scope" (containment, structural) vs "override" (precedence, declared). This is the genuine
-best-in-class move — it retires the timing-as-precedence <em>bug class</em> at the root (weakness 4) by killing
-the registry that can desync.
+<strong>Focus-tree activation model</strong> — tracked in
+<a href="https://github.com/Stvad/knowledge-medium/issues/101">issue #101</a>. Replace the flat,
+runtime-maintained <code>ActiveContextsMap</code> with an active set <em>derived from the focus/DOM tree</em>,
+and split the one <code>activate</code> verb into "establish scope" (containment, structural) vs "override"
+(precedence, declared). This is the genuine best-in-class move — it retires the timing-as-precedence
+<em>bug class</em> at the root (weakness 4) by killing the registry that can desync.
 <ul class="tight" style="margin-top:.5rem">
   <li><strong>It does NOT fix the surface bug</strong> — the surface wants to override <em>against</em>
       containment depth (it's the ancestor; the block is deeper), which needs the explicit priority/override
