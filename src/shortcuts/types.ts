@@ -10,6 +10,16 @@ export type ActionIcon = ComponentType<SVGProps<SVGSVGElement>>
 
 export type KeyCombination = string; // e.g. "ctrl+k", "meta+shift+z"
 
+/**
+ * Precedence tier for a context, used when two active contexts bind the
+ * same chord. Named tiers (CodeMirror `Prec` precedent), deliberately NOT
+ * raw integers — keep the set tiny and add a tier only when a real case
+ * needs it. Ordering among the remaining contexts is `high` ▸ `default` ▸
+ * `low`; `global` is a reserved tier above all of these and an active
+ * `modal` context outranks even `global`. Defaults to `'default'`.
+ */
+export type Priority = 'low' | 'default' | 'high';
+
 export interface EventOptions {
   preventDefault?: boolean;
   stopPropagation?: boolean;
@@ -40,6 +50,14 @@ export interface ActionContextConfig<T extends ActionContextType = ActionContext
    * installed so app-wide chords (Cmd+K, Escape) remain reachable.
    */
   modal?: boolean;
+  /**
+   * Precedence tier when two active contexts bind the same chord. Higher
+   * tiers win; ties fall back to activation recency. Orders the
+   * non-`global`, non-`modal` contexts among themselves — `global` sits
+   * above all priorities and an active `modal` above `global`. Defaults to
+   * `'default'`. See {@link Priority}.
+   */
+  priority?: Priority;
   /**
    * Type guard function to validate the dependencies provided when activating the context.
    */

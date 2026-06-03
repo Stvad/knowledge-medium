@@ -19,11 +19,11 @@ import {
   getEffectiveActions,
 } from './effectiveActions.ts'
 import { keybindingOverridesFacet } from './keybindingOverrides.ts'
+import { computeInstallableContexts } from './resolve.ts'
 import {
   ActionConfig,
   ActionContextConfig,
   ActionContextType,
-  ActionContextTypes,
   ActionDispatch,
   ActionTrigger,
   EventOptions,
@@ -40,30 +40,6 @@ const normalizeKeys = (keys: string | string[]): readonly string[] =>
 
 const defaultEventFilter = (event: KeyboardEvent) =>
   !(isTypingKeyEvent(event) && hasEditableTarget(event))
-
-/**
- * When any active context is `modal: true`, the install set collapses to
- * `{global, <most-recent-modal>}`. Otherwise every active context's
- * bindings install. The `global` carve-out keeps app-wide chords
- * (Cmd+K, Escape, …) reachable while a modal is up — without it, opening
- * the command palette during scrub mode would do nothing.
- *
- * Most-recent-wins for modal stacking: `ActiveContextsMap` is insertion-
- * ordered with re-activations rotated to the end (see ActiveContexts.tsx),
- * so the last `set()` of a modal context wins. `canRun` is not considered
- * here — it's presentational, not an install gate ([types.ts]).
- */
-const computeInstallableContexts = (
-  active: ActiveContextsMap,
-  contextConfigsByType: ReadonlyMap<ActionContextType, ActionContextConfig>,
-): ReadonlySet<ActionContextType> => {
-  const contexts = Array.from(active.keys())
-  const latestModal = contexts.toReversed().find(type =>
-    contextConfigsByType.get(type)?.modal === true,
-  )
-  if (!latestModal) return new Set(contexts)
-  return new Set([ActionContextTypes.GLOBAL, latestModal])
-}
 
 const getInstallableContextDeps = (
   context: ActionContextType,
