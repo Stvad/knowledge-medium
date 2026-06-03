@@ -16,6 +16,7 @@ import type {
   ActionContextType,
   KeyCombination,
 } from '@/shortcuts/types.js'
+import { canonicalizeChord } from './canonicalizeChord.ts'
 
 export interface KeybindingConflict {
   readonly chord: string
@@ -46,18 +47,23 @@ const participantOf = (action: ActionConfig): ActionConflictParticipant => ({
 export const findKeybindingConflicts = (
   actions: readonly ActionConfig[],
 ): readonly KeybindingConflict[] => {
-  const byChord = new Map<string, ActionConfig[]>()
+  // Bucket by the canonical key so alias-equivalent chords (`Cmd+K` and
+  // `$mod+k`, or a reordered `Shift+$mod+k`) land together; keep the
+  // first-seen raw chord as the bucket's reported form so the warning
+  // shows the chord the user actually authored, not its canonical spelling.
+  const byChord = new Map<string, {chord: string; actions: ActionConfig[]}>()
   for (const action of actions) {
     if (!action.defaultBinding) continue
     for (const chord of toChordArray(action.defaultBinding.keys)) {
-      const bucket = byChord.get(chord) ?? []
-      bucket.push(action)
-      byChord.set(chord, bucket)
+      const key = canonicalizeChord(chord)
+      const bucket = byChord.get(key) ?? {chord, actions: []}
+      bucket.actions.push(action)
+      byChord.set(key, bucket)
     }
   }
 
   const conflicts: KeybindingConflict[] = []
-  for (const [chord, candidates] of byChord) {
+  for (const {chord, actions: candidates} of byChord.values()) {
     if (candidates.length < 2) continue
     const participants = findOverlappingGroup(candidates)
     if (participants.length < 2) continue
