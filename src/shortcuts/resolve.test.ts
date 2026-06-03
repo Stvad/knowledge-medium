@@ -152,6 +152,23 @@ describe('resolve precedence', () => {
     ])
     expect(ordered.every(a => a.id === 'save')).toBe(true)
   })
+
+  it('by actionId ignores modal shadowing (imperative invocation is not gated by the install filter)', () => {
+    // A modal is active and 'indent' lives in normal-mode, which the keyboard
+    // path shadows. runActionById must still find it — modal shadowing is a
+    // keyboard-install concern only.
+    const ctx = ctxOf(
+      [ActionContextTypes.NORMAL_MODE, 'multi'],
+      [config(ActionContextTypes.NORMAL_MODE), config('multi', {modal: true})],
+    )
+    const byKey = resolve([action('indent', ActionContextTypes.NORMAL_MODE)], ctx, KEY)
+    const byId = resolve([action('indent', ActionContextTypes.NORMAL_MODE)], ctx, {
+      kind: 'action',
+      actionId: 'indent',
+    })
+    expect(byKey).toEqual([]) // shadowed for the keyboard
+    expect(byId.map(a => a.context)).toEqual([ActionContextTypes.NORMAL_MODE]) // found by id
+  })
 })
 
 describe('compareContexts', () => {

@@ -6,13 +6,12 @@ import {
 import type { FacetRuntime } from '@/extensions/facet.js'
 import type {
   ActionConfig,
-  ActionContextType,
   ActionDecorator,
   ActionOverride,
 } from '@/shortcuts/types.js'
-import type { ActiveContextsMap } from './ActiveContexts.tsx'
 import { applyKeybindingOverrides } from './applyKeybindingOverrides.ts'
 import { keybindingOverridesFacet } from './keybindingOverrides.ts'
+import { resolve, type ResolutionContext } from './resolve.ts'
 
 export const actionRuntimeKey = (
   action: Pick<ActionConfig, 'context' | 'id'>,
@@ -74,20 +73,17 @@ export const getEffectiveActions = (runtime: FacetRuntime): readonly ActionConfi
   )
 }
 
+/**
+ * The active action for an id, resolved through the shared precedence core
+ * so this (the imperative `runActionById` / `useRunAction` path) and the
+ * keyboard path can't diverge. Behaviour change vs the old pure
+ * reverse-activation lookup: a `global`-vs-scoped id collision now resolves
+ * to `global` (reserved top tier) instead of to whichever was activated
+ * most recently. Modal shadowing is NOT applied here — imperative
+ * invocation finds an action in any active context (see `resolve`).
+ */
 export const getActiveActionById = (
   actions: readonly ActionConfig[],
-  active: ActiveContextsMap,
+  ctx: ResolutionContext,
   actionId: string,
-): ActionConfig | null => {
-  const byContext = new Map<ActionContextType, ActionConfig>()
-  for (const action of actions) {
-    if (action.id === actionId) byContext.set(action.context, action)
-  }
-
-  for (const context of Array.from(active.keys()).toReversed()) {
-    const action = byContext.get(context)
-    if (action) return action
-  }
-
-  return null
-}
+): ActionConfig | null => resolve(actions, ctx, {kind: 'action', actionId})[0] ?? null

@@ -107,12 +107,19 @@ export const resolve = (
   ctx: ResolutionContext,
   trigger: Trigger,
 ): readonly ActionConfig[] => {
-  const installable = computeInstallableContexts(ctx.active, ctx.contextConfigsByType)
+  // Modal shadowing is a keyboard-install concern only: imperative
+  // id-invocation (runActionById / useRunAction) finds an action in any
+  // active context, matching the old getActiveActionById. So the installable
+  // filter applies to keyboard triggers, not to `{kind:'action'}`.
+  const installable =
+    trigger.kind === 'action'
+      ? undefined
+      : computeInstallableContexts(ctx.active, ctx.contextConfigsByType)
   const candidates = actions.filter(action => {
     if (!ctx.active.has(action.context)) return false
-    if (!installable.has(action.context)) return false
-    if (trigger.kind === 'action' && action.id !== trigger.actionId) return false
-    return true
+    return trigger.kind === 'action'
+      ? action.id === trigger.actionId
+      : installable!.has(action.context)
   })
   return [...candidates].sort((x, y) => compareContexts(x.context, y.context, ctx))
 }

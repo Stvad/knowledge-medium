@@ -148,7 +148,11 @@ export function HotkeyReconciler(): null {
   // always current. Torn down on unmount so stray callers fail loudly.
   useEffect(() => {
     setRunActionDispatcher((actionId: string, trigger: ActionTrigger) => {
-      const action = getActiveActionById(getEffectiveActions(runtime), activeRef.current, actionId)
+      const action = getActiveActionById(
+        getEffectiveActions(runtime),
+        {active: activeRef.current, contextConfigsByType: contextConfigsByTypeRef.current},
+        actionId,
+      )
       if (!action) {
         throw new Error(`[HotkeyReconciler] Active action with ID "${actionId}" not found.`)
       }
