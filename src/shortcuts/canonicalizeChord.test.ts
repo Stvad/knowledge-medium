@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canonicalizeChord, parseChord } from './canonicalizeChord.ts'
+import { canonicalizeChord, normalizeChord, parseChord } from './canonicalizeChord.ts'
 
 describe('parseChord', () => {
   it('splits a sequence chord into one descriptor per press', () => {
@@ -45,5 +45,22 @@ describe('canonicalizeChord', () => {
   it('distinguishes the same chord on different phases', () => {
     expect(canonicalizeChord('s', 'hold')).not.toBe(canonicalizeChord('s', 'keyup'))
     expect(canonicalizeChord('s')).toBe('s')
+  })
+})
+
+describe('normalizeChord (behaviour pinned across the lift)', () => {
+  // The whole PR's safety rests on normalizeChord being a relocation, not a
+  // change. keyCapture.test.ts covers the ordinary cases through the
+  // re-export; these pin the adversarial edges that the position-aware →
+  // "alias or key" rewrite could plausibly have shifted.
+  it.each([
+    ['cmd+shift', '$mod+Shift'],       // all-modifier chord, no final key
+    ['k+cmd', '$mod+k'],               // non-modifier before a modifier
+    ['meta+cmd+k', '$mod+k'],          // duplicate primary folds to one $mod
+    ['Meta+K', '$mod+K'],              // meta→$mod alias; final-key case kept
+    [' cmd + k ', '$mod+k'],           // surrounding whitespace trimmed
+    ['', ''],                          // empty input stays empty
+  ])('normalizeChord(%j) === %j', (input, expected) => {
+    expect(normalizeChord(input)).toBe(expected)
   })
 })
