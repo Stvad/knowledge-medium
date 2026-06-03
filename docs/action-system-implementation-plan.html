@@ -125,25 +125,33 @@ Keep the descriptor shape open (the <code>kind</code> field) so Phase 3 adds var
       keyboard paths can't diverge.</li>
   <li><code>priority?: number</code> (named tiers) on <code>ActionContextConfig</code> → fixes the surface
       early/late inversion.</li>
-  <li><code>canRun</code> → <code>isVisible</code> (UI) + <code>canDispatch</code> (declinable dispatch gate).
-      <code>canDispatch</code> ships <em>with</em> the coordinator — it's what "run-until-handled" calls.</li>
+  <li><code>canRun</code> → <code>isVisible</code> (UI) + <code>canDispatch</code> (dispatch gate).
+      <code>canDispatch</code> ships <em>with</em> the coordinator — it's the skip predicate the single-winner
+      loop iterates on (PR&nbsp;1); the handler-return sentinel joins it as a second skip-condition in PR&nbsp;2.</li>
   <li><strong>Deps seam:</strong> resolve deps from <strong>{active scopes} ∪ {caller/trigger-supplied}</strong>,
       narrowed at <em>one</em> explicit validated boundary — not active-map-only, not scattered casts.</li>
 </ul>
-<p><strong>What's genuinely coupled vs. what can split:</strong> <code>resolve</code> + <code>compareContexts</code>
-+ <code>priority</code> + single-winner dedup are coupled — precedence without single-winner doesn't fix the
-bug. But the <em>fire-time coordinator rewrite</em> (one listener, run-until-handled, the declinable
-handler-return sentinel = Option D) is separable from the bug fix. <strong>Recommended sequencing (two PRs):</strong>
-<em>PR&nbsp;1</em> ships the comparator + <code>priority</code> + <code>canDispatch</code> as a synchronous
-<em>pre-gate</em> + single-winner dedup, <strong>keeping the per-action listener model</strong> — this alone
-closes the double-fire and fixes the early/late inversion, and stays small enough to bisect if shortcuts break.
-<em>PR&nbsp;2</em> swaps to the fire-time coordinator and widens the handler return for declinable fall-through
-(Option&nbsp;D), landing with / just ahead of the spatial-selection branch that is its only fall-through
-consumer. <strong>Option&nbsp;D remains the committed target</strong> (per the downstream input-unification
-need) — this is sequencing, not a retreat to activation-time-only. The risk it manages: the coordinator
-rewrite is the single riskiest mechanical change and its sole fall-through consumer is a branch not present in
-this checkout, so if that branch slips, PR&nbsp;1 has still shipped the user-visible fix. (The earlier
-"splitting ships dead code" framing only holds once both consumers are real — true at PR&nbsp;2 time, not before.)</p>
+<p><strong>What's genuinely coupled vs. what can split (and why the split costs no rework):</strong> the
+<em>resolver core</em> — <code>resolve</code> + <code>compareContexts</code> + <code>priority</code> + the
+Phase-0 canonicalizer + the <code>canDispatch</code> concept + the deps seam — is built <strong>once</strong>
+and shared by both PRs; nothing in it is thrown away. The split is purely about the <em>dispatch contract</em>:
+<strong>PR&nbsp;1</strong> builds the single coordinator (one keydown + one keyup listener) with
+<strong>single-winner selection</strong>: normalize event → gather matching candidates → order via
+<code>compareContexts</code> → iterate and dispatch the <em>first whose <code>canDispatch</code> passes</em>.
+That loop already exists, so it closes the double-fire and fixes the early/late inversion, and depends on nothing
+downstream. <strong>PR&nbsp;2</strong> adds <em>only</em> the declinable fall-through: widen the handler return
+to a not-handled sentinel and add "handler returned <code>false</code>" as one more skip-condition to the loop
+PR&nbsp;1 already wrote (Option&nbsp;D). That is <strong>pure addition — no listener wiring is rewritten or
+discarded.</strong> So the split boundary is "everything the bug fix needs" (PR&nbsp;1, incl. the coordinator)
+vs. "the dispatch-contract change the downstream input work needs" (PR&nbsp;2): PR&nbsp;1 can merge immediately;
+PR&nbsp;2 lands with / just ahead of the spatial-selection branch that is its only fall-through consumer.
+<strong>Option&nbsp;D remains the committed target.</strong> Note the trade: building the coordinator in
+PR&nbsp;1 (rather than keeping per-action listeners and deferring the rewrite) front-loads the one mechanically
+risky change — the reconciler rewrite, which carries the documented <code>useEffectEvent</code> regression
+history — into the bug-fix PR. It is not speculative there: single-winner dispatch needs a single dispatcher
+anyway. The earlier "negative work" warning applies only to the <em>other</em> way to fix the bug
+(activation-time install-filtering / per-listener self-check), which this plan explicitly does not do precisely
+because it would be thrown out at PR&nbsp;2.</p>
 <p><strong>Retires:</strong> the double-fire (bug); critique weakness 1 (keyboard/dispatch divergence) and the
 swipe fork's reason-to-exist; weakness 3 (canRun-as-gate); weakness 4 symptom (priority escapes lifecycle
 ordering).</p>
@@ -252,10 +260,14 @@ caller-suppliable now so swipe's
 <code>runBlockAction</code> fork can later pass <code>{block, uiStateBlock}</code> through <code>resolve()</code>
 instead of bypassing it — even though the swipe migration itself is Phase 3.</p>
 
-<p><strong>Suggested internal order within the PR:</strong> (1) <code>resolve</code> + <code>compareContexts</code>
-pure, with unit tests — no wiring; (2) <code>priority</code> type + <code>getActiveActionById</code> swap;
-(3) the <code>canRun</code> split; (4) rewrite the reconciler install loop onto the coordinator; (5)
-deps seam; (6) integration tests. Steps 1–3 are independently reviewable even within the one PR.</p>
+<p><strong>Suggested internal order (steps 1–6 = PR&nbsp;1; step 7 = PR&nbsp;2):</strong> (1) <code>resolve</code>
++ <code>compareContexts</code> pure, with unit tests — no wiring; (2) <code>priority</code> type +
+<code>getActiveActionById</code> swap; (3) the <code>canRun</code>→<code>isVisible</code>/<code>canDispatch</code>
+split (<code>canDispatch</code> as the single-winner loop's skip predicate, no handler-return sentinel yet);
+(4) rewrite the reconciler install loop onto the single coordinator (single-winner dispatch); (5) deps seam;
+(6) integration tests → <strong>PR&nbsp;1 merges here, bug fixed.</strong> (7) PR&nbsp;2: widen the handler
+return to a not-handled sentinel and add it as a skip-condition in the existing loop (Option&nbsp;D), with the
+spatial branch. Steps 1–3 are independently reviewable even within PR&nbsp;1.</p>
 </div>
 
 <div class="phase">
@@ -365,19 +377,22 @@ and split the one <code>activate</code> verb into "establish scope" (containment
 <ul class="tight">
   <li><strong>Phase 1 and Phase 3 are separate PRs</strong> regardless of doc organization — "fix the
       double-fire" and "build the unified input resolver" are different-sized commitments and reviews.</li>
-  <li><strong>Phase 1 itself is recommended as two PRs</strong> (see "what's coupled vs. what can split"): the
-      bug-fixing comparator/priority/<code>canDispatch</code>-pre-gate first, the fire-time coordinator + Option-D
-      sentinel second (landing with the spatial branch). Option D stays the committed target.</li>
+  <li><strong>Phase 1 itself is recommended as two PRs</strong> (see "what's coupled vs. what can split"):
+      <em>PR&nbsp;1</em> = the coordinator + comparator + <code>priority</code> + single-winner dispatch (the
+      bug fix, depends on nothing downstream); <em>PR&nbsp;2</em> = the declinable handler-return sentinel
+      (Option&nbsp;D) added on top, landing with the spatial branch. The split costs no rework — PR&nbsp;2 is
+      pure addition to PR&nbsp;1's loop. Option D stays the committed target.</li>
   <li>Phase 0 can ride with Phase 1 or land just ahead of it.</li>
   <li>Phase 2 is its own PR + codemod.</li>
   <li>This plan and the two analysis docs stay docs-only; no code in the precedence PR (#57).</li>
 </ul>
 
 <h2>One-line summary</h2>
-<p>Phase 0 (canonicalizer: lift + sequence parsing) → Phase 1 (resolver + precedence + canDispatch + deps seam
-= the spine; recommended as two PRs — bug fix, then fire-time/Option-D coordinator with the spatial branch) →
-Phase 2 (transform unification) → Phase 3 (input unification, downstream). Focus-tree rework and full
-dependency DI run as separate tracks gated on their own evidence, never blocking the spine.</p>
+<p>Phase 0 (canonicalizer: lift + sequence parsing) → Phase 1 (resolver core = the spine, built once;
+recommended as two PRs — coordinator + single-winner bug fix, then Option-D declinable fall-through added on
+top with the spatial branch, no rework) → Phase 2 (transform unification) → Phase 3 (input unification,
+downstream). Focus-tree rework and full dependency DI run as separate tracks gated on their own evidence, never
+blocking the spine.</p>
 
 </body>
 </html>
