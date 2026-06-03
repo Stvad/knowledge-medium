@@ -11,6 +11,7 @@ import {
   type ActionContextType,
 } from '@/shortcuts/types.js'
 import { getActiveActionById, getEffectiveActions } from './effectiveActions.ts'
+import { resolveDeps } from './resolve.ts'
 
 export type RunActionByIdFn = (
   actionId: string,
@@ -64,7 +65,7 @@ export function useRunAction(): RunActionByIdFn {
       if (!action) {
         throw new Error(`[useRunAction] Active action with ID "${actionId}" not found.`)
       }
-      const deps = active.get(action.context)
+      const deps = resolveDeps(action, active, contextConfigsByType)
       if (!deps) throw new Error(`[useRunAction] Context "${action.context}" is not active.`)
       return action.handler(deps, trigger, dispatch)
     },

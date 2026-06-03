@@ -262,8 +262,8 @@ describe('srsReschedulingPlugin', () => {
     const actions = runtime.read(actionsFacet)
     const cutAction = actions.find(it => it.id === 'srs.cut')
     const pasteAction = actions.find(it => it.id === 'srs.paste')
-    expect(typeof cutAction?.canRun).toBe('function')
-    expect(typeof pasteAction?.canRun).toBe('function')
+    expect(typeof cutAction?.isVisible).toBe('function')
+    expect(typeof pasteAction?.isVisible).toBe('function')
 
     expect(runtime.contributions(blockContentSurfacePropsFacet)).toHaveLength(1)
   })
@@ -514,8 +514,8 @@ describe('srsReschedulingPlugin', () => {
     })
 
     // "cut on a non-SRS block is a no-op" is enforced by surfaces via
-    // `canRun` (the gating test below) — the handler itself no longer
-    // re-checks. Direct programmatic invocation that bypasses canRun is
+    // `isVisible` (the gating test below) — the handler itself no longer
+    // re-checks. Direct programmatic invocation that bypasses isVisible is
     // out of contract.
 
     it('paste is a no-op when nothing is stashed', async () => {
@@ -532,7 +532,7 @@ describe('srsReschedulingPlugin', () => {
       expect(data?.properties.types ?? []).not.toContain(SRS_SM25_TYPE)
     })
 
-    it('canRun gates cut to SRS blocks and paste to non-source blocks with a stash', async () => {
+    it('isVisible gates cut to SRS blocks and paste to non-source blocks with a stash', async () => {
       const {repo, runtime} = setupRepo()
       await seedSrsBlock(repo, 'src', 5)
       await seedPlainBlock(repo, 'plain')
@@ -549,16 +549,16 @@ describe('srsReschedulingPlugin', () => {
       await plainBlock.load()
 
       // Cut visible on SRS blocks only.
-      expect(cutAction.canRun!({block: srcBlock, uiStateBlock: srcBlock} as never)).toBe(true)
-      expect(cutAction.canRun!({block: plainBlock, uiStateBlock: plainBlock} as never)).toBe(false)
+      expect(cutAction.isVisible!({block: srcBlock, uiStateBlock: srcBlock} as never)).toBe(true)
+      expect(cutAction.isVisible!({block: plainBlock, uiStateBlock: plainBlock} as never)).toBe(false)
 
       // Paste hidden until something is cut.
-      expect(pasteAction.canRun!({block: plainBlock, uiStateBlock: plainBlock} as never)).toBe(false)
+      expect(pasteAction.isVisible!({block: plainBlock, uiStateBlock: plainBlock} as never)).toBe(false)
 
       setSrsClipboard({sourceBlockId: 'src', sourceWorkspaceId: 'ws-1'})
-      expect(pasteAction.canRun!({block: plainBlock, uiStateBlock: plainBlock} as never)).toBe(true)
+      expect(pasteAction.isVisible!({block: plainBlock, uiStateBlock: plainBlock} as never)).toBe(true)
       // Paste hidden on the source block itself.
-      expect(pasteAction.canRun!({block: srcBlock, uiStateBlock: srcBlock} as never)).toBe(false)
+      expect(pasteAction.isVisible!({block: srcBlock, uiStateBlock: srcBlock} as never)).toBe(false)
     })
   })
 

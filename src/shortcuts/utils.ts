@@ -188,8 +188,8 @@ export interface DefineBlocksActionConfig {
    *  real multi-select and labels the group-header button. */
   blocksDescription: string
   /** Per-block applicability predicate. When provided, the
-   *  NORMAL_MODE variant's `canRun` gates on `appliesTo(block)`,
-   *  and the MULTI_SELECT_MODE variant's `canRun` gates on at
+   *  NORMAL_MODE variant's `isVisible` gates on `appliesTo(block)`,
+   *  and the MULTI_SELECT_MODE variant's `isVisible` gates on at
    *  least one selected block matching. Omit to mean "always". */
   appliesTo?: (block: Block) => boolean
   /** The actual operation. Both variants forward to this with the
@@ -245,7 +245,7 @@ export const defineBlocksAction = ({
     context: ActionContextTypes.NORMAL_MODE,
     ...(icon ? {icon} : {}),
     ...(appliesTo
-      ? {canRun: ({block}: BlockShortcutDependencies) => appliesTo(block)}
+      ? {isVisible: ({block}: BlockShortcutDependencies) => appliesTo(block)}
       : {}),
     handler: ({block}: BlockShortcutDependencies) => flow([block]),
   },
@@ -254,7 +254,7 @@ export const defineBlocksAction = ({
     description: blocksDescription,
     context: ActionContextTypes.MULTI_SELECT_MODE,
     ...(icon ? {icon} : {}),
-    canRun: ({selectedBlocks}: MultiSelectModeDependencies) => {
+    isVisible: ({selectedBlocks}: MultiSelectModeDependencies) => {
       if (selectedBlocks.length === 0) return false
       if (!appliesTo) return true
       return selectedBlocks.some(block => appliesTo(block))

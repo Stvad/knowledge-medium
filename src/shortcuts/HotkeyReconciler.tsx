@@ -19,7 +19,7 @@ import {
   getEffectiveActions,
 } from './effectiveActions.ts'
 import { keybindingOverridesFacet } from './keybindingOverrides.ts'
-import { compareContexts, computeInstallableContexts } from './resolve.ts'
+import { compareContexts, computeInstallableContexts, resolveDeps } from './resolve.ts'
 import {
   ActionConfig,
   ActionContextConfig,
@@ -56,15 +56,16 @@ const normalizeKeys = (keys: string | string[]): readonly string[] =>
 const defaultEventFilter = (event: KeyboardEvent) =>
   !(isTypingKeyEvent(event) && hasEditableTarget(event))
 
+// Keyboard-side deps gate: a candidate's context must still be installable
+// (modal shadowing / the activation race) AND have resolvable deps. Layers the
+// keyboard-only installable filter over the shared resolveDeps.
 const getInstallableContextDeps = (
-  context: ActionContextType,
+  action: ActionConfig,
   active: ActiveContextsMap,
   contextConfigsByType: ReadonlyMap<ActionContextType, ActionContextConfig>,
 ) => {
-  const deps = active.get(context)
-  if (!deps) return null
-  if (!computeInstallableContexts(active, contextConfigsByType).has(context)) return null
-  return deps
+  if (!computeInstallableContexts(active, contextConfigsByType).has(action.context)) return null
+  return resolveDeps(action, active, contextConfigsByType)
 }
 
 /**
@@ -171,7 +172,7 @@ export function HotkeyReconciler(): null {
       if (!action) {
         throw new Error(`[HotkeyReconciler] Active action with ID "${actionId}" not found.`)
       }
-      const deps = activeRef.current.get(action.context)
+      const deps = resolveDeps(action, activeRef.current, contextConfigsByTypeRef.current)
       if (!deps) throw new Error(`[HotkeyReconciler] Context "${action.context}" is not active.`)
       return action.handler(deps, trigger, dispatchRef.current)
     })
@@ -284,15 +285,18 @@ export function HotkeyReconciler(): null {
       if (!shouldHandleEvent(event, active, contextConfigsByType)) return
 
       // Order best-first via the shared comparator, then dispatch the single
-      // winner: the first candidate whose context is still installable. That
-      // installability check is the canDispatch gate (a context can deactivate
-      // or get shadowed between matcher install and this event).
+      // winner: the first candidate that is still dispatchable. A candidate is
+      // skipped (try the next) when its context deactivated / got shadowed
+      // between matcher install and this event (deps null), or when its
+      // explicit canDispatch gate declines. PR 2 adds a third skip: a handler
+      // returning the not-handled sentinel.
       const ordered = completed.slice().sort((a, b) =>
         compareContexts(a.action.context, b.action.context, {active, contextConfigsByType}),
       )
       for (const {action, binding} of ordered) {
-        const deps = getInstallableContextDeps(action.context, active, contextConfigsByType)
+        const deps = getInstallableContextDeps(action, active, contextConfigsByType)
         if (!deps) continue
+        if (action.canDispatch && !action.canDispatch(deps)) continue
         applyEventOptions(event, action, binding, contextConfigsByType)
         try {
           void Promise.resolve(action.handler(deps, event, dispatchRef.current)).catch(error => {
@@ -405,7 +409,7 @@ const installHoldBinding = (config: HoldBindingInstall): (() => void) => {
 
   const fire = (originalEvent: KeyboardEvent): void => {
     const deps = getInstallableContextDeps(
-      action.context,
+      action,
       activeRef.current,
       contextConfigsByTypeRef.current,
     )
@@ -435,7 +439,7 @@ const installHoldBinding = (config: HoldBindingInstall): (() => void) => {
 
     const active = activeRef.current
     const contextConfigsByType = contextConfigsByTypeRef.current
-    if (!getInstallableContextDeps(action.context, active, contextConfigsByType)) return
+    if (!getInstallableContextDeps(action, active, contextConfigsByType)) return
     if (!shouldHandleEvent(event, active, contextConfigsByType)) return
 
     applyEventOptions(event, action, binding, contextConfigsByType)

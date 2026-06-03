@@ -50,7 +50,7 @@ const pair = defineBlocksAction({
   blockDescription: 'Spread block date across upcoming days',
   blocksDescription: 'Spread dates across upcoming days',
   appliesTo: (block: Block) => {
-    // canRun runs sync during render; fall back to "permissive"
+    // isVisible runs sync during render; fall back to "permissive"
     // when the runtime isn't installed yet (test setups) so the
     // surface doesn't disappear unconditionally.
     const runtime = block.repo.facetRuntime

@@ -18,6 +18,7 @@ import {
   type ActionConfig,
   type ActionContextConfig,
   type ActionContextType,
+  type BaseShortcutDependencies,
   type Priority,
 } from '@/shortcuts/types.js'
 import type { ActiveContextsMap } from './ActiveContexts.tsx'
@@ -122,4 +123,37 @@ export const resolve = (
       : installable!.has(action.context)
   })
   return [...candidates].sort((x, y) => compareContexts(x.context, y.context, ctx))
+}
+
+/**
+ * Resolve the dependency object an action's handler receives: the active
+ * context's deps merged with any caller-supplied deps, validated at this one
+ * boundary — the single widened→narrow cast point. Returns `null` when the
+ * context isn't active or the merged deps fail validation; in the run loop
+ * that means "skip this candidate, try the next", never abort.
+ *
+ * Deliberately NOT an installability check: modal shadowing is the keyboard
+ * gather filter (`computeInstallableContexts`), layered by the coordinator —
+ * so imperative `runActionById` still resolves deps for an action in any
+ * active context.
+ *
+ * `supplied` is plumbed for callers that hold deps the active map doesn't yet
+ * (Phase 3's swipe `runBlockAction` passing `{block, uiStateBlock}` instead of
+ * forking the dispatcher); it's unused for now. Validation runs only when deps
+ * are supplied — active-map deps were already validated at activation, so
+ * re-validating them would be redundant work.
+ */
+export const resolveDeps = (
+  action: ActionConfig,
+  active: ActiveContextsMap,
+  contextConfigsByType: ReadonlyMap<ActionContextType, ActionContextConfig>,
+  supplied?: Partial<BaseShortcutDependencies>,
+): BaseShortcutDependencies | null => {
+  const base = active.get(action.context)
+  if (!base) return null
+  if (!supplied) return base
+  const merged = {...base, ...supplied}
+  const config = contextConfigsByType.get(action.context)
+  if (config && !config.validateDependencies(merged)) return null
+  return merged
 }

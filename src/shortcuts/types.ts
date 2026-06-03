@@ -177,15 +177,23 @@ export interface Action<T extends ActionContextType = ActionContextType> {
    *  swipe menus, eventual command-palette icon column). Surfaces that
    *  don't render icons just ignore the field. */
   icon?: ActionIcon;
-  /** Optional synchronous predicate for "is this action meaningfully
-   *  applicable to its current dependencies?". Surfaces that list
-   *  actions (command palette, swipe menu) hide the action when this
-   *  returns false, so the user doesn't see an entry that would silently
-   *  no-op. It is NOT a security gate on `handler` — direct callers can
-   *  still invoke a handler whose `canRun` is false; the contract is
-   *  presentational. Omit to mean "always applicable when the context is
-   *  active". */
-  canRun?: ActionCanRun<T>;
+  /** Optional synchronous predicate for "should this action be SHOWN as
+   *  applicable to its current dependencies?". Surfaces that list actions
+   *  (command palette, swipe menu) hide the action when this returns false,
+   *  so the user doesn't see an entry that would silently no-op. Purely
+   *  presentational — it does NOT gate dispatch: the keyboard path and direct
+   *  callers (`runActionById`) still invoke the handler when `isVisible` is
+   *  false. For a dispatch gate use `canDispatch`. Omit to mean "always
+   *  visible when the context is active". */
+  isVisible?: ActionCanRun<T>;
+  /** Optional synchronous predicate gating keyboard DISPATCH. When present and
+   *  it returns false for the resolved deps, the single-winner coordinator
+   *  SKIPS this action and tries the next candidate for the chord — it does
+   *  not swallow the chord. Distinct from `isVisible` (presentational) and
+   *  from imperative `runActionById`, which does not consult it. Must be
+   *  synchronous — the coordinator picks the winner within the event. Omit to
+   *  mean "always dispatchable when the context is active and deps resolve". */
+  canDispatch?: ActionCanRun<T>;
 }
 
 export type ActionConfig<T extends ActionContextType = ActionContextType> = Action<T>

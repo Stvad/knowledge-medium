@@ -61,17 +61,17 @@ afterEach(async () => {
 })
 
 describe('reschedule action with SRS decorator', () => {
-  it('canRun is true on a regular block with one date reference (base predicate)', async () => {
+  it('isVisible is true on a regular block with one date reference (base predicate)', async () => {
     const runtime = setupRuntime()
     await repo.tx(tx => tx.create({id: 'b', workspaceId: WS, parentId: null, orderKey: 'a',
       content: 'due [[2026-05-15]]'}), {scope: ChangeScope.BlockDefault})
     const block = repo.block('b'); await block.load()
 
     const action = findRescheduleAction(runtime)
-    expect(action.canRun?.({block, uiStateBlock: block} as BlockShortcutDependencies)).toBe(true)
+    expect(action.isVisible?.({block, uiStateBlock: block} as BlockShortcutDependencies)).toBe(true)
   })
 
-  it('canRun is true on an SRS block without inline date (decorator extension)', async () => {
+  it('isVisible is true on an SRS block without inline date (decorator extension)', async () => {
     const runtime = setupRuntime()
     const may1 = await getOrCreateDailyNote(repo, WS, '2026-05-01')
     await repo.tx(tx => tx.create({id: 'srs', workspaceId: WS, parentId: null, orderKey: 'a',
@@ -84,16 +84,16 @@ describe('reschedule action with SRS decorator', () => {
 
     const block = repo.block('srs'); await block.load()
     const action = findRescheduleAction(runtime)
-    expect(action.canRun?.({block, uiStateBlock: block} as BlockShortcutDependencies)).toBe(true)
+    expect(action.isVisible?.({block, uiStateBlock: block} as BlockShortcutDependencies)).toBe(true)
   })
 
-  it('canRun is false on a plain block (no date, no SRS state)', async () => {
+  it('isVisible is false on a plain block (no date, no SRS state)', async () => {
     const runtime = setupRuntime()
     await repo.tx(tx => tx.create({id: 'plain', workspaceId: WS, parentId: null, orderKey: 'a',
       content: 'just notes'}), {scope: ChangeScope.BlockDefault})
     const block = repo.block('plain'); await block.load()
 
     const action = findRescheduleAction(runtime)
-    expect(action.canRun?.({block, uiStateBlock: block} as BlockShortcutDependencies)).toBe(false)
+    expect(action.isVisible?.({block, uiStateBlock: block} as BlockShortcutDependencies)).toBe(false)
   })
 })

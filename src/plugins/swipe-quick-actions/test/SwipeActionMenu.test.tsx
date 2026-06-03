@@ -251,7 +251,7 @@ describe('SwipeActionMenu', () => {
     })
   })
 
-  it('hides items whose action.canRun returns false for the swiped block', async () => {
+  it('hides items whose action.isVisible returns false for the swiped block', async () => {
     const alwaysAction: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
       id: 'always',
       description: 'Always',
@@ -262,7 +262,7 @@ describe('SwipeActionMenu', () => {
       id: 'gated',
       description: 'Gated',
       context: ActionContextTypes.NORMAL_MODE,
-      canRun: ({block}) => block.id !== 'block-1',
+      isVisible: ({block}) => block.id !== 'block-1',
       handler: vi.fn(),
     }
     runtime = resolveFacetRuntimeSync([
@@ -285,13 +285,13 @@ describe('SwipeActionMenu', () => {
     const handler = vi.fn((deps: BlockShortcutDependencies) => {
       expect(deps.block.id).toBe('block-1')
     })
-    const canRun = vi.fn((deps: BlockShortcutDependencies) => deps.block.id === 'block-1')
+    const isVisible = vi.fn((deps: BlockShortcutDependencies) => deps.block.id === 'block-1')
     runtime = resolveFacetRuntimeSync([
       actionsFacet.of({
         id: 'scoped_action',
         description: 'Scoped action',
         context: ActionContextTypes.NORMAL_MODE,
-        canRun,
+        isVisible,
         handler,
       }, {source: 'test'}),
       quickActionItemsFacet.of({actionId: 'scoped_action', label: 'Scoped'}, {source: 'test'}),
@@ -313,7 +313,7 @@ describe('SwipeActionMenu', () => {
     })
     fireEvent.click(await screen.findByRole('button', {name: 'Scoped'}))
 
-    expect(canRun.mock.calls.some(([deps]) => deps.renderScopeId === 'scope-b')).toBe(true)
+    expect(isVisible.mock.calls.some(([deps]) => deps.renderScopeId === 'scope-b')).toBe(true)
     const deps = handler.mock.calls[0]?.[0] as BlockShortcutDependencies | undefined
     expect(deps?.block.id).toBe('block-1')
     expect(deps?.uiStateBlock.id).toBe('panel-1')

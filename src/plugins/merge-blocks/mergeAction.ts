@@ -6,7 +6,7 @@
  * looking at the two blocks' types, so the kernel mutator stays
  * policy-free (see `core.merge`).
  *
- * Visible for any block (no `canRun` gate) per the design discussion:
+ * Visible for any block (no `isVisible` gate) per the design discussion:
  * for outline blocks the user gets a concat-style merge they could've
  * gotten with Backspace; for pages they get the type-aware page merge.
  */

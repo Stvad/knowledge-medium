@@ -140,7 +140,7 @@ export const ReschedulePicker = () => {
       const block = repo.block(detail.blockId)
       const adapter = pickBlockDateAdapter(runtime, block)
       if (!adapter) {
-        // The action's `canRun` already filters this out — log so a
+        // The action's `isVisible` already filters this out — log so a
         // misconfigured plugin (e.g. forgot to register the adapter) is
         // still visible.
         console.error(`[reschedule] no adapter handles block ${detail.blockId}`)

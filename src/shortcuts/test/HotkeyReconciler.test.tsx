@@ -528,6 +528,39 @@ describe('HotkeyReconciler', () => {
       expect(highHandler).toHaveBeenCalledTimes(1)
       expect(lowHandler).not.toHaveBeenCalled()
     })
+
+    it('skips a candidate whose canDispatch declines and dispatches the next', () => {
+      // The high-priority context would win 'k', but its canDispatch returns
+      // false, so the coordinator falls through to the lower context's 'k'.
+      const declinedHandler = vi.fn()
+      const fallbackHandler = vi.fn()
+      const highAction = buildAction({
+        id: 'test.high-decline',
+        context: HIGH_CONTEXT,
+        handler: declinedHandler,
+        canDispatch: () => false,
+        defaultBinding: {keys: 'k'},
+      })
+      const lowAction = buildAction({
+        id: 'test.low-fallback',
+        context: TEST_CONTEXT,
+        handler: fallbackHandler,
+        defaultBinding: {keys: 'k'},
+      })
+
+      render(
+        <Harness
+          actions={[highAction, lowAction]}
+          contexts={[highContextConfig, testContextConfig]}
+        >
+          <SequentialActivator contexts={[HIGH_CONTEXT, TEST_CONTEXT]}/>
+        </Harness>,
+      )
+
+      act(() => dispatchKeydown('k'))
+      expect(declinedHandler).not.toHaveBeenCalled()
+      expect(fallbackHandler).toHaveBeenCalledTimes(1)
+    })
   })
 
   it('observes the latest dependencies after the context re-activates with new ones', () => {

@@ -23,7 +23,7 @@ import { defineFacet, type FacetRuntime } from '@/extensions/facet.js'
 export interface BlockDateAdapter {
   /** Diagnostic id, also distinguishes adapters in tests. */
   readonly id: string
-  /** Sync predicate over `block.peek()` — used by `canRun` gates and
+  /** Sync predicate over `block.peek()` — used by `isVisible` gates and
    *  the swipe-menu visibility filter, which both run during render. */
   canHandle: (block: Block) => boolean
   /** Resolves the ISO (`YYYY-MM-DD`) the adapter is currently representing
