@@ -327,14 +327,18 @@ chord, regardless of priority or activation order. Without this carve-out the co
 later same-priority context would otherwise win Cmd+K / Escape. (<code>computeInstallableContexts</code> only
 keeps <code>global</code> in the install <em>set</em>; it does not rank it within a collision, so the dedup pass
 must special-case it.) Drop B (suppression, not precedence; name-coupled) and C (A with coupling).</p>
-<p style="margin:.5rem 0"><strong>If NO — every case is "this layer wins these keys, full stop":</strong>
-ship <strong>A + activation-time</strong> resolution (dedup in the reconcile loop that already runs). Smallest
-change; no handler-contract churn. This is the default recommendation absent evidence otherwise.</p>
-<p style="margin:.5rem 0 0"><strong>If YES — a surface wants to own a key sometimes and pass it through
-otherwise:</strong> ship <strong>A + D (fire-time, declinable)</strong>. Costs a real dispatch coordinator and
-a handler return value, but it's the clean version of the capability the double-fire gives us by accident, and
-retrofitting it later means redoing the dispatch path. <em>This is the open decision for the reader</em> — see
-the question at the top of Open questions.</p>
+<p style="margin:.5rem 0 0"><strong>Resolved (2026-05-30): ship A + D (fire-time, declinable), built as the
+resolution core.</strong> The open question below was "does anything need conditional yield?" — a committed
+downstream consumer answers YES: input-unification work (spatial selection) needs a click handler to say "this
+is a selection gesture, not mine — fall through," which is the same declinable mechanism, and needs the single
+fire-time coordinator D builds (chord/descriptor → ordered candidates → run-until-handled) to later own
+mouse/touch too. Given a <em>named</em> consumer (not a speculative one), the YAGNI case for the cheaper
+activation-time A collapses: building A would leave the keyboard path as N <code>window</code> listeners that
+the input work must tear out — negative work. So: build the winner-selection as a reusable
+<code>resolve(activeSet, trigger)</code> the keyboard path, <code>runActionById</code>, and
+<code>useRunAction</code> all call; make <code>trigger</code> a normalized descriptor, not a
+<code>KeyboardEvent</code>; keep <code>phase</code>/<code>role</code> first-class on bindings. A's
+activation-time dedup remains the correct fallback <em>only</em> if the input-unification work is abandoned.</p>
 </div>
 
 <div class="note">
@@ -351,12 +355,20 @@ everywhere" need, the clean tool is letting <code>ActionDecorator.decorate</code
 
 <h2>Open questions / risks</h2>
 <ul class="tight">
-  <li><strong>THE decision: is conditional fall-through (Option D) needed?</strong> Everything else is
-      settled; this isn't. Decider: audit the 8 skip-decorators on the user's surface. If they always no-op the
-      host action when the surface is active → unconditional → A alone suffices, ship activation-time. If any
-      no-op the host <em>only under a condition</em> (and otherwise want the host to run) → that's conditional
-      fall-through in disguise → ship D (fire-time). Picking activation-time and discovering a conditional case
-      later is a dispatch-path rewrite, so decide this deliberately, not by default.</li>
+  <li><strong>THE decision: is conditional fall-through (Option D) needed? — RESOLVED YES (2026-05-30).</strong>
+      A committed downstream consumer (input-unification / spatial selection) needs declinable dispatch: a click
+      handler that says "this is a selection gesture, not mine — fall through" is exactly conditional fall-through,
+      and it wants the same fire-time coordinator extended to own mouse/touch. That converts this from a
+      speculative YAGNI risk into a named requirement, so ship D built as the shared resolver. (The earlier
+      decider — auditing the surface's skip-decorators for conditional no-ops — still applies as corroboration,
+      but the downstream consumer is dispositive on its own.)</li>
+  <li><strong>Normalized trigger descriptor (from the same downstream constraint).</strong> The resolver's
+      event arg must be an opaque/normalized input descriptor — <code>{kind, modifiers, phase, role, …}</code> —
+      not a <code>KeyboardEvent</code>, so mouse/gesture descriptor kinds can be added to the same matcher later.
+      Two specifics this forces: (1) the shared canonicalizer (above) becomes chord↔descriptor, not chord-only;
+      (2) <code>phase</code> and <code>role</code> are first-class binding fields, not keyboard-only — a
+      double-click gesture binds at <code>mousedown</code> on the content node to beat native text selection.
+      Don't bake phase as keyboard-specific.</li>
   <li><strong>The <code>eventFilter</code> invariant is load-bearing for activation-time.</strong> Pre-resolution
       is correct <em>only because</em> no context can decline-and-defer a chord today. If we ship activation-time
       and someone later writes a filter (or handler) meant to scope a chord down and hand it to a lower layer,

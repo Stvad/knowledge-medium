@@ -174,9 +174,12 @@ Most of the weaknesses above (1, 3, 4, partly 5) are the same shape: <strong>the
 owns "active set + event → which action runs."</strong> Resolution is smeared across per-action listeners,
 two dispatch helpers, a presentational predicate, and an implicit lifecycle ordering. The high-leverage
 refactor is to introduce <em>one</em> resolver and route every path through it:
-<pre><code>resolve(activeSet, event | actionId): ActionConfig | null
+<pre><code>resolve(activeSet, trigger): ActionConfig | null
+  // trigger = actionId | normalized input descriptor
+  //   descriptor: {kind:'key'|'mouse'|'touch'|…, modifiers, phase, role, …}
+  //   NOT a raw KeyboardEvent — canonicalization (chord/descriptor) sits
+  //   behind the shared canonicalizer so non-key triggers reuse the matcher
   // single comparator: (priority desc, activation-recency desc)
-  // single canonicalization of chords
   // single place to add modal / declinable / future tiers</code></pre>
 Keyboard dispatch, <code>runActionById</code>, and <code>useRunAction</code> all call it. Precedence,
 canonicalization, modal, and (if chosen) declinable fall-through become properties of the resolver, defined
@@ -184,23 +187,49 @@ once, instead of being re-taught to each path. This is also exactly what the pre
 comparator, used by both paths" bullet is reaching for — generalized.
 </div>
 
+<div class="note">
+<strong>Downstream consumer (2026-05-30): input unification.</strong> Spatial-navigation/selection work on
+another branch is hitting the input-side mirror of weakness 1 — mouse/click/gesture handling is smeared across
+~5 bespoke facets (<code>blockClickHandlersFacet</code>, <code>blockContentSurfacePropsFacet</code>,
+<code>blockGestureConflictsFacet</code>, <code>blockContentDecoratorsFacet</code>, and a new
+<code>blockSelectionClickDecoratorsFacet</code>). The intent downstream is to route <em>all</em> input through
+this same <code>resolve()</code> — which is why the <code>trigger</code> arg is a normalized descriptor, not a
+<code>KeyboardEvent</code>, and why <code>phase</code>/<code>role</code> must be first-class binding fields
+(a double-click gesture binds at <code>mousedown</code> on the content node to beat native text selection).
+This turns two of the prioritized items below from "nice cleanup" into "unblocks active work": the resolver
+itself (a click handler needs declinable "not mine — fall through" dispatch, which is the same mechanism as a
+shortcut yielding a key), and the <code>canDispatch</code> split (the declarative gate that replaces both the
+imperative skip-decorators and the scattered <code>if (isSelectionClick(event)) return</code> guards).
+<strong>This composes with — does not compete with — the focus-derived activation-model exploration:</strong>
+<code>resolve()</code> consumes an active set; the activation model produces one. Either source of
+<code>activeSet</code> feeds the same resolver, so pursuing the resolver now doesn't foreclose that rework.
+</div>
+
 <h2>What's worth doing — prioritized</h2>
 <table class="prio">
 <tr><th>Priority</th><th>Change</th><th>Why / payoff</th></tr>
 <tr><td class="p1">P1</td>
   <td>Single resolution core; route keyboard + both dispatch helpers through it
-      (subsumes the precedence doc's comparator + the double-fire fix)</td>
-  <td>Kills the keyboard/dispatch divergence (weakness 1), gives precedence/canonicalization/modal one home,
-      makes Option D a localized change later instead of a rewrite. Highest leverage.</td></tr>
+      (subsumes the precedence doc's comparator + the double-fire fix). Build it as the
+      <strong>fire-time, declinable</strong> coordinator (precedence-doc Option D), with the
+      <code>trigger</code> as a normalized descriptor — not a dedup bolted onto the install loop.</td>
+  <td>Kills the keyboard/dispatch divergence (weakness 1), gives precedence/canonicalization/modal one home.
+      The dedup-in-loop variant would leave the keyboard path as N independent <code>window</code> listeners that
+      input-unification must then tear out and rebuild — so building it that way is negative work. Highest leverage.</td></tr>
 <tr><td class="p1">P1</td>
   <td>Decide <code>canRun</code>'s identity: either rename to a display-only name, or split into
       <code>isVisible</code> (UI) + <code>canDispatch</code> (gate)</td>
-  <td>Removes the reason skip-decorators exist (weakness 3). Cheap, clarifies a contract people already misuse.</td></tr>
+  <td>Removes the reason skip-decorators exist (weakness 3). <code>canDispatch</code> is the declarative
+      "not me — fall through" gate the input-unification work needs to replace its click guards; land it
+      <em>with</em> the resolver. Cheap, clarifies a contract people already misuse.</td></tr>
 <tr><td class="p2">P2</td>
   <td>Unify the transform pipeline: one <code>(action) → action | null</code> transform type with a
-      documented phase, fold decorator/override into it; keep keybinding-override as the one cross-action pass</td>
-  <td>Ends the override/decorator asymmetry and the "which do I use?" folklore (weakness 2). Medium risk —
-      touches every contributor, so worth a codemod.</td></tr>
+      documented phase, fold decorator/override into it; keep keybinding-override as the one cross-action pass.
+      <em>Sequence close behind the resolver, not stacked into one PR.</em></td>
+  <td>Ends the override/decorator asymmetry and the "which do I use?" folklore (weakness 2). Also the type that
+      vim's skip-decorators <em>and</em> the downstream <code>blockSelectionClickDecoratorsFacet</code> both
+      collapse into — so it directly retires input-side duplication too. Medium risk — touches every contributor,
+      so worth a codemod.</td></tr>
 <tr><td class="p3">P3</td>
   <td>Replace the <code>runActionById</code> singleton with a runtime-scoped service obtained from context</td>
   <td>Removes global mutable state + mount-coupling (weakness 5). Mostly mechanical; low urgency.</td></tr>
