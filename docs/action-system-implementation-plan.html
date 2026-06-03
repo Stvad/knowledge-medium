@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Action system — implementation plan &amp; sequencing</title>
+<style>
+  body { font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         max-width: 980px; margin: 2rem auto; padding: 0 1.25rem; color: #1f2328; }
+  h1 { font-size: 1.6rem; margin-bottom: .25rem; }
+  h2 { font-size: 1.15rem; margin-top: 2rem; border-bottom: 1px solid #d0d7de; padding-bottom: .25rem; }
+  h3 { font-size: 1rem; margin-top: 1.25rem; }
+  code, pre { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; }
+  pre { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px;
+        padding: .75rem .9rem; overflow-x: auto; }
+  code { background: #f6f8fa; padding: .1em .3em; border-radius: 3px; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+  th, td { border: 1px solid #d0d7de; padding: .5rem .65rem; vertical-align: top; text-align: left; }
+  th { background: #f6f8fa; }
+  ul.tight { margin: .4rem 0; }
+  .done { color: #1a7f37; }
+  .open { color: #cf222e; }
+  .note { background: #fff8c5; border-left: 4px solid #d4a72c; padding: .6rem .85rem;
+          border-radius: 4px; margin: 1rem 0; }
+  .axes { background: #ddf4ff; border-left: 4px solid #0969da; padding: .6rem .85rem;
+          border-radius: 4px; margin: 1rem 0; }
+  .phase { background: #f6f8fa; border: 1px solid #d0d7de; border-left: 4px solid #0969da;
+           border-radius: 4px; padding: .75rem 1rem; margin: 1rem 0; }
+  .phase h3 { margin-top: 0; }
+  .sep { background: #fdf4ff; border-left: 4px solid #8250df; padding: .75rem 1rem;
+         border-radius: 4px; margin: 1rem 0; }
+  small { color: #57606a; }
+  .filepath { color: #57606a; font-size: 11.5px; }
+  .pill { display: inline-block; font-size: 11px; font-weight: 700; padding: .05em .5em;
+          border-radius: 10px; vertical-align: middle; }
+  .pill.bug { background: #ffebe9; color: #cf222e; }
+  .pill.arch { background: #ddf4ff; color: #0969da; }
+  .pill.down { background: #fff1e5; color: #bc4c00; }
+</style>
+</head>
+<body>
+
+<h1>Action system — implementation plan &amp; sequencing</h1>
+<small>Synthesis of the precedence + critique + prior-art + input-unification discussion — 2026-05-30</small>
+
+<p>Consolidates the decisions from <code>docs/shortcut-context-precedence.html</code> (the bug + precedence
+options) and <code>docs/action-system-critique.html</code> (the architectural critique), plus the prior-art
+survey, the focus-tree activation exploration, and the downstream input-unification constraint, into one
+sequenced plan. This doc is the "what to build, in what order" — the other two are the "why."</p>
+
+<div class="axes">
+<strong>The spine: one component everything hangs off.</strong> Every thread converges on
+<code>resolve(activeSet, trigger) → action</code>. The precedence bug needs it (single winner); the critique
+names it (P1); input-unification consumes it (mouse/touch through the same path); the focus-tree model only
+changes what <em>produces</em> <code>activeSet</code>. So the plan is "build the spine, hang things off it,"
+not a list of independent fixes. <strong>Don't</strong> build the narrow dedup-in-loop fix — given a committed
+input-unification consumer, it's work that gets torn out.
+</div>
+
+<h2>Decisions ledger</h2>
+<table>
+<tr><th>Question</th><th>Decision</th><th>Status</th></tr>
+<tr><td>Is the double-fire a bug?</td><td>Yes — single winner per chord; nothing intends two actions per chord.</td><td class="done">settled</td></tr>
+<tr><td>Dedup-in-loop vs resolver core?</td><td>Resolver core. Dedup-in-loop is negative work given input unification.</td><td class="done">settled</td></tr>
+<tr><td>Activation-time (A) vs fire-time declinable (D)?</td><td>D — a named downstream consumer needs declinable dispatch (click "not mine, fall through").</td><td class="done">settled</td></tr>
+<tr><td>Precedence signal?</td><td>Context-level <strong>priority via named tiers</strong> (CodeMirror <code>Prec</code> precedent), not raw integers; not per-binding.</td><td class="done">settled</td></tr>
+<tr><td><code>global</code> on a chord collision?</td><td>Reserved top tier — never shadowed by a non-global binding.</td><td class="done">settled</td></tr>
+<tr><td><code>modal</code>?</td><td>Retained, orthogonal — "own all chords, even unbound." Above priority.</td><td class="done">settled</td></tr>
+<tr><td>Trigger type?</td><td>Normalized input descriptor (<code>{kind, modifiers, phase, role}</code>), not <code>KeyboardEvent</code>; phase/role first-class.</td><td class="done">settled</td></tr>
+<tr><td>Replace facets / flatten contexts?</td><td>No. Keep facet contribution + scoping. Unify resolution only.</td><td class="done">settled</td></tr>
+<tr><td><code>global</code> vs active <code>modal</code> on same chord (Escape)?</td><td>Lean: modal is the one tier allowed to override global. Needs explicit sign-off.</td><td class="open">OPEN</td></tr>
+<tr><td>Equal-priority determinism?</td><td>Fall back to recency for now; revisit only if a real case bites.</td><td class="open">deferred</td></tr>
+<tr><td>Full provider/DI dependency model?</td><td>Build only the caller-supplied <em>seam</em> now; full token registry deferred until "dep shapes grow faster than contexts."</td><td class="open">deferred</td></tr>
+<tr><td>Focus-tree activation model?</td><td>Separate prototype track; not a dependency of any phase below.</td><td class="open">prototype</td></tr>
+</table>
+
+<h2>Sequencing</h2>
+
+<div class="phase">
+<h3>Phase 0 — Shared canonicalizer <span class="pill arch">enabling</span></h3>
+<p><strong>What:</strong> lift <code>normalizeChord</code> (<span class="filepath">keybindings-settings/keyCapture.ts:205</span>)
+into <code>src/shortcuts/</code>, add <em>sequence-chord parsing</em>, shape it as <strong>chord↔descriptor</strong>
+from day one (not chord-only). Retrofit <code>keybindingConflicts.ts</code> off it.</p>
+<p><strong>Why first:</strong> Phases 1–3 all assume canonical comparison. Cheap, no behavior change, unblocks
+everything. <span class="filepath">Addresses: precedence-doc "canonicalization is not free" review finding.</span></p>
+<p><strong>Done when:</strong> alias-equivalent chords (<code>Meta+K</code> / <code>$mod+k</code>) compare equal
+(already true today, including modifier order — see Steps); <em>sequence</em> chords (<code>d d</code>,
+<code>g g</code>) parse into an ordered list of presses instead of one atomic key; one shared helper, used by
+dedup + conflict detection.</p>
+<p><strong>Files &amp; shape:</strong></p>
+<pre><code>// new: src/shortcuts/canonicalizeChord.ts
+export type ChordDescriptor = {
+  kind: 'key'                       // Phase 3 adds 'mouse' | 'touch'
+  key: string                       // canonical, e.g. 'k'
+  mods: readonly Modifier[]         // SORTED + alias-folded (ALREADY done today): cmd|meta|os → $mod
+  phase: 'keydown' | 'keyup' | 'hold'
+}
+// a chord is a SEQUENCE of presses: 'd d' / 'g g' → two descriptors; ordinary chords are length 1.
+export type ChordSequence = readonly ChordDescriptor[]
+export const canonicalizeChord = (raw: string, phase?: Phase): string   // stable key; sequence-aware
+export const parseChord = (raw: string): ChordSequence                  // for matching; splits on SPACE first
+</code></pre>
+<p><strong>Steps:</strong> (1) move <code>normalizeChord</code> body out of
+<span class="filepath">keybindings-settings/keyCapture.ts</span> into the new module — it <em>already</em>
+alias-folds, lowercases, AND sorts modifiers (<span class="filepath">keyCapture.ts:236</span>, tested at
+<span class="filepath">test/keyCapture.test.ts:147</span>), so this is a relocation, not a fix;
+(2) add the <em>real</em> gap — <strong>sequence-chord parsing</strong>: today it splits on <code>+</code>
+only and treats a space-bearing token like <code>d d</code> / <code>g g</code> as a single atomic key, so the
+canonicalizer must split on space first into an ordered list of presses, then canonicalize each press;
+(3) re-export from <code>keyCapture.ts</code> so the settings UI is unchanged; (4) point
+<code>keybindingConflicts.ts</code>' <code>toChordArray</code> bucketing at the canonical key.
+Keep the descriptor shape open (the <code>kind</code> field) so Phase 3 adds variants, not a rewrite.</p>
+</div>
+
+<div class="phase">
+<h3>Phase 1 — Resolver core + precedence + canDispatch <span class="pill bug">closes the bug</span> <span class="pill arch">lays the spine</span></h3>
+<p><strong>What (one or two PRs — see "what's coupled vs. what can split" below):</strong></p>
+<ul class="tight">
+  <li><code>resolve(activeSet, trigger) → action</code> as a <strong>fire-time, declinable coordinator</strong>
+      (precedence-doc Option D): one keydown/keyup listener, <code>trigger → ordered candidates →
+      run-until-handled</code>, replacing the N per-action <code>window</code> listeners. Route the keyboard
+      path, <code>runActionById</code>, and <code>useRunAction</code> through it.</li>
+  <li>Comparator <code>(priority desc, then activation-recency desc)</code>, <code>global</code> as reserved
+      top tier, <code>modal</code> preserved. Shared with <code>getActiveActionById</code> so the dispatch and
+      keyboard paths can't diverge.</li>
+  <li><code>priority</code> as <strong>named tiers</strong> <code>'low' | 'default' | 'high'</code> (see
+      "Precedence tiers" below — <em>not</em> a raw <code>number</code>) on <code>ActionContextConfig</code> →
+      fixes the surface early/late inversion.</li>
+  <li><code>canRun</code> → <code>isVisible</code> (UI) + <code>canDispatch</code> (dispatch gate).
+      <code>canDispatch</code> ships <em>with</em> the coordinator — it's the skip predicate the single-winner
+      loop iterates on (PR&nbsp;1); the handler-return sentinel joins it as a second skip-condition in PR&nbsp;2.</li>
+  <li><strong>Deps seam:</strong> resolve deps from <strong>{active scopes} ∪ {caller/trigger-supplied}</strong>,
+      narrowed at <em>one</em> explicit validated boundary — not active-map-only, not scattered casts.</li>
+</ul>
+<p><strong>What's genuinely coupled vs. what can split (and why the split costs no rework):</strong> the
+<em>resolver core</em> — <code>resolve</code> + <code>compareContexts</code> + <code>priority</code> + the
+Phase-0 canonicalizer + the <code>canDispatch</code> concept + the deps seam — is built <strong>once</strong>
+and shared by both PRs; nothing in it is thrown away. The split is purely about the <em>dispatch contract</em>:
+<strong>PR&nbsp;1</strong> builds the single coordinator (one keydown + one keyup listener) with
+<strong>single-winner selection</strong>: normalize event → gather matching candidates → order via
+<code>compareContexts</code> → iterate and dispatch the <em>first whose <code>canDispatch</code> passes</em>.
+That loop already exists, so it closes the double-fire and fixes the early/late inversion, and depends on nothing
+downstream. <strong>PR&nbsp;2</strong> adds <em>only</em> the declinable fall-through: widen the handler return
+to a not-handled sentinel and add "handler returned <code>false</code>" as one more skip-condition to the loop
+PR&nbsp;1 already wrote (Option&nbsp;D). That is <strong>pure addition — no listener wiring is rewritten or
+discarded.</strong> <strong>Scope that claim precisely:</strong> "no rework" is about the <em>listener wiring</em>
+specifically. PR&nbsp;2 still <em>widens the shared <code>ActionHandler</code> return type</em> (add the
+not-handled sentinel). That is back-compat — <code>void</code> = handled, so no handler is <em>forced</em> to
+change — but it touches a signature that <strong>~176 <code>handler:</code> definitions across ~49 files</strong>
+structurally depend on, so budget PR&nbsp;2 as a wide-blast-radius type review even though nothing breaks. So the
+split boundary is "everything the bug fix needs" (PR&nbsp;1, incl. the coordinator)
+vs. "the dispatch-contract change the downstream input work needs" (PR&nbsp;2): PR&nbsp;1 can merge immediately;
+PR&nbsp;2 lands with / just ahead of the spatial-selection branch that is its only fall-through consumer.
+<strong>Option&nbsp;D remains the committed target.</strong> Note the trade — and don't mis-scope PR&nbsp;1 as
+"small": building the coordinator in PR&nbsp;1 (rather than keeping per-action listeners and deferring the
+rewrite) front-loads the one mechanically risky change — the reconciler rewrite, which carries the documented
+<code>useEffectEvent</code> regression history — into the bug-fix PR. It is not speculative there: the coordinator
+is the single-winner decision point that PR&nbsp;2 builds on, so it isn't discarded. (Strictly, a per-listener
+self-check against the shared comparator could fix <em>only</em> the double-fire at lower mechanical risk — but
+it gets thrown out once Option&nbsp;D lands, so it's only the lower-risk choice if Option&nbsp;D were ever
+dropped.) The earlier "negative work" warning applies to that <em>other</em> way to fix the bug
+(activation-time install-filtering / per-listener self-check), which this plan explicitly does not do precisely
+because it would be thrown out at PR&nbsp;2.</p>
+<p><strong>Retires:</strong> the double-fire (bug); critique weakness 1 (keyboard/dispatch divergence) and the
+swipe fork's reason-to-exist; weakness 3 (canRun-as-gate); weakness 4 symptom (priority escapes lifecycle
+ordering).</p>
+<p><strong>Tests:</strong> higher-priority context wins a same-key collision even when activated earlier;
+deactivation restores the lower binding; equal priority → last-wins; <code>modal</code> suppresses
+non-colliding chords; <code>global</code> survives a modal; same key different phase (hold <code>s</code> vs
+keyup <code>s</code>) does NOT dedup; alias-equivalent chords DO dedup; a declining winner falls through to
+the next candidate; sequence chords (<code>d d</code>) still fire under the coordinator.</p>
+<p><strong>Carries the load-bearing invariant comment:</strong> resolution is correct because
+<code>eventFilter</code> only expands, never declines-and-defers — declinable handling is the supported
+fall-through, not filter scoping.</p>
+
+<p><strong>Core signature &amp; types:</strong></p>
+<pre><code>// new: src/shortcuts/resolve.ts
+type Trigger =
+  | { kind: 'action'; actionId: string }          // runActionById / useRunAction
+  | ChordDescriptor                                // keyboard now; mouse/touch in Phase 3
+
+// pure, unit-testable, no React/DOM:
+resolve(
+  actions: readonly ActionConfig[],   // effective actions (post-transform)
+  active: ActiveContextsMap,
+  trigger: Trigger,
+): readonly ActionConfig[]            // ORDERED candidates, best-first
+
+// comparator (the single source of precedence, shared with getActiveActionById):
+compareContexts(a, b): number  // 1) modal-over-global rule  2) priority desc  3) recency desc
+</code></pre>
+<p><strong>Sequence chords vs. this signature — reconcile explicitly:</strong> a single
+<code>ChordDescriptor</code> cannot represent a <em>mid-sequence</em> keypress (the first <code>d</code> of
+<code>d d</code> completes no chord). So <em>matching</em> — including tinykeys-style sequence state — lives in
+the <strong>coordinator</strong>, per-candidate; <code>resolve()</code> only <strong>orders</strong> the
+candidates that have <em>already</em> completed a match this event. Read the <code>ChordDescriptor</code> in the
+keyboard <code>Trigger</code> as "the chord that just completed" (used for ordering / dedup / logging), not as
+the matcher input. Do <em>not</em> reduce a keydown to one descriptor and hand it to <code>resolve</code> to
+match — that path is exactly how <code>g g</code> went dead historically
+(<span class="filepath">vim-normal-mode/actions.ts:204–208</span>). And keep <code>resolve</code>'s internal
+<code>Trigger</code> distinct from what the <em>handler</em> receives: handlers keep their existing second arg
+<code>ActionTrigger = KeyboardEvent | CustomEvent</code> (<span class="filepath">types.ts:108</span>) — the raw
+event still flows through to the handler; the <code>ChordDescriptor</code> is internal to resolution/ordering and
+is never handed to handlers.</p>
+<p><strong>Coordinator control flow (the highest-regression-risk seam in PR&nbsp;1 — spell it out, don't just
+say "keep a matcher"):</strong> keep <em>one tinykeys matcher per candidate binding</em> (today's
+<code>createKeybindingsHandler</code>, <span class="filepath">HotkeyReconciler.tsx:257</span>). On each keydown
+/ keyup the coordinator feeds the event to <em>every</em> candidate's matcher; tinykeys fires a binding's
+callback <em>synchronously</em> when <em>that</em> binding's sequence completes on this event. Rewire each
+callback to <strong>push its candidate into a "completed-this-event" set</strong> instead of running the handler
+directly. After feeding all candidates, the coordinator <strong>orders the completed set via
+<code>compareContexts</code> and runs the loop</strong> (<code>canDispatch</code> → <code>resolveDeps</code> →
+handler; run-until in PR&nbsp;2). Because tinykeys completion is synchronous within the event dispatch,
+collect-then-order happens in the same tick — no async-ordering hazard. Multiple candidates can complete on one
+keypress (two contexts both bind <code>g g</code>) — that is precisely the collision the comparator resolves;
+single chords are the degenerate length-1 case. This per-candidate-matcher → collect → order → run-loop is the
+substantive new design in PR&nbsp;1, not "addition," and it is where <code>g g</code>/<code>d d</code> will
+regress if guessed wrong — give it dedicated sequence tests.</p>
+<p><strong>Precedence tiers (named, not raw ints — CodeMirror <code>Prec</code> precedent):</strong>
+<code>type Priority = 'low' | 'default' | 'high'</code> on <code>ActionContextConfig</code> (default
+<code>'default'</code>). <code>global</code> = reserved top; <code>modal</code> orthogonal (own-all-chords).
+The reporting surface declares <code>'high'</code> to beat <code>normal-mode</code>. Keep the set tiny; add a
+tier only when a real case needs one.</p>
+
+<p><strong>The <code>global</code>-vs-<code>modal</code> sub-question (the "Escape case") — DECIDE before coding:</strong>
+<code>global</code> owns <code>Escape</code> (clear focus) as reserved top tier, but a modal mode (e.g. scrub)
+wants <code>Escape</code> to cancel <em>itself</em>. <strong>Recommended &amp; assumed by this plan: an active
+<code>modal</code> context may override <code>global</code> on a shared chord</strong> (consistent with modal
+already being the tier that suppresses everything else). Encode as: comparator ranks active-<code>modal</code>
+above <code>global</code>, <code>global</code> above all other tiers. Two alternatives, if you'd rather not bake
+a permanent modal-over-global inversion into the one comparator everything routes through: (a) keep
+<code>global</code> absolutely inviolable and make modals bind a non-<code>Escape</code> cancel key; or
+(b) <strong>conditional global</strong> — <code>global</code>'s reserved chords carry an implicit "no modal
+active" filter, so scrub's <code>Escape</code> wins simply because <code>global</code>'s <code>Escape</code>
+isn't contending while a modal is up. Option (b) preserves "<code>global</code> is top tier" <em>as a rule</em>
+while still letting a mode own its cancel key, and is closest to today's behavior (modal shadows non-global;
+<code>global</code> stays installed). Flag the choice before building.</p>
+
+<p><strong>File map:</strong></p>
+<ul class="tight">
+  <li><code>src/shortcuts/resolve.ts</code> — new; <code>resolve</code> + <code>compareContexts</code> (pure).</li>
+  <li><code>src/shortcuts/types.ts</code> — add <code>priority: 'low' | 'default' | 'high'</code> (named tier,
+      default <code>'default'</code>) to <code>ActionContextConfig</code>;
+      split <code>canRun</code> → <code>isVisible</code> + <code>canDispatch</code>; widen
+      <code>ActionHandler</code> return to allow a "not handled" sentinel (<code>boolean</code>;
+      <code>void</code> = handled, for back-compat). <strong>Async rule:</strong> the not-handled signal must be
+      a <em>synchronous</em> <code>boolean</code> — the run-until-handled loop has to choose the next candidate
+      within the same event and cannot <code>await</code>. A handler returning a <code>Promise</code> counts as
+      "handled" the moment it returns (fall-through stops there); only a synchronous <code>false</code> falls
+      through.</li>
+  <li><code>src/shortcuts/effectiveActions.ts</code> — <code>getActiveActionById</code> calls
+      <code>compareContexts</code> (kills the divergence). <strong>This is a behavior change, not a no-op
+      refactor:</strong> today <code>getActiveActionById</code> is pure reverse-activation-order with <em>no</em>
+      <code>global</code> carve-out (verified — zero <code>global</code> references in the file). Routing it
+      through the comparator means a <code>global</code>-vs-scoped id collision that resolves by recency today
+      will instead resolve to <code>global</code> as reserved top tier — so <code>runActionById</code> / the
+      command palette need their own regression test, not just the keyboard path.</li>
+  <li><code>src/shortcuts/HotkeyReconciler.tsx</code> — <strong>the big change.</strong> Replace the
+      per-action <code>window.addEventListener</code> install loop with <em>one</em> keydown + one keyup
+      coordinator that: normalize event → <code>ChordDescriptor</code> (Phase 0) → gather candidates whose
+      <code>(chord, phase)</code> match and whose context is installable → order via <code>compareContexts</code>
+      → run down the ordered candidates and dispatch the first whose <code>canDispatch</code> passes (PR&nbsp;1);
+      in PR&nbsp;2 a handler returning the not-handled sentinel also falls through. Preserve
+      <code>withRecoveredLetterKey</code>, the existing <code>shouldHandleEvent</code> filter cascade, the
+      separate hold-binding observer, <code>eventOptions</code> (preventDefault/stopPropagation) precedence,
+      and <strong>tinykeys sequence state</strong> (<code>d d</code>, <code>g g</code>) — keep a per-candidate
+      sequence matcher; don't reduce each event to a single chord.</li>
+  <li><code>src/shortcuts/runAction.ts</code> — <code>runActionById</code>/<code>useRunAction</code> go through
+      <code>resolve(..., {kind:'action', actionId})</code> + the shared deps seam. <strong>Migrate both copies:</strong>
+      the module dispatcher (<span class="filepath">runAction.ts:15</span>) and <code>useRunAction</code> each have
+      their <em>own</em> lookup + "not found / context not active" throw (<span class="filepath">runAction.ts:51–56</span>) —
+      easy to migrate one and miss the other.</li>
+  <li>Call sites that pass deps: keep working via the seam (see below).</li>
+</ul>
+
+<p><strong>Caution — <code>stopPropagation</code> changes meaning under one coordinator:</strong> today each
+action installs its own <code>window</code> listener, so a binding's <code>stopPropagation</code> suppresses the
+<em>sibling</em> action-listeners (that sibling-listener model is the root of the double-fire). With one
+coordinator, losing candidates are loop entries, not separate listeners — there's nothing left among them for
+<code>stopPropagation</code> to stop. It still matters versus the separate <em>hold</em> observer and any
+app-level listeners. <strong>Heads-up for the audit:</strong> no in-repo binding actually sets
+<code>stopPropagation: true</code> today — every <code>eventOptions</code>/<code>defaultEventOptions</code> only
+sets <code>preventDefault</code> (the binding default is <code>stopPropagation: false</code> at
+<span class="filepath">HotkeyReconciler.tsx:443/470</span>), so the in-repo audit comes back empty. The real
+consumers are the hold observer, app-level listeners, and <em>plugins</em>. Write the regression test against the
+<em>mechanism</em> (a binding declaring <code>stopPropagation: true</code>), not against a pre-existing in-tree
+case — there isn't one. This is a behavior change hiding inside "preserve <code>eventOptions</code>."</p>
+
+<p><strong>Deps seam (the Phase-1 slice of the dependency model):</strong> one function
+<code>resolveDeps(action, active, supplied?) → deps | null</code> that merges the action's active-context deps
+with optional <em>caller-supplied</em> deps, runs the context's <code>validateDependencies</code>, and is the
+<em>only</em> place the widened→narrow cast happens. <code>null</code> ⇒ not dispatchable — and in the
+run-until-handled loop that means <strong>skip this candidate and try the next</strong>, never abort the loop.
+The three fall-through triggers — <code>canDispatch</code> false, <code>resolveDeps</code> null, handler returns
+<code>false</code> — are all "try the next candidate" and the loop must treat them identically. Build it
+caller-suppliable now so swipe's
+<code>runBlockAction</code> fork can later pass <code>{block, uiStateBlock}</code> through <code>resolve()</code>
+instead of bypassing it — even though the swipe migration itself is Phase 3.</p>
+
+<p><strong>Suggested internal order (steps 1–6 = PR&nbsp;1; step 7 = PR&nbsp;2):</strong> (1) <code>resolve</code>
++ <code>compareContexts</code> pure, with unit tests — no wiring; (2) <code>priority</code> type +
+<code>getActiveActionById</code> swap; (3) the <code>canRun</code>→<code>isVisible</code>/<code>canDispatch</code>
+split (<code>canDispatch</code> as the single-winner loop's skip predicate, no handler-return sentinel yet);
+(4) rewrite the reconciler install loop onto the single coordinator (single-winner dispatch); (5) deps seam;
+(6) integration tests → <strong>PR&nbsp;1 merges here, bug fixed.</strong> (7) PR&nbsp;2: widen the handler
+return to a not-handled sentinel and add it as a skip-condition in the existing loop (Option&nbsp;D), with the
+spatial branch. Steps 1–3 are independently reviewable even within PR&nbsp;1.</p>
+</div>
+
+<div class="phase">
+<h3>Phase 2 — Unify the transform pipeline <span class="pill arch">cleanup</span></h3>
+<p><strong>What:</strong> one erased <code>(action) → action | null</code> transform type (no <code>T</code>,
+so the cast lives at the contributor's definition site, not the pipeline); fold
+<code>ActionOverride</code> + <code>ActionDecorator</code> into it; keep <code>keybindingOverridesFacet</code>
+as the one cross-action pass. Add the genuine unbind primitive (<code>decorate → null</code>, parity with
+<code>apply</code>).</p>
+<p><strong>Why separate PR, sequenced close behind:</strong> touches each transform contributor (~3–4 in-repo
+sites — see the verified inventory below) → wants its own reviewable change + codemod. Stacking into Phase 1
+makes it unreviewable.</p>
+<p><strong>Retires:</strong> weakness 2 (override/decorator asymmetry, the "which do I use?" folklore); the
+<code>as never</code> casts (weakness 6 symptom); collapses vim's skip-decorators <em>and</em> the downstream
+<code>blockSelectionClickDecoratorsFacet</code> into one mechanism.</p>
+<p><strong>Shape &amp; files:</strong></p>
+<pre><code>// one type replaces ActionOverride + ActionDecorator:
+type ActionTransform = {
+  actionId: string | '*'
+  context?: ActionContextType
+  apply: (action: ActionConfig) => ActionConfig | null   // ERASED: no T → cast at def site, not pipeline
+}</code></pre>
+<ul class="tight">
+  <li><code>types.ts</code> — define <code>ActionTransform</code>; deprecate the two old types (keep aliases
+      one release for plugins).</li>
+  <li><code>extensions/core.ts</code> — collapse <code>actionOverridesFacet</code> + <code>actionDecoratorsFacet</code>
+      into one transform facet (or keep two facet ids but one type + one apply pass).</li>
+  <li><code>effectiveActions.ts</code> — single ordered transform pass; <code>null</code> drops the action
+      (the genuine unbind primitive). Document phase ordering vs the cross-action keybinding-override pass.</li>
+  <li><strong>Codemod</strong> the existing in-repo decorators/overrides to the new type. Verified inventory:
+      <code>srs-rescheduling</code>'s <code>srsRescheduleDecorator</code> / <code>srsSwipeRightDecorator</code> /
+      <code>srsTodoCycleDecorators</code> (<code>canRun</code>-wideners + handler-wrappers) and
+      <code>spatial-navigation</code>'s decorators, plus the keybinding-override pass. There are <em>no</em> "vim
+      skip-decorators" in this repo — those belong to the external agenda user and are out of scope here.</li>
+</ul>
+</div>
+
+<div class="phase">
+<h3>Phase 3 — Input unification <span class="pill down">downstream branch</span></h3>
+<p><strong>What:</strong> add mouse/touch descriptor kinds to the Phase-0 matcher; migrate the ~5 input facets
+(<code>blockClickHandlersFacet</code>, <code>blockContentSurfacePropsFacet</code>,
+<code>blockGestureConflictsFacet</code>, <code>blockContentDecoratorsFacet</code>,
+<code>blockSelectionClickDecoratorsFacet</code>) onto <code>resolve()</code>; collapse swipe's
+<code>runBlockAction</code> fork back into the one path.</p>
+<p><strong>Owner:</strong> the spatial-selection branch (<code>claude/shift-click-spatial-selection-SvXGG</code>),
+not this track. This plan's job through Phase 2 is to <em>not foreclose</em> it — which the trigger-descriptor,
+<code>canDispatch</code>, and caller-supplied deps seam decisions all ensure.</p>
+<p><strong>What Phase 1/0 must have left in place for this to be additive (not a rewrite):</strong></p>
+<ul class="tight">
+  <li><code>ChordDescriptor.kind</code> extensible → add <code>{kind:'mouse', button, detail, role, phase}</code>,
+      <code>{kind:'touch', …}</code>; <code>parseChord</code>/matcher branch on <code>kind</code>.</li>
+  <li><code>phase</code>/<code>role</code> already first-class on bindings → a double-click binds at
+      <code>mousedown</code> on the content node to beat native text selection (can't be keyboard-only).</li>
+  <li>The coordinator already owns dispatch → extend it to register pointer/touch listeners alongside
+      keydown/keyup, same candidate-ordering + run-until-handled path.</li>
+  <li><code>canDispatch</code> + caller-supplied deps seam → a click handler declares "this is a selection
+      gesture, not mine" by declining; swipe's <code>runBlockAction</code> collapses into <code>resolve()</code>
+      with <code>{block,…}</code> supplied.</li>
+</ul>
+</div>
+
+<h3>Opportunistic — fold in where already touching the code (not their own phases)</h3>
+<ul class="tight">
+  <li>Conflict-UI: broaden <code>contextsOverlap</code> (<span class="filepath">keybindingConflicts.ts:34</span>)
+      to cross-context overlap <em>first</em>, then relabel priority-shadowed chords as intentional ("shadowed
+      by X while active") rather than warnings.</li>
+  <li>De-singleton <code>runActionById</code> (weakness 5) → runtime-scoped service from context.</li>
+  <li>Context generics tidy (weakness 6 residue) — only if the area's already open.</li>
+</ul>
+
+<h2>Dependency thread (why Phase 1's deps seam matters)</h2>
+<div class="note">
+The deps work has <strong>two axes</strong>: <em>typing</em> (who owns the dep type — context vs handler) and
+<em>supply</em> (who produces the value, when — pushed at activation vs provided at dispatch). "Handler-declared
+deps" only fixes typing; <strong>supply is the coherence issue.</strong> Today's push-only model means "to
+dispatch an action you must be its active context" — which is precisely why swipe's <code>runBlockAction</code>
+forks (it holds the deps but can't hand them to the dispatcher). Phase 1 builds only the <em>seam</em>
+(deps from <code>{active scopes} ∪ {caller-supplied}</code>); the full provider/capability DI model
+(scopes provide typed tokens, actions declare needs, missing token ⇒ not dispatchable ⇒ <em>that is</em>
+<code>canDispatch</code>) is deferred until a third data point or the focus-tree prototype — they are the same
+model at different levels of "derive from tree." See critique weakness 6 for the full treatment.
+</div>
+
+<h2>The separate bet — do NOT gate anything on it</h2>
+<div class="sep">
+<strong>Focus-tree activation model</strong> — tracked in
+<a href="https://github.com/Stvad/knowledge-medium/issues/101">issue #101</a>. Replace the flat,
+runtime-maintained <code>ActiveContextsMap</code> with an active set <em>derived from the focus/DOM tree</em>,
+and split the one <code>activate</code> verb into "establish scope" (containment, structural) vs "override"
+(precedence, declared). This is the genuine best-in-class move — it retires the timing-as-precedence
+<em>bug class</em> at the root (weakness 4) by killing the registry that can desync.
+<ul class="tight" style="margin-top:.5rem">
+  <li><strong>It does NOT fix the surface bug</strong> — the surface wants to override <em>against</em>
+      containment depth (it's the ancestor; the block is deeper), which needs the explicit priority/override
+      signal in any architecture. Structural depth alone gives the same wrong answer as last-wins.</li>
+  <li><strong>It composes with the spine, doesn't compete:</strong> it changes what <em>produces</em>
+      <code>activeSet</code>; <code>resolve()</code> consumes one either way. And the provider/capability deps
+      model is literally this model with React-context providers as the chain.</li>
+  <li><strong>Heaviest change discussed</strong> (~27 activation sites + typed-deps threading + non-focus-shaped
+      scopes like multi-select). Recommend a throwaway-branch prototype to validate deps-threading and
+      multi-select before it's a real proposal. Phase 1's <code>priority</code> already patches the bug symptom,
+      so there's no urgency.</li>
+</ul>
+</div>
+
+<h2>PR boundaries (firm)</h2>
+<ul class="tight">
+  <li><strong>Phase 1 and Phase 3 are separate PRs</strong> regardless of doc organization — "fix the
+      double-fire" and "build the unified input resolver" are different-sized commitments and reviews.</li>
+  <li><strong>Phase 1 itself is recommended as two PRs</strong> (see "what's coupled vs. what can split"):
+      <em>PR&nbsp;1</em> = the coordinator + comparator + <code>priority</code> + single-winner dispatch (the
+      bug fix, depends on nothing downstream); <em>PR&nbsp;2</em> = the declinable handler-return sentinel
+      (Option&nbsp;D) added on top, landing with the spatial branch. The split costs no rework — PR&nbsp;2 is
+      pure addition to PR&nbsp;1's loop. Option D stays the committed target.</li>
+  <li>Phase 0 can ride with Phase 1 or land just ahead of it.</li>
+  <li>Phase 2 is its own PR + codemod.</li>
+  <li>This plan and the two analysis docs stay docs-only; no code in the precedence PR (#57).</li>
+</ul>
+
+<h2>One-line summary</h2>
+<p>Phase 0 (canonicalizer: lift + sequence parsing) → Phase 1 (resolver core = the spine, built once;
+recommended as two PRs — coordinator + single-winner bug fix, then Option-D declinable fall-through added on
+top with the spatial branch, no rework) → Phase 2 (transform unification) → Phase 3 (input unification,
+downstream). Focus-tree rework and full dependency DI run as separate tracks gated on their own evidence, never
+blocking the spine.</p>
+
+</body>
+</html>

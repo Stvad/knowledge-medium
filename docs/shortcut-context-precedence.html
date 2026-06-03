@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Shortcut context precedence — options &amp; decision aid</title>
+<style>
+  body { font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         max-width: 980px; margin: 2rem auto; padding: 0 1.25rem; color: #1f2328; }
+  h1 { font-size: 1.6rem; margin-bottom: .25rem; }
+  h2 { font-size: 1.15rem; margin-top: 2rem; border-bottom: 1px solid #d0d7de; padding-bottom: .25rem; }
+  h3 { font-size: 1rem; margin-top: 1.25rem; }
+  code, pre { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; }
+  pre { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px;
+        padding: .75rem .9rem; overflow-x: auto; }
+  code { background: #f6f8fa; padding: .1em .3em; border-radius: 3px; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+  th, td { border: 1px solid #d0d7de; padding: .5rem .65rem; vertical-align: top; text-align: left; }
+  th { background: #f6f8fa; }
+  .pro { color: #1a7f37; }
+  .pro::before { content: "+ "; font-weight: 700; }
+  .con { color: #cf222e; }
+  .con::before { content: "\2212 "; font-weight: 700; }
+  .meh { color: #9a6700; }
+  .meh::before { content: "~ "; font-weight: 700; }
+  ul.tight { margin: .4rem 0; }
+  .note { background: #fff8c5; border-left: 4px solid #d4a72c; padding: .6rem .85rem;
+          border-radius: 4px; margin: 1rem 0; }
+  .axes { background: #ddf4ff; border-left: 4px solid #0969da; padding: .6rem .85rem;
+          border-radius: 4px; margin: 1rem 0; }
+  .verdict { background: #dafbe1; border-left: 4px solid #1a7f37; padding: .75rem 1rem;
+             border-radius: 4px; margin: 1.5rem 0; }
+  .scorecard td:first-child { font-weight: 600; width: 24%; }
+  .scorecard td.win { background: #f0fdf4; }
+  .scorecard td.lose { background: #fff1f0; }
+  .scorecard td.meh { background: #fffbe6; color: #1f2328; }
+  small { color: #57606a; }
+  .filepath { color: #57606a; font-size: 11.5px; }
+</style>
+</head>
+<body>
+
+<h1>Shortcut context precedence</h1>
+<small>Options &amp; decision aid for cross-context shortcut collisions — 2026-05-30</small>
+
+<p>Companion to <code>docs/shortcut-conflict-resolution.md</code> (2026-05-25), which introduced
+the <code>modal</code> flag (now shipped). This doc revisits the area with fresh eyes for a new
+class of report and proposes a precedence model. Where the older doc still holds, it says so;
+where it constrains the design wrongly, it says that too.</p>
+
+<h2>The report</h2>
+<p>A user built a <strong>new display surface for blocks</strong>. The surface registers its own
+action context with a handful of bindings. When you click a block inside that surface, the block
+gains focus and <code>normal-mode</code> activates <em>on top of</em> the surface context. Both
+contexts are now active, and any chord they share <strong>fires both handlers</strong>. Their
+current workaround is a pile of imperative "skip" decorators that no-op the host action — one per
+colliding action.</p>
+
+<p>Two things the user wants that today's primitives don't give:</p>
+<ol>
+  <li><strong>Additive coexistence</strong> for the keys the surface doesn't care about
+      (<code>modal</code> is too broad — it shadows <em>everything</em>).</li>
+  <li>The surface to <strong>win the chords it does bind</strong>, even though
+      <code>normal-mode</code> activated <em>after</em> it.</li>
+</ol>
+
+<h2>Root cause: the double-fire is incidental, not designed</h2>
+
+<p><code>HotkeyReconciler</code> installs <strong>one <code>window</code> listener per active action</strong>
+(<span class="filepath">HotkeyReconciler.tsx:241–264</span>). On a shared chord, both listeners match and
+both run; <code>preventDefault()</code> stops the browser default and other listeners' propagation in
+some cases, but it does <em>not</em> stop sibling listeners registered separately on the same target/phase.
+So both handlers fire. Nothing in the codebase intends two actions on one chord — if you want two effects
+you write one action. <strong>The double-fire is a side effect of the per-listener install model, not a
+feature.</strong> Treat it as a latent bug to close, not a behavior to preserve.</p>
+
+<div class="note">
+<strong>We already resolve to a single winner — just not on the keyboard path.</strong>
+<code>getActiveActionById</code> (<span class="filepath">effectiveActions.ts:77–93</span>), used by
+<code>runActionById</code> (command palette, programmatic dispatch), walks active contexts in
+<strong>reverse activation order</strong> and returns the <em>first</em> match. So "one winner,
+latest-activated context wins" is <em>already the law</em> for one dispatch path. The keyboard path is
+the inconsistent one. Any fix should make the two paths agree.
+</div>
+
+<div class="note">
+<strong>But the double-fire accidentally provides one real capability: conditional fall-through.</strong>
+Because both handlers run today, a context can bind a chord, check a condition in its handler, and
+<em>no-op</em> — and the lower context's handler <em>still ran</em>. The event "fell through" by accident.
+A naïve single-winner fix <strong>removes</strong> this: if only the winner installs the chord and its
+handler bails, nothing else happens — the lower layer never had a listener. Whether that capability is
+worth keeping is the hinge between the two implementation strategies (activation-time vs fire-time
+resolution) and gets its own option below — see <a href="#declinable">Option D</a>. It is not a footnote;
+it changes the recommendation.
+</div>
+
+<h2>What we learned looking with new eyes (codebase facts)</h2>
+<table>
+<tr><th>Fact</th><th>Where</th><th>Why it matters here</th></tr>
+<tr>
+  <td><code>modal: true</code> collapses install set to <code>{global, latest-modal}</code></td>
+  <td><span class="filepath">HotkeyReconciler.tsx:56–66</span></td>
+  <td>The only precedence knob today. All-or-nothing: shadows every non-global context, including
+      chords the modal doesn't bind. Right for palettes; wrong for an additive surface.</td>
+</tr>
+<tr>
+  <td>Activation order is runtime state; re-activation rotates to the end</td>
+  <td><span class="filepath">ActiveContexts.tsx:86–97</span></td>
+  <td>"Latest-activated wins" derives precedence from <em>timing</em>. The surface activates on render
+      (early); <code>normal-mode</code> on click (late) — so timing picks the <em>wrong</em> winner.
+      This is the crux of the report.</td>
+</tr>
+<tr>
+  <td><code>canRun</code> is presentational only — never gates dispatch</td>
+  <td><span class="filepath">types.ts:148–156</span>, all call sites are UI surfaces</td>
+  <td>Rules out "gate the loser with <code>canRun</code>." It can't suppress a keypress.</td>
+</tr>
+<tr>
+  <td>Sequence chords (<code>'d d'</code>, <code>'g g'</code>) are real and live on the non-hold path</td>
+  <td><span class="filepath">vim-normal-mode/actions.ts:67, 208</span></td>
+  <td><code>delete_block</code> is bound to <code>['Delete','Backspace','d d']</code>, not a bare
+      <code>d</code>. A single <code>d</code> and the sequence <code>d d</code> are <em>different chords</em>
+      — they don't collide at the exact-chord level. Matters for granularity (below).</td>
+</tr>
+<tr>
+  <td><code>eventFilter</code> is OR-only / opt-in</td>
+  <td><span class="filepath">HotkeyReconciler.tsx:86–96</span></td>
+  <td>A context's filter can only <em>expand</em> what it accepts; it can pre-decide "I want this event"
+      but cannot <em>decline a chord after inspecting it and defer to a lower layer</em>. So there is no
+      <em>declarative</em> fall-through today — the only fall-through that exists is the accidental
+      handler-level one the double-fire provides. If we want declinable handling as a real feature, it has
+      to come from the dispatch model (Option D), not from <code>eventFilter</code>.</td>
+</tr>
+<tr>
+  <td>The agenda plugin is <em>not</em> in this repo</td>
+  <td>grep: no <code>AGENDA_CONTEXT</code> / <code>set_deadline</code></td>
+  <td>The example in the user's sketch is external. Don't design core semantics around its exact
+      bindings (e.g. the <code>d</code> vs <code>d d</code> sequence mismatch). Solve the general shape.</td>
+</tr>
+</table>
+
+<h2>What to steal from the old doc</h2>
+<ul class="tight">
+  <li><strong>Keep <code>modal</code>.</strong> Precedence resolves <em>collisions</em>; it does not cover
+      the palette case (palette binds <em>no</em> chords but still must stop <code>normal-mode</code>'s
+      <code>p</code> reaching the search box). <code>modal</code> = "own all chords, even unbound." The
+      two are orthogonal tiers and should coexist.</li>
+  <li><strong>The <code>global</code> carve-out is load-bearing.</strong> Whatever wins, app-wide chords
+      (Cmd+K, Escape) must survive. Keep <code>global</code> always-installed.</li>
+  <li><strong>Resolve at the context level, not per binding.</strong> The old doc rejected binding-level
+      <code>priority: number</code> (Model C) as non-local and full of magic-number cliffs. That critique
+      still stands — and it's <em>specifically about per-binding numbers</em>. Context-level precedence
+      (one number per context, ~9 of them) dodges it.</li>
+  <li><strong>Teach the conflict UI about intentional shadowing — but broaden its overlap model first.</strong>
+      Subtle: <code>findKeybindingConflicts</code> today won't even <em>see</em> the surface-vs-<code>normal-mode</code>
+      shadow. Its <code>contextsOverlap</code> (<span class="filepath">keybindingConflicts.ts:34</span>) is
+      <code>a === b || a === 'global' || b === 'global'</code> — two <em>different non-global</em> contexts are
+      treated as non-overlapping, so a high-priority surface shadowing <code>normal-mode</code> on the same chord
+      is never returned as a conflict. So there is nothing to "relabel" until the conflict model is extended to
+      consider cross-context, priority-aware overlap (feed it activation/priority metadata). The relabel is the
+      <em>second</em> step; broadening detection is the first.</li>
+</ul>
+<p class="meh" style="list-style:none">Where the old doc constrains wrongly: it framed the choice as
+modal-vs-additive and scoped selective precedence out as a "known limit." The report <em>is</em> that
+limit. We're picking it back up.</p>
+
+<h2>The shared decision underneath every option</h2>
+<div class="axes">
+<strong>Whatever we choose, the bug fix is the same:</strong> stop installing both colliding bindings;
+install a single winner per chord. The reconcile effect already re-runs on every <code>active</code>
+change and already installs/uninstalls per action (<span class="filepath">HotkeyReconciler.tsx:194–271</span>),
+so this is a <em>dedup step inside the loop that already runs</em> — not a new coordinator. The options
+below differ only in <strong>how the winner is chosen</strong>.
+</div>
+
+<h2>Options</h2>
+
+<h3>Option 0 — Last-activated-context wins (no new config)</h3>
+<p>Make the keyboard path obey the same rule the dispatch path already does: on a chord collision among
+active contexts, the latest-activated context's binding installs; the rest are skipped. Pure reuse of the
+existing comparator.</p>
+<ul class="tight">
+  <li class="pro">Closes the double-fire with zero new surface area; unifies keyboard and
+      <code>runActionById</code> paths under one rule.</li>
+  <li class="pro">Most collisions today are "stacked modes" where latest <em>is</em> the right winner.</li>
+  <li class="con"><strong>Gets the report's case wrong.</strong> Surface activates early, <code>normal-mode</code>
+      late → the generic layer wins the collision. Exactly the inversion the user is fighting.</li>
+  <li class="con">Precedence = timing, which is incidental when two contexts activate off the same focus
+      event. Non-local: you can't read a context and know if it'll win.</li>
+</ul>
+<p><strong>Verdict:</strong> necessary foundation, insufficient alone. Ship it as the default, but it
+needs an escape hatch for the inversion.</p>
+
+<h3>Option A — Context-level priority</h3>
+<p>Add one optional field to <code>ActionContextConfig</code>. Winner = highest priority, ties broken by
+activation recency (Option 0 as the tiebreak). <em>(Final encoding settled on <strong>named tiers</strong>
+<code>'low' | 'default' | 'high'</code> rather than raw integers — CodeMirror <code>Prec</code> precedent, and it
+sidesteps the magic-number cliffs flagged above; see the implementation plan. Shown below as the option was
+originally framed.)</em></p>
+<pre><code>actionContextsFacet.of({
+  type: SURFACE_CONTEXT,
+  priority: 'high',       // beats normal-mode's 'default'
+  // ...
+})</code></pre>
+<ul class="tight">
+  <li class="pro"><strong>Fixes the inversion directly.</strong> The surface declares it outranks the
+      baseline; click timing no longer decides. Additive for every chord it doesn't bind.</li>
+  <li class="pro">One number per context (~9 total), most at default. This is the Emacs major/minor-mode
+      model — precedence by layer specificity, which is what the user means by "normal mode shouldn't win."</li>
+  <li class="pro">Ownership sits in the right place: the <em>specific</em> layer declares its rank;
+      <code>normal-mode</code> stays dumb and knows nothing about the surface.</li>
+  <li class="pro">Supersedes the per-decorator workaround with a single line.</li>
+  <li class="meh">Resolves per <em>exact chord</em>. The external agenda's <code>d</code> would not shadow
+      <code>delete_block</code>'s <code>d d</code> (different chords). For in-repo cases this is fine —
+      no same-key precedence gap exists today; flag if one appears.</li>
+  <li class="con">Absolute numbers need a known baseline (0). Mitigate with a tiny named tier set
+      (<code>high</code>/<code>default</code>/<code>low</code>) instead of bare integers if desired.</li>
+  <li class="con">A high-priority context silently shadows lower bindings on shared chords — powerful,
+      needs the conflict-UI surfacing noted above.</li>
+</ul>
+
+<h3>Option B — Explicit supersession (declared suppression)</h3>
+<p>A context lists the actions/contexts it suppresses while active. (This is the user's sketch, and the
+old doc's Model B.)</p>
+<pre><code>actionContextsFacet.of({
+  type: SURFACE_CONTEXT,
+  supersedes: {
+    [ActionContextTypes.NORMAL_MODE]: {
+      actionIds: ['delete_block', 'toggle_properties', /* ... */],  // or '*'
+    },
+  },
+})</code></pre>
+<ul class="tight">
+  <li class="pro">Most explicit — the conflict is documented at the site that introduces it.</li>
+  <li class="pro">Targets <em>action ids</em>, so it suppresses regardless of binding shape — handles the
+      <code>d d</code> sequence case that exact-chord priority misses.</li>
+  <li class="con"><strong>Suppression, not precedence.</strong> It only turns things off. For a key both
+      contexts want where the surface should simply <em>win</em>, you still enumerate host actions —
+      drifting back toward A with more typing.</li>
+  <li class="con">Name-coupled to host action ids; brittle if <code>normal-mode</code> renames or adds an
+      action (new colliding action fires until you add it to the list — silent).</li>
+  <li class="con">Verbose (the report needs ~8 entries). The <code>'*'</code> wildcard tames verbosity but
+      then it's <code>modal</code> with extra steps.</li>
+</ul>
+
+<h3>Option C — Selective per-chord shadowing (<code>shadowChordsFrom</code>)</h3>
+<p>Middle ground: a context shadows listed contexts <em>only for chords it itself binds</em>.</p>
+<pre><code>shadowChordsFrom: [ActionContextTypes.NORMAL_MODE]</code></pre>
+<ul class="tight">
+  <li class="pro">Additive by default, surgical on conflict; no per-action bookkeeping.</li>
+  <li class="con">Still name-coupled to the suppressed context.</li>
+  <li class="con"><strong>It's just priority with a target list.</strong> "I beat normal-mode specifically"
+      is the coupled special case of "I beat anything lower." A is the decoupled version. No reason to
+      ship both.</li>
+</ul>
+
+<h3 id="declinable">Option D — Declinable resolution (fall-through)</h3>
+<p>The previous options answer "<em>who</em> wins a chord." This one answers a different, partly
+orthogonal question: "<em>when</em> does the winner get to say <em>not me — let the next layer have it</em>?"
+It's the one capability today's accidental double-fire actually provides (a higher context's handler can
+no-op and the lower one still ran), and a naïve single-winner fix silently deletes it.</p>
+
+<p>The model: dispatch consults active contexts in precedence order (whatever 0/A picks). The first that
+binds the chord runs — but its handler may report <strong>"not handled,"</strong> and dispatch then tries
+the next candidate in order. No double-fire (at most one handler ultimately acts), but conditional
+yielding works. This is the dispatch-gating sibling of <code>canRun</code>: a predicate that, when it
+declines, <em>defers</em> instead of <em>suppressing</em>.</p>
+<pre><code>// handler returns false / "not handled" => dispatch falls through to next candidate
+handler: (deps, event) =&gt; {
+  if (!surfaceWantsThisKeyRightNow(deps)) return false   // let normal-mode have it
+  doSurfaceThing(deps)
+  return true
+}</code></pre>
+<p>Precedent: Emacs (a command keymap entry of <code>nil</code> / a command that signals it didn't handle
+falls through to the next keymap), CodeMirror (a keymap <code>run</code> returning <code>false</code> tries
+the next handler). This is the standard layered-keymap escape valve.</p>
+<ul class="tight">
+  <li class="pro">Preserves the only genuine capability the double-fire gave us, but cleanly (one effect, not two).</li>
+  <li class="pro">Composes with A — precedence picks the order; decline walks down that order. They're different axes.</li>
+  <li class="pro">Lets a high-priority surface own a key <em>conditionally</em> without re-implementing the
+      lower layer's behavior for the cases it wants to pass through.</li>
+  <li class="con"><strong>Forces fire-time resolution.</strong> The winner is now per-<em>event</em> (depends on what
+      handlers return), so you can't pre-resolve at activation time by skipping installs. That means a real
+      dispatch coordinator — a single keydown listener that owns chord → ordered-candidates → run-until-handled —
+      replacing today's independent per-action listeners. Bigger change than the activation-time dedup.</li>
+  <li class="con">Handler contract grows a return value (<code>boolean</code> / "handled"). Existing handlers
+      return <code>void | Promise&lt;void&gt;</code>; "no return = handled" keeps them working, but async handlers
+      that want to decline must resolve to the sentinel, and "did it handle?" for an async handler is awkward
+      (you'd likely restrict decline to a synchronous pre-check).</li>
+  <li class="meh">Only worth it if surfaces actually need to <em>conditionally</em> yield a key they bind.
+      If every case is "this layer wins these keys, full stop," D is unnecessary machinery and activation-time
+      wins on simplicity.</li>
+</ul>
+
+<div class="axes">
+<strong>Two axes, not five rivals.</strong> Winner-selection (0 / A / B / C) and resolution-strategy
+(activation-time vs fire-time/declinable, i.e. whether D is in) are independent. The real choice is a
+2×2: <em>{last-wins | priority}</em> × <em>{activation-time | fire-time-declinable}</em>. <code>modal</code>
+sits above both as the "own everything, even unbound" tier and is unaffected.
+</div>
+
+<h2>Scorecard</h2>
+<p><small>0 / A / B / C are winner-selection rules; D is a resolution-strategy that layers on top of
+any of them. The column shows D combined with priority (A) since that's the live candidate.</small></p>
+<table class="scorecard">
+<tr><th></th><th>0 · last-wins</th><th>A · priority</th><th>B · supersedes</th><th>C · shadowChordsFrom</th><th>D · declinable (+A)</th></tr>
+<tr><td>Closes double-fire</td><td class="win">yes</td><td class="win">yes</td><td class="win">yes</td><td class="win">yes</td><td class="win">yes</td></tr>
+<tr><td>Fixes early/late inversion</td><td class="lose">no</td><td class="win">yes</td><td class="win">yes</td><td class="win">yes</td><td class="win">yes</td></tr>
+<tr><td>Additive for non-bound keys</td><td class="win">yes</td><td class="win">yes</td><td class="win">yes</td><td class="win">yes</td><td class="win">yes</td></tr>
+<tr><td>Conditional fall-through</td><td class="lose">no</td><td class="lose">no</td><td class="lose">no</td><td class="lose">no</td><td class="win">yes</td></tr>
+<tr><td>New config surface</td><td class="win">none</td><td class="meh">1 number</td><td class="lose">nested map</td><td class="meh">1 list</td><td class="meh">1 number + handler return</td></tr>
+<tr><td>Avoids host-name coupling</td><td class="win">yes</td><td class="win">yes</td><td class="lose">no</td><td class="lose">no</td><td class="win">yes</td></tr>
+<tr><td>Handles <code>d</code> vs <code>d d</code></td><td class="lose">n/a</td><td class="meh">no*</td><td class="win">yes</td><td class="meh">no*</td><td class="meh">no*</td></tr>
+<tr><td>Implementation cost</td><td class="win">dedup in loop</td><td class="win">dedup in loop</td><td class="win">dedup in loop</td><td class="win">dedup in loop</td><td class="lose">new dispatch coordinator</td></tr>
+<tr><td>Reads locally (1 file)</td><td class="lose">no (timing)</td><td class="win">yes</td><td class="win">yes</td><td class="meh">mostly</td><td class="win">yes</td></tr>
+</table>
+<p><small>* exact-chord granularity; no in-repo case needs cross-granularity shadowing today.</small></p>
+
+<div class="verdict">
+<strong>Recommendation hinges on one question: do surfaces need to <em>conditionally</em> yield a chord
+they bind?</strong>
+<p style="margin:.5rem 0">Common to both answers: fix the double-fire (single winner per chord), winner =
+shared comparator <code>(priority desc, then activation-recency desc)</code> used by <em>both</em> the keyboard
+path and <code>getActiveActionById</code>, add <code>priority</code> (named tiers
+<code>'low' | 'default' | 'high'</code>, default <code>'default'</code>) so the
+reporting surface outranks <code>normal-mode</code> and the 8 skip-decorators collapse to one line, and keep
+<code>modal</code> as the extreme tier. <strong><code>global</code> is a reserved top tier, outside normal
+collision precedence:</strong> a <code>global</code> binding is never shadowed by a non-global one on a shared
+chord, regardless of priority or activation order. Without this carve-out the comparator violates the doc's own
+"app-wide chords must survive" requirement — <code>global</code> activates early and (absent the carve-out)
+would sit at the <code>'default'</code> tier, so a later same-priority context would otherwise win Cmd+K / Escape. (<code>computeInstallableContexts</code> only
+keeps <code>global</code> in the install <em>set</em>; it does not rank it within a collision, so the dedup pass
+must special-case it.) Drop B (suppression, not precedence; name-coupled) and C (A with coupling).</p>
+<p style="margin:.5rem 0 0"><strong>Resolved (2026-05-30): ship A + D (fire-time, declinable), built as the
+resolution core.</strong> The open question below was "does anything need conditional yield?" — a committed
+downstream consumer answers YES: input-unification work (spatial selection) needs a click handler to say "this
+is a selection gesture, not mine — fall through," which is the same declinable mechanism, and needs the single
+fire-time coordinator D builds (chord/descriptor → ordered candidates → run-until-handled) to later own
+mouse/touch too. Given a <em>named</em> consumer (not a speculative one), the YAGNI case for the cheaper
+activation-time A collapses: building A would leave the keyboard path as N <code>window</code> listeners that
+the input work must tear out — negative work. So: build the winner-selection as a reusable
+<code>resolve(activeSet, trigger)</code> the keyboard path, <code>runActionById</code>, and
+<code>useRunAction</code> all call; make <code>trigger</code> a normalized descriptor, not a
+<code>KeyboardEvent</code>; keep <code>phase</code>/<code>role</code> first-class on bindings. A's
+activation-time dedup remains the correct fallback <em>only</em> if the input-unification work is abandoned.</p>
+</div>
+
+<div class="note">
+Skip-decorators were the wrong layer regardless: imperative no-ops fighting the architecture, and
+<code>canRun</code> can't gate dispatch anyway. Note that <strong>Option D is the principled replacement for
+exactly what the skip-decorators were faking</strong> — "run my handler, decide it doesn't apply, let the host
+act" is precisely conditional fall-through, done in dispatch instead of by mutating the action catalog. If the
+8 decorators are <em>unconditional</em> no-ops (always suppress host), A alone replaces them; if any are
+<em>conditional</em> (suppress host only sometimes), that's the in-repo evidence that D is needed. <strong>Worth
+auditing those decorators before deciding.</strong> Separately, for a genuine static "remove this action
+everywhere" need, the clean tool is letting <code>ActionDecorator.decorate</code> return <code>null</code>
+(parity with <code>ActionOverride.apply</code>).
+</div>
+
+<h2>Open questions / risks</h2>
+<ul class="tight">
+  <li><strong>THE decision: is conditional fall-through (Option D) needed? — RESOLVED YES (2026-05-30).</strong>
+      A committed downstream consumer (input-unification / spatial selection) needs declinable dispatch: a click
+      handler that says "this is a selection gesture, not mine — fall through" is exactly conditional fall-through,
+      and it wants the same fire-time coordinator extended to own mouse/touch. That converts this from a
+      speculative YAGNI risk into a named requirement, so ship D built as the shared resolver. (The earlier
+      decider — auditing the surface's skip-decorators for conditional no-ops — still applies as corroboration,
+      but the downstream consumer is dispositive on its own.)</li>
+  <li><strong>Normalized trigger descriptor (from the same downstream constraint).</strong> The resolver's
+      event arg must be an opaque/normalized input descriptor — <code>{kind, modifiers, phase, role, …}</code> —
+      not a <code>KeyboardEvent</code>, so mouse/gesture descriptor kinds can be added to the same matcher later.
+      Two specifics this forces: (1) the shared canonicalizer (above) becomes chord↔descriptor, not chord-only;
+      (2) <code>phase</code> and <code>role</code> are first-class binding fields, not keyboard-only — a
+      double-click gesture binds at <code>mousedown</code> on the content node to beat native text selection.
+      Don't bake phase as keyboard-specific.</li>
+  <li><strong>The <code>eventFilter</code> invariant is load-bearing for activation-time.</strong> Pre-resolution
+      is correct <em>only because</em> no context can decline-and-defer a chord today. If we ship activation-time
+      and someone later writes a filter (or handler) meant to scope a chord down and hand it to a lower layer,
+      pre-resolution breaks (the loser is already uninstalled). That's the same wall as the D question — Option D
+      <em>is</em> the supported way to do declinable handling. Document the invariant next to the dedup so a future
+      reader knows shipping declinable handling means moving to fire-time, not bolting onto the filter.</li>
+  <li><strong>Global vs. a modal/high-priority context on the same chord.</strong> The "global is a reserved
+      top tier" rule says global never loses a collision — but that collides with the old doc's example of
+      scrub-mode's <code>Escape</code> overriding global's <code>Escape</code>. Reconcile explicitly: either
+      (a) global always wins and modal contexts must bind a <em>different</em> cancel key, or (b) global wins
+      except against an active <code>modal</code> context (modal is the one tier allowed to override global,
+      consistent with it already being the only thing global doesn't shadow). (b) is more flexible and matches
+      today's modal semantics; pick one and write it down so the dedup's global special-case is unambiguous.</li>
+  <li><strong>Chord canonicalization is NOT free today.</strong> Grouping by chord needs equivalent
+      bindings to compare equal — but <code>keybindingConflicts.ts</code> does <em>not</em> canonicalize;
+      it buckets raw strings via <code>toChordArray</code>, so <code>Meta+K</code> vs <code>$mod+k</code>,
+      reordered modifiers, and code-form chords would land in different buckets and install as separate
+      listeners. The only real normalizer is <code>normalizeChord</code> in
+      <span class="filepath">keybindings-settings/keyCapture.ts:205</span>, and it has limits: it maps
+      modifier aliases (<code>cmd</code>/<code>meta</code>/<code>os</code> → <code>$mod</code>), lowercases
+      modifier names, <em>and</em> sorts modifiers into a stable order (verified at
+      <span class="filepath">keyCapture.ts:236</span>, tested at
+      <span class="filepath">test/keyCapture.test.ts:147</span> — an earlier draft of this doc wrongly claimed
+      it does not sort). Its <em>real</em> limits: it splits on <code>+</code> only, so it does
+      <strong>not handle sequence chords</strong> — <code>d d</code> / <code>g g</code> get treated as one
+      atomic space-bearing key; it returns a flat string, not a structured descriptor; and it lives in a plugin,
+      not shared infra. <strong>Action item:</strong> this work must <em>add</em> a shared canonicalizer (lift
+      <code>normalizeChord</code> into <code>src/shortcuts/</code>, add <em>sequence-chord parsing</em> + a
+      descriptor shape) and use it in both the dedup and ideally <code>keybindingConflicts</code> — the lift is
+      reuse, but the sequence parsing + descriptor are net-new.</li>
+  <li><strong>Dedup key must include <code>phase</code>, not just the chord.</strong>
+      <code>ShortcutBindingDefaults</code> supports <code>keydown</code> / <code>keyup</code> / <code>hold</code>,
+      and the repo already has phase-distinct same-key bindings that are <em>not</em> a same-event collision:
+      <code>dateScrubActions.ts</code> binds hold <code>s</code> in <code>normal-mode</code>
+      (<span class="filepath">:75</span>) and keyup <code>s</code> in <code>date-scrub</code>
+      (<span class="filepath">:90</span>). A chord-only bucket would wrongly make one shadow the other. Key the
+      winner bucket on <code>(canonical-chord, phase)</code>, and keep hold handling on its own path (it already
+      installs via a separate observer). Only same-<code>(chord, phase)</code> bindings are a real collision.</li>
+  <li><strong>Equal-priority fragility persists.</strong> When two same-priority contexts activate off one
+      focus event, the tiebreak is incidental timing. Acceptable for stacked modes; if a real case wants
+      determinism, that's the moment to reconsider — not now.</li>
+  <li><strong>Conflict-UI follow-up (two steps, in order).</strong> (1) Broaden
+      <code>findKeybindingConflicts</code>' <code>contextsOverlap</code> (<span class="filepath">keybindingConflicts.ts:34</span>)
+      so two different non-global contexts that can co-activate are considered overlapping — today they aren't, so
+      cross-context shadows are invisible to it. (2) Then mark priority-shadowed chords as intentional ("shadowed
+      by X while active") rather than warnings. Both can ship after the core change; step 1 is a prerequisite for
+      step 2 doing anything.</li>
+  <li><strong>Granularity escape hatch.</strong> If an in-repo same-key-vs-sequence case ever needs B's
+      action-targeted suppression, add it then as a narrow supplement — don't pre-build it.</li>
+</ul>
+
+<h2>Rough surface area</h2>
+<p><strong>Shared by both strategies (A core):</strong></p>
+<ul class="tight">
+  <li><code>types.ts</code> — add <code>priority</code> (named tiers <code>'low' | 'default' | 'high'</code>,
+      default <code>'default'</code>) to <code>ActionContextConfig</code> (+ doc comment).</li>
+  <li><code>effectiveActions.ts</code> — extract <code>compareContexts</code>; rewrite
+      <code>getActiveActionById</code> to use it.</li>
+  <li><strong>New shared chord canonicalizer</strong> in <code>src/shortcuts/</code> — lift
+      <code>normalizeChord</code> (which already alias-folds + lowercases + sorts modifiers) and add
+      <em>sequence-chord parsing</em> + a structured descriptor; use it in the dedup and, ideally, retrofit
+      <code>keybindingConflicts.ts</code> off it. The lift is reuse; the sequence parsing + descriptor are net-new.</li>
+</ul>
+<p><strong>If activation-time (A only):</strong></p>
+<ul class="tight">
+  <li><code>HotkeyReconciler.tsx</code> — <code>(canonical-chord, phase)</code> dedup in the install loop using
+      the shared comparator; install only the winner per bucket; keep the hold path distinct; document the
+      <code>eventFilter</code> invariant.</li>
+  <li>Tests — higher-priority context wins a same-key collision even when activated earlier; deactivating it
+      restores the lower binding; equal priority falls back to last-wins; <code>modal</code> still suppresses
+      non-colliding chords; <code>global</code> survives; <strong>same key on different phases (hold <code>s</code>
+      vs keyup <code>s</code>) does NOT dedup away</strong>; alias-equivalent chords (<code>Meta+K</code> /
+      <code>$mod+k</code>) DO dedup together.</li>
+</ul>
+<p><strong>If fire-time (A + D):</strong></p>
+<ul class="tight">
+  <li><code>types.ts</code> — widen <code>ActionHandler</code> return to allow a "not handled" sentinel
+      (e.g. <code>boolean</code>; <code>void</code> = handled, for back-compat). Decide async semantics
+      (likely: decline must be a synchronous decision).</li>
+  <li><code>HotkeyReconciler.tsx</code> — replace independent per-action <code>window</code> listeners with a
+      single keydown/keyup coordinator: one listener per phase that maps the event's chord to candidates in
+      precedence order and runs until one reports handled. Preserve <code>withRecoveredLetterKey</code>,
+      <code>shouldHandleEvent</code>, hold-binding handling, and <code>eventOptions</code> precedence.</li>
+  <li><strong>Preserve sequence-chord state.</strong> A coordinator that maps each keydown's <em>current</em>
+      chord to candidates loses the multi-press sequence state machine tinykeys maintains today — the repo has
+      live sequence defaults (<code>d d</code>, <code>g g</code> in <span class="filepath">vim-normal-mode/actions.ts</span>).
+      The fire-time coordinator must keep a tinykeys (or equivalent) sequence matcher per candidate rather than
+      reduce each event to a single chord, or those bindings become unreachable. Test sequences explicitly under
+      the coordinator.</li>
+  <li>Tests — all of the activation-time tests, plus: a declining winner falls through to the next candidate;
+      a handling winner suppresses the rest; decline order respects priority then recency; <strong>sequence
+      chords (<code>d d</code>) still fire under the coordinator</strong>.</li>
+</ul>
+<p><small>Per repo testing guidance: no tests that merely re-state default binding strings.</small></p>
+
+</body>
+</html>
