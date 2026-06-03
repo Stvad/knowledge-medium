@@ -1,15 +1,14 @@
-import { useCallback, useMemo, useState, type MouseEvent } from 'react'
+import { useCallback, useMemo } from 'react'
 import { Block } from '@/data/block'
 import { BlockLoadingPlaceholder } from '@/components/BlockLoadingPlaceholder.js'
 import { BlockComponent } from '@/components/BlockComponent.js'
-import { BreadcrumbList } from '@/plugins/breadcrumbs/BreadcrumbList.js'
+import { PromotableBreadcrumbList } from '@/plugins/breadcrumbs/PromotableBreadcrumbList.js'
+import { usePromotableBreadcrumb } from '@/plugins/breadcrumbs/usePromotableBreadcrumb.js'
 import { NestedBlockContextProvider, useBlockContext } from '@/context/block.js'
 import { LazyViewportMount } from '@/components/util/LazyViewportMount.js'
 import type { LazyViewportPlaceholderProps } from '@/components/util/LazyViewportMount.js'
 import { useParents } from '@/hooks/block.js'
 import { useRepo } from '@/context/repo.js'
-import { useBlockOpener } from '@/utils/navigation.js'
-import { withMoveTransition } from '@/utils/viewTransition.js'
 import {
   backlinkEntryShortcutContextOverrides,
   promoteClosestBreadcrumb,
@@ -24,32 +23,6 @@ const BACKLINK_OVERSCAN_PX = 600
 const BACKLINK_BLOCK_PLACEHOLDER_HEIGHT_PX = 32
 
 const EMPTY_PARENTS: readonly Block[] = []
-
-interface BacklinkBreadcrumbListProps {
-  parents: readonly Block[]
-  workspaceId: string
-  onSelect: (parent: Block) => void
-}
-
-const BacklinkBreadcrumbList = ({parents, workspaceId, onSelect}: BacklinkBreadcrumbListProps) => {
-  const openBlock = useBlockOpener()
-  const handleLinkClick = useCallback((event: MouseEvent, parent: Block) => {
-    openBlock(event, {blockId: parent.id, workspaceId})
-  }, [openBlock, workspaceId])
-
-  return (
-    <BreadcrumbList
-      parents={parents}
-      workspaceId={workspaceId}
-      overrides={BREADCRUMB_OVERRIDES}
-      onSelect={onSelect}
-      onLinkClick={handleLinkClick}
-      className="flex items-center gap-1 text-xs text-muted-foreground/80 mb-1 flex-wrap"
-      itemClassName="no-underline cursor-pointer truncate max-w-[24ch] hover:text-foreground"
-      separatorClassName="mx-1 text-muted-foreground/40"
-    />
-  )
-}
 
 // Roam-style: breadcrumbs are the chain ABOVE the currently-shown block.
 // Click a segment to "unfurl" — promote it to the shown block. The
@@ -109,7 +82,15 @@ const BacklinkItemContent = ({
   return (
     <>
       {workspaceId && (
-        <BacklinkBreadcrumbList parents={parents} workspaceId={workspaceId} onSelect={onSelect}/>
+        <PromotableBreadcrumbList
+          parents={parents}
+          workspaceId={workspaceId}
+          overrides={BREADCRUMB_OVERRIDES}
+          onPromote={onSelect}
+          className="flex items-center gap-1 text-xs text-muted-foreground/80 mb-1 flex-wrap"
+          itemClassName="no-underline cursor-pointer truncate max-w-[24ch] hover:text-foreground"
+          separatorClassName="mx-1 text-muted-foreground/40"
+        />
       )}
       <NestedBlockContextProvider overrides={bodyOverrides}>
         <BlockComponent blockId={shownBlock.id}/>
@@ -152,9 +133,10 @@ const BacklinkItem = ({
 }) => {
   const repo = useRepo()
   const parentContext = useBlockContext()
-  const [shownBlockId, setShownBlockId] = useState(block.id)
-  const shownBlock = useMemo(() => repo.block(shownBlockId), [repo, shownBlockId])
-  const isInitial = shownBlockId === block.id
+  // Promote-in-place state (unfurl an ancestor, with the panel-nav
+  // crossfade) shared with the SRS review session.
+  const {shownId, isInitial, promote, showBlock} = usePromotableBreadcrumb(block.id)
+  const shownBlock = useMemo(() => repo.block(shownId), [repo, shownId])
   const parentRenderScopeId = typeof parentContext.renderScopeId === 'string'
     ? parentContext.renderScopeId
     : 'backlinks-root'
@@ -163,21 +145,6 @@ const BacklinkItem = ({
     [parentRenderScopeId, scopeId],
   )
 
-  // Wrap in withMoveTransition so unfurling the breadcrumb chain gets
-  // the same crossfade as panel breadcrumb navigation. The state change
-  // is local React (`setShownBlockId`), not a DB write — `navigateInPanel`'s
-  // internal wrap doesn't help here, so the wrap lives at the call site.
-  const handleSelect = useCallback((parent: Block) => {
-    void withMoveTransition(async () => {
-      setShownBlockId(parent.id)
-    })
-  }, [])
-  const handleShowBlock = useCallback((blockId: string) => {
-    void withMoveTransition(async () => {
-      setShownBlockId(blockId)
-    })
-  }, [])
-
   return (
     <div className="border-l-2 border-muted pl-3 py-2">
       {isInitial
@@ -185,16 +152,16 @@ const BacklinkItem = ({
             <BacklinkItemContent
               shownBlock={shownBlock}
               parents={initialParents}
-              onSelect={handleSelect}
-              onShowBlock={handleShowBlock}
+              onSelect={promote}
+              onShowBlock={showBlock}
               renderScopeId={renderScopeId}
             />
           )
         : (
             <BacklinkDynamicContent
               shownBlock={shownBlock}
-              onSelect={handleSelect}
-              onShowBlock={handleShowBlock}
+              onSelect={promote}
+              onShowBlock={showBlock}
               renderScopeId={renderScopeId}
             />
           )}

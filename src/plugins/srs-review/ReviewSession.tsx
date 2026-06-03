@@ -5,7 +5,6 @@ import {
   useRef,
   useState,
   type FocusEvent as ReactFocusEvent,
-  type MouseEvent as ReactMouseEvent,
 } from 'react'
 import {
   ArchiveX,
@@ -25,7 +24,7 @@ import type { Block } from '@/data/block'
 import type { BlockData } from '@/data/api'
 import { useRepo } from '@/context/repo.js'
 import { useManyParents, useProperty } from '@/hooks/block.js'
-import { usePluginUIStateBlock } from '@/data/globalState.js'
+import { usePluginUIStateChildBlock } from '@/data/globalState.js'
 import { getBlockTypes } from '@/data/properties.js'
 import { NestedBlockContextProvider } from '@/context/block.js'
 import { BlockComponent } from '@/components/BlockComponent.js'
@@ -34,8 +33,7 @@ import { cn } from '@/lib/utils.js'
 import { showError, showInfo } from '@/utils/toast.js'
 import { useActionContextActivations } from '@/shortcuts/useActionContext.js'
 import { useBlockOpener } from '@/utils/navigation.js'
-import { withMoveTransition } from '@/utils/viewTransition.js'
-import { BreadcrumbList } from '@/plugins/breadcrumbs'
+import { PromotableBreadcrumbList, usePromotableBreadcrumb } from '@/plugins/breadcrumbs'
 import { openReschedulePicker } from '@/plugins/daily-notes'
 import {
   SRS_SM25_TYPE,
@@ -167,11 +165,13 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
   const dueCards = useDueCards(workspaceId, tagName)
   const dueLoaded = useDueCardsReady(workspaceId, tagName)
 
-  // Persist the in-progress session (frozen queue + place) on the
-  // plugin's ui-state block so navigating away and back resumes instantly
-  // instead of re-running the due query and restarting at card one — see
-  // `reviewProgressProp`.
-  const progressBlock = usePluginUIStateBlock(srsReviewProgressType)
+  // Persist the in-progress session (frozen queue + place) on a per-deck
+  // child of the plugin's ui-state block so navigating away and back
+  // resumes instantly instead of re-running the due query and restarting
+  // at card one — see `reviewProgressProp`. Keying by deck id (rather than
+  // a single shared block discriminated by tag) lets every deck keep its
+  // own frozen session, so switching decks no longer clobbers the others.
+  const progressBlock = usePluginUIStateChildBlock(srsReviewProgressType, deck.id)
   const [progress, setProgress] = useProperty(progressBlock, reviewProgressProp)
   // Today's day key, advanced on rollover (mirrors `useDueCards`' cutoff)
   // so a session kept open past midnight saves under the new day and still
@@ -305,38 +305,18 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
   // Promote-in-place: a plain breadcrumb click "unfurls" that ancestor —
   // the card surface re-renders its subtree (the card is still visible
   // nested below) and the chain truncates to it, mirroring the backlinks
-  // entry. Modifier clicks still navigate (handled by `onLinkClick`).
-  // `shownId` defaults to the card and snaps back whenever the card
-  // changes (advance / back / skip / restart), so promotion never leaks
-  // across cards.
-  const [shownBlockId, setShownBlockId] = useState<string | null>(currentId)
-  // Snap the promoted view back to the card whenever the card changes
-  // (advance / back / skip / restart) — the "reset state on change during
-  // render" pattern, so a promotion never leaks across cards.
-  const [promotedForCard, setPromotedForCard] = useState(currentId)
-  if (promotedForCard !== currentId) {
-    setPromotedForCard(currentId)
-    setShownBlockId(currentId)
-  }
-  const shownId = shownBlockId ?? currentId
+  // entry. The shared hook owns the shown-block state and snaps back to
+  // the card whenever it changes (advance / back / skip / restart), so a
+  // promotion never leaks across cards; modifier clicks navigate (handled
+  // by `PromotableBreadcrumbList`).
+  const {shownId, promote: promoteBreadcrumb} = usePromotableBreadcrumb(currentId ?? '')
   // The shown block's ancestors are a prefix of the card's chain, so we
   // can slice the already-fetched parents instead of querying again.
   const shownParents = useMemo(() => {
-    if (!shownId || shownId === currentId) return currentParents
+    if (!currentId || shownId === currentId) return currentParents
     const cut = currentParents.findIndex(p => p.id === shownId)
     return cut >= 0 ? currentParents.slice(0, cut) : currentParents
   }, [shownId, currentId, currentParents])
-  const promoteBreadcrumb = useCallback((parent: Block) => {
-    void withMoveTransition(async () => { setShownBlockId(parent.id) })
-  }, [])
-
-  const openBreadcrumb = useBlockOpener()
-  const handleBreadcrumbClick = useCallback(
-    (e: ReactMouseEvent, parent: Block) => {
-      openBreadcrumb(e, {blockId: parent.id, workspaceId})
-    },
-    [openBreadcrumb, workspaceId],
-  )
 
   const grade = useCallback(
     async (signal: SrsSignal) => {
@@ -534,7 +514,7 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
 
   // currentId is non-null past the guards above, so the shown surface id
   // is always a concrete block id (the card, or a promoted ancestor).
-  const surfaceId = shownBlockId ?? currentId
+  const surfaceId = shownId
   const showingCard = surfaceId === currentId
 
   return (
@@ -552,12 +532,11 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
           already warm; renders nothing for a top-level block. Plain click
           unfurls a segment in place (promote); modifier clicks navigate. */}
       {shownParents.length > 0 && (
-        <BreadcrumbList
+        <PromotableBreadcrumbList
           parents={shownParents}
           workspaceId={workspaceId}
           overrides={BREADCRUMB_OVERRIDES}
-          onSelect={promoteBreadcrumb}
-          onLinkClick={handleBreadcrumbClick}
+          onPromote={promoteBreadcrumb}
           className="mb-2 flex flex-wrap items-center gap-1 overflow-x-auto py-1 text-sm text-muted-foreground"
           itemClassName="max-w-full cursor-pointer truncate no-underline"
           separatorClassName="mx-1 text-muted-foreground/50"

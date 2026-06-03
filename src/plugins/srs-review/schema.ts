@@ -31,14 +31,14 @@ export const srsReviewDeckType = defineBlockType({
 
 export const SRS_REVIEW_PROGRESS_TYPE = 'srs-review-progress'
 
-/** A frozen review session's persisted state. Stored on the plugin's
- *  ui-state block (see `usePluginUIStateProperty`) so the session survives
- *  navigating away and back — both the user's place (`index`/`revealed`)
- *  and the frozen card order (`queue`), so returning doesn't re-run the
- *  due-cards query or restart at card one. `tag` and `day` scope the saved
- *  state: a different deck tag, or a midnight rollover, invalidates it so
- *  the queue rebuilds from the live due set instead of resuming a stale
- *  one. */
+/** A frozen review session's persisted state. Stored on a per-deck child
+ *  of the plugin's ui-state block (see `usePluginUIStateChildBlock`, keyed
+ *  by deck id) so each deck keeps its own session across navigating away
+ *  and back — both the user's place (`index`/`revealed`) and the frozen
+ *  card order (`queue`), so returning doesn't re-run the due-cards query or
+ *  restart at card one. `tag` and `day` still scope the saved state:
+ *  retagging the deck, or a midnight rollover, invalidates it so the queue
+ *  rebuilds from the live due set instead of resuming a stale one. */
 export interface ReviewProgress {
   queue: string[]
   index: number
