@@ -6,6 +6,8 @@ import { Breadcrumbs } from './Breadcrumbs.tsx'
 import { BreadcrumbRenderer } from './BreadcrumbRenderer.tsx'
 
 export { BreadcrumbList } from './BreadcrumbList.tsx'
+export { PromotableBreadcrumbList } from './PromotableBreadcrumbList.tsx'
+export { usePromotableBreadcrumb, type PromotableBreadcrumb } from './usePromotableBreadcrumb.ts'
 export { BreadcrumbRenderer } from './BreadcrumbRenderer.tsx'
 export { Breadcrumbs } from './Breadcrumbs.tsx'
 export { getBreadcrumbContentPreview } from './breadcrumbPreview.ts'

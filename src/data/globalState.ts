@@ -35,6 +35,7 @@ import {
   getLayoutSessionBlock,
   getPluginPrefsBlock,
   getPluginUIStateBlock,
+  getPluginUIStateChild,
   getUIStateBlock,
   getUserBlock,
   requireSchemaScope,
@@ -150,6 +151,14 @@ export function usePluginUIStateBlock(type: TypeContribution): Block {
   const workspaceId = requireWorkspaceId(repo, 'usePluginUIStateBlock')
 
   return use(getPluginUIStateBlock(repo, workspaceId, user, type))
+}
+
+/** Resolve a per-`key` child of the plugin's ui-state sub-block, for
+ *  plugins that partition their ui-state (e.g. one frozen review session
+ *  per deck, keyed by deck id) instead of overloading a single block. The
+ *  child is bootstrapped on first access. */
+export function usePluginUIStateChildBlock(type: TypeContribution, key: string): Block {
+  return use(getPluginUIStateChild(usePluginUIStateBlock(type), key))
 }
 
 /** Read/write a ui-state property on the plugin's own ui-state
