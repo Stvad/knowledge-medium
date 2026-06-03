@@ -192,11 +192,14 @@ existing comparator.</p>
 needs an escape hatch for the inversion.</p>
 
 <h3>Option A — Context-level priority</h3>
-<p>Add one optional field to <code>ActionContextConfig</code>; default <code>0</code>. Winner =
-highest priority, ties broken by activation recency (Option 0 as the tiebreak).</p>
+<p>Add one optional field to <code>ActionContextConfig</code>. Winner = highest priority, ties broken by
+activation recency (Option 0 as the tiebreak). <em>(Final encoding settled on <strong>named tiers</strong>
+<code>'low' | 'default' | 'high'</code> rather than raw integers — CodeMirror <code>Prec</code> precedent, and it
+sidesteps the magic-number cliffs flagged above; see the implementation plan. Shown below as the option was
+originally framed.)</em></p>
 <pre><code>actionContextsFacet.of({
   type: SURFACE_CONTEXT,
-  priority: 100,          // &gt; normal-mode's default (0)
+  priority: 'high',       // beats normal-mode's 'default'
   // ...
 })</code></pre>
 <ul class="tight">
@@ -318,13 +321,14 @@ any of them. The column shows D combined with priority (A) since that's the live
 they bind?</strong>
 <p style="margin:.5rem 0">Common to both answers: fix the double-fire (single winner per chord), winner =
 shared comparator <code>(priority desc, then activation-recency desc)</code> used by <em>both</em> the keyboard
-path and <code>getActiveActionById</code>, add <code>priority?: number</code> (default <code>0</code>) so the
+path and <code>getActiveActionById</code>, add <code>priority</code> (named tiers
+<code>'low' | 'default' | 'high'</code>, default <code>'default'</code>) so the
 reporting surface outranks <code>normal-mode</code> and the 8 skip-decorators collapse to one line, and keep
 <code>modal</code> as the extreme tier. <strong><code>global</code> is a reserved top tier, outside normal
 collision precedence:</strong> a <code>global</code> binding is never shadowed by a non-global one on a shared
 chord, regardless of priority or activation order. Without this carve-out the comparator violates the doc's own
-"app-wide chords must survive" requirement — <code>global</code> activates early and defaults to priority 0, so a
-later same-priority context would otherwise win Cmd+K / Escape. (<code>computeInstallableContexts</code> only
+"app-wide chords must survive" requirement — <code>global</code> activates early and (absent the carve-out)
+would sit at the <code>'default'</code> tier, so a later same-priority context would otherwise win Cmd+K / Escape. (<code>computeInstallableContexts</code> only
 keeps <code>global</code> in the install <em>set</em>; it does not rank it within a collision, so the dedup pass
 must special-case it.) Drop B (suppression, not precedence; name-coupled) and C (A with coupling).</p>
 <p style="margin:.5rem 0 0"><strong>Resolved (2026-05-30): ship A + D (fire-time, declinable), built as the
@@ -423,7 +427,8 @@ everywhere" need, the clean tool is letting <code>ActionDecorator.decorate</code
 <h2>Rough surface area</h2>
 <p><strong>Shared by both strategies (A core):</strong></p>
 <ul class="tight">
-  <li><code>types.ts</code> — add <code>priority?: number</code> to <code>ActionContextConfig</code> (+ doc comment).</li>
+  <li><code>types.ts</code> — add <code>priority</code> (named tiers <code>'low' | 'default' | 'high'</code>,
+      default <code>'default'</code>) to <code>ActionContextConfig</code> (+ doc comment).</li>
   <li><code>effectiveActions.ts</code> — extract <code>compareContexts</code>; rewrite
       <code>getActiveActionById</code> to use it.</li>
   <li><strong>New shared chord canonicalizer</strong> in <code>src/shortcuts/</code> — lift

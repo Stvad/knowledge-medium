@@ -123,8 +123,9 @@ Keep the descriptor shape open (the <code>kind</code> field) so Phase 3 adds var
   <li>Comparator <code>(priority desc, then activation-recency desc)</code>, <code>global</code> as reserved
       top tier, <code>modal</code> preserved. Shared with <code>getActiveActionById</code> so the dispatch and
       keyboard paths can't diverge.</li>
-  <li><code>priority?: number</code> (named tiers) on <code>ActionContextConfig</code> → fixes the surface
-      early/late inversion.</li>
+  <li><code>priority</code> as <strong>named tiers</strong> <code>'low' | 'default' | 'high'</code> (see
+      "Precedence tiers" below — <em>not</em> a raw <code>number</code>) on <code>ActionContextConfig</code> →
+      fixes the surface early/late inversion.</li>
   <li><code>canRun</code> → <code>isVisible</code> (UI) + <code>canDispatch</code> (dispatch gate).
       <code>canDispatch</code> ships <em>with</em> the coordinator — it's the skip predicate the single-winner
       loop iterates on (PR&nbsp;1); the handler-return sentinel joins it as a second skip-condition in PR&nbsp;2.</li>
@@ -142,14 +143,22 @@ That loop already exists, so it closes the double-fire and fixes the early/late 
 downstream. <strong>PR&nbsp;2</strong> adds <em>only</em> the declinable fall-through: widen the handler return
 to a not-handled sentinel and add "handler returned <code>false</code>" as one more skip-condition to the loop
 PR&nbsp;1 already wrote (Option&nbsp;D). That is <strong>pure addition — no listener wiring is rewritten or
-discarded.</strong> So the split boundary is "everything the bug fix needs" (PR&nbsp;1, incl. the coordinator)
+discarded.</strong> <strong>Scope that claim precisely:</strong> "no rework" is about the <em>listener wiring</em>
+specifically. PR&nbsp;2 still <em>widens the shared <code>ActionHandler</code> return type</em> (add the
+not-handled sentinel). That is back-compat — <code>void</code> = handled, so no handler is <em>forced</em> to
+change — but it touches a signature that <strong>~176 <code>handler:</code> definitions across ~49 files</strong>
+structurally depend on, so budget PR&nbsp;2 as a wide-blast-radius type review even though nothing breaks. So the
+split boundary is "everything the bug fix needs" (PR&nbsp;1, incl. the coordinator)
 vs. "the dispatch-contract change the downstream input work needs" (PR&nbsp;2): PR&nbsp;1 can merge immediately;
 PR&nbsp;2 lands with / just ahead of the spatial-selection branch that is its only fall-through consumer.
-<strong>Option&nbsp;D remains the committed target.</strong> Note the trade: building the coordinator in
-PR&nbsp;1 (rather than keeping per-action listeners and deferring the rewrite) front-loads the one mechanically
-risky change — the reconciler rewrite, which carries the documented <code>useEffectEvent</code> regression
-history — into the bug-fix PR. It is not speculative there: single-winner dispatch needs a single dispatcher
-anyway. The earlier "negative work" warning applies only to the <em>other</em> way to fix the bug
+<strong>Option&nbsp;D remains the committed target.</strong> Note the trade — and don't mis-scope PR&nbsp;1 as
+"small": building the coordinator in PR&nbsp;1 (rather than keeping per-action listeners and deferring the
+rewrite) front-loads the one mechanically risky change — the reconciler rewrite, which carries the documented
+<code>useEffectEvent</code> regression history — into the bug-fix PR. It is not speculative there: the coordinator
+is the single-winner decision point that PR&nbsp;2 builds on, so it isn't discarded. (Strictly, a per-listener
+self-check against the shared comparator could fix <em>only</em> the double-fire at lower mechanical risk — but
+it gets thrown out once Option&nbsp;D lands, so it's only the lower-risk choice if Option&nbsp;D were ever
+dropped.) The earlier "negative work" warning applies to that <em>other</em> way to fix the bug
 (activation-time install-filtering / per-listener self-check), which this plan explicitly does not do precisely
 because it would be thrown out at PR&nbsp;2.</p>
 <p><strong>Retires:</strong> the double-fire (bug); critique weakness 1 (keyboard/dispatch divergence) and the
@@ -188,7 +197,25 @@ candidates that have <em>already</em> completed a match this event. Read the <co
 keyboard <code>Trigger</code> as "the chord that just completed" (used for ordering / dedup / logging), not as
 the matcher input. Do <em>not</em> reduce a keydown to one descriptor and hand it to <code>resolve</code> to
 match — that path is exactly how <code>g g</code> went dead historically
-(<span class="filepath">vim-normal-mode/actions.ts:204–208</span>).</p>
+(<span class="filepath">vim-normal-mode/actions.ts:204–208</span>). And keep <code>resolve</code>'s internal
+<code>Trigger</code> distinct from what the <em>handler</em> receives: handlers keep their existing second arg
+<code>ActionTrigger = KeyboardEvent | CustomEvent</code> (<span class="filepath">types.ts:108</span>) — the raw
+event still flows through to the handler; the <code>ChordDescriptor</code> is internal to resolution/ordering and
+is never handed to handlers.</p>
+<p><strong>Coordinator control flow (the highest-regression-risk seam in PR&nbsp;1 — spell it out, don't just
+say "keep a matcher"):</strong> keep <em>one tinykeys matcher per candidate binding</em> (today's
+<code>createKeybindingsHandler</code>, <span class="filepath">HotkeyReconciler.tsx:257</span>). On each keydown
+/ keyup the coordinator feeds the event to <em>every</em> candidate's matcher; tinykeys fires a binding's
+callback <em>synchronously</em> when <em>that</em> binding's sequence completes on this event. Rewire each
+callback to <strong>push its candidate into a "completed-this-event" set</strong> instead of running the handler
+directly. After feeding all candidates, the coordinator <strong>orders the completed set via
+<code>compareContexts</code> and runs the loop</strong> (<code>canDispatch</code> → <code>resolveDeps</code> →
+handler; run-until in PR&nbsp;2). Because tinykeys completion is synchronous within the event dispatch,
+collect-then-order happens in the same tick — no async-ordering hazard. Multiple candidates can complete on one
+keypress (two contexts both bind <code>g g</code>) — that is precisely the collision the comparator resolves;
+single chords are the degenerate length-1 case. This per-candidate-matcher → collect → order → run-loop is the
+substantive new design in PR&nbsp;1, not "addition," and it is where <code>g g</code>/<code>d d</code> will
+regress if guessed wrong — give it dedicated sequence tests.</p>
 <p><strong>Precedence tiers (named, not raw ints — CodeMirror <code>Prec</code> precedent):</strong>
 <code>type Priority = 'low' | 'default' | 'high'</code> on <code>ActionContextConfig</code> (default
 <code>'default'</code>). <code>global</code> = reserved top; <code>modal</code> orthogonal (own-all-chords).
@@ -212,7 +239,8 @@ while still letting a mode own its cancel key, and is closest to today's behavio
 <p><strong>File map:</strong></p>
 <ul class="tight">
   <li><code>src/shortcuts/resolve.ts</code> — new; <code>resolve</code> + <code>compareContexts</code> (pure).</li>
-  <li><code>src/shortcuts/types.ts</code> — add <code>priority</code> to <code>ActionContextConfig</code>;
+  <li><code>src/shortcuts/types.ts</code> — add <code>priority: 'low' | 'default' | 'high'</code> (named tier,
+      default <code>'default'</code>) to <code>ActionContextConfig</code>;
       split <code>canRun</code> → <code>isVisible</code> + <code>canDispatch</code>; widen
       <code>ActionHandler</code> return to allow a "not handled" sentinel (<code>boolean</code>;
       <code>void</code> = handled, for back-compat). <strong>Async rule:</strong> the not-handled signal must be
@@ -231,13 +259,17 @@ while still letting a mode own its cancel key, and is closest to today's behavio
       per-action <code>window.addEventListener</code> install loop with <em>one</em> keydown + one keyup
       coordinator that: normalize event → <code>ChordDescriptor</code> (Phase 0) → gather candidates whose
       <code>(chord, phase)</code> match and whose context is installable → order via <code>compareContexts</code>
-      → run until one's <code>canDispatch</code> passes and its handler returns "handled". Preserve
+      → run down the ordered candidates and dispatch the first whose <code>canDispatch</code> passes (PR&nbsp;1);
+      in PR&nbsp;2 a handler returning the not-handled sentinel also falls through. Preserve
       <code>withRecoveredLetterKey</code>, the existing <code>shouldHandleEvent</code> filter cascade, the
       separate hold-binding observer, <code>eventOptions</code> (preventDefault/stopPropagation) precedence,
       and <strong>tinykeys sequence state</strong> (<code>d d</code>, <code>g g</code>) — keep a per-candidate
       sequence matcher; don't reduce each event to a single chord.</li>
   <li><code>src/shortcuts/runAction.ts</code> — <code>runActionById</code>/<code>useRunAction</code> go through
-      <code>resolve(..., {kind:'action', actionId})</code> + the shared deps seam.</li>
+      <code>resolve(..., {kind:'action', actionId})</code> + the shared deps seam. <strong>Migrate both copies:</strong>
+      the module dispatcher (<span class="filepath">runAction.ts:15</span>) and <code>useRunAction</code> each have
+      their <em>own</em> lookup + "not found / context not active" throw (<span class="filepath">runAction.ts:51–56</span>) —
+      easy to migrate one and miss the other.</li>
   <li>Call sites that pass deps: keep working via the seam (see below).</li>
 </ul>
 
@@ -246,8 +278,13 @@ action installs its own <code>window</code> listener, so a binding's <code>stopP
 <em>sibling</em> action-listeners (that sibling-listener model is the root of the double-fire). With one
 coordinator, losing candidates are loop entries, not separate listeners — there's nothing left among them for
 <code>stopPropagation</code> to stop. It still matters versus the separate <em>hold</em> observer and any
-app-level listeners. Audit every binding that sets <code>stopPropagation</code>, decide what it should now mean,
-and add a regression test — this is a behavior change hiding inside "preserve <code>eventOptions</code>."</p>
+app-level listeners. <strong>Heads-up for the audit:</strong> no in-repo binding actually sets
+<code>stopPropagation: true</code> today — every <code>eventOptions</code>/<code>defaultEventOptions</code> only
+sets <code>preventDefault</code> (the binding default is <code>stopPropagation: false</code> at
+<span class="filepath">HotkeyReconciler.tsx:443/470</span>), so the in-repo audit comes back empty. The real
+consumers are the hold observer, app-level listeners, and <em>plugins</em>. Write the regression test against the
+<em>mechanism</em> (a binding declaring <code>stopPropagation: true</code>), not against a pre-existing in-tree
+case — there isn't one. This is a behavior change hiding inside "preserve <code>eventOptions</code>."</p>
 
 <p><strong>Deps seam (the Phase-1 slice of the dependency model):</strong> one function
 <code>resolveDeps(action, active, supplied?) → deps | null</code> that merges the action's active-context deps
