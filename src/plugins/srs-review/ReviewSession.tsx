@@ -48,7 +48,7 @@ import {
   srsNextReviewDateProp,
 } from '@/plugins/srs-rescheduling'
 import { SrsSignal, estimateSrsIntervalDays } from '@/plugins/srs-rescheduling/scheduler.js'
-import { useDueCards } from './useDueCards.ts'
+import { useDueCards, useDueCardsReady } from './useDueCards.ts'
 import { archiveSrsCard } from './archive.ts'
 import { reviewDeckStartedProp, reviewProgressProp, srsReviewProgressType } from './schema.ts'
 import { localDayKey, reconcileRestoredQueue, restoreSavedSession } from './reviewProgress.ts'
@@ -165,6 +165,7 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
   const repo = useRepo()
   const workspaceId = deck.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
   const dueCards = useDueCards(workspaceId, tagName)
+  const dueLoaded = useDueCardsReady(workspaceId, tagName)
 
   // Persist the in-progress session (frozen queue + place) on the
   // plugin's ui-state block so navigating away and back resumes instantly
@@ -259,15 +260,17 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
   // drop not-yet-reached cards that are no longer due — e.g. rescheduled
   // on another surface since the session was saved. `useDueCards` is
   // already running for the snapshot/refresh paths, so this needs no extra
-  // query. Runs once; an empty due set is treated as "still loading"
-  // (mirrors the snapshot guard) so we never nuke the queue mid-load.
+  // query. Runs once, and only after the query has actually resolved
+  // (`dueLoaded`) — a loaded-but-empty deck (everything rescheduled away)
+  // must still reconcile to "complete", which is why we gate on load
+  // status rather than on a non-empty array.
   const reconciledRef = useRef(false)
   useEffect(() => {
-    if (!wasRestored || reconciledRef.current || dueCards.length === 0) return
+    if (!wasRestored || reconciledRef.current || !dueLoaded) return
     reconciledRef.current = true
     const dueIds = new Set(dueCards.map(c => c.id))
     setQueue(prev => (prev === null ? prev : reconcileRestoredQueue(prev, index, dueIds)))
-  }, [wasRestored, dueCards, index])
+  }, [wasRestored, dueLoaded, dueCards, index])
 
   // Discard the saved session and rebuild from the live due set. Now that
   // progress persists (navigating away no longer resets it), this is the
