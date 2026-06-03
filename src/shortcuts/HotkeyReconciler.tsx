@@ -19,7 +19,7 @@ import {
   getEffectiveActions,
 } from './effectiveActions.ts'
 import { keybindingOverridesFacet } from './keybindingOverrides.ts'
-import { computeInstallableContexts } from './resolve.ts'
+import { compareContexts, computeInstallableContexts } from './resolve.ts'
 import {
   ActionConfig,
   ActionContextConfig,
@@ -31,8 +31,23 @@ import {
 } from '@/shortcuts/types.js'
 import { hasEditableTarget, isTypingKeyEvent, withRecoveredLetterKey } from '@/shortcuts/utils.js'
 
-interface InstalledBinding {
-  unsubscribe: () => void
+/**
+ * A non-hold keyboard binding's per-candidate tinykeys matcher. Fed every
+ * event of its phase so it keeps its own sequence state (`g g`); on a
+ * completed match its callback records the candidate for this event rather
+ * than running the handler directly — the coordinator picks the winner.
+ */
+interface KeyboardCandidate {
+  action: ActionConfig
+  binding: ShortcutBindingDefaults
+  phase: 'keydown' | 'keyup'
+  matcher: (event: KeyboardEvent) => void
+}
+
+/** A binding whose chord completed on the event currently being processed. */
+interface CompletedBinding {
+  action: ActionConfig
+  binding: ShortcutBindingDefaults
 }
 
 const normalizeKeys = (keys: string | string[]): readonly string[] =>
@@ -163,29 +178,40 @@ export function HotkeyReconciler(): null {
     return () => setRunActionDispatcher(null)
   }, [runtime])
 
-  // Track which actions currently have hotkeys installed.
-  // Each entry owns its own tinykeys subscription — calling its
-  // unsubscribe removes only that handler's listener.
+  // One coordinator per phase replaces the N per-action window listeners —
+  // that sibling-listener model was the double-fire (a binding's
+  // preventDefault can't stop a sibling listener). Each installable non-hold
+  // binding keeps its own tinykeys matcher so sequence state (`g g`) survives,
+  // but a completed match only RECORDS the candidate; the coordinator orders
+  // the recorded candidates and dispatches a single winner. Hold bindings keep
+  // their own observer (installHoldBinding) — duration isn't a tinykeys match.
   const installedRef = useRef<{
     actions: readonly ActionConfig[]
-    byActionId: Map<string, InstalledBinding>
-  }>({actions: [], byActionId: new Map()})
+    keyboard: Map<string, KeyboardCandidate>
+    hold: Map<string, {unsubscribe: () => void}>
+  }>({actions: [], keyboard: new Map(), hold: new Map()})
+  // Bindings whose chord completed on the event currently being processed.
+  // The coordinator clears it before feeding matchers, the match callbacks
+  // push into it, and it's read back synchronously after — tinykeys completion
+  // is synchronous within the dispatch, so there's no async-ordering hazard.
+  const completedRef = useRef<CompletedBinding[]>([])
 
   useEffect(() => {
     const state = installedRef.current
 
-    const uninstall = (actionId: string) => {
-      const entry = state.byActionId.get(actionId)
+    const uninstallHold = (actionKey: string) => {
+      const entry = state.hold.get(actionKey)
       if (!entry) return
       entry.unsubscribe()
-      state.byActionId.delete(actionId)
+      state.hold.delete(actionKey)
     }
 
     // If the action set identity changed (runtime regeneration), tear
-    // everything down first. Handlers close over the old action objects and
-    // would otherwise become stale.
+    // everything down first. Matchers/observers close over the old action
+    // objects and would otherwise run stale handlers.
     if (state.actions !== actions) {
-      for (const actionId of Array.from(state.byActionId.keys())) uninstall(actionId)
+      for (const actionKey of Array.from(state.hold.keys())) uninstallHold(actionKey)
+      state.keyboard.clear()
       state.actions = actions
     }
 
@@ -199,66 +225,105 @@ export function HotkeyReconciler(): null {
       const actionKey = actionRuntimeKey(action)
       desiredActionIds.add(actionKey)
 
-      if (state.byActionId.has(actionKey)) continue
-
       const binding = action.defaultBinding
-      const keys = normalizeKeys(binding.keys)
 
       if (binding.phase === 'hold') {
+        if (state.hold.has(actionKey)) continue
         const unsubscribe = installHoldBinding({
           action,
           binding,
-          keys,
+          keys: normalizeKeys(binding.keys),
           holdMs: binding.holdMs,
           activeRef,
           contextConfigsByTypeRef,
           dispatchRef,
         })
-        state.byActionId.set(actionKey, {unsubscribe})
+        state.hold.set(actionKey, {unsubscribe})
         continue
       }
 
-      const handler = makeHandler(action, binding, activeRef, contextConfigsByTypeRef, dispatchRef)
-      const bindingMap: Record<string, (event: KeyboardEvent) => void> = {}
-      for (const key of keys) bindingMap[key] = handler
-      // We use `createKeybindingsHandler` + a manual listener rather than
-      // tinykeys() directly so we can preprocess events with
-      // `withRecoveredLetterKey`. tinykeys' matcher reads event.key, which
-      // Mac's option-transformations and Linux compose-key setups can
-      // corrupt for letter chords (Alt+y → '¥' on Mac US). The wrapper
-      // restores the logical letter from event.keyCode before tinykeys
-      // sees it — matches hotkeys-js's pre-migration behavior, and works
-      // on Colemak/Dvorak where event.code lies about layout.
-      //
-      // `ignore: () => false` disables tinykeys' built-in editable-target
-      // filter; we run our own context-aware filter inside the handler so
-      // contexts like property-editing can opt in to events tinykeys
-      // would otherwise drop.
-      const tinykeysHandler = createKeybindingsHandler(bindingMap, {ignore: () => false})
-      const listener: EventListener = (event) => {
-        tinykeysHandler(withRecoveredLetterKey(event as KeyboardEvent))
-      }
-      const phase = binding.phase ?? 'keydown'
-      window.addEventListener(phase, listener)
-      const unsubscribe = () => window.removeEventListener(phase, listener)
-      state.byActionId.set(actionKey, {unsubscribe})
+      if (state.keyboard.has(actionKey)) continue
+      state.keyboard.set(actionKey, {
+        action,
+        binding,
+        phase: binding.phase ?? 'keydown',
+        matcher: makeMatcher(action, binding, completedRef),
+      })
     }
 
-    // Uninstall actions whose context deactivated (or that disappeared).
-    for (const actionId of Array.from(state.byActionId.keys())) {
-      if (!desiredActionIds.has(actionId)) uninstall(actionId)
+    // Drop candidates whose context deactivated, was shadowed, or disappeared.
+    for (const actionKey of Array.from(state.keyboard.keys())) {
+      if (!desiredActionIds.has(actionKey)) state.keyboard.delete(actionKey)
+    }
+    for (const actionKey of Array.from(state.hold.keys())) {
+      if (!desiredActionIds.has(actionKey)) uninstallHold(actionKey)
     }
   }, [actions, active, contextConfigsByType])
 
-  // Final teardown on unmount (test cleanup, HMR). Separate effect with
-  // empty deps so it only runs once on unmount, after all reconcile effects
-  // have stopped firing. Snapshot the ref into a local so the cleanup
-  // doesn't read a (potentially-mutated) installedRef.current at unmount.
+  // The single keydown/keyup coordinator. Installed once; reads refs so it
+  // always sees the current matcher set, active contexts, and configs without
+  // rebinding. (Per the note above, the useEffectEvent indirection broke
+  // delivery here — tinykeys fires from a global listener outside React's
+  // event scope — so the latest state must come through refs.)
+  useEffect(() => {
+    const dispatchPhase = (phase: 'keydown' | 'keyup', rawEvent: Event): void => {
+      const event = withRecoveredLetterKey(rawEvent as KeyboardEvent)
+      const completed = completedRef.current
+      completed.length = 0
+      // Feed every candidate of this phase so each advances its own sequence
+      // state; a completed match pushes the candidate into `completed`.
+      for (const candidate of installedRef.current.keyboard.values()) {
+        if (candidate.phase === phase) candidate.matcher(event)
+      }
+      if (completed.length === 0) return
+
+      const active = activeRef.current
+      const contextConfigsByType = contextConfigsByTypeRef.current
+      // The filter cascade gates dispatch, not matching — sequence state has
+      // already advanced above, matching tinykeys' per-listener behaviour.
+      if (!shouldHandleEvent(event, active, contextConfigsByType)) return
+
+      // Order best-first via the shared comparator, then dispatch the single
+      // winner: the first candidate whose context is still installable. That
+      // installability check is the canDispatch gate (a context can deactivate
+      // or get shadowed between matcher install and this event).
+      const ordered = completed.slice().sort((a, b) =>
+        compareContexts(a.action.context, b.action.context, {active, contextConfigsByType}),
+      )
+      for (const {action, binding} of ordered) {
+        const deps = getInstallableContextDeps(action.context, active, contextConfigsByType)
+        if (!deps) continue
+        applyEventOptions(event, action, binding, contextConfigsByType)
+        try {
+          void Promise.resolve(action.handler(deps, event, dispatchRef.current)).catch(error => {
+            console.error(`[HotkeyReconciler] Action ${action.id} rejected`, error)
+          })
+        } catch (error) {
+          console.error(`[HotkeyReconciler] Action ${action.id} threw`, error)
+        }
+        return // single winner (PR 1); PR 2 lets a declining handler fall through
+      }
+    }
+
+    const onKeydown = (event: Event) => dispatchPhase('keydown', event)
+    const onKeyup = (event: Event) => dispatchPhase('keyup', event)
+    window.addEventListener('keydown', onKeydown)
+    window.addEventListener('keyup', onKeyup)
+    return () => {
+      window.removeEventListener('keydown', onKeydown)
+      window.removeEventListener('keyup', onKeyup)
+    }
+  }, [])
+
+  // Final teardown on unmount (test cleanup, HMR). Separate effect with empty
+  // deps so it runs once on unmount, after reconcile effects have stopped.
+  // Snapshot the ref so cleanup doesn't read a mutated installedRef.current.
   useEffect(() => {
     const state = installedRef.current
     return () => {
-      for (const [, entry] of state.byActionId) entry.unsubscribe()
-      state.byActionId.clear()
+      for (const [, entry] of state.hold) entry.unsubscribe()
+      state.hold.clear()
+      state.keyboard.clear()
       state.actions = []
     }
   }, [])
@@ -428,44 +493,31 @@ const applyEventOptions = (
   if (options.preventDefault) event.preventDefault()
 }
 
-const makeHandler = (
+/**
+ * Build a candidate's tinykeys matcher. Every key in the binding maps to the
+ * same callback, which records the candidate in `completedRef` for the event
+ * in flight instead of running the handler — the coordinator orders the
+ * recorded candidates and runs the winner.
+ *
+ * `createKeybindingsHandler` (rather than `tinykeys()` directly) lets the
+ * coordinator preprocess each event with `withRecoveredLetterKey` before the
+ * matcher sees it: tinykeys reads event.key, which Mac option-transforms
+ * (Alt+y → '¥') and Linux compose setups corrupt for letter chords; the
+ * wrapper restores the logical letter from event.keyCode, and works on
+ * Colemak/Dvorak where event.code lies about layout. `ignore: () => false`
+ * disables tinykeys' built-in editable-target filter — the coordinator runs
+ * the context-aware cascade (`shouldHandleEvent`) itself, so contexts like
+ * property-editing can opt into events tinykeys would otherwise drop.
+ */
+const makeMatcher = (
   action: ActionConfig,
   binding: ShortcutBindingDefaults,
-  activeRef: { current: ActiveContextsMap },
-  contextConfigsByTypeRef: { current: ReadonlyMap<ActionContextType, ActionContextConfig> },
-  dispatchRef: { current: ActionDispatch },
-) => {
-  return (event: KeyboardEvent) => {
-    const active = activeRef.current
-    const contextConfigsByType = contextConfigsByTypeRef.current
-    if (!shouldHandleEvent(event, active, contextConfigsByType)) return
-
-    const deps = getInstallableContextDeps(action.context, active, contextConfigsByType)
-    // Context may have deactivated or become shadowed between install and callback.
-    if (!deps) return
-
-    const contextConfig = contextConfigsByType.get(action.context)
-    const options: EventOptions = {
-      preventDefault: true,
-      stopPropagation: false,
-      ...contextConfig?.defaultEventOptions,
-      ...binding.eventOptions,
-    }
-
-    if (options.stopPropagation) event.stopPropagation()
-    if (options.preventDefault) {
-      console.debug(
-        `[HotkeyReconciler] Preventing default for action: ${action.id}, context: ${action.context}`,
-      )
-      event.preventDefault()
-    }
-
-    try {
-      void Promise.resolve(action.handler(deps, event, dispatchRef.current)).catch(error => {
-        console.error(`[HotkeyReconciler] Action ${action.id} rejected`, error)
-      })
-    } catch (error) {
-      console.error(`[HotkeyReconciler] Action ${action.id} threw`, error)
-    }
+  completedRef: { current: CompletedBinding[] },
+): ((event: KeyboardEvent) => void) => {
+  const record = () => {
+    completedRef.current.push({action, binding})
   }
+  const bindingMap: Record<string, (event: KeyboardEvent) => void> = {}
+  for (const key of normalizeKeys(binding.keys)) bindingMap[key] = record
+  return createKeybindingsHandler(bindingMap, {ignore: () => false})
 }

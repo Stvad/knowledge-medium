@@ -52,6 +52,15 @@ const secondModalContextConfig: ActionContextConfig = {
     typeof deps === 'object' && deps !== null,
 }
 
+const HIGH_CONTEXT = 'high-priority-mode' as ActionContextType
+const highContextConfig: ActionContextConfig = {
+  type: HIGH_CONTEXT,
+  displayName: 'High Priority Mode',
+  priority: 'high',
+  validateDependencies: (deps): deps is BaseShortcutDependencies =>
+    typeof deps === 'object' && deps !== null,
+}
+
 interface MockDeps extends BaseShortcutDependencies {
   marker: string
 }
@@ -449,6 +458,75 @@ describe('HotkeyReconciler', () => {
 
       act(() => dispatchKeydown('m'))
       expect(firstHandler).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('single winner (no double-fire)', () => {
+    it('fires only the highest-precedence action when two contexts share a chord', () => {
+      // Both global and the base context bind 'k' and are active. The old
+      // per-action-listener model fired BOTH (the double-fire bug); the
+      // coordinator must dispatch exactly one — global, as the reserved top
+      // tier.
+      const globalHandler = vi.fn()
+      const baseHandler = vi.fn()
+      const globalAction = buildAction({
+        id: 'test.global-k',
+        context: GLOBAL_CONTEXT,
+        handler: globalHandler,
+        defaultBinding: {keys: 'k'},
+      })
+      const baseAction = buildAction({
+        id: 'test.base-k',
+        context: TEST_CONTEXT,
+        handler: baseHandler,
+        defaultBinding: {keys: 'k'},
+      })
+
+      render(
+        <Harness
+          actions={[globalAction, baseAction]}
+          contexts={[testContextConfig, globalContextConfig]}
+        >
+          <SequentialActivator contexts={[GLOBAL_CONTEXT, TEST_CONTEXT]}/>
+        </Harness>,
+      )
+
+      act(() => dispatchKeydown('k'))
+      expect(globalHandler).toHaveBeenCalledTimes(1)
+      expect(baseHandler).not.toHaveBeenCalled()
+    })
+
+    it('a higher-priority context wins a shared chord even when activated earlier', () => {
+      // The early/late inversion: the high-priority context is activated
+      // FIRST (older) and the default context LATER (newer). Recency alone
+      // would pick the newer one; priority must override it.
+      const highHandler = vi.fn()
+      const lowHandler = vi.fn()
+      const highAction = buildAction({
+        id: 'test.high-k',
+        context: HIGH_CONTEXT,
+        handler: highHandler,
+        defaultBinding: {keys: 'k'},
+      })
+      const lowAction = buildAction({
+        id: 'test.low-k',
+        context: TEST_CONTEXT,
+        handler: lowHandler,
+        defaultBinding: {keys: 'k'},
+      })
+
+      render(
+        <Harness
+          actions={[highAction, lowAction]}
+          contexts={[highContextConfig, testContextConfig]}
+        >
+          <SequentialActivator contexts={[HIGH_CONTEXT, TEST_CONTEXT]}/>
+        </Harness>,
+      )
+
+      act(() => dispatchKeydown('k'))
+      expect(highHandler).toHaveBeenCalledTimes(1)
+      expect(lowHandler).not.toHaveBeenCalled()
     })
   })
 
