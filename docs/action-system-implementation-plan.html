@@ -68,7 +68,7 @@ input-unification consumer, it's work that gets torn out.
 <tr><td><code>modal</code>?</td><td>Retained, orthogonal — "own all chords, even unbound." Above priority.</td><td class="done">settled</td></tr>
 <tr><td>Trigger type?</td><td>Normalized input descriptor (<code>{kind, modifiers, phase, role}</code>), not <code>KeyboardEvent</code>; phase/role first-class.</td><td class="done">settled</td></tr>
 <tr><td>Replace facets / flatten contexts?</td><td>No. Keep facet contribution + scoping. Unify resolution only.</td><td class="done">settled</td></tr>
-<tr><td><code>global</code> vs active <code>modal</code> on same chord (Escape)?</td><td>Lean: modal is the one tier allowed to override global. Needs explicit sign-off.</td><td class="open">OPEN</td></tr>
+<tr><td><code>global</code> vs active <code>modal</code> on same chord (Escape)?</td><td>Lean: modal is the one tier allowed to override global. <strong>But</strong> nothing binds <code>Escape</code> at <code>global</code> today (both Escape bindings are scoped), so this is likely moot for Escape — revisit with a real collision. Needs explicit sign-off.</td><td class="open">OPEN</td></tr>
 <tr><td>Equal-priority determinism?</td><td>Fall back to recency for now; revisit only if a real case bites.</td><td class="open">deferred</td></tr>
 <tr><td>Full provider/DI dependency model?</td><td>Build only the caller-supplied <em>seam</em> now; full token registry deferred until "dep shapes grow faster than contexts."</td><td class="open">deferred</td></tr>
 <tr><td>Focus-tree activation model?</td><td>Separate prototype track; not a dependency of any phase below.</td><td class="open">prototype</td></tr>
@@ -223,8 +223,17 @@ The reporting surface declares <code>'high'</code> to beat <code>normal-mode</co
 tier only when a real case needs one.</p>
 
 <p><strong>The <code>global</code>-vs-<code>modal</code> sub-question (the "Escape case") — DECIDE before coding:</strong>
-<code>global</code> owns <code>Escape</code> (clear focus) as reserved top tier, but a modal mode (e.g. scrub)
-wants <code>Escape</code> to cancel <em>itself</em>. <strong>Recommended &amp; assumed by this plan: an active
+<strong>Reality check (verified):</strong> nothing binds <code>Escape</code> at the <code>global</code> tier today.
+The only two <code>Escape</code> bindings are <em>scoped</em> — <code>exit_edit_mode_cm</code> in
+<code>EDIT_MODE_CM</code> and <code>clear_selection</code> in <code>MULTI_SELECT_MODE</code>
+(<span class="filepath">defaultShortcuts.ts:565 / :920</span>) — and <code>global</code> binds
+undo/redo/preferences/import-export, <em>not</em> <code>Escape</code> (no "clear focus" binding exists). So
+"<code>global</code> owns <code>Escape</code>" is the canonical <em>illustration</em> of the tension, not current
+behavior: a modal mode (e.g. scrub) that wants <code>Escape</code> to cancel <em>itself</em> contends only with
+those scoped bindings, which the ordinary comparator already resolves — the modal-over-<code>global</code> special
+case may never fire for <code>Escape</code> specifically. Still pick the rule before Phase 1 wires the comparator,
+but frame it as "modal vs. a scoped exit/clear binding" and revisit with a real collision rather than abstractly.
+<strong>Recommended &amp; assumed by this plan: an active
 <code>modal</code> context may override <code>global</code> on a shared chord</strong> (consistent with modal
 already being the tier that suppresses everything else). Encode as: comparator ranks active-<code>modal</code>
 above <code>global</code>, <code>global</code> above all other tiers. Two alternatives, if you'd rather not bake
