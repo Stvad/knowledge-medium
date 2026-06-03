@@ -473,11 +473,31 @@ describe('repo.queryBlocks', () => {
       })
     }, {scope: ChangeScope.BlockDefault})
 
-    const out = await env.repo.queryBlocks({workspaceId: WS, 
+    const out = await env.repo.queryBlocks({workspaceId: WS,
       where: {status: 'open'},
       match: [{scope: 'ancestor', id: 'parent'}],
     })
     expect(ids(out)).toEqual(['open-child'])
+  })
+
+  it('exclude keeps rows whose filtered property is unset (NULL is not a match)', async () => {
+    // Regression: a scalar `exclude` where compiles to
+    // `json_extract(...) = ?`, which is NULL when the property is
+    // missing. A bare `NOT (NULL)` is NULL — not TRUE — so it used to
+    // drop every row that never set the property, the opposite of the
+    // documented NOR contract ("exclude iff a predicate matches"; an
+    // unknown does not match). This is exactly how SRS due-cards lost
+    // every card that had never been archived.
+    await create({id: 'unset', types: ['todo']})
+    await create({id: 'explicit-false', types: ['todo'], properties: {[doneProp.name]: doneProp.codec.encode(false)}})
+    await create({id: 'explicit-true', types: ['todo'], properties: {[doneProp.name]: doneProp.codec.encode(true)}})
+
+    const out = await env.repo.queryBlocks({
+      workspaceId: WS,
+      types: ['todo'],
+      exclude: [{scope: 'self', where: {[doneProp.name]: true}}],
+    })
+    expect(ids(out).sort()).toEqual(['explicit-false', 'unset'])
   })
 })
 

@@ -367,10 +367,10 @@ export const getLayoutSessionBlock = memoize(
 )
 
 /** Per-plugin ui-state sub-block under the root ui-state block. The
- *  mirror of `getPluginPrefsBlock` for state that is persistent but
- *  per-device (and therefore should NOT sync) — e.g. "what blocks did
- *  the user open recently on this device". Writes flow through
- *  `ChangeScope.UiState` so they stay out of the upload queue. */
+ *  mirror of `getPluginPrefsBlock` for persistent UI state — e.g.
+ *  "what blocks did the user open recently". Writes flow through
+ *  `ChangeScope.UiState`: not undoable, but they upload and sync
+ *  across devices like any other write. */
 export const getPluginUIStateBlock = memoize(
   async (
     repo: Repo,
@@ -391,6 +391,18 @@ export const getPluginUIStateBlock = memoize(
   },
   (repo, workspaceId, user, type) =>
     `${repoIdentity(repo)}:${workspaceId}:${user.id}:plugin-ui-state:${type.id}`,
+)
+
+/** A per-key child under a plugin's ui-state sub-block, so a plugin can
+ *  partition its ui-state (e.g. one frozen review session per deck)
+ *  instead of overloading a single block and discriminating by hand.
+ *  Inherits the parent's `ChangeScope.UiState` (undo-segregated from
+ *  document edits). Mirrors `getLayoutSessionBlock`. */
+export const getPluginUIStateChild = memoize(
+  async (pluginUIStateBlock: Block, key: string): Promise<Block> =>
+    ensureUiChild(pluginUIStateBlock.repo, pluginUIStateBlock, key),
+  (pluginUIStateBlock, key) =>
+    `${repoIdentity(pluginUIStateBlock.repo)}:${pluginUIStateBlock.id}:${key}`,
 )
 
 // ──── Selection-state helpers (pure operations on a Block) ────
