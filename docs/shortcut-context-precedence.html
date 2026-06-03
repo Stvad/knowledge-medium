@@ -388,12 +388,17 @@ everywhere" need, the clean tool is letting <code>ActionDecorator.decorate</code
       reordered modifiers, and code-form chords would land in different buckets and install as separate
       listeners. The only real normalizer is <code>normalizeChord</code> in
       <span class="filepath">keybindings-settings/keyCapture.ts:205</span>, and it has limits: it maps
-      modifier aliases (<code>cmd</code>/<code>meta</code>/<code>os</code> → <code>$mod</code>) and lowercases
-      modifier names, but does <strong>not sort modifiers</strong> (so <code>Shift+$mod+k</code> vs
-      <code>$mod+Shift+k</code> still differ) and lives in a plugin, not shared infra. <strong>Action item:</strong>
-      this work must <em>add</em> a shared canonicalizer (lift/extend <code>normalizeChord</code> into
-      <code>src/shortcuts/</code>, add modifier sorting) and use it in both the dedup and ideally
-      <code>keybindingConflicts</code> — it is not a "reuse what exists" freebie.</li>
+      modifier aliases (<code>cmd</code>/<code>meta</code>/<code>os</code> → <code>$mod</code>), lowercases
+      modifier names, <em>and</em> sorts modifiers into a stable order (verified at
+      <span class="filepath">keyCapture.ts:236</span>, tested at
+      <span class="filepath">test/keyCapture.test.ts:147</span> — an earlier draft of this doc wrongly claimed
+      it does not sort). Its <em>real</em> limits: it splits on <code>+</code> only, so it does
+      <strong>not handle sequence chords</strong> — <code>d d</code> / <code>g g</code> get treated as one
+      atomic space-bearing key; it returns a flat string, not a structured descriptor; and it lives in a plugin,
+      not shared infra. <strong>Action item:</strong> this work must <em>add</em> a shared canonicalizer (lift
+      <code>normalizeChord</code> into <code>src/shortcuts/</code>, add <em>sequence-chord parsing</em> + a
+      descriptor shape) and use it in both the dedup and ideally <code>keybindingConflicts</code> — the lift is
+      reuse, but the sequence parsing + descriptor are net-new.</li>
   <li><strong>Dedup key must include <code>phase</code>, not just the chord.</strong>
       <code>ShortcutBindingDefaults</code> supports <code>keydown</code> / <code>keyup</code> / <code>hold</code>,
       and the repo already has phase-distinct same-key bindings that are <em>not</em> a same-event collision:
@@ -421,9 +426,10 @@ everywhere" need, the clean tool is letting <code>ActionDecorator.decorate</code
   <li><code>types.ts</code> — add <code>priority?: number</code> to <code>ActionContextConfig</code> (+ doc comment).</li>
   <li><code>effectiveActions.ts</code> — extract <code>compareContexts</code>; rewrite
       <code>getActiveActionById</code> to use it.</li>
-  <li><strong>New shared chord canonicalizer</strong> in <code>src/shortcuts/</code> — lift/extend
-      <code>normalizeChord</code> (alias-fold + lowercase modifiers + <em>sort modifiers</em>); use it in the
-      dedup and, ideally, retrofit <code>keybindingConflicts.ts</code> off it. This is net-new code, not reuse.</li>
+  <li><strong>New shared chord canonicalizer</strong> in <code>src/shortcuts/</code> — lift
+      <code>normalizeChord</code> (which already alias-folds + lowercases + sorts modifiers) and add
+      <em>sequence-chord parsing</em> + a structured descriptor; use it in the dedup and, ideally, retrofit
+      <code>keybindingConflicts.ts</code> off it. The lift is reuse; the sequence parsing + descriptor are net-new.</li>
 </ul>
 <p><strong>If activation-time (A only):</strong></p>
 <ul class="tight">
