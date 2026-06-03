@@ -46,20 +46,15 @@ const STREAM_QUERIES: readonly StreamQuery[] = [
     predicate: '        WHERE workspace_members.workspace_id IN user_workspaces',
   },
   {
-    table: 'public.blocks',
-    columns: BLOCK_STORAGE_COLUMNS,
-    predicate: '        WHERE blocks.workspace_id IN user_workspaces',
-  },
-  {
-    // TEMPORARY — Layout B (D-4) dual-run validation. Re-emits the SAME
-    // `public.blocks` rows under row_type `blocks_synced` (PowerSync derives
-    // row_type from the FROM-clause alias), so a Layout B client hydrates its
-    // `blocks_synced` staging table and decrypts/materializes via the observer,
-    // while pre-cutover clients keep consuming the plain `blocks` stream above.
-    // A client only has a raw table for ONE of the two row_types, so it
-    // ignores the other (stored in PowerSync's internal `ps_untyped`). At the
-    // final cutover — once every client ships the observer — drop the plain
-    // `blocks` query above and keep only this one.
+    // Layout B blocks stream (cutover complete). Re-emits `public.blocks`
+    // under row_type `blocks_synced` (PowerSync derives row_type from the
+    // FROM-clause alias), so the client hydrates its `blocks_synced` staging
+    // table and the JS observer materializes/decrypts into the app-visible
+    // `blocks` table. The plain `FROM public.blocks` stream (row_type
+    // `blocks`) that pre-Layout-B clients consumed has been dropped — those
+    // clients no longer sync. The alias is REQUIRED: a bare `FROM public.blocks`
+    // would surface row_type `blocks`, which the Layout B client has no raw
+    // table for, so nothing would hydrate.
     table: 'public.blocks',
     as: 'blocks_synced',
     columns: BLOCK_STORAGE_COLUMNS,
@@ -79,12 +74,14 @@ const HEADER =
 # PowerSync re-evaluates the set whenever workspace_members changes.
 #
 # IMPORTANT: PowerSync derives the client-side row_type from the FROM-clause
-# name. So the PRIMARY tables must NOT be aliased — \`FROM public.blocks b\`
-# would surface row_type='b' and a client would never hydrate its \`blocks\`
-# table. The one DELIBERATE exception is the Layout B \`blocks_synced\` twin:
-# it aliases \`public.blocks AS blocks_synced\` precisely to re-emit the same
-# rows under row_type='blocks_synced' for clients that stage + decrypt via the
-# observer. See the TEMPORARY note on that query in gen-sync-config.ts.
+# name. So a table whose row_type must match its name must NOT be aliased —
+# \`FROM public.workspaces w\` would surface row_type='w' and a client would
+# never hydrate its \`workspaces\` table. The DELIBERATE exception is the Layout B
+# blocks stream: it aliases \`public.blocks AS blocks_synced\` precisely to
+# re-emit \`blocks\` rows under row_type='blocks_synced', which the client stages
+# and the JS observer materializes/decrypts into the app-visible \`blocks\` table.
+# The pre-Layout-B plain \`FROM public.blocks\` stream (row_type='blocks') has been
+# dropped at cutover — see the note on that query in gen-sync-config.ts.
 #
 # workspace_invitations is intentionally NOT synced. Invitations are queried
 # on demand via Supabase REST + the workspace_invitations RLS policy keyed
