@@ -642,25 +642,39 @@ ALTER TABLE public.workspaces ADD COLUMN encryption_mode TEXT
   NOT NULL DEFAULT 'none'
   CHECK (encryption_mode IN ('none', 'e2ee'));
 
--- Per-column immutability trigger, matching the existing
--- blocks_prevent_workspace_change() pattern in the consolidated
--- migration (concrete function per invariant, not a generic helper).
-CREATE OR REPLACE FUNCTION public.workspaces_prevent_encryption_mode_change()
+-- Immutability trigger, matching the existing blocks_prevent_workspace_change()
+-- pattern in the consolidated migration (concrete function per invariant, not a
+-- generic helper). ONE trigger covers BOTH e2ee fields (encryption_mode AND
+-- wk_canary, added below) -- this, not a column-level privilege REVOKE/GRANT, is
+-- what the shipped migration uses; see the immutability note under the canary
+-- CHECK for the why. (Late-binding plpgsql lets the body name wk_canary before
+-- the ADD COLUMN a few lines down; the trigger only fires at runtime, after it
+-- exists.)
+CREATE OR REPLACE FUNCTION public.workspaces_prevent_e2ee_field_change()
   RETURNS trigger
-  LANGUAGE plpgsql AS $$
+  LANGUAGE plpgsql
+  SET search_path = '' AS $$
 begin
+  -- errcode 23514 (check_violation) is a PERMANENT SQLSTATE, so a stale/buggy
+  -- client that PATCHes these columns is quarantined by the upload classifier
+  -- rather than retrying the generic P0001 forever and jamming the queue.
   if OLD.encryption_mode is distinct from NEW.encryption_mode then
     raise exception 'workspaces.encryption_mode is immutable (% -> %)',
-      OLD.encryption_mode, NEW.encryption_mode;
+      OLD.encryption_mode, NEW.encryption_mode
+      using errcode = 'check_violation';
+  end if;
+  if OLD.wk_canary is distinct from NEW.wk_canary then
+    raise exception 'workspaces.wk_canary is immutable (rotation is a post-v1 SECURITY DEFINER path)'
+      using errcode = 'check_violation';
   end if;
   return NEW;
 end;
 $$;
 
-CREATE TRIGGER workspaces_prevent_encryption_mode_change_trg
+CREATE TRIGGER workspaces_prevent_e2ee_field_change_trg
   BEFORE UPDATE ON public.workspaces
   FOR EACH ROW
-  EXECUTE FUNCTION public.workspaces_prevent_encryption_mode_change();
+  EXECUTE FUNCTION public.workspaces_prevent_e2ee_field_change();
 
 -- create_workspace accepts encryption_mode and a key-check canary
 -- so we can validate pasted WKs even on workspaces that have no
@@ -709,7 +723,9 @@ ALTER TABLE public.workspaces ADD COLUMN wk_canary TEXT;
 CREATE OR REPLACE FUNCTION public.is_enc_v1_envelope(v text)
   RETURNS boolean
   LANGUAGE sql IMMUTABLE AS $$
-  SELECT v ~ '^enc:v1:([A-Za-z0-9_-]{4}){9,}([A-Za-z0-9_-]{4}|[A-Za-z0-9_-]{2}(==)?|[A-Za-z0-9_-]{3}=?)$'
+  -- No padding: the client encodes with base64url-NOPAD (@scure/base), so a
+  -- '='-padded payload never appears on the wire and is rejected as malformed.
+  SELECT v ~ '^enc:v1:([A-Za-z0-9_-]{4}){9,}([A-Za-z0-9_-]{4}|[A-Za-z0-9_-]{2}|[A-Za-z0-9_-]{3})$'
 $$;
 
 ALTER TABLE public.workspaces
@@ -720,27 +736,36 @@ ALTER TABLE public.workspaces
   );
 
 -- Immutable after create: an editor with write access to the workspaces row
--- could otherwise replace the canary and brick WK validation for other
--- members. Enforce this with COLUMN-LEVEL PRIVILEGE, not a trigger bypass.
--- A session GUC (an earlier SET LOCAL kmp.rotating_wk approach) is forgeable:
--- any caller who can run SQL as the authenticated role can set it to 'on'
--- before updating wk_canary, so it cannot scope a bypass to a single RPC.
--- Instead make wk_canary (and encryption_mode) unwritable by client roles:
-REVOKE UPDATE ON public.workspaces FROM anon, authenticated;
-GRANT  UPDATE (name, update_time) ON public.workspaces TO authenticated;
--- Grant UPDATE only on the columns clients legitimately write — name and
--- update_time (renameWorkspace in src/data/workspaces.ts updates both, and the
--- existing migration already column-grants both) — and omit wk_canary and
--- encryption_mode. Any client UPDATE that sets wk_canary now
--- fails with "permission denied for column wk_canary" — direct updates
--- outside the RPC are impossible, enforced by the privilege system rather
--- than a forgeable session flag. The sole writer of wk_canary is the
--- dedicated rotate_workspace_wk RPC (§14): SECURITY DEFINER, running as the
--- table owner, so it retains column UPDATE while ordinary callers do not.
--- (This also makes encryption_mode immutable to clients, demoting the
--- prevent-encryption_mode-change trigger above to defense-in-depth. Client
--- upload paths must not include wk_canary/encryption_mode in their PATCH
--- column set, or PostgREST/PowerSync writes will be rejected.)
+-- could otherwise replace the canary and brick WK validation for other members.
+-- The shipped migration enforces this with the BEFORE UPDATE trigger above
+-- (workspaces_prevent_e2ee_field_change), which rejects any change to either
+-- e2ee field. This is load-bearing, NOT defense-in-depth: the consolidated
+-- migration keeps a live workspaces_update RLS policy for writers plus
+-- `GRANT ALL ON TABLE public.workspaces TO authenticated`, so an authenticated
+-- writer CAN issue a direct PostgREST UPDATE on this table -- and the canary
+-- CHECK only requires the replacement to be a well-formed envelope, so without
+-- the trigger a writer could swap in an attacker-chosen canary while keeping
+-- encryption_mode = 'e2ee', bricking every other member's unlock.
+--
+-- Why a trigger, not a column-level privilege REVOKE/GRANT (an earlier draft):
+-- both fully prevent client writes and are equally secure for v1 (there is NO
+-- legitimate post-create writer of either field -- the canary is minted once in
+-- create_workspace's INSERT, which a BEFORE UPDATE trigger does not gate). The
+-- trigger is simpler and localized: a column REVOKE UPDATE ... GRANT
+-- UPDATE(name, update_time) recarving would have to untangle that existing
+-- `GRANT ALL` + per-column grant surface, and the trigger matches the repo's
+-- concrete-function-per-invariant convention (cf. blocks_prevent_workspace_change()).
+--
+-- A session GUC bypass (an earlier SET LOCAL kmp.rotating_wk idea) was rejected
+-- as forgeable: any caller running SQL as the authenticated role can set it
+-- before updating wk_canary, so it can't scope a bypass to one RPC. Rotation
+-- (§14) is post-v1; when it lands, the dedicated rotate_workspace_wk RPC --
+-- SECURITY DEFINER, owned by postgres -- can carry a NON-forgeable bypass (the
+-- trigger permits the write only when current_user is the table owner, which a
+-- client on the authenticated role can never become), or switch to the column-
+-- privilege model then. Either way the client never gains a canary write path.
+-- (Client upload paths must still not PATCH wk_canary/encryption_mode with
+-- CHANGED values, or the trigger rejects the write.)
 
 -- Postgres function signatures include parameter count/types, so a new
 -- create_workspace with extra defaulted params would *overload* the
@@ -1209,8 +1234,9 @@ CREATE TRIGGER blocks_require_ciphertext_for_e2ee_trg
     </p>
 
     <p>
-      <strong>The observer subsumes <code>rowEventsTail</code> &mdash; it invalidates directly, and
-      the <code>row_events</code> path is removed.</strong> Today PowerSync writes synced rows
+      <strong>The observer subsumes <code>rowEventsTail</code> &mdash; it invalidates directly, so
+      the <code>row_events</code> invalidation round-trip is removed (the audit table itself is
+      RETAINED as the local change-history log; see the removals list below).</strong> Today PowerSync writes synced rows
       straight into <code>blocks</code>, bypassing JS, so the app reconstructs each change after the
       fact: the <code>row_events</code> triggers (<code>clientSchema.ts</code>) serialize before/after
       JSON into an audit table, and <code>rowEventsTail.ts</code> reads it back, re-parses, LWW-gates,
@@ -1380,10 +1406,20 @@ CREATE TRIGGER blocks_require_ciphertext_for_e2ee_trg
             read plaintext <code>blocks</code>, unaffected). Two already-dead exports here &mdash;
             <code>UPSERT_BLOCK_SQL</code>, <code>buildBlockCrudJsonSql</code> &mdash; can go
             independently of this work.</li>
-          <li><strong>The <code>row_events</code> path</strong> (3 triggers + table + indexes and
-            <code>rowEventsTail.ts</code>, per the callout above), plus the <code>triggerTxIdSql</code>
-            helper in <code>clientSchema.ts</code> that only those triggers use
-            (<code>tx_context.tx_id</code> itself stays &mdash; <code>command_events</code> uses it).
+          <li><strong>The <code>row_events</code> <em>invalidation round-trip</em></strong> &mdash;
+            <code>rowEventsTail.ts</code> and the <code>collectFromRowEvent</code> rule path (per the
+            callout above).
+            <strong>Correction (post-implementation):</strong> the <code>row_events</code> table + its
+            3 INSERT/UPDATE/DELETE triggers + indexes (and the <code>triggerTxIdSql</code> helper they
+            use) are <strong>RETAINED</strong>, not removed. The original list folded them in because
+            their only <em>consumer</em> was the tail; that missed their second job. They are the local
+            change-history / time-travel log and the <em>only</em> durable record of an INCOMING sync
+            change (<code>command_events</code> records local <code>repo.tx</code> operations only,
+            mutator-grain, never sync apply). The observer owning invalidation makes the <em>reader</em>
+            redundant; it does not make the history substrate redundant. Nothing reads
+            <code>row_events</code> at runtime now &mdash; it is a write-only history log. (Triggers
+            fire on the observer's materialize into <code>blocks</code>, tagging incoming changes
+            <code>source='sync'</code>.)
             <code>ApplyIfNewerSource = 'sync' | 'hydrate'</code> in <code>blockCache.ts</code> is
             <em>not</em> removed: the observer inherits the <code>'sync'</code> caller role. A few
             stale comments referencing <code>rowEventsTail</code> (<code>block.ts</code>,
@@ -1690,16 +1726,19 @@ CREATE TRIGGER blocks_require_ciphertext_for_e2ee_trg
         under the old WK), uploads the lot; distributes the new WK to current collaborators
         out-of-band. The "re-encrypt all blocks" cost is real for large workspaces; worth thinking
         through the UX (progress bar, atomic rotation token to detect mid-rotation states). The
-        canary is unwritable by client roles (§7 enforces this with column-level privilege), so the
+        canary is immutable to client writes (§7 enforces this with the
+        <code>workspaces_prevent_e2ee_field_change</code> BEFORE UPDATE trigger), so the
         rotation path is the dedicated <code>rotate_workspace_wk</code> RPC &mdash; SECURITY DEFINER,
-        running as the table owner, the only principal with UPDATE on <code>wk_canary</code>. No
-        forgeable bypass flag is involved: clients simply lack the privilege, and the RPC updates
+        owned by and running as the table owner (<code>postgres</code>). The RPC updates
         the canary in the same transaction as the re-encrypt rotation token. Because it is SECURITY
-        DEFINER it bypasses both RLS <em>and</em> the column privilege &mdash; precisely so it can
-        write <code>wk_canary</code> &mdash; so it <strong>must self-authorize</strong>: its body
+        DEFINER it bypasses RLS, and it needs a NON-forgeable way past the immutability trigger:
+        the trigger permits a <code>wk_canary</code> change only when <code>current_user</code> is the
+        table owner &mdash; which a client on the <code>authenticated</code> role can never become &mdash;
+        rather than a forgeable session flag. (Switching to the column-privilege model at that point is
+        an equally valid alternative.) Either way the RPC <strong>must self-authorize</strong>: its body
         checks that <code>auth.uid()</code> is the workspace <em>owner</em> before touching the
         canary, otherwise any authenticated caller could rotate or brick another workspace's canary.
-        The whole column-privilege design hinges on this RPC being the sole canary writer <em>and</em>
+        The whole immutability design hinges on this RPC being the sole canary writer <em>and</em>
         self-guarding.</li>
 
       <li><strong>Backfill behavior on first WK paste.</strong> The first time a device gets a

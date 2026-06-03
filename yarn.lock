@@ -1312,6 +1312,11 @@
     argparse "~1.0.9"
     string-argv "~0.3.1"
 
+"@scure/base@^2.2.0":
+  version "2.2.0"
+  resolved "https://registry.yarnpkg.com/@scure/base/-/base-2.2.0.tgz#1311378ed247df6d58f8eb8941921965e97e5747"
+  integrity sha512-b8XEupJibegiXV+tDUseI8oLQc8ei3d/4Jkb2RpbHh3MfE054ov3uIz2dhFkB3FI8iwYkEh0gGCApkrYggkPNg==
+
 "@shikijs/engine-oniguruma@^3.23.0":
   version "3.23.0"
   resolved "https://registry.yarnpkg.com/@shikijs/engine-oniguruma/-/engine-oniguruma-3.23.0.tgz#789421048d66ac1b33613169d6d18b9cc6e340ed"

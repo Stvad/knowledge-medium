@@ -22,7 +22,7 @@ describe('convertEmptyChildBlockToProperty', () => {
       now: () => ++now,
       newId: () => crypto.randomUUID(),
       newTxSeq: () => ++txSeq,
-      startRowEventsTail: false,
+      startSyncObserver: false,
     })
 
     await repo.tx(async tx => {

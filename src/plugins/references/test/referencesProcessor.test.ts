@@ -601,14 +601,15 @@ describe('parseReferences — idempotent comparison', () => {
     )
     await flush()
 
-    // Only the user's `create` row_event should exist for src — no
-    // processor-issued `update`. (Other rows in this tx involve the
+    // No second write fires for src — the processor's re-parse compared
+    // canonical-equal, so it issued no reprojection update (the
+    // 16k-uploads-on-cold-resync bug). Only the create PUT reaches the upload
+    // queue; no follow-up PATCH for src. (Other rows in this tx involve the
     // alias-target ensure path, which still runs.)
-    const evts = await env.h.db.getAll<{kind: string}>(
-      "SELECT kind FROM row_events WHERE block_id = ? ORDER BY id",
-      ['src'],
-    )
-    expect(evts.map(e => e.kind)).toEqual(['create'])
+    const srcOps = (await env.h.db.getAll<{data: string}>('SELECT data FROM ps_crud ORDER BY id'))
+      .map(r => JSON.parse(r.data) as {op: string; id: string})
+      .filter(e => e.id === 'src')
+    expect(srcOps.map(e => e.op)).toEqual(['PUT'])
 
     // Stored refs are canonical-sorted regardless of writer order. Sort
     // key is (sourceField, id, alias); both refs have empty sourceField
@@ -816,15 +817,13 @@ describe('parseReferences — bookkeeping', () => {
       "SELECT scope, description FROM command_events ORDER BY created_at",
     )
     expect(cmds.some(c => c.scope === 'block-default:references' && c.description?.startsWith(`processor: ${PARSE_REFERENCES_PROCESSOR}`))).toBe(true)
-    // The references update used skipMetadata, so the source row's
-    // updated_by stays at the user but the row_events still record
-    // the change.
-    const evt = await env.h.db.getAll<{kind: string; source: string}>(
-      "SELECT kind, source FROM row_events WHERE block_id = ? ORDER BY id",
-      ['src'],
-    )
-    // create (user) + update (references; user with References scope).
-    expect(evt.map(e => e.kind)).toEqual(['create', 'update'])
+    // The references reprojection wrote src again (skipMetadata, so
+    // updated_by stays the user) — it surfaces as a follow-up PATCH upload
+    // after the create PUT.
+    const srcOps = (await env.h.db.getAll<{data: string}>('SELECT data FROM ps_crud ORDER BY id'))
+      .map(r => JSON.parse(r.data) as {op: string; id: string})
+      .filter(e => e.id === 'src')
+    expect(srcOps.map(e => e.op)).toEqual(['PUT', 'PATCH'])
   })
 
   it('an empty content insert still fires the processor but produces no references and no cleanup', async () => {

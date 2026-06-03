@@ -86,7 +86,7 @@ describe('SwipeActionMenu', () => {
       cache: new BlockCache(),
       user: USER,
       newTxSeq: () => ++txSeq,
-      startRowEventsTail: false,
+      startSyncObserver: false,
     })
     repo.setActiveWorkspaceId(WS)
     runtime = resolveFacetRuntimeSync([

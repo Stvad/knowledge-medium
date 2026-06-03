@@ -45,9 +45,21 @@ export const SEED_TX_CONTEXT_ROW_SQL = `
   INSERT OR IGNORE INTO tx_context (id) VALUES (1)
 `
 
-/** Per-row audit + invalidation log. Trigger-written. tx_id = NULL for
- *  sync-applied writes (see the COALESCE / CASE in the row_events
- *  triggers below). */
+/** Per-row audit / change-history log. Trigger-written on every write to
+ *  `blocks` — local (`repo.tx`) and sync-applied (observer materialize) alike
+ *  — capturing the full before/after row state of each change. `tx_id` = NULL
+ *  for sync-applied writes (see the COALESCE / CASE in the row_events triggers
+ *  below); `source` distinguishes 'user' from 'sync'.
+ *
+ *  This is the substrate for local change history / time-travel, and the ONLY
+ *  place an INCOMING sync change is durably recorded — `command_events` covers
+ *  local `repo.tx` operations only (mutator-grain), never sync apply. Nothing
+ *  reads `row_events` at runtime: the Layout B observer owns invalidation, so
+ *  this is a write-only history log.
+ *
+ *  Intentionally unbounded — full history is kept and never auto-trimmed. Any
+ *  retention policy is a future opt-in, never a silent drop (preserving user
+ *  history is paramount). Client-only; never synced. */
 export const CREATE_ROW_EVENTS_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS row_events (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -260,11 +272,80 @@ export const CREATE_PS_CRUD_REJECTED_TX_ID_INDEX_SQL = `
 `
 
 // ============================================================================
-// Helpers used inside trigger bodies. Centralised so the SQL fragments
-// match in every trigger.
+// blocks_synced change-capture queue (Layout B, design doc §9.2) — the
+// observer's O(delta) detection signal, replacing an O(N) re-scan of the whole
+// staging table on every startup/tick.
+//
+// PowerSync's sync-apply runs the raw-table put/delete statements
+// (BLOCKS_SYNCED_RAW_TABLE) directly against `blocks_synced` as ordinary SQL,
+// and those INSERT/DELETE statements fire the AFTER triggers below — the
+// signal the observer drains to materialize each change into the live `blocks`
+// table (the production sync-invalidation path).
+//
+// APPEND-ONLY LOG keyed by a monotonic `seq`, drained with a watermark
+// pattern: the observer reads rows up to MAX(seq),
+// processes them, then `DELETE … WHERE seq <= <that max>`. This is robust to
+// the two things a coalescing id-keyed table is NOT:
+//   - Drain race: a delivery that lands mid-drain gets a higher seq, so the
+//     watermark delete can't remove its signal (an id-keyed REPLACE would have
+//     overwritten the very row being processed and lost the newer change).
+//   - Partial failure: if processing throws, the delete is never reached, so
+//     the rows stay queued and retry on the next tick / next startup.
+// Coalescing still happens, in JS at drain time (latest op per id wins), so a
+// hot row is materialized once per batch, not once per delivery.
+//
+//   - INSERT trigger → 'upsert'. The raw put is `INSERT OR REPLACE`, so a
+//     re-delivery of an existing id fires DELETE then INSERT, appending a
+//     'delete' then a higher-seq 'upsert' that wins the dedup. (No UPDATE
+//     trigger: PowerSync never issues a bare UPDATE against the raw table.)
+//   - DELETE trigger → 'delete'. A real stream-exit (membership revoke /
+//     workspace delete) appends a higher-seq 'delete' that supersedes an
+//     un-drained 'upsert', and is captured DURABLY so a removal that lands
+//     while the observer is down is still drained on next startup.
+//
+// No source-gating: these are not upload triggers, so they fire on both sync
+// and (the rare) local writes to the staging table. blocks_synced itself
+// carries no upload routing, so this never enqueues a server write.
 // ============================================================================
 
-/** Snapshot a `blocks` row as JSON in domain shape (camelCase) for
+export const CREATE_BLOCKS_SYNCED_CHANGES_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS blocks_synced_changes (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    id  TEXT NOT NULL,
+    op  TEXT NOT NULL CHECK (op IN ('upsert', 'delete'))
+  )
+`
+
+export const CREATE_BLOCKS_SYNCED_CHANGES_INSERT_TRIGGER_SQL = `
+  CREATE TRIGGER IF NOT EXISTS blocks_synced_changes_insert
+  AFTER INSERT ON blocks_synced
+  BEGIN
+    INSERT INTO blocks_synced_changes (id, op) VALUES (NEW.id, 'upsert');
+  END
+`
+
+export const CREATE_BLOCKS_SYNCED_CHANGES_DELETE_TRIGGER_SQL = `
+  CREATE TRIGGER IF NOT EXISTS blocks_synced_changes_delete
+  AFTER DELETE ON blocks_synced
+  BEGIN
+    INSERT INTO blocks_synced_changes (id, op) VALUES (OLD.id, 'delete');
+  END
+`
+
+// ============================================================================
+// row_events triggers (3) — the per-row audit / change-history log. Fire for
+// BOTH local (`repo.tx`) and sync-applied (observer materialize) writes to
+// `blocks`; the COALESCE-to-'sync' tag distinguishes them. Nothing reads
+// row_events at runtime — the Layout B observer owns invalidation — so this is
+// a write-only history substrate (local change-history / time-travel; the only
+// durable record of incoming sync changes).
+//
+// Soft-delete semantics (§4.3): tx.delete sets deleted = 1 (UPDATE), so it
+// fires the UPDATE trigger. The body inspects whether `deleted` transitioned
+// from 0 to 1 and writes kind = 'soft-delete' instead of 'update'.
+// ============================================================================
+
+/** Serializes a blocks row (NEW or OLD) to the JSON snapshot stored in
  *  `row_events.{before,after}_json`. NEW / OLD references resolve at
  *  trigger time. */
 const blockJsonObjectSql = (rowRef: 'NEW' | 'OLD') => `
@@ -285,11 +366,11 @@ const blockJsonObjectSql = (rowRef: 'NEW' | 'OLD') => `
 `.trim()
 
 /** Belt-and-suspenders: tx_id is the active local tx_id only when source
- *  IS NOT NULL. Sync-applied writes leave source = NULL (no `repo.tx` is
- *  open during PowerSync's CRUD apply); without this guard a stale tx_id
- *  left in `tx_context` from the previous local tx would leak into the
- *  sync-applied row_events row. The TxEngine clears all four fields at
- *  end-of-tx; the trigger logic is the load-bearing correctness check. */
+ *  IS NOT NULL. Sync-applied writes leave source = NULL (no `repo.tx` is open
+ *  during the observer's materialize); without this guard a stale tx_id left
+ *  in `tx_context` from the previous local tx would leak into the sync-applied
+ *  row_events row. The TxEngine clears all fields at end-of-tx; the trigger
+ *  logic is the load-bearing correctness check. */
 const triggerTxIdSql = `
       CASE
         WHEN (SELECT source FROM tx_context WHERE id = 1) IS NULL
@@ -299,15 +380,6 @@ const triggerTxIdSql = `
 `.trim()
 
 const triggerSourceSql = `COALESCE((SELECT source FROM tx_context WHERE id = 1), 'sync')`
-
-// ============================================================================
-// row_events triggers (3) — fire for both local AND sync writes; the
-// COALESCE-to-'sync' tag distinguishes them.
-//
-// Soft-delete semantics (§4.3): tx.delete sets deleted = 1 (UPDATE), so it
-// fires the UPDATE trigger. The body inspects whether `deleted` transitioned
-// from 0 to 1 and writes kind = 'soft-delete' instead of 'update'.
-// ============================================================================
 
 export const CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS blocks_row_event_insert
@@ -348,9 +420,7 @@ export const CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL = `
   END
 `
 
-/** DELETE row_event writer is reserved for hard purges. v1 ships no purge
- *  mechanism; the trigger exists for future use (e.g. a job that purges
- *  soft-deleted rows older than N days). Hard deletes do not sync —
+/** DELETE row_event writer captures hard purges. Hard deletes do not sync —
  *  PowerSync sees the row vanish locally; soft-delete via the synced
  *  `deleted` column is what propagates "this row is gone" through sync. */
 export const CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL = `
@@ -426,11 +496,18 @@ const blockUploadDiffPredicateSql = BLOCK_UPLOAD_COLUMNS
   .map(column => `OLD.${column.name} IS NOT NEW.${column.name}`)
   .join('\n    OR ')
 
+// workspace_id is emitted UNCONDITIONALLY (not gated on OLD IS NOT NEW): the
+// Phase D encrypt-on-upload hook needs it on EVERY PATCH to look up the
+// workspace key and build the per-column AAD, but a content-only edit wouldn't
+// otherwise change workspace_id and so would omit it. A self-write of the
+// unchanged workspace_id is a harmless no-op server-side. The remaining columns
+// stay change-gated to keep PATCHes column-narrow.
 const blockUploadPatchJsonSql = () => `
       json_remove(
         json_set(
           '{}',
-${BLOCK_UPLOAD_COLUMNS.map(column =>
+          '$.workspace_id', NEW.workspace_id,
+${BLOCK_UPLOAD_COLUMNS.filter(column => column.name !== 'workspace_id').map(column =>
   `          CASE WHEN OLD.${column.name} IS NOT NEW.${column.name} THEN '$.${column.name}' ELSE '$.__noop' END, ${column.jsonValue('NEW')}`,
 ).join(',\n')}
         ),
@@ -986,11 +1063,13 @@ export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = [
   CREATE_PS_CRUD_REJECTED_TABLE_SQL,
   CREATE_PS_CRUD_REJECTED_REJECTED_AT_INDEX_SQL,
   CREATE_PS_CRUD_REJECTED_TX_ID_INDEX_SQL,
+  CREATE_BLOCKS_SYNCED_CHANGES_TABLE_SQL,
   DROP_BLOCKS_WORKSPACE_TYPE_INDEX_SQL,
-  // 5 audit/upload triggers
+  // 3 row_events audit/history triggers
   CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL,
   CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL,
   CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL,
+  // 2 upload-routing triggers
   CREATE_BLOCKS_UPLOAD_INSERT_TRIGGER_SQL,
   CREATE_BLOCKS_UPLOAD_UPDATE_TRIGGER_SQL,
   // 2 workspace-invariant triggers
@@ -1012,6 +1091,9 @@ export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = [
   CREATE_BLOCKS_FTS_INSERT_TRIGGER_SQL,
   CREATE_BLOCKS_FTS_UPDATE_TRIGGER_SQL,
   CREATE_BLOCKS_FTS_DELETE_TRIGGER_SQL,
+  // 2 blocks_synced change-capture triggers (Layout B observer detection)
+  CREATE_BLOCKS_SYNCED_CHANGES_INSERT_TRIGGER_SQL,
+  CREATE_BLOCKS_SYNCED_CHANGES_DELETE_TRIGGER_SQL,
 ] as const
 
 export const CLIENT_SCHEMA_TRIGGER_NAMES = [
@@ -1034,6 +1116,8 @@ export const CLIENT_SCHEMA_TRIGGER_NAMES = [
   'blocks_fts_insert',
   'blocks_fts_update',
   'blocks_fts_delete',
+  'blocks_synced_changes_insert',
+  'blocks_synced_changes_delete',
 ] as const
 
 interface ClientSchemaBootstrapDb {

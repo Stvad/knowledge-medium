@@ -119,7 +119,7 @@ describe('DefaultBlockRenderer paste handling', () => {
       now: () => ++now,
       newId: () => crypto.randomUUID(),
       newTxSeq: () => ++txSeq,
-      startRowEventsTail: false,
+      startSyncObserver: false,
     })
     runtime = resolveFacetRuntimeSync([
       kernelDataExtension,

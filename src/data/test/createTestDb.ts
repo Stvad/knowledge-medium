@@ -36,8 +36,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PowerSyncDatabase, Schema } from '@powersync/node'
 import {
-  BLOCKS_RAW_TABLE,
+  BLOCKS_SYNCED_RAW_TABLE,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
+  CREATE_BLOCKS_SYNCED_TABLE_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
 } from '@/data/blockSchema'
@@ -72,8 +73,12 @@ const localSchemaContributions = resolveLocalSchemaContributions(staticDataExten
 
 const createTestSchema = (): Schema => {
   const schema = new Schema({})
+  // Layout B (design doc §9.2): production maps only `blocks_synced` as a raw
+  // table — `blocks` is a plain local table the observer materializes into —
+  // so the harness mirrors that. Tests drive sync by writing `blocks_synced`
+  // and running the observer / `materializeStagingRows`.
   schema.withRawTables({
-    blocks: BLOCKS_RAW_TABLE,
+    blocks_synced: BLOCKS_SYNCED_RAW_TABLE,
     workspaces: WORKSPACES_RAW_TABLE,
     workspace_members: WORKSPACE_MEMBERS_RAW_TABLE,
   })
@@ -97,6 +102,7 @@ const initializeTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
   // mirror that ordering: blocks table + indexes first, then the
   // client-schema add-ons (auxiliary tables + triggers).
   await db.execute(CREATE_BLOCKS_TABLE_SQL)
+  await db.execute(CREATE_BLOCKS_SYNCED_TABLE_SQL)
   await db.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   await db.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
   await db.execute(CREATE_WORKSPACES_TABLE_SQL)
@@ -137,6 +143,8 @@ const getTemplateFingerprint = (): string => {
   hash.update(process.cwd())
   hash.update('\0')
   hash.update(CREATE_BLOCKS_TABLE_SQL)
+  hash.update('\0')
+  hash.update(CREATE_BLOCKS_SYNCED_TABLE_SQL)
   hash.update('\0')
   hash.update(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   hash.update('\0')

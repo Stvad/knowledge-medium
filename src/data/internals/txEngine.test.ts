@@ -5,8 +5,8 @@
  * Every test runs against a real `@powersync/node` PowerSyncDatabase via
  * the `createTestDb` harness — same `db.execute` / `db.writeTransaction`
  * surface as production, real SQLite, real triggers. So:
- *   - row_events fire when primitives write, with the correct
- *     `(tx_id, source, kind)` tag determined by `tx_context`
+ *   - command_events + upload routing fire when primitives write, gated by
+ *     the `(tx_id, source)` set in `tx_context`
  *   - the upload-routing trigger fires on `source = 'user'` writes
  *   - the workspace-invariant trigger fires on local writes (and would
  *     ABORT a cross-workspace child)
@@ -81,7 +81,6 @@ interface Harness {
    *  can predict ordering without relying on wall-clock timing. */
   tick: () => number
   /** Counter snapshot helpers. */
-  rowEventsFor(blockId: string): Promise<Array<{kind: string; source: string; tx_id: string | null}>>
   commandEvents(): Promise<Array<{tx_id: string; scope: string; workspace_id: string | null; source: string}>>
   psCrud(): Promise<Array<{data: string}>>
 }
@@ -115,8 +114,6 @@ const setup = async (overrides?: {isReadOnly?: boolean}): Promise<Harness> => {
     cache,
     repo,
     tick,
-    rowEventsFor: blockId =>
-      h.db.getAll('SELECT kind, source, tx_id FROM row_events WHERE block_id = ? ORDER BY id', [blockId]),
     commandEvents: () =>
       h.db.getAll('SELECT tx_id, scope, workspace_id, source FROM command_events ORDER BY created_at'),
     psCrud: () => h.db.getAll('SELECT data FROM ps_crud ORDER BY id'),
@@ -150,13 +147,10 @@ describe('tx.create', () => {
     expect(snap.createdAt).toBeGreaterThan(0)
     expect(snap.createdBy).toBe('user-1')
 
-    // row_events tagged source='user', tx_id matches command_events.
-    const events = await env.rowEventsFor(id)
-    expect(events).toEqual([{kind: 'create', source: 'user', tx_id: expect.any(String)}])
+    // command_events records the user tx.
     const cmds = await env.commandEvents()
     expect(cmds.length).toBe(1)
     expect(cmds[0]).toMatchObject({scope: 'block-default', workspace_id: 'ws-1', source: 'user'})
-    expect(events[0].tx_id).toBe(cmds[0].tx_id)
 
     // Upload routing: ps_crud has the PUT envelope.
     const crud = await env.psCrud()
@@ -315,7 +309,7 @@ describe('tx.update (data-fields-only)', () => {
     expect(env.cache.getSnapshot(id)!.content).toBe('after')
   })
 
-  it('skips SQL, row_events, and upload routing when the patch is a semantic no-op', async () => {
+  it('skips SQL and upload routing when the patch is a semantic no-op', async () => {
     await env.repo.tx(
       tx => tx.create({
         id: 'upd-noop',
@@ -328,7 +322,6 @@ describe('tx.update (data-fields-only)', () => {
       }),
       {scope: ChangeScope.BlockDefault},
     )
-    const beforeEvents = await env.rowEventsFor('upd-noop')
     const beforeCrud = await env.psCrud()
     const beforeUpdatedAt = env.cache.getSnapshot('upd-noop')!.updatedAt
 
@@ -341,7 +334,7 @@ describe('tx.update (data-fields-only)', () => {
       {scope: ChangeScope.BlockDefault},
     )
 
-    expect(await env.rowEventsFor('upd-noop')).toEqual(beforeEvents)
+    // No new upload envelope and no metadata bump ⇒ the write was skipped.
     expect(await env.psCrud()).toHaveLength(beforeCrud.length)
     expect(env.cache.getSnapshot('upd-noop')!.updatedAt).toBe(beforeUpdatedAt)
   })
@@ -366,15 +359,17 @@ describe('tx.update (data-fields-only)', () => {
 // ──── tx.delete + tx.restore ────
 
 describe('tx.delete + tx.restore', () => {
-  it('soft-delete: deleted flips 0→1 and trigger emits kind=soft-delete', async () => {
+  it('soft-delete: deleted flips 0→1 and uploads a PATCH setting deleted', async () => {
     const id = await env.repo.tx(
       tx => tx.create({id: 'sd-1', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
       {scope: ChangeScope.BlockDefault},
     )
     await env.repo.tx(tx => tx.delete(id), {scope: ChangeScope.BlockDefault})
     expect(env.cache.getSnapshot(id)!.deleted).toBe(true)
-    const events = await env.rowEventsFor(id)
-    expect(events.map(e => e.kind)).toEqual(['create', 'soft-delete'])
+    // The soft-delete is a PATCH (not a row removal) that sets deleted = 1.
+    const ops = (await env.psCrud()).map(r => JSON.parse(r.data) as {op: string; data: Record<string, unknown>})
+    expect(ops.map(e => e.op)).toEqual(['PUT', 'PATCH'])
+    expect(ops[1].data).toMatchObject({deleted: true})
   })
 
   it('delete on already-soft-deleted row is a no-op', async () => {
@@ -383,9 +378,10 @@ describe('tx.delete + tx.restore', () => {
       {scope: ChangeScope.BlockDefault},
     )
     await env.repo.tx(tx => tx.delete('sd-2'), {scope: ChangeScope.BlockDefault})
+    const afterFirstDelete = (await env.psCrud()).length
     await env.repo.tx(tx => tx.delete('sd-2'), {scope: ChangeScope.BlockDefault})
-    const events = await env.rowEventsFor('sd-2')
-    expect(events.map(e => e.kind)).toEqual(['create', 'soft-delete'])  // still just one delete
+    // The second delete writes nothing — no new upload envelope.
+    expect((await env.psCrud()).length).toBe(afterFirstDelete)
   })
 
   it('tx.restore un-soft-deletes; throws NotDeletedError on a live row', async () => {
@@ -424,8 +420,7 @@ describe('tx.move (cycle validation, §4.7 Layer 1)', () => {
     expect(env.cache.getSnapshot('mv-C')).toMatchObject({parentId: 'mv-root', orderKey: 'b0'})
   })
 
-  it('skips SQL, row_events, and upload routing when target parent/order are unchanged', async () => {
-    const beforeEvents = await env.rowEventsFor('mv-C')
+  it('skips SQL and upload routing when target parent/order are unchanged', async () => {
     const beforeCrud = await env.psCrud()
     const beforeUpdatedAt = env.cache.getSnapshot('mv-C')!.updatedAt
 
@@ -434,7 +429,7 @@ describe('tx.move (cycle validation, §4.7 Layer 1)', () => {
       {scope: ChangeScope.BlockDefault},
     )
 
-    expect(await env.rowEventsFor('mv-C')).toEqual(beforeEvents)
+    // No new upload envelope and no metadata bump ⇒ the write was skipped.
     expect(await env.psCrud()).toHaveLength(beforeCrud.length)
     expect(env.cache.getSnapshot('mv-C')!.updatedAt).toBe(beforeUpdatedAt)
   })
@@ -498,12 +493,11 @@ describe('tx.setProperty / tx.getProperty (codec boundary)', () => {
     expect(got).toBe('Inbox')
   })
 
-  it('skips SQL, row_events, and upload routing when the encoded value is already stored', async () => {
+  it('skips SQL and upload routing when the encoded value is already stored', async () => {
     await env.repo.tx(async tx => {
       await tx.create({id: 'prop-noop', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
       await tx.setProperty('prop-noop', titleProp, 'Inbox')
     }, {scope: ChangeScope.BlockDefault})
-    const beforeEvents = await env.rowEventsFor('prop-noop')
     const beforeCrud = await env.psCrud()
     const beforeUpdatedAt = env.cache.getSnapshot('prop-noop')!.updatedAt
 
@@ -512,7 +506,7 @@ describe('tx.setProperty / tx.getProperty (codec boundary)', () => {
       {scope: ChangeScope.BlockDefault},
     )
 
-    expect(await env.rowEventsFor('prop-noop')).toEqual(beforeEvents)
+    // No new upload envelope and no metadata bump ⇒ the write was skipped.
     expect(await env.psCrud()).toHaveLength(beforeCrud.length)
     expect(env.cache.getSnapshot('prop-noop')!.updatedAt).toBe(beforeUpdatedAt)
   })

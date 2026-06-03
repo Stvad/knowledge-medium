@@ -132,7 +132,7 @@ describe('useShortcutSurfaceActivations', () => {
       cache: new BlockCache(),
       user: testGlobals.user,
       newTxSeq: () => ++txSeq,
-      startRowEventsTail: false,
+      startSyncObserver: false,
     })
     repo.setActiveWorkspaceId(WS)
     testGlobals.repo = repo

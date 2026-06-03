@@ -29,6 +29,13 @@ export interface Workspace {
   ownerUserId: string
   createTime: number
   updateTime: number
+  // E2EE (docs/e2ee-design.html §7). `encryptionMode` is a server-
+  // maintained UX hint / feature-gating projection; `wkCanary` is the
+  // key-check blob a new device decrypts to validate a pasted WK (null for
+  // plaintext workspaces). Carried through the domain so the optimistic
+  // local prime after create_workspace doesn't null them out before sync.
+  encryptionMode: string
+  wkCanary: string | null
 }
 
 export interface WorkspaceMembership {

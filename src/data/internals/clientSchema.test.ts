@@ -8,11 +8,9 @@
  * dependency added.
  *
  * What this covers (data-layer-redesign §4.3 / §4.5 / §4.1.1):
- *   - row_events triggers fire for INSERT / UPDATE / DELETE
- *   - source COALESCE: NULL → 'sync'; 'user' passes through
- *   - tx_id belt-and-suspenders: NULL when source is NULL, even with a
- *     stale tx_id left in tx_context
- *   - soft-delete UPDATE emits kind='soft-delete'
+ *   - row_events audit/history triggers fire for both local and sync-applied
+ *     writes; source COALESCEs NULL → 'sync', 'user' passes through; tx_id is
+ *     NULL on sync apply; soft-delete UPDATE emits kind='soft-delete'
  *   - upload-routing triggers fire on every repo.tx write (source IS NOT NULL),
  *     and skip sync-applied writes (source = NULL)
  *   - workspace-invariant triggers reject cross-workspace + dangling
@@ -28,9 +26,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
 import {
-  BLOCKS_RAW_TABLE,
   BLOCK_STORAGE_COLUMNS,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
+  CREATE_BLOCKS_SYNCED_TABLE_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
 } from '@/data/blockSchema'
@@ -60,9 +58,20 @@ interface TestDb {
   insertWorkspaceMember: (overrides?: Partial<WorkspaceMemberInsert>) => void
   updateBlock: (id: string, set: Record<string, unknown>) => void
   deleteBlock: (id: string) => void
-  rowEvents: () => Array<RowEventRow>
   psCrud: () => Array<{ id: number; data: string; tx_id: number | null }>
+  rowEvents: () => Array<RowEventRow>
   rowEventCount: () => number
+}
+
+interface RowEventRow {
+  id: number
+  tx_id: string | null
+  block_id: string
+  kind: string
+  before_json: string | null
+  after_json: string | null
+  source: string
+  created_at: number
 }
 
 interface WorkspaceMemberInsert {
@@ -79,17 +88,6 @@ const defaultMember: WorkspaceMemberInsert = {
   user_id: 'user-1',
   role: 'owner',
   create_time: 1700000000000,
-}
-
-interface RowEventRow {
-  id: number
-  tx_id: string | null
-  block_id: string
-  kind: string
-  before_json: string | null
-  after_json: string | null
-  source: string
-  created_at: number
 }
 
 interface BlockInsert {
@@ -144,6 +142,9 @@ const setupDb = (): TestDb => {
 
   // The blocks table (built from the same column list as production).
   db.exec(CREATE_BLOCKS_TABLE_SQL)
+  // Layout B staging table — the blocks_synced change-capture triggers in
+  // CLIENT_SCHEMA_STATEMENTS attach to it, so it must exist first.
+  db.exec(CREATE_BLOCKS_SYNCED_TABLE_SQL)
   db.exec(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   db.exec(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
 
@@ -191,8 +192,8 @@ const setupDb = (): TestDb => {
     deleteBlock: (id) => {
       db.prepare('DELETE FROM blocks WHERE id = ?').run(id)
     },
-    rowEvents: () => db.prepare('SELECT * FROM row_events ORDER BY id').all() as unknown as RowEventRow[],
     psCrud: () => db.prepare('SELECT * FROM ps_crud ORDER BY id').all() as unknown as { id: number; data: string; tx_id: number | null }[],
+    rowEvents: () => db.prepare('SELECT * FROM row_events ORDER BY id').all() as unknown as RowEventRow[],
     rowEventCount: () => (db.prepare('SELECT COUNT(*) AS n FROM row_events').get() as {n: number}).n,
   }
 }
@@ -206,12 +207,13 @@ afterEach(() => { h.db.close() })
 describe('client schema bootstrap', () => {
   it('creates the documented set of client-schema triggers', () => {
     // CLIENT_SCHEMA_TRIGGER_NAMES covers triggers on `blocks` (the
-    // bulk of them — row_events, upload routing, workspace
-    // invariants, side-index maintenance) AND on `block_aliases`
-    // (the uniqueness-enforcement trigger). Query against both
-    // tables so the inventory test catches additions on either side.
+    // bulk of them — row_events audit/history, upload routing, workspace
+    // invariants, side-index maintenance), on `block_aliases`
+    // (the uniqueness-enforcement trigger), and on `blocks_synced`
+    // (the Layout B change-capture triggers). Query against all three
+    // tables so the inventory test catches additions on any side.
     const triggers = (h.db
-      .prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name IN ('blocks', 'block_aliases') ORDER BY name")
+      .prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name IN ('blocks', 'block_aliases', 'blocks_synced') ORDER BY name")
       .all() as Array<{name: string}>)
       .map(r => r.name)
     expect(triggers.sort()).toEqual([...CLIENT_SCHEMA_TRIGGER_NAMES].sort())
@@ -275,7 +277,8 @@ describe('row_events trigger — INSERT', () => {
   })
 
   it("COALESCEs NULL source to 'sync' and ZEROES tx_id (sync apply)", () => {
-    // tx_context stays at its post-clear state: source IS NULL
+    // tx_context stays at its post-clear state: source IS NULL — the shape an
+    // observer materialize of an incoming change leaves it in.
     h.insertBlock({id: 'b3'})
     expect(h.rowEvents()[0]).toMatchObject({source: 'sync', tx_id: null})
   })
@@ -326,31 +329,6 @@ describe('row_events trigger — UPDATE', () => {
   })
 })
 
-describe('PowerSync raw-table put', () => {
-  it('does not fire UPDATE triggers for identical sync replays', () => {
-    const put = h.db.prepare(BLOCKS_RAW_TABLE.put.sql)
-    const row = {...defaultBlock, id: 'raw-put'}
-
-    put.run(...blockValues(row))
-    expect(h.rowEvents()).toHaveLength(1)
-    expect(h.rowEvents()[0]).toMatchObject({block_id: 'raw-put', kind: 'create', source: 'sync'})
-
-    put.run(...blockValues(row))
-    expect(h.rowEvents()).toHaveLength(1)
-
-    put.run(...blockValues({
-      ...row,
-      content: 'changed',
-      updated_at: row.updated_at + 1,
-    }))
-    const events = h.rowEvents()
-    expect(events).toHaveLength(2)
-    expect(events[1]).toMatchObject({block_id: 'raw-put', kind: 'update', source: 'sync'})
-    expect(events[1].before_json).toContain('"content":""')
-    expect(events[1].after_json).toContain('"content":"changed"')
-  })
-})
-
 describe('row_events trigger — DELETE', () => {
   it("emits kind='delete' on hard delete with before snapshot only", () => {
     h.insertBlock({id: 'b1'})
@@ -385,7 +363,7 @@ describe('upload-routing triggers', () => {
     expect(JSON.parse(crud[0].data)).toMatchObject({op: 'PATCH', id: 'b1'})
   })
 
-  it('forwards only changed columns in UPDATE PATCH payloads', () => {
+  it('forwards changed columns plus the always-present workspace_id in PATCH payloads', () => {
     h.insertBlock({
       id: 'b1',
       content: 'old',
@@ -402,21 +380,25 @@ describe('upload-routing triggers', () => {
 
     const payload = JSON.parse(h.psCrud()[0].data)
     expect(payload).toMatchObject({op: 'PATCH', type: 'blocks', id: 'b1'})
+    // workspace_id is always emitted (even on a content-only edit) so the
+    // encrypt-on-upload hook can look up the WK + build AAD; the rest are
+    // change-gated.
     expect(payload.data).toEqual({
+      workspace_id: 'ws1',
       content: 'new',
       updated_at: 1700000999000,
       updated_by: 'user-2',
     })
   })
 
-  it('keeps explicit nulls in changed UPDATE PATCH payloads', () => {
+  it('keeps explicit nulls in changed UPDATE PATCH payloads (alongside workspace_id)', () => {
     h.insertBlock({id: 'b1', parent_id: 'old-parent'})
     h.setTxContext({txId: 'tx-1', txSeq: 5151, userId: 'user-1', scope: 'block-default', source: 'user'})
     h.updateBlock('b1', {parent_id: null})
     h.clearTxContext()
 
     const payload = JSON.parse(h.psCrud()[0].data)
-    expect(payload.data).toEqual({parent_id: null})
+    expect(payload.data).toEqual({workspace_id: 'ws1', parent_id: null})
   })
 
   it('does not queue an empty PATCH for no-op UPDATE statements', () => {

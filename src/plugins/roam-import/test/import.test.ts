@@ -518,8 +518,11 @@ describe('importRoam', () => {
       currentUserId: USER_ID,
     })
 
+    const idsBefore = new Set(
+      (await env.h.db.getAll<{id: string}>('SELECT id FROM blocks')).map(r => r.id),
+    )
     const before = await env.h.db.getOptional<{maxId: number | null}>(
-      'SELECT MAX(id) AS maxId FROM row_events',
+      'SELECT MAX(id) AS maxId FROM ps_crud',
     )
 
     await importRoam(minimalExport, env.repo, {
@@ -527,15 +530,16 @@ describe('importRoam', () => {
       currentUserId: USER_ID,
     })
 
-    const churn = await env.h.db.getOptional<{count: number}>(
-      `SELECT COUNT(*) AS count
-       FROM row_events re
-       JOIN command_events ce ON ce.tx_id = re.tx_id
-       WHERE re.id > ?
-         AND ce.description IN ('roam import: pages', 'roam import: descendants')`,
-      [before?.maxId ?? 0],
-    )
-    expect(churn?.count).toBe(0)
+    // A no-op re-import must not REWRITE a block that already existed — the
+    // imported pages and descendants stay untouched (the 16k-uploads-on-cold-
+    // resync bug). It may still create new auxiliary blocks, so scope the
+    // check to uploads that target a pre-existing id.
+    const rewritesOfExisting = (await env.h.db.getAll<{data: string}>(
+      'SELECT data FROM ps_crud WHERE id > ?', [before?.maxId ?? 0],
+    ))
+      .map(r => JSON.parse(r.data) as {op: string; id: string})
+      .filter(op => idsBefore.has(op.id))
+    expect(rewritesOfExisting).toEqual([])
   })
 
   it('points imports at a pre-existing seat instead of creating a parallel block', async () => {

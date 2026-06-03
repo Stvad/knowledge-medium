@@ -31,7 +31,7 @@ describe('writeBlockTypeLabel', () => {
       now: () => ++now,
       newId: () => `generated-${++idSeq}`,
       newTxSeq: () => ++txSeq,
-      startRowEventsTail: false,
+      startSyncObserver: false,
     })
     repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension]))
     repo.setActiveWorkspaceId('ws-1')

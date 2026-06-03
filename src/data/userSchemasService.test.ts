@@ -36,7 +36,7 @@ const setup = async (extraPresets: readonly AnyValuePreset[] = []): Promise<Harn
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
     registerKernelProcessors: false,
-    startRowEventsTail: false,
+    startSyncObserver: false,
   })
   repo.setActiveWorkspaceId(WS)
   repo.setFacetRuntime(resolveFacetRuntimeSync([

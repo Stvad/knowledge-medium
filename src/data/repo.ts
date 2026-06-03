@@ -11,7 +11,7 @@
  *
  * Stage 2 of Phase 1 (post-1.6) adds:
  *   - HandleStore + `repo.block(id)` / `repo.children(id)` / etc.
- *   - row_events tail subscription for sync-applied invalidation
+ *   - Layout B sync observer for sync-applied invalidation (design doc §9.2)
  */
 
 import { v4 as uuidv4 } from 'uuid'
@@ -84,10 +84,11 @@ import {
   wrapDbWithMetrics,
 } from './internals/timingMetrics'
 import {
-  startRowEventsTail,
-  type RowEventsTail,
-  type RowEventsTailOptions,
-} from './internals/rowEventsTail'
+  startBlocksSyncedObserver,
+  type BlocksSyncedObserver,
+  type BlocksSyncedObserverArgs,
+} from '@/sync/observer/observer'
+import type { Materializability } from '@/sync/observer/materialize'
 import {
   CLEAR_REPROJECT_REF_MARKER_SQL,
   RECORD_REPROJECT_REF_MARKER_SQL,
@@ -341,16 +342,24 @@ export interface RepoOptions {
    *  call. Tests that want to populate the invalidation-rules registry
    *  explicitly can disable this. */
   registerKernelInvalidationRules?: boolean
-  /** When true (default), the row_events tail subscription is started
-   *  at construction time so sync-applied writes propagate into the
-   *  cache + invalidate handles (spec §9.3). Set false in unit tests
-   *  that want explicit control over tail timing — they can call
-   *  `repo.startRowEventsTail({initialLastId: 0})` to opt back in
-   *  with deterministic semantics. */
-  startRowEventsTail?: boolean
-  /** Options forwarded to the row_events tail when started. */
-  rowEventsTailOptions?: RowEventsTailOptions
+  /** When true (default), the Layout B sync observer is started at
+   *  construction time so sync-applied writes — staged into `blocks_synced`
+   *  — materialize into the app-visible `blocks` table and invalidate
+   *  handles (design doc §9.2). Set false in unit tests that want explicit
+   *  control over drain timing — they call `repo.startSyncObserver()`
+   *  themselves and `flushSyncObserver()` to settle deterministically. */
+  startSyncObserver?: boolean
+  /** Options forwarded to the sync observer when started. */
+  syncObserverOptions?: SyncObserverOptions
 }
+
+/** Repo-level knobs for the Layout B sync observer. `db` / `cache` /
+ *  `handleStore` / `getInvalidationRules` / `deps` are supplied by the Repo
+ *  itself; only these pass through from a caller. */
+export type SyncObserverOptions = Pick<
+  BlocksSyncedObserverArgs,
+  'onCycleDetected' | 'throttleMs' | 'onError'
+>
 
 /** Structured payload of the `block_aliases_workspace_alias_unique`
  *  trigger's RAISE message. See `clientSchema.ts` for the SQL that
@@ -561,7 +570,7 @@ export class Repo {
    *  `subtree`, `ancestors`, plugin queries, etc. Identity rule:
    *  same key → same LoaderHandle instance. GC after `gcTimeMs` of
    *  zero subscribers + zero in-flight loads. The store also walks
-   *  invalidation: TxEngine fast path + row_events tail (Phase 2.C)
+   *  invalidation: TxEngine fast path + the Layout B sync observer
    *  call `handleStore.invalidate({…})` to fan out to dep-matching
    *  handles. */
   readonly handleStore: HandleStore = new HandleStore()
@@ -603,10 +612,12 @@ export class Repo {
    *  most recent `TX_LOG_CAPACITY` entries are retained; older drops
    *  are silent. Surfaces through `repo.metrics().txLog`. */
   private readonly txLog: Array<{description: string | null; ms: number}> = []
-  /** Active row_events tail (spec §9.3 path 2). Lazy: created on first
-   *  start, replaced on subsequent starts. Tests can `dispose()` and
-   *  re-`start` for deterministic flushing. */
-  private rowEventsTail: RowEventsTail | null = null
+  /** Active Layout B sync observer (design doc §9.2): drains the
+   *  `blocks_synced` staging table into the app-visible `blocks` table and
+   *  invalidates cache + handles. Replaces the row_events tail. Lazy:
+   *  created on first start, replaced on subsequent starts. Tests can
+   *  `dispose()` and re-`start` for deterministic flushing. */
+  private syncObserver: BlocksSyncedObserver | null = null
   /** Backing field for `activeWorkspaceId` (see getter/setter below). */
   private _activeWorkspaceId: string | null = null
   /** Instance discriminator for memoization keys that need to vary
@@ -730,7 +741,7 @@ export class Repo {
   constructor(opts: RepoOptions) {
     // Wrap the raw PowerSyncDb so every read/write call goes through
     // the timing proxy. Internal Repo code, processors, runTx, and the
-    // row_events tail all consume `this.db` — they all get the wrapped
+    // sync observer all consume `this.db` — they all get the wrapped
     // surface for free. External callers that hold the original
     // `opts.db` reference are NOT instrumented; pass `repo.db` if you
     // want timings (or use `repo.runQuery` / `repo.tx` which already
@@ -808,45 +819,53 @@ export class Repo {
         return dispatchQ(prop)
       },
     }) as QueryProxy
-    // Start the row_events tail by default (spec §9.3). Tests that
-    // want deterministic timing pass startRowEventsTail: false and
-    // call repo.startRowEventsTail({initialLastId: 0}) themselves
-    // before issuing sync-style writes.
-    if (opts.startRowEventsTail ?? true) {
-      this.startRowEventsTail(opts.rowEventsTailOptions)
+    // Start the Layout B sync observer by default (design doc §9.2).
+    // Tests that want deterministic timing pass startSyncObserver: false
+    // and call repo.startSyncObserver() + flushSyncObserver() themselves
+    // before issuing sync-style writes into `blocks_synced`.
+    if (opts.startSyncObserver ?? true) {
+      this.startSyncObserver(opts.syncObserverOptions)
     }
   }
 
-  /** Start the row_events tail subscription (spec §9.3). Idempotent
-   *  in spirit: if a tail is already running, it's disposed first so
-   *  the new options take effect. Returns the tail for inspection /
-   *  manual flushing. */
-  startRowEventsTail(options?: RowEventsTailOptions): RowEventsTail {
-    if (this.rowEventsTail) this.rowEventsTail.dispose()
-    this.rowEventsTail = startRowEventsTail({
+  /** Start the Layout B sync observer (design doc §9.2). Idempotent in
+   *  spirit: if one is already running, it's disposed first so the new
+   *  options take effect. Returns the observer for inspection / manual
+   *  flushing. */
+  startSyncObserver(options?: SyncObserverOptions): BlocksSyncedObserver {
+    if (this.syncObserver) this.syncObserver.dispose()
+    this.syncObserver = startBlocksSyncedObserver({
       db: this.db,
       cache: this.cache,
       handleStore: this.handleStore,
+      // No e2ee workspaces exist until e2ee creation ships (gated on the
+      // full deploy), so every downloaded row is plaintext → copy-through
+      // with no key. The §6 mode-pin resolver + IndexedDB key-store bridge
+      // replace these baked-in plaintext defaults when e2ee lands.
+      deps: { getMaterializability: (): Materializability => 'copy', getCek: async () => null },
       getInvalidationRules: () => this.invalidationRules,
-      options,
+      onCycleDetected: options?.onCycleDetected,
+      throttleMs: options?.throttleMs,
+      onError: options?.onError,
     })
-    return this.rowEventsTail
+    return this.syncObserver
   }
 
-  /** Dispose the active row_events tail (no-op if none). Tests use
-   *  this to detach the subscription before tearing down the test DB. */
-  stopRowEventsTail(): void {
-    if (this.rowEventsTail) {
-      this.rowEventsTail.dispose()
-      this.rowEventsTail = null
+  /** Dispose the active sync observer (no-op if none). Tests use this to
+   *  detach the subscription before tearing down the test DB. */
+  stopSyncObserver(): void {
+    if (this.syncObserver) {
+      this.syncObserver.dispose()
+      this.syncObserver = null
     }
   }
 
-  /** Manually flush the row_events tail — synchronously consumes any
-   *  rows not yet processed and walks `handleStore.invalidate(...)`.
-   *  Tests use this instead of waiting on the throttle window. */
-  async flushRowEventsTail(): Promise<void> {
-    if (this.rowEventsTail) await this.rowEventsTail.flush()
+  /** Manually flush the sync observer — drains any pending `blocks_synced`
+   *  changes into `blocks` and walks `handleStore.invalidate(...)`. Tests
+   *  use this instead of waiting on the throttle window; it's a real settle
+   *  barrier (awaits every drain enqueued before it). */
+  async flushSyncObserver(): Promise<void> {
+    if (this.syncObserver) await this.syncObserver.flush()
   }
 
   /** Frozen snapshot of internal data-layer counters + timings

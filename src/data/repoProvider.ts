@@ -32,8 +32,9 @@
 import { PowerSyncDatabase, Schema, WASQLiteOpenFactory, WASQLiteVFS } from '@powersync/web'
 import { createPowerSyncConnector, hasRemoteSyncConfig } from '@/services/powersync.js'
 import {
-  BLOCKS_RAW_TABLE,
+  BLOCKS_SYNCED_RAW_TABLE,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
+  CREATE_BLOCKS_SYNCED_TABLE_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
 } from '@/data/blockSchema'
@@ -43,6 +44,7 @@ import {
   CREATE_WORKSPACE_MEMBERS_TABLE_SQL,
   WORKSPACES_RAW_TABLE,
   WORKSPACE_MEMBERS_RAW_TABLE,
+  ensureWorkspaceE2eeColumns,
 } from '@/data/workspaceSchema'
 import {
   CLIENT_SCHEMA_STATEMENTS,
@@ -59,8 +61,16 @@ import {
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
 
 const appSchema = new Schema({})
+// Layout B (design doc §9.2): PowerSync writes EVERY downloaded block — the
+// `blocks_synced` row_type emitted by the sync rules — into the raw
+// `blocks_synced` staging table; the Repo's sync observer then decrypts/copies
+// each into the app-visible plaintext `blocks` table. So `blocks` is NOT a raw
+// table here — it's a plain local table the observer owns. During the dual-run
+// window the sync rules still also emit a plain `blocks` row_type for old
+// clients; this client has no raw mapping for it, so PowerSync stashes it in
+// `ps_untyped` and ignores it.
 appSchema.withRawTables({
-  blocks: BLOCKS_RAW_TABLE,
+  blocks_synced: BLOCKS_SYNCED_RAW_TABLE,
   workspaces: WORKSPACES_RAW_TABLE,
   workspace_members: WORKSPACE_MEMBERS_RAW_TABLE,
 })
@@ -220,11 +230,21 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
 
   // ── blocks + its indexes ──
   await powerSyncDb.execute(CREATE_BLOCKS_TABLE_SQL)
+  // Layout B staging table (§9.2). The raw-table mapping above tells
+  // PowerSync how to write it, but does NOT create the local SQLite table —
+  // we run the DDL ourselves, same as `blocks`. This is the live landing zone
+  // for the `blocks_synced` sync stream; the Repo's observer materializes it
+  // into `blocks`.
+  await powerSyncDb.execute(CREATE_BLOCKS_SYNCED_TABLE_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
 
   // ── workspaces + workspace_members ──
   await powerSyncDb.execute(CREATE_WORKSPACES_TABLE_SQL)
+  // Idempotent local migration: add the E2EE columns to an existing
+  // `workspaces` table on upgrading devices (CREATE TABLE IF NOT EXISTS
+  // above is a no-op when the table already exists). §7 / e2ee-design.
+  await ensureWorkspaceE2eeColumns(powerSyncDb)
   await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
   await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_INDEX_SQL)
 

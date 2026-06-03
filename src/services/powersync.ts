@@ -7,6 +7,7 @@ import {
 } from '@powersync/common'
 import { supabase, hasSupabaseAuthConfig, readPersistedSession } from '@/services/supabase.js'
 import { classifyUploadError } from '@/services/uploadErrorClassifier.js'
+import { encryptUploadColumns, type GetCek, type SyncMode } from '@/sync/transform.js'
 
 const powerSyncUrl = import.meta.env.VITE_POWERSYNC_URL?.trim()
 
@@ -52,7 +53,61 @@ export interface UploadDeps {
     transaction: CrudTransaction,
     error: unknown,
   ) => Promise<void>
+  /** Encrypt-on-upload transform (§9.2), applied to the compacted ops before
+   *  they hit the wire. Optional so test deps can omit it; absent ⇒ identity. */
+  encryptOps?: (
+    operations: readonly CompactedBlockOperation[],
+  ) => Promise<readonly CompactedBlockOperation[]>
 }
+
+/** Resolve a workspace's sync mode for the encrypt-on-upload decision. The
+ *  policy (mode pin, §6) is injected; today's default is uniformly 'none'
+ *  (no e2ee workspace exists pre-rollout), so encryption is a no-op until the
+ *  §8 flows wire a real resolver + key store. */
+export type GetWorkspaceMode = (workspaceId: string) => SyncMode | Promise<SyncMode>
+
+/** Seal the content columns of each create/patch op whose workspace is e2ee,
+ *  before they reach the wire (§9.2). Deletes and plaintext workspaces pass
+ *  through untouched. `workspace_id` is read off the payload (always present
+ *  per the upload trigger, D-3.1); an op missing it can't be e2ee-routed and
+ *  passes through — a genuine e2ee plaintext write would be rejected by the
+ *  server-side ciphertext trigger rather than silently stored. */
+const encryptUploadOps = async (
+  ops: readonly CompactedBlockOperation[],
+  getMode: GetWorkspaceMode,
+  getCek: GetCek,
+): Promise<CompactedBlockOperation[]> => {
+  const out: CompactedBlockOperation[] = []
+  for (const op of ops) {
+    if (op.kind === 'delete') {
+      out.push(op)
+      continue
+    }
+    const workspaceId = op.payload.workspace_id
+    if (typeof workspaceId !== 'string') {
+      out.push(op)
+      continue
+    }
+    const mode = await getMode(workspaceId)
+    if (mode === 'none') {
+      out.push(op)
+      continue
+    }
+    const payload = await encryptUploadColumns(op.id, workspaceId, op.payload, mode, getCek)
+    out.push(
+      op.kind === 'create'
+        ? { ...op, payload: payload as BlockUploadPayload }
+        : { ...op, payload },
+    )
+  }
+  return out
+}
+
+// Pre-rollout defaults: every workspace is plaintext and no keys exist, so the
+// default encryptOps is identity. The §8 flows replace these with a mode-pin
+// resolver + IndexedDB key-store lookup when e2ee ships.
+const defaultGetWorkspaceMode: GetWorkspaceMode = () => 'none'
+const defaultUploadGetCek: GetCek = async () => null
 
 /** Per-row apply primitives that `applyCompactedBlockOperations` dispatches
  *  to. Factored out so tests can substitute a controllable sink and assert
@@ -419,6 +474,7 @@ const crudEntryEnvelope = (entry: CrudEntry): Record<string, unknown> => {
 const defaultUploadDeps = (): UploadDeps => ({
   applyOperations: applyCompactedBlockOperations,
   recordRejection: recordRejectionToTable,
+  encryptOps: ops => encryptUploadOps(ops, defaultGetWorkspaceMode, defaultUploadGetCek),
 })
 
 /** Optimistic-batch / pessimistic-per-tx upload orchestrator.
@@ -439,7 +495,8 @@ const uploadTransactionsWithFallback = async (
   transactions: readonly CrudTransaction[],
   deps: UploadDeps,
 ): Promise<void> => {
-  const batchOps = compactBlockCrudEntries(transactions.flatMap(t => t.crud))
+  const encryptOps = deps.encryptOps ?? (async ops => ops)
+  const batchOps = await encryptOps(compactBlockCrudEntries(transactions.flatMap(t => t.crud)))
 
   try {
     await deps.applyOperations(database, batchOps)
@@ -461,7 +518,7 @@ const uploadTransactionsWithFallback = async (
   // preserved — losing it would clobber properties_json on a server row
   // the deterministic-id bootstrap already created.
   for (const transaction of transactions) {
-    const txOps = compactBlockCrudEntries(transaction.crud)
+    const txOps = await encryptOps(compactBlockCrudEntries(transaction.crud))
     try {
       await deps.applyOperations(database, txOps)
       await transaction.complete()
@@ -526,6 +583,7 @@ export const createPowerSyncConnector = (): PowerSyncBackendConnector => ({
   uploadData,
 })
 
+export const __encryptUploadOpsForTest = encryptUploadOps
 export const __compactBlockCrudEntriesForTest = compactBlockCrudEntries
 export const __orderedBlockUpsertsForTest = orderedBlockUpserts
 export const __uploadTransactionsWithFallbackForTest = uploadTransactionsWithFallback

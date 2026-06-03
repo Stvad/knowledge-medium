@@ -65,10 +65,6 @@ const isInvalidationRule = (value: unknown): value is InvalidationRule =>
   (
     value.collectFromSnapshots === undefined ||
     typeof value.collectFromSnapshots === 'function'
-  ) &&
-  (
-    value.collectFromRowEvent === undefined ||
-    typeof value.collectFromRowEvent === 'function'
   )
 
 /** Key the registry by `Mutator.name`; duplicates log a warning and

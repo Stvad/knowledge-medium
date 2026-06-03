@@ -9,6 +9,8 @@ interface WorkspaceRowResult {
   owner_user_id: string
   create_time: number
   update_time: number
+  encryption_mode: string
+  wk_canary: string | null
 }
 
 interface WorkspaceMemberRowResult {
@@ -20,7 +22,7 @@ interface WorkspaceMemberRowResult {
 }
 
 const SELECT_WORKSPACES_SQL = `
-  SELECT id, name, owner_user_id, create_time, update_time
+  SELECT id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary
   FROM workspaces
   ORDER BY create_time ASC, id ASC
 `
@@ -38,6 +40,8 @@ const parseWorkspace = (row: WorkspaceRowResult): Workspace => ({
   ownerUserId: row.owner_user_id,
   createTime: row.create_time,
   updateTime: row.update_time,
+  encryptionMode: row.encryption_mode,
+  wkCanary: row.wk_canary,
 })
 
 const parseMember = (row: WorkspaceMemberRowResult): WorkspaceMembership => ({

@@ -56,11 +56,4 @@ export const referencesInvalidationRule: InvalidationRule = {
       emitSnapshotTargetDiff(snapshot, emit)
     }
   },
-  collectFromRowEvent: ({before, after}, emit) => {
-    const beforeLive = !!before && !before.deleted
-    const afterLive = !!after && !after.deleted
-    const beforeRefs = beforeLive ? before?.references ?? [] : []
-    const afterRefs = afterLive ? after?.references ?? [] : []
-    emitReferenceTargetDiff(beforeRefs, afterRefs, emit)
-  },
 }

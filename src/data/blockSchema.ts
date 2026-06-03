@@ -51,25 +51,10 @@ export const BLOCK_STORAGE_COLUMNS = [
 
 const BLOCK_COLUMN_NAMES = BLOCK_STORAGE_COLUMNS.map(column => column.name)
 
-const BLOCK_SYNC_COLUMN_NAMES = BLOCK_COLUMN_NAMES.filter(
-  (name): name is Exclude<BlockColumnName, 'id'> => name !== 'id',
-)
-
 const formatSqlList = (items: readonly string[], indentSize: number) => {
   const indent = ' '.repeat(indentSize)
   return items.map(item => `${indent}${item}`).join(',\n')
 }
-
-const formatSqlOrList = (items: readonly string[], indentSize: number) => {
-  const indent = ' '.repeat(indentSize)
-  return items.map((item, index) => `${indent}${index === 0 ? '' : 'OR '}${item}`).join('\n')
-}
-
-const BLOCK_SYNC_ASSIGNMENTS = BLOCK_SYNC_COLUMN_NAMES.map(columnName => `${columnName} = excluded.${columnName}`)
-
-const BLOCK_SYNC_DIFF_PREDICATES = BLOCK_SYNC_COLUMN_NAMES.map(
-  columnName => `blocks.${columnName} IS NOT excluded.${columnName}`,
-)
 
 export const SELECT_BLOCK_COLUMNS_SQL = BLOCK_COLUMN_NAMES.join(',\n  ')
 
@@ -80,6 +65,19 @@ export const buildQualifiedBlockColumnsSql = (tableName: string) =>
 
 export const CREATE_BLOCKS_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS blocks (
+${formatSqlList(BLOCK_STORAGE_COLUMNS.map(column => column.definition), 6)}
+  )
+`
+
+/** Layout B staging table (design doc §9.2). PowerSync's blocks stream is
+ *  retargeted to row_type `blocks_synced`, so EVERY downloaded row —
+ *  plaintext or `enc:v1:` ciphertext — lands here first; a JS observer then
+ *  materializes it into the app-visible plaintext `blocks` table. It mirrors
+ *  the `blocks` column shape (same `BLOCK_STORAGE_COLUMNS`) so a server row
+ *  hydrates without dropping fields, but carries NONE of the `blocks`
+ *  triggers — it's a passive landing zone, never read by app queries. */
+export const CREATE_BLOCKS_SYNCED_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS blocks_synced (
 ${formatSqlList(BLOCK_STORAGE_COLUMNS.map(column => column.definition), 6)}
   )
 `
@@ -103,32 +101,23 @@ export const CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL = `
 const powerSyncParamForColumn = (columnName: BlockColumnName): PendingStatementParameter =>
   columnName === 'id' ? 'Id' : {Column: columnName}
 
-// PowerSync's CRUD-apply path runs this `put` for both inserts and updates of
-// a synced row. INSERT OR REPLACE would fire SQLite's DELETE+INSERT trigger
-// pair on an update, so the `row_events` audit trigger sees the change as
-// kind='insert' with before_json=NULL — and `rowEventsTail` then treats a
-// pure content/property edit as a child-membership change and clears the
-// parent's child-loaded marker. ON CONFLICT(id) DO UPDATE preserves the
-// UPDATE shape (OLD/NEW visible to triggers), keeping before_json populated
-// so the membership-vs-content classification in `rowEventsTail` is correct.
-// The WHERE guard keeps re-delivered identical sync rows from firing UPDATE
-// triggers at all; `row_events` is an invalidation queue, not a durable copy
-// of every sync operation PowerSync has replayed.
-export const BLOCKS_RAW_TABLE = {
+// Layout B staging raw table (design doc §9.2). PowerSync's sync-apply runs
+// this plain `INSERT OR REPLACE` / `DELETE` directly against `blocks_synced`,
+// which carries no triggers of its own beyond the change-capture queue. It
+// overwrites the staged row (plaintext or `enc:v1:` ciphertext) on every
+// re-delivery; the observer is what dedups no-ops, in JS, on its way into the
+// live `blocks` table.
+export const BLOCKS_SYNCED_RAW_TABLE = {
   put: {
     sql: `
-      INSERT INTO blocks (
+      INSERT OR REPLACE INTO blocks_synced (
 ${formatSqlList(BLOCK_COLUMN_NAMES, 8)}
       ) VALUES (${BLOCK_COLUMN_NAMES.map(() => '?').join(', ')})
-      ON CONFLICT(id) DO UPDATE SET
-${formatSqlList(BLOCK_SYNC_ASSIGNMENTS, 8)}
-      WHERE
-${formatSqlOrList(BLOCK_SYNC_DIFF_PREDICATES, 8)}
     `,
     params: BLOCK_COLUMN_NAMES.map(powerSyncParamForColumn),
   },
   delete: {
-    sql: 'DELETE FROM blocks WHERE id = ?',
+    sql: 'DELETE FROM blocks_synced WHERE id = ?',
     params: ['Id'],
   },
 } satisfies RawTableType

@@ -103,7 +103,7 @@ describe('moveSrsState', () => {
       user: {id: 'user-1'},
       newTxSeq: () => ++txSeq,
       registerKernelProcessors: false,
-      startRowEventsTail: false,
+      startSyncObserver: false,
     })
     const runtime = resolveFacetRuntimeSync([
       kernelDataExtension,
