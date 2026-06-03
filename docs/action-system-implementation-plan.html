@@ -110,6 +110,25 @@ canonicalizer must split on space first into an ordered list of presses, then ca
 (3) re-export from <code>keyCapture.ts</code> so the settings UI is unchanged; (4) point
 <code>keybindingConflicts.ts</code>' <code>toChordArray</code> bucketing at the canonical key.
 Keep the descriptor shape open (the <code>kind</code> field) so Phase 3 adds variants, not a rewrite.</p>
+<p><strong>Known limits (deferred — Phase 0 shipped in PR&nbsp;#102 with these left open on purpose):</strong></p>
+<ul class="tight">
+  <li><strong>Conflict bucketing is case-sensitive on the final key.</strong> The canonical key preserves the
+      final key's case, so <code>cmd+k</code> and <code>cmd+K</code> bucket as <em>distinct</em> chords in
+      <code>keybindingConflicts</code>. This matches today's case-sensitive raw-string behavior — <em>not</em> a
+      regression — but it means a <code>Shift</code>-less uppercase-letter binding won't be flagged as colliding
+      with its <code>Shift</code>+lowercase equivalent. Revisit when the comparator lands: decide whether key
+      comparison should fold case so the physical key + an explicit <code>Shift</code> modifier is the canonical
+      form. (Touches <code>canonicalizeChord</code>'s key handling, so it would also shift the resolver — do it
+      deliberately, not as a drive-by.)</li>
+  <li><strong>Conflict bucketing ignores <code>phase</code> — and that asymmetry is intentional.</strong>
+      <code>keybindingConflicts</code> calls <code>canonicalizeChord(chord)</code> with <em>no</em> phase, so two
+      actions on the same chord+context differing only by phase (keydown vs keyup vs hold) bucket together. That
+      is inert today (no such default pair) and arguably correct — a same-chord/different-phase pair is a
+      plausible UX surprise worth surfacing. <strong>The resolver must do the opposite:</strong> the
+      phase-aware key (<code>canonicalizeChord(raw, phase)</code>) exists precisely so dispatch does <em>not</em>
+      dedup hold&nbsp;<code>s</code> against keyup&nbsp;<code>s</code> (see the Phase&nbsp;1 "same key different
+      phase does NOT dedup" test). Don't unify the two call sites onto one phase policy.</li>
+</ul>
 </div>
 
 <div class="phase">
