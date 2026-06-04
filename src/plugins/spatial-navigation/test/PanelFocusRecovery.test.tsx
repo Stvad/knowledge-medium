@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { cleanup, render, waitFor } from '@testing-library/react'
 import { BlockCache } from '@/data/blockCache'
 import { ChangeScope, type User } from '@/data/api'
 import { Repo } from '@/data/repo'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import {
   focusedBlockLocationProp,
   peekFocusedBlockLocation,
@@ -23,7 +23,8 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const repo = new Repo({
     db: h.db,
     cache: new BlockCache(),
@@ -79,7 +80,10 @@ const setFocused = async (blockId: string, renderScopeId = `i-${blockId}`): Prom
   await env.repo.block(PANEL_ID).set(focusedBlockLocationProp, focusedLocation(blockId, renderScopeId))
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 
 beforeEach(async () => {
   __resetSpatialNavigationForTesting()
@@ -105,7 +109,7 @@ afterEach(async () => {
   cleanup()
   __resetSpatialNavigationForTesting()
   document.body.innerHTML = ''
-  await env.h.cleanup()
+  env.repo.stopSyncObserver()
 })
 
 describe('PanelFocusRecovery', () => {

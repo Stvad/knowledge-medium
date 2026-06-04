@@ -18,10 +18,10 @@
  *     layer can surface it
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, ProcessorRejection } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import { aliasesProp } from '@/data/internals/coreProperties'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes'
@@ -40,7 +40,8 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   let idCursor = 0
@@ -68,14 +69,17 @@ const setup = async (): Promise<Harness> => {
   }
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
   env = await setup()
   vi.useFakeTimers({shouldAdvanceTime: true})
 })
 afterEach(async () => {
   vi.useRealTimers()
-  await env.h.cleanup()
+  env.repo.stopSyncObserver()
 })
 
 const readAliases = async (id: string): Promise<string[]> => {
