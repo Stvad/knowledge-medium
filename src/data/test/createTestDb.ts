@@ -44,6 +44,7 @@ import {
 } from '@/data/blockSchema'
 import {
   CLIENT_SCHEMA_STATEMENTS,
+  REPROJECT_REF_MARKER_PREFIX,
   backfillBlockAliasesIfEmpty,
   backfillBlocksFtsIfEmpty,
   backfillBlockTypesIfEmpty,
@@ -295,6 +296,14 @@ export const resetTestDb = async (db: PowerSyncDatabase): Promise<void> => {
     )
     for (const table of existing(RESET_CONTENT_TABLES)) await tx.execute(`DELETE FROM ${table}`)
     for (const table of existing(RESET_AUDIT_TABLES)) await tx.execute(`DELETE FROM ${table}`)
+    // Clear per-property reprojection markers so a schema-swap reprojection
+    // is re-detected per test — a freshly-opened harness has none of these
+    // (only the backfill/ANALYZE markers from template init, which we keep).
+    if (present.has('client_schema_state')) {
+      await tx.execute(
+        `DELETE FROM client_schema_state WHERE key LIKE '${REPROJECT_REF_MARKER_PREFIX}%'`,
+      )
+    }
     // Restart AUTOINCREMENT counters (e.g. ps_crud.id) so per-test row-id
     // expectations stay stable.
     if (present.has('sqlite_sequence')) await tx.execute('DELETE FROM sqlite_sequence')
