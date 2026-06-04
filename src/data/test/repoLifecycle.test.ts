@@ -19,10 +19,10 @@
  * contract).
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { BlockCache } from '@/data/blockCache'
 import { ChangeScope } from '@/data/api'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '../repo'
 
 interface Harness {
@@ -30,19 +30,25 @@ interface Harness {
   repo: Repo
 }
 
+// Builds a harness on the shared, already-reset DB. Called from beforeEach
+// AND mid-test (some tests build a second Repo to prove per-Repo identity), so
+// it must NOT reset — reset lives in beforeEach. `h.cleanup` disposes this
+// harness's observer without closing the shared DB.
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
   const cache = new BlockCache()
   const repo = new Repo({
-    db: h.db,
+    db: sharedDb.db,
     cache,
     user: {id: 'user-1'},
   })
-  return {h, repo}
+  return {h: {db: sharedDb.db, cleanup: async () => { repo.stopSyncObserver() }}, repo}
 }
 
+let sharedDb: TestDb
 let env: Harness
-beforeEach(async () => { env = await setup() })
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
+beforeEach(async () => { await resetTestDb(sharedDb.db); env = await setup() })
 afterEach(async () => { await env.h.cleanup() })
 
 describe('repo.block(id) identity stability', () => {

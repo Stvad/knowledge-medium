@@ -22,7 +22,7 @@
  *   - resetBlockSelection: no-op when already empty, clears when set
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import {
   ChangeScope,
   codecs,
@@ -35,7 +35,7 @@ import { BlockCache } from '@/data/blockCache'
 import { sameTxProcessorsFacet, typesFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { addedTypes } from '@/data/properties'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { resolveFacetRuntimeSync } from '@/extensions/facet'
 import { Repo } from '../repo'
 import { PAGE_TYPE, USER_TYPE } from '@/data/blockTypes'
@@ -66,11 +66,15 @@ interface Harness {
   repo: Repo
 }
 
+// Builds a harness on the shared, already-reset DB. Called from beforeEach
+// AND mid-test (some tests build a second Repo on the SAME data to bypass the
+// per-Repo memoize cache), so it must NOT reset — reset lives in beforeEach.
+// `h.cleanup` disposes this harness's sync observer without closing the shared
+// DB, so every `*.h.cleanup()` call (main or secondary) stays correct.
 const setup = async (types: readonly TypeContribution[] = []): Promise<Harness> => {
-  const h = await createTestDb()
   const cache = new BlockCache()
   const repo = new Repo({
-    db: h.db,
+    db: sharedDb.db,
     cache,
     user: USER,
     registerKernelProcessors: false,
@@ -82,7 +86,7 @@ const setup = async (types: readonly TypeContribution[] = []): Promise<Harness> 
       types.map(type => typesFacet.of(type, {source: 'test'})),
     ]))
   }
-  return {h, repo}
+  return {h: {db: sharedDb.db, cleanup: async () => { repo.stopSyncObserver() }}, repo}
 }
 
 const registerTypes = (repo: Repo, types: readonly TypeContribution[]): void => {
@@ -92,8 +96,11 @@ const registerTypes = (repo: Repo, types: readonly TypeContribution[]): void => 
   ]))
 }
 
+let sharedDb: TestDb
 let env: Harness
-beforeEach(async () => { env = await setup() })
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
+beforeEach(async () => { await resetTestDb(sharedDb.db); env = await setup() })
 afterEach(async () => { await env.h.cleanup() })
 
 describe('getUserBlock', () => {
