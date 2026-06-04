@@ -5,10 +5,10 @@
  * materialize → invalidate, plus the drain's race/failure/restart robustness.
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams } from '@/data/blockSchema'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { startBlocksSyncedObserver, type BlocksSyncedObserver } from './observer.js'
 import type { GetMaterializability } from './materialize.js'
 import { encodeForWire, type GetCek } from '../transform.js'
@@ -33,12 +33,15 @@ const stagingCiphertextParams = (
   return params
 }
 
+let sharedDb: TestDb
 let env: TestDb
 let observers: BlocksSyncedObserver[]
-beforeEach(async () => { env = await createTestDb(); observers = [] })
-afterEach(async () => {
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
+beforeEach(async () => { await resetTestDb(sharedDb.db); env = sharedDb; observers = [] })
+afterEach(() => {
+  // Dispose any observers the test started; the shared DB closes in afterAll.
   for (const o of observers) o.dispose()
-  await env.cleanup()
 })
 
 const put = (d: BlockData, params?: unknown[]) =>

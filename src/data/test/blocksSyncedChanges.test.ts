@@ -19,9 +19,9 @@
  *      DELETE+INSERT) appends 'delete' then a higher-seq 'upsert' that wins.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams } from '@/data/blockSchema'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import type { BlockData } from '@/data/api'
 
 const data = (o: Partial<BlockData> = {}): BlockData => ({
@@ -30,9 +30,12 @@ const data = (o: Partial<BlockData> = {}): BlockData => ({
   updatedBy: 'u', deleted: false, ...o,
 })
 
+let sharedDb: TestDb
 let env: TestDb
-beforeEach(async () => { env = await createTestDb() })
-afterEach(async () => { await env.cleanup() })
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
+// Reuse one DB across the file; reset (not reopen) per test.
+beforeEach(async () => { await resetTestDb(sharedDb.db); env = sharedDb })
 
 const put = (d: BlockData) => env.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToRowParams(d))
 const del = (id: string) => env.db.execute(BLOCKS_SYNCED_RAW_TABLE.delete.sql, [id])

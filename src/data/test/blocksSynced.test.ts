@@ -19,9 +19,9 @@
  *      trigger is the change-capture queue the observer drains.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams } from '@/data/blockSchema'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import type { BlockData } from '@/data/api'
 
 interface ColumnInfo {
@@ -47,9 +47,12 @@ const fixture: BlockData = {
   deleted: false,
 }
 
+let sharedDb: TestDb
 let env: TestDb
-beforeEach(async () => { env = await createTestDb() })
-afterEach(async () => { await env.cleanup() })
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
+// Reuse one DB across the file; reset (not reopen) per test.
+beforeEach(async () => { await resetTestDb(sharedDb.db); env = sharedDb })
 
 describe('blocks_synced staging table', () => {
   it('mirrors the blocks column shape exactly (name + type + nullability)', async () => {
