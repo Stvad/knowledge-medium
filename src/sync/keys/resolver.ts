@@ -56,7 +56,17 @@ export const createSyncResolver = (
   const getCek: GetCek = async (workspaceId) => {
     const userId = getUserId()
     if (!userId) return null
-    return keyStore.get(userId, workspaceId)
+    try {
+      return await keyStore.get(userId, workspaceId)
+    } catch (err) {
+      // A key-store read failure (IndexedDB unavailable / corrupt / quota) must
+      // never throw out of the resolver: getMaterializability (below) runs
+      // OUTSIDE materializeStagingRows' per-row decode try/catch, so a throw
+      // there aborts the entire observer drain and strands the durable change
+      // queue. Treat an unreadable store as "no key".
+      console.warn(`[syncResolver] key read failed for ${workspaceId}; treating as no key`, err)
+      return null
+    }
   }
 
   const getMaterializability: GetMaterializability = async (workspaceId) => {
@@ -65,7 +75,10 @@ export const createSyncResolver = (
     const pin = getModePin(userId, workspaceId)
     if (pin === 'plaintext') return 'copy'
     if (pin === 'e2ee') {
-      const key = await keyStore.get(userId, workspaceId)
+      // getCek swallows read failures → null, so an unreadable key store defers
+      // (leaves the row staged; retries when the store recovers / WK is pasted)
+      // instead of wedging the drain.
+      const key = await getCek(workspaceId)
       return key ? 'decrypt' : 'defer'
     }
     // Unpinned: never materialize until a §8 flow resolves the first encounter.

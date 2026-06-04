@@ -49,6 +49,22 @@ describe('createSyncResolver — getMaterializability (§6 policy collapse)', ()
     const { resolver } = build(null)
     expect(await resolver.getMaterializability(WS)).toBe('defer')
   })
+
+  it('defers (never throws) when the key store read fails for an e2ee pin', async () => {
+    // getMaterializability runs outside the observer's per-row decode try/catch,
+    // so a throw here would wedge the whole drain. An unreadable store → defer.
+    const throwingStore = {
+      get: async () => {
+        throw new Error('IndexedDB unavailable')
+      },
+      put: async () => {},
+      delete: async () => {},
+      clearAll: async () => {},
+    }
+    const resolver = createSyncResolver(() => USER, throwingStore)
+    setModePin(USER, WS, 'e2ee')
+    await expect(resolver.getMaterializability(WS)).resolves.toBe('defer')
+  })
 })
 
 describe('createSyncResolver — getCek', () => {
@@ -73,6 +89,19 @@ describe('createSyncResolver — getCek', () => {
     await keyStore.put('other-user', WS, FAKE_KEY)
     const resolver = createSyncResolver(() => USER, keyStore)
     expect(await resolver.getCek(WS)).toBeNull()
+  })
+
+  it('returns null (does not throw) when the key store read fails', async () => {
+    const throwingStore = {
+      get: async () => {
+        throw new Error('boom')
+      },
+      put: async () => {},
+      delete: async () => {},
+      clearAll: async () => {},
+    }
+    const resolver = createSyncResolver(() => USER, throwingStore)
+    await expect(resolver.getCek(WS)).resolves.toBeNull()
   })
 })
 
