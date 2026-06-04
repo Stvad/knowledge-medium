@@ -1,5 +1,11 @@
 # Follow-ups
 
+> **Deprecated — track new follow-ups as GitHub issues, not here.** This file
+> is frozen: open an issue at https://github.com/Stvad/knowledge-medium/issues
+> instead of appending. The entries below predate that decision and are kept as
+> historical context until they're migrated or closed. **Future agents: create
+> a GitHub issue rather than adding to this doc.**
+
 Sorted by priority. **P0** = security/data-loss risk active. **P1** = clear user impact or near-term blocker. **P2** = improvement with a mild trigger present. **P3** = deferred until a measured trigger fires. The "Architectural ideas" section at the bottom holds shapes with no current trigger — they exist so future-us doesn't re-derive the analysis from scratch.
 
 ## P0 — Security
@@ -186,16 +192,6 @@ The same id-only shape would work for the other three list-handle factories in `
 - `backlinkIds` — Backlinks UI also renders each backlink's content; row deps are bounded by the backlinks list size.
 
 Add when a measured hot path appears, not preemptively. Phase 4's `queriesFacet` (per `tasks/data-layer-redesign.md` §13.4) is the canonical place for these — `repo.childIds` will migrate alongside `repo.children` to `repo.query.childIds` with no callsite changes downstream of the hooks.
-
-### Single-key binding shadowing a co-active sequence chord — surface as a keybinding conflict
-
-The single-winner coordinator (`HotkeyReconciler`) feeds each candidate its own tinykeys matcher, then orders the set that completed *this* event through `resolve(...)` by context tier → priority → recency. Chord *length* is not a factor. So if a single-key binding is a prefix of a sequence in a co-active context — say a plugin binds `g` while vim normal mode keeps `g g` — both matchers complete on the second `g`, and the prefix can out-rank the sequence by context, so `g g` never fires. (Raised as a P2 by Codex on PR #103.)
-
-Not a resolver fix, for two reasons: (1) a "prefer the longer chord" tiebreak would have to rank *below* the modal/global tiers — a modal that binds `g` must still beat a background `g g` ("modal owns all chords"), so length can't be a top-level rule in the one comparator everything routes through; (2) the single-key prefix fires on the *first* press regardless (its matcher completes immediately), so even a perfect press-2 tiebreak can't undo the press-1 dispatch. The situation is fundamentally a misconfiguration — a single key racing a sequence it prefixes — which the conflict detector is the right place to catch.
-
-Fix shape: extend `keybindingConflicts.ts` (which already buckets chords via the Phase-0 canonical key and warns on collisions) to also flag "binding X is a strict prefix of sequence Y in an overlapping context" as an intentional-shadow-style warning, so the author sees it in shortcut settings rather than discovering a dead sequence at runtime. Needs the sequence-aware `parseChord` (already landed in Phase 0) to compare press lists, not just the atomic key.
-
-Not reachable today: the repo has exactly one sequence binding (`g g`, vim normal mode) and no single-key `g` binding in any context, so no prefix/sequence collision exists. Build it when a real one appears (or when the conflict-UI work in the plan's "Opportunistic" section gets picked up).
 
 ### `rendererProp` silently no-ops on a misspelled renderer id
 
