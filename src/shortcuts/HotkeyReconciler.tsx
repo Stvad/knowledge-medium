@@ -417,6 +417,11 @@ const installHoldBinding = (config: HoldBindingInstall): (() => void) => {
       contextConfigsByTypeRef.current,
     )
     if (!deps) return
+    // Hold dispatch happens here (timer fire), so the canDispatch gate is
+    // evaluated here too — same contract the keydown/keyup coordinator
+    // enforces: a declining predicate skips the handler rather than firing
+    // in a state the action opted out of.
+    if (action.canDispatch && !action.canDispatch(deps)) return
 
     try {
       void Promise.resolve(action.handler(deps, originalEvent, dispatchRef.current)).catch(error => {

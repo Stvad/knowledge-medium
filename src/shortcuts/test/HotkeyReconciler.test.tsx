@@ -811,6 +811,34 @@ describe('HotkeyReconciler', () => {
         }
       })
 
+      it('does not fire when canDispatch declines, even after the threshold', () => {
+        // Hold dispatch must honour the same canDispatch gate the keydown/keyup
+        // coordinator enforces — otherwise hold bindings are the one path that
+        // fires in a state the action opted out of.
+        vi.useFakeTimers()
+        try {
+          const handler = vi.fn()
+          const action = buildAction({
+            id: 'test.hold-candispatch',
+            handler,
+            canDispatch: () => false,
+            defaultBinding: {keys: 's', phase: 'hold', holdMs: 200},
+          })
+
+          render(
+            <Harness actions={[action]} contexts={[testContextConfig]}>
+              <Activator context={TEST_CONTEXT}/>
+            </Harness>,
+          )
+
+          act(() => dispatchKeydown('s'))
+          act(() => vi.advanceTimersByTime(300))
+          expect(handler).not.toHaveBeenCalled()
+        } finally {
+          vi.useRealTimers()
+        }
+      })
+
       it('ignores OS-repeat keydowns while held', () => {
         vi.useFakeTimers()
         try {
