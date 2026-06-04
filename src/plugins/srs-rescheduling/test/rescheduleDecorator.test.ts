@@ -1,11 +1,11 @@
 // @vitest-environment node
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { Repo } from '@/data/repo'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { actionsFacet } from '@/extensions/core.js'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
 import { typesProp } from '@/data/properties.js'
@@ -24,6 +24,7 @@ import {
 } from '../index.ts'
 
 const WS = 'ws-1'
+let sharedDb: TestDb
 let h: TestDb
 let repo: Repo
 
@@ -44,8 +45,11 @@ const findRescheduleAction = (runtime: ReturnType<typeof setupRuntime>) =>
     action.context === ActionContextTypes.NORMAL_MODE,
   ) as ActionConfig<typeof ActionContextTypes.NORMAL_MODE>
 
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
-  h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  h = sharedDb
   repo = new Repo({
     db: h.db, cache: new BlockCache(), user: {id: 'user-1'},
     registerKernelProcessors: false,
@@ -53,7 +57,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  await h.cleanup()
+  repo.stopSyncObserver()
 })
 
 describe('reschedule action with SRS decorator', () => {

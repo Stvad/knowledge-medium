@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import {
   ChangeScope,
@@ -10,7 +10,7 @@ import {
 } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import { typesFacet } from '@/data/facets'
 import { resolveFacetRuntimeSync, type FacetRuntime } from '@/extensions/facet'
@@ -109,12 +109,16 @@ const TestBlockRenderer = ({block}: BlockRendererProps) => {
 }
 
 describe('BlockProperties component', () => {
+  let sharedDb: TestDb
   let h: TestDb
   let repo: Repo
   let runtime: FacetRuntime
+  beforeAll(async () => { sharedDb = await createTestDb() })
+  afterAll(async () => { await sharedDb.cleanup() })
 
   beforeEach(async () => {
-    h = await createTestDb()
+    await resetTestDb(sharedDb.db)
+    h = sharedDb
     let now = 1700_000_000_000
     let idSeq = 0
     let txSeq = 0
@@ -163,11 +167,11 @@ describe('BlockProperties component', () => {
     uiStateBlockRef.current = repo.block('ui-state')
   })
 
-  afterEach(async () => {
+  afterEach(() => {
     cleanup()
     repoRef.current = undefined
     uiStateBlockRef.current = undefined
-    await h.cleanup()
+    repo.stopSyncObserver()
   })
 
   it('keeps primitive value edits local until blur commits them', async () => {

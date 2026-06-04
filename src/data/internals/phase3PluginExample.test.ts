@@ -27,7 +27,7 @@
  * regression without adding a meaningless feature.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { createElement, type JSX } from 'react'
 import { resolveFacetRuntimeSync } from '@/extensions/facet'
@@ -40,7 +40,7 @@ import {
   type PropertyEditor,
 } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { kernelDataExtension } from '../kernelDataExtension'
 import {
   mutatorsFacet,
@@ -99,12 +99,16 @@ const tasksPluginExtension = [
 
 // ──── Test setup ────
 
+let sharedDb: TestDb
 let h: TestDb
 let cache: BlockCache
 let repo: Repo
 
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
-  h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  h = sharedDb
   cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   let idCursor = 0
@@ -127,7 +131,7 @@ beforeEach(async () => {
   )
 })
 
-afterEach(async () => { await h.cleanup() })
+afterEach(async () => { repo.stopSyncObserver() })
 
 // ──── End-to-end §12.1 wiring ────
 

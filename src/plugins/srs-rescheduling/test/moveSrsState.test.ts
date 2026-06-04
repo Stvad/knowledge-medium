@@ -1,12 +1,12 @@
 // @vitest-environment node
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, codecs, defineProperty } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { propertySchemasFacet } from '@/data/facets.js'
 import { Repo } from '@/data/repo'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { moveSrsState } from '../moveSrsState.ts'
@@ -91,11 +91,15 @@ const seedPlainBlock = async (
 }
 
 describe('moveSrsState', () => {
+  let sharedDb: TestDb
   let h: TestDb
   let repo: Repo
 
+  beforeAll(async () => { sharedDb = await createTestDb() })
+  afterAll(async () => { await sharedDb.cleanup() })
   beforeEach(async () => {
-    h = await createTestDb()
+    await resetTestDb(sharedDb.db)
+    h = sharedDb
     let txSeq = 0
     repo = new Repo({
       db: h.db,
@@ -115,7 +119,7 @@ describe('moveSrsState', () => {
   })
 
   afterEach(async () => {
-    await h.cleanup()
+    repo.stopSyncObserver()
   })
 
   const loadProps = async (id: string) => {

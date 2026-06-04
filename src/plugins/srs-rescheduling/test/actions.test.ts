@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { dailyNoteBlockId } from '@/plugins/daily-notes'
@@ -8,7 +8,7 @@ import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { typesProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { resolveFacetRuntimeSync } from '@/extensions/facet'
 import {
   formatRescheduleToastMessage,
@@ -29,11 +29,15 @@ import {
 const WORKSPACE = 'ws-1'
 const USER = 'user-1'
 
+let sharedDb: TestDb
 let h: TestDb
 let repo: Repo
 
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
-  h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  h = sharedDb
   let now = 1700_000_000_000
   let id = 0
   repo = new Repo({
@@ -54,7 +58,7 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.useRealTimers()
   vi.restoreAllMocks()
-  await h.cleanup()
+  repo.stopSyncObserver()
 })
 
 describe('rescheduleBlock', () => {
