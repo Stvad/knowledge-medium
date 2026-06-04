@@ -33,6 +33,7 @@ import { PowerSyncDatabase, Schema, WASQLiteOpenFactory, WASQLiteVFS } from '@po
 import { createPowerSyncConnector, hasRemoteSyncConfig } from '@/services/powersync.js'
 import { createSyncResolver } from '@/sync/keys/resolver.js'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore.js'
+import { seedModePinsFromWorkspaces } from '@/sync/keys/rolloutSeed.js'
 import {
   BLOCKS_SYNCED_RAW_TABLE,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
@@ -168,6 +169,16 @@ export const ensurePowerSyncReady = async (
     initPromises.set(userId, initPromise)
   }
   await initPromise
+
+  // §6 rollout pin-seed — run BEFORE db.connect() (below) so it only ever sees
+  // rows persisted on disk by a prior, pre-this-release session. Those predate
+  // e2ee existing at all, so trusting their server `encryption_mode` is safe by
+  // construction — none can be a downgraded e2ee workspace. A fresh device /
+  // profile has no on-disk workspaces here, so it seeds nothing and sends every
+  // later-synced workspace through the first-encounter gate instead of trusting
+  // a possibly-stale/downgraded server flag delivered after connect. Runs once
+  // (arePinsSeeded), for both remote and local-only sessions.
+  await seedModePinsFromWorkspaces(db, userId)
 
   if (!useRemoteSync) {
     return

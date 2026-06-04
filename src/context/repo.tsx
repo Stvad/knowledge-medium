@@ -7,7 +7,6 @@ import { useIsLocalOnly, useUser } from '@/components/Login'
 import { ensurePowerSyncReady, getPowerSyncDb } from '@/data/repoProvider'
 import { createSyncResolver } from '@/sync/keys/resolver.js'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore.js'
-import { seedModePinsFromWorkspaces } from '@/sync/keys/rolloutSeed.js'
 import { User } from '@/types.js'
 import { memoize } from 'lodash'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
@@ -20,13 +19,11 @@ import { surfaceProcessorRejectionFor } from '@/utils/processorRejectionToast.js
 // correctly keeps the contract honest.
 const initRepo = memoize(
   async (user: User, useRemoteSync: boolean): Promise<Repo> => {
+    // ensurePowerSyncReady runs the §6 rollout pin-seed between db.init() and
+    // db.connect(), so pins are settled (from pre-connect on-disk rows only)
+    // before the observer/gate read them below.
     await ensurePowerSyncReady(user.id, useRemoteSync)
     const db = getPowerSyncDb(user.id)
-    // §6 rollout pin-seed: pin pre-existing memberships from the server flag
-    // ONCE, before the observer/gate read pins, so established devices keep
-    // materializing plaintext workspaces (which would otherwise read as
-    // unpinned → deferred/quarantined).
-    await seedModePinsFromWorkspaces(db, user.id)
     // §6 mode/key resolver — shared store + pins drive both the observer
     // (decrypt/copy/defer) and (via the connector) encrypt-on-upload.
     const resolver = createSyncResolver(() => user.id, getWorkspaceKeyStore())

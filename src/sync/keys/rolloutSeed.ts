@@ -11,11 +11,15 @@
  * seed (seedModePinsOnce + arePinsSeeded enforce the once-only marker in
  * wipe-surviving localStorage).
  *
- * Reads the LOCAL `workspaces` table, so on an established device every synced
- * membership is already present and gets pinned before the observer/gate read
- * pins. A genuinely-fresh device seeds whatever has synced so far (often
- * nothing) and the rest take the gate — the accepted "one resolution step per
- * workspace per new device" cost.
+ * SAFETY rests on WHEN this runs: the caller invokes it AFTER `db.init()` but
+ * BEFORE `db.connect()`, so the `workspaces` table holds ONLY rows persisted on
+ * disk by a prior, pre-this-release session. Those predate e2ee existing at all,
+ * so a row's `encryption_mode` can't be a downgraded e2ee workspace — trusting
+ * it is safe by construction. A fresh device / profile has no on-disk rows here,
+ * so it seeds nothing and marks-seeded; every workspace that syncs in afterward
+ * (including any e2ee one a hostile server flags `none`) takes the
+ * first-encounter gate, never this server-trusting path. This is what limits the
+ * seed to the genuine rollout cohort without a separate cohort signal.
  */
 
 import { arePinsSeeded, seedModePinsOnce, type SeedEntry } from './modePin.js'
