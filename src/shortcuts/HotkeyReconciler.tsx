@@ -19,7 +19,7 @@ import {
   getEffectiveActions,
 } from './effectiveActions.ts'
 import { keybindingOverridesFacet } from './keybindingOverrides.ts'
-import { compareContexts, computeInstallableContexts, resolveDeps } from './resolve.ts'
+import { computeInstallableContexts, resolve, resolveDeps } from './resolve.ts'
 import {
   ActionConfig,
   ActionContextConfig,
@@ -284,20 +284,23 @@ export function HotkeyReconciler(): null {
       // already advanced above, matching tinykeys' per-listener behaviour.
       if (!shouldHandleEvent(event, active, contextConfigsByType)) return
 
-      // Order best-first via the shared comparator, then dispatch the single
-      // winner: the first candidate that is still dispatchable. A candidate is
-      // skipped (try the next) when its context deactivated / got shadowed
-      // between matcher install and this event (deps null), or when its
-      // explicit canDispatch gate declines. PR 2 adds a third skip: a handler
-      // returning the not-handled sentinel.
-      const ordered = completed.slice().sort((a, b) =>
-        compareContexts(a.action.context, b.action.context, {active, contextConfigsByType}),
+      // Order + filter through the shared resolver (modal shadowing + the
+      // precedence comparator), so the keyboard path can't diverge from the
+      // imperative one. resolve drops candidates whose context deactivated or
+      // got shadowed between matcher install and this event (filter-before-
+      // sort), then orders best-first. Dispatch the single winner: the first
+      // candidate whose deps resolve and whose canDispatch gate doesn't
+      // decline. PR 2 adds a third skip: a handler returning the not-handled
+      // sentinel.
+      const bindings = new Map<ActionConfig, ShortcutBindingDefaults>(
+        completed.map(c => [c.action, c.binding]),
       )
-      for (const {action, binding} of ordered) {
-        const deps = getInstallableContextDeps(action, active, contextConfigsByType)
+      const ordered = resolve([...bindings.keys()], {active, contextConfigsByType}, {kind: 'keyboard'})
+      for (const action of ordered) {
+        const deps = resolveDeps(action, active, contextConfigsByType)
         if (!deps) continue
         if (action.canDispatch && !action.canDispatch(deps)) continue
-        applyEventOptions(event, action, binding, contextConfigsByType)
+        applyEventOptions(event, action, bindings.get(action)!, contextConfigsByType)
         try {
           void Promise.resolve(action.handler(deps, event, dispatchRef.current)).catch(error => {
             console.error(`[HotkeyReconciler] Action ${action.id} rejected`, error)

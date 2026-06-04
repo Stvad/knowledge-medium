@@ -8,10 +8,11 @@
  * `resolve` ORDERS candidates; it does not MATCH chords. Keyboard chord
  * matching (including tinykeys sequence state for `g g`) stays in the
  * coordinator, which feeds `resolve` the candidates that have already
- * completed a match this event. The `ChordDescriptor` trigger is read as
- * "the chord that just completed" — carried for dedup/logging, never used
- * to match here. Reducing a keydown to one descriptor and matching on it
- * is exactly how sequence chords went dead historically.
+ * completed a match this event (a `'keyboard'` trigger). Reducing a keydown
+ * to one descriptor and matching on it here is exactly how sequence chords
+ * went dead historically, so resolve never sees the chord — only the
+ * already-matched candidate set, which it filters (modal shadowing) and
+ * orders.
  */
 import {
   ActionContextTypes,
@@ -22,11 +23,21 @@ import {
   type Priority,
 } from '@/shortcuts/types.js'
 import type { ActiveContextsMap } from './ActiveContexts.tsx'
-import type { ChordDescriptor } from './canonicalizeChord.ts'
 
+/**
+ * What's being resolved. The kind selects the install-filter policy:
+ *  - `'action'` — imperative lookup by id (runActionById / useRunAction).
+ *    Modal shadowing is NOT applied; an action is found in any active context.
+ *  - `'keyboard'` — the coordinator's already-matched candidate set for a
+ *    chord. Modal shadowing IS applied (the keyboard gather filter).
+ * Phase 3 will extend the keyboard arm with a normalized pointer/touch
+ * descriptor when a caller actually constructs one (see `ChordDescriptor`,
+ * whose `kind` field stays open for that); resolve doesn't need the chord
+ * itself, only the policy + the candidate set.
+ */
 export type Trigger =
   | { kind: 'action'; actionId: string }
-  | ChordDescriptor // keyboard now; mouse/touch descriptors in Phase 3
+  | { kind: 'keyboard' }
 
 /** Everything the comparator needs that isn't on the `ActionConfig`. */
 export interface ResolutionContext {
@@ -61,6 +72,13 @@ const PRIORITY_RANK: Record<Priority, number> = {low: 0, default: 1, high: 2}
 
 // Primary tier: an active `modal` outranks `global`, `global` outranks the
 // rest. Ordered ascending so a larger number wins.
+//
+// `TIER_MODAL > TIER_GLOBAL` bakes in the modal-over-global default, which is
+// still an OPEN ledger item ("global vs active modal on the same chord —
+// needs explicit sign-off"; see docs/action-system-implementation-plan.html).
+// It's currently moot — nothing binds a global chord that an active modal
+// also claims (e.g. no global Escape) — but if that decision reverses, this
+// is the one line to change, and it routes through the single comparator.
 const TIER_SCOPED = 0
 const TIER_GLOBAL = 1
 const TIER_MODAL = 2

@@ -46,7 +46,7 @@ const action = (id: string, context: ActionContextType): ActionConfig => ({
   handler: () => {},
 })
 
-const KEY = {kind: 'key', key: 'x', mods: [], phase: 'keydown'} as const
+const KEY = {kind: 'keyboard'} as const
 
 describe('resolve precedence', () => {
   it('higher-priority context wins a collision even when activated earlier', () => {

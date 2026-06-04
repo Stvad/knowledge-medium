@@ -5,10 +5,14 @@ import {
   actionsFacet,
 } from '@/extensions/core.js'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
-import { getEffectiveActions } from '@/shortcuts/effectiveActions.js'
+import { getActiveActionById, getEffectiveActions } from '@/shortcuts/effectiveActions.js'
+import type { ResolutionContext } from '@/shortcuts/resolve.js'
 import {
   ActionConfig,
+  type ActionContextConfig,
+  type ActionContextType,
   ActionContextTypes,
+  type BaseShortcutDependencies,
   type BlockShortcutDependencies,
 } from '@/shortcuts/types.js'
 
@@ -197,5 +201,37 @@ describe('getEffectiveActions', () => {
       'Base action',
       'Decorated edit action',
     ])
+  })
+})
+
+describe('getActiveActionById', () => {
+  const cfg = (type: ActionContextType): ActionContextConfig => ({
+    type,
+    displayName: type,
+    validateDependencies: (d): d is BaseShortcutDependencies =>
+      typeof d === 'object' && d !== null,
+  })
+
+  it('resolves a global-vs-scoped id collision to global (reserved top tier)', () => {
+    // Behaviour change vs the old reverse-activation lookup: when the same id
+    // is registered in both global and a more-recently-activated scoped
+    // context (e.g. undo/redo in global + vim normal-mode), the imperative
+    // path (runActionById / useRunAction) now resolves to global rather than
+    // to the newer scoped context. Recency alone would have picked NORMAL_MODE.
+    const globalUndo = baseAction({id: 'undo', context: ActionContextTypes.GLOBAL})
+    const scopedUndo = baseAction({id: 'undo', context: ActionContextTypes.NORMAL_MODE})
+    const ctx: ResolutionContext = {
+      active: new Map<ActionContextType, BaseShortcutDependencies>([
+        [ActionContextTypes.GLOBAL, {} as BaseShortcutDependencies],
+        [ActionContextTypes.NORMAL_MODE, {} as BaseShortcutDependencies],
+      ]),
+      contextConfigsByType: new Map([
+        [ActionContextTypes.GLOBAL, cfg(ActionContextTypes.GLOBAL)],
+        [ActionContextTypes.NORMAL_MODE, cfg(ActionContextTypes.NORMAL_MODE)],
+      ]),
+    }
+
+    expect(getActiveActionById([globalUndo, scopedUndo], ctx, 'undo')?.context)
+      .toBe(ActionContextTypes.GLOBAL)
   })
 })
