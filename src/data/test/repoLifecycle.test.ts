@@ -90,19 +90,17 @@ describe('repo.setReadOnly', () => {
     expect(env.repo.isReadOnly).toBe(false)
   })
 
-  it('respects opts.isReadOnly at construction', async () => {
-    const h = await createTestDb()
-    try {
-      const repo = new Repo({
-        db: h.db,
-        cache: new BlockCache(),
-        user: {id: 'u'},
-        isReadOnly: true,
-      })
-      expect(repo.isReadOnly).toBe(true)
-    } finally {
-      await h.cleanup()
-    }
+  it('respects opts.isReadOnly at construction', () => {
+    // Construction-only assertion — no DB I/O — so it rides the shared DB
+    // with the observer off rather than opening its own harness.
+    const repo = new Repo({
+      db: sharedDb.db,
+      cache: new BlockCache(),
+      user: {id: 'u'},
+      isReadOnly: true,
+      startSyncObserver: false,
+    })
+    expect(repo.isReadOnly).toBe(true)
   })
 })
 
