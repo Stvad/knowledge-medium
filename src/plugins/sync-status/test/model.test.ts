@@ -79,6 +79,67 @@ describe('getSyncIndicatorView', () => {
     expect(view.pendingLabel).toBe('2')
   })
 
+  describe('materializing backlog (Layout B observer catch-up)', () => {
+    // Rows can be downloaded into the `blocks_synced` staging table but not yet
+    // applied to the app-visible `blocks` table — a large initial sync drains in
+    // bounded windows. While that backlog is non-zero the content isn't on
+    // screen yet, so "Synced"/"Offline" would misreport; surface a catch-up.
+
+    it('shows a processing state with the remaining count', () => {
+      const view = getSyncIndicatorView({
+        ...baseInput,
+        materializingChanges: 12_340,
+      })
+
+      expect(view.state).toBe('materializing')
+      expect(view.label).toBe('Processing')
+      expect(view.spinning).toBe(true)
+      expect(view.title).toContain('12340 blocks')
+    })
+
+    it('outranks the synced chip — downloaded data that is not applied is not "done"', () => {
+      const view = getSyncIndicatorView({
+        ...baseInput,
+        hasSynced: true,
+        materializingChanges: 5,
+      })
+
+      expect(view.state).toBe('materializing')
+    })
+
+    it('surfaces over offline so a disconnected backlog is still visible', () => {
+      const view = getSyncIndicatorView({
+        ...baseInput,
+        connected: false,
+        hasSynced: true,
+        materializingChanges: 500,
+      })
+
+      expect(view.state).toBe('materializing')
+    })
+
+    it('yields to an active download (its percentage is the leading progress)', () => {
+      const view = getSyncIndicatorView({
+        ...baseInput,
+        downloading: true,
+        downloadFraction: 0.4,
+        materializingChanges: 9_000,
+      })
+
+      expect(view.state).toBe('downloading')
+    })
+
+    it('yields to a hard error', () => {
+      const view = getSyncIndicatorView({
+        ...baseInput,
+        errorMessage: 'JWT expired',
+        materializingChanges: 9_000,
+      })
+
+      expect(view.state).toBe('error')
+    })
+  })
+
   describe('quarantined / rejected changes', () => {
     // When the bucket is otherwise drained, a green "Synced" check
     // misrepresents the state of the data: the server refused some

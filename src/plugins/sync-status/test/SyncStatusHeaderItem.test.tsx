@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SyncStatusHeaderItem } from '../SyncStatusHeaderItem.tsx'
 import {
+  materializeQueueCountSql,
   uploadQueueCountCap,
   uploadQueueExactCountSql,
   uploadQueuePreviewCountSql,
@@ -121,6 +122,39 @@ describe('SyncStatusHeaderItem', () => {
 
     expect(await screen.findByText('1,032,688 blocks changed, stored locally')).toBeInTheDocument()
     expect(mocks.queryCalls.some(call => call.sql === uploadQueueExactCountSql)).toBe(true)
+  })
+
+  it('surfaces the materialization backlog as a processing state with a count', async () => {
+    // No pending uploads — just a staged backlog the observer hasn't applied yet.
+    mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
+    mocks.queryResponses.set(materializeQueueCountSql, {data: [{count: 12_340}]})
+
+    render(<SyncStatusHeaderItem/>)
+
+    const button = screen.getByRole('button')
+    expect(button.getAttribute('aria-label')).toContain('Applying 12340 blocks of synced data')
+
+    fireEvent.pointerDown(button)
+    expect(await screen.findByText('12,340 blocks')).toBeInTheDocument()
+  })
+
+  it('shows the materializing state over a pending upload backlog (content is still missing)', () => {
+    // Default mock has a capped (1000+) pending-upload count → would be "pending";
+    // an unapplied staged backlog is the more important signal.
+    mocks.queryResponses.set(materializeQueueCountSql, {data: [{count: 5}]})
+
+    render(<SyncStatusHeaderItem/>)
+
+    expect(screen.getByRole('button').getAttribute('aria-label'))
+      .toContain('Applying 5 blocks of synced data')
+  })
+
+  it('does not watch the materialization queue for the local-only header state', () => {
+    mocks.localOnly = true
+
+    render(<SyncStatusHeaderItem/>)
+
+    expect(mocks.queryCalls.some(call => call.sql === materializeQueueCountSql)).toBe(false)
   })
 
   it('shows a calm "offline" state instead of the websocket error when the device is offline', () => {
