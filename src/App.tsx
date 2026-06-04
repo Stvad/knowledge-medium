@@ -42,6 +42,10 @@ import {
 import { keyAtEnd } from '@/data/orderKey.js'
 import { ChangeScope } from '@/data/api'
 import { hasSafeModeSearchParam } from '@/utils/safeMode.js'
+import { getModePin, setModePin } from '@/sync/keys/modePin.js'
+import { getWorkspaceKeyStore } from '@/sync/keys/keyStore.js'
+import { resolveWorkspaceAccess } from '@/sync/keys/workspaceAccess.js'
+import { WorkspaceKeyGate } from '@/components/workspace/WorkspaceKeyGate.js'
 
 // Resolved-workspace bundle. `freshlyCreated` is true only when this run
 // inserted a brand-new personal workspace via ensure_personal_workspace;
@@ -54,10 +58,19 @@ interface ResolvedWorkspace {
   freshlyCreated: boolean
 }
 
-interface InitialLayout {
-  workspaceId: string
-  layoutSessionBlock: Block
-}
+// `ready`: the workspace materialized and bootstrapped normally. `locked`: the
+// §6 gate intercepted before any bootstrap write — the workspace is e2ee
+// without its key, or never-pinned (quarantine) — and App renders the
+// WorkspaceKeyGate instead of the layout.
+type InitialLayout =
+  | {kind: 'ready'; workspaceId: string; layoutSessionBlock: Block}
+  | {
+      kind: 'locked'
+      workspaceId: string
+      workspaceName: string | null
+      reason: 'key-required' | 'quarantine'
+      canary: string | null
+    }
 
 interface HashSnapshot {
   hash: string
@@ -129,6 +142,10 @@ const resolveWorkspace = async (
     // leave two membership rows in local sqlite, since the raw table has
     // no (workspace_id, user_id) UNIQUE constraint.
     await primeLocalWorkspaceAndMember(repo, result.workspace, result.member)
+    // A workspace WE just created is plaintext-confirmed (§8.1) — pin it so the
+    // §6 gate never quarantines it. An already-existing personal workspace
+    // (inserted=false) is left for the seed/gate to resolve.
+    if (result.inserted) setModePin(repo.user.id, result.workspace.id, 'plaintext')
     return {id: result.workspace.id, freshlyCreated: result.inserted}
   }
 
@@ -140,6 +157,9 @@ const resolveWorkspace = async (
   // workspace + owner membership locally so the rest of bootstrap
   // (seedTutorial, daily note, Tutorial bullet) can run unchanged.
   const local = await ensureLocalPersonalWorkspace(repo)
+  // Same plaintext-confirm as the remote path (§8.1) so the gate stays out of
+  // the way in local-only mode.
+  if (local.inserted) setModePin(repo.user.id, local.workspace.id, 'plaintext')
   return {id: local.workspace.id, freshlyCreated: local.inserted}
 }
 
@@ -219,6 +239,36 @@ const resolveInitialLayout = async (
 
   rememberWorkspace(workspaceId)
 
+  // §6 rule 3 access gate. Resolve whether this workspace can be materialized
+  // for us right now BEFORE any bootstrap write below — those writes (daily
+  // note, properties/types/recents pages, ui-state) would otherwise write
+  // plaintext into an encrypted-but-locked workspace. If it can't, return a
+  // `locked` layout and App renders the WorkspaceKeyGate. Safe because the
+  // rollout seed has already pinned pre-existing plaintext workspaces, so only
+  // genuinely locked/never-pinned workspaces land here.
+  const pin = getModePin(repo.user.id, workspaceId)
+  const gateWorkspace = await getLocalWorkspace(repo, workspaceId)
+  // Only gate when we actually know something: a durable pin (authoritative even
+  // without the row) or a synced local row (real server flag). If both are
+  // absent the workspace simply hasn't replicated yet — proceed and let blocks
+  // poll in, matching pre-e2ee behavior. This avoids mis-quarantining (and
+  // worse, offering plaintext-confirm for) an e2ee workspace whose row hasn't
+  // arrived, which would default its encryption_mode to 'none'.
+  if (pin !== null || gateWorkspace !== null) {
+    const hasKey = (await getWorkspaceKeyStore().get(repo.user.id, workspaceId)) !== null
+    const access = resolveWorkspaceAccess(pin, gateWorkspace?.encryptionMode ?? 'none', hasKey)
+    if (access.kind === 'locked') {
+      repo.setReadOnly(true)
+      return {
+        kind: 'locked',
+        workspaceId,
+        workspaceName: gateWorkspace?.name ?? null,
+        reason: access.reason,
+        canary: gateWorkspace?.wkCanary ?? null,
+      }
+    }
+  }
+
   // Freshly inserted personal workspace: install the starter tutorial
   // as its own parent-less page. The [[Tutorial]] bullet on today's
   // daily note (added below) makes it discoverable from the landing
@@ -285,7 +335,7 @@ const resolveInitialLayout = async (
     }
   }
 
-  return {workspaceId, layoutSessionBlock}
+  return {kind: 'ready', workspaceId, layoutSessionBlock}
 }
 
 const initialLayoutCacheKey = (
@@ -340,11 +390,15 @@ const App = () => {
   const localOnly = useIsLocalOnly()
   const useRemoteSync = hasRemoteSyncConfig && !localOnly
 
-  const {workspaceId: activeWorkspaceId, layoutSessionBlock} = use(
+  const initial = use(
     getInitialLayout(repo, hashSnapshot.hash, useRemoteSync, hashSnapshot.version),
   )
+  const activeWorkspaceId = initial.workspaceId
+  // null while the workspace is locked (gate shown) — there's no layout yet.
+  const layoutSessionBlock = initial.kind === 'ready' ? initial.layoutSessionBlock : null
 
   useEffect(() => {
+    if (!layoutSessionBlock) return
     const projection = new PanelLayoutProjection({
       repo,
       workspaceId: activeWorkspaceId,
@@ -389,10 +443,28 @@ const App = () => {
     repo.setReadOnly(activeRole === 'viewer')
   }, [activeRole, repo])
 
+  if (initial.kind === 'locked') {
+    return (
+      <WorkspaceKeyGate
+        userId={repo.user.id}
+        workspaceId={initial.workspaceId}
+        workspaceName={initial.workspaceName ?? undefined}
+        reason={initial.reason}
+        canary={initial.canary}
+        onResolved={() => {
+          // Now materializable — re-drain its staged rows and re-resolve the
+          // layout (bumping the version busts the initial-layout cache).
+          void repo.drainSyncWorkspace(initial.workspaceId)
+          setHashSnapshot(current => ({hash: current.hash, version: current.version + 1}))
+        }}
+      />
+    )
+  }
+
   return (
     <BlockContextProvider initialValue={{layoutBoundary: true, safeMode}}>
       <AppRuntimeProvider safeMode={safeMode}>
-        <BlockComponent blockId={layoutSessionBlock.id}/>
+        <BlockComponent blockId={initial.layoutSessionBlock.id}/>
       </AppRuntimeProvider>
     </BlockContextProvider>
   )

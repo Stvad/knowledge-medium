@@ -88,7 +88,7 @@ import {
   type BlocksSyncedObserver,
   type BlocksSyncedObserverArgs,
 } from '@/sync/observer/observer'
-import type { Materializability } from '@/sync/observer/materialize'
+import type { Materializability, MaterializeDeps } from '@/sync/observer/materialize'
 import {
   CLEAR_REPROJECT_REF_MARKER_SQL,
   RECORD_REPROJECT_REF_MARKER_SQL,
@@ -351,6 +351,12 @@ export interface RepoOptions {
   startSyncObserver?: boolean
   /** Options forwarded to the sync observer when started. */
   syncObserverOptions?: SyncObserverOptions
+  /** Layout B materialization deps — the §6 mode/key resolver (getCek +
+   *  getMaterializability). Production (initRepo) passes the real resolver so
+   *  e2ee rows decrypt, plaintext copies through, and locked/unpinned
+   *  workspaces defer. Omitted in tests, which fall back to the plaintext
+   *  copy-through stub below (no key). */
+  syncObserverDeps?: MaterializeDeps
 }
 
 /** Repo-level knobs for the Layout B sync observer. `db` / `cache` /
@@ -618,6 +624,8 @@ export class Repo {
    *  created on first start, replaced on subsequent starts. Tests can
    *  `dispose()` and re-`start` for deterministic flushing. */
   private syncObserver: BlocksSyncedObserver | null = null
+  /** §6 mode/key resolver for the observer (undefined ⇒ plaintext stub). */
+  private readonly syncObserverDeps?: MaterializeDeps
   /** Backing field for `activeWorkspaceId` (see getter/setter below). */
   private _activeWorkspaceId: string | null = null
   /** Instance discriminator for memoization keys that need to vary
@@ -748,6 +756,7 @@ export class Repo {
     // route through it). The wrapper has the same shape, so existing
     // type contracts hold.
     this.db = wrapDbWithMetrics(opts.db, this.dbMetrics) as PowerSyncDb
+    this.syncObserverDeps = opts.syncObserverDeps
     this.cache = opts.cache
     this.user = opts.user
     this.isReadOnly = opts.isReadOnly ?? false
@@ -838,11 +847,11 @@ export class Repo {
       db: this.db,
       cache: this.cache,
       handleStore: this.handleStore,
-      // No e2ee workspaces exist until e2ee creation ships (gated on the
-      // full deploy), so every downloaded row is plaintext → copy-through
-      // with no key. The §6 mode-pin resolver + IndexedDB key-store bridge
-      // replace these baked-in plaintext defaults when e2ee lands.
-      deps: { getMaterializability: (): Materializability => 'copy', getCek: async () => null },
+      // Production passes the §6 mode/key resolver (initRepo). Tests omit it
+      // and fall back to plaintext copy-through with no key — the historical
+      // behavior, so non-e2ee tests are unaffected.
+      deps: this.syncObserverDeps
+        ?? { getMaterializability: (): Materializability => 'copy', getCek: async () => null },
       getInvalidationRules: () => this.invalidationRules,
       onCycleDetected: options?.onCycleDetected,
       throttleMs: options?.throttleMs,
@@ -866,6 +875,13 @@ export class Repo {
    *  barrier (awaits every drain enqueued before it). */
   async flushSyncObserver(): Promise<void> {
     if (this.syncObserver) await this.syncObserver.flush()
+  }
+
+  /** Re-materialize a workspace's staged `blocks_synced` rows after it becomes
+   *  materializable (WK pasted / plaintext confirmed via the §8.2 gate). No-op
+   *  if the observer isn't running. */
+  async drainSyncWorkspace(workspaceId: string): Promise<void> {
+    if (this.syncObserver) await this.syncObserver.drainWorkspace(workspaceId)
   }
 
   /** Frozen snapshot of internal data-layer counters + timings

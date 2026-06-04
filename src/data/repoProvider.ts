@@ -31,6 +31,8 @@
 
 import { PowerSyncDatabase, Schema, WASQLiteOpenFactory, WASQLiteVFS } from '@powersync/web'
 import { createPowerSyncConnector, hasRemoteSyncConfig } from '@/services/powersync.js'
+import { createSyncResolver } from '@/sync/keys/resolver.js'
+import { getWorkspaceKeyStore } from '@/sync/keys/keyStore.js'
 import {
   BLOCKS_SYNCED_RAW_TABLE,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
@@ -189,7 +191,14 @@ export const ensurePowerSyncReady = async (
           await previousDb.disconnect()
         }
       }
-      await db.connect(createPowerSyncConnector())
+      // Encrypt-on-upload (§9.2): bind the connector's mode/key lookups to this
+      // user's mode pins + shared workspace-key store. Plaintext workspaces
+      // resolve mode 'none' (no-op); e2ee workspaces seal content columns.
+      const resolver = createSyncResolver(() => userId, getWorkspaceKeyStore())
+      await db.connect(createPowerSyncConnector({
+        getWorkspaceMode: resolver.getMode,
+        getCek: resolver.getCek,
+      }))
     })
     .catch((error) => {
       console.error(`PowerSync background connect failed for ${userId}:`, error)
