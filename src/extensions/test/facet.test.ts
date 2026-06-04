@@ -77,3 +77,95 @@ describe('facet runtime', () => {
     }
   })
 })
+
+// The runtime-mutation path (setRuntimeContributions + onFacetChange) backs
+// every live service effect — keybinding overrides, theme registry, user
+// schemas/types. It had no direct coverage; a regression silently breaks
+// reactive facet updates across the app.
+describe('FacetRuntime runtime contributions', () => {
+  const labelsFacet = defineFacet<string, string>({
+    id: 'test.runtime-labels',
+    combine: values => values.join(','),
+    empty: () => '',
+  })
+
+  it('merges a runtime bucket with static contributions and reflects it in read', () => {
+    const runtime = resolveFacetRuntimeSync([labelsFacet.of('static')])
+    expect(runtime.read(labelsFacet)).toBe('static')
+
+    runtime.setRuntimeContributions(labelsFacet, 'svc', ['live-a', 'live-b'])
+    expect(runtime.read(labelsFacet)).toBe('static,live-a,live-b')
+  })
+
+  it('replaces (does not append to) a bucket on a second call for the same source', () => {
+    const runtime = resolveFacetRuntimeSync([])
+    runtime.setRuntimeContributions(labelsFacet, 'svc', ['first'])
+    runtime.setRuntimeContributions(labelsFacet, 'svc', ['second'])
+    expect(runtime.read(labelsFacet)).toBe('second')
+  })
+
+  it('removes the bucket when given an empty array (falls back to static/empty)', () => {
+    const runtime = resolveFacetRuntimeSync([labelsFacet.of('static')])
+    runtime.setRuntimeContributions(labelsFacet, 'svc', ['live'])
+    expect(runtime.read(labelsFacet)).toBe('static,live')
+
+    runtime.setRuntimeContributions(labelsFacet, 'svc', [])
+    expect(runtime.read(labelsFacet)).toBe('static')
+  })
+
+  it('fires onFacetChange once per setRuntimeContributions on that facet', () => {
+    const runtime = resolveFacetRuntimeSync([])
+    const fired = vi.fn()
+    runtime.onFacetChange(labelsFacet.id, fired)
+
+    runtime.setRuntimeContributions(labelsFacet, 'svc', ['a'])
+    runtime.setRuntimeContributions(labelsFacet, 'svc', ['b'])
+    expect(fired).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not fire listeners registered for a different facet', () => {
+    const otherFacet = defineFacet<string, string>({
+      id: 'test.runtime-other',
+      combine: values => values.join(','),
+      empty: () => '',
+    })
+    const runtime = resolveFacetRuntimeSync([])
+    const onLabels = vi.fn()
+    const onOther = vi.fn()
+    runtime.onFacetChange(labelsFacet.id, onLabels)
+    runtime.onFacetChange(otherFacet.id, onOther)
+
+    runtime.setRuntimeContributions(labelsFacet, 'svc', ['a'])
+    expect(onLabels).toHaveBeenCalledTimes(1)
+    expect(onOther).not.toHaveBeenCalled()
+  })
+
+  it('stops notifying after unsubscribe', () => {
+    const runtime = resolveFacetRuntimeSync([])
+    const fired = vi.fn()
+    const unsubscribe = runtime.onFacetChange(labelsFacet.id, fired)
+
+    runtime.setRuntimeContributions(labelsFacet, 'svc', ['a'])
+    unsubscribe()
+    runtime.setRuntimeContributions(labelsFacet, 'svc', ['b'])
+    expect(fired).toHaveBeenCalledTimes(1)
+  })
+
+  it('isolates a throwing listener so others still run', () => {
+    const runtime = resolveFacetRuntimeSync([])
+    const boom = vi.fn(() => { throw new Error('listener boom') })
+    const ok = vi.fn()
+    runtime.onFacetChange(labelsFacet.id, boom)
+    runtime.onFacetChange(labelsFacet.id, ok)
+
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      runtime.setRuntimeContributions(labelsFacet, 'svc', ['a'])
+      expect(boom).toHaveBeenCalledTimes(1)
+      expect(ok).toHaveBeenCalledTimes(1)
+      expect(error).toHaveBeenCalled()
+    } finally {
+      error.mockRestore()
+    }
+  })
+})

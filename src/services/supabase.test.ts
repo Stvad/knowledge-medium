@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { Session } from '@supabase/supabase-js'
 
 // readPersistedSession is the load-bearing piece of the offline-boot fix:
 // it recovers the last Supabase session straight from storage so the app
@@ -97,5 +98,41 @@ describe('isAuthCallbackUrl', () => {
 
     window.localStorage.setItem(`${storageKey}-code-verifier`, 'verifier')
     expect(await check('/?code=xyz')).toBe(true)
+  })
+})
+
+// sessionUserToAppUser drives the display name shown across the app. Its
+// getUserName helper is a 4-step fallback chain (metadata name -> email ->
+// "Anonymous" -> short id label) that had no coverage; a regression here
+// shows a wrong/blank name for whole user classes (anonymous, name-less).
+describe('sessionUserToAppUser display-name fallback', () => {
+  const appUser = async (user: Record<string, unknown>) => {
+    const {sessionUserToAppUser} = await import('./supabase.ts')
+    return sessionUserToAppUser({user} as unknown as Session)
+  }
+
+  it('prefers a trimmed user_metadata.name over email', async () => {
+    const u = await appUser({id: 'u1', user_metadata: {name: '  Alice  '}, email: 'a@b.co'})
+    expect(u.name).toBe('Alice')
+  })
+
+  it('falls back to email when the metadata name is blank/whitespace', async () => {
+    const u = await appUser({id: 'u1', user_metadata: {name: '   '}, email: 'a@b.co'})
+    expect(u.name).toBe('a@b.co')
+  })
+
+  it('labels anonymous users when there is no name or email', async () => {
+    const u = await appUser({id: 'u1', is_anonymous: true})
+    expect(u.name).toBe('Anonymous')
+  })
+
+  it('falls back to a short user-id label as the last resort', async () => {
+    const u = await appUser({id: 'abcdef0123456789'})
+    expect(u.name).toBe('User abcdef01')
+  })
+
+  it('carries the user id through unchanged', async () => {
+    const u = await appUser({id: 'u-42', email: 'a@b.co'})
+    expect(u.id).toBe('u-42')
   })
 })

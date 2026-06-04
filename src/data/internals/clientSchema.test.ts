@@ -959,3 +959,59 @@ describe('runAnalyzeIfDue', () => {
     expect(recordedAt()).toBe(refreshAt)
   })
 })
+
+// The block_types side-index backs byType / typedBlocks — among the most
+// subscribed queries in the app — yet (unlike block_aliases / blocks_fts)
+// its three maintenance triggers had no dedicated coverage. A silent
+// regression here corrupts every typed-block result with nothing catching
+// it.
+describe('block_types side-index triggers', () => {
+  const types = (): Array<{block_id: string; workspace_id: string; type: string}> =>
+    h.db
+      .prepare('SELECT block_id, workspace_id, type FROM block_types ORDER BY block_id, type')
+      .all() as unknown as Array<{block_id: string; workspace_id: string; type: string}>
+
+  const withTypes = (...t: unknown[]) => JSON.stringify({types: t})
+
+  it('insert: indexes every text entry in properties_json.$.types', () => {
+    h.insertBlock({id: 'b1', workspace_id: 'ws1', properties_json: withTypes('todo', 'project')})
+    expect(types()).toEqual([
+      {block_id: 'b1', workspace_id: 'ws1', type: 'project'},
+      {block_id: 'b1', workspace_id: 'ws1', type: 'todo'},
+    ])
+  })
+
+  it('insert: ignores non-text entries and skips soft-deleted rows', () => {
+    h.insertBlock({id: 'b1', properties_json: withTypes('todo', 42, null)})
+    expect(types().map(t => t.type)).toEqual(['todo'])
+
+    h.insertBlock({id: 'b2', deleted: 1, properties_json: withTypes('todo')})
+    expect(types().filter(t => t.block_id === 'b2')).toEqual([])
+  })
+
+  it('update: re-derives the whole type set when properties_json changes', () => {
+    h.insertBlock({id: 'b1', properties_json: withTypes('todo')})
+    h.updateBlock('b1', {properties_json: withTypes('project', 'area')})
+    expect(types().map(t => t.type)).toEqual(['area', 'project'])
+  })
+
+  it('update: a soft-delete removes the type rows', () => {
+    h.insertBlock({id: 'b1', properties_json: withTypes('todo')})
+    expect(types()).toHaveLength(1)
+    h.updateBlock('b1', {deleted: 1})
+    expect(types()).toEqual([])
+  })
+
+  it('update: a workspace move re-homes the type rows', () => {
+    h.insertBlock({id: 'b1', workspace_id: 'ws1', properties_json: withTypes('todo')})
+    h.updateBlock('b1', {workspace_id: 'ws2'})
+    expect(types()).toEqual([{block_id: 'b1', workspace_id: 'ws2', type: 'todo'}])
+  })
+
+  it('delete: removes the type rows', () => {
+    h.insertBlock({id: 'b1', properties_json: withTypes('todo', 'project')})
+    expect(types()).toHaveLength(2)
+    h.deleteBlock('b1')
+    expect(types()).toEqual([])
+  })
+})

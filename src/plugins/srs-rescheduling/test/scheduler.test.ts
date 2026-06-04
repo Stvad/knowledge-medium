@@ -61,4 +61,41 @@ describe('SRS scheduler', () => {
     expect(estimateSrsIntervalDays(params, SrsSignal.GOOD)).toBe(10)
     expect(estimateSrsIntervalDays(params, SrsSignal.EASY)).toBe(10)
   })
+
+  it('EASY raises the ease factor above GOOD for the same card (SM-2.5 core)', () => {
+    // GOOD and EASY produce the same next interval (interval * factor),
+    // so the only thing separating them is the ease bump EASY applies.
+    // If that bump regressed to 0 the two signals would be identical and
+    // the estimate-interval test above would still pass — this pins the
+    // distinction.
+    const params = {interval: 4, factor: 2.5}
+    const good = getNewSrsParametersFromValues(params, SrsSignal.GOOD, noJitter)
+    const easy = getNewSrsParametersFromValues(params, SrsSignal.EASY, noJitter)
+
+    expect(good.factor).toBe(2.5)
+    expect(easy.factor).toBeCloseTo(2.65) // +0.15 FACTOR_MODIFIER
+    expect(easy.factor).toBeGreaterThan(good.factor)
+    expect(easy.interval).toBeCloseTo(good.interval) // same interval growth
+  })
+
+  it('clamps the ease factor to the 1.3 floor on HARD, not just AGAIN', () => {
+    // factor 1.4 - 0.15 = 1.25, below the MIN_FACTOR floor → clamps to 1.3.
+    const out = getNewSrsParametersFromValues(
+      {interval: 5, factor: 1.4},
+      SrsSignal.HARD,
+      noJitter,
+    )
+    expect(out.factor).toBe(1.3)
+    expect(out.interval).toBeCloseTo(6.5) // interval * HARD_FACTOR (1.3)
+  })
+
+  it('caps the interval at the 50-year ceiling', () => {
+    // 20000 * 2.5 = 50000 days, well past MAX_INTERVAL (50 * 365 = 18250).
+    const out = getNewSrsParametersFromValues(
+      {interval: 20000, factor: 2.5},
+      SrsSignal.GOOD,
+      noJitter,
+    )
+    expect(out.interval).toBe(50 * 365)
+  })
 })
