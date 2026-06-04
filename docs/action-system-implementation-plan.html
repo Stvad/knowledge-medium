@@ -368,6 +368,14 @@ type ActionTransform = {
       <code>spatial-navigation</code>'s decorators, plus the keybinding-override pass. There are <em>no</em> "vim
       skip-decorators" in this repo — those belong to the external agenda user and are out of scope here.</li>
 </ul>
+<p class="note"><strong>Shipped (supersedes the bullets above):</strong> the owner chose a
+   <strong>hard removal, no deprecation window</strong> — <code>ActionOverride</code>/<code>ActionDecorator</code>,
+   <code>actionOverridesFacet</code>/<code>actionDecoratorsFacet</code>, their guards, and their
+   <code>extensions/api.ts</code> exports are deleted outright rather than kept one release. Collapsed to
+   a <strong>single</strong> <code>actionTransformsFacet</code> (not two facet ids). Codemod inventory was
+   <strong>incomplete</strong>: it also had to migrate <code>agent-extensions/readwise.tsx</code> (the same
+   mark-complete/reviewed transforms as SRS), which is outside <code>tsconfig</code>/ESLint scope so
+   <code>yarn run check</code> did not flag it — a reviewer caught it.</p>
 </div>
 
 <div class="phase">

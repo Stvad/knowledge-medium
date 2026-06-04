@@ -102,7 +102,7 @@ const decorateAction = <T extends typeof ActionContextTypes.NORMAL_MODE | typeof
     candidate.actionId === action.id && candidate.context === action.context,
   )
   if (!decorator) throw new Error(`Missing spatial decorator for ${action.context}:${action.id}`)
-  return decorator.decorate(action as ActionConfig) as ActionConfig<T>
+  return decorator.apply(action as ActionConfig) as ActionConfig<T>
 }
 
 let sharedDb: TestDb

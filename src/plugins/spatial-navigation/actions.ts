@@ -1,12 +1,12 @@
 import {
-  actionDecoratorsFacet,
+  actionTransformsFacet,
   actionsFacet,
 } from '@/extensions/core.js'
 import type { AppExtension } from '@/extensions/facet.js'
 import {
   ActionConfig,
   type BaseShortcutDependencies,
-  type ActionDecorator,
+  type ActionTransform,
   ActionContextTypes,
   type BlockShortcutDependencies,
 } from '@/shortcuts/types.js'
@@ -298,10 +298,10 @@ const verticalDecorator = (
   actionId: 'move_down' | 'move_up',
   direction: 'down' | 'up',
   description: string,
-): ActionDecorator => ({
+): ActionTransform => ({
   actionId,
   context: ActionContextTypes.NORMAL_MODE,
-  decorate: action => ({
+  apply: action => ({
     ...action,
     description,
     handler: async (deps, trigger, dispatch) => {
@@ -315,10 +315,10 @@ const selectionVerticalDecorator = (
   actionId: 'extend_selection_down' | 'extend_selection_up' | 'multi_select.extend_selection_down' | 'multi_select.extend_selection_up',
   context: typeof ActionContextTypes.NORMAL_MODE | typeof ActionContextTypes.MULTI_SELECT_MODE,
   direction: 'down' | 'up',
-): ActionDecorator => ({
+): ActionTransform => ({
   actionId,
   context,
-  decorate: action => ({
+  apply: action => ({
     ...action,
     handler: async (deps, trigger, dispatch) => {
       if (await extendSelectionVertical(deps, direction)) return
@@ -327,7 +327,7 @@ const selectionVerticalDecorator = (
   }),
 })
 
-export function getSpatialNavigationActionDecorators(): ActionDecorator[] {
+export function getSpatialNavigationActionDecorators(): ActionTransform[] {
   return [
     verticalDecorator('move_down', 'down', 'Move focus down (next block, then stack-sibling panel below)'),
     verticalDecorator('move_up', 'up', 'Move focus up (previous block, then stack-sibling panel above)'),
@@ -345,5 +345,5 @@ export const spatialNavigationActionsExtension: AppExtension =
 
 export const spatialNavigationActionDecoratorsExtension: AppExtension =
   getSpatialNavigationActionDecorators().map(decorator =>
-    actionDecoratorsFacet.of(decorator as ActionDecorator, {source: 'spatial-navigation'}),
+    actionTransformsFacet.of(decorator, {source: 'spatial-navigation'}),
   )

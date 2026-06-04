@@ -10,14 +10,14 @@ import {
 } from '@/plugins/daily-notes/rescheduleAction.js'
 import type {
   ActionConfig,
-  ActionDecorator,
+  ActionTransform,
   BlockShortcutDependencies,
 } from '@/shortcuts/types.js'
 import { srsBlockDateAdapter } from './srsBlockDateAdapter.ts'
 
-export const srsRescheduleDecorator: ActionDecorator = {
+export const srsRescheduleDecorator: ActionTransform = {
   actionId: RESCHEDULE_BLOCK_DATE_ACTION_ID,
-  decorate: (action: ActionConfig): ActionConfig => ({
+  apply: (action: ActionConfig): ActionConfig => ({
     ...action,
     isVisible: (deps) => {
       const block = (deps as BlockShortcutDependencies).block

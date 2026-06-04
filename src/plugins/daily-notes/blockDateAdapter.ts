@@ -7,7 +7,7 @@
  * - daily-notes can't import srs-rescheduling without a layering cycle
  *   (srs-rescheduling already depends on daily-notes for daily-note
  *   resolution).
- * - The existing `actionDecoratorsFacet` pattern only handles
+ * - The existing `actionTransformsFacet` pattern only handles
  *   parameter-less actions ("shift +1d"). Picking an absolute ISO from
  *   a calendar can't go through that channel without inventing a
  *   parameter passing mechanism.

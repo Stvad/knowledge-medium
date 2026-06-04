@@ -7,7 +7,7 @@ import {
   useActiveContextsDispatch,
 } from '@/shortcuts/ActiveContexts.js'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.js'
-import { actionContextsFacet, actionDecoratorsFacet, actionsFacet } from '@/extensions/core.js'
+import { actionContextsFacet, actionTransformsFacet, actionsFacet } from '@/extensions/core.js'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
 import {
   ActionConfig,
@@ -138,19 +138,19 @@ const LayoutKeydownWhenActive = ({
 
 const Harness = ({
   actions,
-  decorators = [],
+  transforms = [],
   contexts,
   children,
 }: {
   actions: readonly ActionConfig[]
-  decorators?: Parameters<typeof actionDecoratorsFacet.of>[0][]
+  transforms?: Parameters<typeof actionTransformsFacet.of>[0][]
   contexts: readonly ActionContextConfig[]
   children?: ReactNode
 }) => {
   const runtime = resolveFacetRuntimeSync([
     ...contexts.map(c => actionContextsFacet.of(c)),
     ...actions.map(a => actionsFacet.of(a)),
-    ...decorators.map(d => actionDecoratorsFacet.of(d)),
+    ...transforms.map(t => actionTransformsFacet.of(t)),
   ])
 
   return (
@@ -207,10 +207,10 @@ describe('HotkeyReconciler', () => {
     render(
       <Harness
         actions={[action]}
-        decorators={[{
+        transforms={[{
           actionId: action.id,
           context: TEST_CONTEXT,
-          decorate: current => ({
+          apply: current => ({
             ...current,
             handler: (deps, trigger) => {
               calls.push('decorated')
