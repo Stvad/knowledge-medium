@@ -48,5 +48,15 @@ export const seedModePinsFromWorkspaces = async (
     workspaceId: row.id,
     serverMode: row.encryption_mode === 'e2ee' ? 'e2ee' : 'plaintext',
   }))
-  return seedModePinsOnce(userId, entries)
+  try {
+    return seedModePinsOnce(userId, entries)
+  } catch (err) {
+    // BEST-EFFORT: setModePin throws if localStorage is unavailable / blocked
+    // (private mode, storage disabled). The seed is only an optimization — it
+    // spares pre-existing workspaces a first-encounter gate — so a write
+    // failure must NOT abort startup. Boot proceeds; without pins those
+    // workspaces hit the gate, but the app still loads.
+    console.warn('[rolloutSeed] pin-seed failed (storage unavailable?); continuing without it', err)
+    return 0
+  }
 }

@@ -32,6 +32,18 @@ describe('seedModePinsFromWorkspaces (§6 rollout seed)', () => {
     expect(db.getAll).toHaveBeenCalledTimes(1)
   })
 
+  it('does not throw when pin writes fail (storage disabled) so startup can continue', async () => {
+    const db = reader([{ id: 'ws-1', encryption_mode: 'none' }])
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('localStorage is blocked')
+    })
+    try {
+      await expect(seedModePinsFromWorkspaces(db, USER)).resolves.toBe(0)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
   it('seeds an empty set (fresh device) and marks seeded so later syncs take the gate', async () => {
     const db = reader([])
     const written = await seedModePinsFromWorkspaces(db, USER)
