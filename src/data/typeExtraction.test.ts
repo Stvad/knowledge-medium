@@ -179,12 +179,15 @@ describe('createTypeBlock', () => {
     env = await setup()
     const controller = new AbortController()
     controller.abort()
+    // throwIfAborted() rejects with signal.reason — an AbortError
+    // DOMException. Pin the abort contract so a swap to some unrelated
+    // error (or a rejection with undefined) is caught.
     await expect(createTypeBlock(env.repo, {
       workspaceId: WS,
       label: 'Task',
       propertySchemaIds: [],
       signal: controller.signal,
-    })).rejects.toBeDefined()
+    })).rejects.toMatchObject({name: 'AbortError'})
   })
 
   it('TypeRegistrationTimeout has the expected shape', () => {
@@ -278,7 +281,7 @@ describe('retagBlocks', () => {
       typeId,
       instanceIds: [id],
       signal: controller.signal,
-    })).rejects.toBeDefined()
+    })).rejects.toMatchObject({name: 'AbortError'})
     const row = await env.repo.load(id)
     expect(getBlockTypes(row!)).not.toContain(typeId)
   })
