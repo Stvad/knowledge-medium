@@ -87,6 +87,17 @@ const initialLayoutCache = new Map<string, Promise<InitialLayout>>()
 const getCurrentHash = (): string =>
   typeof window === 'undefined' ? '' : window.location.hash
 
+// Pin a workspace plaintext, best-effort: a blocked/quota localStorage write
+// must not abort bootstrap (the create dialog catches the same failure). Worst
+// case the workspace shows the quarantine gate once on next load.
+const pinPlaintextBestEffort = (userId: string, workspaceId: string): void => {
+  try {
+    setModePin(userId, workspaceId, 'plaintext')
+  } catch (err) {
+    console.warn(`[App] plaintext pin failed for ${workspaceId} (will quarantine on next load)`, err)
+  }
+}
+
 const resolveWorkspace = async (
   repo: Repo,
   requestedWorkspaceId: string | undefined,
@@ -149,7 +160,7 @@ const resolveWorkspace = async (
     // A workspace WE just created is plaintext-confirmed (§8.1) — pin it so the
     // §6 gate never quarantines it. An already-existing personal workspace
     // (inserted=false) is left for the seed/gate to resolve.
-    if (result.inserted) setModePin(repo.user.id, result.workspace.id, 'plaintext')
+    if (result.inserted) pinPlaintextBestEffort(repo.user.id, result.workspace.id)
     return {id: result.workspace.id, freshlyCreated: result.inserted}
   }
 
@@ -163,7 +174,7 @@ const resolveWorkspace = async (
   const local = await ensureLocalPersonalWorkspace(repo)
   // Same plaintext-confirm as the remote path (§8.1) so the gate stays out of
   // the way in local-only mode.
-  if (local.inserted) setModePin(repo.user.id, local.workspace.id, 'plaintext')
+  if (local.inserted) pinPlaintextBestEffort(repo.user.id, local.workspace.id)
   return {id: local.workspace.id, freshlyCreated: local.inserted}
 }
 
@@ -241,8 +252,6 @@ const resolveInitialLayout = async (
   const role = await getLocalMemberRole(repo, workspaceId, repo.user.id)
   repo.setReadOnly(role === 'viewer')
 
-  rememberWorkspace(workspaceId)
-
   // §6 rule 3 access gate. Resolve whether this workspace can be materialized
   // for us right now BEFORE any bootstrap write below — those writes (daily
   // note, properties/types/recents pages, ui-state) would otherwise write
@@ -283,6 +292,11 @@ const resolveInitialLayout = async (
       canary: gateWorkspace?.wkCanary ?? null,
     }
   }
+
+  // Ready — only NOW remember it as the default. Remembering a locked/waiting
+  // workspace would make the next empty-hash visit re-select it and render only
+  // the key gate (no switcher), trapping the user away from accessible spaces.
+  rememberWorkspace(workspaceId)
 
   // Freshly inserted personal workspace: install the starter tutorial
   // as its own parent-less page. The [[Tutorial]] bullet on today's
