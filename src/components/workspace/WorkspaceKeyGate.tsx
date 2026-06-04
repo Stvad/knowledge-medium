@@ -45,23 +45,31 @@ export function WorkspaceKeyGate({
     if (!trimmed || busy) return
     setBusy(true)
     setError(null)
-    const result = await unlockWorkspaceWithKey({
-      userId,
-      workspaceId,
-      canary: canary ?? '',
-      pastedKey: trimmed,
-      keyStore: getWorkspaceKeyStore(),
-    })
-    if (result.ok) {
-      onResolved()
-      return
+    try {
+      const result = await unlockWorkspaceWithKey({
+        userId,
+        workspaceId,
+        canary: canary ?? '',
+        pastedKey: trimmed,
+        keyStore: getWorkspaceKeyStore(),
+      })
+      if (result.ok) {
+        onResolved()
+        return
+      }
+      setBusy(false)
+      setError(
+        result.reason === 'format'
+          ? "That doesn't look like a workspace key (expected kmp-wk-1:…)."
+          : result.reason === 'storage'
+            ? "Your key is correct, but it couldn't be saved on this device (storage may be full or blocked). Try again."
+            : "That key doesn't decrypt this workspace's data.",
+      )
+    } catch (err) {
+      // Defensive: never leave the button stuck on "Unlocking…" with no message.
+      setBusy(false)
+      setError(err instanceof Error ? err.message : 'Could not unlock this workspace.')
     }
-    setBusy(false)
-    setError(
-      result.reason === 'format'
-        ? "That doesn't look like a workspace key (expected kmp-wk-1:…)."
-        : "That key doesn't decrypt this workspace's data.",
-    )
   }
 
   const confirmPlaintext = () => {

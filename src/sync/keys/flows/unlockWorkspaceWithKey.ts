@@ -37,8 +37,10 @@ export interface UnlockWorkspaceArgs {
 export type UnlockWorkspaceResult =
   | { readonly ok: true }
   /** `format`: the paste isn't a `kmp-wk-1:` key at all (typo / wrong text).
-   *  `invalid-key`: well-formed, but doesn't decrypt THIS workspace's canary. */
-  | { readonly ok: false; readonly reason: 'format' | 'invalid-key' }
+   *  `invalid-key`: well-formed, but doesn't decrypt THIS workspace's canary.
+   *  `storage`: valid key, but this device couldn't persist it (IndexedDB
+   *  quota / private mode) — retryable; the workspace is pinned e2ee + locked. */
+  | { readonly ok: false; readonly reason: 'format' | 'invalid-key' | 'storage' }
 
 export const unlockWorkspaceWithKey = async (
   args: UnlockWorkspaceArgs,
@@ -56,9 +58,19 @@ export const unlockWorkspaceWithKey = async (
     return { ok: false, reason: 'invalid-key' }
   }
 
-  // Validated: persist the WK and pin e2ee. Re-pinning an already-e2ee
-  // workspace (post-wipe re-paste) is a no-op; the pin is never downgraded.
-  await keyStore.put(userId, workspaceId, key)
+  // Canary validated → this workspace is genuinely e2ee. Pin it FIRST (in the
+  // quarantine case the pin is what defeats a server downgrade lie, and it must
+  // stick even if the key write below fails), then persist the key. Re-pinning
+  // an already-e2ee workspace (post-wipe re-paste) is a no-op.
   setModePin(userId, workspaceId, 'e2ee')
+  try {
+    await keyStore.put(userId, workspaceId, key)
+  } catch (err) {
+    // Valid key, but this device can't store it (IndexedDB quota / private
+    // mode). Report so the caller can offer a retry — the workspace stays
+    // e2ee-pinned-but-locked, never silently stuck mid-unlock.
+    console.warn(`unlockWorkspaceWithKey: key store write failed for ${workspaceId}`, err)
+    return { ok: false, reason: 'storage' }
+  }
   return { ok: true }
 }

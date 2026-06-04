@@ -77,6 +77,32 @@ describe('unlockWorkspaceWithKey (§8.2)', () => {
     expect(getModePin(USER, WS)).toBeNull()
   })
 
+  it('reports a storage failure (still pins e2ee to defeat a downgrade) when the key write throws', async () => {
+    const { wkString, canary } = await mintKeyAndCanary(WS)
+    // A valid key, but the device can't persist it (IndexedDB quota / private mode).
+    const failingStore = {
+      get: async () => null,
+      put: async () => {
+        throw new Error('QuotaExceededError')
+      },
+      delete: async () => {},
+      clearAll: async () => {},
+    }
+
+    const result = await unlockWorkspaceWithKey({
+      userId: USER,
+      workspaceId: WS,
+      canary,
+      pastedKey: wkString,
+      keyStore: failingStore,
+    })
+
+    expect(result).toEqual({ ok: false, reason: 'storage' })
+    // The canary validated, so the workspace IS e2ee — pin it even though the
+    // key couldn't be stored, closing the quarantine plaintext-confirm hatch.
+    expect(getModePin(USER, WS)).toBe('e2ee')
+  })
+
   it('re-unlocks an already-e2ee-pinned workspace idempotently (post-wipe re-paste)', async () => {
     const keyStore = new InMemoryWorkspaceKeyStore()
     const { wkString, canary } = await mintKeyAndCanary(WS)
