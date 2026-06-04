@@ -7,14 +7,19 @@
  * append `(seq, id, op)` to `blocks_synced_changes`; this driver drains that
  * log and turns each change into the app-visible plaintext `blocks` table.
  *
- * DRAIN (race- and failure-safe, the row_events watermark pattern):
- *   1. read the queue up to MAX(seq),
- *   2. dedup per id (latest op wins — a hot row materializes once per batch),
+ * DRAIN (race- and failure-safe, the row_events watermark pattern). Loops over
+ * the queue in bounded seq-ordered windows ({@link DEFAULT_DRAIN_CHUNK}) until
+ * it's empty — a large initial sync or a long observer-down backlog can queue
+ * hundreds of thousands of changes, and one unbounded pass would build the whole
+ * working set in memory and wrap every write in a single transaction. Per window:
+ *   1. read the next <= chunk changes (ORDER BY seq LIMIT chunk),
+ *   2. dedup per id (latest op wins — a hot row materializes once per window),
  *   3. `materializeStagingRows` (decrypt/copy/defer/skip/delete) +
  *      `applySyncInvalidation` (cache + handles, one LWW gate),
- *   4. `DELETE … WHERE seq <= <that max>`.
- * A delivery that lands mid-drain gets a higher seq, so step 4 can't drop it;
- * if any step throws, the delete is skipped and the rows retry next tick.
+ *   4. `DELETE … WHERE seq <= <that window's max>`.
+ * A delivery that lands mid-drain gets a higher seq, so step 4 can't drop it —
+ * it's picked up by a later window. If any step throws, that window's delete is
+ * skipped (prior committed windows survive) and the rows retry next tick.
  *
  * Drains serialize on a single promise chain, so two never overlap (duplicate
  * invalidations) and `flush()` is a real settle barrier for tests.
@@ -48,6 +53,13 @@ import {
  *  sync-burst arrivals into one batched drain. */
 const DEFAULT_THROTTLE_MS = 100
 
+/** Max queued changes materialized per drain window. Draining a large backlog in
+ *  bounded, individually-committed windows (rather than one unbounded pass) keeps
+ *  memory flat, makes progress durable across reloads/crashes, and lets the UI
+ *  fill in as it goes: the queue is consumed per window, so an interrupted drain
+ *  resumes from the last committed window instead of restarting from zero. */
+const DEFAULT_DRAIN_CHUNK = 1000
+
 export interface BlocksSyncedObserverArgs {
   readonly db: PowerSyncDb
   readonly cache: SyncCache
@@ -61,6 +73,9 @@ export interface BlocksSyncedObserverArgs {
    *  rowEventsTail. txIdsInvolved is always empty (sync writes carry no tx_id). */
   readonly onCycleDetected?: (event: CycleDetectedEvent) => void
   readonly throttleMs?: number
+  /** Max changes materialized per drain window (default {@link DEFAULT_DRAIN_CHUNK}).
+   *  Tests shrink it to exercise multi-window backlogs. */
+  readonly drainChunkSize?: number
   readonly onError?: (err: unknown) => void
 }
 
@@ -116,6 +131,7 @@ export const startBlocksSyncedObserver = (
 ): BlocksSyncedObserver => {
   const { db, cache, handleStore, deps, getInvalidationRules, onCycleDetected } = args
   const throttleMs = args.throttleMs ?? DEFAULT_THROTTLE_MS
+  const drainChunk = Math.max(1, args.drainChunkSize ?? DEFAULT_DRAIN_CHUNK)
   const rules = (): readonly InvalidationRule[] => getInvalidationRules?.() ?? []
   const onError = args.onError ?? ((err: unknown) => {
     if (!isConnectionClosedError(err)) console.warn('[blocksSyncedObserver] drain error:', err)
@@ -151,26 +167,41 @@ export const startBlocksSyncedObserver = (
   }
 
   const drainQueueOnce = async (): Promise<void> => {
-    if (disposed) return
-    const rows = await db.getAll<QueueRow>(
-      'SELECT seq, id, op FROM blocks_synced_changes ORDER BY seq',
-    )
-    if (rows.length === 0) return
-    const maxSeq = rows[rows.length - 1]!.seq
+    // Loop over the queue in bounded seq-ordered windows until it's empty, so a
+    // large backlog never builds the whole working set in one in-memory pass /
+    // one transaction. Each window commits independently (step 4), so the next
+    // window — and any retry after a throw — resumes from the last consumed seq.
+    for (;;) {
+      if (disposed) return
+      const rows = await db.getAll<QueueRow>(
+        'SELECT seq, id, op FROM blocks_synced_changes ORDER BY seq LIMIT ?',
+        [drainChunk],
+      )
+      if (rows.length === 0) return
+      const maxSeq = rows[rows.length - 1]!.seq
 
-    // Latest op per id (rows are seq-ordered, so a later op overwrites).
-    const opById = new Map<string, 'upsert' | 'delete'>()
-    for (const row of rows) opById.set(row.id, row.op)
-    const upserted: string[] = []
-    const removed: string[] = []
-    for (const [id, op] of opById) (op === 'upsert' ? upserted : removed).push(id)
+      // Latest op per id within this window (rows are seq-ordered, so a later op
+      // overwrites). Cross-window order holds too: windows run in seq order, so a
+      // hot id's final state is set by whichever window holds its last change, and
+      // re-materializing it in a later window is an idempotent LWW-gated write.
+      const opById = new Map<string, 'upsert' | 'delete'>()
+      for (const row of rows) opById.set(row.id, row.op)
+      const upserted: string[] = []
+      const removed: string[] = []
+      for (const [id, op] of opById) (op === 'upsert' ? upserted : removed).push(id)
 
-    const outcome = await materializeStagingRows(db, { upserted, removed }, deps)
-    await applyOutcome(outcome)
+      const outcome = await materializeStagingRows(db, { upserted, removed }, deps)
+      await applyOutcome(outcome)
 
-    // Consume only what we read. Rows appended mid-drain have seq > maxSeq and
-    // survive for the next pass. Done last so a throw above leaves them queued.
-    await db.execute('DELETE FROM blocks_synced_changes WHERE seq <= ?', [maxSeq])
+      // Consume only this window. Rows appended mid-drain have seq > maxSeq and
+      // survive for a later window. Done last so a throw above leaves this window
+      // queued (prior committed windows are not rolled back).
+      await db.execute('DELETE FROM blocks_synced_changes WHERE seq <= ?', [maxSeq])
+
+      // A short final window means the queue is drained; stop without an extra
+      // empty read. (Rows arriving after this still re-trigger via onChange.)
+      if (rows.length < drainChunk) return
+    }
   }
 
   const materializeWorkspace = async (workspaceId: string): Promise<void> => {

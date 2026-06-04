@@ -63,6 +63,8 @@ const start = (opts: {
   getMaterializability: GetMaterializability
   getCek?: GetCek
   onCycleDetected?: (e: CycleDetectedEvent) => void
+  drainChunkSize?: number
+  onError?: (err: unknown) => void
 }): Harness => {
   const cache = new BlockCache()
   const notifications: ChangeNotification[] = []
@@ -73,6 +75,8 @@ const start = (opts: {
     deps: { getMaterializability: opts.getMaterializability, getCek: opts.getCek ?? noKey },
     onCycleDetected: opts.onCycleDetected,
     throttleMs: 5,
+    drainChunkSize: opts.drainChunkSize,
+    onError: opts.onError,
   })
   observers.push(observer)
   return { observer, cache, notifications }
@@ -209,6 +213,50 @@ describe('blocksSyncedObserver — robustness', () => {
     // materialize unit level.)
     expect(await blocks()).toEqual([{ id: 'good', content: 'readable' }])
     expect(await queueLen()).toBe(0)
+  })
+
+  it('drains a backlog larger than the chunk size across bounded windows', async () => {
+    // 5 distinct queued rows, chunk size 2 → three windows (2 + 2 + 1). One
+    // flush must loop until the whole backlog is materialized and the queue is
+    // empty — the regression was a single unbounded pass over the entire queue.
+    for (let i = 0; i < 5; i++) await put(data({ id: `b${i}`, content: `c${i}` }))
+    const { observer } = start({ getMaterializability: constMat('copy'), drainChunkSize: 2 })
+
+    await observer.flush()
+
+    expect(await blocks()).toEqual([
+      { id: 'b0', content: 'c0' }, { id: 'b1', content: 'c1' },
+      { id: 'b2', content: 'c2' }, { id: 'b3', content: 'c3' },
+      { id: 'b4', content: 'c4' },
+    ])
+    expect(await queueLen()).toBe(0)
+  })
+
+  it('commits each window independently, so a mid-backlog failure keeps prior progress', async () => {
+    for (let i = 0; i < 4; i++) await put(data({ id: `b${i}`, content: `c${i}` }))
+    // getMaterializability is resolved once per window (all rows share a
+    // workspace); throw on the second window so its materialize aborts.
+    let windows = 0
+    const getMaterializability: GetMaterializability = () => {
+      windows += 1
+      if (windows >= 2) throw new Error('boom')
+      return 'copy'
+    }
+    const errors: unknown[] = []
+    const { observer } = start({
+      getMaterializability, drainChunkSize: 2, onError: e => errors.push(e),
+    })
+
+    await observer.flush()
+
+    // First window (b0,b1) committed and consumed; the second window's failure
+    // left its rows queued for a later retry rather than rolling back everything.
+    expect(await blocks()).toEqual([{ id: 'b0', content: 'c0' }, { id: 'b1', content: 'c1' }])
+    expect(await queueLen()).toBe(2)
+    // The failure surfaced via onError (the initial start() drain and the
+    // explicit flush both reach the throwing window); it never rejects flush().
+    expect(errors.length).toBeGreaterThanOrEqual(1)
+    expect(errors.every(e => e instanceof Error && e.message === 'boom')).toBe(true)
   })
 
   it('survives a restart: a queued change persists for a fresh observer (durable queue)', async () => {
