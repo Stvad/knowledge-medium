@@ -1,8 +1,8 @@
 // @vitest-environment node
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, type BlockReference } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/extensions/facet.js'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
@@ -44,7 +44,9 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  // Shared DB opened once per file, reset between tests; fresh Repo per test.
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   let idCursor = 0
@@ -64,9 +66,12 @@ const setup = async (): Promise<Harness> => {
   return {h, repo}
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-afterEach(async () => { await env.h.cleanup() })
+afterEach(() => { env.repo.stopSyncObserver() })
 
 const create = async (args: {
   id: string
