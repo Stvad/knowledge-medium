@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { BlockCache } from '@/data/blockCache'
 import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { aliasesProp, extensionDescriptionProp, extensionNameProp, typesProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions'
 import { resolveFacetRuntimeSync } from '@/extensions/facet'
 import { __setCompileImplForTest } from '@/extensions/compileExtensionModule'
@@ -25,7 +25,8 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const repo = new Repo({
     db: h.db,
     cache: new BlockCache(),
@@ -43,9 +44,14 @@ const setup = async (): Promise<Harness> => {
   return {h, repo, context}
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-afterEach(async () => { await env.h.cleanup() })
+// Dispose the per-test Repo's sync observer so its db.onChange subscription
+// doesn't leak onto the shared DB (closed once in afterAll).
+afterEach(() => { env.repo.stopSyncObserver() })
 
 describe('agent runtime commands', () => {
   it('installs labelled extensions under a per-label container page', async () => {

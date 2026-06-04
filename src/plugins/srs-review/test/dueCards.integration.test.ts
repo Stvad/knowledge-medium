@@ -6,11 +6,11 @@
 // excluded — the bug lived in the query engine's three-valued handling
 // of `exclude`, not in the query we build. These tests run the actual
 // query so that regression stays caught.
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { resolveFacetRuntimeSync } from '@/extensions/facet'
 import { ChangeScope, type BlockReference } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { typesProp } from '@/data/properties'
 import { propertySchemasFacet, typesFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
@@ -30,7 +30,8 @@ const NOW = new Date('2026-06-02T12:00:00')
 interface Harness { h: TestDb; repo: Repo }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   let idCursor = 0
@@ -54,9 +55,14 @@ const setup = async (): Promise<Harness> => {
   return {h, repo}
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-afterEach(async () => { await env.h.cleanup() })
+// Dispose the per-test Repo's sync observer so its db.onChange subscription
+// doesn't leak onto the shared DB (closed once in afterAll).
+afterEach(() => { env.repo.stopSyncObserver() })
 
 const create = async (args: {
   id: string
