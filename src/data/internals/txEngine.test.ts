@@ -17,7 +17,7 @@
  * snapshots → cache.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import {
   ChangeScope,
   CycleError,
@@ -41,7 +41,7 @@ import {
 } from '@/data/api'
 import { aliasesProp } from '@/data/internals/coreProperties'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '../repo'
 
 // ──── Test fixtures ────
@@ -86,7 +86,9 @@ interface Harness {
 }
 
 const setup = async (overrides?: {isReadOnly?: boolean}): Promise<Harness> => {
-  const h = await createTestDb()
+  // Shared DB opened once per file, reset between tests; fresh Repo per test.
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   const tick = () => ++timeCursor
@@ -120,9 +122,14 @@ const setup = async (overrides?: {isReadOnly?: boolean}): Promise<Harness> => {
   }
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-afterEach(async () => { await env.h.cleanup() })
+// Dispose the per-test Repo's default sync observer so its db.onChange
+// subscription doesn't leak onto the shared DB (closed once in afterAll).
+afterEach(() => { env.repo.stopSyncObserver() })
 
 // ──── tx.create ────
 
@@ -762,7 +769,9 @@ describe('read-only mode', () => {
       const crud = await ro.psCrud()
       expect(crud.map(c => JSON.parse(c.data).id).sort()).toEqual(['prefs-1', 'ui-1'])
     } finally {
-      await ro.h.cleanup()
+      // ro shares the file-level DB now — just drop its observer; the DB is
+      // closed once in afterAll. (The next test's beforeEach resets the data.)
+      ro.repo.stopSyncObserver()
     }
   })
 })
