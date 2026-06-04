@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, type User } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
@@ -75,14 +75,6 @@ const layoutRows = async () => env.repo.query.subtree({id: env.layoutSessionBloc
 
 const rowIdsByBlock = async (): Promise<Map<string, string>> =>
   new Map((await layoutRows()).map(row => [row.properties[topLevelBlockIdProp.name] as string, row.id]))
-
-const waitFor = async (predicate: () => boolean): Promise<void> => {
-  const startedAt = Date.now()
-  while (!predicate()) {
-    if (Date.now() - startedAt > 1000) throw new Error('timed out waiting for condition')
-    await new Promise(resolve => setTimeout(resolve, 10))
-  }
-}
 
 describe('applyCurrentLayoutUrl', () => {
   it('creates panel rows for an explicit layout URL', async () => {
@@ -338,7 +330,7 @@ describe('PanelLayoutProjection', () => {
       await tx.setProperty(row.id, topLevelBlockIdProp, 'b')
     }, {scope: ChangeScope.UiState, description: 'navigate panel'})
 
-    await waitFor(() => pushed === '#ws-1/b')
+    await vi.waitFor(() => expect(pushed).toBe('#ws-1/b'))
     expect(notified).toBeGreaterThan(0)
     unsubscribe()
     projection.dispose()
@@ -373,7 +365,7 @@ describe('PanelLayoutProjection', () => {
       await tx.setProperty(rowB, topLevelBlockIdProp, 'y')
     }, {scope: ChangeScope.UiState, description: 'navigate nested panel'})
 
-    await waitFor(() => pushed === '#ws-1/a/(s:x,y)')
+    await vi.waitFor(() => expect(pushed).toBe('#ws-1/a/(s:x,y)'))
     projection.dispose()
   })
 

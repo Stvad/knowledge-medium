@@ -7,14 +7,15 @@ import { exampleExtensions } from '@/extensions/exampleExtensions'
 // import would only surface at workspace seed / command-palette
 // invocation time.
 describe('exampleExtensions — templated sources', () => {
-  for (const {id, source} of exampleExtensions) {
-    it(`${id} transpiles via Babel (react + typescript) without error`, () => {
+  it('all templated sources transpile via Babel (react + typescript) without error', () => {
+    for (const {id, source} of exampleExtensions) {
       expect(() =>
         Babel.transform(source, {
           filename: `${id}.tsx`,
           presets: ['react', 'typescript'],
         }),
+        `${id} should transpile`,
       ).not.toThrow()
-    })
-  }
+    }
+  })
 })
