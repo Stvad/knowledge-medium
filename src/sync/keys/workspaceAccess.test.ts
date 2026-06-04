@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resolveWorkspaceAccess } from './workspaceAccess.js'
+import { decideWorkspaceEntry, resolveWorkspaceAccess } from './workspaceAccess.js'
 
 describe('resolveWorkspaceAccess (§6 rule 3 — UI gate policy)', () => {
   it('plaintext pin → ready (server flag and key irrelevant)', () => {
@@ -31,5 +31,31 @@ describe('resolveWorkspaceAccess (§6 rule 3 — UI gate policy)', () => {
       kind: 'locked',
       reason: 'quarantine',
     })
+  })
+})
+
+describe('decideWorkspaceEntry (row-aware — guards the unsynced-row case)', () => {
+  const noneRow = { encryptionMode: 'none' }
+  const e2eeRow = { encryptionMode: 'e2ee' }
+
+  it('decides WITHOUT the row when the pin settles it', () => {
+    // plaintext pin → ready even before the row syncs (bootstrap is plaintext).
+    expect(decideWorkspaceEntry('plaintext', false, null)).toEqual({ kind: 'ready' })
+    // e2ee pin + WK loaded → ready (materialization uses the pin/key, not the row).
+    expect(decideWorkspaceEntry('e2ee', true, null)).toEqual({ kind: 'ready' })
+  })
+
+  it('WAITS when the decision needs the row but it has not synced', () => {
+    // unpinned: can't tell branch a from b without the server flag.
+    expect(decideWorkspaceEntry(null, false, null)).toEqual({ kind: 'waiting' })
+    // e2ee pin, no WK: needs the canary (in the row) to validate a paste.
+    expect(decideWorkspaceEntry('e2ee', false, null)).toEqual({ kind: 'waiting' })
+  })
+
+  it('decides via the row once it is present', () => {
+    expect(decideWorkspaceEntry(null, false, noneRow)).toEqual({ kind: 'locked', reason: 'quarantine' })
+    expect(decideWorkspaceEntry(null, false, e2eeRow)).toEqual({ kind: 'locked', reason: 'key-required' })
+    expect(decideWorkspaceEntry('e2ee', false, e2eeRow)).toEqual({ kind: 'locked', reason: 'key-required' })
+    expect(decideWorkspaceEntry('plaintext', false, noneRow)).toEqual({ kind: 'ready' })
   })
 })

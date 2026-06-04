@@ -65,7 +65,14 @@ export function WorkspaceKeyGate({
   }
 
   const confirmPlaintext = () => {
-    setModePin(userId, workspaceId, 'plaintext')
+    try {
+      setModePin(userId, workspaceId, 'plaintext')
+    } catch (err) {
+      // Unreachable today (quarantine only renders when unpinned), but a future
+      // regression must not surface as an unhandled throw.
+      setError(err instanceof Error ? err.message : 'Could not confirm plaintext')
+      return
+    }
     onResolved()
   }
 

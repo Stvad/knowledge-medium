@@ -1,6 +1,7 @@
 import { BlockComponent } from './components/BlockComponent'
 import { BlockContextProvider } from '@/context/block.js'
-import { use, useEffect, useState } from 'react'
+import { use, useCallback, useEffect, useState } from 'react'
+import { useQuery } from '@powersync/react'
 import type { Block } from './data/block'
 import { useRepo } from '@/context/repo.js'
 import { useSearchParam } from 'react-use'
@@ -44,7 +45,7 @@ import { ChangeScope } from '@/data/api'
 import { hasSafeModeSearchParam } from '@/utils/safeMode.js'
 import { getModePin, setModePin } from '@/sync/keys/modePin.js'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore.js'
-import { resolveWorkspaceAccess } from '@/sync/keys/workspaceAccess.js'
+import { decideWorkspaceEntry } from '@/sync/keys/workspaceAccess.js'
 import { WorkspaceKeyGate } from '@/components/workspace/WorkspaceKeyGate.js'
 
 // Resolved-workspace bundle. `freshlyCreated` is true only when this run
@@ -61,7 +62,9 @@ interface ResolvedWorkspace {
 // `ready`: the workspace materialized and bootstrapped normally. `locked`: the
 // §6 gate intercepted before any bootstrap write — the workspace is e2ee
 // without its key, or never-pinned (quarantine) — and App renders the
-// WorkspaceKeyGate instead of the layout.
+// WorkspaceKeyGate. `waiting`: access can't be decided until the workspaces row
+// replicates (opened by URL before sync delivered encryption_mode/wk_canary);
+// App shows a neutral loader and re-resolves when the row lands.
 type InitialLayout =
   | {kind: 'ready'; workspaceId: string; layoutSessionBlock: Block}
   | {
@@ -71,6 +74,7 @@ type InitialLayout =
       reason: 'key-required' | 'quarantine'
       canary: string | null
     }
+  | {kind: 'waiting'; workspaceId: string}
 
 interface HashSnapshot {
   hash: string
@@ -247,25 +251,24 @@ const resolveInitialLayout = async (
   // rollout seed has already pinned pre-existing plaintext workspaces, so only
   // genuinely locked/never-pinned workspaces land here.
   const pin = getModePin(repo.user.id, workspaceId)
+  const hasKey = (await getWorkspaceKeyStore().get(repo.user.id, workspaceId)) !== null
   const gateWorkspace = await getLocalWorkspace(repo, workspaceId)
-  // Only gate when we actually know something: a durable pin (authoritative even
-  // without the row) or a synced local row (real server flag). If both are
-  // absent the workspace simply hasn't replicated yet — proceed and let blocks
-  // poll in, matching pre-e2ee behavior. This avoids mis-quarantining (and
-  // worse, offering plaintext-confirm for) an e2ee workspace whose row hasn't
-  // arrived, which would default its encryption_mode to 'none'.
-  if (pin !== null || gateWorkspace !== null) {
-    const hasKey = (await getWorkspaceKeyStore().get(repo.user.id, workspaceId)) !== null
-    const access = resolveWorkspaceAccess(pin, gateWorkspace?.encryptionMode ?? 'none', hasKey)
-    if (access.kind === 'locked') {
-      repo.setReadOnly(true)
-      return {
-        kind: 'locked',
-        workspaceId,
-        workspaceName: gateWorkspace?.name ?? null,
-        reason: access.reason,
-        canary: gateWorkspace?.wkCanary ?? null,
-      }
+  const entry = decideWorkspaceEntry(pin, hasKey, gateWorkspace)
+  if (entry.kind === 'waiting') {
+    // The workspaces row hasn't replicated yet and the pin can't settle access
+    // without it. Don't bootstrap (would write plaintext into a possibly-e2ee
+    // workspace) and don't gate with a null canary — wait for the row.
+    repo.setReadOnly(true)
+    return {kind: 'waiting', workspaceId}
+  }
+  if (entry.kind === 'locked') {
+    repo.setReadOnly(true)
+    return {
+      kind: 'locked',
+      workspaceId,
+      workspaceName: gateWorkspace?.name ?? null,
+      reason: entry.reason,
+      canary: gateWorkspace?.wkCanary ?? null,
     }
   }
 
@@ -439,9 +442,21 @@ const App = () => {
   const {rolesByWorkspaceId} = useMyWorkspaceRoles()
   const activeRole = rolesByWorkspaceId.get(activeWorkspaceId)
   useEffect(() => {
-    if (!activeRole) return
+    // Don't override the gate/waiting read-only lock with the role-derived flag
+    // (an owner/editor of a *locked* workspace must stay read-only).
+    if (initial.kind !== 'ready' || !activeRole) return
     repo.setReadOnly(activeRole === 'viewer')
-  }, [activeRole, repo])
+  }, [initial.kind, activeRole, repo])
+
+  // Re-resolve the initial layout (bumping the version busts the cache) — used
+  // when a gate is resolved or a pending workspace row finally replicates.
+  const reResolve = useCallback(() => {
+    setHashSnapshot(current => ({hash: current.hash, version: current.version + 1}))
+  }, [])
+
+  if (initial.kind === 'waiting') {
+    return <WorkspaceSyncWaiting workspaceId={initial.workspaceId} onReady={reResolve}/>
+  }
 
   if (initial.kind === 'locked') {
     return (
@@ -451,11 +466,12 @@ const App = () => {
         workspaceName={initial.workspaceName ?? undefined}
         reason={initial.reason}
         canary={initial.canary}
-        onResolved={() => {
-          // Now materializable — re-drain its staged rows and re-resolve the
-          // layout (bumping the version busts the initial-layout cache).
-          void repo.drainSyncWorkspace(initial.workspaceId)
-          setHashSnapshot(current => ({hash: current.hash, version: current.version + 1}))
+        onResolved={async () => {
+          // Re-materialize the now-decryptable staged rows BEFORE re-resolving,
+          // so the bootstrap getOrCreate*s no-op against the synced content
+          // rather than racing it.
+          await repo.drainSyncWorkspace(initial.workspaceId)
+          reResolve()
         }}
       />
     )
@@ -467,6 +483,33 @@ const App = () => {
         <BlockComponent blockId={initial.layoutSessionBlock.id}/>
       </AppRuntimeProvider>
     </BlockContextProvider>
+  )
+}
+
+// Shown while a workspace's row hasn't replicated yet (opened by URL before
+// sync delivered encryption_mode/wk_canary). Reactively watches for the row and
+// re-resolves the layout the moment it lands — no bootstrap writes happen until
+// then, so we never write plaintext into a workspace that may turn out e2ee.
+function WorkspaceSyncWaiting({
+  workspaceId,
+  onReady,
+}: {
+  workspaceId: string
+  onReady: () => void
+}) {
+  const {data} = useQuery<{id: string}>(
+    'SELECT id FROM workspaces WHERE id = ? LIMIT 1',
+    [workspaceId],
+  )
+  const present = data.length > 0
+  useEffect(() => {
+    if (present) onReady()
+  }, [present, onReady])
+
+  return (
+    <div className="flex min-h-svh items-center justify-center p-6">
+      <p className="text-sm text-muted-foreground">Loading workspace…</p>
+    </div>
   )
 }
 

@@ -20,6 +20,7 @@ import {
   formatWorkspaceKey,
   generateWorkspaceKeyBytes,
   importWorkspaceKey,
+  parseWorkspaceKey,
 } from '../../crypto/workspaceKey.js'
 import type { WorkspaceKeyStore } from '../keyStore.js'
 import { setModePin } from '../modePin.js'
@@ -54,11 +55,14 @@ export const createEncryptedWorkspace = async <T extends object>(
   keyBytes.fill(0) // drop the raw bytes once imported (the handle is enough)
 
   const wkCanary = await mintCanary(cryptoKey, workspaceId)
-  // Self-check (§8.1): the canary we're about to store must validate against
-  // the key that minted it. A failure means a crypto/env bug — fail before
+  // Self-check (§8.1): prove the EXACT string we show the user re-imports to a
+  // key that opens the canary — i.e. the §8.2 new-device unlock will succeed.
+  // Re-deriving from `workspaceKey` (not reusing `cryptoKey`) is what makes this
+  // a real proof of recoverability, not just "this key opens it". Fail before
   // creating a server row whose canary no device could ever open.
-  if (!(await validateCanary(cryptoKey, wkCanary, workspaceId))) {
-    throw new Error('createEncryptedWorkspace: freshly minted canary failed self-validation')
+  const verifyKey = await importWorkspaceKey(parseWorkspaceKey(workspaceKey))
+  if (!(await validateCanary(verifyKey, wkCanary, workspaceId))) {
+    throw new Error('createEncryptedWorkspace: minted canary failed round-trip self-validation')
   }
 
   // Server row first: if the RPC throws, we've written no local key or pin for
@@ -69,8 +73,22 @@ export const createEncryptedWorkspace = async <T extends object>(
     wkCanary,
   })
 
-  await deps.keyStore.put(deps.userId, workspaceId, cryptoKey)
+  // Pin e2ee as soon as the server row exists — the pin is the durable record
+  // that this workspace is encrypted and MUST be set even if the key write
+  // below fails. Then best-effort persist the key. If the put fails (IndexedDB
+  // quota / private mode), the workspace is simply LOCKED on this device — the
+  // user has the WK we return and can paste it to unlock — rather than an
+  // orphaned workspace whose mode no device knows.
   setModePin(deps.userId, workspaceId, 'e2ee')
+  try {
+    await deps.keyStore.put(deps.userId, workspaceId, cryptoKey)
+  } catch (err) {
+    console.warn(
+      `createEncryptedWorkspace: key store write failed for ${workspaceId}; ` +
+        'workspace is locked until the saved WK is re-pasted',
+      err,
+    )
+  }
 
   return { ...created, workspaceKey }
 }
