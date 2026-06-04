@@ -59,17 +59,16 @@ export const unlockWorkspaceWithKey = async (
   }
 
   // Canary validated → this workspace is genuinely e2ee. Pin it FIRST (in the
-  // quarantine case the pin is what defeats a server downgrade lie, and it must
-  // stick even if the key write below fails), then persist the key. Re-pinning
-  // an already-e2ee workspace (post-wipe re-paste) is a no-op.
-  setModePin(userId, workspaceId, 'e2ee')
+  // quarantine case the pin is what defeats a server downgrade lie), then
+  // persist the key. Either write can fail if storage is blocked/full (private
+  // mode, IndexedDB quota, localStorage disabled); both surface as a retryable
+  // 'storage' result rather than throwing out of the flow, so the caller can
+  // reset and report. Re-pinning an already-e2ee workspace is a no-op.
   try {
+    setModePin(userId, workspaceId, 'e2ee')
     await keyStore.put(userId, workspaceId, key)
   } catch (err) {
-    // Valid key, but this device can't store it (IndexedDB quota / private
-    // mode). Report so the caller can offer a retry — the workspace stays
-    // e2ee-pinned-but-locked, never silently stuck mid-unlock.
-    console.warn(`unlockWorkspaceWithKey: key store write failed for ${workspaceId}`, err)
+    console.warn(`unlockWorkspaceWithKey: persisting unlock failed for ${workspaceId}`, err)
     return { ok: false, reason: 'storage' }
   }
   return { ok: true }
