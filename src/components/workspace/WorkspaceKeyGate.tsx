@@ -17,8 +17,9 @@ interface Props {
    *  genuinely-plaintext workspace (then only confirm-plaintext can resolve it). */
   canary: string | null
   /** Called after the gate is resolved (WK accepted, or plaintext confirmed) so
-   *  the host can re-resolve the workspace and run its bootstrap. */
-  onResolved: () => void
+   *  the host can re-materialize + re-resolve the workspace. May be async (the
+   *  host awaits a drain); the gate awaits it so a failure resets the button. */
+  onResolved: () => void | Promise<void>
 }
 
 /**
@@ -54,7 +55,10 @@ export function WorkspaceKeyGate({
         keyStore: getWorkspaceKeyStore(),
       })
       if (result.ok) {
-        onResolved()
+        // Await — the host's onResolved drains/materializes, which can fail
+        // (local DB / decryption). If it rejects, the catch below resets `busy`
+        // and surfaces the error instead of leaving the button stuck.
+        await onResolved()
         return
       }
       setBusy(false)
@@ -72,7 +76,7 @@ export function WorkspaceKeyGate({
     }
   }
 
-  const confirmPlaintext = () => {
+  const confirmPlaintext = async () => {
     try {
       setModePin(userId, workspaceId, 'plaintext')
     } catch (err) {
@@ -81,7 +85,11 @@ export function WorkspaceKeyGate({
       setError(err instanceof Error ? err.message : 'Could not confirm plaintext')
       return
     }
-    onResolved()
+    try {
+      await onResolved()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not load this workspace.')
+    }
   }
 
   const name = workspaceName ? `"${workspaceName}"` : 'This workspace'
@@ -133,7 +141,7 @@ export function WorkspaceKeyGate({
               No key because it's not encrypted? Confirm to load it as a plain workspace. This
               choice is permanent for this workspace on every device.
             </p>
-            <Button type="button" variant="secondary" className="w-full" onClick={confirmPlaintext}>
+            <Button type="button" variant="secondary" className="w-full" onClick={() => void confirmPlaintext()}>
               This workspace is not encrypted
             </Button>
           </div>

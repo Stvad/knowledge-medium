@@ -460,6 +460,31 @@ const App = () => {
     repo.setReadOnly(activeRole === 'viewer')
   }, [initial.kind, activeRole, repo])
 
+  // Always watch the URL hash so navigating to a different workspace (Back
+  // button / manual hash edit) re-resolves the layout — even while a gate or
+  // loading screen is shown. In those states there's no layout, so the
+  // projection effect above is inactive and isn't registering the hashchange
+  // listener; without this a user who opened a locked workspace would be stuck
+  // until a full reload. Safe to run alongside the projection's own listener
+  // when ready: the reducer only bumps on a workspace change, so the second
+  // handler in a batch sees the already-updated hash and no-ops.
+  useEffect(() => {
+    const onHashChange = () => {
+      const nextHash = getCurrentHash()
+      setHashSnapshot(current =>
+        layoutWorkspaceChanged(current.hash, nextHash)
+          ? {hash: nextHash, version: current.version + 1}
+          : current,
+      )
+    }
+    window.addEventListener('hashchange', onHashChange)
+    window.addEventListener('popstate', onHashChange)
+    return () => {
+      window.removeEventListener('hashchange', onHashChange)
+      window.removeEventListener('popstate', onHashChange)
+    }
+  }, [])
+
   // Re-resolve the initial layout (bumping the version busts the cache) — used
   // when a gate is resolved or a pending workspace row finally replicates.
   const reResolve = useCallback(() => {
