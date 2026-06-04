@@ -23,7 +23,7 @@ import {
   parseWorkspaceKey,
 } from '../../crypto/workspaceKey.js'
 import type { WorkspaceKeyStore } from '../keyStore.js'
-import { setModePin } from '../modePin.js'
+import { canPersistPins, setModePin } from '../modePin.js'
 
 export interface CreateEncryptedWorkspaceDeps<T> {
   /** The signed-in user — keys and pins are per (user, workspace). */
@@ -46,6 +46,18 @@ export const createEncryptedWorkspace = async <T extends object>(
   name: string,
   deps: CreateEncryptedWorkspaceDeps<T>,
 ): Promise<T & { workspaceKey: string }> => {
+  // Preflight: e2ee needs durable pin storage (the pin is the wipe-surviving
+  // authority and the §6 gate keys off it). If localStorage can't persist,
+  // refuse BEFORE creating the server row — otherwise we'd mint a server-side
+  // encrypted workspace this device could never open (the pin would be lost and
+  // re-pasting the WK would loop on the same failed write). Plaintext is fine.
+  if (!canPersistPins()) {
+    throw new Error(
+      'Encrypted workspaces need browser storage that is currently unavailable ' +
+        '(private mode or storage disabled). You can still create a regular workspace.',
+    )
+  }
+
   const workspaceId = (deps.newWorkspaceId ?? (() => crypto.randomUUID()))()
   const keyBytes = (deps.generateKeyBytes ?? generateWorkspaceKeyBytes)()
   // The paste-friendly string is the ONLY place the raw key ever leaves this

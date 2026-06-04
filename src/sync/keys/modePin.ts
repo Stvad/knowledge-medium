@@ -88,6 +88,23 @@ export const confirmPlaintextForSession = (userId: string, workspaceId: string):
   sessionPlaintext.add(pinStorageKey(userId, workspaceId))
 }
 
+/** True if this device can durably persist mode pins (localStorage is writable).
+ *  E2EE REQUIRES this — the pin is the wipe-surviving authority and the §6 gate
+ *  keys off it — so the create flow preflights it rather than minting an
+ *  encrypted workspace this device could never open. Plaintext doesn't need it
+ *  (it has the session fallback). Probes with a temp key and cleans up. */
+export const canPersistPins = (): boolean => {
+  if (!hasLocalStorage()) return false
+  try {
+    const probe = `${E2EE_MODE_PIN_PREFIX}__probe__`
+    localStorage.setItem(probe, '1')
+    localStorage.removeItem(probe)
+    return true
+  } catch {
+    return false
+  }
+}
+
 /**
  * Pin a workspace's mode. Set-once and locally immutable: re-pinning the
  * same value is a no-op; attempting to pin a *different* value throws,

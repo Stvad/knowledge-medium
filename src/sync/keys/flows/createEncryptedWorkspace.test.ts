@@ -87,23 +87,29 @@ describe('createEncryptedWorkspace (§8.1)', () => {
     expect(getModePin(USER, 'ws-nokey')).toBe('e2ee')
   })
 
-  it('still returns the WK when the mode-pin write fails (localStorage blocked)', async () => {
-    // The server row exists, so the one-time WK MUST reach the caller even if
-    // the pin write throws — otherwise it's lost on the stack and the workspace
-    // is orphaned. The key store write (separate) still succeeds here.
+  it('refuses to create (no server row, no local key) when pin storage is unavailable', async () => {
+    // E2EE needs durable pin storage. If localStorage can't persist, the flow
+    // must refuse BEFORE creating the server row — otherwise the user would have
+    // a server-side encrypted workspace this device can never open.
     const keyStore = new InMemoryWorkspaceKeyStore()
+    let rpcCalled = false
     const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new Error('localStorage is blocked')
     })
     try {
-      const result = await createEncryptedWorkspace('Secret', {
-        userId: USER,
-        keyStore,
-        newWorkspaceId: () => 'ws-nopin',
-        createWorkspace: async (_name, options) => ({ workspaceId: options.workspaceId }),
-      })
-      expect(result.workspaceKey.startsWith(WK_PREFIX)).toBe(true)
-      expect(await keyStore.get(USER, 'ws-nopin')).not.toBeNull()
+      await expect(
+        createEncryptedWorkspace('Secret', {
+          userId: USER,
+          keyStore,
+          newWorkspaceId: () => 'ws-nostore',
+          createWorkspace: async (_name, options) => {
+            rpcCalled = true
+            return { workspaceId: options.workspaceId }
+          },
+        }),
+      ).rejects.toThrow(/storage/i)
+      expect(rpcCalled).toBe(false)
+      expect(await keyStore.get(USER, 'ws-nostore')).toBeNull()
     } finally {
       spy.mockRestore()
     }
