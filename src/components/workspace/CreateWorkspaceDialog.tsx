@@ -63,17 +63,30 @@ export function CreateWorkspaceDialog({open, onOpenChange, onCreated}: Props) {
           keyStore: getWorkspaceKeyStore(),
           createWorkspace,
         })
-        await primeLocalWorkspaceAndMember(repo, result.workspace, result.member)
-        // Don't navigate yet — show the key once and require confirmation.
+        // Reveal the one-time WK IMMEDIATELY — the server workspace now exists
+        // and this key is its only recovery. Priming local state is just an
+        // optimization (the workspace syncs down regardless), so it must NOT be
+        // able to abort the reveal — best-effort, after the reveal is set.
         setReveal({workspace: result.workspace, workspaceKey: result.workspaceKey})
         setSubmitting(false)
+        try {
+          await primeLocalWorkspaceAndMember(repo, result.workspace, result.member)
+        } catch (err) {
+          console.warn('Failed to prime new encrypted workspace locally (will sync down)', err)
+        }
         return
       }
 
       const result = await createWorkspace(trimmed)
       // Plaintext create confirms plaintext (§8.1): pin so first-encounter
       // handling never later quarantines a workspace we created ourselves.
-      setModePin(repo.user.id, result.workspace.id, 'plaintext')
+      // Best-effort — a blocked localStorage write shouldn't fail the create
+      // (worst case the workspace quarantines once on next load).
+      try {
+        setModePin(repo.user.id, result.workspace.id, 'plaintext')
+      } catch (err) {
+        console.warn('Failed to pin new workspace plaintext (will quarantine on next load)', err)
+      }
       // Optimistically write to local SQLite so the new workspace shows up
       // in the switcher before PowerSync replicates it. We use the canonical
       // member row returned by the RPC (real id) so we don't collide with the

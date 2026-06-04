@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { InMemoryWorkspaceKeyStore } from '../keyStore.js'
 import { getModePin } from '../modePin.js'
 import { importWorkspaceKey, parseWorkspaceKey, WK_PREFIX } from '../../crypto/workspaceKey.js'
@@ -85,6 +85,28 @@ describe('createEncryptedWorkspace (§8.1)', () => {
     })
     expect(result.workspaceKey.startsWith(WK_PREFIX)).toBe(true)
     expect(getModePin(USER, 'ws-nokey')).toBe('e2ee')
+  })
+
+  it('still returns the WK when the mode-pin write fails (localStorage blocked)', async () => {
+    // The server row exists, so the one-time WK MUST reach the caller even if
+    // the pin write throws — otherwise it's lost on the stack and the workspace
+    // is orphaned. The key store write (separate) still succeeds here.
+    const keyStore = new InMemoryWorkspaceKeyStore()
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('localStorage is blocked')
+    })
+    try {
+      const result = await createEncryptedWorkspace('Secret', {
+        userId: USER,
+        keyStore,
+        newWorkspaceId: () => 'ws-nopin',
+        createWorkspace: async (_name, options) => ({ workspaceId: options.workspaceId }),
+      })
+      expect(result.workspaceKey.startsWith(WK_PREFIX)).toBe(true)
+      expect(await keyStore.get(USER, 'ws-nopin')).not.toBeNull()
+    } finally {
+      spy.mockRestore()
+    }
   })
 
   it('generates a distinct random WK per call by default', async () => {

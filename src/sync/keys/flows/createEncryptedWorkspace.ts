@@ -73,13 +73,22 @@ export const createEncryptedWorkspace = async <T extends object>(
     wkCanary,
   })
 
-  // Pin e2ee as soon as the server row exists — the pin is the durable record
-  // that this workspace is encrypted and MUST be set even if the key write
-  // below fails. Then best-effort persist the key. If the put fails (IndexedDB
-  // quota / private mode), the workspace is simply LOCKED on this device — the
-  // user has the WK we return and can paste it to unlock — rather than an
-  // orphaned workspace whose mode no device knows.
-  setModePin(deps.userId, workspaceId, 'e2ee')
+  // Both local writes below are BEST-EFFORT: once the server e2ee row exists,
+  // the returned `workspaceKey` is the ONLY recovery path, so nothing here may
+  // throw and abort before we return it. A failed pin/key write just leaves the
+  // workspace unpinned/locked on THIS device — the user still has the WK we
+  // return (and the §6 first-encounter gate prompts to paste it on next load),
+  // rather than an orphaned workspace whose key was lost on the stack.
+  try {
+    // Pin first — the durable record that this workspace is encrypted.
+    setModePin(deps.userId, workspaceId, 'e2ee')
+  } catch (err) {
+    console.warn(
+      `createEncryptedWorkspace: mode-pin write failed for ${workspaceId}; ` +
+        'the workspace will prompt for the saved WK on next load',
+      err,
+    )
+  }
   try {
     await deps.keyStore.put(deps.userId, workspaceId, cryptoKey)
   } catch (err) {
