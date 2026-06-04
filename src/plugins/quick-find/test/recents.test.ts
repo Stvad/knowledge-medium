@@ -1,9 +1,9 @@
 // @vitest-environment node
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import {
   RECENT_BLOCKS_LIMIT,
@@ -20,7 +20,8 @@ interface Harness {
 }
 
 const setup = async (initialIds: string[]): Promise<Harness> => {
-  const h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   let idCursor = 0
@@ -44,8 +45,11 @@ const setup = async (initialIds: string[]): Promise<Harness> => {
   return {h, repo}
 }
 
+let sharedDb: TestDb
 let env: Harness
-afterEach(async () => { await env?.h.cleanup() })
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
+afterEach(() => { env?.repo.stopSyncObserver() })
 
 const flush = async (repo: Repo) => {
   await repo.tx(async () => {}, {scope: ChangeScope.UiState})
