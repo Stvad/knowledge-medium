@@ -110,7 +110,11 @@ export const arePinsSeeded = (userId: string): boolean => {
 }
 
 const markPinsSeeded = (userId: string): void => {
-  if (!hasLocalStorage()) return
+  // Throw (rather than silently no-op) when the seal can't be persisted, so
+  // seal-first seeding can abort BEFORE writing any pin — see seedModePinsOnce.
+  if (!hasLocalStorage()) {
+    throw new Error('cannot seal E2EE pin seed: localStorage unavailable')
+  }
   localStorage.setItem(seededMarkerKey(userId), ROLLOUT_SEED_VERSION)
 }
 
@@ -140,12 +144,24 @@ export interface SeedEntry {
  *
  * `entries` are the signed-in user's memberships. Returns the number of
  * pins written. No-op (returns 0) if already seeded for this user.
+ *
+ * SEAL FIRST: the "ran once" marker is written BEFORE any pin. If the seal
+ * can't be persisted (localStorage blocked) this throws before trusting a
+ * single server flag — so we never leave the dangerous "some pins written but
+ * not sealed" state, which a later boot would re-seed (re-trusting the server
+ * `encryption_mode` for any membership that synced in the meantime — a
+ * downgrade vector if a hostile/stale server flagged an e2ee workspace `none`).
+ * If sealing succeeds but a later pin write fails, the workspace is already
+ * sealed, so the unpinned remainder takes the first-encounter gate on next
+ * load — never a re-seed. (The caller wraps this best-effort so a seal failure
+ * doesn't crash startup.)
  */
 export const seedModePinsOnce = (
   userId: string,
   entries: readonly SeedEntry[],
 ): number => {
   if (arePinsSeeded(userId)) return 0
+  markPinsSeeded(userId)
   let written = 0
   for (const entry of entries) {
     if (getModePin(userId, entry.workspaceId) === null) {
@@ -153,6 +169,5 @@ export const seedModePinsOnce = (
       written++
     }
   }
-  markPinsSeeded(userId)
   return written
 }

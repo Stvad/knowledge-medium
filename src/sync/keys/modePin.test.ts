@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   arePinsSeeded,
   getModePin,
@@ -82,5 +82,29 @@ describe('rollout pin seed', () => {
     const written = seedModePinsOnce('user-2', [{ workspaceId: WS_A, serverMode: 'plaintext' }])
     expect(written).toBe(1)
     expect(getModePin('user-2', WS_A)).toBe('plaintext')
+  })
+
+  it('seals BEFORE pinning: a pin write that fails mid-seed still leaves the device sealed', () => {
+    // Seal-first invariant: if the marker were written LAST, a pin-write failure
+    // would leave the device unsealed and a later boot would re-seed — re-trusting
+    // the server flag for memberships synced in the meantime (a downgrade vector).
+    // Fail the pin write but allow the seal-marker write.
+    const realSetItem = Storage.prototype.setItem
+    const spy = vi
+      .spyOn(Storage.prototype, 'setItem')
+      .mockImplementation(function (this: Storage, key: string, value: string) {
+        if (key.startsWith('kmp-e2ee-mode:')) throw new Error('quota exceeded')
+        realSetItem.call(this, key, value)
+      })
+    try {
+      expect(() =>
+        seedModePinsOnce(USER, [{ workspaceId: WS_A, serverMode: 'plaintext' }]),
+      ).toThrow()
+      // Sealed despite the pin failure → a later seed is a no-op (no re-trust).
+      expect(arePinsSeeded(USER)).toBe(true)
+    } finally {
+      spy.mockRestore()
+    }
+    expect(seedModePinsOnce(USER, [{ workspaceId: WS_A, serverMode: 'plaintext' }])).toBe(0)
   })
 })
