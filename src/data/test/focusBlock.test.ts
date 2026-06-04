@@ -1,11 +1,11 @@
 // @vitest-environment node
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { focusBlock, focusedBlockLocationProp, isEditingProp, topLevelBlockIdProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 
 const WS = 'ws-1'
 const USER = {id: 'user-1'}
@@ -17,7 +17,8 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   let now = 1700_000_000_000
   let txSeq = 0
   const repo = new Repo({
@@ -48,14 +49,17 @@ const setup = async (): Promise<Harness> => {
   return {h, repo}
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 
 beforeEach(async () => {
   env = await setup()
 })
 
 afterEach(async () => {
-  await env.h.cleanup()
+  env.repo.stopSyncObserver()
 })
 
 describe('focusBlock', () => {

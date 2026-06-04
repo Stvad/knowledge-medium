@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MouseEvent } from 'react'
 import {
   blockOpenerAction,
@@ -11,7 +11,7 @@ import {
 } from '@/utils/navigation'
 import { panelHistory } from '@/utils/panelHistory'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
 import {
@@ -36,9 +36,11 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  // Shared DB opened once per file (beforeAll), reset here per test.
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const repo = new Repo({
-    db: h.db,
+    db: sharedDb.db,
     cache: new BlockCache(),
     user: USER,
     registerKernelProcessors: false,
@@ -47,16 +49,19 @@ const setup = async (): Promise<Harness> => {
   return {h, repo}
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 
 beforeEach(async () => {
   __resetLayoutSessionIdForTesting()
   env = await setup()
 })
 
-afterEach(async () => {
+afterEach(() => {
   vi.unstubAllGlobals()
-  await env.h.cleanup()
+  env.repo.stopSyncObserver()
 })
 
 const layoutSessionBlock = async () => {

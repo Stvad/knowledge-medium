@@ -1,10 +1,10 @@
 // @vitest-environment node
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import type { BlockData } from '@/data/api'
 import { aliasesProp } from '@/data/properties.js'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import {
   labelForBlockData,
@@ -23,7 +23,8 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   let idCursor = 0
@@ -38,9 +39,14 @@ const setup = async (): Promise<Harness> => {
   return {h, repo}
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-afterEach(async () => { await env.h.cleanup() })
+// Dispose the per-test Repo's sync observer so its db.onChange subscription
+// doesn't leak onto the shared DB (closed once in afterAll).
+afterEach(() => { env.repo.stopSyncObserver() })
 
 const create = async (args: {
   id: string

@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { resolveFacetRuntimeSync } from '@/extensions/facet'
 import {
   BlockNotFoundForTypeError,
@@ -11,13 +11,16 @@ import {
   defineSameTxProcessor,
 } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { sameTxProcessorsFacet, typesFacet } from '@/data/facets'
 import { addedTypes, getBlockTypes, typesProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
 
+let sharedDb: TestDb
 let h: TestDb
 let repo: Repo
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 
 const createBlock = async (id: string, properties: Record<string, unknown> = {}) => {
   await repo.tx(async tx => {
@@ -32,7 +35,8 @@ const createBlock = async (id: string, properties: Record<string, unknown> = {})
 }
 
 beforeEach(async () => {
-  h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  h = sharedDb
   let timeCursor = 1700_000_000_000
   let idCursor = 0
   repo = new Repo({
@@ -47,9 +51,7 @@ beforeEach(async () => {
   })
 })
 
-afterEach(async () => {
-  await h.cleanup()
-})
+afterEach(() => { repo.stopSyncObserver() })
 
 describe('Repo type membership orchestration', () => {
   it('adds a type, encodes initial values, and runs a type-add same-tx processor only on the first transition', async () => {

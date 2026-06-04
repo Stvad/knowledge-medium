@@ -22,10 +22,10 @@
  * so a local write can't double-fire through the sync path by construction.
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams } from '@/data/blockSchema'
 import { Repo } from '../repo'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
@@ -42,7 +42,9 @@ interface Harness { h: TestDb; cache: BlockCache; repo: Repo }
 const setup = async (
   opts: {startTail?: boolean} = {},
 ): Promise<Harness> => {
-  const h = await createTestDb()
+  // Shared DB opened once per file (beforeAll), reset per test in setup().
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const cache = new BlockCache()
   const repo = new Repo({
     db: h.db,
@@ -56,12 +58,13 @@ const setup = async (
   return {h, cache, repo}
 }
 
+let sharedDb: TestDb
 let env: Harness
-afterEach(async () => {
-  if (env) {
-    env.repo.stopSyncObserver()
-    await env.h.cleanup()
-  }
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
+afterEach(() => {
+  // Dispose the per-test observer; the shared DB closes once in afterAll.
+  if (env) env.repo.stopSyncObserver()
 })
 
 const create = async (

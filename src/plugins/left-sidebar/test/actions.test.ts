@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { User } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import {
   __resetLayoutSessionIdForTesting,
@@ -22,7 +22,8 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   let id = 0
   const repo = new Repo({
     db: h.db,
@@ -35,7 +36,10 @@ const setup = async (): Promise<Harness> => {
   return {h, repo}
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 
 beforeEach(async () => {
   __resetLayoutSessionIdForTesting()
@@ -43,7 +47,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  await env.h.cleanup()
+  env.repo.stopSyncObserver()
 })
 
 describe('left sidebar actions', () => {

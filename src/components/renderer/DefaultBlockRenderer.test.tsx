@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import {
   ChangeScope,
@@ -8,7 +8,7 @@ import {
   defineProperty,
 } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { propertySchemasFacet } from '@/data/facets'
@@ -102,14 +102,18 @@ const dispatchPaste = (target: Element, text: string): Event => {
 }
 
 describe('DefaultBlockRenderer paste handling', () => {
+  let sharedDb: TestDb
   let h: TestDb
   let repo: Repo
   let runtime: FacetRuntime
 
+  beforeAll(async () => { sharedDb = await createTestDb() })
+  afterAll(async () => { await sharedDb.cleanup() })
   beforeEach(async () => {
     vi.mocked(pasteMultilineText).mockClear()
 
-    h = await createTestDb()
+    await resetTestDb(sharedDb.db)
+    h = sharedDb
     let now = 1700_000_000_000
     let txSeq = 0
     repo = new Repo({
@@ -176,7 +180,7 @@ describe('DefaultBlockRenderer paste handling', () => {
     cleanup()
     repoRef.current = undefined
     uiStateBlockRef.current = undefined
-    await h.cleanup()
+    repo.stopSyncObserver()
   })
 
   const renderBlock = () =>

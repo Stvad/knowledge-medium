@@ -1,10 +1,10 @@
 // @vitest-environment node
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createElement, type JSX } from 'react'
 import { resolveFacetRuntimeSync } from '@/extensions/facet'
 import { ChangeScope, codecs, definePreset, defineProperty, type AnyValuePreset } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
@@ -25,12 +25,14 @@ interface Harness {
 }
 
 const setup = async (extraPresets: readonly AnyValuePreset[] = []): Promise<Harness> => {
-  const h = await createTestDb()
+  // Shared DB opened once per file (beforeAll); each test calls setup()
+  // inline, so reset here gives the per-test clean slate.
+  await resetTestDb(sharedDb.db)
   const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   let idCursor = 0
   const repo = new Repo({
-    db: h.db,
+    db: sharedDb.db,
     cache,
     user: {id: 'user-1'},
     now: () => ++timeCursor,
@@ -48,10 +50,14 @@ const setup = async (extraPresets: readonly AnyValuePreset[] = []): Promise<Harn
   await getOrCreatePropertiesPage(repo, WS)
   const service = repo.userSchemas
   const dispose = service.start()
+  const h: TestDb = {db: sharedDb.db, cleanup: async () => { repo.stopSyncObserver() }}
   return {h, repo, service, dispose}
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 afterEach(async () => {
   env.dispose()
   await env.h.cleanup()

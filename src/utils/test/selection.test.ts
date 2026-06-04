@@ -1,9 +1,9 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { BlockCache } from '@/data/blockCache'
 import { ChangeScope, type User } from '@/data/api'
 import { isCollapsedProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import {
   blockAfterSubtreeRemoval,
   blockIdsInOrderedSelectionRange,
@@ -20,9 +20,11 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  // Shared DB opened once per file (beforeAll), reset here per test.
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const repo = new Repo({
-    db: h.db,
+    db: sharedDb.db,
     cache: new BlockCache(),
     user: USER,
     registerKernelProcessors: false,
@@ -31,11 +33,18 @@ const setup = async (): Promise<Harness> => {
   return {h, repo}
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 
 beforeEach(async () => {
   env = await setup()
 })
+
+// The original had no afterEach (and so never closed its per-test DB);
+// dispose the per-test Repo's observer now that the DB is shared.
+afterEach(() => { env.repo.stopSyncObserver() })
 
 const seedOutline = async (
   repo: Repo,

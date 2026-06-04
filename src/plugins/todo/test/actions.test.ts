@@ -1,12 +1,12 @@
 // @vitest-environment node
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { typesProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { resolveFacetRuntimeSync } from '@/extensions/facet'
 import { SWIPE_RIGHT_BLOCK_ACTION_ID } from '@/plugins/swipe-quick-actions'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types'
@@ -14,11 +14,15 @@ import { cycleTodoState, todoActions } from '../actions'
 import { todoDataExtension } from '../dataExtension'
 import { statusProp, TODO_TYPE } from '../schema'
 
+let sharedDb: TestDb
 let h: TestDb
 let repo: Repo
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 
 beforeEach(async () => {
-  h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  h = sharedDb
   let now = 1700_000_000_000
   let id = 0
   repo = new Repo({
@@ -42,9 +46,7 @@ beforeEach(async () => {
   }), {scope: ChangeScope.BlockDefault, description: 'create block'})
 })
 
-afterEach(async () => {
-  await h.cleanup()
-})
+afterEach(() => { repo.stopSyncObserver() })
 
 describe('cycleTodoState', () => {
   it('rotates not todo -> open -> done -> not todo', async () => {

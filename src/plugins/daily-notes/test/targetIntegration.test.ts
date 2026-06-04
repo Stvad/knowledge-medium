@@ -14,14 +14,14 @@
  *     typesProp; shares its namespace with `dailyNoteBlockId`.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { aliasesProp } from '@/data/internals/coreProperties'
 import { typesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { BlockCache } from '@/data/blockCache'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import { resolveFacetRuntimeSync } from '@/extensions/facet'
 import {
@@ -42,7 +42,8 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   let idCursor = 0
@@ -61,9 +62,14 @@ const setup = async (): Promise<Harness> => {
   return {h, repo}
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-afterEach(async () => { await env.h.cleanup() })
+// Dispose the per-test Repo's sync observer so its db.onChange subscription
+// doesn't leak onto the shared DB (closed once in afterAll).
+afterEach(() => { env.repo.stopSyncObserver() })
 
 describe('dailyNoteBlockId', () => {
   it('is stable for a given (workspaceId, iso)', () => {

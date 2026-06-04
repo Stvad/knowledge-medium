@@ -2,10 +2,10 @@
 
 import { Suspense } from 'react'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, type User } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import { actionContextsFacet } from '@/extensions/core'
 import { resolveFacetRuntimeSync, type FacetRuntime } from '@/extensions/facet'
@@ -120,12 +120,16 @@ function ActiveNormalModeProbe() {
 }
 
 describe('useShortcutSurfaceActivations', () => {
+  let sharedDb: TestDb
   let h: TestDb
   let repo: Repo
   let runtime: FacetRuntime
+  beforeAll(async () => { sharedDb = await createTestDb() })
+  afterAll(async () => { await sharedDb.cleanup() })
 
   beforeEach(async () => {
-    h = await createTestDb()
+    await resetTestDb(sharedDb.db)
+    h = sharedDb
     let txSeq = 0
     repo = new Repo({
       db: h.db,
@@ -202,10 +206,10 @@ describe('useShortcutSurfaceActivations', () => {
     }, {scope: ChangeScope.BlockDefault, description: 'create shortcut surface fixture'})
   })
 
-  afterEach(async () => {
+  afterEach(() => {
     cleanup()
+    repo.stopSyncObserver()
     testGlobals.repo = undefined
-    await h.cleanup()
   })
 
   it('moves block shortcut ownership when the active panel changes without changing focused location', async () => {

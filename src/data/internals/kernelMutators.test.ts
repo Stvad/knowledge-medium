@@ -13,7 +13,7 @@
  * (stage 1.6) will migrate to.
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   CORE_BLOCK_MERGED_EVENT,
   ChangeScope,
@@ -24,7 +24,7 @@ import {
   type CoreBlockMergedEvent,
 } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '../repo'
 import { isCollapsedProp } from '@/data/properties'
 import { aliasesProp } from './coreProperties'
@@ -41,7 +41,11 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  // One real PowerSync DB is opened per file (beforeAll) and reset between
+  // tests — ~100x cheaper than reopening it for each case. A fresh Repo per
+  // test keeps the cache / handle-store / registry isolated.
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   let idCursor = 0
@@ -71,9 +75,15 @@ const setup = async (): Promise<Harness> => {
   }
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-afterEach(async () => { await env.h.cleanup() })
+// Dispose the per-test Repo's sync observer (started by default in the Repo
+// constructor) so its db.onChange subscription doesn't leak onto the shared
+// DB; the DB itself is closed once in afterAll.
+afterEach(() => { env.repo.stopSyncObserver() })
 
 /** Seed a small tree: root, three children A/B/C at depth 1. */
 const seedABC = async () => {

@@ -14,13 +14,13 @@
  * the source-gating and trigger interactions are the real ones.
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   BLOCKS_SYNCED_RAW_TABLE,
   BLOCK_STORAGE_COLUMNS,
   blockToRowParams,
 } from '@/data/blockSchema'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { materializeStagingRows, type Materializability } from './materialize.js'
 import { encodeForWire, type GetCek } from '../transform.js'
 import { generateWorkspaceKeyBytes, importWorkspaceKey } from '../crypto/workspaceKey.js'
@@ -58,9 +58,12 @@ const stagingCiphertextParams = (
   return params
 }
 
+let sharedDb: TestDb
 let env: TestDb
-beforeEach(async () => { env = await createTestDb() })
-afterEach(async () => { await env.cleanup() })
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
+// Reuse one DB across the file; reset (not reopen) per test.
+beforeEach(async () => { await resetTestDb(sharedDb.db); env = sharedDb })
 
 const stageRow = (data: BlockData, params?: unknown[]) =>
   env.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, params ?? blockToRowParams(data))

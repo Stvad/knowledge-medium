@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BlockCache } from '@/data/blockCache.js'
 import { ChangeScope, type User } from '@/data/api'
 import { Repo } from '@/data/repo.js'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb.js'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb.js'
 import {
   focusBlock,
   focusedBlockLocationProp,
@@ -30,7 +30,8 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const repo = new Repo({
     db: h.db,
     cache: new BlockCache(),
@@ -104,7 +105,10 @@ const decorateAction = <T extends typeof ActionContextTypes.NORMAL_MODE | typeof
   return decorator.decorate(action as ActionConfig) as ActionConfig<T>
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 
 beforeEach(async () => {
   env = await setup()
@@ -113,7 +117,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   document.body.innerHTML = ''
-  await env.h.cleanup()
+  env.repo.stopSyncObserver()
 })
 
 describe('spatial navigation selection actions', () => {

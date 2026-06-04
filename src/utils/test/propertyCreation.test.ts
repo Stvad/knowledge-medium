@@ -1,18 +1,22 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import { showPropertiesProp } from '@/data/properties'
 import { consumePendingPropertyCreateRequest } from '@/utils/propertyNavigation'
 import { convertEmptyChildBlockToProperty } from '@/utils/propertyCreation'
 
 describe('convertEmptyChildBlockToProperty', () => {
+  let sharedDb: TestDb
   let h: TestDb
   let repo: Repo
 
+  beforeAll(async () => { sharedDb = await createTestDb() })
+  afterAll(async () => { await sharedDb.cleanup() })
   beforeEach(async () => {
-    h = await createTestDb()
+    await resetTestDb(sharedDb.db)
+    h = sharedDb
     let now = 1700_000_000_000
     let txSeq = 0
     repo = new Repo({
@@ -44,7 +48,7 @@ describe('convertEmptyChildBlockToProperty', () => {
 
   afterEach(async () => {
     consumePendingPropertyCreateRequest('parent')
-    await h.cleanup()
+    repo.stopSyncObserver()
   })
 
   it('turns an empty child block into a pending property creation on its parent', async () => {

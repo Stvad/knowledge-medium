@@ -19,13 +19,13 @@
  * trigger interactions are the real ones on both sides.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import {
   BLOCKS_SYNCED_RAW_TABLE,
   BLOCK_STORAGE_COLUMNS,
   blockToRowParams,
 } from '@/data/blockSchema'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { materializeStagingRows, type Materializability } from './materialize.js'
 import type { GetCek } from '../transform.js'
 import type { BlockData } from '@/data/api'
@@ -100,10 +100,20 @@ const stageAndMaterialize = async (db: TestDb['db'], b: BlockData) => {
   )
 }
 
+// Two DBs: the "reference" (direct blocks write) and the "observer" (staged +
+// materialized) path, compared for parity. Open each once; reset per test.
+let sharedRef: TestDb
+let sharedObs: TestDb
 let ref: TestDb
 let obs: TestDb
-beforeEach(async () => { ref = await createTestDb(); obs = await createTestDb() })
-afterEach(async () => { await ref.cleanup(); await obs.cleanup() })
+beforeAll(async () => { sharedRef = await createTestDb(); sharedObs = await createTestDb() })
+afterAll(async () => { await sharedRef.cleanup(); await sharedObs.cleanup() })
+beforeEach(async () => {
+  await resetTestDb(sharedRef.db)
+  await resetTestDb(sharedObs.db)
+  ref = sharedRef
+  obs = sharedObs
+})
 
 describe('cutover parity — plaintext block: observer path vs a direct blocks write', () => {
   it('produces an identical blocks row and identical derived indexes', async () => {

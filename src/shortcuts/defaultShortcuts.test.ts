@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { waitFor } from '@testing-library/react'
 import type { EditorView } from '@codemirror/view'
 import { BlockCache } from '@/data/blockCache'
 import { ChangeScope, type User } from '@/data/api'
 import { Repo } from '@/data/repo'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import {
   editorSelection,
   focusBlock,
@@ -51,7 +51,8 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const cache = new BlockCache()
   const repo = new Repo({
     db: h.db,
@@ -183,12 +184,15 @@ const isDeleted = async (id: string): Promise<boolean> => {
   return row.deleted === 1
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
   __resetLayoutSessionIdForTesting()
   env = await setup()
 })
-afterEach(async () => { await env.h.cleanup() })
+afterEach(async () => { env.repo.stopSyncObserver() })
 
 describe('default CodeMirror shortcuts', () => {
   it('prevents native CodeMirror handling for structural move shortcuts', () => {

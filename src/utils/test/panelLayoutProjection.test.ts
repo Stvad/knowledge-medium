@@ -1,9 +1,9 @@
 // @vitest-environment node
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, type User } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import { keysBetween } from '@/data/orderKey'
 import {
@@ -34,7 +34,8 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const repo = new Repo({
     db: h.db,
     cache: new BlockCache(),
@@ -47,9 +48,14 @@ const setup = async (): Promise<Harness> => {
   return {h, repo, layoutSessionBlockId: layoutSessionBlock.id}
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-afterEach(async () => { await env.h.cleanup() })
+// Dispose the per-test Repo's sync observer so its db.onChange subscription
+// doesn't leak onto the shared DB (closed once in afterAll).
+afterEach(() => { env.repo.stopSyncObserver() })
 
 const layoutSessionBlock = () => env.repo.block(env.layoutSessionBlockId)
 

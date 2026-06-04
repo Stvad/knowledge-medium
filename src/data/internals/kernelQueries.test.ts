@@ -10,7 +10,7 @@
  * loop works for non-kernel contributions.
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { resolveFacetRuntimeSync } from '@/extensions/facet'
 import {
@@ -21,7 +21,7 @@ import {
 } from '@/data/api'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { kernelDataExtension } from '../kernelDataExtension'
 import { queriesFacet } from '../facets'
 import { Repo } from '../repo'
@@ -37,7 +37,9 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  // Shared DB opened once per file, reset between tests; fresh Repo per test.
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   let idCursor = 0
@@ -54,9 +56,14 @@ const setup = async (): Promise<Harness> => {
   return {h, cache, repo}
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-afterEach(async () => { await env.h.cleanup() })
+// Dispose the per-test Repo's default sync observer so its db.onChange
+// subscription doesn't leak onto the shared DB (closed once in afterAll).
+afterEach(() => { env.repo.stopSyncObserver() })
 
 const create = async (args: {
   id: string

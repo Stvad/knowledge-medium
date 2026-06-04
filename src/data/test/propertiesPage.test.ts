@@ -1,13 +1,13 @@
 // @vitest-environment node
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { PAGE_TYPE, PROPERTIES_PAGE_TYPE } from '@/data/blockTypes'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { Repo } from '@/data/repo'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 
 const WS = 'ws-properties-page'
 
@@ -17,7 +17,8 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const repo = new Repo({
     db: h.db,
     cache: new BlockCache(),
@@ -28,9 +29,14 @@ const setup = async (): Promise<Harness> => {
   return {h, repo}
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-afterEach(async () => { await env.h.cleanup() })
+// Dispose the per-test Repo's sync observer so its db.onChange subscription
+// doesn't leak onto the shared DB (closed once in afterAll).
+afterEach(() => { env.repo.stopSyncObserver() })
 
 describe('getOrCreatePropertiesPage', () => {
   it('creates the singleton as both a page and properties page', async () => {

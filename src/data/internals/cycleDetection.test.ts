@@ -27,18 +27,22 @@
  * subscriber surface.
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CycleDetectedEvent } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams } from '@/data/blockSchema'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '../repo'
 
 interface Harness { h: TestDb; cache: BlockCache; repo: Repo }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
-  const h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const cache = new BlockCache()
   const repo = new Repo({
     db: h.db,
@@ -48,11 +52,8 @@ beforeEach(async () => {
   })
   env = { h, cache, repo }
 })
-afterEach(async () => {
-  if (env) {
-    env.repo.stopSyncObserver()
-    await env.h.cleanup()
-  }
+afterEach(() => {
+  if (env) env.repo.stopSyncObserver()
 })
 
 // "Newer than the seeded rows" (which carry updated_at = 0), so a sync-applied

@@ -20,12 +20,12 @@
  * production.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '../../../data/repo'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import {
@@ -64,12 +64,15 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  // Shared DB opened once per file (beforeAll), reset here per test; the
+  // returned h.cleanup disposes this Repo's observer rather than closing the
+  // shared DB, so the existing afterEach stays correct.
+  await resetTestDb(sharedDb.db)
   const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   let idCursor = 0
   const repo = new Repo({
-    db: h.db,
+    db: sharedDb.db,
     cache,
     user: {id: USER_ID},
     now: () => ++timeCursor,
@@ -88,10 +91,14 @@ const setup = async (): Promise<Harness> => {
     srsReschedulingDataExtension,
   ]))
   await getOrCreatePropertiesPage(repo, WORKSPACE)
+  const h: TestDb = {db: sharedDb.db, cleanup: async () => { repo.stopSyncObserver() }}
   return {h, repo}
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
 afterEach(async () => { await env.h.cleanup() })
 

@@ -13,7 +13,7 @@
  * tx.restore / tx.move) and `createTestDb` harness.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { aliasesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
@@ -23,7 +23,7 @@ import {
 } from '@/plugins/daily-notes/localSchema.js'
 import { BlockCache } from '@/data/blockCache'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import { resolveFacetRuntimeSync } from '@/extensions/facet'
 import {
@@ -47,7 +47,9 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  // Shared DB opened once per file, reset between tests; fresh Repo per test.
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   let idCursor = 0
@@ -65,9 +67,12 @@ const setup = async (): Promise<Harness> => {
   return {h, cache, repo}
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-afterEach(async () => { await env.h.cleanup() })
+afterEach(() => { env.repo.stopSyncObserver() })
 
 describe('deterministic ids', () => {
   it('journalBlockId is stable for a given workspace', () => {

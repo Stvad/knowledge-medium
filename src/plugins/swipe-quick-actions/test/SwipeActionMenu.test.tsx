@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { ChangeScope, type User } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import type { Block } from '@/data/block'
 import { actionDecoratorsFacet, actionsFacet } from '@/extensions/core'
@@ -72,14 +72,18 @@ const runEvent = (
   })
 
 describe('SwipeActionMenu', () => {
+  let sharedDb: TestDb
   let h: TestDb
   let repo: Repo
   let runtime: FacetRuntime
 
+  beforeAll(async () => { sharedDb = await createTestDb() })
+  afterAll(async () => { await sharedDb.cleanup() })
   beforeEach(async () => {
     vi.stubGlobal('ResizeObserver', TestResizeObserver)
 
-    h = await createTestDb()
+    await resetTestDb(sharedDb.db)
+    h = sharedDb
     let txSeq = 0
     repo = new Repo({
       db: h.db,
@@ -133,7 +137,7 @@ describe('SwipeActionMenu', () => {
     cleanup()
     vi.unstubAllGlobals()
     uiStateBlockRef.current = undefined
-    await h.cleanup()
+    repo.stopSyncObserver()
   })
 
   const renderMenu = () =>
