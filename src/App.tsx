@@ -251,7 +251,19 @@ const resolveInitialLayout = async (
   // rollout seed has already pinned pre-existing plaintext workspaces, so only
   // genuinely locked/never-pinned workspaces land here.
   const pin = getModePin(repo.user.id, workspaceId)
-  const hasKey = (await getWorkspaceKeyStore().get(repo.user.id, workspaceId)) !== null
+  // Only an e2ee pin actually uses the workspace key. Reading the key store for
+  // plaintext/unpinned workspaces is unnecessary and — if IndexedDB is
+  // unavailable (private mode, disabled/corrupt storage) — would block an
+  // otherwise-plaintext user from loading the app. A read failure is treated as
+  // "no key" (→ locked, key-required) rather than aborting the bootstrap.
+  let hasKey = false
+  if (pin === 'e2ee') {
+    try {
+      hasKey = (await getWorkspaceKeyStore().get(repo.user.id, workspaceId)) !== null
+    } catch (err) {
+      console.warn(`[App] workspace key read failed for ${workspaceId}; treating as locked`, err)
+    }
+  }
   const gateWorkspace = await getLocalWorkspace(repo, workspaceId)
   const entry = decideWorkspaceEntry(pin, hasKey, gateWorkspace)
   if (entry.kind === 'waiting') {
