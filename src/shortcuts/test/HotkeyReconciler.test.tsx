@@ -983,6 +983,10 @@ describe('HotkeyReconciler', () => {
         const input = document.createElement('input')
         document.body.appendChild(input)
         input.focus()
+        // Guard against a silent false-green: if focus didn't take, the
+        // "filtered out" path wouldn't be exercised and the test would
+        // pass for the wrong reason.
+        expect(document.activeElement).toBe(input)
         try {
           const handler = vi.fn()
           const action = buildAction({

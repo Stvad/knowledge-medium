@@ -798,6 +798,28 @@ describe('rollback', () => {
     const cmds = await env.commandEvents()
     expect(cmds.length).toBe(1)
   })
+
+  it('resets tx_context after a rollback so the next tx is not mis-routed', async () => {
+    await expect(env.repo.tx(async tx => {
+      await tx.create({id: 'rb-ctx', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+      throw new Error('boom')
+    }, {scope: ChangeScope.BlockDefault})).rejects.toThrow('boom')
+
+    // A leftover tx_id / source here would make the upload-routing and
+    // workspace-invariant triggers mis-tag the NEXT transaction's writes
+    // (e.g. a fresh local write looking like a sync apply).
+    const ctx = await env.h.db.get<Record<string, unknown>>('SELECT * FROM tx_context')
+    expect(ctx).toMatchObject({tx_id: null, user_id: null, scope: null, source: null})
+
+    // The following successful tx still routes exactly one row to ps_crud,
+    // proving the context was usable (not stuck) after the failure.
+    const crudBefore = (await env.psCrud()).length
+    await env.repo.tx(
+      tx => tx.create({id: 'rb-after', workspaceId: 'ws-1', parentId: null, orderKey: 'a1'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    expect((await env.psCrud()).length).toBe(crudBefore + 1)
+  })
 })
 
 // ──── tx.run (composition) ────

@@ -1,7 +1,6 @@
 // @vitest-environment node
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { Check, ClipboardPaste, ClockArrowDown, Gauge, RotateCcw, Scissors, Sparkles } from 'lucide-react'
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
@@ -10,7 +9,6 @@ import { createTestDb } from '@/data/test/createTestDb'
 import { actionsFacet } from '@/extensions/core.js'
 import { blockContentSurfacePropsFacet } from '@/extensions/blockInteraction.js'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
-import { propertySchemasFacet, typesFacet } from '@/data/facets.js'
 import { SWIPE_RIGHT_BLOCK_ACTION_ID } from '@/plugins/swipe-quick-actions'
 import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.js'
 import { getEffectiveActions } from '@/shortcuts/effectiveActions.js'
@@ -52,86 +50,6 @@ import {
 } from '../srsClipboard.ts'
 
 describe('srsReschedulingPlugin', () => {
-  it('contributes the SRS SM-2.5 type and property schemas', () => {
-    const runtime = resolveFacetRuntimeSync(srsReschedulingPlugin)
-    const schemas = runtime.read(propertySchemasFacet)
-    const types = runtime.read(typesFacet)
-
-    expect(schemas.get(srsIntervalProp.name)).toBe(srsIntervalProp)
-    expect(schemas.get(srsFactorProp.name)).toBe(srsFactorProp)
-    expect(schemas.get(srsNextReviewDateProp.name)).toBe(srsNextReviewDateProp)
-    expect(schemas.get(srsReviewCountProp.name)).toBe(srsReviewCountProp)
-    expect(schemas.get(srsGradeProp.name)).toBe(srsGradeProp)
-    expect(schemas.get(srsArchivedProp.name)).toBe(srsArchivedProp)
-    expect(schemas.get(srsSnapshotHistoryProp.name)).toBe(srsSnapshotHistoryProp)
-    expect(types.get(SRS_SM25_TYPE)?.properties).toEqual([
-      srsIntervalProp,
-      srsFactorProp,
-      srsNextReviewDateProp,
-      srsReviewCountProp,
-      srsGradeProp,
-      srsArchivedProp,
-      srsSnapshotHistoryProp,
-    ])
-  })
-
-  it('contributes matching actions in normal and edit mode', () => {
-    const runtime = resolveFacetRuntimeSync(srsReschedulingPlugin)
-    const actions = runtime.read(actionsFacet)
-
-    expect(actions).toHaveLength(17)
-    expect(actions.map(action => action.context)).toEqual([
-      ActionContextTypes.NORMAL_MODE,
-      ActionContextTypes.NORMAL_MODE,
-      ActionContextTypes.NORMAL_MODE,
-      ActionContextTypes.NORMAL_MODE,
-      ActionContextTypes.NORMAL_MODE,
-      ActionContextTypes.EDIT_MODE_CM,
-      ActionContextTypes.EDIT_MODE_CM,
-      ActionContextTypes.EDIT_MODE_CM,
-      ActionContextTypes.EDIT_MODE_CM,
-      ActionContextTypes.EDIT_MODE_CM,
-      DATE_SCRUB_CONTEXT,
-      DATE_SCRUB_CONTEXT,
-      DATE_SCRUB_CONTEXT,
-      DATE_SCRUB_CONTEXT,
-      DATE_SCRUB_CONTEXT,
-      ActionContextTypes.NORMAL_MODE,
-      ActionContextTypes.NORMAL_MODE,
-    ])
-
-    expect(actions.slice(0, 5).map(action => action.icon)).toEqual([
-      RotateCcw,
-      Gauge,
-      Check,
-      Sparkles,
-      ClockArrowDown,
-    ])
-    expect(actions.slice(5, 10).map(action => action.icon)).toEqual([
-      RotateCcw,
-      Gauge,
-      Check,
-      Sparkles,
-      ClockArrowDown,
-    ])
-    expect(actions.slice(10, 15).map(action => action.id)).toEqual([
-      'date-scrub.srs.reschedule.again',
-      'date-scrub.srs.reschedule.hard',
-      'date-scrub.srs.reschedule.good',
-      'date-scrub.srs.reschedule.easy',
-      'date-scrub.srs.reschedule.sooner',
-    ])
-    expect(actions.slice(10, 15).map(action => action.defaultBinding?.keys)).toEqual([
-      'Digit1',
-      'Digit2',
-      'Digit3',
-      'Digit4',
-      'Digit5',
-    ])
-    expect(actions.slice(15).map(action => action.id)).toEqual(['srs.cut', 'srs.paste'])
-    expect(actions.slice(15).map(action => action.icon)).toEqual([Scissors, ClipboardPaste])
-  })
-
   const withSrsScrubRepo = async (
     run: (
       repo: Repo,

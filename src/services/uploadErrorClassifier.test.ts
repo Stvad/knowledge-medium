@@ -40,6 +40,18 @@ describe('classifyUploadError', () => {
       expect(classifyUploadError(postgrestError('PGRST301'))).toBe('permanent')
     })
 
+    it('classifies the other narrow PostgREST permanent codes (PGRST204, PGRST116)', () => {
+      // PGRST204 = column not found in schema cache (client/server schema
+      // drift); PGRST116 = result-cardinality mismatch. Both fail again
+      // unchanged on retry, so they must be dropped, not re-queued.
+      expect(classifyUploadError(postgrestError('PGRST204'))).toBe('permanent')
+      expect(classifyUploadError(postgrestError('PGRST116'))).toBe('permanent')
+    })
+
+    it('keeps unknown PGRST codes transient (the list stays narrow)', () => {
+      expect(classifyUploadError(postgrestError('PGRST500'))).toBe('transient')
+    })
+
     it('classifies P0002 (no_data_found) as permanent', () => {
       // Raised by apply_block_patches when a patch's target row is
       // missing — the RPC rolls back via this exception, and the

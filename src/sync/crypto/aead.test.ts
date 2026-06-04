@@ -38,6 +38,24 @@ describe('AES-256-GCM seal/open', () => {
     ).rejects.toThrow()
   })
 
+  it('fails when the ciphertext is rebound to another workspace (AAD workspace binding)', async () => {
+    // A server that copies a ciphertext from ws-A into ws-B (same block id,
+    // same column) must not be able to make it decrypt under ws-B's view.
+    const key = await keyFrom(0x01)
+    const envelope = await seal(key, 'secret', contentAad('block-1', 'ws-A', 'content'))
+    await expect(
+      open(key, envelope, contentAad('block-1', 'ws-B', 'content')),
+    ).rejects.toThrow()
+  })
+
+  it('fails when the ciphertext is rebound to another block (AAD block binding)', async () => {
+    const key = await keyFrom(0x01)
+    const envelope = await seal(key, 'secret', contentAad('block-1', 'ws-A', 'content'))
+    await expect(
+      open(key, envelope, contentAad('block-2', 'ws-A', 'content')),
+    ).rejects.toThrow()
+  })
+
   it('fails when the ciphertext is tampered', async () => {
     const key = await keyFrom(0x01)
     const aad = contentAad('block-1', 'ws-A', 'content')
