@@ -3,7 +3,7 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore'
-import { setModePin } from '@/sync/keys/modePin'
+import { confirmPlaintextForSession, setModePin } from '@/sync/keys/modePin'
 import { unlockWorkspaceWithKey } from '@/sync/keys/flows/unlockWorkspaceWithKey'
 
 interface Props {
@@ -80,10 +80,12 @@ export function WorkspaceKeyGate({
     try {
       setModePin(userId, workspaceId, 'plaintext')
     } catch (err) {
-      // Unreachable today (quarantine only renders when unpinned), but a future
-      // regression must not surface as an unhandled throw.
-      setError(err instanceof Error ? err.message : 'Could not confirm plaintext')
-      return
+      // localStorage can't persist the pin (writes blocked / quota) while the
+      // rest of the app still works. Fall back to a session-only confirmation so
+      // a plaintext user isn't trapped on the gate; it re-quarantines on next
+      // load (where storage may have recovered).
+      console.warn('[gate] plaintext pin persist failed; confirming for this session only', err)
+      confirmPlaintextForSession(userId, workspaceId)
     }
     try {
       await onResolved()

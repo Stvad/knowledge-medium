@@ -53,16 +53,39 @@ const pinStorageKey = (userId: string, workspaceId: string): string =>
 const seededMarkerKey = (userId: string): string =>
   `${E2EE_PINS_SEEDED_PREFIX}${encodeURIComponent(userId)}`
 
-/** The pinned mode for this (user, workspace) on this device, or null if
- *  never pinned. */
-export const getModePin = (userId: string, workspaceId: string): ModePin | null => {
+// Session-only plaintext confirmations: workspaces the user explicitly
+// confirmed plaintext in the §6 gate when localStorage couldn't persist the pin
+// (writes blocked / quota) while the rest of the app still works. This keeps a
+// plaintext user from being trapped on the quarantine gate in a degraded
+// storage environment. It is in-memory (lost on reload → re-quarantine, where
+// storage may have recovered), and ONLY ever holds user-confirmed plaintext —
+// never anything derived from the server — so it carries no downgrade risk. A
+// real persisted pin always takes precedence.
+const sessionPlaintext = new Set<string>()
+
+const readPersistedPin = (key: string): ModePin | null => {
   if (!hasLocalStorage()) return null
   try {
-    const raw = localStorage.getItem(pinStorageKey(userId, workspaceId))
+    const raw = localStorage.getItem(key)
     return isModePin(raw) ? raw : null
   } catch {
     return null
   }
+}
+
+/** The pinned mode for this (user, workspace) on this device, or null if
+ *  never pinned. A persisted pin wins; otherwise a session-only plaintext
+ *  confirmation (see {@link confirmPlaintextForSession}) counts as plaintext. */
+export const getModePin = (userId: string, workspaceId: string): ModePin | null => {
+  const key = pinStorageKey(userId, workspaceId)
+  return readPersistedPin(key) ?? (sessionPlaintext.has(key) ? 'plaintext' : null)
+}
+
+/** Record a plaintext confirmation that couldn't be persisted (localStorage
+ *  unavailable), so {@link getModePin} reports plaintext for this session and
+ *  the user can load the workspace. Re-quarantines on next load. */
+export const confirmPlaintextForSession = (userId: string, workspaceId: string): void => {
+  sessionPlaintext.add(pinStorageKey(userId, workspaceId))
 }
 
 /**
