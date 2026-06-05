@@ -34,7 +34,6 @@ const setup = async (): Promise<Harness> => {
   const h = sharedDb
   const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
-  let idCursor = 0
   const repo = new Repo({
     db: h.db,
     cache,
@@ -64,6 +63,15 @@ const setup = async (): Promise<Harness> => {
 
 let sharedDb: TestDb
 let env: Harness
+// Monotonic across the whole file (NOT reset per test). The suite shares one
+// PowerSync DB; tx_id comes from this counter, and an awaited write's
+// command_events insert can land just after the next test's resetTestDb (PS
+// write-behind). A per-test reset to gen-1 made those late ids collide with
+// the next test's own ids on the UNIQUE command_events.tx_id; keeping it
+// monotonic means a leaked id is always lower than the live test's, so it
+// can never collide. Nothing here asserts on generated ids (blocks use
+// explicit ids), so the values themselves don't matter.
+let idCursor = 0
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
