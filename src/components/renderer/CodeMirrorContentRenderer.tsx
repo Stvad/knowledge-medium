@@ -1,6 +1,5 @@
 import { BlockRendererProps } from '@/types.js'
 import { useMemo, ClipboardEvent, KeyboardEvent, useRef } from 'react'
-import { EditorView } from '@codemirror/view'
 import { EditorSelection } from '@codemirror/state'
 import type { ReactCodeMirrorRef } from '@uiw/react-codemirror'
 import { createMinimalMarkdownConfig } from '@/utils/codemirror.js'
@@ -16,7 +15,7 @@ import {
 import { useRepo } from '@/context/repo.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { codeMirrorExtensionsFacet } from '@/extensions/editor.js'
-import { convertEmptyChildBlockToProperty } from '@/utils/propertyCreation.js'
+import { createFieldCreationKeydownExtension } from './fieldCreationKeydown.js'
 import { useBlockContext } from '@/context/block.js'
 
 export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
@@ -33,35 +32,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   const pasteIntentRef = useRef<'split' | 'single-block'>('split')
 
   const extensions = useMemo(() => {
-    const fieldCreationExtension = EditorView.domEventHandlers({
-      keydown: (event, view) => {
-        if (
-          repo.isReadOnly ||
-          event.key !== '>' ||
-          event.defaultPrevented ||
-          event.metaKey ||
-          event.ctrlKey ||
-          event.altKey
-        ) {
-          return false
-        }
-
-        const selection = view.state.selection.main
-        if (!selection.empty || selection.from !== 0 || view.state.doc.length !== 0) {
-          return false
-        }
-        if (!block.peek()?.parentId) return false
-
-        event.preventDefault()
-        event.stopPropagation()
-
-        void convertEmptyChildBlockToProperty(block, repo).catch(error => {
-          console.error('[CodeMirrorContentRenderer] Failed to create property field', error)
-        })
-
-        return true
-      },
-    })
+    const fieldCreationExtension = createFieldCreationKeydownExtension(block, repo)
     const pluginExtensions = runtime.read(codeMirrorExtensionsFacet)({repo, block})
     return createMinimalMarkdownConfig([...pluginExtensions, fieldCreationExtension])
   }, [block, repo, runtime])

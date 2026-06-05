@@ -83,6 +83,35 @@ describe('agent runtime config', () => {
     expect(bridgeUrl()).toBe('http://127.0.0.1:9876')
   })
 
+  it('rethrows on a corrupt (non-JSON) config file instead of silently resetting it', async () => {
+    // A garbled file is not the same as a missing one (ENOENT → {}); resetting
+    // it would clobber a secret the user might still recover by hand, so the
+    // read surfaces the parse error.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-runtime-config-'))
+    const configFile = path.join(dir, 'agent-bridge.json')
+    await fs.writeFile(configFile, 'not json {{{')
+    process.env.AGENT_RUNTIME_CONFIG_FILE = configFile
+    delete process.env.AGENT_RUNTIME_BRIDGE_SECRET
+
+    const {loadOrCreateBridgeConfig} = await loadConfigModule()
+    await expect(loadOrCreateBridgeConfig()).rejects.toThrow()
+  })
+
+  it('mints a fresh secret when the stored config has a wrong-typed bridgeSecret', async () => {
+    // Valid JSON but the wrong shape (bridgeSecret not a string) normalises to
+    // an empty secret, so load-or-create generates a new one rather than
+    // returning the bogus value.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-runtime-config-'))
+    const configFile = path.join(dir, 'agent-bridge.json')
+    await fs.writeFile(configFile, JSON.stringify({bridgeSecret: 42, createdAt: 'soon'}))
+    process.env.AGENT_RUNTIME_CONFIG_FILE = configFile
+    delete process.env.AGENT_RUNTIME_BRIDGE_SECRET
+
+    const {loadOrCreateBridgeConfig} = await loadConfigModule()
+    const resolved = await loadOrCreateBridgeConfig()
+    expect(resolved.bridgeSecret).toMatch(/^[0-9a-f]{64}$/)
+  })
+
   it('can request the token dialog in pairing URLs', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-runtime-config-'))
     process.env.AGENT_RUNTIME_CONFIG_FILE = path.join(dir, 'agent-bridge.json')
