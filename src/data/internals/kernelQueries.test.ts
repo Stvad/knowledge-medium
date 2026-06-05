@@ -705,15 +705,20 @@ describe('invalidation', () => {
     const handle = env.repo.query.childIds(args)
     await handle.load()
 
-    const fired: number[] = []
-    const unsub = handle.subscribe(() => { fired.push(1) })
+    const fired: string[][] = []
+    const unsub = handle.subscribe(v => { fired.push(asIds(v as string[])) })
     try {
       // Content-only edit on c1 — bumps rowIds in the tx fast path but
-      // the lean childIds dep set has no row entry, so `matches` is
-      // false and the listener never fires.
+      // the lean childIds dep set has no row entry, so the list must not
+      // re-project.
       await env.repo.tx(tx => tx.update('c1', {content: 'edited'}), {scope: ChangeScope.BlockDefault})
-      await new Promise(r => setTimeout(r, 10))
-      expect(fired.length).toBe(0)
+      // Tracer-bullet: adding a real child DOES invalidate (parent-edge).
+      // Wait for that single emission; a content-edit re-projection would
+      // surface as an extra one. (Replaces a 10 ms sleep that raced the
+      // reader pool under full-suite parallelism.)
+      await create({id: 'c3', parentId: 'p', orderKey: 'a2'})
+      await vi.waitFor(() => expect([...(fired.at(-1) ?? [])].sort()).toEqual(['c1', 'c2', 'c3']))
+      expect(fired.length).toBe(1)
     } finally {
       unsub()
     }
@@ -784,17 +789,21 @@ describe('invalidation', () => {
     const handle = env.repo.query.byType({workspaceId: WS, type: 'note'})
     await handle.load()
 
-    const fired: number[] = []
-    const unsub = handle.subscribe(() => { fired.push(1) })
+    const fired: string[][] = []
+    const unsub = handle.subscribe(v => { fired.push(asBlocks(v as BlockData[]).map(b => b.id)) })
     try {
       await env.repo.tx(async tx => {
         const block = env.repo.block('panel')
         await block.load()
         await tx.update('panel', {properties: {focusedBlockLocation: {blockId: 'something', renderScopeId: 'scope:something'}}})
       }, {scope: ChangeScope.UiState})
-      // Give the handle plenty of opportunity to (incorrectly) re-resolve.
-      await new Promise(r => setTimeout(r, 30))
-      expect(fired.length).toBe(0)
+      // Tracer-bullet: a new matching note DOES invalidate the type channel.
+      // Wait for that single emission; a UiState-triggered re-resolve would
+      // surface as an extra one. (Replaces a 30 ms "give it a chance to
+      // misfire" sleep with a deterministic positive control.)
+      await create({id: 'b', type: 'note'})
+      await vi.waitFor(() => expect([...(fired.at(-1) ?? [])].sort()).toEqual(['a', 'b']))
+      expect(fired.length).toBe(1)
     } finally {
       unsub()
     }
@@ -806,15 +815,19 @@ describe('invalidation', () => {
     const handle = env.repo.query.byType({workspaceId: WS, type: 'note'})
     await handle.load()
 
-    const fired: number[] = []
-    const unsub = handle.subscribe(() => { fired.push(1) })
+    const fired: string[][] = []
+    const unsub = handle.subscribe(v => { fired.push(asBlocks(v as BlockData[]).map(b => b.id)) })
     try {
       await env.repo.tx(
         tx => tx.update('plain', {content: 'edited'}),
         {scope: ChangeScope.BlockDefault},
       )
-      await new Promise(r => setTimeout(r, 30))
-      expect(fired.length).toBe(0)
+      // Tracer-bullet: a new note DOES invalidate. Wait for that single
+      // emission; had the non-matching content edit leaked 'plain' into the
+      // result, it would surface as an earlier (wrong-valued) emission.
+      await create({id: 'b', type: 'note'})
+      await vi.waitFor(() => expect([...(fired.at(-1) ?? [])].sort()).toEqual(['a', 'b']))
+      expect(fired.length).toBe(1)
     } finally {
       unsub()
     }
