@@ -176,7 +176,12 @@ describe('UserSchemasService subscription', () => {
       Editor: (): JSX.Element => createElement('span', null, null),
     })
     env.repo.setRuntimeContributions(valuePresetsFacet, 'plugin', [priorityPreset])
-    expect(env.repo.propertySchemas.get('priority')?.codec.type).toBe('string')
+    // The preset arrival re-resolves the previously-skipped schema on the
+    // valuePresets-change tick. Poll for it rather than assuming the
+    // listener fires synchronously within setRuntimeContributions.
+    await vi.waitFor(() => {
+      expect(env.repo.propertySchemas.get('priority')?.codec.type).toBe('string')
+    }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
   })
 
   it('addSchema-followed-by-immediate-write does not race the subscription tick', async () => {
@@ -222,9 +227,15 @@ describe('UserSchemasService.getSchemaForBlockId', () => {
     env = await setup()
     const id = await createExternalSchemaBlock('tags')
 
-    const resolved = env.service.getSchemaForBlockId(id)
-    expect(resolved?.name).toBe('tags')
-    expect(resolved?.codec.type).toBe('string')
+    // The reverse-map is repopulated by the service's own subscriber, which
+    // can lag the first onPropertySchemasChange: a rebuild pass may run
+    // before the block facade hydrates (tryBuildSchema then skips it). Poll
+    // until the hydrated rebuild lands.
+    await vi.waitFor(() => {
+      const resolved = env.service.getSchemaForBlockId(id)
+      expect(resolved?.name).toBe('tags')
+      expect(resolved?.codec.type).toBe('string')
+    }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
   })
 
   it('returns undefined for unknown block ids', async () => {
@@ -235,7 +246,9 @@ describe('UserSchemasService.getSchemaForBlockId', () => {
   it('drops the reverse-map entry when a block stops resolving to a schema', async () => {
     env = await setup()
     const id = await createExternalSchemaBlock('tags')
-    expect(env.service.getSchemaForBlockId(id)?.name).toBe('tags')
+    await vi.waitFor(() => {
+      expect(env.service.getSchemaForBlockId(id)?.name).toBe('tags')
+    }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
 
     // Blank the name — tryBuildSchema will now drop the block on the
     // next rebuild tick.
@@ -245,7 +258,9 @@ describe('UserSchemasService.getSchemaForBlockId', () => {
       }, {scope: ChangeScope.BlockDefault})
     })
 
-    expect(env.service.getSchemaForBlockId(id)).toBeUndefined()
+    await vi.waitFor(() => {
+      expect(env.service.getSchemaForBlockId(id)).toBeUndefined()
+    }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
   })
 })
 
