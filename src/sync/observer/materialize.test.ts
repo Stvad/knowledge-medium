@@ -248,6 +248,40 @@ describe('materializeStagingRows — skip-stale (local edit must win)', () => {
   })
 })
 
+describe('materializeStagingRows — batched gate (mixed outcomes, chunked)', () => {
+  it('keeps each id\'s gate state separate when the local reads are bulked across chunks', async () => {
+    // The Phase-1/Phase-2 gate reads (local updated_at, pending uploads, before
+    // rows) are bulked per batch rather than probed per row. Drive three ids to
+    // three different outcomes in ONE pass, with a chunk size that splits them,
+    // so a map that crossed an id with another's state would surface here.
+
+    // apply: strictly-newer staging snapshot, no local row.
+    await stageRow(blockData({ id: 'apply', content: 'fresh', updatedAt: 300 }))
+    // skip: local row is newer than the staging snapshot.
+    await seedLocalBlock(blockData({ id: 'newer', content: 'local newer', updatedAt: 500 }))
+    await stageRow(blockData({ id: 'newer', content: 'stale server', updatedAt: 200 }))
+    // skip: an unsent local edit is queued for this id (pending always wins).
+    await seedLocalBlock(blockData({ id: 'pending', content: 'local pending', updatedAt: 100 }))
+    await env.db.execute(
+      "INSERT INTO ps_crud (tx_id, data) VALUES (1, json_object('op','PATCH','type','blocks','id',?,'data',json_object()))",
+      ['pending'],
+    )
+    await stageRow(blockData({ id: 'pending', content: 'server snapshot', updatedAt: 999 }))
+
+    const out = await materializeStagingRows(
+      env.db,
+      { upserted: ['apply', 'newer', 'pending'], removed: [] },
+      { getMaterializability: constMat('copy'), getCek: noKey },
+      { readChunkSize: 2 }, // 3 ids → 2 read chunks, so the bulk maps span a boundary
+    )
+
+    expect(out.applied).toEqual(['apply'])
+    expect([...out.skippedStale].sort()).toEqual(['newer', 'pending'])
+    const byId = Object.fromEntries((await allBlocks()).map(b => [b.id, b.content]))
+    expect(byId).toEqual({ apply: 'fresh', newer: 'local newer', pending: 'local pending' })
+  })
+})
+
 describe('materializeStagingRows — quarantine (undecryptable)', () => {
   it('quarantines a row whose ciphertext fails AEAD, still applying a valid sibling', async () => {
     const key = await importWorkspaceKey(generateWorkspaceKeyBytes())

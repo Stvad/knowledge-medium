@@ -18,6 +18,15 @@ export const uploadQueuePreviewCountSql =
 export const uploadQueueExactCountSql =
   `SELECT COUNT(DISTINCT json_extract(data, '$.id')) AS count FROM ps_crud`
 
+// Rows downloaded into the `blocks_synced` staging table but not yet applied to
+// the app-visible `blocks` table — the Layout B observer's materialization
+// backlog (its `blocks_synced_changes` change queue; see observer.ts). It drains
+// to 0 as the observer catches up, so the indicator counts down. A plain
+// single-table COUNT(*) — cheap even at a large initial-sync backlog, and the
+// real magnitude is worth showing, so it isn't capped like the upload preview.
+export const materializeQueueCountSql =
+  'SELECT COUNT(*) AS count FROM blocks_synced_changes'
+
 export const formatPendingChanges = (
   count: number,
   localOnly: boolean,

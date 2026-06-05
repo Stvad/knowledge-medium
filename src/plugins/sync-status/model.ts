@@ -3,6 +3,7 @@ export type SyncIndicatorState =
   | 'local'
   | 'uploading'
   | 'downloading'
+  | 'materializing'
   | 'pending'
   | 'connecting'
   | 'offline'
@@ -28,6 +29,13 @@ export interface SyncIndicatorInput {
    *  Defaults to 0 so callers that don't pipe it in stay backwards-
    *  compatible. */
   rejectedChanges?: number
+  /** Rows synced into the `blocks_synced` staging table but not yet applied to
+   *  the app-visible `blocks` table — the Layout B observer's
+   *  `blocks_synced_changes` backlog. Non-zero means downloaded data hasn't
+   *  fully surfaced in the UI yet (e.g. a large initial sync still draining).
+   *  Defaults to 0 so callers that don't pipe it in stay unaffected. */
+  materializingChanges?: number
+  materializingChangesApproximate?: boolean
   downloadFraction?: number | null
   errorMessage?: string | null
   lastSyncedAt?: Date
@@ -102,6 +110,8 @@ export const getSyncIndicatorView = ({
   pendingChanges,
   pendingChangesApproximate = false,
   rejectedChanges = 0,
+  materializingChanges = 0,
+  materializingChangesApproximate = false,
   downloadFraction,
   errorMessage,
   lastSyncedAt,
@@ -156,6 +166,29 @@ export const getSyncIndicatorView = ({
       ),
       pendingLabel,
       progressPercent,
+      spinning: true,
+    }
+  }
+
+  // Downloaded data that hasn't been applied to `blocks` yet is invisible in the
+  // UI, so surface the catch-up explicitly — above uploading/pending/offline/
+  // synced (all of which would otherwise misreport "done" while content is still
+  // missing), but below an active download (its % is the upstream progress) and
+  // below a hard error.
+  if (materializingChanges > 0) {
+    return {
+      state: 'materializing',
+      tone: 'active',
+      icon: 'sync',
+      label: 'Processing',
+      title: appendPendingTitle(
+        `Applying ${formatChangeCount(materializingChanges, materializingChangesApproximate)} of synced data to this device.`,
+        pendingChanges,
+        false,
+        pendingChangesApproximate,
+      ),
+      pendingLabel,
+      progressPercent: null,
       spinning: true,
     }
   }
