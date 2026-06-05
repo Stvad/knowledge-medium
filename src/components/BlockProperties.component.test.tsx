@@ -322,8 +322,9 @@ describe('BlockProperties component', () => {
     })
 
     const listbox = screen.getByRole('listbox')
+    // Portaled to <body> so it escapes the property panel's overflow
+    // clipping; how it's then positioned is a styling concern, not asserted.
     expect(listbox.parentElement).toBe(document.body)
-    expect(listbox.classList.contains('fixed')).toBe(true)
 
     await act(async () => {
       fireEvent.keyDown(input, {key: 'Enter'})
@@ -609,8 +610,8 @@ describe('BlockProperties component', () => {
     })
 
     const listbox = await screen.findByRole('listbox')
+    // Portaled to <body> (escapes overflow clipping); positioning is styling.
     expect(listbox.parentElement).toBe(document.body)
-    expect(listbox.classList.contains('fixed')).toBe(true)
     expect(await screen.findByRole('option', {name: /Target Alias/})).toBeTruthy()
     expect(await screen.findByRole('option', {name: /Recent target content/})).toBeTruthy()
     expect(screen.queryByRole('option', {name: /Unrelated target content/})).toBeNull()

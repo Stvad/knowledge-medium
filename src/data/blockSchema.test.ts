@@ -38,23 +38,13 @@ const rowFromParams = (params: ReturnType<typeof blockToRowParams>): BlockRow =>
 })
 
 describe('BLOCK_STORAGE_COLUMNS', () => {
-  it('declares the v2 column set; childIds-shaped columns are gone', () => {
+  // The exact column set + order is exercised end-to-end by the
+  // blockToRowParams / parseBlockRow round-trip below (which maps every
+  // column positionally), so a literal copy of the list here would only
+  // restate the source. What that round-trip can't catch is a *legacy*
+  // column name silently reappearing, so keep just those guards.
+  it('never reintroduces legacy / renamed columns', () => {
     const names = BLOCK_STORAGE_COLUMNS.map(c => c.name)
-    expect(names).toEqual([
-      'id',
-      'workspace_id',
-      'parent_id',
-      'order_key',
-      'content',
-      'properties_json',
-      'references_json',
-      'created_at',
-      'updated_at',
-      'created_by',
-      'updated_by',
-      'deleted',
-    ])
-    // Hard guard against the legacy column ever sneaking back in.
     expect(names).not.toContain('child_ids_json')
     expect(names).not.toContain('create_time')
     expect(names).not.toContain('update_time')

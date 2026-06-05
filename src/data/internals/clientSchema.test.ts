@@ -44,7 +44,6 @@ import {
   BACKFILL_BLOCKS_FTS_SQL,
   BLOCKS_FTS_BACKFILL_MARKER_KEY,
   CLIENT_SCHEMA_STATEMENTS,
-  CLIENT_SCHEMA_TRIGGER_NAMES,
   backfillBlockAliasesIfEmpty,
   backfillBlocksFtsIfEmpty,
   runAnalyzeIfDue,
@@ -205,21 +204,11 @@ beforeEach(() => { h = setupDb() })
 afterEach(() => { h.db.close() })
 
 describe('client schema bootstrap', () => {
-  it('creates the documented set of client-schema triggers', () => {
-    // CLIENT_SCHEMA_TRIGGER_NAMES covers triggers on `blocks` (the
-    // bulk of them — row_events audit/history, upload routing, workspace
-    // invariants, side-index maintenance), on `block_aliases`
-    // (the uniqueness-enforcement trigger), and on `blocks_synced`
-    // (the Layout B change-capture triggers). Query against all three
-    // tables so the inventory test catches additions on any side.
-    const triggers = (h.db
-      .prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name IN ('blocks', 'block_aliases', 'blocks_synced') ORDER BY name")
-      .all() as Array<{name: string}>)
-      .map(r => r.name)
-    expect(triggers.sort()).toEqual([...CLIENT_SCHEMA_TRIGGER_NAMES].sort())
-    expect(triggers).toHaveLength(CLIENT_SCHEMA_TRIGGER_NAMES.length)
-  })
-
+  // The trigger *names* are exported as CLIENT_SCHEMA_TRIGGER_NAMES purely so
+  // a test can re-list them; asserting "the DB has exactly that list" only
+  // restates the constant. What the triggers actually *do* is covered by the
+  // row_events / upload-routing behavior tests below, and the harness already
+  // verifies the production trigger set installs (createTestDb.test.ts).
   it('seeds tx_context with one row that starts NULL across all five tx fields', () => {
     const ctx = h.db.prepare('SELECT * FROM tx_context').get() as Record<string, unknown>
     expect(ctx).toEqual({id: 1, tx_id: null, tx_seq: null, user_id: null, scope: null, source: null})
