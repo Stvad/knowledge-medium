@@ -92,6 +92,10 @@ beforeEach(async () => {
   vi.useFakeTimers({shouldAdvanceTime: true})
 })
 afterEach(async () => {
+  // Drain any in-flight reprojection before swapping back to real timers
+  // and resetting the shared DB — otherwise a fire-and-forget reprojection
+  // from this test can write into the next one (the DB is shared per file).
+  await env.repo.awaitReprojections()
   vi.useRealTimers()
   await env.h.cleanup()
 })
@@ -109,9 +113,16 @@ const dailyId = (date: string) => dailyNoteBlockId(WS, date)
  *  tests still see the pre-cleanup intermediate state. */
 const flush = async (delayMs = 0) => {
   await vi.advanceTimersByTimeAsync(1)
+  // Schema-swap reprojections are fire-and-forget (scheduled via
+  // setTimeout(0) off the cold-start path); advancing the timer starts
+  // them but does not await their write. Drain them — then processors —
+  // so callers see a fully-settled references_json without racing
+  // vi.waitFor (issue #85).
+  await env.repo.awaitReprojections()
   await env.repo.awaitProcessors()
   if (delayMs > 0) {
     await vi.advanceTimersByTimeAsync(delayMs)
+    await env.repo.awaitReprojections()
     await env.repo.awaitProcessors()
   }
 }
@@ -360,11 +371,11 @@ describe('parseReferences — schema-swap reprojection', () => {
     env.repo.setFacetRuntime(runtimeWithoutReviewer())
     await flush()
 
-    await vi.waitFor(async () => {
-      expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([
-        {id: aliasId('content-target'), alias: 'content-target'},
-      ])
-    })
+    // flush() drains the schema-swap reprojection, so the stale `reviewer`
+    // field ref is already gone — no vi.waitFor race (issue #85).
+    expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([
+      {id: aliasId('content-target'), alias: 'content-target'},
+    ])
   })
 
   it('does not let an older ref-typed reprojection re-add refs after schema removal', async () => {
