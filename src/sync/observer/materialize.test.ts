@@ -360,4 +360,23 @@ describe('materializeStagingRows — removed (stream-exit)', () => {
     expect(aliases).toEqual([])
     expect(await crudCount()).toBe(0)
   })
+
+  it('does NOT delete when the staging row still exists (INSERT OR REPLACE artifact, not a stream-exit)', async () => {
+    // INSERT OR REPLACE re-delivery enqueues delete-then-upsert; drained in seq
+    // windows the delete can arrive alone. But the staging row is still present
+    // (the replace re-inserted it), so this is not a removal — dropping the
+    // local row would clobber an unsent local edit and the gated upsert wouldn't
+    // restore it. A delete is honored only once the staging row is truly gone.
+    await seedLocalBlock(blockData({ content: 'local edit', updatedAt: 500 }))
+    await stageRow(blockData({ content: 'server snapshot', updatedAt: 999 })) // staging row present
+
+    const out = await materializeStagingRows(
+      env.db,
+      { upserted: [], removed: ['b1'] },
+      { getMaterializability: constMat('copy'), getCek: noKey },
+    )
+
+    expect(out.deleted).toEqual([])
+    expect((await allBlocks())[0]?.content).toBe('local edit')
+  })
 })

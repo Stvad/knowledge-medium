@@ -262,6 +262,37 @@ describe('blocksSyncedObserver — robustness', () => {
     expect(errors.every(e => e instanceof Error && e.message === 'boom')).toBe(true)
   })
 
+  it('keeps a locally-edited block when a re-delivery\'s delete/upsert straddle a window boundary', async () => {
+    // `put` is INSERT OR REPLACE, so re-delivering an existing staged row
+    // enqueues a delete (the replace's implicit delete) THEN an upsert. With a
+    // small drain window the pair can split across windows: the delete lands
+    // alone in one window, the upsert in the next. A lone delete must NOT drop a
+    // block the user has an unsent local edit for — the trailing upsert is then
+    // skip-staled by the pending gate, so the row would vanish entirely.
+    await put(data({ content: 'server v1', updatedAt: 1 }))
+    const { observer } = start({ getMaterializability: constMat('copy'), drainChunkSize: 1 })
+    await observer.flush()
+    expect(await blocks()).toEqual([{ id: 'b1', content: 'server v1' }])
+
+    // The user edits b1 locally; the edit is queued for upload (pending).
+    await env.db.execute(
+      'UPDATE blocks SET content = ?, updated_at = ? WHERE id = ?', ['local edit', 100, 'b1'],
+    )
+    await env.db.execute(
+      "INSERT INTO ps_crud (tx_id, data) VALUES (1, json_object('op','PATCH','type','blocks','id',?,'data',json_object()))",
+      ['b1'],
+    )
+
+    // Server re-delivers b1 → enqueues delete@N then upsert@N+1; chunk size 1
+    // puts them in separate windows.
+    await put(data({ content: 'server v2', updatedAt: 2 }))
+    await observer.flush()
+
+    // The local edit survives, and the queue still fully drains.
+    expect(await blocks()).toEqual([{ id: 'b1', content: 'local edit' }])
+    expect(await queueLen()).toBe(0)
+  })
+
   it('survives a restart: a queued change persists for a fresh observer (durable queue)', async () => {
     await put(data({ content: 'persisted' }))
 

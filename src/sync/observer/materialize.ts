@@ -94,8 +94,11 @@ export interface MaterializeDeps {
   readonly getCek: GetCek
 }
 
-/** The staging-table delta to process: ids whose staging row changed, and
- *  ids that left the synced set entirely. */
+/** The staging-table delta to process: ids whose staging row changed, and ids
+ *  whose staging row was deleted. A `removed` id only hard-deletes the local
+ *  row if its `blocks_synced` row is actually gone — a delete whose staging row
+ *  is still present is an INSERT OR REPLACE re-delivery artifact, not a
+ *  stream-exit (see the Phase 2 removed loop). */
 export interface StagingChange {
   readonly upserted: readonly string[]
   readonly removed: readonly string[]
@@ -208,6 +211,23 @@ const readBlocksByIds = async (
 const readPendingUploadIds = async (db: RowsReader): Promise<Set<string>> => {
   const rows = await db.getAll<{ id: string }>(PENDING_UPLOAD_IDS_SQL)
   return new Set(rows.map(row => row.id))
+}
+
+/** Subset of `ids` that still have a row in the `blocks_synced` staging table.
+ *  Chunked like the other id-keyed reads. */
+const readExistingStagingIds = async (
+  db: RowsReader, ids: readonly string[], chunkSize: number,
+): Promise<Set<string>> => {
+  const out = new Set<string>()
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const chunk = ids.slice(i, i + chunkSize)
+    const rows = await db.getAll<{ id: string }>(
+      `SELECT id FROM blocks_synced WHERE id IN (${buildInClause(chunk.length)})`,
+      chunk,
+    )
+    for (const row of rows) out.add(row.id)
+  }
+  return out
 }
 
 /** Tunables (batch sizing). Defaults are production values; tests override. */
@@ -346,7 +366,18 @@ export const materializeStagingRows = async (
     }
 
     const removedBeforeById = await readBlocksByIds(tx, change.removed, readChunkSize)
+    // A 'delete' whose staging row still exists is an INSERT OR REPLACE
+    // re-delivery artifact, not a stream-exit: SQLite's REPLACE fires the
+    // staging delete trigger then the insert trigger, enqueuing delete-then-
+    // upsert for one row. Drained in seq windows, that pair can split so the
+    // delete arrives alone here. Deleting the local row then would be wrong —
+    // the trailing upsert is gated (skip-stale on a pending local edit / newer
+    // local stamp), so the block would vanish and an unsent edit be lost. Only
+    // hard-delete ids whose staging row is truly gone; the upsert (this window
+    // or a later one) reconciles the rest through the gate.
+    const removedStillStaged = await readExistingStagingIds(tx, change.removed, readChunkSize)
     for (const id of change.removed) {
+      if (removedStillStaged.has(id)) continue
       await tx.execute(DELETE_BLOCK_SQL, [id])
       deleted.push(id)
       // Only a row that actually existed locally has anything to invalidate.
