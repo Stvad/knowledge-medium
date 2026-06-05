@@ -6,7 +6,7 @@
 // excluded — the bug lived in the query engine's three-valued handling
 // of `exclude`, not in the query we build. These tests run the actual
 // query so that regression stays caught.
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { resolveFacetRuntimeSync } from '@/extensions/facet'
 import { ChangeScope, type BlockReference } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
@@ -42,6 +42,13 @@ const setup = async (): Promise<Harness> => {
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
     registerKernelProcessors: false,
+    // No live sync observer (the sanctioned deterministic-timing pattern).
+    // This suite does explicit local writes + queries and never needs
+    // materialization. With it on, a prior test's async observer write — whose
+    // tx_id comes from the per-test `newId` counter (reset to gen-1 each test)
+    // — could land after this test's resetTestDb cleared command_events and
+    // collide on the UNIQUE command_events.tx_id under full-suite load.
+    startSyncObserver: false,
   })
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
@@ -60,9 +67,6 @@ let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-// Dispose the per-test Repo's sync observer so its db.onChange subscription
-// doesn't leak onto the shared DB (closed once in afterAll).
-afterEach(() => { env.repo.stopSyncObserver() })
 
 const create = async (args: {
   id: string
