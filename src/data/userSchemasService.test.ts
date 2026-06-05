@@ -230,9 +230,15 @@ describe('UserSchemasService.getSchemaForBlockId', () => {
     env = await setup()
     const id = await createExternalSchemaBlock('tags')
 
-    const resolved = env.service.getSchemaForBlockId(id)
-    expect(resolved?.name).toBe('tags')
-    expect(resolved?.codec.type).toBe('string')
+    // The block subscription settles over one or more rebuild ticks;
+    // waitForPropertySchemasChange resolves on the first change event, which
+    // under full-suite load can precede the rebuild that registers this
+    // schema. Poll the reverse-map rather than reading it synchronously.
+    await vi.waitFor(() => {
+      const resolved = env.service.getSchemaForBlockId(id)
+      expect(resolved?.name).toBe('tags')
+      expect(resolved?.codec.type).toBe('string')
+    }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
   })
 
   it('returns undefined for unknown block ids', async () => {
@@ -243,7 +249,9 @@ describe('UserSchemasService.getSchemaForBlockId', () => {
   it('drops the reverse-map entry when a block stops resolving to a schema', async () => {
     env = await setup()
     const id = await createExternalSchemaBlock('tags')
-    expect(env.service.getSchemaForBlockId(id)?.name).toBe('tags')
+    await vi.waitFor(() => {
+      expect(env.service.getSchemaForBlockId(id)?.name).toBe('tags')
+    }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
 
     // Blank the name — tryBuildSchema will now drop the block on the
     // next rebuild tick.
@@ -253,7 +261,9 @@ describe('UserSchemasService.getSchemaForBlockId', () => {
       }, {scope: ChangeScope.BlockDefault})
     })
 
-    expect(env.service.getSchemaForBlockId(id)).toBeUndefined()
+    await vi.waitFor(() => {
+      expect(env.service.getSchemaForBlockId(id)).toBeUndefined()
+    }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
   })
 })
 
