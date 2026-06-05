@@ -176,7 +176,15 @@ describe('UserSchemasService subscription', () => {
       Editor: (): JSX.Element => createElement('span', null, null),
     })
     env.repo.setRuntimeContributions(valuePresetsFacet, 'plugin', [priorityPreset])
-    expect(env.repo.propertySchemas.get('priority')?.codec.type).toBe('string')
+    // The preset arrival re-resolves the previously-skipped schema on the
+    // valuePresets-change tick. Unlike the subscription-path assertions, this
+    // read isn't preceded by an awaited change event, and the
+    // valuePresets-change -> rebuild chain does NOT settle synchronously
+    // within setRuntimeContributions (it flakes under full-suite load), so
+    // poll for the resolved schema.
+    await vi.waitFor(() => {
+      expect(env.repo.propertySchemas.get('priority')?.codec.type).toBe('string')
+    }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
   })
 
   it('addSchema-followed-by-immediate-write does not race the subscription tick', async () => {
