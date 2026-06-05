@@ -20,7 +20,7 @@
  * production.
  */
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
@@ -99,8 +99,20 @@ let sharedDb: TestDb
 let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
-beforeEach(async () => { env = await setup() })
-afterEach(async () => { await env.h.cleanup() })
+beforeEach(async () => {
+  // Freeze the wall clock (Date only — timers/async stay real) so the
+  // import-log tests that place output on "today's" daily note can't race
+  // the UTC midnight rollover between writeImportLog()'s todayIso() and
+  // the assertion's todayIso(). Block timestamps use the repo's timeCursor,
+  // not Date, so this only pins the daily-note lookup.
+  vi.useFakeTimers({toFake: ['Date']})
+  vi.setSystemTime(new Date('2026-04-28T12:00:00Z'))
+  env = await setup()
+})
+afterEach(async () => {
+  await env.h.cleanup()
+  vi.useRealTimers()
+})
 
 const minimalExport: RoamExport = [
   {

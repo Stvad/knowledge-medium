@@ -583,12 +583,23 @@ describe('groupedBacklinksDataExtension query', () => {
     })
     await vi.waitFor(() => expect(fired).toEqual([['Project']]))
 
+    // A content-only edit on a source must not re-project the grouping.
     await env.repo.tx(
       tx => tx.update('src-1', {content: 'source content edited'}),
       {scope: ChangeScope.BlockDefault},
     )
-    await new Promise(r => setTimeout(r, 30))
-    expect(fired).toEqual([['Project']])
+    // Tracer-bullet: a reference change DOES re-resolve. Deleting src-2 drops
+    // the 2-member 'Project' group below minGroupSize, so the lone remaining
+    // source falls into the 'Other' fallback. Asserting `fired` ends at
+    // exactly [['Project'], ['Other']] proves the content edit emitted nothing
+    // in between — robust against the loader's structural-diff dedup, which
+    // would let a same-value re-resolve slip past a bare timeout.
+    await env.repo.tx(
+      tx => tx.delete('src-2'),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await vi.waitFor(() => expect(fired.at(-1)).toEqual(['Other']))
+    expect(fired).toEqual([['Project'], ['Other']])
   })
 
   it('re-resolves when a source moves to a different root grouping context', async () => {

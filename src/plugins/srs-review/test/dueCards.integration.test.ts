@@ -6,7 +6,7 @@
 // excluded — the bug lived in the query engine's three-valued handling
 // of `exclude`, not in the query we build. These tests run the actual
 // query so that regression stays caught.
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { resolveFacetRuntimeSync } from '@/extensions/facet'
 import { ChangeScope, type BlockReference } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
@@ -34,7 +34,6 @@ const setup = async (): Promise<Harness> => {
   const h = sharedDb
   const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
-  let idCursor = 0
   const repo = new Repo({
     db: h.db,
     cache,
@@ -42,6 +41,13 @@ const setup = async (): Promise<Harness> => {
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
     registerKernelProcessors: false,
+    // No live sync observer (the sanctioned deterministic-timing pattern).
+    // This suite does explicit local writes + queries and never needs
+    // materialization. With it on, a prior test's async observer write — whose
+    // tx_id comes from the per-test `newId` counter (reset to gen-1 each test)
+    // — could land after this test's resetTestDb cleared command_events and
+    // collide on the UNIQUE command_events.tx_id under full-suite load.
+    startSyncObserver: false,
   })
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
@@ -57,12 +63,18 @@ const setup = async (): Promise<Harness> => {
 
 let sharedDb: TestDb
 let env: Harness
+// Monotonic across the whole file (NOT reset per test). The suite shares one
+// PowerSync DB; tx_id comes from this counter, and an awaited write's
+// command_events insert can land just after the next test's resetTestDb (PS
+// write-behind). A per-test reset to gen-1 made those late ids collide with
+// the next test's own ids on the UNIQUE command_events.tx_id; keeping it
+// monotonic means a leaked id is always lower than the live test's, so it
+// can never collide. Nothing here asserts on generated ids (blocks use
+// explicit ids), so the values themselves don't matter.
+let idCursor = 0
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-// Dispose the per-test Repo's sync observer so its db.onChange subscription
-// doesn't leak onto the shared DB (closed once in afterAll).
-afterEach(() => { env.repo.stopSyncObserver() })
 
 const create = async (args: {
   id: string
