@@ -492,28 +492,50 @@ const makeUploadDeps = (
  *  each tx individually, completing on success, recording-then-completing
  *  on permanent failure, re-throwing on transient. This way one bad tx
  *  no longer jams the bucket — the rest of the queue drains and the
- *  bad one lands in ps_crud_rejected for inspection. */
+ *  bad one lands in ps_crud_rejected for inspection.
+ *
+ *  Encrypt-on-upload (§9.2) is part of that isolation: a tx for an e2ee
+ *  workspace whose key is momentarily missing/unreadable makes `encryptOps`
+ *  throw. The BATCH encryption is guarded so that failure DOESN'T abort the
+ *  whole preflight — it falls through to the per-tx loop, which drains every
+ *  earlier (encryptable) tx and then stops at the un-encryptable one (its
+ *  per-tx `encryptOps` throws out of the loop). `complete()` is a checkpoint
+ *  that drains all PRECEDING txs, so we can't skip the bad tx and complete a
+ *  later one — instead PowerSync retries from it once the key is back. A
+ *  missing key is treated as transient (retry), never a rejection (which would
+ *  discard the edit). */
 const uploadTransactionsWithFallback = async (
   database: AbstractPowerSyncDatabase,
   transactions: readonly CrudTransaction[],
   deps: UploadDeps,
 ): Promise<void> => {
   const encryptOps = deps.encryptOps ?? (async ops => ops)
-  const batchOps = await encryptOps(compactBlockCrudEntries(transactions.flatMap(t => t.crud)))
 
+  // Guard the batch encryption: if a tx in the batch can't be encrypted (e2ee
+  // key unavailable), fall through to the per-tx fallback rather than aborting
+  // the whole batch before any of it can drain.
+  let batchOps: readonly CompactedBlockOperation[] | null = null
   try {
-    await deps.applyOperations(database, batchOps)
-    await transactions[transactions.length - 1]?.complete()
-    return
+    batchOps = await encryptOps(compactBlockCrudEntries(transactions.flatMap(t => t.crud)))
   } catch (err) {
-    if (classifyUploadError(err) === 'transient') {
-      console.error('[powersync] upload failed (transient, will retry)', err)
-      throw err
+    console.warn('[powersync] batch encryption failed — isolating per tx', err)
+  }
+
+  if (batchOps) {
+    try {
+      await deps.applyOperations(database, batchOps)
+      await transactions[transactions.length - 1]?.complete()
+      return
+    } catch (err) {
+      if (classifyUploadError(err) === 'transient') {
+        console.error('[powersync] upload failed (transient, will retry)', err)
+        throw err
+      }
+      console.warn(
+        `[powersync] batch upload rejected permanently — isolating ${transactions.length} tx(s)`,
+        err,
+      )
     }
-    console.warn(
-      `[powersync] batch upload rejected permanently — isolating ${transactions.length} tx(s)`,
-      err,
-    )
   }
 
   // Per-tx fallback. Within-tx compaction still runs so the bootstrap
