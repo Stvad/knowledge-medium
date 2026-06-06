@@ -65,10 +65,12 @@ describe('createEncryptedWorkspace (§8.1)', () => {
     expect(getModePin(USER, 'ws-fail')).toBeNull()
   })
 
-  it('still pins e2ee and reveals the WK when the key store write fails (locked, not orphaned)', async () => {
-    // A device where IndexedDB put fails (quota / private mode). The workspace
-    // must end up e2ee-pinned-but-locked, with the WK returned so the user can
-    // save it and re-paste — never an orphaned workspace whose mode is unknown.
+  it('refuses (no server row, no pin) when the key store write fails — never an unopenable workspace', async () => {
+    // IndexedDB unwritable (quota / corruption / private mode) while localStorage
+    // works. The key-store preflight probe must refuse BEFORE creating the server
+    // row, rather than producing an e2ee workspace with a pin but no key that
+    // this device could never open (the gate would loop on re-paste).
+    let rpcCalled = false
     const failingStore = {
       get: async () => null,
       put: async () => {
@@ -77,14 +79,19 @@ describe('createEncryptedWorkspace (§8.1)', () => {
       delete: async () => {},
       clearAll: async () => {},
     }
-    const result = await createEncryptedWorkspace('Secret', {
-      userId: USER,
-      keyStore: failingStore,
-      newWorkspaceId: () => 'ws-nokey',
-      createWorkspace: async (_name, options) => ({ workspaceId: options.workspaceId }),
-    })
-    expect(result.workspaceKey.startsWith(WK_PREFIX)).toBe(true)
-    expect(getModePin(USER, 'ws-nokey')).toBe('e2ee')
+    await expect(
+      createEncryptedWorkspace('Secret', {
+        userId: USER,
+        keyStore: failingStore,
+        newWorkspaceId: () => 'ws-nokey',
+        createWorkspace: async (_name, options) => {
+          rpcCalled = true
+          return { workspaceId: options.workspaceId }
+        },
+      }),
+    ).rejects.toThrow(/storage/i)
+    expect(rpcCalled).toBe(false)
+    expect(getModePin(USER, 'ws-nokey')).toBeNull()
   })
 
   it('refuses to create (no server row, no local key) when pin storage is unavailable', async () => {

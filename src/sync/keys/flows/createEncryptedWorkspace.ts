@@ -42,6 +42,10 @@ export interface CreateEncryptedWorkspaceDeps<T> {
   readonly generateKeyBytes?: () => Uint8Array<ArrayBuffer>
 }
 
+// Sentinel workspace id used only to probe key-store writability before
+// creating the server row. Never a real workspace id; written then deleted.
+const KEY_STORE_PROBE_ID = '__e2ee_keystore_probe__'
+
 export const createEncryptedWorkspace = async <T extends object>(
   name: string,
   deps: CreateEncryptedWorkspaceDeps<T>,
@@ -77,8 +81,25 @@ export const createEncryptedWorkspace = async <T extends object>(
     throw new Error('createEncryptedWorkspace: minted canary failed round-trip self-validation')
   }
 
+  // Preflight the KEY store (IndexedDB) too — symmetric with the pin-store
+  // (localStorage) preflight above. Probe a write+delete with the real key at a
+  // sentinel id, so a key-store failure (quota / corruption / private mode)
+  // refuses the create HERE rather than producing a server-side e2ee workspace
+  // this device can't open: a pin would persist but no key, and re-pasting the
+  // WK would loop on the same failed write. Cleaned up immediately; the real key
+  // is persisted after the row exists.
+  try {
+    await deps.keyStore.put(deps.userId, KEY_STORE_PROBE_ID, cryptoKey)
+    await deps.keyStore.delete(deps.userId, KEY_STORE_PROBE_ID)
+  } catch {
+    throw new Error(
+      'Encrypted workspaces need browser storage that is currently unavailable ' +
+        '(private mode or storage limits). You can still create a regular workspace.',
+    )
+  }
+
   // Server row first: if the RPC throws, we've written no local key or pin for
-  // a workspace that doesn't exist.
+  // a workspace that doesn't exist (the probe above cleaned itself up).
   const created = await deps.createWorkspace(name, {
     encryptionMode: 'e2ee',
     workspaceId,
