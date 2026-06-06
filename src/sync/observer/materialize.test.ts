@@ -25,6 +25,7 @@ import { materializeStagingRows, type Materializability } from './materialize.js
 import { encodeForWire, type GetCek } from '../transform.js'
 import { generateWorkspaceKeyBytes, importWorkspaceKey } from '../crypto/workspaceKey.js'
 import type { BlockData } from '@/data/api'
+import type { PowerSyncDb } from '@/data/internals/commitPipeline.js'
 
 const COLUMN_NAMES = BLOCK_STORAGE_COLUMNS.map(c => c.name)
 const INSERT_BLOCK_SQL = `INSERT INTO blocks (${COLUMN_NAMES.join(', ')}) VALUES (${COLUMN_NAMES.map(() => '?').join(', ')})`
@@ -82,6 +83,35 @@ const crudCount = async () =>
 const constMat = (m: Materializability) => () => m
 
 const noKey: GetCek = async () => null
+
+/** Wrap the test DB so a racing local write fires exactly once, AFTER the
+ *  Phase-1 reads (which use the auto-commit `db`) but BEFORE the Phase-2 write
+ *  transaction opens — the precise TOCTOU window the authoritative in-tx
+ *  re-gate has to close. Everything else proxies straight through to the real
+ *  DB, so the materialization runs against the production schema as usual. */
+const racingDb = (real: PowerSyncDb, raceOnce: () => Promise<unknown>): PowerSyncDb => {
+  let raced = false
+  return new Proxy(real as object, {
+    get(target, prop, receiver) {
+      if (prop === 'writeTransaction') {
+        return async (fn: Parameters<PowerSyncDb['writeTransaction']>[0]) => {
+          if (!raced) { raced = true; await raceOnce() }
+          return real.writeTransaction(fn)
+        }
+      }
+      const value = Reflect.get(target, prop, receiver)
+      return typeof value === 'function'
+        ? (value as (...a: unknown[]) => unknown).bind(real)
+        : value
+    },
+  }) as PowerSyncDb
+}
+
+const queuePendingUpload = (id: string) =>
+  env.db.execute(
+    "INSERT INTO ps_crud (tx_id, data) VALUES (1, json_object('op','PATCH','type','blocks','id',?,'data',json_object()))",
+    [id],
+  )
 
 describe('materializeStagingRows — copy-through (plaintext workspace)', () => {
   it('copies a staged plaintext row into blocks verbatim, with no upload echo', async () => {
@@ -378,5 +408,92 @@ describe('materializeStagingRows — removed (stream-exit)', () => {
 
     expect(out.deleted).toEqual([])
     expect((await allBlocks())[0]?.content).toBe('local edit')
+  })
+})
+
+describe('materializeStagingRows — Phase-1/Phase-2 TOCTOU re-gate', () => {
+  // The Phase-1 staleness reads run outside the write tx, so a local edit can
+  // land between them and the lock. The clean path (Phase 1 passes and stays
+  // clean) is covered by "applies when the staging snapshot is strictly newer"
+  // above; these cover the race the second phase exists to close — Phase 1 sees
+  // a clean gate, a local edit lands in the window, and the in-tx re-gate must
+  // catch it and skip the write rather than clobber the unsynced edit.
+
+  it('skips a candidate when a local edit is queued for upload in the window', async () => {
+    await seedLocalBlock(blockData({ content: 'local v1', updatedAt: 200 }))
+    await stageRow(blockData({ content: 'server v2', updatedAt: 300 }))
+
+    const out = await materializeStagingRows(
+      racingDb(env.db, () => queuePendingUpload('b1')),
+      { upserted: ['b1'], removed: [] },
+      { getMaterializability: constMat('copy'), getCek: noKey },
+    )
+
+    expect(out.applied).toEqual([])
+    expect(out.skippedStale).toEqual(['b1'])
+    expect(out.snapshots.has('b1')).toBe(false) // nothing written ⇒ nothing to invalidate
+    expect((await allBlocks())[0]!.content).toBe('local v1')
+  })
+
+  it('skips a candidate when the local row is bumped newer in the window', async () => {
+    await seedLocalBlock(blockData({ content: 'local v1', updatedAt: 200 }))
+    await stageRow(blockData({ content: 'server v2', updatedAt: 300 }))
+
+    const out = await materializeStagingRows(
+      racingDb(env.db, async () => {
+        await env.db.execute('UPDATE blocks SET updated_at = ? WHERE id = ?', [999, 'b1'])
+      }),
+      { upserted: ['b1'], removed: [] },
+      { getMaterializability: constMat('copy'), getCek: noKey },
+    )
+
+    expect(out.applied).toEqual([])
+    expect(out.skippedStale).toEqual(['b1'])
+    expect((await allBlocks())[0]!.content).toBe('local v1')
+  })
+})
+
+describe('materializeStagingRows — soft-delete (tombstone) materialization', () => {
+  const deletedFlag = (id: string) =>
+    env.db.getAll<{ deleted: number }>('SELECT deleted FROM blocks WHERE id = ?', [id])
+
+  it('materializes a deleted=true snapshot as a soft-deleted row, not a hard delete', async () => {
+    // A tombstone arrives as an UPSERT (still in the synced set, just flagged
+    // deleted) — distinct from the `removed` stream-exit path. It must land in
+    // `blocks` as deleted=1 so it can still sync / LWW-merge, not vanish.
+    await stageRow(blockData({ content: 'tombstone', deleted: true }))
+
+    const out = await materializeStagingRows(
+      env.db,
+      { upserted: ['b1'], removed: [] },
+      { getMaterializability: constMat('copy'), getCek: noKey },
+    )
+
+    expect(out.applied).toEqual(['b1'])
+    expect(out.deleted).toEqual([]) // not the hard-delete path
+    expect(await deletedFlag('b1')).toEqual([{ deleted: 1 }])
+    expect(out.snapshots.get('b1')).toMatchObject({
+      before: null,
+      after: { id: 'b1', deleted: true },
+    })
+  })
+
+  it('soft-deletes a previously-live local row when a newer tombstone arrives', async () => {
+    await seedLocalBlock(blockData({ content: 'alive', updatedAt: 100 }))
+    await stageRow(blockData({ content: 'alive', deleted: true, updatedAt: 200 }))
+
+    const out = await materializeStagingRows(
+      env.db,
+      { upserted: ['b1'], removed: [] },
+      { getMaterializability: constMat('copy'), getCek: noKey },
+    )
+
+    expect(out.applied).toEqual(['b1'])
+    expect(out.deleted).toEqual([])
+    expect(await deletedFlag('b1')).toEqual([{ deleted: 1 }])
+    expect(out.snapshots.get('b1')).toMatchObject({
+      before: { deleted: false },
+      after: { deleted: true },
+    })
   })
 })

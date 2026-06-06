@@ -352,6 +352,37 @@ describe('blocksSyncedObserver — cycle detection (§4.7)', () => {
     warn.mockRestore()
   })
 
+  it('emits cycleDetected for a sync-applied 3-cycle (startIds cover all three members)', async () => {
+    // The 2-cycle test above only walks one hop; this drives the cycleScanSql
+    // recursion across three members (A→B→C→A) to confirm n>2 loops are caught.
+    const events: CycleDetectedEvent[] = []
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { observer } = start({
+      getMaterializability: constMat('copy'),
+      onCycleDetected: e => events.push(e),
+    })
+
+    await put(data({ id: 'A', parentId: null, updatedAt: 1 }))
+    await put(data({ id: 'B', parentId: null, updatedAt: 1 }))
+    await put(data({ id: 'C', parentId: null, updatedAt: 1 }))
+    await observer.flush()
+
+    // Three sync-applied moves close the loop A→B→C→A (all strictly newer).
+    await put(data({ id: 'A', parentId: 'B', updatedAt: 2 }))
+    await put(data({ id: 'B', parentId: 'C', updatedAt: 2 }))
+    await put(data({ id: 'C', parentId: 'A', updatedAt: 2 }))
+    await observer.flush()
+
+    expect(events.length).toBeGreaterThanOrEqual(1)
+    const startIds = new Set<string>()
+    for (const ev of events) {
+      expect(ev.workspaceId).toBe('ws-plain')
+      ev.startIds.forEach(id => startIds.add(id))
+    }
+    expect([...startIds].sort()).toEqual(['A', 'B', 'C'])
+    warn.mockRestore()
+  })
+
   it('does not fire when a sync-applied move does not close a loop', async () => {
     const events: CycleDetectedEvent[] = []
     const { observer } = start({

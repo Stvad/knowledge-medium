@@ -9,6 +9,8 @@ import {describe, expect, it} from 'vitest'
 import {
   commandPayloadSchema,
   commandStatusResponseSchema,
+  knownAgentCommandSchema,
+  knownCommandSchema,
   registerClientMetadataSchema,
   registerTokenSpecSchema,
   whoamiInfoSchema,
@@ -41,6 +43,28 @@ describe('commandPayloadSchema', () => {
     expect(commandPayloadSchema.safeParse(null).success).toBe(false)
     expect(commandPayloadSchema.safeParse('hello').success).toBe(false)
     expect(commandPayloadSchema.safeParse([]).success).toBe(false)
+  })
+})
+
+describe('known command unions (strict per-verb validation)', () => {
+  it('rejects an unknown command type and a known type missing a required field', () => {
+    expect(knownAgentCommandSchema.safeParse({type: 'bogus'}).success).toBe(false)
+    // sql requires `sql`; the discriminated branch enforces it (unlike the
+    // loose commandPayloadSchema, which would forward it to the kernel).
+    expect(knownAgentCommandSchema.safeParse({type: 'sql'}).success).toBe(false)
+    expect(knownAgentCommandSchema.safeParse({type: 'sql', sql: 'SELECT 1'}).success).toBe(true)
+  })
+
+  it('keeps legacy aliases in the kernel union but not in the CLI canonical union', () => {
+    // `action` / `set-extension-enabled` are back-compat aliases the kernel
+    // still dispatches, so they validate against knownAgentCommandSchema...
+    expect(knownAgentCommandSchema.safeParse({type: 'action', id: 'a'}).success).toBe(true)
+    expect(knownAgentCommandSchema.safeParse({type: 'set-extension-enabled', id: 'x', enabled: true}).success).toBe(true)
+    // ...but the CLI never emits them, so they're absent from the canonical set.
+    expect(knownCommandSchema.safeParse({type: 'action', id: 'a'}).success).toBe(false)
+    expect(knownCommandSchema.safeParse({type: 'set-extension-enabled', id: 'x', enabled: true}).success).toBe(false)
+    // run-action is the canonical form both unions accept.
+    expect(knownCommandSchema.safeParse({type: 'run-action', id: 'a'}).success).toBe(true)
   })
 })
 

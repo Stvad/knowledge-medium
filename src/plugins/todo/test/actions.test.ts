@@ -65,6 +65,16 @@ describe('cycleTodoState', () => {
     expect(block.peekProperty(statusProp)).toBeUndefined()
   })
 
+  it('is a no-op on a read-only repo (read-only guard short-circuits before any write)', async () => {
+    const block = repo.block('block-1')
+    repo.isReadOnly = true
+
+    await cycleTodoState(block)
+
+    expect(block.types).not.toContain(TODO_TYPE)
+    expect(block.peekProperty(statusProp)).toBeUndefined()
+  })
+
   it('reopens as open even when a stale status property exists without todo type', async () => {
     await repo.tx(async tx => {
       await tx.update('block-1', {
