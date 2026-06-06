@@ -22,27 +22,32 @@ const fixture: BlockData = {
   deleted: false,
 }
 
-const rowFromParams = (params: ReturnType<typeof blockToRowParams>): BlockRow => ({
-  id: params[0],
-  workspace_id: params[1],
-  parent_id: params[2],
-  order_key: params[3],
-  content: params[4],
-  properties_json: params[5],
-  references_json: params[6],
-  created_at: params[7],
-  updated_at: params[8],
-  created_by: params[9],
-  updated_by: params[10],
-  deleted: params[11],
-})
+// Build the row exactly as production binds it: column BLOCK_STORAGE_COLUMNS[i]
+// receives blockToRowParams()[i]. txEngine's INSERT and the blocks_synced
+// raw-table `put` both build their column list from BLOCK_STORAGE_COLUMNS order
+// and bind these params positionally, so zipping the two here (rather than
+// hard-coding tuple indexes) makes every round-trip below a guard on that
+// order ↔ params invariant — a reorder/added column lands values under the
+// wrong column name and fails the decode.
+const rowFromParams = (params: ReturnType<typeof blockToRowParams>): BlockRow => {
+  const row: Record<string, unknown> = {}
+  BLOCK_STORAGE_COLUMNS.forEach((column, index) => {
+    row[column.name] = params[index]
+  })
+  return row as unknown as BlockRow
+}
 
 describe('BLOCK_STORAGE_COLUMNS', () => {
-  // The exact column set + order is exercised end-to-end by the
-  // blockToRowParams / parseBlockRow round-trip below (which maps every
-  // column positionally), so a literal copy of the list here would only
-  // restate the source. What that round-trip can't catch is a *legacy*
-  // column name silently reappearing, so keep just those guards.
+  // The column set + ORDER is guarded against blockToRowParams by the
+  // BLOCK_STORAGE_COLUMNS-zipped round-trip below (a reorder mis-binds and
+  // fails the decode); the count guard here catches an added/removed column
+  // that the round-trip's named decode would otherwise skip. A literal copy of
+  // the name list would only restate the source, so it's gone — but the legacy
+  // *name* guards stay (the round-trip can't catch a renamed-back column).
+  it('binds exactly one positional param per storage column', () => {
+    expect(blockToRowParams(fixture)).toHaveLength(BLOCK_STORAGE_COLUMNS.length)
+  })
+
   it('never reintroduces legacy / renamed columns', () => {
     const names = BLOCK_STORAGE_COLUMNS.map(c => c.name)
     expect(names).not.toContain('child_ids_json')
