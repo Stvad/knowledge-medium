@@ -23,6 +23,7 @@ import {
 } from './model.ts'
 import {
   formatPendingChanges,
+  materializeQueueCountSql,
   uploadQueueCountCap,
   uploadQueueExactCountSql,
   uploadQueuePreviewCountSql,
@@ -142,6 +143,7 @@ export function SyncStatusHeaderItem() {
         pendingChanges={0}
         pendingChangesApproximate={false}
         rejectedCount={rejectedCount}
+        materializingChanges={0}
         localErrorMessage={localErrorMessage}
       />
     )
@@ -179,6 +181,19 @@ function RemoteSyncStatusHeaderContent({
   const pendingChangesApproximate = previewCount > uploadQueueCountCap
   const pendingChanges = pendingChangesApproximate ? uploadQueueCountCap : previewCount
 
+  // Staged rows the Layout B observer hasn't applied to `blocks` yet. The change
+  // queue mutates every drain window, so watch it throttled like the upload
+  // preview; it counts down to 0 as the backlog materializes.
+  const materializeQueue = useQuery<UploadQueueCountRow>(
+    materializeQueueCountSql,
+    [],
+    {
+      reportFetching: false,
+      throttleMs: uploadQueuePreviewThrottleMs,
+    },
+  )
+  const materializingChanges = Number(materializeQueue.data[0]?.count ?? 0)
+
   return (
     <SyncStatusHeaderContent
       localOnly={false}
@@ -186,6 +201,7 @@ function RemoteSyncStatusHeaderContent({
       pendingChanges={pendingChanges}
       pendingChangesApproximate={pendingChangesApproximate}
       rejectedCount={rejectedCount}
+      materializingChanges={materializingChanges}
       localErrorMessage={queue.error?.message ?? baseLocalErrorMessage}
     />
   )
@@ -197,6 +213,7 @@ interface SyncStatusHeaderContentProps {
   pendingChanges: number
   pendingChangesApproximate: boolean
   rejectedCount: number
+  materializingChanges: number
   localErrorMessage: string | null
 }
 
@@ -206,6 +223,7 @@ function SyncStatusHeaderContent({
   pendingChanges,
   pendingChangesApproximate,
   rejectedCount,
+  materializingChanges,
   localErrorMessage,
 }: SyncStatusHeaderContentProps) {
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -236,6 +254,7 @@ function SyncStatusHeaderContent({
     pendingChanges,
     pendingChangesApproximate,
     rejectedChanges: rejectedCount,
+    materializingChanges,
     downloadFraction: status.downloadProgress?.downloadedFraction ?? null,
     errorMessage,
     lastSyncedAt: status.lastSyncedAt,
@@ -284,6 +303,14 @@ function SyncStatusHeaderContent({
                 <>
                   <div className="text-muted-foreground">Progress</div>
                   <div className="text-right">{view.progressPercent}%</div>
+                </>
+              )}
+              {materializingChanges > 0 && (
+                <>
+                  <div className="text-muted-foreground">Processing</div>
+                  <div className="text-right">
+                    {materializingChanges.toLocaleString()} {materializingChanges === 1 ? 'block' : 'blocks'}
+                  </div>
                 </>
               )}
               <div className="text-muted-foreground">Last sync</div>

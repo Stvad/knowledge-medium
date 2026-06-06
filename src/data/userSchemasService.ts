@@ -6,9 +6,10 @@ import {
   ChangeScope,
   type AnyPropertySchema,
   type AnyValuePreset,
+  type BlockData,
+  type PropertySchema,
   type Unsubscribe,
 } from '@/data/api'
-import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
 import {
   presetConfigProp,
@@ -19,6 +20,17 @@ import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 import { propertySchemasFacet } from '@/data/facets'
 
 const USER_DATA_SOURCE_ID = 'user-data'
+
+/** Decode a single property straight off a raw row — same logic as
+ *  `Block.peekProperty`, minus the cache-backed facade. The block
+ *  subscription already hands us the authoritative `BlockData`, so
+ *  reading it directly avoids the hydration race where `repo.block(id)`
+ *  could transiently read an un-hydrated facade (peekProperty → undefined)
+ *  and drop a freshly-created schema from the rebuild. */
+const peekRowProperty = <T>(row: BlockData, schema: PropertySchema<T>): T | undefined => {
+  const stored = row.properties[schema.name]
+  return stored === undefined ? undefined : schema.codec.decode(stored)
+}
 
 export interface AddSchemaArgs {
   name: string
@@ -59,9 +71,11 @@ export class UserSchemasService {
    *  previously-skipped schemas resolvable). */
   private presetsListenerDisposer: (() => void) | null = null
 
-  /** Latest blocks list captured by the subscription. Stored so the
-   *  value-preset change path can re-resolve without a fresh DB read. */
-  private latestBlocks: readonly Block[] = []
+  /** Latest rows captured by the subscription. Stored so the value-preset
+   *  change path can re-resolve without a fresh DB read. Kept as raw
+   *  `BlockData` (not Block facades) so rebuilds read the authoritative
+   *  delivered snapshot directly — see `peekRowProperty`. */
+  private latestBlocks: readonly BlockData[] = []
 
   constructor(private readonly repo: Repo) {}
 
@@ -96,7 +110,7 @@ export class UserSchemasService {
       throw new Error('[UserSchemasService] no active workspace at start()')
     }
 
-    const rebuildFromBlocks = (blocks: readonly Block[]) => {
+    const rebuildFromBlocks = (blocks: readonly BlockData[]) => {
       this.latestBlocks = blocks
       const presets = this.repo.valuePresets
       const next: AnyPropertySchema[] = []
@@ -118,12 +132,11 @@ export class UserSchemasService {
 
     this.subscriptionDisposer = this.repo.subscribeBlocks(
       {workspaceId, types: [PROPERTY_SCHEMA_TYPE]},
-      blocks => {
-        // Hydrate to Block facades so we can read codec-decoded
-        // properties (block.get) rather than poking at raw
-        // properties_json shapes.
-        rebuildFromBlocks(blocks.map(b => this.repo.block(b.id)))
-      },
+      // Build straight from the delivered rows: they're the authoritative
+      // query snapshot. Going through repo.block(id) facades instead raced
+      // the BlockCache — an un-hydrated facade would read undefined and
+      // drop a freshly-created schema until a later rebuild tick.
+      blocks => rebuildFromBlocks(blocks),
     )
 
     this.presetsListenerDisposer = this.repo.onValuePresetsChange(() => {
@@ -146,31 +159,31 @@ export class UserSchemasService {
    *  (3) configCodec.decode throws. The block stays in the database
    *  untouched; a fix re-runs this on the next subscription tick. */
   private tryBuildSchema(
-    block: Block,
+    row: BlockData,
     presets: ReadonlyMap<string, AnyValuePreset>,
   ): AnyPropertySchema | null {
-    const presetId = block.peekProperty(presetIdProp) ?? ''
+    const presetId = peekRowProperty(row, presetIdProp) ?? ''
     if (!presetId) {
-      console.warn(`[UserSchemasService] schema block ${block.id} has no presetId`)
+      console.warn(`[UserSchemasService] schema block ${row.id} has no presetId`)
       return null
     }
     const preset = presets.get(presetId)
     if (!preset) {
       console.warn(
-        `[UserSchemasService] schema block ${block.id} references unknown preset ${JSON.stringify(presetId)}; ` +
+        `[UserSchemasService] schema block ${row.id} references unknown preset ${JSON.stringify(presetId)}; ` +
         `preset's plugin may not be loaded`,
       )
       return null
     }
-    const name = block.peekProperty(propertyNameProp) ?? ''
+    const name = peekRowProperty(row, propertyNameProp) ?? ''
     if (!name) {
-      console.warn(`[UserSchemasService] schema block ${block.id} has empty propertyName`)
+      console.warn(`[UserSchemasService] schema block ${row.id} has empty propertyName`)
       return null
     }
     let config: unknown
     if (preset.configCodec) {
       try {
-        const raw = block.peekProperty(presetConfigProp) ?? {}
+        const raw = peekRowProperty(row, presetConfigProp) ?? {}
         config = preset.configCodec.decode(raw)
       } catch (err) {
         console.warn(

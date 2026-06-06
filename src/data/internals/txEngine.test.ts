@@ -466,6 +466,43 @@ describe('tx.move (cycle validation, §4.7 Layer 1)', () => {
     )).rejects.toThrow(CycleError)
   })
 
+  it('detects a cycle several levels deep, not just an immediate child', async () => {
+    // Extend root→A→B→C with D under C, then try to move A under D. D is A's
+    // descendant four hops down, so the ancestor walk has to traverse
+    // D→C→B→A to catch it — exercises multi-hop recursion, not a 2-cycle.
+    await env.repo.tx(
+      tx => tx.create({id: 'mv-D', workspaceId: 'ws-1', parentId: 'mv-C', orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await expect(env.repo.tx(
+      tx => tx.move('mv-A', {parentId: 'mv-D', orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toThrow(CycleError)
+    expect(env.cache.getSnapshot('mv-A')!.parentId).toBe('mv-root')
+  })
+
+  it('does NOT catch a loop deeper than the §4.7 depth-guard cap (documented truncation)', async () => {
+    // The ancestor walk is bounded by `depth < 100` so a pathological chain
+    // can't run the recursion away. The trade-off: a loop that closes past the
+    // cap is knowingly missed. CHAIN must stay above the cap; if the cap moves,
+    // this is the test that flags it.
+    const CHAIN = 110
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'deep-0', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+      for (let i = 1; i <= CHAIN; i++) {
+        await tx.create({id: `deep-${i}`, workspaceId: 'ws-1', parentId: `deep-${i - 1}`, orderKey: 'a0'})
+      }
+    }, {scope: ChangeScope.BlockDefault})
+
+    // deep-110 is a descendant of deep-0, so this closes a loop — but it's past
+    // the cap, so the guard truncates before reaching deep-0 and the move lands.
+    await env.repo.tx(
+      tx => tx.move('deep-0', {parentId: `deep-${CHAIN}`, orderKey: 'b0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    expect(env.cache.getSnapshot('deep-0')).toMatchObject({parentId: `deep-${CHAIN}`})
+  })
+
   it('throws ParentNotFoundError when target parent_id is missing', async () => {
     await expect(env.repo.tx(
       tx => tx.move('mv-A', {parentId: 'missing-parent', orderKey: 'a0'}),

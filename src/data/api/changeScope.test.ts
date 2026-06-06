@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import {
-  CHANGE_SCOPE_POLICIES,
   ChangeScope,
   scopeAllowedInReadOnly,
   scopeIsUndoable,
@@ -9,9 +8,10 @@ import {
 } from './changeScope'
 
 describe('change scope policies', () => {
-  it('defines every scope in the policy table', () => {
-    expect(Object.keys(CHANGE_SCOPE_POLICIES).sort()).toEqual(Object.values(ChangeScope).sort())
-  })
+  // The "every scope is in the policy table" invariant is enforced at
+  // compile time by `CHANGE_SCOPE_POLICIES satisfies Readonly<Record<
+  // ChangeScope, ChangeScopePolicy>>` — a runtime restatement can't catch
+  // anything the type checker doesn't already reject.
 
   it('routes every writable scope through source="user"', () => {
     // Every repo.tx invocation queues to ps_crud now; UI-state used to

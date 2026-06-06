@@ -28,7 +28,11 @@ import { outlineRenderScopeId } from '@/utils/renderScope.js'
 
 const JUMP_BLOCK_COUNT = 8
 
-const jumpVisibleBlocks = async (
+/** Walk up to `count` visible blocks in `direction`, stopping early at the
+ *  scope boundary. Returns the landing block, or null when the start block is
+ *  already at the boundary (no movement). Exported for direct testing — the
+ *  jump_many_{up,down} actions are thin focus wrappers around it. */
+export const jumpVisibleBlocks = async (
   startBlock: BlockShortcutDependencies['block'],
   scopeRootId: string,
   count: number,

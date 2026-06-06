@@ -145,6 +145,11 @@ describe('cutover parity — plaintext block: observer path vs a direct blocks w
     await ref.db.execute('DELETE FROM blocks WHERE id = ?', [block.id])
 
     await stageAndMaterialize(obs.db, block)
+    // A real stream-exit deletes the staging row — that DELETE is what enqueues
+    // the 'delete' op. The observer only hard-deletes the local row once the
+    // staging row is gone (a 'delete' with the staging row still present is an
+    // INSERT OR REPLACE re-delivery artifact, not a removal).
+    await obs.db.execute(BLOCKS_SYNCED_RAW_TABLE.delete.sql, [block.id])
     const out = await materializeStagingRows(
       obs.db,
       { upserted: [], removed: [block.id] },

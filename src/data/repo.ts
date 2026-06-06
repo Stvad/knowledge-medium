@@ -607,6 +607,13 @@ export class Repo {
    *  this set without further SQL. Tests / migrations that wipe the
    *  table can call `__resetReprojectionMarkerCache` to force a reload. */
   private reprojectionMarkers: Set<string> | null = null
+  /** In-flight reprojection runs whose deferral timer has already
+   *  fired. `scheduleReprojection` is fire-and-forget (the cold-start
+   *  path must not block on it), so this set is the only handle on
+   *  those promises; `awaitReprojections()` drains it for deterministic
+   *  test quiescence and to keep a stray reprojection from writing into
+   *  the next test on a shared DB. Entries remove themselves on settle. */
+  private readonly pendingReprojections = new Set<Promise<void>>()
   /** Slowest writeTransaction observed since the last reset, by
    *  description (`opts.description` passed to `repo.tx`). Updated only
    *  when a tx exceeds the previous high-water mark, so the field is
@@ -1692,7 +1699,11 @@ export class Repo {
     names: readonly string[],
     schemas: ReadonlyMap<string, AnyPropertySchema>,
   ): void {
-    const run = () => { void this.reprojectRefTypedProperties(names, schemas) }
+    const run = () => {
+      const p = this.reprojectRefTypedProperties(names, schemas)
+        .finally(() => { this.pendingReprojections.delete(p) })
+      this.pendingReprojections.add(p)
+    }
     const idle = (globalThis as {requestIdleCallback?: (cb: () => void, opts?: {timeout: number}) => void}).requestIdleCallback
     if (typeof idle === 'function') {
       idle(run, {timeout: 2000})
@@ -2026,6 +2037,20 @@ export class Repo {
    *  pending set when the timer fires. */
   async awaitProcessors(): Promise<void> {
     await this.processorRunner.awaitIdle()
+  }
+
+  /** Wait until every reprojection whose deferral timer has already
+   *  fired has finished writing. Like `awaitProcessors()`, this does
+   *  NOT advance timers — a reprojection only enters the pending set
+   *  once its `setTimeout`/`requestIdleCallback` callback runs, so
+   *  callers using fake timers must advance the clock first. Loops so
+   *  that a reprojection settling while we await an earlier one is
+   *  still drained. Reprojection runs never schedule further
+   *  reprojections, so this terminates. */
+  async awaitReprojections(): Promise<void> {
+    while (this.pendingReprojections.size > 0) {
+      await Promise.all([...this.pendingReprojections])
+    }
   }
 
   /** Test-only escape hatch retained for stage-level tests that wire

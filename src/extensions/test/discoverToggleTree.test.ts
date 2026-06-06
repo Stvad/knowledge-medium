@@ -112,17 +112,18 @@ describe('discoverToggleTreeSync', () => {
     ).toThrow(/function-valued AppExtension/i)
   })
 
-  it('deduplicates roots that share a handle reference', () => {
+  it('surfaces a repeated handle without crashing the walk', () => {
     const handle = systemToggle({id: 'system:dup', name: 'Dup'})
     const tree = [handle.of([]), handle.of([])]
 
     const result = discoverToggleTreeSync(tree)
 
-    // Two wraps of the same handle = two separate boundary arrays.
-    // Each surfaces as a node, but the *handles* are identical. The
-    // settings UI keys by handle.id, so this is informational —
-    // codify the current behaviour rather than enforce dedup.
-    expect(allIds(result)).toEqual(['system:dup', 'system:dup'])
+    // Two wraps of the same handle = two separate boundary arrays. The
+    // settings UI keys by handle.id, so whether the walk dedups or not is
+    // an implementation detail — assert only that the handle surfaces.
+    // (Pinning the exact count here would force a future real dedup fix to
+    // update this test for the wrong reason.)
+    expect(allIds(result)).toContain('system:dup')
   })
 })
 

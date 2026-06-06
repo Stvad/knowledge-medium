@@ -59,36 +59,27 @@ const UPSERT_BLOCK_SQL = `
 
 const DELETE_BLOCK_SQL = 'DELETE FROM blocks WHERE id = ?'
 
-// Full pre-write row, both for the LWW gate (updated_at) and for the
-// invalidation `before` snapshot the observer emits (parent-edge / plugin
-// channels need the prior parent_id, content, properties, etc.).
-const SELECT_BLOCK_BY_ID_SQL = `SELECT ${COLUMN_NAMES.join(', ')} FROM blocks WHERE id = ?`
-
-const PENDING_UPLOAD_SQL = `
-  SELECT 1 AS one FROM ps_crud
-   WHERE json_extract(data, '$.id') = ?
-     AND json_extract(data, '$.type') = 'blocks'
-   LIMIT 1
+// All block ids with an unsent local edit queued for upload. A pending edit
+// always wins over an incoming snapshot (the echo reconciles), so the gate
+// needs this set. `ps_crud.data` is the upload envelope the blocks_upload_*
+// triggers write: `{op, type, id, data}`. DISTINCT ids only — an editing burst
+// fans out to many crud rows for one block. Read once per pass instead of a
+// per-row probe: the queue holds only local, not-yet-synced edits (tiny in
+// steady state, empty during a large initial download).
+const PENDING_UPLOAD_IDS_SQL = `
+  SELECT DISTINCT json_extract(data, '$.id') AS id FROM ps_crud
+   WHERE json_extract(data, '$.type') = 'blocks'
 `
 
 const blockRowParams = (row: BlockRow): unknown[] =>
   COLUMN_NAMES.map(name => row[name])
 
-/** Read-only surface both the auto-commit DB and an open `TxDb` satisfy, so
- *  the reconcile reads can run either outside the write tx (Phase 1 pre-gate)
- *  or inside it (Phase 2 authoritative re-check). */
-type Reader = {
-  getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
+/** Minimal read surface both the auto-commit DB and an open write-tx (`TxDb`)
+ *  satisfy, so the bulk gate reads run either outside the write tx (Phase 1
+ *  pre-gate) or inside it (Phase 2 authoritative re-check). */
+type RowsReader = {
+  getAll<T>(sql: string, params?: unknown[]): Promise<T[]>
 }
-
-/** True if PowerSync's upload queue holds an unsent local edit for this id. */
-const hasPendingUpload = async (db: Reader, id: string): Promise<boolean> =>
-  (await db.getOptional<{ one: number }>(PENDING_UPLOAD_SQL, [id])) !== null
-
-const localUpdatedAt = async (db: Reader, id: string): Promise<number | null> =>
-  (await db.getOptional<{ updated_at: number }>(
-    'SELECT updated_at FROM blocks WHERE id = ?', [id],
-  ))?.updated_at ?? null
 
 /** Resolve how a workspace's rows can be materialized right now. The policy
  *  (pin lookup, WK presence, §6 quarantine) is injected; the observer core
@@ -103,8 +94,11 @@ export interface MaterializeDeps {
   readonly getCek: GetCek
 }
 
-/** The staging-table delta to process: ids whose staging row changed, and
- *  ids that left the synced set entirely. */
+/** The staging-table delta to process: ids whose staging row changed, and ids
+ *  whose staging row was deleted. A `removed` id only hard-deletes the local
+ *  row if its `blocks_synced` row is actually gone — a delete whose staging row
+ *  is still present is an INSERT OR REPLACE re-delivery artifact, not a
+ *  stream-exit (see the Phase 2 removed loop). */
 export interface StagingChange {
   readonly upserted: readonly string[]
   readonly removed: readonly string[]
@@ -175,6 +169,67 @@ const readStagingRows = async (
   return out
 }
 
+/** Local `updated_at` for the `ids` the app already has a `blocks` row for (the
+ *  LWW gate's local stamp), keyed by id. Chunked so the IN-clause never exceeds
+ *  SQLite's bound-parameter limit. Absent ids = no local row. */
+const readLocalUpdatedAt = async (
+  db: RowsReader, ids: readonly string[], chunkSize: number,
+): Promise<Map<string, number>> => {
+  const out = new Map<string, number>()
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const chunk = ids.slice(i, i + chunkSize)
+    const rows = await db.getAll<{ id: string; updated_at: number }>(
+      `SELECT id, updated_at FROM blocks WHERE id IN (${buildInClause(chunk.length)})`,
+      chunk,
+    )
+    for (const row of rows) out.set(row.id, row.updated_at)
+  }
+  return out
+}
+
+/** Full pre-write `blocks` rows for `ids`, keyed by id — serves both the LWW
+ *  gate's local stamp and the invalidation `before` snapshot (parent-edge /
+ *  plugin channels need the prior parent_id, content, properties, etc.).
+ *  Chunked like the staging read. */
+const readBlocksByIds = async (
+  db: RowsReader, ids: readonly string[], chunkSize: number,
+): Promise<Map<string, BlockRow>> => {
+  const out = new Map<string, BlockRow>()
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const chunk = ids.slice(i, i + chunkSize)
+    const rows = await db.getAll<BlockRow>(
+      `SELECT ${COLUMN_NAMES.join(', ')} FROM blocks WHERE id IN (${buildInClause(chunk.length)})`,
+      chunk,
+    )
+    for (const row of rows) out.set(row.id, row)
+  }
+  return out
+}
+
+/** Block ids with an unsent local edit queued for upload (a single read of the
+ *  whole upload queue, not a per-row probe). */
+const readPendingUploadIds = async (db: RowsReader): Promise<Set<string>> => {
+  const rows = await db.getAll<{ id: string }>(PENDING_UPLOAD_IDS_SQL)
+  return new Set(rows.map(row => row.id))
+}
+
+/** Subset of `ids` that still have a row in the `blocks_synced` staging table.
+ *  Chunked like the other id-keyed reads. */
+const readExistingStagingIds = async (
+  db: RowsReader, ids: readonly string[], chunkSize: number,
+): Promise<Set<string>> => {
+  const out = new Set<string>()
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const chunk = ids.slice(i, i + chunkSize)
+    const rows = await db.getAll<{ id: string }>(
+      `SELECT id FROM blocks_synced WHERE id IN (${buildInClause(chunk.length)})`,
+      chunk,
+    )
+    for (const row of rows) out.add(row.id)
+  }
+  return out
+}
+
 /** Tunables (batch sizing). Defaults are production values; tests override. */
 export interface MaterializeOptions {
   readonly readChunkSize?: number
@@ -209,6 +264,15 @@ export const materializeStagingRows = async (
 
   const stagingRows = await readStagingRows(db, change.upserted, readChunkSize)
 
+  // Bulk-read the gate's local state for the whole batch up front, rather than
+  // two awaited probes per row. On a large backlog those per-row probes — a
+  // `blocks` lookup plus a `ps_crud` json_extract scan, each a serialized
+  // round-trip to the SQLite worker — were the dominant cost, not the copy.
+  const localUpdatedAtById = await readLocalUpdatedAt(
+    db, stagingRows.map(row => row.id), readChunkSize,
+  )
+  const pendingUploadIds = await readPendingUploadIds(db)
+
   const materializabilityByWs = new Map<string, Materializability>()
   const resolveMaterializability = async (workspaceId: string): Promise<Materializability> => {
     const cached = materializabilityByWs.get(workspaceId)
@@ -227,8 +291,8 @@ export const materializeStagingRows = async (
       continue
     }
     const action = decideStagingRow(materializability, row.updated_at, {
-      localUpdatedAt: await localUpdatedAt(db, row.id),
-      hasPendingUpload: await hasPendingUpload(db, row.id),
+      localUpdatedAt: localUpdatedAtById.get(row.id) ?? null,
+      hasPendingUpload: pendingUploadIds.has(row.id),
     })
     if (action.kind !== 'apply') {
       // Skip-stale BEFORE decrypt: a stale ciphertext never gets decoded.
@@ -270,13 +334,23 @@ export const materializeStagingRows = async (
     // set it explicitly to defend against any stale value.
     await tx.execute('UPDATE tx_context SET source = NULL WHERE id = 1')
 
+    // Re-gate authoritatively INSIDE the lock, but bulk-read the inputs once.
+    // Candidate ids are distinct (deduped upstream) so no upsert below feeds a
+    // later candidate's before-row, and the NULL-source upserts never touch
+    // `ps_crud` — so one up-front read of each input equals a per-row probe,
+    // with far fewer round-trips. The before-rows double as the `before`
+    // invalidation snapshots.
+    const beforeRowById = await readBlocksByIds(
+      tx, candidates.map(candidate => candidate.plaintext.id), readChunkSize,
+    )
+    const pendingNow = await readPendingUploadIds(tx)
+
     for (const candidate of candidates) {
       const { plaintext, stagingUpdatedAt, materializability } = candidate
-      // The before-row read is also the LWW gate's local state — one read.
-      const beforeRow = await tx.getOptional<BlockRow>(SELECT_BLOCK_BY_ID_SQL, [plaintext.id])
+      const beforeRow = beforeRowById.get(plaintext.id) ?? null
       const action = decideStagingRow(materializability, stagingUpdatedAt, {
         localUpdatedAt: beforeRow?.updated_at ?? null,
-        hasPendingUpload: await hasPendingUpload(tx, plaintext.id),
+        hasPendingUpload: pendingNow.has(plaintext.id),
       })
       if (action.kind === 'apply') {
         await tx.execute(UPSERT_BLOCK_SQL, blockRowParams(plaintext))
@@ -291,11 +365,23 @@ export const materializeStagingRows = async (
       }
     }
 
+    const removedBeforeById = await readBlocksByIds(tx, change.removed, readChunkSize)
+    // A 'delete' whose staging row still exists is an INSERT OR REPLACE
+    // re-delivery artifact, not a stream-exit: SQLite's REPLACE fires the
+    // staging delete trigger then the insert trigger, enqueuing delete-then-
+    // upsert for one row. Drained in seq windows, that pair can split so the
+    // delete arrives alone here. Deleting the local row then would be wrong —
+    // the trailing upsert is gated (skip-stale on a pending local edit / newer
+    // local stamp), so the block would vanish and an unsent edit be lost. Only
+    // hard-delete ids whose staging row is truly gone; the upsert (this window
+    // or a later one) reconciles the rest through the gate.
+    const removedStillStaged = await readExistingStagingIds(tx, change.removed, readChunkSize)
     for (const id of change.removed) {
-      const beforeRow = await tx.getOptional<BlockRow>(SELECT_BLOCK_BY_ID_SQL, [id])
+      if (removedStillStaged.has(id)) continue
       await tx.execute(DELETE_BLOCK_SQL, [id])
       deleted.push(id)
       // Only a row that actually existed locally has anything to invalidate.
+      const beforeRow = removedBeforeById.get(id)
       if (beforeRow) snapshots.set(id, { before: parseBlockRow(beforeRow), after: null })
     }
   })

@@ -66,6 +66,8 @@ const start = (opts: {
   getMaterializability: GetMaterializability
   getCek?: GetCek
   onCycleDetected?: (e: CycleDetectedEvent) => void
+  drainChunkSize?: number
+  onError?: (err: unknown) => void
 }): Harness => {
   const cache = new BlockCache()
   const notifications: ChangeNotification[] = []
@@ -76,6 +78,8 @@ const start = (opts: {
     deps: { getMaterializability: opts.getMaterializability, getCek: opts.getCek ?? noKey },
     onCycleDetected: opts.onCycleDetected,
     throttleMs: 5,
+    drainChunkSize: opts.drainChunkSize,
+    onError: opts.onError,
   })
   observers.push(observer)
   return { observer, cache, notifications }
@@ -214,6 +218,81 @@ describe('blocksSyncedObserver — robustness', () => {
     expect(await queueLen()).toBe(0)
   })
 
+  it('drains a backlog larger than the chunk size across bounded windows', async () => {
+    // 5 distinct queued rows, chunk size 2 → three windows (2 + 2 + 1). One
+    // flush must loop until the whole backlog is materialized and the queue is
+    // empty — the regression was a single unbounded pass over the entire queue.
+    for (let i = 0; i < 5; i++) await put(data({ id: `b${i}`, content: `c${i}` }))
+    const { observer } = start({ getMaterializability: constMat('copy'), drainChunkSize: 2 })
+
+    await observer.flush()
+
+    expect(await blocks()).toEqual([
+      { id: 'b0', content: 'c0' }, { id: 'b1', content: 'c1' },
+      { id: 'b2', content: 'c2' }, { id: 'b3', content: 'c3' },
+      { id: 'b4', content: 'c4' },
+    ])
+    expect(await queueLen()).toBe(0)
+  })
+
+  it('commits each window independently, so a mid-backlog failure keeps prior progress', async () => {
+    for (let i = 0; i < 4; i++) await put(data({ id: `b${i}`, content: `c${i}` }))
+    // getMaterializability is resolved once per window (all rows share a
+    // workspace); throw on the second window so its materialize aborts.
+    let windows = 0
+    const getMaterializability: GetMaterializability = () => {
+      windows += 1
+      if (windows >= 2) throw new Error('boom')
+      return 'copy'
+    }
+    const errors: unknown[] = []
+    const { observer } = start({
+      getMaterializability, drainChunkSize: 2, onError: e => errors.push(e),
+    })
+
+    await observer.flush()
+
+    // First window (b0,b1) committed and consumed; the second window's failure
+    // left its rows queued for a later retry rather than rolling back everything.
+    expect(await blocks()).toEqual([{ id: 'b0', content: 'c0' }, { id: 'b1', content: 'c1' }])
+    expect(await queueLen()).toBe(2)
+    // The failure surfaced via onError (the initial start() drain and the
+    // explicit flush both reach the throwing window); it never rejects flush().
+    expect(errors.length).toBeGreaterThanOrEqual(1)
+    expect(errors.every(e => e instanceof Error && e.message === 'boom')).toBe(true)
+  })
+
+  it('keeps a locally-edited block when a re-delivery\'s delete/upsert straddle a window boundary', async () => {
+    // `put` is INSERT OR REPLACE, so re-delivering an existing staged row
+    // enqueues a delete (the replace's implicit delete) THEN an upsert. With a
+    // small drain window the pair can split across windows: the delete lands
+    // alone in one window, the upsert in the next. A lone delete must NOT drop a
+    // block the user has an unsent local edit for — the trailing upsert is then
+    // skip-staled by the pending gate, so the row would vanish entirely.
+    await put(data({ content: 'server v1', updatedAt: 1 }))
+    const { observer } = start({ getMaterializability: constMat('copy'), drainChunkSize: 1 })
+    await observer.flush()
+    expect(await blocks()).toEqual([{ id: 'b1', content: 'server v1' }])
+
+    // The user edits b1 locally; the edit is queued for upload (pending).
+    await env.db.execute(
+      'UPDATE blocks SET content = ?, updated_at = ? WHERE id = ?', ['local edit', 100, 'b1'],
+    )
+    await env.db.execute(
+      "INSERT INTO ps_crud (tx_id, data) VALUES (1, json_object('op','PATCH','type','blocks','id',?,'data',json_object()))",
+      ['b1'],
+    )
+
+    // Server re-delivers b1 → enqueues delete@N then upsert@N+1; chunk size 1
+    // puts them in separate windows.
+    await put(data({ content: 'server v2', updatedAt: 2 }))
+    await observer.flush()
+
+    // The local edit survives, and the queue still fully drains.
+    expect(await blocks()).toEqual([{ id: 'b1', content: 'local edit' }])
+    expect(await queueLen()).toBe(0)
+  })
+
   it('survives a restart: a queued change persists for a fresh observer (durable queue)', async () => {
     await put(data({ content: 'persisted' }))
 
@@ -270,6 +349,37 @@ describe('blocksSyncedObserver — cycle detection (§4.7)', () => {
     expect([...startIds].sort()).toEqual(['A', 'B'])
     const cycleWarns = warn.mock.calls.filter(c => String(c[0]).includes('cycleDetected'))
     expect(cycleWarns).toHaveLength(events.length)
+    warn.mockRestore()
+  })
+
+  it('emits cycleDetected for a sync-applied 3-cycle (startIds cover all three members)', async () => {
+    // The 2-cycle test above only walks one hop; this drives the cycleScanSql
+    // recursion across three members (A→B→C→A) to confirm n>2 loops are caught.
+    const events: CycleDetectedEvent[] = []
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { observer } = start({
+      getMaterializability: constMat('copy'),
+      onCycleDetected: e => events.push(e),
+    })
+
+    await put(data({ id: 'A', parentId: null, updatedAt: 1 }))
+    await put(data({ id: 'B', parentId: null, updatedAt: 1 }))
+    await put(data({ id: 'C', parentId: null, updatedAt: 1 }))
+    await observer.flush()
+
+    // Three sync-applied moves close the loop A→B→C→A (all strictly newer).
+    await put(data({ id: 'A', parentId: 'B', updatedAt: 2 }))
+    await put(data({ id: 'B', parentId: 'C', updatedAt: 2 }))
+    await put(data({ id: 'C', parentId: 'A', updatedAt: 2 }))
+    await observer.flush()
+
+    expect(events.length).toBeGreaterThanOrEqual(1)
+    const startIds = new Set<string>()
+    for (const ev of events) {
+      expect(ev.workspaceId).toBe('ws-plain')
+      ev.startIds.forEach(id => startIds.add(id))
+    }
+    expect([...startIds].sort()).toEqual(['A', 'B', 'C'])
     warn.mockRestore()
   })
 
