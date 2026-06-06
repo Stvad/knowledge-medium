@@ -1,6 +1,7 @@
 import { BlockComponent } from './components/BlockComponent'
 import { BlockContextProvider } from '@/context/block.js'
-import { use, useEffect, useState } from 'react'
+import { use, useCallback, useEffect, useState } from 'react'
+import { useQuery } from '@powersync/react'
 import type { Block } from './data/block'
 import { useRepo } from '@/context/repo.js'
 import { useSearchParam } from 'react-use'
@@ -42,6 +43,10 @@ import {
 import { keyAtEnd } from '@/data/orderKey.js'
 import { ChangeScope } from '@/data/api'
 import { hasSafeModeSearchParam } from '@/utils/safeMode.js'
+import { getModePin, setModePin } from '@/sync/keys/modePin.js'
+import { getWorkspaceKeyStore } from '@/sync/keys/keyStore.js'
+import { decideWorkspaceEntry } from '@/sync/keys/workspaceAccess.js'
+import { WorkspaceKeyGate } from '@/components/workspace/WorkspaceKeyGate.js'
 
 // Resolved-workspace bundle. `freshlyCreated` is true only when this run
 // inserted a brand-new personal workspace via ensure_personal_workspace;
@@ -54,10 +59,22 @@ interface ResolvedWorkspace {
   freshlyCreated: boolean
 }
 
-interface InitialLayout {
-  workspaceId: string
-  layoutSessionBlock: Block
-}
+// `ready`: the workspace materialized and bootstrapped normally. `locked`: the
+// §6 gate intercepted before any bootstrap write — the workspace is e2ee
+// without its key, or never-pinned (quarantine) — and App renders the
+// WorkspaceKeyGate. `waiting`: access can't be decided until the workspaces row
+// replicates (opened by URL before sync delivered encryption_mode/wk_canary);
+// App shows a neutral loader and re-resolves when the row lands.
+type InitialLayout =
+  | {kind: 'ready'; workspaceId: string; layoutSessionBlock: Block}
+  | {
+      kind: 'locked'
+      workspaceId: string
+      workspaceName: string | null
+      reason: 'key-required' | 'quarantine'
+      canary: string | null
+    }
+  | {kind: 'waiting'; workspaceId: string}
 
 interface HashSnapshot {
   hash: string
@@ -69,6 +86,17 @@ const initialLayoutCache = new Map<string, Promise<InitialLayout>>()
 
 const getCurrentHash = (): string =>
   typeof window === 'undefined' ? '' : window.location.hash
+
+// Pin a workspace plaintext, best-effort: a blocked/quota localStorage write
+// must not abort bootstrap (the create dialog catches the same failure). Worst
+// case the workspace shows the quarantine gate once on next load.
+const pinPlaintextBestEffort = (userId: string, workspaceId: string): void => {
+  try {
+    setModePin(userId, workspaceId, 'plaintext')
+  } catch (err) {
+    console.warn(`[App] plaintext pin failed for ${workspaceId} (will quarantine on next load)`, err)
+  }
+}
 
 const resolveWorkspace = async (
   repo: Repo,
@@ -129,6 +157,10 @@ const resolveWorkspace = async (
     // leave two membership rows in local sqlite, since the raw table has
     // no (workspace_id, user_id) UNIQUE constraint.
     await primeLocalWorkspaceAndMember(repo, result.workspace, result.member)
+    // A workspace WE just created is plaintext-confirmed (§8.1) — pin it so the
+    // §6 gate never quarantines it. An already-existing personal workspace
+    // (inserted=false) is left for the seed/gate to resolve.
+    if (result.inserted) pinPlaintextBestEffort(repo.user.id, result.workspace.id)
     return {id: result.workspace.id, freshlyCreated: result.inserted}
   }
 
@@ -140,6 +172,9 @@ const resolveWorkspace = async (
   // workspace + owner membership locally so the rest of bootstrap
   // (seedTutorial, daily note, Tutorial bullet) can run unchanged.
   const local = await ensureLocalPersonalWorkspace(repo)
+  // Same plaintext-confirm as the remote path (§8.1) so the gate stays out of
+  // the way in local-only mode.
+  if (local.inserted) pinPlaintextBestEffort(repo.user.id, local.workspace.id)
   return {id: local.workspace.id, freshlyCreated: local.inserted}
 }
 
@@ -217,6 +252,50 @@ const resolveInitialLayout = async (
   const role = await getLocalMemberRole(repo, workspaceId, repo.user.id)
   repo.setReadOnly(role === 'viewer')
 
+  // §6 rule 3 access gate. Resolve whether this workspace can be materialized
+  // for us right now BEFORE any bootstrap write below — those writes (daily
+  // note, properties/types/recents pages, ui-state) would otherwise write
+  // plaintext into an encrypted-but-locked workspace. If it can't, return a
+  // `locked` layout and App renders the WorkspaceKeyGate. Safe because the
+  // rollout seed has already pinned pre-existing plaintext workspaces, so only
+  // genuinely locked/never-pinned workspaces land here.
+  const pin = getModePin(repo.user.id, workspaceId)
+  // Only an e2ee pin actually uses the workspace key. Reading the key store for
+  // plaintext/unpinned workspaces is unnecessary and — if IndexedDB is
+  // unavailable (private mode, disabled/corrupt storage) — would block an
+  // otherwise-plaintext user from loading the app. A read failure is treated as
+  // "no key" (→ locked, key-required) rather than aborting the bootstrap.
+  let hasKey = false
+  if (pin === 'e2ee') {
+    try {
+      hasKey = (await getWorkspaceKeyStore().get(repo.user.id, workspaceId)) !== null
+    } catch (err) {
+      console.warn(`[App] workspace key read failed for ${workspaceId}; treating as locked`, err)
+    }
+  }
+  const gateWorkspace = await getLocalWorkspace(repo, workspaceId)
+  const entry = decideWorkspaceEntry(pin, hasKey, gateWorkspace)
+  if (entry.kind === 'waiting') {
+    // The workspaces row hasn't replicated yet and the pin can't settle access
+    // without it. Don't bootstrap (would write plaintext into a possibly-e2ee
+    // workspace) and don't gate with a null canary — wait for the row.
+    repo.setReadOnly(true)
+    return {kind: 'waiting', workspaceId}
+  }
+  if (entry.kind === 'locked') {
+    repo.setReadOnly(true)
+    return {
+      kind: 'locked',
+      workspaceId,
+      workspaceName: gateWorkspace?.name ?? null,
+      reason: entry.reason,
+      canary: gateWorkspace?.wkCanary ?? null,
+    }
+  }
+
+  // Ready — only NOW remember it as the default. Remembering a locked/waiting
+  // workspace would make the next empty-hash visit re-select it and render only
+  // the key gate (no switcher), trapping the user away from accessible spaces.
   rememberWorkspace(workspaceId)
 
   // Freshly inserted personal workspace: install the starter tutorial
@@ -285,7 +364,7 @@ const resolveInitialLayout = async (
     }
   }
 
-  return {workspaceId, layoutSessionBlock}
+  return {kind: 'ready', workspaceId, layoutSessionBlock}
 }
 
 const initialLayoutCacheKey = (
@@ -340,11 +419,15 @@ const App = () => {
   const localOnly = useIsLocalOnly()
   const useRemoteSync = hasRemoteSyncConfig && !localOnly
 
-  const {workspaceId: activeWorkspaceId, layoutSessionBlock} = use(
+  const initial = use(
     getInitialLayout(repo, hashSnapshot.hash, useRemoteSync, hashSnapshot.version),
   )
+  const activeWorkspaceId = initial.workspaceId
+  // null while the workspace is locked (gate shown) — there's no layout yet.
+  const layoutSessionBlock = initial.kind === 'ready' ? initial.layoutSessionBlock : null
 
   useEffect(() => {
+    if (!layoutSessionBlock) return
     const projection = new PanelLayoutProjection({
       repo,
       workspaceId: activeWorkspaceId,
@@ -385,16 +468,99 @@ const App = () => {
   const {rolesByWorkspaceId} = useMyWorkspaceRoles()
   const activeRole = rolesByWorkspaceId.get(activeWorkspaceId)
   useEffect(() => {
-    if (!activeRole) return
+    // Don't override the gate/waiting read-only lock with the role-derived flag
+    // (an owner/editor of a *locked* workspace must stay read-only).
+    if (initial.kind !== 'ready' || !activeRole) return
     repo.setReadOnly(activeRole === 'viewer')
-  }, [activeRole, repo])
+  }, [initial.kind, activeRole, repo])
+
+  // Always watch the URL hash so navigating to a different workspace (Back
+  // button / manual hash edit) re-resolves the layout — even while a gate or
+  // loading screen is shown. In those states there's no layout, so the
+  // projection effect above is inactive and isn't registering the hashchange
+  // listener; without this a user who opened a locked workspace would be stuck
+  // until a full reload. Safe to run alongside the projection's own listener
+  // when ready: the reducer only bumps on a workspace change, so the second
+  // handler in a batch sees the already-updated hash and no-ops.
+  useEffect(() => {
+    const onHashChange = () => {
+      const nextHash = getCurrentHash()
+      setHashSnapshot(current =>
+        layoutWorkspaceChanged(current.hash, nextHash)
+          ? {hash: nextHash, version: current.version + 1}
+          : current,
+      )
+    }
+    window.addEventListener('hashchange', onHashChange)
+    window.addEventListener('popstate', onHashChange)
+    return () => {
+      window.removeEventListener('hashchange', onHashChange)
+      window.removeEventListener('popstate', onHashChange)
+    }
+  }, [])
+
+  // Re-resolve the initial layout (bumping the version busts the cache) — used
+  // when a gate is resolved or a pending workspace row finally replicates.
+  const reResolve = useCallback(() => {
+    setHashSnapshot(current => ({hash: current.hash, version: current.version + 1}))
+  }, [])
+
+  if (initial.kind === 'waiting') {
+    return <WorkspaceSyncWaiting workspaceId={initial.workspaceId} onReady={reResolve}/>
+  }
+
+  if (initial.kind === 'locked') {
+    return (
+      <WorkspaceKeyGate
+        userId={repo.user.id}
+        workspaceId={initial.workspaceId}
+        workspaceName={initial.workspaceName ?? undefined}
+        reason={initial.reason}
+        canary={initial.canary}
+        onResolved={async () => {
+          // Re-materialize the now-decryptable staged rows BEFORE re-resolving,
+          // so the bootstrap getOrCreate*s no-op against the synced content
+          // rather than racing it.
+          await repo.drainSyncWorkspace(initial.workspaceId)
+          reResolve()
+        }}
+      />
+    )
+  }
 
   return (
     <BlockContextProvider initialValue={{layoutBoundary: true, safeMode}}>
       <AppRuntimeProvider safeMode={safeMode}>
-        <BlockComponent blockId={layoutSessionBlock.id}/>
+        <BlockComponent blockId={initial.layoutSessionBlock.id}/>
       </AppRuntimeProvider>
     </BlockContextProvider>
+  )
+}
+
+// Shown while a workspace's row hasn't replicated yet (opened by URL before
+// sync delivered encryption_mode/wk_canary). Reactively watches for the row and
+// re-resolves the layout the moment it lands — no bootstrap writes happen until
+// then, so we never write plaintext into a workspace that may turn out e2ee.
+function WorkspaceSyncWaiting({
+  workspaceId,
+  onReady,
+}: {
+  workspaceId: string
+  onReady: () => void
+}) {
+  const {data} = useQuery<{id: string}>(
+    'SELECT id FROM workspaces WHERE id = ? LIMIT 1',
+    [workspaceId],
+  )
+  const present = data.length > 0
+  useEffect(() => {
+    if (present) onReady()
+  }, [present, onReady])
+
+  return (
+    <div className="flex min-h-svh items-center justify-center p-6">
+      <p className="text-sm text-muted-foreground">Loading workspace…</p>
+    </div>
   )
 }
 

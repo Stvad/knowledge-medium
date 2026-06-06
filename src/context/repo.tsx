@@ -5,6 +5,8 @@ import { Repo } from '../data/repo'
 import { BlockCache } from '@/data/blockCache'
 import { useIsLocalOnly, useUser } from '@/components/Login'
 import { ensurePowerSyncReady, getPowerSyncDb } from '@/data/repoProvider'
+import { createSyncResolver } from '@/sync/keys/resolver.js'
+import { getWorkspaceKeyStore } from '@/sync/keys/keyStore.js'
 import { User } from '@/types.js'
 import { memoize } from 'lodash'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
@@ -17,10 +19,24 @@ import { surfaceProcessorRejectionFor } from '@/utils/processorRejectionToast.js
 // correctly keeps the contract honest.
 const initRepo = memoize(
   async (user: User, useRemoteSync: boolean): Promise<Repo> => {
+    // ensurePowerSyncReady runs the §6 rollout pin-seed between db.init() and
+    // db.connect(), so pins are settled (from pre-connect on-disk rows only)
+    // before the observer/gate read them below.
     await ensurePowerSyncReady(user.id, useRemoteSync)
     const db = getPowerSyncDb(user.id)
+    // §6 mode/key resolver — shared store + pins drive both the observer
+    // (decrypt/copy/defer) and (via the connector) encrypt-on-upload.
+    const resolver = createSyncResolver(() => user.id, getWorkspaceKeyStore())
     const cache = new BlockCache()
-    const repo = new Repo({db, cache, user: {id: user.id, name: user.name}})
+    const repo = new Repo({
+      db,
+      cache,
+      user: {id: user.id, name: user.name},
+      syncObserverDeps: {
+        getMaterializability: resolver.getMaterializability,
+        getCek: resolver.getCek,
+      },
+    })
     repo.setFacetRuntime(resolveFacetRuntimeSync(staticDataExtensions, {
       repo,
       workspaceId: null,

@@ -216,9 +216,26 @@ export const ensurePersonalWorkspace = async (): Promise<EnsuredPersonalWorkspac
   }
 }
 
-export const createWorkspace = async (name: string): Promise<CreatedWorkspace> => {
+/** E2EE create params (§8.1). Omitted ⇒ a plaintext workspace, identical to
+ *  the original single-arg call (the server defaults `p_encryption_mode` to
+ *  'none' and generates the id). For e2ee, the client picks the id and mints
+ *  the canary so the canary's AAD lines up with the server's stored row. */
+export interface CreateWorkspaceOptions {
+  readonly encryptionMode?: 'none' | 'e2ee'
+  readonly workspaceId?: string
+  readonly wkCanary?: string
+}
+
+export const createWorkspace = async (
+  name: string,
+  options: CreateWorkspaceOptions = {},
+): Promise<CreatedWorkspace> => {
   const client = assertSupabase()
-  const {data, error} = await client.rpc('create_workspace', {p_name: name})
+  const params: Record<string, unknown> = {p_name: name}
+  if (options.encryptionMode) params.p_encryption_mode = options.encryptionMode
+  if (options.workspaceId) params.p_workspace_id = options.workspaceId
+  if (options.wkCanary) params.p_wk_canary = options.wkCanary
+  const {data, error} = await client.rpc('create_workspace', params)
   if (error) throw error
   if (!data) throw new Error('create_workspace returned no payload')
   return parseCreatedWorkspace(data as WorkspaceCreationPayload)

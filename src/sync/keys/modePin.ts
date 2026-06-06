@@ -53,15 +53,55 @@ const pinStorageKey = (userId: string, workspaceId: string): string =>
 const seededMarkerKey = (userId: string): string =>
   `${E2EE_PINS_SEEDED_PREFIX}${encodeURIComponent(userId)}`
 
-/** The pinned mode for this (user, workspace) on this device, or null if
- *  never pinned. */
-export const getModePin = (userId: string, workspaceId: string): ModePin | null => {
+// Session-only plaintext confirmations: workspaces the user explicitly
+// confirmed plaintext in the §6 gate when localStorage couldn't persist the pin
+// (writes blocked / quota) while the rest of the app still works. This keeps a
+// plaintext user from being trapped on the quarantine gate in a degraded
+// storage environment. It is in-memory (lost on reload → re-quarantine, where
+// storage may have recovered), and ONLY ever holds user-confirmed plaintext —
+// never anything derived from the server — so it carries no downgrade risk. A
+// real persisted pin always takes precedence.
+const sessionPlaintext = new Set<string>()
+
+const readPersistedPin = (key: string): ModePin | null => {
   if (!hasLocalStorage()) return null
   try {
-    const raw = localStorage.getItem(pinStorageKey(userId, workspaceId))
+    const raw = localStorage.getItem(key)
     return isModePin(raw) ? raw : null
   } catch {
     return null
+  }
+}
+
+/** The pinned mode for this (user, workspace) on this device, or null if
+ *  never pinned. A persisted pin wins; otherwise a session-only plaintext
+ *  confirmation (see {@link confirmPlaintextForSession}) counts as plaintext. */
+export const getModePin = (userId: string, workspaceId: string): ModePin | null => {
+  const key = pinStorageKey(userId, workspaceId)
+  return readPersistedPin(key) ?? (sessionPlaintext.has(key) ? 'plaintext' : null)
+}
+
+/** Record a plaintext confirmation that couldn't be persisted (localStorage
+ *  unavailable), so {@link getModePin} reports plaintext for this session and
+ *  the user can load the workspace. Re-quarantines on next load. */
+export const confirmPlaintextForSession = (userId: string, workspaceId: string): void => {
+  sessionPlaintext.add(pinStorageKey(userId, workspaceId))
+}
+
+/** True if this device can durably persist mode pins (localStorage is writable).
+ *  E2EE REQUIRES this — the pin is the wipe-surviving authority and the §6 gate
+ *  keys off it — so the create flow preflights it rather than minting an
+ *  encrypted workspace this device could never open. Plaintext doesn't need it
+ *  (it has the session fallback). Probes with a temp key and cleans up. */
+export const canPersistPins = (): boolean => {
+  if (!hasLocalStorage()) return false
+  try {
+    const probe = `${E2EE_MODE_PIN_PREFIX}__probe__`
+    localStorage.setItem(probe, '1')
+    localStorage.removeItem(probe)
+    return true
+  } catch {
+    return false
   }
 }
 
@@ -110,7 +150,11 @@ export const arePinsSeeded = (userId: string): boolean => {
 }
 
 const markPinsSeeded = (userId: string): void => {
-  if (!hasLocalStorage()) return
+  // Throw (rather than silently no-op) when the seal can't be persisted, so
+  // seal-first seeding can abort BEFORE writing any pin — see seedModePinsOnce.
+  if (!hasLocalStorage()) {
+    throw new Error('cannot seal E2EE pin seed: localStorage unavailable')
+  }
   localStorage.setItem(seededMarkerKey(userId), ROLLOUT_SEED_VERSION)
 }
 
@@ -140,12 +184,24 @@ export interface SeedEntry {
  *
  * `entries` are the signed-in user's memberships. Returns the number of
  * pins written. No-op (returns 0) if already seeded for this user.
+ *
+ * SEAL FIRST: the "ran once" marker is written BEFORE any pin. If the seal
+ * can't be persisted (localStorage blocked) this throws before trusting a
+ * single server flag — so we never leave the dangerous "some pins written but
+ * not sealed" state, which a later boot would re-seed (re-trusting the server
+ * `encryption_mode` for any membership that synced in the meantime — a
+ * downgrade vector if a hostile/stale server flagged an e2ee workspace `none`).
+ * If sealing succeeds but a later pin write fails, the workspace is already
+ * sealed, so the unpinned remainder takes the first-encounter gate on next
+ * load — never a re-seed. (The caller wraps this best-effort so a seal failure
+ * doesn't crash startup.)
  */
 export const seedModePinsOnce = (
   userId: string,
   entries: readonly SeedEntry[],
 ): number => {
   if (arePinsSeeded(userId)) return 0
+  markPinsSeeded(userId)
   let written = 0
   for (const entry of entries) {
     if (getModePin(userId, entry.workspaceId) === null) {
@@ -153,6 +209,5 @@ export const seedModePinsOnce = (
       written++
     }
   }
-  markPinsSeeded(userId)
   return written
 }

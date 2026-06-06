@@ -440,6 +440,44 @@ describe('uploadTransactionsWithFallback', () => {
     expect(recordRejection).not.toHaveBeenCalled()
   })
 
+  it('un-encryptable tx (missing e2ee key) does not jam the batch: drains the OK prefix, stops at it', async () => {
+    // tx1 is plaintext (encryptable); tx2 is an e2ee workspace whose key is
+    // momentarily unavailable, so encryptOps throws for any batch containing it.
+    // The guard must NOT abort the whole batch preflight: tx1 (the OK prefix)
+    // drains, and we stop at tx2 (throw → PowerSync retries it once the key is
+    // back). tx2 is NOT recorded as a rejection — a missing key is transient, so
+    // discarding the edit would be data loss.
+    const tx1 = fakeTx(1, [
+      new CrudEntry(1, UpdateType.PUT, 'blocks', 'b1', 1, {workspace_id: 'w-ok', content: 'A'}),
+    ])
+    const tx2 = fakeTx(2, [
+      new CrudEntry(2, UpdateType.PUT, 'blocks', 'b2', 2, {workspace_id: 'w-locked', content: 'B'}),
+    ])
+    const {applyOperations, recordRejection} = collectCalls()
+    const encryptOps = vi.fn(async (ops: readonly CompactedBlockOperation[]) => {
+      if (
+        ops.some(
+          o => o.kind !== 'delete' && (o.payload as {workspace_id?: string}).workspace_id === 'w-locked',
+        )
+      ) {
+        throw new Error('sync transform: no workspace key available for w-locked')
+      }
+      return ops as CompactedBlockOperation[]
+    })
+
+    await expect(
+      __uploadTransactionsWithFallbackForTest(
+        fakeDb,
+        [tx1, tx2] as unknown as CrudTransaction[],
+        {applyOperations, recordRejection, encryptOps},
+      ),
+    ).rejects.toThrow(/workspace key/)
+
+    expect(tx1.completed).toBe(true) // plaintext prefix drained
+    expect(tx2.completed).toBe(false) // un-encryptable tx left queued for retry
+    expect(recordRejection).not.toHaveBeenCalled()
+  })
+
   it('per-tx fallback applies within-tx compaction (PUT + same-tx PATCH still fuse)', async () => {
     // Correctness check: when we drop from batched into per-tx, the
     // create+patch fusion that the original handler relies on for
