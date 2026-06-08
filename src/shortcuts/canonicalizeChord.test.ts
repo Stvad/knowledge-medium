@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { canonicalizeChord, normalizeChord, parseChord } from './canonicalizeChord.ts'
+import {
+  canonicalizeChord,
+  matchesMouseEvent,
+  normalizeChord,
+  parseChord,
+  type MouseChordDescriptor,
+  type MouseEventLike,
+} from './canonicalizeChord.ts'
 
 describe('parseChord', () => {
   it('splits a sequence chord into one descriptor per press', () => {
@@ -45,6 +52,53 @@ describe('canonicalizeChord', () => {
   it('distinguishes the same chord on different phases', () => {
     expect(canonicalizeChord('s', 'hold')).not.toBe(canonicalizeChord('s', 'keyup'))
     expect(canonicalizeChord('s')).toBe('s')
+  })
+})
+
+describe('matchesMouseEvent', () => {
+  const mouseEvent = (overrides: Partial<MouseEventLike> = {}): MouseEventLike => ({
+    button: 0,
+    detail: 1,
+    shiftKey: false,
+    altKey: false,
+    ctrlKey: false,
+    metaKey: false,
+    ...overrides,
+  })
+
+  const shiftClick: MouseChordDescriptor = {
+    kind: 'mouse', button: 0, detail: 1, mods: ['Shift'], phase: 'click',
+  }
+
+  it('matches a plain shift-click', () => {
+    expect(matchesMouseEvent(shiftClick, mouseEvent({shiftKey: true}))).toBe(true)
+  })
+
+  it('requires the modifier set to match exactly (ctrl+shift is not shift)', () => {
+    // The collision that matters: shift-click extends a selection, ctrl-click
+    // toggles one. An extra modifier must NOT satisfy the shift-click binding.
+    expect(matchesMouseEvent(shiftClick, mouseEvent({shiftKey: true, ctrlKey: true}))).toBe(false)
+  })
+
+  it('does not match when the required modifier is absent', () => {
+    expect(matchesMouseEvent(shiftClick, mouseEvent())).toBe(false)
+  })
+
+  it('distinguishes button and click count', () => {
+    const doublePrimary: MouseChordDescriptor = {
+      kind: 'mouse', button: 0, detail: 2, mods: [], phase: 'pointerdown',
+    }
+    expect(matchesMouseEvent(doublePrimary, mouseEvent({detail: 2}))).toBe(true)
+    expect(matchesMouseEvent(doublePrimary, mouseEvent({detail: 1}))).toBe(false)
+    expect(matchesMouseEvent(doublePrimary, mouseEvent({detail: 2, button: 2}))).toBe(false)
+  })
+
+  it('matches a no-modifier descriptor only when no modifiers are held', () => {
+    const plainClick: MouseChordDescriptor = {
+      kind: 'mouse', button: 0, detail: 1, mods: [], phase: 'click',
+    }
+    expect(matchesMouseEvent(plainClick, mouseEvent())).toBe(true)
+    expect(matchesMouseEvent(plainClick, mouseEvent({altKey: true}))).toBe(false)
   })
 })
 
