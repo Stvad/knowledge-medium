@@ -11,6 +11,7 @@ vi.mock('@/services/supabase.js', () => ({
 }))
 
 import {
+  MAX_PATCHES_PER_SUPABASE_RPC,
   __applyBlockPatchesRpcForTest,
   __applyCompactedBlockOperationsForTest,
   __compactBlockCrudEntriesForTest,
@@ -686,6 +687,39 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
         {id: 'block-c', deleted: true},
       ],
     })
+  })
+
+  it('chunks an oversized patch batch into multiple capped RPC calls', async () => {
+    // A single compacted tx can carry tens of thousands of patches — a
+    // schema-swap reprojection rewrites every block's references_json in one
+    // repo.tx, and a bulk import lands as one big tx too. Shipping them all in
+    // one apply_block_patches RPC runs N server-side UPDATEs (each firing the
+    // per-write triggers) inside one statement, which blows past Postgres
+    // statement_timeout (SQLSTATE 57014). A timeout classifies transient, so
+    // PowerSync retries the same oversized batch forever and the queue never
+    // drains. Cap the per-RPC size so each call stays well under the timeout;
+    // the patches are column-narrow and idempotent, so splitting them across
+    // separate RPC transactions is safe.
+    supabaseRef.rpc.mockResolvedValue({data: null, error: null})
+    const total = MAX_PATCHES_PER_SUPABASE_RPC * 2 + 1
+    const patches = Array.from({length: total}, (_, i) => ({
+      id: `block-${i}`,
+      payload: {references_json: '[]'},
+    }))
+
+    await __applyBlockPatchesRpcForTest(patches)
+
+    // ceil(total / cap) calls, none exceeding the cap, every patch shipped once.
+    expect(supabaseRef.rpc).toHaveBeenCalledTimes(3)
+    const shipped = supabaseRef.rpc.mock.calls.flatMap(
+      call => (call[1] as {patches: Array<{id: string}>}).patches,
+    )
+    expect(shipped).toHaveLength(total)
+    expect(shipped.map(p => p.id)).toEqual(patches.map(p => p.id))
+    for (const call of supabaseRef.rpc.mock.calls) {
+      expect((call[1] as {patches: unknown[]}).patches.length)
+        .toBeLessThanOrEqual(MAX_PATCHES_PER_SUPABASE_RPC)
+    }
   })
 
   it('propagates a P0002 SQLSTATE from the RPC for missing rows', async () => {

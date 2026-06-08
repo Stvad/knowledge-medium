@@ -15,6 +15,19 @@ const MAX_CRUD_ENTRIES_PER_UPLOAD_BATCH = 10_000
 const MAX_TRANSACTIONS_PER_UPLOAD_BATCH = 25
 const MAX_BLOCKS_PER_SUPABASE_UPSERT = 500
 
+/** Upper bound on patches shipped in a single `apply_block_patches` RPC.
+ *  That RPC runs one UPDATE per patch (each firing the per-write server
+ *  triggers) inside one statement, so an uncapped batch — a schema-swap
+ *  reprojection or a bulk import lands as one big repo.tx, and
+ *  `collectUploadBatch` always takes the first tx whole — runs tens of
+ *  thousands of UPDATEs in one statement and trips Postgres
+ *  `statement_timeout` (SQLSTATE 57014). A timeout classifies transient,
+ *  so PowerSync retries the same oversized batch forever and the queue
+ *  stops draining. Chunking keeps each RPC well under the timeout; the
+ *  patches are column-narrow and idempotent, so splitting them across
+ *  separate RPC transactions is safe. Mirrors `MAX_BLOCKS_PER_SUPABASE_UPSERT`. */
+export const MAX_PATCHES_PER_SUPABASE_RPC = 500
+
 export const hasPowerSyncServiceConfig = Boolean(powerSyncUrl)
 export const hasRemoteSyncConfig = hasSupabaseAuthConfig && hasPowerSyncServiceConfig
 
@@ -294,12 +307,16 @@ const applyBlockPatchesRpc = async (
   if (patches.length === 0) return
   const client = assertSupabase()
 
-  console.debug('[powersync] PATCH batch', patches.length)
-  const payload = patches.map(patch => ({id: patch.id, ...patch.payload}))
-  const {error} = await client.rpc('apply_block_patches', {patches: payload})
+  // Chunk so one RPC never runs more than MAX_PATCHES_PER_SUPABASE_RPC
+  // server-side UPDATEs in a single statement (see the constant for why).
+  for (const chunk of chunked(patches, MAX_PATCHES_PER_SUPABASE_RPC)) {
+    console.debug('[powersync] PATCH batch', chunk.length)
+    const payload = chunk.map(patch => ({id: patch.id, ...patch.payload}))
+    const {error} = await client.rpc('apply_block_patches', {patches: payload})
 
-  if (error) {
-    throw error
+    if (error) {
+      throw error
+    }
   }
 }
 
