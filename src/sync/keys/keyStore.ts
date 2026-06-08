@@ -101,8 +101,28 @@ export class IndexedDbWorkspaceKeyStore implements WorkspaceKeyStore {
     run: (store: IDBObjectStore) => IDBRequest<T>,
   ): Promise<T> {
     const db = await this.openDb()
-    const store = db.transaction(STORE_NAME, mode).objectStore(STORE_NAME)
-    return promisifyRequest(run(store))
+    const transaction = db.transaction(STORE_NAME, mode)
+    // Resolve on the TRANSACTION commit, not just the request's `onsuccess`. A
+    // readwrite write (put/delete/clear) is only durable once the tx commits
+    // (`oncomplete`); `onsuccess` fires earlier, while the tx is still open. §6
+    // Lock & wipe reloads the page immediately after `clearAll()`, so without
+    // awaiting the commit the navigation can abort the not-yet-committed tx and
+    // roll the clear back — leaving the workspace keys in IndexedDB while the
+    // SQLite file is wiped, so encrypted workspaces would reopen WITHOUT
+    // re-pasting the WK (the lock silently fails). Register the completion
+    // handlers synchronously here so we can't miss an `oncomplete` that fires
+    // before we start awaiting. (Readonly txs commit trivially — harmless.)
+    const committed = new Promise<void>((resolve, reject) => {
+      transaction.oncomplete = () => resolve()
+      transaction.onabort = () =>
+        reject(transaction.error ?? new Error('IndexedDB transaction aborted'))
+      transaction.onerror = () =>
+        reject(transaction.error ?? new Error('IndexedDB transaction error'))
+    })
+    const store = transaction.objectStore(STORE_NAME)
+    const result = await promisifyRequest(run(store))
+    await committed
+    return result
   }
 
   async get(userId: string, workspaceId: string): Promise<CryptoKey | null> {
