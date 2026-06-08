@@ -270,7 +270,15 @@ const projectedRefsForField = (
 /** Reprojection scans can outlive a later schema swap. Keep the
  *  scheduled schema when its ref-ness still matches the live registry;
  *  otherwise project against the live registry so an old scan cannot
- *  re-add refs for a field that is no longer ref-typed. */
+ *  re-add refs for a field that is no longer ref-typed.
+ *
+ *  A name *absent* from the live registry is treated as "not loaded right
+ *  now", NOT as a redefinition: user/import schemas register asynchronously
+ *  (UserSchemasService republishes the bucket as `blocks` materializes), so
+ *  projecting a still-scheduled-ref field against an absent (undefined) live
+ *  entry would strip its refs on every cold start. Keep the scheduled schema
+ *  in that case; only a *present* live schema with different ref-ness
+ *  overrides it. */
 const latestRefProjectionSchema = (
   scheduledSchemas: ReadonlyMap<string, AnyPropertySchema>,
   currentSchemas: ReadonlyMap<string, AnyPropertySchema>,
@@ -278,6 +286,7 @@ const latestRefProjectionSchema = (
 ): AnyPropertySchema | undefined => {
   const scheduledSchema = scheduledSchemas.get(name)
   const currentSchema = currentSchemas.get(name)
+  if (currentSchema === undefined) return scheduledSchema
   return refCodecKind(scheduledSchema) === refCodecKind(currentSchema)
     ? scheduledSchema
     : currentSchema
@@ -598,6 +607,11 @@ export class Repo {
     blocksUpdated: 0,
     msTotal: 0,
     skippedByMarker: 0,
+    /** Names skipped because they were absent from the schema snapshot
+     *  (treated as "not loaded yet", never a ref→non-ref removal). A
+     *  non-zero value on a settled cold start is the schema-swap-flood
+     *  signal this guards against. */
+    skippedAbsent: 0,
   }
   /** Lazy in-memory mirror of the per-name reprojection markers in
    *  `client_schema_state` (rows keyed `reproject_ref:<name>`). `null`
@@ -964,6 +978,7 @@ export class Repo {
       blocksUpdated: number
       msTotal: number
       skippedByMarker: number
+      skippedAbsent: number
     }>
   }> {
     return Object.freeze({
@@ -1579,15 +1594,33 @@ export class Repo {
       const markers = await this.loadReprojectionMarkers()
       const namesToScan: string[] = []
       let skippedByMarker = 0
+      let skippedAbsent = 0
       for (const name of propertyNames) {
-        const kind = refCodecKind(propertySchemas.get(name))
+        const schema = propertySchemas.get(name)
+        if (schema === undefined) {
+          // Absent from this (possibly mid-load) schema snapshot is "unknown",
+          // not "the property stopped being ref-typed". User/import schemas
+          // load asynchronously (UserSchemasService republishes the bucket as
+          // `blocks` materializes; a workspace switch restarts it), so treating
+          // absence as a removal would strip refs + clear markers on every cold
+          // start and re-add them the next tick — the schema-swap flood. Leave
+          // refs and the marker untouched; a genuine deletion is reconciled by
+          // the references processor on the next write to each affected block.
+          skippedAbsent += 1
+          continue
+        }
+        const kind = refCodecKind(schema)
         if (kind !== undefined && markers.has(name)) {
           skippedByMarker += 1
           continue
         }
+        // Either a present ref-typed name without a marker (first-time
+        // backfill) or a present *non-ref* name (a real ref→non-ref
+        // transition — strip its now-stale refs).
         namesToScan.push(name)
       }
       this.reprojectionMetrics.skippedByMarker += skippedByMarker
+      this.reprojectionMetrics.skippedAbsent += skippedAbsent
       if (namesToScan.length === 0) return
       scanScheduled = true
       this.reprojectionMetrics.calls += 1

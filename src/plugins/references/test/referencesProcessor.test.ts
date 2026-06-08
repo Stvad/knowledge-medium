@@ -266,11 +266,26 @@ describe('parseReferences — schema-swap reprojection', () => {
     defaultValue: '',
     changeScope: ChangeScope.BlockDefault,
   })
+  // `reviewer` redefined with a NON-ref codec — the real "stopped being
+  // ref-typed" transition (e.g. a user changes the property's preset from a
+  // ref type to text). Distinct from `runtimeWithoutReviewer`, where the
+  // schema is *absent* (a load-transient that must NOT strip refs).
+  const reviewerStringProp = defineProperty<string>('reviewer', {
+    codec: codecs.string,
+    defaultValue: '',
+    changeScope: ChangeScope.BlockDefault,
+  })
   const runtimeWithReviewer = () => resolveFacetRuntimeSync([
     kernelDataExtension,
     dailyNotesDataExtension,
     referencesDataExtension,
     propertySchemasFacet.of(reviewerProp, {source: 'test'}),
+  ])
+  const runtimeWithReviewerAsString = () => resolveFacetRuntimeSync([
+    kernelDataExtension,
+    dailyNotesDataExtension,
+    referencesDataExtension,
+    propertySchemasFacet.of(reviewerStringProp, {source: 'test'}),
   ])
   const runtimeWithReviewerAndApprover = () => resolveFacetRuntimeSync([
     kernelDataExtension,
@@ -353,7 +368,7 @@ describe('parseReferences — schema-swap reprojection', () => {
     }
   })
 
-  it('removes stale field refs when a property stops being ref-typed', async () => {
+  it('removes stale field refs when a property is redefined to a non-ref codec', async () => {
     env.repo.setFacetRuntime(runtimeWithReviewer())
     await env.repo.tx(
       tx => tx.create({
@@ -368,7 +383,9 @@ describe('parseReferences — schema-swap reprojection', () => {
     )
     await flush()
 
-    env.repo.setFacetRuntime(runtimeWithoutReviewer())
+    // `reviewer` is now a *present* non-ref schema — a genuine ref→non-ref
+    // transition (not mere absence), so its stale field ref must be stripped.
+    env.repo.setFacetRuntime(runtimeWithReviewerAsString())
     await flush()
 
     // flush() drains the schema-swap reprojection, so the stale `reviewer`
@@ -378,7 +395,55 @@ describe('parseReferences — schema-swap reprojection', () => {
     ])
   })
 
-  it('does not let an older ref-typed reprojection re-add refs after schema removal', async () => {
+  it('does NOT strip refs or clear the marker when a ref-typed property goes absent (cold-start load transient)', async () => {
+    // The schema-swap flood guard. UserSchemasService republishes its bucket
+    // as `blocks` materializes at cold start (and on workspace switch), so a
+    // ref-typed import/user schema can momentarily vanish from the merged map
+    // and reappear. Treating that absence as a ref→non-ref removal stripped
+    // every block's references_json + cleared the marker, then re-added on the
+    // next tick — ~16k references_json PATCHes per reload on a real graph.
+    env.repo.setFacetRuntime(runtimeWithReviewer())
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'src',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        content: 'see [[content-target]]',
+        properties: {reviewer: 'target-a'},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    // Backfill happened: the marker is set and the reviewer ref is present.
+    const projected = [
+      {id: aliasId('content-target'), alias: 'content-target'},
+      {id: 'target-a', alias: 'target-a', sourceField: 'reviewer'},
+    ]
+    expect(JSON.parse((await env.read('src'))!.references_json)).toEqual(projected)
+    expect(await env.h.db.getOptional(
+      `SELECT 1 FROM client_schema_state WHERE key = 'reproject_ref:reviewer'`,
+    )).not.toBeNull()
+
+    const updatesBefore = env.repo.metrics().reprojection.blocksUpdated
+
+    // `reviewer` vanishes from the schema set (load transient), then returns.
+    env.repo.setFacetRuntime(runtimeWithoutReviewer())
+    await flush()
+    env.repo.setFacetRuntime(runtimeWithReviewer())
+    await flush()
+
+    // Refs untouched, marker intact, and not a single block rewritten across
+    // the disappear/reappear cycle.
+    expect(JSON.parse((await env.read('src'))!.references_json)).toEqual(projected)
+    expect(await env.h.db.getOptional(
+      `SELECT 1 FROM client_schema_state WHERE key = 'reproject_ref:reviewer'`,
+    )).not.toBeNull()
+    expect(env.repo.metrics().reprojection.blocksUpdated).toBe(updatesBefore)
+    expect(env.repo.metrics().reprojection.skippedAbsent).toBeGreaterThanOrEqual(1)
+  })
+
+  it('does not let an older ref-typed reprojection re-add refs after the property is redefined non-ref', async () => {
     const originalGetAll = env.h.db.getAll.bind(env.h.db)
     const originalExecute = env.h.db.execute.bind(env.h.db)
     let releaseScan: (() => void) | null = null
@@ -442,7 +507,9 @@ describe('parseReferences — schema-swap reprojection', () => {
       // captured), not merely to have entered the spy.
       await scanParkedPromise
 
-      env.repo.setFacetRuntime(runtimeWithoutReviewer())
+      // Redefine `reviewer` to a non-ref codec (a genuine ref→non-ref
+      // transition, not mere absence) so reprojection-2 strips its stale ref.
+      env.repo.setFacetRuntime(runtimeWithReviewerAsString())
       await vi.advanceTimersByTimeAsync(1)
       await vi.waitFor(async () => {
         expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([
