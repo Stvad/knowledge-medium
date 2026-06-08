@@ -61,7 +61,62 @@ export const summarizeOp = (rawData: string): RejectionOpSummary => {
   }
 }
 
-const shortenId = (id: string): string => {
+export const shortenId = (id: string): string => {
   if (id.length <= 13) return id
   return `${id.slice(0, 8)}…${id.slice(-4)}`
+}
+
+/** Block-level detail pulled out of a rejected upload envelope's `data`
+ *  payload, so the dialog can show WHICH block and WHAT was being written —
+ *  not just the op + id. The three content columns may hold e2ee ciphertext
+ *  (`enc:v1:` envelopes), so a preview is only offered for plaintext; an
+ *  encrypted payload is flagged instead of dumping unreadable bytes. */
+export interface RejectedBlockDetails {
+  /** The block's workspace, or null when the payload omits it (e.g. the
+   *  pre-fix stale-trigger bug stripped workspace_id from content-only
+   *  PATCHes — surfacing its absence is itself diagnostic). */
+  workspaceId: string | null
+  /** The payload's data columns, minus workspace_id (shown separately). For a
+   *  PATCH this reads as the changed fields; for a PUT, the full column set. */
+  fields: string[]
+  /** Truncated plaintext `content`, or null when absent/empty/encrypted. */
+  contentPreview: string | null
+  /** True when any content column carries an `enc:v1:` ciphertext envelope. */
+  encrypted: boolean
+}
+
+const CONTENT_COLUMNS = ['content', 'properties_json', 'references_json'] as const
+const ENC_V1_PREFIX = 'enc:v1:'
+const CONTENT_PREVIEW_MAX = 80
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null
+
+const truncate = (value: string, max: number): string =>
+  value.length <= max ? value : `${value.slice(0, max)}…`
+
+export const extractBlockDetails = (rawData: string): RejectedBlockDetails => {
+  const empty: RejectedBlockDetails = {
+    workspaceId: null, fields: [], contentPreview: null, encrypted: false,
+  }
+  try {
+    const parsed = JSON.parse(rawData) as Record<string, unknown>
+    const data = isRecord(parsed.data) ? parsed.data : {}
+    const content = typeof data.content === 'string' ? data.content : null
+    const encrypted = CONTENT_COLUMNS.some(
+      column => typeof data[column] === 'string'
+        && (data[column] as string).startsWith(ENC_V1_PREFIX),
+    )
+    const contentPreview = content && !content.startsWith(ENC_V1_PREFIX)
+      ? truncate(content, CONTENT_PREVIEW_MAX)
+      : null
+    return {
+      workspaceId: pickString(data, 'workspace_id'),
+      fields: Object.keys(data).filter(key => key !== 'workspace_id'),
+      contentPreview,
+      encrypted,
+    }
+  } catch {
+    return empty
+  }
 }

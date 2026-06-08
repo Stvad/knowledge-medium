@@ -1,6 +1,6 @@
 import { useQuery, usePowerSync } from '@powersync/react'
-import { Copy, RotateCcw, Trash2 } from 'lucide-react'
-import { useState } from 'react'
+import { Copy, Lock, RotateCcw, Trash2 } from 'lucide-react'
+import { useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button.js'
 import {
   Dialog,
@@ -9,7 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog.js'
-import { parseRejectionError, summarizeOp } from './rejectedHelpers.ts'
+import { extractBlockDetails, parseRejectionError, shortenId, summarizeOp } from './rejectedHelpers.ts'
 
 interface RejectedRow {
   id: number
@@ -33,6 +33,20 @@ export function RejectionDialog({open, onOpenChange}: Props) {
     [],
     {reportFetching: false},
   )
+  // Resolve a block's workspace_id to a readable name. Falls back to a short id
+  // when the workspace is gone (a rejection can outlive the workspace it
+  // referenced — e.g. the user deleted it), which is itself a useful signal.
+  const workspaces = useQuery<{id: string; name: string}>(
+    'SELECT id, name FROM workspaces',
+    [],
+    {reportFetching: false},
+  )
+  const workspaceNameById = useMemo(
+    () => new Map(workspaces.data.map(workspace => [workspace.id, workspace.name])),
+    [workspaces.data],
+  )
+  const workspaceLabel = (workspaceId: string): string =>
+    workspaceNameById.get(workspaceId) ?? shortenId(workspaceId)
   const [copiedId, setCopiedId] = useState<number | null>(null)
 
   const handleRetry = async (row: RejectedRow) => {
@@ -83,6 +97,7 @@ export function RejectionDialog({open, onOpenChange}: Props) {
           {rows.data.map(row => {
             const summary = summarizeOp(row.data)
             const error = parseRejectionError(row.error_message)
+            const details = extractBlockDetails(row.data)
             return (
               <div key={row.id} className="rounded-md border bg-card p-3 text-sm">
                 <div className="flex items-start justify-between gap-2">
@@ -90,6 +105,29 @@ export function RejectionDialog({open, onOpenChange}: Props) {
                     <div className="font-mono text-xs text-muted-foreground">
                       {summary.op} {summary.table} {summary.idShort}
                     </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+                      {details.workspaceId && (
+                        <span>
+                          workspace <span className="font-mono">{workspaceLabel(details.workspaceId)}</span>
+                        </span>
+                      )}
+                      {details.fields.length > 0 && (
+                        <span>
+                          fields <span className="font-mono">{details.fields.join(', ')}</span>
+                        </span>
+                      )}
+                      {details.encrypted && (
+                        <span className="inline-flex items-center gap-1">
+                          <Lock className="h-3 w-3"/>
+                          encrypted
+                        </span>
+                      )}
+                    </div>
+                    {details.contentPreview && (
+                      <div className="mt-1 truncate text-xs text-foreground/80" title={details.contentPreview}>
+                        “{details.contentPreview}”
+                      </div>
+                    )}
                     <div className="mt-1 text-sm">
                       {error.message}
                     </div>

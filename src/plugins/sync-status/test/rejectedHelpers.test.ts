@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseRejectionError, summarizeOp } from '../rejectedHelpers.ts'
+import { extractBlockDetails, parseRejectionError, summarizeOp } from '../rejectedHelpers.ts'
 
 describe('parseRejectionError', () => {
   it('unwraps the PostgrestError JSON envelope Supabase stores in error_message', () => {
@@ -66,5 +66,78 @@ describe('summarizeOp', () => {
   it('passes short ids through without truncation', () => {
     const data = JSON.stringify({op: 'PATCH', type: 'blocks', id: 'short'})
     expect(summarizeOp(data).idShort).toBe('short')
+  })
+})
+
+describe('extractBlockDetails', () => {
+  it('surfaces workspace, changed fields, and a content preview from a PATCH', () => {
+    const data = JSON.stringify({
+      op: 'PATCH',
+      type: 'blocks',
+      id: 'b1',
+      data: {workspace_id: 'ws-1', content: 'new things', updated_at: 1700000000000},
+    })
+    expect(extractBlockDetails(data)).toEqual({
+      workspaceId: 'ws-1',
+      // workspace_id is routing metadata, surfaced separately — not a "changed field".
+      fields: ['content', 'updated_at'],
+      contentPreview: 'new things',
+      encrypted: false,
+    })
+  })
+
+  it('flags encrypted content instead of dumping the ciphertext envelope', () => {
+    const data = JSON.stringify({
+      op: 'PATCH',
+      type: 'blocks',
+      id: 'b1',
+      data: {workspace_id: 'ws-1', content: 'enc:v1:4A6hEDnol9bZ_ciphertext_bytes'},
+    })
+    const details = extractBlockDetails(data)
+    expect(details.encrypted).toBe(true)
+    expect(details.contentPreview).toBeNull()
+  })
+
+  it('reports a null workspace when the payload omits workspace_id (the stale-trigger bug shape)', () => {
+    // Pre-fix clients stripped workspace_id from content-only PATCHes; the
+    // dialog should make that visibly absent rather than guess.
+    const data = JSON.stringify({
+      op: 'PATCH',
+      type: 'blocks',
+      id: 'b1',
+      data: {content: 'new things'},
+    })
+    expect(extractBlockDetails(data).workspaceId).toBeNull()
+  })
+
+  it('lists payload columns even when there is no previewable content (properties-only edit)', () => {
+    const data = JSON.stringify({
+      op: 'PATCH',
+      type: 'blocks',
+      id: 'b1',
+      data: {workspace_id: 'ws-1', properties_json: '{"topLevelBlockId":"x"}'},
+    })
+    const details = extractBlockDetails(data)
+    expect(details.fields).toEqual(['properties_json'])
+    expect(details.contentPreview).toBeNull()
+  })
+
+  it('truncates a long content preview', () => {
+    const long = 'x'.repeat(200)
+    const data = JSON.stringify({op: 'PUT', type: 'blocks', id: 'b1', data: {content: long}})
+    const preview = extractBlockDetails(data).contentPreview
+    expect(preview).not.toBeNull()
+    expect(preview!.length).toBeLessThan(long.length)
+    expect(preview!.endsWith('…')).toBe(true)
+  })
+
+  it('returns empty details for a DELETE envelope (no data) and for malformed JSON', () => {
+    const del = JSON.stringify({op: 'DELETE', type: 'blocks', id: 'b1'})
+    expect(extractBlockDetails(del)).toEqual({
+      workspaceId: null, fields: [], contentPreview: null, encrypted: false,
+    })
+    expect(extractBlockDetails('not json')).toEqual({
+      workspaceId: null, fields: [], contentPreview: null, encrypted: false,
+    })
   })
 })
