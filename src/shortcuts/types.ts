@@ -155,12 +155,30 @@ export interface ActionDispatch {
   deactivate: (context: ActionContextType) => void
 }
 
+/**
+ * What an action handler returns. A SYNCHRONOUS `false` is the "not handled —
+ * try the next candidate" sentinel (Option D): the single-winner coordinator
+ * treats it as a third fall-through condition, identical to `resolveDeps → null`
+ * and `canDispatch → false` — skip this candidate, never abort the loop.
+ *
+ * Everything else — `void`, `undefined`, or any `Promise` — counts as HANDLED
+ * the moment the handler returns; the loop stops there and never awaits. A
+ * `Promise` that resolves to `false` therefore does NOT fall through (the loop
+ * can't await to find out which is why the sentinel is synchronous-only). The
+ * type forbids `Promise<false>` because `Promise<false>` is not assignable to
+ * `Promise<void>` — so a handler can't accidentally declare an async decline.
+ *
+ * Imperative `runActionById` / `useRunAction` ignore the sentinel: they have no
+ * candidate list to fall through to, and coerce a `false` to `undefined`.
+ */
+export type ActionHandlerResult = void | false | Promise<void>
+
 export type ActionHandler<T extends ActionContextType = ActionContextType> = {
   bivarianceHack(
     dependencies: ShortcutDependenciesMap[T],
     trigger: ActionTrigger,
     dispatch?: ActionDispatch,
-  ): void | Promise<void>
+  ): ActionHandlerResult
 }['bivarianceHack']
 
 export type ActionCanRun<T extends ActionContextType = ActionContextType> = {

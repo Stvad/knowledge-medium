@@ -529,6 +529,107 @@ describe('HotkeyReconciler', () => {
       expect(lowHandler).not.toHaveBeenCalled()
     })
 
+    it('falls through to the next candidate when the winner returns false', () => {
+      // Option D: a handler declares "not mine" by returning a synchronous
+      // `false`. The high-priority context would win 'k', but its handler
+      // declines, so the coordinator falls through to the lower context.
+      const declinedHandler = vi.fn(() => false as const)
+      const fallbackHandler = vi.fn()
+      const highAction = buildAction({
+        id: 'test.high-return-false',
+        context: HIGH_CONTEXT,
+        handler: declinedHandler,
+        defaultBinding: {keys: 'k'},
+      })
+      const lowAction = buildAction({
+        id: 'test.low-return-fallback',
+        context: TEST_CONTEXT,
+        handler: fallbackHandler,
+        defaultBinding: {keys: 'k'},
+      })
+
+      render(
+        <Harness
+          actions={[highAction, lowAction]}
+          contexts={[highContextConfig, testContextConfig]}
+        >
+          <SequentialActivator contexts={[HIGH_CONTEXT, TEST_CONTEXT]}/>
+        </Harness>,
+      )
+
+      act(() => dispatchKeydown('k'))
+      expect(declinedHandler).toHaveBeenCalledTimes(1)
+      expect(fallbackHandler).toHaveBeenCalledTimes(1)
+    })
+
+    it('treats a void return as handled — the next candidate does not run', () => {
+      const winnerHandler = vi.fn(() => undefined)
+      const fallbackHandler = vi.fn()
+      const highAction = buildAction({
+        id: 'test.high-void',
+        context: HIGH_CONTEXT,
+        handler: winnerHandler,
+        defaultBinding: {keys: 'k'},
+      })
+      const lowAction = buildAction({
+        id: 'test.low-void-fallback',
+        context: TEST_CONTEXT,
+        handler: fallbackHandler,
+        defaultBinding: {keys: 'k'},
+      })
+
+      render(
+        <Harness
+          actions={[highAction, lowAction]}
+          contexts={[highContextConfig, testContextConfig]}
+        >
+          <SequentialActivator contexts={[HIGH_CONTEXT, TEST_CONTEXT]}/>
+        </Harness>,
+      )
+
+      act(() => dispatchKeydown('k'))
+      expect(winnerHandler).toHaveBeenCalledTimes(1)
+      expect(fallbackHandler).not.toHaveBeenCalled()
+    })
+
+    it('does not fall through for a Promise that resolves to false (sync sentinel only)', () => {
+      // The loop chooses the next candidate within the same synchronous event
+      // and cannot await — so a Promise counts as handled the moment it
+      // returns, even if it later resolves to false. Only a synchronous false
+      // falls through. This pins that contract.
+      const asyncDeclineHandler = vi.fn(
+        // Returns Promise<false> at runtime; typed loosely since the public
+        // handler signature forbids it (Promise<false> ⊄ Promise<void>).
+        (() => Promise.resolve(false)) as unknown as () => void,
+      )
+      const fallbackHandler = vi.fn()
+      const highAction = buildAction({
+        id: 'test.high-async-false',
+        context: HIGH_CONTEXT,
+        handler: asyncDeclineHandler,
+        defaultBinding: {keys: 'k'},
+      })
+      const lowAction = buildAction({
+        id: 'test.low-async-fallback',
+        context: TEST_CONTEXT,
+        handler: fallbackHandler,
+        defaultBinding: {keys: 'k'},
+      })
+
+      render(
+        <Harness
+          actions={[highAction, lowAction]}
+          contexts={[highContextConfig, testContextConfig]}
+        >
+          <SequentialActivator contexts={[HIGH_CONTEXT, TEST_CONTEXT]}/>
+        </Harness>,
+      )
+
+      act(() => dispatchKeydown('k'))
+      expect(asyncDeclineHandler).toHaveBeenCalledTimes(1)
+      expect(fallbackHandler).not.toHaveBeenCalled()
+    })
+
     it('skips a candidate whose canDispatch declines and dispatches the next', () => {
       // The high-priority context would win 'k', but its canDispatch returns
       // false, so the coordinator falls through to the lower context's 'k'.

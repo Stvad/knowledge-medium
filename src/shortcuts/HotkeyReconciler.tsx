@@ -25,6 +25,7 @@ import {
   ActionContextConfig,
   ActionContextType,
   ActionDispatch,
+  ActionHandlerResult,
   ActionTrigger,
   EventOptions,
   ShortcutBindingDefaults,
@@ -174,7 +175,10 @@ export function HotkeyReconciler(): null {
       }
       const deps = resolveDeps(action, activeRef.current, contextConfigsByTypeRef.current)
       if (!deps) throw new Error(`[HotkeyReconciler] Context "${action.context}" is not active.`)
-      return action.handler(deps, trigger, dispatchRef.current)
+      // Imperative invocation has no candidate list to fall through to, so the
+      // not-handled sentinel is meaningless here — coerce it to undefined.
+      const result = action.handler(deps, trigger, dispatchRef.current)
+      return result === false ? undefined : result
     })
     return () => setRunActionDispatcher(null)
   }, [runtime])
@@ -288,10 +292,10 @@ export function HotkeyReconciler(): null {
       // precedence comparator), so the keyboard path can't diverge from the
       // imperative one. resolve drops candidates whose context deactivated or
       // got shadowed between matcher install and this event (filter-before-
-      // sort), then orders best-first. Dispatch the single winner: the first
-      // candidate whose deps resolve and whose canDispatch gate doesn't
-      // decline. PR 2 adds a third skip: a handler returning the not-handled
-      // sentinel.
+      // sort), then orders best-first. Dispatch the first candidate that
+      // doesn't decline through any of the three identically-treated
+      // fall-through conditions: deps don't resolve, canDispatch returns false,
+      // or the handler synchronously returns the not-handled sentinel (`false`).
       const bindings = new Map<ActionConfig, ShortcutBindingDefaults>(
         completed.map(c => [c.action, c.binding]),
       )
@@ -300,15 +304,25 @@ export function HotkeyReconciler(): null {
         const deps = resolveDeps(action, active, contextConfigsByType)
         if (!deps) continue
         if (action.canDispatch && !action.canDispatch(deps)) continue
-        applyEventOptions(event, action, bindings.get(action)!, contextConfigsByType)
+
+        // Event options apply only to a candidate that actually handles the
+        // chord — a declining handler (sync `false`) leaves the event
+        // untouched so the next candidate, or the native default, proceeds.
+        // A throw still counts as handled (we applied its options and stop).
+        let result: ActionHandlerResult
         try {
-          void Promise.resolve(action.handler(deps, event, dispatchRef.current)).catch(error => {
-            console.error(`[HotkeyReconciler] Action ${action.id} rejected`, error)
-          })
+          result = action.handler(deps, event, dispatchRef.current)
         } catch (error) {
           console.error(`[HotkeyReconciler] Action ${action.id} threw`, error)
+          applyEventOptions(event, action, bindings.get(action)!, contextConfigsByType)
+          return
         }
-        return // single winner (PR 1); PR 2 lets a declining handler fall through
+        if (result === false) continue // declined — try the next candidate
+        applyEventOptions(event, action, bindings.get(action)!, contextConfigsByType)
+        void Promise.resolve(result).catch(error => {
+          console.error(`[HotkeyReconciler] Action ${action.id} rejected`, error)
+        })
+        return // single winner
       }
     }
 
