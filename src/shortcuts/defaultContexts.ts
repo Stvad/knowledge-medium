@@ -71,9 +71,11 @@ export const defaultActionContextConfigs: readonly ActionContextConfig[] = [
   },
   {
     // Never auto-activated; dispatched with supplied deps from the block shell.
-    // Carries no bindings to install, so modal/priority are irrelevant.
+    // Carries no bindings to install, so modal/priority are irrelevant, and its
+    // pointer-only actions must not surface as keyboard-bindable.
     type: ActionContextTypes.BLOCK_POINTER,
     displayName: 'Block Pointer Gesture',
+    keyboardBindable: false,
     validateDependencies: isBlockPointerDependencies,
   },
 ]

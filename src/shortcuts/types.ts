@@ -60,6 +60,15 @@ export interface ActionContextConfig<T extends ActionContextType = ActionContext
    */
   priority?: Priority;
   /**
+   * Whether actions in this context can be bound to a KEYBOARD chord. Defaults
+   * to true. Set false for contexts dispatched some other way — e.g.
+   * `block-pointer`, fired only by pointer gestures with supplied deps. Such
+   * actions carry no keyboard `defaultBinding`, so they must NOT surface in the
+   * keybindings editor as assignable, and must stay out of keyboard conflict
+   * detection (an assigned chord would be a dead binding).
+   */
+  keyboardBindable?: boolean;
+  /**
    * Type guard function to validate the dependencies provided when activating the context.
    */
   validateDependencies: DependencyValidator<T>;

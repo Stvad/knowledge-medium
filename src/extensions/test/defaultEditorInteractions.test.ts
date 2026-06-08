@@ -150,6 +150,33 @@ describe('default editor interactions', () => {
     expect(pluginClick).not.toHaveBeenCalled()
   })
 
+  it('supplies scope + render-scope deps derived from a nested surface context', () => {
+    // The deps the spatial transform and structural handler actually consume —
+    // scopeRootId, scopeRootForcesOpen (= !isNestedSurface), renderScopeId — must
+    // be forwarded faithfully, not just block/uiStateBlock/targetElement.
+    const nestedContext = {
+      ...context,
+      scopeRootId: 'scope-root',
+      blockContext: {isNestedSurface: true, renderScopeId: 'scope-z'},
+    } as unknown as BlockInteractionContext
+    const target = document.createElement('span')
+    const event = selectionMouseEvent(target, {
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: true,
+    })
+    const nextState = createBlockSelectionShellState(nestedContext, shellState())
+
+    nextState.shellProps.onClick?.(event)
+
+    const [, supplied] = mockDispatchPointerAction.mock.calls[0]!
+    expect(supplied).toMatchObject({
+      scopeRootId: 'scope-root',
+      scopeRootForcesOpen: false,
+      renderScopeId: 'scope-z',
+    })
+  })
+
   it('passes non-selection clicks through to the plugin click handler', () => {
     const pluginClick = vi.fn()
     const target = document.createElement('span')

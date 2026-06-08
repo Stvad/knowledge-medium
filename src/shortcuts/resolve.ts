@@ -147,9 +147,15 @@ export const resolve = (
       case 'pointer':
         // Candidates are pre-filtered by binding match and dispatched with
         // supplied deps, so the context need NOT be active — the click itself
-        // provides the context. resolve only orders them. (Modal shadowing is
-        // deliberately not applied to pointer; a click on a block targets that
-        // block regardless of which mode holds keyboard focus.)
+        // provides the context. resolve only orders them. Modal shadowing is
+        // deliberately NOT applied: a click on a block targets that block
+        // regardless of which mode holds keyboard focus (shift-click selection
+        // fired through a plain DOM onClick before this migration too, so this
+        // preserves behavior). FIXME(phase3): this blanket bypass is only sound
+        // for inherently spatially-targeted gestures. A future non-spatial
+        // pointer action that SHOULD be suppressed under a modal overlay (e.g.
+        // while the command palette is up) will need a per-action/context
+        // opt-in to shadowing before it can rely on this arm.
         return true
     }
   })

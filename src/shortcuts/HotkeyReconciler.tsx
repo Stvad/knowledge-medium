@@ -539,9 +539,19 @@ interface CandidateRunContext {
  * — the single run-until-handled loop shared by the keyboard and pointer
  * paths. The three fall-through conditions are treated identically: deps don't
  * resolve, `canDispatch` returns false, or the handler synchronously returns
- * the not-handled sentinel (`false`). Event options apply only to the candidate
- * that actually handles (or throws); a declining handler leaves the event
- * untouched so the next candidate, or the native default, proceeds.
+ * the not-handled sentinel (`false`).
+ *
+ * Event options apply only to the candidate that actually handles (or throws);
+ * a declining handler leaves the event untouched so the next candidate, or the
+ * native default, proceeds. NOTE this is a deliberate timing change from the
+ * pre-Option-D keyboard loop, which applied options BEFORE invoking the
+ * handler: here they're applied AFTER the synchronous return, because "handled"
+ * isn't known until the handler returns non-`false`. `preventDefault` is
+ * unaffected (the UA evaluates the default after the whole sync dispatch), but
+ * `stopPropagation` now fires after the handler body rather than before. No
+ * in-tree binding sets `stopPropagation: true`, so this is currently latent;
+ * a binding that does and relies on propagation already being stopped while its
+ * handler runs would see the new ordering.
  *
  * `supplied` deps are merged in for callers that hold them (pointer gestures,
  * swipe) and undefined for keyboard. Returns true if a candidate handled (or
