@@ -1,5 +1,5 @@
 import { Check, ClipboardPaste, ClockArrowDown, Gauge, RotateCcw, Scissors, Sparkles } from 'lucide-react'
-import { actionDecoratorsFacet, actionsFacet } from '@/extensions/core.js'
+import { actionTransformsFacet, actionsFacet } from '@/extensions/core.js'
 import type { AppExtension } from '@/extensions/facet.js'
 import { systemToggle } from '@/extensions/togglable.js'
 import type { Block } from '@/data/block'
@@ -591,10 +591,10 @@ export const srsReschedulingPlugin: AppExtension = systemToggle({
   srsReschedulingActions.map(action =>
     actionsFacet.of(action, {source: 'srs-rescheduling'}),
   ),
-  actionDecoratorsFacet.of(srsRescheduleDecorator, {source: 'srs-rescheduling'}),
-  actionDecoratorsFacet.of(srsSwipeRightDecorator, {source: 'srs-rescheduling'}),
+  actionTransformsFacet.of(srsRescheduleDecorator, {source: 'srs-rescheduling'}),
+  actionTransformsFacet.of(srsSwipeRightDecorator, {source: 'srs-rescheduling'}),
   srsTodoCycleDecorators.map(decorator =>
-    actionDecoratorsFacet.of(decorator, {source: 'srs-rescheduling'}),
+    actionTransformsFacet.of(decorator, {source: 'srs-rescheduling'}),
   ),
   // Negative precedence: SRS adapter sorts before the generic reference
   // adapter so a block that is BOTH an SRS card AND has an inline date

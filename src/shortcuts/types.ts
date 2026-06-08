@@ -198,16 +198,21 @@ export interface Action<T extends ActionContextType = ActionContextType> {
 
 export type ActionConfig<T extends ActionContextType = ActionContextType> = Action<T>
 
-export interface ActionOverride<T extends ActionContextType = ActionContextType> {
+/**
+ * The single contributor shape for rewriting actions before dispatch.
+ * `apply` maps an action to a new action, or to `null` to remove it (the
+ * unbind primitive). `actionId` may be {@link WILDCARD_ACTION_ID} (`'*'`)
+ * to match every action.
+ *
+ * Deliberately NOT generic in the context type. Erasing `T` keeps the
+ * pipeline cast-free — the one widened→narrow cast lives at the
+ * contributor's definition site (where it already narrows `deps`/`action`
+ * to its context), not scattered through `effectiveActions`.
+ */
+export interface ActionTransform {
   actionId: string;
-  context?: T;
-  apply: (action: ActionConfig<T>) => ActionConfig<T> | null;
-}
-
-export interface ActionDecorator<T extends ActionContextType = ActionContextType> {
-  actionId: string;
-  context?: T;
-  decorate: (action: ActionConfig<T>) => ActionConfig<T>;
+  context?: ActionContextType;
+  apply: (action: ActionConfig) => ActionConfig | null;
 }
 
 

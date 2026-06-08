@@ -7,7 +7,7 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import type { Block } from '@/data/block'
-import { actionDecoratorsFacet, actionsFacet } from '@/extensions/core'
+import { actionTransformsFacet, actionsFacet } from '@/extensions/core'
 import { resolveFacetRuntimeSync, type FacetRuntime } from '@/extensions/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { type ActionConfig, ActionContextTypes, type BlockShortcutDependencies } from '@/shortcuts/types'
@@ -332,10 +332,10 @@ describe('SwipeActionMenu', () => {
     }
     runtime = resolveFacetRuntimeSync([
       actionsFacet.of(baseAction, {source: 'test'}),
-      actionDecoratorsFacet.of({
+      actionTransformsFacet.of({
         actionId: SWIPE_RIGHT_BLOCK_ACTION_ID,
         context: ActionContextTypes.NORMAL_MODE,
-        decorate: current => ({
+        apply: current => ({
           ...current,
           handler: async (deps, trigger) => {
             const blockDeps = deps as BlockShortcutDependencies
