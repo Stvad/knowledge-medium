@@ -242,6 +242,60 @@ describe('client schema bootstrap', () => {
   })
 })
 
+// The body a client bootstrapped before D-3.1 (commit b3b1bc52) still carries:
+// workspace_id is CHANGE-GATED, so a content-only edit drops it from the upload
+// envelope. That strands e2ee PATCH uploads — the encrypt-on-upload hook routes
+// on payload.workspace_id, so without it the plaintext content reaches the
+// server and the e2ee ciphertext CHECK rejects it (SQLSTATE 23514). Faithful to
+// the trigger pulled off a live affected client. `CREATE TRIGGER IF NOT EXISTS`
+// would never replace this on upgrade — the schema applier must drop+recreate.
+const STALE_BLOCKS_UPLOAD_UPDATE_TRIGGER_SQL = `
+  CREATE TRIGGER blocks_upload_update
+  AFTER UPDATE ON blocks
+  WHEN (SELECT source FROM tx_context WHERE id = 1) IS NOT NULL
+  BEGIN
+    INSERT INTO ps_crud (tx_id, data) VALUES (
+      (SELECT tx_seq FROM tx_context WHERE id = 1),
+      json_object(
+        'op', 'PATCH',
+        'type', 'blocks',
+        'id', NEW.id,
+        'data', json_remove(
+          json_set(
+            '{}',
+            CASE WHEN OLD.workspace_id IS NOT NEW.workspace_id THEN '$.workspace_id' ELSE '$.__noop' END, NEW.workspace_id,
+            CASE WHEN OLD.content IS NOT NEW.content THEN '$.content' ELSE '$.__noop' END, NEW.content
+          ),
+          '$.__noop'
+        )
+      )
+    );
+  END
+`
+
+describe('client schema upgrade — trigger bodies re-apply on a stale DB', () => {
+  it('replaces a stale blocks_upload_update so content-only PATCHes still carry workspace_id', () => {
+    // Regress the freshly-bootstrapped DB to a pre-D-3.1 client: clobber the
+    // current trigger with the stale (workspace_id change-gated) body.
+    h.db.exec('DROP TRIGGER blocks_upload_update')
+    h.db.exec(STALE_BLOCKS_UPLOAD_UPDATE_TRIGGER_SQL)
+
+    // App startup after the fix shipped re-runs the schema set. With plain
+    // CREATE TRIGGER IF NOT EXISTS this is a no-op (stale body persists); the
+    // drop+recreate applier re-installs the current body.
+    for (const stmt of CLIENT_SCHEMA_STATEMENTS) h.db.exec(stmt)
+
+    h.insertBlock({id: 'b1', content: 'old'}) // source NULL → no upload noise
+    h.setTxContext({txId: 'tx-1', txSeq: 1, userId: 'user-1', scope: 'block-default', source: 'user'})
+    h.updateBlock('b1', {content: 'new'}) // content-only edit; workspace_id unchanged
+    h.clearTxContext()
+
+    const payload = JSON.parse(h.psCrud()[0].data)
+    expect(payload).toMatchObject({op: 'PATCH', id: 'b1'})
+    expect(payload.data.workspace_id).toBe('ws1')
+  })
+})
+
 describe('row_events trigger — INSERT', () => {
   it("tags source='user' and writes tx_id when local user tx is open", () => {
     h.setTxContext({txId: 'tx-A', userId: 'user-1', scope: 'block-default', source: 'user'})

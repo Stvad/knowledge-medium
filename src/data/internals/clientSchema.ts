@@ -1041,7 +1041,30 @@ export const CLEAR_REPROJECT_REF_MARKER_SQL = `
 // initialization creates it). Idempotent (`IF NOT EXISTS`).
 // ============================================================================
 
-export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = [
+// A trigger created with `CREATE TRIGGER IF NOT EXISTS` is FROZEN on upgrade:
+// once a trigger of that name exists, SQLite keeps the old body and silently
+// ignores the new definition. So a client whose local DB was bootstrapped
+// before a trigger's body changed keeps running the stale one forever — which
+// is exactly how the pre-D-3.1 `blocks_upload_update` kept stripping
+// workspace_id from content-only PATCHes and stranding e2ee uploads behind the
+// server's ciphertext CHECK (SQLSTATE 23514).
+//
+// Force every CREATE TRIGGER to re-apply from current source by prepending a
+// `DROP TRIGGER IF EXISTS <name>` before it. This is self-maintaining: any
+// future trigger body change auto-installs on next startup, with no per-change
+// migration to remember. Only triggers are force-recreated — tables and indexes
+// keep `IF NOT EXISTS` (dropping a table would destroy data). A dropped trigger
+// is free to rebuild, and the bootstrap runs before the repo serves any write,
+// so there is no window where a write misses its trigger.
+const CREATE_TRIGGER_NAME_RE = /^\s*CREATE\s+TRIGGER\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z0-9_]+)/i
+
+const withTriggerRecreate = (statements: readonly string[]): string[] =>
+  statements.flatMap(stmt => {
+    const name = stmt.match(CREATE_TRIGGER_NAME_RE)?.[1]
+    return name ? [`DROP TRIGGER IF EXISTS ${name}`, stmt] : [stmt]
+  })
+
+export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = withTriggerRecreate([
   // Tables
   CREATE_TX_CONTEXT_TABLE_SQL,
   SEED_TX_CONTEXT_ROW_SQL,
@@ -1094,7 +1117,7 @@ export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = [
   // 2 blocks_synced change-capture triggers (Layout B observer detection)
   CREATE_BLOCKS_SYNCED_CHANGES_INSERT_TRIGGER_SQL,
   CREATE_BLOCKS_SYNCED_CHANGES_DELETE_TRIGGER_SQL,
-] as const
+])
 
 export const CLIENT_SCHEMA_TRIGGER_NAMES = [
   'blocks_row_event_insert',
