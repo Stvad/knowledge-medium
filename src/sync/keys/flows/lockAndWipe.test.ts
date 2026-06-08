@@ -2,12 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { InMemoryWorkspaceKeyStore } from '../keyStore.js'
 import { getModePin, setModePin } from '../modePin.js'
 import {
+  broadcastWipeReload,
   clearPendingWipe,
   consumePendingWipe,
   flushUploadQueue,
   isPendingWipe,
   lockAndWipe,
   markPendingWipe,
+  onWipeReload,
 } from './lockAndWipe.js'
 
 const USER = 'user-1'
@@ -203,15 +205,56 @@ describe('consumePendingWipe (boot-time, §6)', () => {
     expect(isPendingWipe(USER)).toBe(false)
   })
 
-  it('leaves the marker armed when removal fails, so the next boot retries', async () => {
+  it('retries the delete and succeeds once a sibling tab releases the handle', async () => {
     markPendingWipe(USER)
-    const remove = vi.fn().mockRejectedValue(new Error('OPFS removeEntry failed'))
+    const remove = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('NoModificationAllowedError'))
+      .mockResolvedValueOnce(undefined)
 
-    await expect(consumePendingWipe(USER, remove, resolveFilename)).rejects.toThrow(
-      /OPFS removeEntry failed/,
-    )
+    const wiped = await consumePendingWipe(USER, remove, resolveFilename, {
+      retries: 3,
+      sleep: async () => {},
+    })
+
+    expect(wiped).toBe(true)
+    expect(remove).toHaveBeenCalledTimes(2)
+    expect(isPendingWipe(USER)).toBe(false)
+  })
+
+  it('leaves the marker armed (actionable error) when every retry fails', async () => {
+    markPendingWipe(USER)
+    const remove = vi.fn().mockRejectedValue(new Error('NoModificationAllowedError'))
+
+    await expect(
+      consumePendingWipe(USER, remove, resolveFilename, { retries: 2, sleep: async () => {} }),
+    ).rejects.toThrow(/close other tabs/i)
     // Marker must NOT be cleared — opening a DB that still holds the wiped
     // plaintext would break the security promise; retry on next boot instead.
     expect(isPendingWipe(USER)).toBe(true)
+    expect(remove).toHaveBeenCalledTimes(3) // initial + 2 retries
+  })
+})
+
+describe('cross-tab wipe-reload signal (§6)', () => {
+  it('reloads other tabs for the same user, and ignores other users', async () => {
+    const reloads: string[] = []
+    const off = onWipeReload(USER, () => reloads.push('reloaded'))
+
+    // A wipe in another tab for a DIFFERENT user must not reload this one.
+    broadcastWipeReload('someone-else')
+    await new Promise(r => setTimeout(r, 10))
+    expect(reloads).toEqual([])
+
+    // A wipe for THIS user does.
+    broadcastWipeReload(USER)
+    await new Promise(r => setTimeout(r, 10))
+    expect(reloads).toEqual(['reloaded'])
+
+    // After unsubscribe, no further reloads.
+    off()
+    broadcastWipeReload(USER)
+    await new Promise(r => setTimeout(r, 10))
+    expect(reloads).toEqual(['reloaded'])
   })
 })

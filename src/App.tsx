@@ -44,6 +44,7 @@ import { keyAtEnd } from '@/data/orderKey.js'
 import { ChangeScope } from '@/data/api'
 import { hasSafeModeSearchParam } from '@/utils/safeMode.js'
 import { getModePin, setModePin } from '@/sync/keys/modePin.js'
+import { onWipeReload } from '@/sync/keys/flows/lockAndWipe.js'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore.js'
 import { decideWorkspaceEntry } from '@/sync/keys/workspaceAccess.js'
 import { WorkspaceKeyGate } from '@/components/workspace/WorkspaceKeyGate.js'
@@ -498,6 +499,15 @@ const App = () => {
       window.removeEventListener('popstate', onHashChange)
     }
   }, [])
+
+  // §6 Lock & wipe is all-or-nothing across tabs: when one same-user tab wipes,
+  // every other tab must reload too, or it keeps the wiped plaintext in memory
+  // and holds the OPFS DB handle open (blocking the boot-time file delete). The
+  // wiping tab broadcasts; this listener reloads the rest into the fresh,
+  // re-locked state.
+  useEffect(() => {
+    return onWipeReload(repo.user.id, () => window.location.reload())
+  }, [repo.user.id])
 
   // Re-resolve the initial layout (bumping the version busts the cache) — used
   // when a gate is resolved or a pending workspace row finally replicates.
