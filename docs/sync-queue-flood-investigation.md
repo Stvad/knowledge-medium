@@ -379,32 +379,49 @@ after the upload path is healthy.
 
 ### Fix plan (revised priority)
 
-1. **Cap the PATCH RPC batch** (Finding 3) — chunk `applyBlockPatchesRpc` like
-   CREATEs (reuse `chunked(...)` + a max-patches-per-RPC const), completing
-   incrementally so progress persists. This unwedges the *current* 34k-row queue
-   and hardens against any future large batch. Lowest-risk, highest operational
-   payoff; do first so the queue can drain while the deeper fix is built.
-2. **Stop the flood at the source** (Findings 1) — make reprojection robust to
-   *transient schema absence*. Keystone change: in `changedRefSchemaNames` / the
-   gate, **distinguish "schema absent from the snapshot" from "schema present but
-   non-ref-typed."** Only a *present-but-non-ref* schema is a real ref→non-ref
-   transition that may strip refs + clear a marker; an **absent** name during
-   cold-start load must NOT strip refs or clear its marker. Optionally also gate
-   `scheduleReprojection` on the schema set being settled (initial materialization
-   drain + `userSchemas` initial load complete) so it runs once, not per
-   transient rebuild. (A genuinely deleted property-schema block also goes
-   present→absent; losing a few derived backlinks there is recoverable and the
-   lesser evil — reconcile via a deliberate "schemas settled" pass, not via a
-   load-transient.) TDD: a test that drives two cold starts on the same DB and
-   asserts `blocksUpdated === 0` on the second (the regression guard the original
-   doc already suggested).
-3. **Issue B** — the `activePanelId` UI-state block in the e2ee workspace goes up
-   unsealed (no `workspace_id`, plaintext `properties_json`). Root: `2acf5183`
-   ("UI-state writes upload uniformly", also bundled in the merge) removed the
-   local-ephemeral sink that previously kept UI-state out of the queue. Decide:
-   seal it (ensure the upload trigger emits `workspace_id` for this write path so
-   the connector can seal) **or** keep layout/session UI-state out of synced
-   blocks in e2ee workspaces. Then dismiss/retry the 1 quarantined row.
-4. **Recheck** `downloadError` once 1–3 land.
+1. ✅ **DONE** (`9fc1b872`) — **Cap the PATCH RPC batch** (Finding 3). Chunk
+   `applyBlockPatchesRpc` at `MAX_PATCHES_PER_SUPABASE_RPC = 500` (mirrors the
+   CREATE upsert cap), reusing `chunked(...)`. Patches are column-narrow and
+   idempotent, so splitting across separate RPC transactions is safe. Unwedges
+   the current 34k-row queue and hardens against any large legitimate batch.
+2. ✅ **DONE** (`0ddad24a`) — **Stop the flood at the source** (Finding 1). The
+   reprojection gate now treats a name *absent* from its schema snapshot as
+   "not loaded yet" (skip — leave refs and marker untouched), and only a
+   *present non-ref* schema as a real ref→non-ref transition that strips refs +
+   clears the marker. `latestRefProjectionSchema` keeps the scheduled schema
+   when the live registry no longer knows the name (so a parked ref-typed scan
+   can't strip a still-ref-typed field that transiently vanished). Added a
+   `reprojection.skippedAbsent` metric (the flood signal) and a regression
+   guard: zero `blocksUpdated` across a disappear/reappear cycle. **Accepted
+   tradeoff:** genuinely deleting a ref-typed property schema no longer eagerly
+   sweeps its derived backlinks — the references processor strips them on the
+   next write to each affected block. A deliberate "schemas settled" sweep
+   could reclaim that later if it ever matters.
+3. **TODO — Issue B** — the `activePanelId` UI-state block in the e2ee workspace
+   goes up unsealed (no `workspace_id`, plaintext `properties_json`). Root:
+   `2acf5183` ("UI-state writes upload uniformly", also bundled in the merge)
+   removed the local-ephemeral sink that previously kept UI-state out of the
+   queue. Decide: seal it (ensure the upload trigger emits `workspace_id` for
+   this write path so the connector can seal) **or** keep layout/session
+   UI-state out of synced blocks in e2ee workspaces. Then dismiss/retry the 1
+   quarantined row.
+4. **TODO — Recheck** `downloadError` once Issue B lands.
+
+### Live recovery (after the fixed build ships)
+
+The two fixes are client-side; `ff-vlad-dev` is still running the old build.
+On the next load of the fixed build, recovery is automatic and needs no manual
+`ps_crud` surgery:
+
+- **Queue drains:** the existing 34k PATCHes upload in 500-row RPC chunks
+  instead of one 16k-row statement that times out.
+- **No new flood:** the 86 markers are already present, so the fixed gate skips
+  them on cold start (and transient absence no longer clears them).
+- Watch `repo.metrics().reprojection` — `blocksUpdated` should be ~0 and
+  `skippedAbsent` may be non-zero (proof the guard fired) — and confirm
+  `ps_crud` `MIN(id)` starts advancing.
+
+The 1 quarantined `ps_crud_rejected` row (Issue B) is separate — dismiss/retry
+it after Issue B is fixed.
 
 Verification gate per [AGENTS.md](AGENTS.md): `yarn run check`.
