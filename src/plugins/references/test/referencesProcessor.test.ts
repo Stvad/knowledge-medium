@@ -64,6 +64,10 @@ const setup = async (
     newId: () => `gen-${++idCursor}`,
     registerKernelProcessors: false,
   })
+  // Reprojection is workspace-scoped: it only scans + marks the active
+  // workspace. All fixtures here live in WS, so make it active or every
+  // schema-swap reprojection would no-op (no active workspace ⇒ skip).
+  repo.setActiveWorkspaceId(WS)
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
     dailyNotesDataExtension,
@@ -422,7 +426,7 @@ describe('parseReferences — schema-swap reprojection', () => {
     ]
     expect(JSON.parse((await env.read('src'))!.references_json)).toEqual(projected)
     expect(await env.h.db.getOptional(
-      `SELECT 1 FROM client_schema_state WHERE key = 'reproject_ref:reviewer'`,
+      `SELECT 1 FROM client_schema_state WHERE key = 'reproject_ref:${WS}:reviewer'`,
     )).not.toBeNull()
 
     const updatesBefore = env.repo.metrics().reprojection.blocksUpdated
@@ -437,10 +441,52 @@ describe('parseReferences — schema-swap reprojection', () => {
     // the disappear/reappear cycle.
     expect(JSON.parse((await env.read('src'))!.references_json)).toEqual(projected)
     expect(await env.h.db.getOptional(
-      `SELECT 1 FROM client_schema_state WHERE key = 'reproject_ref:reviewer'`,
+      `SELECT 1 FROM client_schema_state WHERE key = 'reproject_ref:${WS}:reviewer'`,
     )).not.toBeNull()
     expect(env.repo.metrics().reprojection.blocksUpdated).toBe(updatesBefore)
     expect(env.repo.metrics().reprojection.skippedAbsent).toBeGreaterThanOrEqual(1)
+  })
+
+  it('only reprojects the active workspace, leaving unopened workspaces untouched', async () => {
+    // Reprojection scans + marks only repo.activeWorkspaceId. `propertySchemas`
+    // reflects just the active workspace's user-data schemas, so evaluating
+    // ref-ness against another workspace's blocks is meaningless — and
+    // rewriting/stripping their references_json is exactly the cross-workspace
+    // churn (every A↔B switch re-evaluating the whole graph) behind the flood.
+    const OTHER_WS = 'ws-2'
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'src-active', workspaceId: WS, parentId: null, orderKey: 'a0',
+        properties: {reviewer: 'target-a'},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'src-other', workspaceId: OTHER_WS, parentId: null, orderKey: 'a0',
+        properties: {reviewer: 'target-b'},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    env.repo.setFacetRuntime(runtimeWithReviewer())
+    await flush()
+
+    // Active workspace: the reviewer ref is backfilled.
+    expect(JSON.parse((await env.read('src-active'))!.references_json)).toEqual([
+      {id: 'target-a', alias: 'target-a', sourceField: 'reviewer'},
+    ])
+    // Unopened workspace: its block is never scanned — references_json stays
+    // as the create-time processor left it (reviewer was not ref-typed then).
+    expect(JSON.parse((await env.read('src-other'))!.references_json)).toEqual([])
+    // And the per-workspace marker is recorded for the active workspace only.
+    expect(await env.h.db.getOptional(
+      `SELECT 1 FROM client_schema_state WHERE key = 'reproject_ref:${WS}:reviewer'`,
+    )).not.toBeNull()
+    expect(await env.h.db.getOptional(
+      `SELECT 1 FROM client_schema_state WHERE key = 'reproject_ref:${OTHER_WS}:reviewer'`,
+    )).toBeNull()
   })
 
   it('does not let an older ref-typed reprojection re-add refs after the property is redefined non-ref', async () => {
@@ -476,7 +522,7 @@ describe('parseReferences — schema-swap reprojection', () => {
     ) => {
       const result = await originalExecute(sql, params)
       const isReviewerMarker = sql.includes('client_schema_state')
-        && params?.[0] === 'reproject_ref:reviewer'
+        && params?.[0] === `reproject_ref:${WS}:reviewer`
       if (isReviewerMarker) {
         if (released) {
           markerAfterRelease = true
@@ -596,10 +642,10 @@ describe('parseReferences — schema-swap reprojection', () => {
       // would not have been markered before the fix.
       await vi.waitFor(async () => {
         const reviewerMarker = await env.h.db.getOptional(
-          `SELECT 1 FROM client_schema_state WHERE key = 'reproject_ref:reviewer'`,
+          `SELECT 1 FROM client_schema_state WHERE key = 'reproject_ref:${WS}:reviewer'`,
         )
         const approverMarker = await env.h.db.getOptional(
-          `SELECT 1 FROM client_schema_state WHERE key = 'reproject_ref:approver'`,
+          `SELECT 1 FROM client_schema_state WHERE key = 'reproject_ref:${WS}:approver'`,
         )
         expect(reviewerMarker).not.toBeNull()
         expect(approverMarker).not.toBeNull()
@@ -630,7 +676,7 @@ describe('parseReferences — schema-swap reprojection', () => {
     // on the marker is the strict-er gate.
     await vi.waitFor(async () => {
       const row = await env.h.db.getOptional<{1: number}>(
-        `SELECT 1 FROM client_schema_state WHERE key = 'reproject_ref:reviewer'`,
+        `SELECT 1 FROM client_schema_state WHERE key = 'reproject_ref:${WS}:reviewer'`,
       )
       expect(row).not.toBeNull()
     })
@@ -646,6 +692,7 @@ describe('parseReferences — schema-swap reprojection', () => {
       user: {id: 'user-1'},
       registerKernelProcessors: false,
     })
+    repo2.setActiveWorkspaceId(WS)
     repo2.setFacetRuntime(runtimeWithReviewer())
     // The reprojection short-circuit is async (it awaits
     // loadReprojectionMarkers). Wait for the bookkeeping to land.

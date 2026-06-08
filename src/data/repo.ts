@@ -292,6 +292,14 @@ const latestRefProjectionSchema = (
     : currentSchema
 }
 
+/** Suffix (the part after the `reproject_ref:` prefix) of a per-workspace
+ *  reprojection marker. Reprojection is workspace-scoped, so each workspace
+ *  records its own "already backfilled name X" marker. Workspace ids are UUIDs
+ *  (no colons), so this stays unambiguous even though property names can carry
+ *  colons (e.g. `roam:isa`). */
+const reprojectionMarkerKey = (workspaceId: string, name: string): string =>
+  `${workspaceId}:${name}`
+
 /** A named rebuild step. Declares which facets it reads via `inputs`
  *  so the runtime contribution path can run only the steps whose
  *  inputs changed. Outputs are written to Repo private fields by the
@@ -1578,8 +1586,15 @@ export class Repo {
   private async reprojectRefTypedProperties(
     propertyNames: readonly string[],
     propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
+    /** Workspace to scan + mark. Reprojection is scoped to a single
+     *  workspace: `propertySchemas` only reflects the *active* workspace's
+     *  user-data schemas, so evaluating ref-ness against another workspace's
+     *  blocks is meaningless and would rewrite (or strip) refs in workspaces
+     *  the user hasn't even opened. Markers are likewise per-workspace, so each
+     *  workspace gets its own one-time backfill when first opened. */
+    workspaceId: string,
   ): Promise<void> {
-    if (this.isReadOnly || propertyNames.length === 0) return
+    if (this.isReadOnly || propertyNames.length === 0 || !workspaceId) return
     const t0 = performance.now()
     let blocksUpdated = 0
     let scanScheduled = false
@@ -1610,7 +1625,7 @@ export class Repo {
           continue
         }
         const kind = refCodecKind(schema)
-        if (kind !== undefined && markers.has(name)) {
+        if (kind !== undefined && markers.has(reprojectionMarkerKey(workspaceId, name))) {
           skippedByMarker += 1
           continue
         }
@@ -1632,9 +1647,10 @@ export class Repo {
           SELECT DISTINCT ${buildQualifiedBlockColumnsSql('b')}
           FROM blocks b, json_each(b.properties_json) prop
           WHERE b.deleted = 0
+            AND b.workspace_id = ?
             AND prop.key IN (${placeholders})
         `,
-        [...namesToScan],
+        [workspaceId, ...namesToScan],
       )
       this.reprojectionMetrics.rowsScanned += rows.length
       // Note: we do NOT bail when `this._propertySchemas !== propertySchemas`.
@@ -1699,9 +1715,9 @@ export class Repo {
         const schema = latestRefProjectionSchema(propertySchemas, this._propertySchemas, name)
         const kind = refCodecKind(schema)
         if (kind === undefined) {
-          await this.clearReprojectionMarker(name)
+          await this.clearReprojectionMarker(workspaceId, name)
         } else {
-          await this.setReprojectionMarker(name)
+          await this.setReprojectionMarker(workspaceId, name)
         }
       }
     } catch (err) {
@@ -1732,8 +1748,15 @@ export class Repo {
     names: readonly string[],
     schemas: ReadonlyMap<string, AnyPropertySchema>,
   ): void {
+    // Capture the active workspace now, not inside the deferred callback: a
+    // workspace switch during the idle-callback window must not re-scope a scan
+    // scheduled for the workspace whose schemas actually changed. No active
+    // workspace (bootstrap, before any workspace opens) ⇒ nothing to scope, so
+    // there's nothing to backfill yet — skip.
+    const workspaceId = this._activeWorkspaceId
+    if (!workspaceId) return
     const run = () => {
-      const p = this.reprojectRefTypedProperties(names, schemas)
+      const p = this.reprojectRefTypedProperties(names, schemas, workspaceId)
         .finally(() => { this.pendingReprojections.delete(p) })
       this.pendingReprojections.add(p)
     }
@@ -1745,8 +1768,13 @@ export class Repo {
     }
   }
 
-  /** Lazy load the per-name marker set on first call, then keep it
-   *  in-memory. One SQL round-trip per Repo lifetime. */
+  /** Lazy load the marker set on first call, then keep it in-memory. One SQL
+   *  round-trip per Repo lifetime. Entries are stored as the key *suffix*
+   *  (everything after `reproject_ref:`), i.e. `<workspaceId>:<name>` — see
+   *  `reprojectionMarkerKey`. Legacy un-namespaced markers (just `<name>`,
+   *  written before reprojection was workspace-scoped) load as inert entries
+   *  that never match the workspace-qualified lookup; each workspace simply
+   *  re-scans once on next open (a no-op write thanks to the diff guard). */
   private async loadReprojectionMarkers(): Promise<Set<string>> {
     if (this.reprojectionMarkers !== null) return this.reprojectionMarkers
     const rows = await this.db.getAll<{key: string}>(SELECT_REPROJECT_REF_MARKERS_SQL)
@@ -1756,14 +1784,16 @@ export class Repo {
     return set
   }
 
-  private async setReprojectionMarker(name: string): Promise<void> {
-    await this.db.execute(RECORD_REPROJECT_REF_MARKER_SQL, [`${REPROJECT_REF_MARKER_PREFIX}${name}`])
-    this.reprojectionMarkers?.add(name)
+  private async setReprojectionMarker(workspaceId: string, name: string): Promise<void> {
+    const suffix = reprojectionMarkerKey(workspaceId, name)
+    await this.db.execute(RECORD_REPROJECT_REF_MARKER_SQL, [`${REPROJECT_REF_MARKER_PREFIX}${suffix}`])
+    this.reprojectionMarkers?.add(suffix)
   }
 
-  private async clearReprojectionMarker(name: string): Promise<void> {
-    await this.db.execute(CLEAR_REPROJECT_REF_MARKER_SQL, [`${REPROJECT_REF_MARKER_PREFIX}${name}`])
-    this.reprojectionMarkers?.delete(name)
+  private async clearReprojectionMarker(workspaceId: string, name: string): Promise<void> {
+    const suffix = reprojectionMarkerKey(workspaceId, name)
+    await this.db.execute(CLEAR_REPROJECT_REF_MARKER_SQL, [`${REPROJECT_REF_MARKER_PREFIX}${suffix}`])
+    this.reprojectionMarkers?.delete(suffix)
   }
 
   /** Test escape hatch — drop the in-memory marker mirror so the next
