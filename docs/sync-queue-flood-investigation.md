@@ -377,51 +377,63 @@ There's also a `downloadError` ("Failed to create websocket connection to
 …powersync…/sync/stream"). May be transient/aggravating; lower priority — recheck
 after the upload path is healthy.
 
-### Fix plan (revised priority)
+### Fix plan — FINAL STATUS (all three resolved)
 
-1. ✅ **DONE** (`9fc1b872`) — **Cap the PATCH RPC batch** (Finding 3). Chunk
-   `applyBlockPatchesRpc` at `MAX_PATCHES_PER_SUPABASE_RPC = 500` (mirrors the
-   CREATE upsert cap), reusing `chunked(...)`. Patches are column-narrow and
-   idempotent, so splitting across separate RPC transactions is safe. Unwedges
-   the current 34k-row queue and hardens against any large legitimate batch.
-2. ✅ **DONE** (`0ddad24a`) — **Stop the flood at the source** (Finding 1). The
-   reprojection gate now treats a name *absent* from its schema snapshot as
-   "not loaded yet" (skip — leave refs and marker untouched), and only a
-   *present non-ref* schema as a real ref→non-ref transition that strips refs +
-   clears the marker. `latestRefProjectionSchema` keeps the scheduled schema
-   when the live registry no longer knows the name (so a parked ref-typed scan
-   can't strip a still-ref-typed field that transiently vanished). Added a
-   `reprojection.skippedAbsent` metric (the flood signal) and a regression
-   guard: zero `blocksUpdated` across a disappear/reappear cycle. **Accepted
-   tradeoff:** genuinely deleting a ref-typed property schema no longer eagerly
-   sweeps its derived backlinks — the references processor strips them on the
-   next write to each affected block. A deliberate "schemas settled" sweep
-   could reclaim that later if it ever matters.
-3. **TODO — Issue B** — the `activePanelId` UI-state block in the e2ee workspace
-   goes up unsealed (no `workspace_id`, plaintext `properties_json`). Root:
-   `2acf5183` ("UI-state writes upload uniformly", also bundled in the merge)
-   removed the local-ephemeral sink that previously kept UI-state out of the
-   queue. Decide: seal it (ensure the upload trigger emits `workspace_id` for
-   this write path so the connector can seal) **or** keep layout/session
-   UI-state out of synced blocks in e2ee workspaces. Then dismiss/retry the 1
-   quarantined row.
-4. **TODO — Recheck** `downloadError` once Issue B lands.
+1. ✅ **DONE** (`9fc1b872`) — **Cap the PATCH RPC batch** (Finding 3 / drain
+   stall). Chunk `applyBlockPatchesRpc` at `MAX_PATCHES_PER_SUPABASE_RPC = 500`
+   (mirrors the CREATE upsert cap), reusing `chunked(...)`. Patches are
+   column-narrow and idempotent, so splitting across separate RPC transactions
+   is safe. Unwedged the 34k-row queue and hardens against any large batch.
+   Verified live: queue drained 34,232 → 0, `uploadError` gone.
+2. ✅ **DONE** — **Stop the flood at the source** (Finding 1). Landed in three
+   steps as understanding improved:
+   - `0ddad24a` (interim) treated *absent* schemas as "not loaded yet" (skip).
+     It stopped the churn but I'd mis-diagnosed the trigger as a within-workspace
+     cold-start load race.
+   - `24971b31` — **the real fix: scope reprojection to the active workspace.**
+     The scan had no `workspace_id` filter but evaluated ref-ness against only
+     the active workspace's schema set, so a property ref-typed in workspace A
+     but absent in B was read as ref→non-ref whenever B was active and the scan
+     rewrote/stripped **all** workspaces' blocks. Every A↔B switch re-evaluated
+     the whole graph — that was the flood. Now the scan filters `workspace_id`,
+     markers are per-workspace (`reproject_ref:<workspaceId>:<name>`), and the
+     workspace is captured at schedule time.
+   - `bd7c363a` — with scoping in place, reverted the `0ddad24a` absent-skip back
+     to **eager strip**: "absent or non-ref in the active workspace's schema
+     set" is a real removal → strip the stale derived refs + clear the marker
+     immediately (no tolerated stale backlinks). Safe now because the scan is
+     workspace-scoped and a schema never *transiently* leaves a workspace's set
+     (cold-start materialization is grow-only; the observer never deletes a
+     still-staged block — [materialize.ts:379](src/sync/observer/materialize.ts:379)).
+     `liveSchemas` guards the deferred-run-after-switch case (use the scheduled
+     snapshot once the active workspace ≠ the scan's workspace).
+   Verified live (post-reload, fixed build): `reprojection.calls = 0`,
+   `blocksUpdated = 0`, all markers skipped — no churn.
+3. ✅ **DONE** (`285d79cd`) — **Issue B** root cause was NOT "UI-state shouldn't
+   sync" (my hypotheses in the Issue B section above were wrong). It's that
+   `CREATE TRIGGER IF NOT EXISTS` **froze the old `blocks_upload_update` trigger
+   body** on clients bootstrapped before D-3.1 (`b3b1bc52`): the stale trigger
+   change-gated `workspace_id`, so a content-only PATCH dropped it from the
+   upload envelope → `encryptUploadOps` (which routes on `payload.workspace_id`)
+   couldn't seal → plaintext reached the server → the e2ee ciphertext CHECK
+   rejected it (23514). CREATEs were unaffected (insert trigger emits the full
+   row). Fix: `DROP TRIGGER IF EXISTS` before each `CREATE TRIGGER` in
+   `CLIENT_SCHEMA_STATEMENTS`, so trigger bodies always re-apply from current
+   source on startup. (The stale `ps_crud_rejected` row drains/retries once the
+   re-created trigger emits `workspace_id`.)
+4. `downloadError` (websocket) did not recur after the upload path was healthy —
+   it was a transient reconnect blip.
 
-### Live recovery (after the fixed build ships)
+### Follow-up found while auditing (NOT yet fixed)
 
-The two fixes are client-side; `ff-vlad-dev` is still running the old build.
-On the next load of the fixed build, recovery is automatic and needs no manual
-`ps_crud` surgery:
-
-- **Queue drains:** the existing 34k PATCHes upload in 500-row RPC chunks
-  instead of one 16k-row statement that times out.
-- **No new flood:** the 86 markers are already present, so the fixed gate skips
-  them on cold start (and transient absence no longer clears them).
-- Watch `repo.metrics().reprojection` — `blocksUpdated` should be ~0 and
-  `skippedAbsent` may be non-zero (proof the guard fired) — and confirm
-  `ps_crud` `MIN(id)` starts advancing.
-
-The 1 quarantined `ps_crud_rejected` row (Issue B) is separate — dismiss/retry
-it after Issue B is fixed.
+**Daily-notes date backfill modifies unopened workspaces.**
+[`BACKFILL_DAILY_NOTE_DATE_SQL`](src/plugins/daily-notes/localSchema.ts:69) runs
+at cold start and `UPDATE`s daily-note blocks across **all** workspaces (its
+`WHERE id IN (SELECT block_id FROM block_types WHERE type='daily-note')` has no
+`workspace_id` filter). Same anti-pattern as the reprojection bug, milder
+severity: it's idempotent and one-time-per-block (no flip-flop), but opening one
+workspace still writes + uploads date props into every unopened workspace's
+daily notes. Should be scoped to the active workspace (run per-workspace on
+open). Separate subsystem — tracked separately.
 
 Verification gate per [AGENTS.md](AGENTS.md): `yarn run check`.
