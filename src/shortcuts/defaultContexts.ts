@@ -2,6 +2,7 @@ import {
   ActionContextConfig,
   ActionContextTypes,
   BaseShortcutDependencies,
+  BlockPointerDependencies,
   BlockShortcutDependencies,
   CodeMirrorEditModeDependencies,
   MultiSelectModeDependencies,
@@ -27,6 +28,11 @@ const isMultiSelectModeDependencies = (deps: unknown): deps is MultiSelectModeDe
   typeof deps === 'object' && deps !== null &&
   'selectedBlocks' in deps && Array.isArray(deps.selectedBlocks) && (deps.selectedBlocks as unknown[]).every(b => b instanceof Block) &&
   'anchorBlock' in deps && (deps.anchorBlock === null || deps.anchorBlock instanceof Block)
+
+const isBlockPointerDependencies = (deps: unknown): deps is BlockPointerDependencies =>
+  isBlockShortcutDependencies(deps) &&
+  typeof deps === 'object' && deps !== null &&
+  'targetElement' in deps && deps.targetElement instanceof HTMLElement
 
 export const defaultActionContextConfigs: readonly ActionContextConfig[] = [
   {
@@ -62,5 +68,12 @@ export const defaultActionContextConfigs: readonly ActionContextConfig[] = [
     displayName: 'Multi-Select Mode',
     modal: true,
     validateDependencies: isMultiSelectModeDependencies,
+  },
+  {
+    // Never auto-activated; dispatched with supplied deps from the block shell.
+    // Carries no bindings to install, so modal/priority are irrelevant.
+    type: ActionContextTypes.BLOCK_POINTER,
+    displayName: 'Block Pointer Gesture',
+    validateDependencies: isBlockPointerDependencies,
   },
 ]

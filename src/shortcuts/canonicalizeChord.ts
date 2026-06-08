@@ -209,6 +209,32 @@ export interface MouseEventLike extends PointerModifierState {
 }
 
 /**
+ * A pointer (mouse) binding declared on an action — the pointer analogue of a
+ * keyboard `defaultBinding`. Structured rather than a string because pointer
+ * chords aren't sequences and don't share keyboard's phase set. Defaults:
+ * primary button, single click, no modifiers, `click` phase.
+ */
+export interface PointerBindingSpec {
+  readonly kind: 'mouse'
+  readonly button?: number
+  readonly detail?: number
+  readonly mods?: readonly Modifier[]
+  readonly role?: string
+  readonly phase?: PointerPhase
+}
+
+/** Realize a {@link PointerBindingSpec}'s declared/defaulted fields into the
+ *  descriptor the matcher and coordinator compare against. */
+export const pointerBindingDescriptor = (spec: PointerBindingSpec): MouseChordDescriptor => ({
+  kind: 'mouse',
+  button: spec.button ?? 0,
+  detail: spec.detail ?? 1,
+  mods: spec.mods ?? [],
+  ...(spec.role !== undefined ? {role: spec.role} : {}),
+  phase: spec.phase ?? 'click',
+})
+
+/**
  * Does a mouse event satisfy a {@link MouseChordDescriptor}? Button and click
  * count match exactly, and the modifier set matches exactly — `mods: ['Shift']`
  * requires Shift held and Ctrl/Alt/Meta absent, so shift-click (extend

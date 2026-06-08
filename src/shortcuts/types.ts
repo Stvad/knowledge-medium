@@ -1,6 +1,7 @@
-import type { ComponentType, SVGProps } from 'react';
+import type { ComponentType, MouseEvent as ReactMouseEvent, SVGProps } from 'react';
 import { Block } from '../data/block';
 import { EditorView } from '@codemirror/view'
+import type { PointerBindingSpec } from './canonicalizeChord.js'
 
 /** Action icon — same SVG-component shape lucide-react emits, so the
  *  default action set can use those directly without an adapter. The
@@ -70,6 +71,7 @@ export type BuiltInActionContextType =
   | 'edit-mode-cm'
   | 'property-editing'
   | 'multi-select-mode'
+  | 'block-pointer'
 
 export type ActionContextType = BuiltInActionContextType | (string & {})
 
@@ -79,6 +81,15 @@ export const ActionContextTypes = {
   EDIT_MODE_CM: 'edit-mode-cm',
   PROPERTY_EDITING: 'property-editing',
   MULTI_SELECT_MODE: 'multi-select-mode',
+  /**
+   * Pointer-dispatched block gestures (shift-click selection, future
+   * double-click-to-edit). Never auto-activated by a surface — it carries no
+   * persistent state to install bindings against. Instead the block shell
+   * dispatches a pointer event with the clicked block's deps SUPPLIED, and the
+   * coordinator resolves candidates against those. The context exists only to
+   * give those actions a home + a dependency validator.
+   */
+  BLOCK_POINTER: 'block-pointer',
 } as const;
 
 export interface BaseShortcutDependencies {
@@ -117,6 +128,16 @@ export interface MultiSelectModeDependencies extends BaseShortcutDependencies {
   anchorBlock: Block | null; // The block that started a shift-selection range
 }
 
+/**
+ * Dependencies for a pointer-dispatched block gesture. The clicked block plus
+ * the DOM element the pointer event targeted — captured synchronously at
+ * dispatch (React nulls `currentTarget` once the handler returns), so spatial
+ * walkers can locate the clicked instance among visible blocks.
+ */
+export interface BlockPointerDependencies extends BlockShortcutDependencies {
+  targetElement: HTMLElement;
+}
+
 export interface ShortcutDependenciesMap {
   [context: string]: BaseShortcutDependencies;
   [ActionContextTypes.GLOBAL]: BaseShortcutDependencies;
@@ -124,6 +145,7 @@ export interface ShortcutDependenciesMap {
   [ActionContextTypes.EDIT_MODE_CM]: CodeMirrorEditModeDependencies;
   [ActionContextTypes.PROPERTY_EDITING]: PropertyEditingDependencies;
   [ActionContextTypes.MULTI_SELECT_MODE]: MultiSelectModeDependencies;
+  [ActionContextTypes.BLOCK_POINTER]: BlockPointerDependencies;
 }
 
 export interface ActiveContextInfo {
@@ -137,7 +159,14 @@ export interface ActionContextActivation {
   enabled?: boolean;
 }
 
-export type ActionTrigger = KeyboardEvent | CustomEvent
+/**
+ * The raw event handed to a handler as its second argument. Keyboard chords
+ * deliver a `KeyboardEvent`, imperative/swipe callers a `CustomEvent`, and
+ * pointer-bound actions the React `MouseEvent` (whose `currentTarget` the
+ * handler reads synchronously before any await). The descriptor used for
+ * resolution/ordering is internal to the coordinator and never reaches here.
+ */
+export type ActionTrigger = KeyboardEvent | CustomEvent | ReactMouseEvent<HTMLElement>
 
 /**
  * Activation primitives surfaced to action handlers as the optional third
@@ -190,7 +219,11 @@ export interface Action<T extends ActionContextType = ActionContextType> {
   description: string;
   context: T;
   handler: ActionHandler<T>;
-  defaultBinding?: ShortcutBindingDefaults; // Optional default binding
+  defaultBinding?: ShortcutBindingDefaults; // Optional default keyboard binding
+  /** Optional pointer (mouse) binding — dispatched through the same coordinator
+   *  + `resolve` path as keyboard, but matched against a pointer event and
+   *  supplied the clicked block's deps. See {@link PointerBindingSpec}. */
+  pointerBinding?: PointerBindingSpec;
   /** Optional icon for surfaces that render actions visually (toolbars,
    *  swipe menus, eventual command-palette icon column). Surfaces that
    *  don't render icons just ignore the field. */

@@ -1,6 +1,8 @@
 import { describe, expect, it, afterEach, vi } from 'vitest'
 import { act, render, cleanup } from '@testing-library/react'
+import type { MouseEvent as ReactMouseEvent } from 'react'
 import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler.js'
+import { dispatchPointerAction } from '@/shortcuts/pointerAction.js'
 import {
   ActiveContextsProvider,
   useActiveContextsState,
@@ -51,6 +53,32 @@ const secondModalContextConfig: ActionContextConfig = {
   validateDependencies: (deps): deps is BaseShortcutDependencies =>
     typeof deps === 'object' && deps !== null,
 }
+
+const BLOCK_POINTER_CONTEXT = 'block-pointer' as ActionContextType
+const blockPointerContextConfig: ActionContextConfig = {
+  type: BLOCK_POINTER_CONTEXT,
+  displayName: 'Block Pointer',
+  validateDependencies: (deps): deps is BaseShortcutDependencies =>
+    typeof deps === 'object' && deps !== null,
+}
+
+const pointerEvent = (
+  overrides: Partial<{
+    type: string; button: number; detail: number
+    shiftKey: boolean; altKey: boolean; ctrlKey: boolean; metaKey: boolean
+  }> = {},
+): ReactMouseEvent<HTMLElement> => ({
+  type: 'click',
+  button: 0,
+  detail: 1,
+  shiftKey: false,
+  altKey: false,
+  ctrlKey: false,
+  metaKey: false,
+  preventDefault: vi.fn(),
+  stopPropagation: vi.fn(),
+  ...overrides,
+}) as unknown as ReactMouseEvent<HTMLElement>
 
 const HIGH_CONTEXT = 'high-priority-mode' as ActionContextType
 const highContextConfig: ActionContextConfig = {
@@ -661,6 +689,70 @@ describe('HotkeyReconciler', () => {
       act(() => dispatchKeydown('k'))
       expect(declinedHandler).not.toHaveBeenCalled()
       expect(fallbackHandler).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('pointer dispatch', () => {
+    const pointerAction = (
+      overrides: Partial<ActionConfig> & Pick<ActionConfig, 'id' | 'handler'>,
+    ): ActionConfig => ({
+      description: 'test pointer action',
+      context: BLOCK_POINTER_CONTEXT,
+      pointerBinding: {kind: 'mouse', mods: ['Shift'], phase: 'click'},
+      ...overrides,
+    } as ActionConfig)
+
+    it('dispatches a matching shift-click to a pointer-bound action with supplied deps', () => {
+      const handler = vi.fn()
+      const action = pointerAction({id: 'pointer.shift', handler})
+
+      render(<Harness actions={[action]} contexts={[blockPointerContextConfig]}/>)
+
+      const supplied = {marker: 'clicked'} as unknown as BaseShortcutDependencies
+      let handled = false
+      act(() => {
+        handled = dispatchPointerAction(pointerEvent({shiftKey: true}), supplied as never)
+      })
+
+      // The context is NOT active — the click supplies the deps, which reach
+      // the handler unchanged.
+      expect(handled).toBe(true)
+      expect(handler).toHaveBeenCalledTimes(1)
+      expect(handler.mock.calls[0]?.[0]).toBe(supplied)
+    })
+
+    it('does not dispatch when the modifier set differs (ctrl+shift is not shift)', () => {
+      const handler = vi.fn()
+      const action = pointerAction({id: 'pointer.shift-only', handler})
+
+      render(<Harness actions={[action]} contexts={[blockPointerContextConfig]}/>)
+
+      let handled = true
+      act(() => {
+        handled = dispatchPointerAction(
+          pointerEvent({shiftKey: true, ctrlKey: true}),
+          {marker: 'x'} as never,
+        )
+      })
+
+      expect(handled).toBe(false)
+      expect(handler).not.toHaveBeenCalled()
+    })
+
+    it('falls through to the next pointer candidate when the first declines', () => {
+      const declined = vi.fn(() => false as const)
+      const fallback = vi.fn()
+      const first = pointerAction({id: 'pointer.declines', handler: declined})
+      const second = pointerAction({id: 'pointer.fallback', handler: fallback})
+
+      render(<Harness actions={[first, second]} contexts={[blockPointerContextConfig]}/>)
+
+      act(() => {
+        dispatchPointerAction(pointerEvent({shiftKey: true}), {marker: 'x'} as never)
+      })
+
+      expect(declined).toHaveBeenCalledTimes(1)
+      expect(fallback).toHaveBeenCalledTimes(1)
     })
   })
 

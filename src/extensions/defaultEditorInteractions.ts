@@ -1,7 +1,6 @@
 import { useMemo } from 'react'
 import type { MouseEvent } from 'react'
 import {
-  blockSelectionClickDecoratorsFacet,
   blockShellDecoratorsFacet,
   handleBlockSelectionClick,
   isInteractiveContentEvent,
@@ -13,10 +12,12 @@ import {
   ShortcutActivationContribution,
   shortcutSurfaceActivationsFacet,
 } from '@/extensions/blockInteraction.js'
-import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { editorAutocompleteExtension } from '@/extensions/editorAutocomplete.js'
 import { AppExtension } from '@/extensions/facet.js'
-import { ActionContextTypes } from '@/shortcuts/types.js'
+import { actionsFacet } from '@/extensions/core.js'
+import { ActionContextTypes, type BlockPointerDependencies } from '@/shortcuts/types.js'
+import { dispatchPointerAction } from '@/shortcuts/pointerAction.js'
+import { extendBlockSelectionAction } from '@/extensions/blockSelectionAction.js'
 import { blockFocusShellDecorator } from '@/extensions/BlockFocusShellDecorator.js'
 import { systemToggle } from '@/extensions/togglable.js'
 
@@ -36,23 +37,50 @@ export const codeMirrorEditModeActivation: ShortcutActivationContribution = cont
   }]
 }
 
-type ApplyBlockSelectionClick = (
-  context: BlockResolveContext,
-  event: MouseEvent<HTMLElement>,
-) => void | Promise<void>
-
 const isBlockSelectionGesture = (event: MouseEvent<HTMLElement>): boolean =>
   isSelectionClick(event) && !isInteractiveContentEvent(event)
+
+/**
+ * Dispatch a selection-gesture click through the unified pointer path. The
+ * clicked block's deps are SUPPLIED (the gesture's context isn't keyboard-
+ * active), and `currentTarget` — the block shell the spatial walker tags — is
+ * captured synchronously before React nulls it. A pointer-bound action
+ * (shift-click → `extend_block_selection`, possibly decorated by spatial nav)
+ * may claim it; if none does (ctrl/meta toggle, plain reset), fall back to the
+ * structural handler that still owns those branches.
+ */
+const dispatchSelectionClick = (
+  resolveContext: BlockResolveContext,
+  event: MouseEvent<HTMLElement>,
+): void => {
+  const targetElement = event.currentTarget
+  const renderScopeId = typeof resolveContext.blockContext?.renderScopeId === 'string'
+    ? resolveContext.blockContext.renderScopeId
+    : undefined
+  const supplied: BlockPointerDependencies = {
+    block: resolveContext.block,
+    uiStateBlock: resolveContext.uiStateBlock,
+    scopeRootId: resolveContext.scopeRootId,
+    scopeRootForcesOpen: !resolveContext.blockContext?.isNestedSurface,
+    targetElement,
+    ...(renderScopeId ? {renderScopeId} : {}),
+  }
+
+  if (!dispatchPointerAction(event, supplied)) {
+    void handleBlockSelectionClick(resolveContext, event)
+  }
+}
 
 export const createBlockSelectionShellState = (
   resolveContext: BlockResolveContext,
   state: BlockShellState,
-  applySelectionClick: ApplyBlockSelectionClick = handleBlockSelectionClick,
 ): BlockShellState => ({
   shellProps: {
     ...state.shellProps,
     onMouseDownCapture: event => {
       if (isBlockSelectionGesture(event)) {
+        // Suppress the browser's native text-selection drag a shift-click
+        // would otherwise start before the click resolves.
         event.preventDefault()
         return
       }
@@ -60,7 +88,7 @@ export const createBlockSelectionShellState = (
     },
     onClick: event => {
       if (isBlockSelectionGesture(event)) {
-        void applySelectionClick(resolveContext, event)
+        dispatchSelectionClick(resolveContext, event)
         return
       }
       state.shellProps.onClick?.(event)
@@ -74,13 +102,9 @@ export function BlockSelectionShellDecorator({
   state,
   children,
 }: BlockShellDecoratorProps) {
-  // Resolved selection-click handler — the structural base wrapped by any
-  // contributed decorators (e.g. spatial navigation's DOM-order range).
-  // `runtime.read` caches per-facet, so this reference is stable.
-  const applySelectionClick = useAppRuntime().read(blockSelectionClickDecoratorsFacet)
   const nextState = useMemo(
-    () => createBlockSelectionShellState(resolveContext, state, applySelectionClick),
-    [resolveContext, state, applySelectionClick],
+    () => createBlockSelectionShellState(resolveContext, state),
+    [resolveContext, state],
   )
 
   return children(nextState)
@@ -103,5 +127,9 @@ export const defaultEditorInteractionExtension: AppExtension = systemToggle({
   shortcutSurfaceActivationsFacet.of(codeMirrorEditModeActivation, {
     source: 'codemirror-edit-mode',
   }),
+  // Shift-click selection as a pointer-bound action — spatial navigation
+  // decorates it (ActionTransform) for visible-DOM-order ranges, mirroring how
+  // it decorates the keyboard extend-selection actions.
+  actionsFacet.of(extendBlockSelectionAction, {source: 'default-block-selection'}),
   editorAutocompleteExtension,
 ])

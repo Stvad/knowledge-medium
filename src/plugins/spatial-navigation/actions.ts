@@ -2,16 +2,14 @@ import {
   actionTransformsFacet,
   actionsFacet,
 } from '@/extensions/core.js'
-import {
-  isInteractiveContentEvent,
-  type BlockSelectionClickDecorator,
-} from '@/extensions/blockInteraction.js'
+import { EXTEND_BLOCK_SELECTION_ACTION_ID } from '@/extensions/blockSelectionAction.js'
 import type { AppExtension } from '@/extensions/facet.js'
 import {
   ActionConfig,
   type BaseShortcutDependencies,
   type ActionTransform,
   ActionContextTypes,
+  type BlockPointerDependencies,
   type BlockShortcutDependencies,
 } from '@/shortcuts/types.js'
 import type { BlockAction } from '@/shortcuts/blockActions.js'
@@ -332,43 +330,37 @@ const selectionVerticalDecorator = (
 })
 
 /**
- * Shift-click selection in visible DOM order. The mouse-side counterpart
- * of `selectionVerticalDecorator`: anchor → clicked block range across
- * whatever is on screen (backlinks, embeds), not the data tree. Only
- * plain shift-click is intercepted; ctrl/meta toggle and plain-click
- * reset are order-independent and stay with the structural handler. Falls
- * through to `next` when no spatial range resolves (e.g. the clicked
- * instance isn't a navigable panel item).
+ * Shift-click selection in visible DOM order — an `ActionTransform` on the
+ * structural `extend_block_selection` action, the mouse-side counterpart of
+ * `selectionVerticalDecorator`: anchor → clicked block range across whatever is
+ * on screen (backlinks, embeds), not the data tree. Declines back to the
+ * structural base when no spatial range resolves (e.g. the clicked instance
+ * isn't in this panel / isn't a navigable item).
  *
- * `event.currentTarget` is the block shell — the same element the spatial
- * shell decorator tags with `data-block-nav-item`, so the walker can find
- * it. It's captured synchronously before the first await, since React
- * nulls `currentTarget` once the synchronous dispatch returns.
+ * `deps.targetElement` is the block shell the block-pointer dispatch captured —
+ * the same element the spatial shell decorator tags with `data-block-nav-item`,
+ * so the walker can locate it. Upstream gating (selection-gesture + exact
+ * shift-only pointer binding) means this only ever sees a plain shift-click, so
+ * it no longer re-checks modifiers or interactive content.
  */
-export const spatialSelectionClickDecorator: BlockSelectionClickDecorator =
-  next => async (context, event) => {
-    const {uiStateBlock} = context
-    const target = event.currentTarget
-    // Only the clicked block's own panel can resolve a spatial range; for
-    // anything else (no panel, mismatched panel) defer to the structural
-    // handler rather than swallow the click. `extendSelectionToSpatialTarget`
-    // reports the mismatch as "handled" for the keyboard contract, so we
-    // gate on the panel match here instead of trusting its return.
-    if (
-      event.shiftKey &&
-      !event.ctrlKey &&
-      !event.metaKey &&
-      !isInteractiveContentEvent(event) &&
-      panelOf(target)?.dataset.panelId === uiStateBlock.id
-    ) {
-      event.preventDefault()
-      event.stopPropagation()
-      if (await extendSelectionToSpatialTarget({uiStateBlock}, target)) {
-        return
+export const spatialSelectionClickTransform: ActionTransform = {
+  actionId: EXTEND_BLOCK_SELECTION_ACTION_ID,
+  context: ActionContextTypes.BLOCK_POINTER,
+  apply: action => ({
+    ...action,
+    handler: async (deps, trigger, dispatch) => {
+      const {uiStateBlock, targetElement} = deps as BlockPointerDependencies
+      // Only the clicked block's own panel can resolve a spatial range; for a
+      // mismatched panel defer to the structural base rather than swallow it.
+      // `extendSelectionToSpatialTarget` reports a mismatch as "handled" for
+      // the keyboard contract, so gate on the panel match here.
+      if (panelOf(targetElement)?.dataset.panelId === uiStateBlock.id) {
+        if (await extendSelectionToSpatialTarget({uiStateBlock}, targetElement)) return
       }
-    }
-    await next(context, event)
-  }
+      await action.handler(deps, trigger, dispatch)
+    },
+  }),
+}
 
 export function getSpatialNavigationActionDecorators(): ActionTransform[] {
   return [
@@ -378,6 +370,7 @@ export function getSpatialNavigationActionDecorators(): ActionTransform[] {
     selectionVerticalDecorator('extend_selection_up', ActionContextTypes.NORMAL_MODE, 'up'),
     selectionVerticalDecorator('multi_select.extend_selection_down', ActionContextTypes.MULTI_SELECT_MODE, 'down'),
     selectionVerticalDecorator('multi_select.extend_selection_up', ActionContextTypes.MULTI_SELECT_MODE, 'up'),
+    spatialSelectionClickTransform,
   ]
 }
 
