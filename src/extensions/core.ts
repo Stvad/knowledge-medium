@@ -6,8 +6,7 @@ import {
   ActionConfig,
   ActionContextConfig,
   ActionContextType,
-  type ActionDecorator,
-  type ActionOverride,
+  type ActionTransform,
 } from '@/shortcuts/types.js'
 import { BlockRenderer, RendererRegistry } from '@/types.js'
 import type { ComponentType } from 'react'
@@ -121,17 +120,11 @@ export const isActionConfig = (value: unknown): value is ActionConfig =>
   typeof value.handler === 'function' &&
   (value.defaultBinding === undefined || isShortcutBindingInput(value.defaultBinding))
 
-const isActionOverride = (value: unknown): value is ActionOverride =>
+const isActionTransform = (value: unknown): value is ActionTransform =>
   isRecord(value) &&
   typeof value.actionId === 'string' &&
   (value.context === undefined || isActionContextType(value.context)) &&
   typeof value.apply === 'function'
-
-const isActionDecorator = (value: unknown): value is ActionDecorator =>
-  isRecord(value) &&
-  typeof value.actionId === 'string' &&
-  (value.context === undefined || isActionContextType(value.context)) &&
-  typeof value.decorate === 'function'
 
 export const createRendererRegistry = (
   contributions: readonly RendererContribution[],
@@ -160,14 +153,14 @@ export const actionsFacet = defineFacet<ActionConfig, readonly ActionConfig[]>({
   validate: isActionConfig,
 })
 
-export const actionOverridesFacet = defineFacet<ActionOverride, readonly ActionOverride[]>({
-  id: 'core.action-overrides',
-  validate: isActionOverride,
-})
-
-export const actionDecoratorsFacet = defineFacet<ActionDecorator, readonly ActionDecorator[]>({
-  id: 'core.action-decorators',
-  validate: isActionDecorator,
+/**
+ * The one facet for contributing action transforms (replace / wrap /
+ * unbind). The effective-actions pipeline runs every contribution in a
+ * single ordered pass.
+ */
+export const actionTransformsFacet = defineFacet<ActionTransform, readonly ActionTransform[]>({
+  id: 'core.action-transforms',
+  validate: isActionTransform,
 })
 
 export const isAppEffect = (value: unknown): value is AppEffect =>

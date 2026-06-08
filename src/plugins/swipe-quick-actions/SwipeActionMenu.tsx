@@ -353,7 +353,7 @@ export const SwipeActionMenu = () => {
     // panel's top-level block is the scope root — the same value the
     // structural handlers need (delete/indent/move).
     const deps = {block, uiStateBlock, scopeRootId: topLevelBlockId, ...(renderScopeId ? {renderScopeId} : {})}
-    if (action.canRun && !action.canRun(deps)) return false
+    if (action.isVisible && !action.isVisible(deps)) return false
 
     void Promise.resolve(action.handler(deps, trigger)).catch(error => {
       console.error(`[swipe-quick-actions] Action "${actionId}" failed`, error)
@@ -361,7 +361,7 @@ export const SwipeActionMenu = () => {
     return true
   }, [allActions, repo, uiStateBlock, topLevelBlockId])
   const actionItems = runtime.read(quickActionItemsFacet)
-  // Filter via the referenced action's `canRun` (the swipe surface is
+  // Filter via the referenced action's `isVisible` (the swipe surface is
   // presentational — semantic availability lives on the action). The
   // filter runs at menu-open time, not reactively. Items whose action
   // isn't registered fall through so the missing-action error is still
@@ -378,8 +378,8 @@ export const SwipeActionMenu = () => {
     return actionItems.filter(item => {
       const action = allActions.find(a => a.id === item.actionId)
       if (!action) return true
-      if (!action.canRun) return true
-      return action.canRun(deps)
+      if (!action.isVisible) return true
+      return action.isVisible(deps)
     })
   }, [
     actionItems, allActions,

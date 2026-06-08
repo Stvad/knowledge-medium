@@ -31,7 +31,7 @@ interface GroupHeaderActionButtonProps {
  *  Resolves the action from the runtime at render time rather than
  *  at facet-contribution time so contributions don't have to be
  *  ordered with the action registration. If the action isn't
- *  registered, or its `canRun` predicate rejects the synthesized
+ *  registered, or its `isVisible` predicate rejects the synthesized
  *  deps, the button renders nothing — same affordance-hiding
  *  contract as the command palette. */
 export const GroupHeaderActionButton = ({
@@ -65,7 +65,7 @@ export const GroupHeaderActionButton = ({
     anchorBlock: null,
     uiStateBlock,
   }
-  if (action.canRun && !action.canRun(deps)) return null
+  if (action.isVisible && !action.isVisible(deps)) return null
 
   const Icon = iconOverride ?? action.icon
   const label = labelOverride ?? action.description

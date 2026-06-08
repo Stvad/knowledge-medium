@@ -1,5 +1,5 @@
 import { Check, ClipboardPaste, ClockArrowDown, Gauge, RotateCcw, Scissors, Sparkles } from 'lucide-react'
-import { actionDecoratorsFacet, actionsFacet } from '@/extensions/core.js'
+import { actionTransformsFacet, actionsFacet } from '@/extensions/core.js'
 import type { AppExtension } from '@/extensions/facet.js'
 import { systemToggle } from '@/extensions/togglable.js'
 import type { Block } from '@/data/block'
@@ -456,7 +456,7 @@ const createScrubRescheduleAction = (
     description: `SRS: ${name} (Date Scrub)`,
     context: DATE_SCRUB_CONTEXT,
     icon: iconForSignal(signal),
-    canRun: (deps: BaseShortcutDependencies) => {
+    isVisible: (deps: BaseShortcutDependencies) => {
       const block = blockFromDependencies(deps)
       const data = block?.peek()
       return !!data && getBlockTypes(data).includes(SRS_SM25_TYPE)
@@ -488,7 +488,7 @@ const srsCutAction: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
   description: 'SRS: Cut state',
   context: ActionContextTypes.NORMAL_MODE,
   icon: Scissors,
-  canRun: ({block}) => {
+  isVisible: ({block}) => {
     const data = block.peek()
     return !!data && getBlockTypes(data).includes(SRS_SM25_TYPE)
   },
@@ -507,7 +507,7 @@ const srsPasteAction: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
   description: 'SRS: Paste state',
   context: ActionContextTypes.NORMAL_MODE,
   icon: ClipboardPaste,
-  canRun: ({block}) => {
+  isVisible: ({block}) => {
     const entry = getSrsClipboard()
     return entry !== null && entry.sourceBlockId !== block.id
   },
@@ -547,7 +547,7 @@ const srsQuickActionItems = srsSignals
 // Overflow keeps them out of the primary strip — these are rarer than
 // reschedule. Visibility (cut only on SRS blocks; paste only when
 // something is stashed and the target isn't the same block) is gated by
-// the `canRun` predicate on the actions themselves, so the same gating
+// the `isVisible` predicate on the actions themselves, so the same gating
 // applies to the command palette.
 const srsCutQuickAction = {
   actionId: 'srs.cut',
@@ -591,10 +591,10 @@ export const srsReschedulingPlugin: AppExtension = systemToggle({
   srsReschedulingActions.map(action =>
     actionsFacet.of(action, {source: 'srs-rescheduling'}),
   ),
-  actionDecoratorsFacet.of(srsRescheduleDecorator, {source: 'srs-rescheduling'}),
-  actionDecoratorsFacet.of(srsSwipeRightDecorator, {source: 'srs-rescheduling'}),
+  actionTransformsFacet.of(srsRescheduleDecorator, {source: 'srs-rescheduling'}),
+  actionTransformsFacet.of(srsSwipeRightDecorator, {source: 'srs-rescheduling'}),
   srsTodoCycleDecorators.map(decorator =>
-    actionDecoratorsFacet.of(decorator, {source: 'srs-rescheduling'}),
+    actionTransformsFacet.of(decorator, {source: 'srs-rescheduling'}),
   ),
   // Negative precedence: SRS adapter sorts before the generic reference
   // adapter so a block that is BOTH an SRS card AND has an inline date

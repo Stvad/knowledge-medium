@@ -7,7 +7,7 @@
  * - daily-notes can't import srs-rescheduling without a layering cycle
  *   (srs-rescheduling already depends on daily-notes for daily-note
  *   resolution).
- * - The existing `actionDecoratorsFacet` pattern only handles
+ * - The existing `actionTransformsFacet` pattern only handles
  *   parameter-less actions ("shift +1d"). Picking an absolute ISO from
  *   a calendar can't go through that channel without inventing a
  *   parameter passing mechanism.
@@ -23,7 +23,7 @@ import { defineFacet, type FacetRuntime } from '@/extensions/facet.js'
 export interface BlockDateAdapter {
   /** Diagnostic id, also distinguishes adapters in tests. */
   readonly id: string
-  /** Sync predicate over `block.peek()` — used by `canRun` gates and
+  /** Sync predicate over `block.peek()` — used by `isVisible` gates and
    *  the swipe-menu visibility filter, which both run during render. */
   canHandle: (block: Block) => boolean
   /** Resolves the ISO (`YYYY-MM-DD`) the adapter is currently representing

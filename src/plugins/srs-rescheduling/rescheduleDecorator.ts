@@ -1,7 +1,7 @@
 /**
  * Extends the daily-notes "Reschedule" action so it stays visible on
  * SRS blocks that don't have an inline date reference (where the base
- * `canRun` would say "nope, no shiftable date here"). The handler is
+ * `isVisible` would say "nope, no shiftable date here"). The handler is
  * shared — it only opens the picker, and the picker resolves the right
  * adapter at commit time via `blockDateAdapterFacet`.
  */
@@ -10,19 +10,19 @@ import {
 } from '@/plugins/daily-notes/rescheduleAction.js'
 import type {
   ActionConfig,
-  ActionDecorator,
+  ActionTransform,
   BlockShortcutDependencies,
 } from '@/shortcuts/types.js'
 import { srsBlockDateAdapter } from './srsBlockDateAdapter.ts'
 
-export const srsRescheduleDecorator: ActionDecorator = {
+export const srsRescheduleDecorator: ActionTransform = {
   actionId: RESCHEDULE_BLOCK_DATE_ACTION_ID,
-  decorate: (action: ActionConfig): ActionConfig => ({
+  apply: (action: ActionConfig): ActionConfig => ({
     ...action,
-    canRun: (deps) => {
+    isVisible: (deps) => {
       const block = (deps as BlockShortcutDependencies).block
       if (block && srsBlockDateAdapter.canHandle(block)) return true
-      return action.canRun?.(deps as never) ?? true
+      return action.isVisible?.(deps as never) ?? true
     },
   }),
 }

@@ -58,14 +58,14 @@ describe('defineBlocksAction', () => {
     expect(flow).toHaveBeenCalledWith(selectedBlocks)
   })
 
-  it('omits canRun on NORMAL_MODE when no per-block predicate is supplied', () => {
+  it('omits isVisible on NORMAL_MODE when no per-block predicate is supplied', () => {
     const pair = defineBlocksAction({
       id: 'test.op',
       blockDescription: 'block',
       blocksDescription: 'blocks',
       flow: async () => undefined,
     })
-    expect(pair.block.canRun).toBeUndefined()
+    expect(pair.block.isVisible).toBeUndefined()
   })
 
   it('routes appliesTo through both variants', () => {
@@ -82,24 +82,24 @@ describe('defineBlocksAction', () => {
     const no = fakeBlock('no')
 
     // NORMAL_MODE — predicate runs against the focused block.
-    expect(pair.block.canRun!({block: yes, uiStateBlock: yes})).toBe(true)
-    expect(pair.block.canRun!({block: no, uiStateBlock: no})).toBe(false)
+    expect(pair.block.isVisible!({block: yes, uiStateBlock: yes})).toBe(true)
+    expect(pair.block.isVisible!({block: no, uiStateBlock: no})).toBe(false)
 
     // MULTI_SELECT_MODE — true when at least one selected block
     // applies; false for empty selections; false when nothing in
     // the selection applies.
     expect(
-      pair.blocks.canRun!({selectedBlocks: [yes, no], anchorBlock: null, uiStateBlock: yes}),
+      pair.blocks.isVisible!({selectedBlocks: [yes, no], anchorBlock: null, uiStateBlock: yes}),
     ).toBe(true)
     expect(
-      pair.blocks.canRun!({selectedBlocks: [no, no], anchorBlock: null, uiStateBlock: no}),
+      pair.blocks.isVisible!({selectedBlocks: [no, no], anchorBlock: null, uiStateBlock: no}),
     ).toBe(false)
     expect(
-      pair.blocks.canRun!({selectedBlocks: [], anchorBlock: null, uiStateBlock: no}),
+      pair.blocks.isVisible!({selectedBlocks: [], anchorBlock: null, uiStateBlock: no}),
     ).toBe(false)
   })
 
-  it('MULTI_SELECT canRun rejects empty selections even without appliesTo', () => {
+  it('MULTI_SELECT isVisible rejects empty selections even without appliesTo', () => {
     const pair = defineBlocksAction({
       id: 'test.op',
       blockDescription: 'block',
@@ -107,14 +107,14 @@ describe('defineBlocksAction', () => {
       flow: async () => undefined,
     })
     expect(
-      pair.blocks.canRun!({
+      pair.blocks.isVisible!({
         selectedBlocks: [],
         anchorBlock: null,
         uiStateBlock: fakeBlock('ui'),
       }),
     ).toBe(false)
     expect(
-      pair.blocks.canRun!({
+      pair.blocks.isVisible!({
         selectedBlocks: [fakeBlock('a')],
         anchorBlock: null,
         uiStateBlock: fakeBlock('ui'),

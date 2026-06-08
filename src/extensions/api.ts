@@ -40,9 +40,8 @@ export {
 
 // --- Blessed core facets ---
 export {
-  actionDecoratorsFacet,
+  actionTransformsFacet,
   actionsFacet,
-  actionOverridesFacet,
   actionContextsFacet,
   appEffectsFacet,
   appMountsFacet,
@@ -113,8 +112,7 @@ export {
   type ActionContextConfig,
   type ActionContextType,
   type Action,
-  type ActionDecorator,
-  type ActionOverride,
+  type ActionTransform,
   type ShortcutBinding,
   type KeyCombination,
 } from '@/shortcuts/types.js'

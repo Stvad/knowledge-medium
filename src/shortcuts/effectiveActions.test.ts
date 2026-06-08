@@ -1,14 +1,17 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
-  actionDecoratorsFacet,
-  actionOverridesFacet,
+  actionTransformsFacet,
   actionsFacet,
 } from '@/extensions/core.js'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
-import { getEffectiveActions } from '@/shortcuts/effectiveActions.js'
+import { getActiveActionById, getEffectiveActions } from '@/shortcuts/effectiveActions.js'
+import type { ResolutionContext } from '@/shortcuts/resolve.js'
 import {
   ActionConfig,
+  type ActionContextConfig,
+  type ActionContextType,
   ActionContextTypes,
+  type BaseShortcutDependencies,
   type BlockShortcutDependencies,
 } from '@/shortcuts/types.js'
 
@@ -22,7 +25,7 @@ const baseAction = (overrides: Partial<ActionConfig> = {}): ActionConfig => ({
 } as ActionConfig)
 
 describe('getEffectiveActions', () => {
-  it('decorates a matching action handler without changing the raw action registry', async () => {
+  it('wraps a matching action handler without changing the raw action registry', async () => {
     const calls: string[] = []
     const action = baseAction({
       handler: async () => {
@@ -31,10 +34,10 @@ describe('getEffectiveActions', () => {
     })
     const runtime = resolveFacetRuntimeSync([
       actionsFacet.of(action),
-      actionDecoratorsFacet.of({
+      actionTransformsFacet.of({
         actionId: action.id,
         context: ActionContextTypes.NORMAL_MODE,
-        decorate: current => ({
+        apply: current => ({
           ...current,
           handler: async (deps, trigger) => {
             calls.push('before')
@@ -52,7 +55,7 @@ describe('getEffectiveActions', () => {
     expect(calls).toEqual(['before', 'base', 'after'])
   })
 
-  it('applies lower-precedence decorators innermost and higher-precedence decorators outermost', async () => {
+  it('applies lower-precedence transforms innermost and higher-precedence transforms outermost', async () => {
     const calls: string[] = []
     const action = baseAction({
       handler: async () => {
@@ -61,9 +64,9 @@ describe('getEffectiveActions', () => {
     })
     const runtime = resolveFacetRuntimeSync([
       actionsFacet.of(action),
-      actionDecoratorsFacet.of({
+      actionTransformsFacet.of({
         actionId: action.id,
-        decorate: current => ({
+        apply: current => ({
           ...current,
           handler: async (deps, trigger) => {
             calls.push('low-before')
@@ -72,9 +75,9 @@ describe('getEffectiveActions', () => {
           },
         }),
       }, {precedence: 0}),
-      actionDecoratorsFacet.of({
+      actionTransformsFacet.of({
         actionId: action.id,
-        decorate: current => ({
+        apply: current => ({
           ...current,
           handler: async (deps, trigger) => {
             calls.push('high-before')
@@ -96,13 +99,13 @@ describe('getEffectiveActions', () => {
     ])
   })
 
-  it('lets overrides replace metadata and remove actions', () => {
+  it('lets a transform replace metadata and remove an action (apply → null unbinds)', () => {
     const kept = baseAction()
     const removed = baseAction({id: 'test.removed'})
     const runtime = resolveFacetRuntimeSync([
       actionsFacet.of(kept),
       actionsFacet.of(removed),
-      actionOverridesFacet.of({
+      actionTransformsFacet.of({
         actionId: kept.id,
         apply: action => ({
           ...action,
@@ -110,7 +113,7 @@ describe('getEffectiveActions', () => {
           defaultBinding: {keys: 'y'},
         }),
       }),
-      actionOverridesFacet.of({
+      actionTransformsFacet.of({
         actionId: removed.id,
         apply: () => null,
       }),
@@ -134,9 +137,9 @@ describe('getEffectiveActions', () => {
     const runtime = resolveFacetRuntimeSync([
       actionsFacet.of(first),
       actionsFacet.of(second),
-      actionDecoratorsFacet.of({
+      actionTransformsFacet.of({
         actionId: '*',
-        decorate: action => {
+        apply: action => {
           visited.push(action.id)
           return {...action, description: `seen:${action.id}`}
         },
@@ -159,10 +162,10 @@ describe('getEffectiveActions', () => {
     const runtime = resolveFacetRuntimeSync([
       actionsFacet.of(normal),
       actionsFacet.of(edit),
-      actionDecoratorsFacet.of({
+      actionTransformsFacet.of({
         actionId: '*',
         context: ActionContextTypes.EDIT_MODE_CM,
-        decorate: action => ({...action, description: 'edit-only'}),
+        apply: action => ({...action, description: 'edit-only'}),
       }),
     ])
 
@@ -172,7 +175,7 @@ describe('getEffectiveActions', () => {
     ])
   })
 
-  it('matches context-specific decorators only against that action context', async () => {
+  it('matches context-specific transforms only against that action context', async () => {
     const normal = baseAction({
       handler: async () => undefined,
     })
@@ -183,19 +186,51 @@ describe('getEffectiveActions', () => {
     const runtime = resolveFacetRuntimeSync([
       actionsFacet.of(normal),
       actionsFacet.of(edit),
-      actionDecoratorsFacet.of({
+      actionTransformsFacet.of({
         actionId: normal.id,
         context: ActionContextTypes.EDIT_MODE_CM,
-        decorate: action => ({
+        apply: action => ({
           ...action,
-          description: 'Decorated edit action',
+          description: 'Transformed edit action',
         }),
       }),
     ])
 
     expect(getEffectiveActions(runtime).map(action => action.description)).toEqual([
       'Base action',
-      'Decorated edit action',
+      'Transformed edit action',
     ])
+  })
+})
+
+describe('getActiveActionById', () => {
+  const cfg = (type: ActionContextType): ActionContextConfig => ({
+    type,
+    displayName: type,
+    validateDependencies: (d): d is BaseShortcutDependencies =>
+      typeof d === 'object' && d !== null,
+  })
+
+  it('resolves a global-vs-scoped id collision to global (reserved top tier)', () => {
+    // Behaviour change vs the old reverse-activation lookup: when the same id
+    // is registered in both global and a more-recently-activated scoped
+    // context (e.g. undo/redo in global + vim normal-mode), the imperative
+    // path (runActionById / useRunAction) now resolves to global rather than
+    // to the newer scoped context. Recency alone would have picked NORMAL_MODE.
+    const globalUndo = baseAction({id: 'undo', context: ActionContextTypes.GLOBAL})
+    const scopedUndo = baseAction({id: 'undo', context: ActionContextTypes.NORMAL_MODE})
+    const ctx: ResolutionContext = {
+      active: new Map<ActionContextType, BaseShortcutDependencies>([
+        [ActionContextTypes.GLOBAL, {} as BaseShortcutDependencies],
+        [ActionContextTypes.NORMAL_MODE, {} as BaseShortcutDependencies],
+      ]),
+      contextConfigsByType: new Map([
+        [ActionContextTypes.GLOBAL, cfg(ActionContextTypes.GLOBAL)],
+        [ActionContextTypes.NORMAL_MODE, cfg(ActionContextTypes.NORMAL_MODE)],
+      ]),
+    }
+
+    expect(getActiveActionById([globalUndo, scopedUndo], ctx, 'undo')?.context)
+      .toBe(ActionContextTypes.GLOBAL)
   })
 })

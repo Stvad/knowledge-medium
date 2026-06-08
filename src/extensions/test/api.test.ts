@@ -13,10 +13,9 @@ describe('@/extensions/api — public surface', () => {
     // Facet primitives
     'defineFacet',
     // Blessed core facets
-    'actionDecoratorsFacet',
+    'actionTransformsFacet',
     'actionsFacet',
     'actionContextsFacet',
-    'actionOverridesFacet',
     'appEffectsFacet',
     'appMountsFacet',
     'blockRenderersFacet',

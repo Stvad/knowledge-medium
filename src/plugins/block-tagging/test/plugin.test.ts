@@ -38,7 +38,7 @@ describe('blockTaggingPlugin', () => {
     expect(blocksAction?.context).toBe(ActionContextTypes.MULTI_SELECT_MODE)
     expect(blockAction?.icon).toBe(Tag)
     expect(blocksAction?.icon).toBe(Tag)
-    expect(typeof blocksAction?.canRun).toBe('function')
+    expect(typeof blocksAction?.isVisible).toBe('function')
   })
 
   it('contributes a grouped-backlinks header entry pointing at the multi-select action id', () => {

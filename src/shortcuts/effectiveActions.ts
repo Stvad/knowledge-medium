@@ -1,60 +1,57 @@
 import {
-  actionDecoratorsFacet,
-  actionOverridesFacet,
+  actionTransformsFacet,
   actionsFacet,
 } from '@/extensions/core.js'
 import type { FacetRuntime } from '@/extensions/facet.js'
 import type {
   ActionConfig,
-  ActionContextType,
-  ActionDecorator,
-  ActionOverride,
+  ActionTransform,
 } from '@/shortcuts/types.js'
-import type { ActiveContextsMap } from './ActiveContexts.tsx'
 import { applyKeybindingOverrides } from './applyKeybindingOverrides.ts'
 import { keybindingOverridesFacet } from './keybindingOverrides.ts'
+import { resolve, type ResolutionContext } from './resolve.ts'
 
 export const actionRuntimeKey = (
   action: Pick<ActionConfig, 'context' | 'id'>,
 ): string => `${action.context}:${action.id}`
 
 /** Sentinel `actionId` that matches every action. Use sparingly — most
- *  overrides/decorators target a specific id. The keybindings module
- *  ships one wildcard decorator that reads the
- *  `keybindingOverridesFacet` and rewrites whichever actions the user
- *  has remapped; that needs to inspect every action so it can also
- *  strip a default chord that lost a collision to a user override. */
+ *  transforms target a specific id. The cross-action keybinding-override
+ *  pass (`applyKeybindingOverrides`, run after this pipeline) is the main
+ *  whole-list consumer: it reads the `keybindingOverridesFacet` and
+ *  rewrites whichever actions the user has remapped, inspecting every
+ *  action so it can also strip a default chord that lost a collision to a
+ *  user override. */
 export const WILDCARD_ACTION_ID = '*'
 
 const matchesAction = (
-  target: Pick<ActionOverride | ActionDecorator, 'actionId' | 'context'>,
+  target: Pick<ActionTransform, 'actionId' | 'context'>,
   action: Pick<ActionConfig, 'id' | 'context'>,
 ): boolean =>
   (target.actionId === WILDCARD_ACTION_ID || target.actionId === action.id) &&
   (target.context === undefined || target.context === action.context)
 
-/** The action list after `actionOverridesFacet` and
- *  `actionDecoratorsFacet` have been applied but before any
- *  keybinding-override rewrites. Used by the settings UI so it can
- *  preview an unsaved `StoredKeybindingOverrides` map without waiting
- *  for the runtime rebuild that happens after the canonical prefs
- *  block subscription fires. */
+/** The action list after every `actionTransformsFacet` contribution has
+ *  been applied, but before any keybinding-override rewrites. Used by the
+ *  settings UI so it can preview an unsaved `StoredKeybindingOverrides`
+ *  map without waiting for the runtime rebuild that happens after the
+ *  canonical prefs block subscription fires.
+ *
+ *  Transforms run in the runtime's order (precedence asc, then
+ *  registration), so a later contribution wraps the earlier ones. */
 export const getActionsBeforeKeybindingOverrides = (runtime: FacetRuntime): readonly ActionConfig[] => {
-  const overrides = runtime.read(actionOverridesFacet)
-  const decorators = runtime.read(actionDecoratorsFacet)
+  const transforms = runtime.read(actionTransformsFacet)
   const out: ActionConfig[] = []
 
   for (const rawAction of runtime.read(actionsFacet)) {
     let action: ActionConfig | null = rawAction
 
-    for (const override of overrides) {
-      if (!action || !matchesAction(override, action)) continue
-      action = override.apply(action as never) as ActionConfig | null
-    }
-
-    for (const decorator of decorators) {
-      if (!action || !matchesAction(decorator, action)) continue
-      action = decorator.decorate(action as never) as ActionConfig
+    for (const transform of transforms) {
+      if (!action || !matchesAction(transform, action)) continue
+      // No cast: `ActionTransform` is erased, so `apply` is plain
+      // `ActionConfig → ActionConfig | null`. Contributors narrow at
+      // their own definition site.
+      action = transform.apply(action)
     }
 
     if (action) out.push(action)
@@ -67,27 +64,24 @@ export const getEffectiveActions = (runtime: FacetRuntime): readonly ActionConfi
   // Keybinding overrides run as a final pass — they need cross-action
   // visibility (the "default loses on chord collision" rule reads
   // every other action's effective binding), which the per-action
-  // override/decorator pipeline above can't express cleanly.
+  // transform pipeline above can't express cleanly.
   return applyKeybindingOverrides(
     getActionsBeforeKeybindingOverrides(runtime),
     runtime.read(keybindingOverridesFacet),
   )
 }
 
+/**
+ * The active action for an id, resolved through the shared precedence core
+ * so this (the imperative `runActionById` / `useRunAction` path) and the
+ * keyboard path can't diverge. Behaviour change vs the old pure
+ * reverse-activation lookup: a `global`-vs-scoped id collision now resolves
+ * to `global` (reserved top tier) instead of to whichever was activated
+ * most recently. Modal shadowing is NOT applied here — imperative
+ * invocation finds an action in any active context (see `resolve`).
+ */
 export const getActiveActionById = (
   actions: readonly ActionConfig[],
-  active: ActiveContextsMap,
+  ctx: ResolutionContext,
   actionId: string,
-): ActionConfig | null => {
-  const byContext = new Map<ActionContextType, ActionConfig>()
-  for (const action of actions) {
-    if (action.id === actionId) byContext.set(action.context, action)
-  }
-
-  for (const context of Array.from(active.keys()).toReversed()) {
-    const action = byContext.get(context)
-    if (action) return action
-  }
-
-  return null
-}
+): ActionConfig | null => resolve(actions, ctx, {kind: 'action', actionId})[0] ?? null

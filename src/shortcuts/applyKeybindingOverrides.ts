@@ -1,7 +1,7 @@
 /**
  * Pure pass that rewrites each action's `defaultBinding` from a list of
  * `KeybindingOverride` contributions. Invoked by `getEffectiveActions`
- * after the standard override/decorator pipeline.
+ * after the per-action transform pipeline.
  *
  * Rules:
  *

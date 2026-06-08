@@ -7,7 +7,7 @@ import {
   useActiveContextsDispatch,
 } from '@/shortcuts/ActiveContexts.js'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.js'
-import { actionContextsFacet, actionDecoratorsFacet, actionsFacet } from '@/extensions/core.js'
+import { actionContextsFacet, actionTransformsFacet, actionsFacet } from '@/extensions/core.js'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
 import {
   ActionConfig,
@@ -48,6 +48,15 @@ const secondModalContextConfig: ActionContextConfig = {
   type: SECOND_MODAL_CONTEXT,
   displayName: 'Second Modal Mode',
   modal: true,
+  validateDependencies: (deps): deps is BaseShortcutDependencies =>
+    typeof deps === 'object' && deps !== null,
+}
+
+const HIGH_CONTEXT = 'high-priority-mode' as ActionContextType
+const highContextConfig: ActionContextConfig = {
+  type: HIGH_CONTEXT,
+  displayName: 'High Priority Mode',
+  priority: 'high',
   validateDependencies: (deps): deps is BaseShortcutDependencies =>
     typeof deps === 'object' && deps !== null,
 }
@@ -129,19 +138,19 @@ const LayoutKeydownWhenActive = ({
 
 const Harness = ({
   actions,
-  decorators = [],
+  transforms = [],
   contexts,
   children,
 }: {
   actions: readonly ActionConfig[]
-  decorators?: Parameters<typeof actionDecoratorsFacet.of>[0][]
+  transforms?: Parameters<typeof actionTransformsFacet.of>[0][]
   contexts: readonly ActionContextConfig[]
   children?: ReactNode
 }) => {
   const runtime = resolveFacetRuntimeSync([
     ...contexts.map(c => actionContextsFacet.of(c)),
     ...actions.map(a => actionsFacet.of(a)),
-    ...decorators.map(d => actionDecoratorsFacet.of(d)),
+    ...transforms.map(t => actionTransformsFacet.of(t)),
   ])
 
   return (
@@ -198,10 +207,10 @@ describe('HotkeyReconciler', () => {
     render(
       <Harness
         actions={[action]}
-        decorators={[{
+        transforms={[{
           actionId: action.id,
           context: TEST_CONTEXT,
-          decorate: current => ({
+          apply: current => ({
             ...current,
             handler: (deps, trigger) => {
               calls.push('decorated')
@@ -452,6 +461,108 @@ describe('HotkeyReconciler', () => {
     })
   })
 
+  describe('single winner (no double-fire)', () => {
+    it('fires only the highest-precedence action when two contexts share a chord', () => {
+      // Both global and the base context bind 'k' and are active. The old
+      // per-action-listener model fired BOTH (the double-fire bug); the
+      // coordinator must dispatch exactly one — global, as the reserved top
+      // tier.
+      const globalHandler = vi.fn()
+      const baseHandler = vi.fn()
+      const globalAction = buildAction({
+        id: 'test.global-k',
+        context: GLOBAL_CONTEXT,
+        handler: globalHandler,
+        defaultBinding: {keys: 'k'},
+      })
+      const baseAction = buildAction({
+        id: 'test.base-k',
+        context: TEST_CONTEXT,
+        handler: baseHandler,
+        defaultBinding: {keys: 'k'},
+      })
+
+      render(
+        <Harness
+          actions={[globalAction, baseAction]}
+          contexts={[testContextConfig, globalContextConfig]}
+        >
+          <SequentialActivator contexts={[GLOBAL_CONTEXT, TEST_CONTEXT]}/>
+        </Harness>,
+      )
+
+      act(() => dispatchKeydown('k'))
+      expect(globalHandler).toHaveBeenCalledTimes(1)
+      expect(baseHandler).not.toHaveBeenCalled()
+    })
+
+    it('a higher-priority context wins a shared chord even when activated earlier', () => {
+      // The early/late inversion: the high-priority context is activated
+      // FIRST (older) and the default context LATER (newer). Recency alone
+      // would pick the newer one; priority must override it.
+      const highHandler = vi.fn()
+      const lowHandler = vi.fn()
+      const highAction = buildAction({
+        id: 'test.high-k',
+        context: HIGH_CONTEXT,
+        handler: highHandler,
+        defaultBinding: {keys: 'k'},
+      })
+      const lowAction = buildAction({
+        id: 'test.low-k',
+        context: TEST_CONTEXT,
+        handler: lowHandler,
+        defaultBinding: {keys: 'k'},
+      })
+
+      render(
+        <Harness
+          actions={[highAction, lowAction]}
+          contexts={[highContextConfig, testContextConfig]}
+        >
+          <SequentialActivator contexts={[HIGH_CONTEXT, TEST_CONTEXT]}/>
+        </Harness>,
+      )
+
+      act(() => dispatchKeydown('k'))
+      expect(highHandler).toHaveBeenCalledTimes(1)
+      expect(lowHandler).not.toHaveBeenCalled()
+    })
+
+    it('skips a candidate whose canDispatch declines and dispatches the next', () => {
+      // The high-priority context would win 'k', but its canDispatch returns
+      // false, so the coordinator falls through to the lower context's 'k'.
+      const declinedHandler = vi.fn()
+      const fallbackHandler = vi.fn()
+      const highAction = buildAction({
+        id: 'test.high-decline',
+        context: HIGH_CONTEXT,
+        handler: declinedHandler,
+        canDispatch: () => false,
+        defaultBinding: {keys: 'k'},
+      })
+      const lowAction = buildAction({
+        id: 'test.low-fallback',
+        context: TEST_CONTEXT,
+        handler: fallbackHandler,
+        defaultBinding: {keys: 'k'},
+      })
+
+      render(
+        <Harness
+          actions={[highAction, lowAction]}
+          contexts={[highContextConfig, testContextConfig]}
+        >
+          <SequentialActivator contexts={[HIGH_CONTEXT, TEST_CONTEXT]}/>
+        </Harness>,
+      )
+
+      act(() => dispatchKeydown('k'))
+      expect(declinedHandler).not.toHaveBeenCalled()
+      expect(fallbackHandler).toHaveBeenCalledTimes(1)
+    })
+  })
+
   it('observes the latest dependencies after the context re-activates with new ones', () => {
     const handler = vi.fn()
     const action = buildAction({
@@ -695,6 +806,34 @@ describe('HotkeyReconciler', () => {
 
           act(() => vi.advanceTimersByTime(1))
           expect(handler).toHaveBeenCalledTimes(1)
+        } finally {
+          vi.useRealTimers()
+        }
+      })
+
+      it('does not fire when canDispatch declines, even after the threshold', () => {
+        // Hold dispatch must honour the same canDispatch gate the keydown/keyup
+        // coordinator enforces — otherwise hold bindings are the one path that
+        // fires in a state the action opted out of.
+        vi.useFakeTimers()
+        try {
+          const handler = vi.fn()
+          const action = buildAction({
+            id: 'test.hold-candispatch',
+            handler,
+            canDispatch: () => false,
+            defaultBinding: {keys: 's', phase: 'hold', holdMs: 200},
+          })
+
+          render(
+            <Harness actions={[action]} contexts={[testContextConfig]}>
+              <Activator context={TEST_CONTEXT}/>
+            </Harness>,
+          )
+
+          act(() => dispatchKeydown('s'))
+          act(() => vi.advanceTimersByTime(300))
+          expect(handler).not.toHaveBeenCalled()
         } finally {
           vi.useRealTimers()
         }

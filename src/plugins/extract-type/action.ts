@@ -45,8 +45,8 @@ export const findTypeInstancesAction: ActionConfig<typeof ActionContextTypes.NOR
   context: ActionContextTypes.NORMAL_MODE,
   icon: Users,
   // Only meaningful on a block-type block. Surfaces (command palette,
-  // swipe menu) hide the entry when canRun is false.
-  canRun: ({block}) => {
+  // swipe menu) hide the entry when isVisible is false.
+  isVisible: ({block}) => {
     const data = block.peek()
     return !!data && getBlockTypes(data).includes(BLOCK_TYPE_TYPE)
   },

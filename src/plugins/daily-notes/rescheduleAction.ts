@@ -1,6 +1,6 @@
 /**
  * "Reschedule" quick-action — opens the calendar+strip sheet over the
- * swiped block. The base action's `canRun` gates on the regular
+ * swiped block. The base action's `isVisible` gates on the regular
  * date-reference adapter; the SRS plugin contributes a decorator that
  * extends the gate to SRS blocks. The picker itself looks up the right
  * adapter via `blockDateAdapterFacet` at commit time, so the handler
@@ -23,7 +23,7 @@ export const rescheduleBlockDateAction: ActionConfig<typeof ActionContextTypes.N
   description: 'Reschedule block date',
   context: ActionContextTypes.NORMAL_MODE,
   icon: CalendarRange,
-  canRun: ({block}) => referenceDateAdapter.canHandle(block),
+  isVisible: ({block}) => referenceDateAdapter.canHandle(block),
   handler: async ({block}: BlockShortcutDependencies) => {
     const data = block.peek() ?? await block.load()
     if (!data) return

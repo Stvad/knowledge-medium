@@ -51,7 +51,7 @@ const srsArchiveAction: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
   description: 'SRS: Archive card',
   context: ActionContextTypes.NORMAL_MODE,
   icon: ArchiveX,
-  canRun: ({block}) => {
+  isVisible: ({block}) => {
     const data = block.peek()
     return !!data && getBlockTypes(data).includes(SRS_SM25_TYPE)
   },

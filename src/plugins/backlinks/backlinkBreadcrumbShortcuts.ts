@@ -87,7 +87,7 @@ export const promoteClosestBreadcrumbAction: ActionConfig = {
     const deps = toBacklinkEntryShortcutDependencies(dependencies)
     deps.promoteClosestBreadcrumb?.()
   },
-  canRun: (dependencies) => {
+  isVisible: (dependencies) => {
     const deps = toBacklinkEntryShortcutDependencies(dependencies)
     return deps.hasBreadcrumb?.() === true
   },

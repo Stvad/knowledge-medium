@@ -10,6 +10,16 @@ export type ActionIcon = ComponentType<SVGProps<SVGSVGElement>>
 
 export type KeyCombination = string; // e.g. "ctrl+k", "meta+shift+z"
 
+/**
+ * Precedence tier for a context, used when two active contexts bind the
+ * same chord. Named tiers (CodeMirror `Prec` precedent), deliberately NOT
+ * raw integers — keep the set tiny and add a tier only when a real case
+ * needs it. Ordering among the remaining contexts is `high` ▸ `default` ▸
+ * `low`; `global` is a reserved tier above all of these and an active
+ * `modal` context outranks even `global`. Defaults to `'default'`.
+ */
+export type Priority = 'low' | 'default' | 'high';
+
 export interface EventOptions {
   preventDefault?: boolean;
   stopPropagation?: boolean;
@@ -40,6 +50,14 @@ export interface ActionContextConfig<T extends ActionContextType = ActionContext
    * installed so app-wide chords (Cmd+K, Escape) remain reachable.
    */
   modal?: boolean;
+  /**
+   * Precedence tier when two active contexts bind the same chord. Higher
+   * tiers win; ties fall back to activation recency. Orders the
+   * non-`global`, non-`modal` contexts among themselves — `global` sits
+   * above all priorities and an active `modal` above `global`. Defaults to
+   * `'default'`. See {@link Priority}.
+   */
+  priority?: Priority;
   /**
    * Type guard function to validate the dependencies provided when activating the context.
    */
@@ -159,29 +177,42 @@ export interface Action<T extends ActionContextType = ActionContextType> {
    *  swipe menus, eventual command-palette icon column). Surfaces that
    *  don't render icons just ignore the field. */
   icon?: ActionIcon;
-  /** Optional synchronous predicate for "is this action meaningfully
-   *  applicable to its current dependencies?". Surfaces that list
-   *  actions (command palette, swipe menu) hide the action when this
-   *  returns false, so the user doesn't see an entry that would silently
-   *  no-op. It is NOT a security gate on `handler` — direct callers can
-   *  still invoke a handler whose `canRun` is false; the contract is
-   *  presentational. Omit to mean "always applicable when the context is
-   *  active". */
-  canRun?: ActionCanRun<T>;
+  /** Optional synchronous predicate for "should this action be SHOWN as
+   *  applicable to its current dependencies?". Surfaces that list actions
+   *  (command palette, swipe menu) hide the action when this returns false,
+   *  so the user doesn't see an entry that would silently no-op. Purely
+   *  presentational — it does NOT gate dispatch: the keyboard path and direct
+   *  callers (`runActionById`) still invoke the handler when `isVisible` is
+   *  false. For a dispatch gate use `canDispatch`. Omit to mean "always
+   *  visible when the context is active". */
+  isVisible?: ActionCanRun<T>;
+  /** Optional synchronous predicate gating keyboard DISPATCH. When present and
+   *  it returns false for the resolved deps, the single-winner coordinator
+   *  SKIPS this action and tries the next candidate for the chord — it does
+   *  not swallow the chord. Distinct from `isVisible` (presentational) and
+   *  from imperative `runActionById`, which does not consult it. Must be
+   *  synchronous — the coordinator picks the winner within the event. Omit to
+   *  mean "always dispatchable when the context is active and deps resolve". */
+  canDispatch?: ActionCanRun<T>;
 }
 
 export type ActionConfig<T extends ActionContextType = ActionContextType> = Action<T>
 
-export interface ActionOverride<T extends ActionContextType = ActionContextType> {
+/**
+ * The single contributor shape for rewriting actions before dispatch.
+ * `apply` maps an action to a new action, or to `null` to remove it (the
+ * unbind primitive). `actionId` may be {@link WILDCARD_ACTION_ID} (`'*'`)
+ * to match every action.
+ *
+ * Deliberately NOT generic in the context type. Erasing `T` keeps the
+ * pipeline cast-free — the one widened→narrow cast lives at the
+ * contributor's definition site (where it already narrows `deps`/`action`
+ * to its context), not scattered through `effectiveActions`.
+ */
+export interface ActionTransform {
   actionId: string;
-  context?: T;
-  apply: (action: ActionConfig<T>) => ActionConfig<T> | null;
-}
-
-export interface ActionDecorator<T extends ActionContextType = ActionContextType> {
-  actionId: string;
-  context?: T;
-  decorate: (action: ActionConfig<T>) => ActionConfig<T>;
+  context?: ActionContextType;
+  apply: (action: ActionConfig) => ActionConfig | null;
 }
 
 

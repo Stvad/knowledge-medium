@@ -1,5 +1,5 @@
 import {
-  actionDecoratorsFacet, actionsFacet, ActionContextTypes, appEffectsFacet, appMountsFacet,
+  actionTransformsFacet, actionsFacet, ActionContextTypes, appEffectsFacet, appMountsFacet,
   blockContentDecoratorsFacet, ChangeScope, codecs, defineBlockType, defineProperty,
   definePropertyEditorOverride, getPluginPrefsBlock,
   keyBetween, keysBetween, pluginBlockId,
@@ -8,7 +8,7 @@ import {
   showSuccess, typesFacet, useRepo,
   type ActionConfig,
   type ActionContextType,
-  type ActionDecorator,
+  type ActionTransform,
   type BlockContentDecorator,
   type BlockContentDecoratorContribution,
   type PropertyEditorProps,
@@ -1017,10 +1017,10 @@ const toggleHighlightReviewed = async (block: any): Promise<boolean> => {
 const decorateActionToToggleReadwiseReview = (
   actionId: string,
   context?: ActionContextType,
-): ActionDecorator => ({
+): ActionTransform => ({
   actionId,
   ...(context ? { context } : {}),
-  decorate: (action: ActionConfig): ActionConfig => ({
+  apply: (action: ActionConfig): ActionConfig => ({
     ...action,
     handler: async (deps, trigger, dispatch) => {
       const block = (deps as BlockShortcutDependencies).block
@@ -1030,10 +1030,10 @@ const decorateActionToToggleReadwiseReview = (
   }),
 })
 
-const readwiseSwipeRightDecorator: ActionDecorator =
+const readwiseSwipeRightDecorator: ActionTransform =
   decorateActionToToggleReadwiseReview(SWIPE_RIGHT_BLOCK_ACTION_ID)
 
-const readwiseTodoCycleDecorators: readonly ActionDecorator[] = [
+const readwiseTodoCycleDecorators: readonly ActionTransform[] = [
   decorateActionToToggleReadwiseReview(
     TODO_CYCLE_ACTION_ID,
     ActionContextTypes.NORMAL_MODE,
@@ -1660,7 +1660,7 @@ export default [
   actionsFacet.of(openSettingsAction, { source }),
   actionsFacet.of(syncNowAction, { source }),
   actionsFacet.of(connectAction, { source }),
-  actionDecoratorsFacet.of(readwiseSwipeRightDecorator, { source }),
+  actionTransformsFacet.of(readwiseSwipeRightDecorator, { source }),
   ...readwiseTodoCycleDecorators.map(decorator =>
-    actionDecoratorsFacet.of(decorator, { source })),
+    actionTransformsFacet.of(decorator, { source })),
 ]
