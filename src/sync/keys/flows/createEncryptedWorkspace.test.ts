@@ -77,7 +77,7 @@ describe('createEncryptedWorkspace (§8.1)', () => {
         throw new Error('QuotaExceededError')
       },
       delete: async () => {},
-      clearAll: async () => {},
+      clearForUser: async () => {},
     }
     await expect(
       createEncryptedWorkspace('Secret', {

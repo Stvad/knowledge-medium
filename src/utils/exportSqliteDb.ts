@@ -184,7 +184,7 @@ export async function importRawSqliteDb(repo: Repo, file: File): Promise<void> {
     // we don't run native SQLite WAL, but be defensive — a leftover sibling
     // from a crashed prior session would be replayed against the freshly
     // imported DB and silently corrupt it.
-    for (const suffix of ['-journal', '-wal', '-shm']) {
+    for (const suffix of DB_FILE_SIBLING_SUFFIXES) {
       await removeEntryIfExists(root, dbFilename + suffix)
     }
 
@@ -212,6 +212,12 @@ const pipeBlobToFileHandle = async (
   await blob.stream().pipeTo(writable)
 }
 
+// SQLite sibling files derived from the main .db name. Rollback-journal mode
+// uses -journal; -wal/-shm only appear if a WAL-capable VFS is ever used, but
+// removing them is harmless when absent and defends against a crashed prior
+// session leaving one behind.
+const DB_FILE_SIBLING_SUFFIXES = ['-journal', '-wal', '-shm'] as const
+
 const removeEntryIfExists = async (
   root: FileSystemDirectoryHandle,
   name: string,
@@ -222,6 +228,21 @@ const removeEntryIfExists = async (
     if (!(err instanceof DOMException && err.name === 'NotFoundError')) {
       throw err
     }
+  }
+}
+
+/**
+ * Delete a user's PowerSync SQLite DB file (and its journal/WAL/shm siblings)
+ * from OPFS. Used by the §6 Lock & wipe boot path, which runs this BEFORE
+ * PowerSync opens the file — wa-sqlite must not be holding an OPFS sync-access
+ * handle on a file being removed. Missing entries are treated as already-gone
+ * (success), so a partial prior wipe converges on the next boot.
+ */
+export async function removeOpfsDbFile(dbFilename: string): Promise<void> {
+  const root = await navigator.storage.getDirectory()
+  await removeEntryIfExists(root, dbFilename)
+  for (const suffix of DB_FILE_SIBLING_SUFFIXES) {
+    await removeEntryIfExists(root, dbFilename + suffix)
   }
 }
 

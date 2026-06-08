@@ -25,15 +25,26 @@ export interface WorkspaceKeyStore {
   get(userId: string, workspaceId: string): Promise<CryptoKey | null>
   put(userId: string, workspaceId: string, key: CryptoKey): Promise<void>
   delete(userId: string, workspaceId: string): Promise<void>
-  /** Drop every stored WK on this device — the key-material half of a §6
-   *  Lock & wipe. (The mode pins live elsewhere and deliberately survive.) */
-  clearAll(): Promise<void>
+  /** Drop every stored WK FOR THIS USER — the key-material half of a §6 Lock &
+   *  wipe. Scoped to `userId` (not the whole store) because the IndexedDB store
+   *  is shared across all accounts in the browser profile, while the wipe
+   *  marker + DB-file deletion are per-user: clearing another account's keys
+   *  would lock its e2ee workspaces without wiping its DB. (The mode pins live
+   *  elsewhere and deliberately survive.) */
+  clearForUser(userId: string): Promise<void>
 }
+
+/** localStorage/IndexedDB record-id prefix for all of a user's keys. The
+ *  trailing `:` plus `encodeURIComponent` (which escapes any literal `:` to
+ *  `%3A`) makes this an unambiguous, collision-free prefix — `enc("ab"):` is
+ *  never a prefix of `enc("abc"):…`. */
+export const keyStoreUserPrefix = (userId: string): string =>
+  `${encodeURIComponent(userId)}:`
 
 /** Composite record id. Encoded so a delimiter inside an id can't make
  *  two distinct (user, workspace) pairs collide. */
 export const keyStoreRecordId = (userId: string, workspaceId: string): string =>
-  `${encodeURIComponent(userId)}:${encodeURIComponent(workspaceId)}`
+  `${keyStoreUserPrefix(userId)}${encodeURIComponent(workspaceId)}`
 
 /** In-memory store. Used in tests and as the fallback when IndexedDB is
  *  unavailable (the WK then lives only for the page's lifetime, which the
@@ -53,8 +64,11 @@ export class InMemoryWorkspaceKeyStore implements WorkspaceKeyStore {
     this.keys.delete(keyStoreRecordId(userId, workspaceId))
   }
 
-  async clearAll(): Promise<void> {
-    this.keys.clear()
+  async clearForUser(userId: string): Promise<void> {
+    const prefix = keyStoreUserPrefix(userId)
+    for (const key of [...this.keys.keys()]) {
+      if (key.startsWith(prefix)) this.keys.delete(key)
+    }
   }
 }
 
@@ -101,8 +115,28 @@ export class IndexedDbWorkspaceKeyStore implements WorkspaceKeyStore {
     run: (store: IDBObjectStore) => IDBRequest<T>,
   ): Promise<T> {
     const db = await this.openDb()
-    const store = db.transaction(STORE_NAME, mode).objectStore(STORE_NAME)
-    return promisifyRequest(run(store))
+    const transaction = db.transaction(STORE_NAME, mode)
+    // Resolve on the TRANSACTION commit, not just the request's `onsuccess`. A
+    // readwrite write (put/delete/clear) is only durable once the tx commits
+    // (`oncomplete`); `onsuccess` fires earlier, while the tx is still open. §6
+    // Lock & wipe reloads the page immediately after clearing keys, so without
+    // awaiting the commit the navigation can abort the not-yet-committed tx and
+    // roll the clear back — leaving the workspace keys in IndexedDB while the
+    // SQLite file is wiped, so encrypted workspaces would reopen WITHOUT
+    // re-pasting the WK (the lock silently fails). Register the completion
+    // handlers synchronously here so we can't miss an `oncomplete` that fires
+    // before we start awaiting. (Readonly txs commit trivially — harmless.)
+    const committed = new Promise<void>((resolve, reject) => {
+      transaction.oncomplete = () => resolve()
+      transaction.onabort = () =>
+        reject(transaction.error ?? new Error('IndexedDB transaction aborted'))
+      transaction.onerror = () =>
+        reject(transaction.error ?? new Error('IndexedDB transaction error'))
+    })
+    const store = transaction.objectStore(STORE_NAME)
+    const result = await promisifyRequest(run(store))
+    await committed
+    return result
   }
 
   async get(userId: string, workspaceId: string): Promise<CryptoKey | null> {
@@ -124,8 +158,40 @@ export class IndexedDbWorkspaceKeyStore implements WorkspaceKeyStore {
     )
   }
 
-  async clearAll(): Promise<void> {
-    await this.tx('readwrite', store => store.clear())
+  async clearForUser(userId: string): Promise<void> {
+    const prefix = keyStoreUserPrefix(userId)
+    const db = await this.openDb()
+    const transaction = db.transaction(STORE_NAME, 'readwrite')
+    // Await the commit (durability), same as `tx` — Lock & wipe reloads right
+    // after this resolves; an un-committed delete would be rolled back by the
+    // navigation, leaving keys behind. Handlers registered synchronously.
+    const committed = new Promise<void>((resolve, reject) => {
+      transaction.oncomplete = () => resolve()
+      transaction.onabort = () =>
+        reject(transaction.error ?? new Error('IndexedDB transaction aborted'))
+      transaction.onerror = () =>
+        reject(transaction.error ?? new Error('IndexedDB transaction error'))
+    })
+    const store = transaction.objectStore(STORE_NAME)
+    // Cursor over the (small) store, deleting only this user's records. A plain
+    // startsWith check avoids any IDBKeyRange string-bound subtlety; the store
+    // holds at most a handful of keys (one per workspace per account).
+    await new Promise<void>((resolve, reject) => {
+      const request = store.openCursor()
+      request.onsuccess = () => {
+        const cursor = request.result
+        if (!cursor) {
+          resolve()
+          return
+        }
+        if (typeof cursor.key === 'string' && cursor.key.startsWith(prefix)) {
+          cursor.delete()
+        }
+        cursor.continue()
+      }
+      request.onerror = () => reject(request.error)
+    })
+    await committed
   }
 }
 

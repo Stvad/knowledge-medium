@@ -86,7 +86,7 @@ describe('unlockWorkspaceWithKey (§8.2)', () => {
         throw new Error('QuotaExceededError')
       },
       delete: async () => {},
-      clearAll: async () => {},
+      clearForUser: async () => {},
     }
 
     const result = await unlockWorkspaceWithKey({

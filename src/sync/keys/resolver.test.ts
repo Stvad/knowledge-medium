@@ -59,7 +59,7 @@ describe('createSyncResolver — getMaterializability (§6 policy collapse)', ()
       },
       put: async () => {},
       delete: async () => {},
-      clearAll: async () => {},
+      clearForUser: async () => {},
     }
     const resolver = createSyncResolver(() => USER, throwingStore)
     setModePin(USER, WS, 'e2ee')
@@ -98,7 +98,7 @@ describe('createSyncResolver — getCek', () => {
       },
       put: async () => {},
       delete: async () => {},
-      clearAll: async () => {},
+      clearForUser: async () => {},
     }
     const resolver = createSyncResolver(() => USER, throwingStore)
     await expect(resolver.getCek(WS)).resolves.toBeNull()

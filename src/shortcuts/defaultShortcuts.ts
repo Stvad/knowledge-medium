@@ -79,6 +79,9 @@ import {
   importRawSqliteDb,
   rawSqliteDbExportFilename,
 } from '@/utils/exportSqliteDb.js'
+import { broadcastWipeReload, flushUploadQueue, lockAndWipe } from '@/sync/keys/flows/lockAndWipe.js'
+import { getWorkspaceKeyStore } from '@/sync/keys/keyStore.js'
+import { getPowerSyncDb } from '@/data/repoProvider.js'
 import { focusPropertyRow } from '@/utils/propertyNavigation.js'
 import { reloadInSafeMode } from '@/utils/safeMode.js'
 import { outlineRenderScopeId } from '@/utils/renderScope.js'
@@ -515,6 +518,59 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         }
 
         input.click()
+      },
+    },
+    {
+      id: 'lock_and_wipe_local_data',
+      description: 'Lock & wipe local data on this device',
+      context: ActionContextTypes.GLOBAL,
+      handler: async () => {
+        // §6 Lock & wipe: drop every workspace key and erase this device's
+        // local DB. Deliberate and user-only — never triggered automatically.
+        const ok = window.confirm(
+          'Lock & wipe local data on THIS device?\n\n' +
+          'This erases ALL locally stored data and removes every encryption key from ' +
+          'this device. Encrypted workspaces will require re-pasting their workspace key ' +
+          'to reopen — make sure you have it saved.\n\n' +
+          'Anything already synced to the server re-downloads; anything not synced ' +
+          '(or that only exists on this device) is permanently lost. You stay signed ' +
+          'in. The page reloads.',
+        )
+        if (!ok) return
+
+        const banner = showProgress('Flushing unsynced changes…')
+        try {
+          // Drain pending uploads first so unsynced edits aren't lost. If they
+          // can't flush (offline / sync stuck / local-only), let the user decide
+          // rather than silently dropping their work.
+          // The genuine PowerSyncDatabase singleton (not the metrics-wrapped
+          // `repo.db`) — it exposes the upload-queue stats + connection status.
+          const { flushed, remaining } = await flushUploadQueue(getPowerSyncDb(repo.user.id))
+          if (!flushed) {
+            const proceed = window.confirm(
+              `${remaining} change(s) haven't been saved to the server yet.\n\n` +
+              'Proceed and PERMANENTLY LOSE those changes?\n' +
+              'Cancel to keep your data — you can retry once they have synced.',
+            )
+            if (!proceed) {
+              banner.done('Lock & wipe cancelled — your data is unchanged')
+              return
+            }
+          }
+
+          banner.update('Wiping local data — reloading…')
+          await lockAndWipe({ userId: repo.user.id, keyStore: getWorkspaceKeyStore() })
+          // Reload every other same-user tab too (multi-tab): otherwise they
+          // keep the wiped plaintext in memory and hold the OPFS DB handle open,
+          // blocking the boot-time file delete. Then reload self — the armed
+          // marker makes the next boot delete the DB file before PowerSync
+          // reopens it.
+          broadcastWipeReload(repo.user.id)
+          window.location.reload()
+        } catch (err) {
+          console.error('[lock-and-wipe] failed:', err)
+          banner.fail(`Lock & wipe failed: ${err instanceof Error ? err.message : String(err)}`)
+        }
       },
     },
     {
