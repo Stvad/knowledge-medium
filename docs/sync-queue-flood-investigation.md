@@ -424,16 +424,21 @@ after the upload path is healthy.
 4. `downloadError` (websocket) did not recur after the upload path was healthy —
    it was a transient reconnect blip.
 
-### Follow-up found while auditing (NOT yet fixed)
+### Follow-up found while auditing — RESOLVED (dropped)
 
-**Daily-notes date backfill modifies unopened workspaces.**
-[`BACKFILL_DAILY_NOTE_DATE_SQL`](src/plugins/daily-notes/localSchema.ts:69) runs
-at cold start and `UPDATE`s daily-note blocks across **all** workspaces (its
-`WHERE id IN (SELECT block_id FROM block_types WHERE type='daily-note')` has no
-`workspace_id` filter). Same anti-pattern as the reprojection bug, milder
-severity: it's idempotent and one-time-per-block (no flip-flop), but opening one
-workspace still writes + uploads date props into every unopened workspace's
-daily notes. Should be scoped to the active workspace (run per-workspace on
-open). Separate subsystem — tracked separately.
+**Daily-notes date backfill modified unopened workspaces.** `BACKFILL_DAILY_NOTE_DATE_SQL`
+ran at cold start and `UPDATE`d daily-note blocks across **all** workspaces (no
+`workspace_id` filter) — same "touches unopened workspaces" anti-pattern as the
+reprojection bug, though milder (idempotent, one-time-per-block, no flip-flop).
+Rather than scope it per-workspace, we **dropped the backfill entirely**: it was
+a one-shot upgrade migration (populate `daily-note:date` on legacy rows from
+their ISO alias), it's been shipping since ~2026-05-22 so active workspaces are
+already migrated, and `getOrCreateDailyNote` sets the property on every new
+daily note — so the partial index stays populated without it. The
+`idx_blocks_daily_note_date` index and the creation-path property write remain.
+Accepted edge: a legacy daily note in a workspace never opened since ~05-22 will
+lack `daily-note:date` and drop out of date-range queries until re-derived
+(derived/recoverable, not content loss); re-add a *workspace-scoped* pass if that
+ever surfaces.
 
 Verification gate per [AGENTS.md](AGENTS.md): `yarn run check`.
