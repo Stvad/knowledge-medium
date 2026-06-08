@@ -399,13 +399,14 @@ describe('parseReferences — schema-swap reprojection', () => {
     ])
   })
 
-  it('does NOT strip refs or clear the marker when a ref-typed property goes absent (cold-start load transient)', async () => {
-    // The schema-swap flood guard. UserSchemasService republishes its bucket
-    // as `blocks` materializes at cold start (and on workspace switch), so a
-    // ref-typed import/user schema can momentarily vanish from the merged map
-    // and reappear. Treating that absence as a ref→non-ref removal stripped
-    // every block's references_json + cleared the marker, then re-added on the
-    // next tick — ~16k references_json PATCHes per reload on a real graph.
+  it('strips stale refs and clears the marker when a ref-typed property is deleted (goes absent)', async () => {
+    // A property whose schema is *deleted* leaves the active workspace's schema
+    // set entirely. That's a genuine "no longer ref-typed here" transition, so
+    // its stale derived backlinks must be swept eagerly — not tolerated until
+    // each affected block is next written. Treating absence as a removal is safe
+    // because reprojection is workspace-scoped and a schema never *transiently*
+    // leaves a workspace's set (cold-start materialization is grow-only; the
+    // observer never deletes a still-staged block — see materialize.ts).
     env.repo.setFacetRuntime(runtimeWithReviewer())
     await env.repo.tx(
       tx => tx.create({
@@ -420,31 +421,26 @@ describe('parseReferences — schema-swap reprojection', () => {
     )
     await flush()
     // Backfill happened: the marker is set and the reviewer ref is present.
-    const projected = [
+    expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([
       {id: aliasId('content-target'), alias: 'content-target'},
       {id: 'target-a', alias: 'target-a', sourceField: 'reviewer'},
-    ]
-    expect(JSON.parse((await env.read('src'))!.references_json)).toEqual(projected)
+    ])
     expect(await env.h.db.getOptional(
       `SELECT 1 FROM client_schema_state WHERE key = 'reproject_ref:${WS}:reviewer'`,
     )).not.toBeNull()
 
-    const updatesBefore = env.repo.metrics().reprojection.blocksUpdated
-
-    // `reviewer` vanishes from the schema set (load transient), then returns.
+    // reviewer's schema is deleted ⇒ it leaves the schema set entirely.
     env.repo.setFacetRuntime(runtimeWithoutReviewer())
     await flush()
-    env.repo.setFacetRuntime(runtimeWithReviewer())
-    await flush()
 
-    // Refs untouched, marker intact, and not a single block rewritten across
-    // the disappear/reappear cycle.
-    expect(JSON.parse((await env.read('src'))!.references_json)).toEqual(projected)
+    // The stale reviewer ref is stripped (content ref retained); the marker is
+    // cleared so a future re-add as ref triggers a fresh backfill.
+    expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([
+      {id: aliasId('content-target'), alias: 'content-target'},
+    ])
     expect(await env.h.db.getOptional(
       `SELECT 1 FROM client_schema_state WHERE key = 'reproject_ref:${WS}:reviewer'`,
-    )).not.toBeNull()
-    expect(env.repo.metrics().reprojection.blocksUpdated).toBe(updatesBefore)
-    expect(env.repo.metrics().reprojection.skippedAbsent).toBeGreaterThanOrEqual(1)
+    )).toBeNull()
   })
 
   it('only reprojects the active workspace, leaving unopened workspaces untouched', async () => {
@@ -487,6 +483,37 @@ describe('parseReferences — schema-swap reprojection', () => {
     expect(await env.h.db.getOptional(
       `SELECT 1 FROM client_schema_state WHERE key = 'reproject_ref:${OTHER_WS}:reviewer'`,
     )).toBeNull()
+  })
+
+  it('uses the scheduled schema, not the live registry, when the workspace switched after scheduling', async () => {
+    // A reprojection captures (names, scheduled schemas, workspaceId) atomically
+    // and runs deferred. If the user switches workspace before it fires,
+    // `this._propertySchemas` now reflects the OTHER workspace — reconciling the
+    // scan against it would let the other workspace's schema set strip refs from
+    // the captured workspace's blocks. The scan must fall back to its scheduled
+    // snapshot in that case.
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0',
+        properties: {reviewer: 'target-a'},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    // Schedule the backfill for WS (reviewer is ref-typed here)...
+    env.repo.setFacetRuntime(runtimeWithReviewer())
+    // ...then, before the deferred scan fires, switch away and drop reviewer
+    // from the (now other-workspace) live registry.
+    env.repo.setActiveWorkspaceId('ws-2')
+    env.repo.setFacetRuntime(runtimeWithoutReviewer())
+    await flush()
+
+    // The WS-scheduled scan still projects reviewer from its own snapshot — it
+    // does NOT read ws-2's empty registry and strip the ref.
+    expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([
+      {id: 'target-a', alias: 'target-a', sourceField: 'reviewer'},
+    ])
   })
 
   it('does not let an older ref-typed reprojection re-add refs after the property is redefined non-ref', async () => {
