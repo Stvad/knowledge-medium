@@ -2,6 +2,10 @@ import {
   actionTransformsFacet,
   actionsFacet,
 } from '@/extensions/core.js'
+import {
+  isInteractiveContentEvent,
+  type BlockSelectionClickDecorator,
+} from '@/extensions/blockInteraction.js'
 import type { AppExtension } from '@/extensions/facet.js'
 import {
   ActionConfig,
@@ -67,7 +71,7 @@ const locationsOf = (instances: readonly HTMLElement[]): FocusedBlockLocation[] 
     : null
 }
 
-const extendSelectionToSpatialTarget = async (
+export const extendSelectionToSpatialTarget = async (
   deps: BaseShortcutDependencies,
   target: HTMLElement,
 ): Promise<boolean> => {
@@ -326,6 +330,45 @@ const selectionVerticalDecorator = (
     },
   }),
 })
+
+/**
+ * Shift-click selection in visible DOM order. The mouse-side counterpart
+ * of `selectionVerticalDecorator`: anchor → clicked block range across
+ * whatever is on screen (backlinks, embeds), not the data tree. Only
+ * plain shift-click is intercepted; ctrl/meta toggle and plain-click
+ * reset are order-independent and stay with the structural handler. Falls
+ * through to `next` when no spatial range resolves (e.g. the clicked
+ * instance isn't a navigable panel item).
+ *
+ * `event.currentTarget` is the block shell — the same element the spatial
+ * shell decorator tags with `data-block-nav-item`, so the walker can find
+ * it. It's captured synchronously before the first await, since React
+ * nulls `currentTarget` once the synchronous dispatch returns.
+ */
+export const spatialSelectionClickDecorator: BlockSelectionClickDecorator =
+  next => async (context, event) => {
+    const {uiStateBlock} = context
+    const target = event.currentTarget
+    // Only the clicked block's own panel can resolve a spatial range; for
+    // anything else (no panel, mismatched panel) defer to the structural
+    // handler rather than swallow the click. `extendSelectionToSpatialTarget`
+    // reports the mismatch as "handled" for the keyboard contract, so we
+    // gate on the panel match here instead of trusting its return.
+    if (
+      event.shiftKey &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !isInteractiveContentEvent(event) &&
+      panelOf(target)?.dataset.panelId === uiStateBlock.id
+    ) {
+      event.preventDefault()
+      event.stopPropagation()
+      if (await extendSelectionToSpatialTarget({uiStateBlock}, target)) {
+        return
+      }
+    }
+    await next(context, event)
+  }
 
 export function getSpatialNavigationActionDecorators(): ActionTransform[] {
   return [

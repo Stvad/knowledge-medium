@@ -528,3 +528,40 @@ export const handleBlockSelectionClick = async (
 
 export const isSelectionClick = (event: MouseEvent) =>
   event.ctrlKey || event.metaKey || event.shiftKey
+
+/**
+ * Selection-click handler that plugins can decorate. The kernel's
+ * `handleBlockSelectionClick` (structural, data-tree visible-order range)
+ * is the base; decorators wrap it to swap in a different range strategy
+ * while delegating inward for the cases they don't handle.
+ *
+ * This is the mouse-side analogue of `actionDecoratorsFacet`: spatial
+ * navigation already decorates the keyboard `extend_selection_*` actions
+ * to select in visible DOM order (across backlinks/embeds); this lets it
+ * do the same for shift-click, falling back to the structural handler
+ * when it can't resolve a spatial range.
+ */
+export type BlockSelectionClickHandler = (
+  context: BlockResolveContext,
+  event: MouseEvent<HTMLElement>,
+) => void | Promise<void>
+
+export type BlockSelectionClickDecorator =
+  (next: BlockSelectionClickHandler) => BlockSelectionClickHandler
+
+export const blockSelectionClickDecoratorsFacet = defineFacet<
+  BlockSelectionClickDecorator,
+  BlockSelectionClickHandler
+>({
+  id: 'core.block-selection-click-decorators',
+  // Lower precedence wraps closest to the structural base; the last
+  // contribution applied ends up outermost (runs first, decides whether
+  // to delegate inward). Mirrors `blockContentDecoratorsFacet`.
+  combine: decorators =>
+    decorators.reduce<BlockSelectionClickHandler>(
+      (next, decorate) => decorate(next),
+      handleBlockSelectionClick,
+    ),
+  empty: () => handleBlockSelectionClick,
+  validate: isFunction<BlockSelectionClickDecorator>,
+})

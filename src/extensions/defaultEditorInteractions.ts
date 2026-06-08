@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import type { MouseEvent } from 'react'
 import {
+  blockSelectionClickDecoratorsFacet,
   blockShellDecoratorsFacet,
   handleBlockSelectionClick,
   isInteractiveContentEvent,
@@ -12,6 +13,7 @@ import {
   ShortcutActivationContribution,
   shortcutSurfaceActivationsFacet,
 } from '@/extensions/blockInteraction.js'
+import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { editorAutocompleteExtension } from '@/extensions/editorAutocomplete.js'
 import { AppExtension } from '@/extensions/facet.js'
 import { ActionContextTypes } from '@/shortcuts/types.js'
@@ -72,9 +74,13 @@ export function BlockSelectionShellDecorator({
   state,
   children,
 }: BlockShellDecoratorProps) {
+  // Resolved selection-click handler — the structural base wrapped by any
+  // contributed decorators (e.g. spatial navigation's DOM-order range).
+  // `runtime.read` caches per-facet, so this reference is stable.
+  const applySelectionClick = useAppRuntime().read(blockSelectionClickDecoratorsFacet)
   const nextState = useMemo(
-    () => createBlockSelectionShellState(resolveContext, state),
-    [resolveContext, state],
+    () => createBlockSelectionShellState(resolveContext, state, applySelectionClick),
+    [resolveContext, state, applySelectionClick],
   )
 
   return children(nextState)
