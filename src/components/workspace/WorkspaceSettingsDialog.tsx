@@ -230,6 +230,18 @@ function MembersSection({workspace, canManage}: {workspace: Workspace, canManage
         })}
       </ul>
 
+      {canManage && workspace.encryptionMode === 'e2ee' && (
+        // §8.3 — the app deliberately never transmits the WK; sharing it out of
+        // band IS the security property. Remind the owner so an invitee isn't
+        // left staring at a locked, empty workspace.
+        <p className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-muted-foreground">
+          <span className="font-medium text-foreground">End-to-end encrypted.</span>{' '}
+          After an invitee accepts, send them this workspace&rsquo;s key yourself over a
+          channel you trust (Signal, a password manager, in person). The app never
+          transmits the key — without it they&rsquo;ll see a locked, empty workspace.
+        </p>
+      )}
+
       {canManage && (
         <form onSubmit={invite} className="space-y-2">
           <Label htmlFor="ws-invite">Invite by email</Label>

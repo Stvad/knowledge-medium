@@ -4,6 +4,24 @@ Deployment ordering for the per-workspace E2EE groundwork (see
 [`e2ee-design.html`](./e2ee-design.html); landed in PR #56). Read this before
 applying the migration to a shared environment.
 
+## Status
+
+The full per-workspace E2EE feature is now implemented:
+
+- **Sync seam (Phase D).** Encrypt-on-upload + the Layout B cutover (blocks
+  stream retargeted to `blocks_synced` + the JS observer) — shipped in PR #105.
+- **User flows (Phase E).** Create an encrypted workspace with one-time WK
+  reveal (§8.1); the key-required / quarantine render gate (§6 rule 3); paste-WK
+  unlock on a new device / accepted invite (§8.2); share by inviting + sending
+  the WK out of band (§8.3) — shipped in PR #105.
+- **Lock & wipe (§6)** and the **drift-guard note (§11.2, below)** — this PR.
+
+So in the deployed (production) environment the "one hard rule" prerequisites are
+already satisfied and e2ee-workspace creation is live. The rule below still
+governs **any fresh environment bring-up** — apply the migration + sync rules and
+deploy a client with Phase D before letting that environment create e2ee
+workspaces.
+
 ## The one hard rule
 
 **Do not enable E2EE-workspace *creation* in an environment before BOTH the
@@ -35,6 +53,35 @@ ways:
 This is why we coordinate the deploy instead of adding a temporary "`'none'`
 only" gate to the `create_workspace` RPC (we're in alpha; coordination is
 cheaper than code we'd rip out — see the resolved review threads on PR #56).
+
+## Drift guard: server-side content reads must filter on mode (design §11.2)
+
+**Any new *server-side* feature that reads `blocks.content`, `properties_json`,
+or `references_json` MUST either filter on `workspaces.encryption_mode = 'none'`
+or explicitly document a decision to skip E2EE workspaces.**
+
+For an e2ee workspace those columns are opaque `enc:v1:` ciphertext — the
+workspace key never leaves the members' devices. A server-side reader that
+assumes plaintext will at best break (malformed JSON, garbage tokens) and at
+worst *leak*: a server FTS index, a summarizer, a "related blocks" job, or a
+notification that quotes block text would derive and persist plaintext-shaped
+artifacts the design guarantees the server can't see. Filtering on
+`encryption_mode = 'none'` keeps such features correct for plaintext workspaces
+while leaving e2ee ones untouched.
+
+The **deliberate exception** is the PowerSync sync rule
+(`powersync/sync-config.yaml`), which selects the content columns unconditionally
+on purpose: it only *ships* rows (ciphertext included) to the workspace's own
+members, who decrypt locally — it never interprets content, so it isn't a
+"content feature" in this sense.
+
+There are **no server-side content features today** (no server FTS, no
+server-side summarization), so this is a forward-looking rule rather than a fix.
+We keep it as a documented invariant rather than an automated scanner: a grep for
+content-column reads would have to special-case the legitimate sync-rule
+selection above and has nothing real to check yet, so it would be speculative
+machinery. Add the guard (with an explicit allowlist) alongside the *first*
+server-side content feature that needs the exception, not before.
 
 ## Why this is safe to land now anyway
 
