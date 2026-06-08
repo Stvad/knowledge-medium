@@ -78,6 +78,12 @@ export const clearPendingWipe = (userId: string): void => {
 export interface UploadQueueProbe {
   getUploadQueueStats(includeSize?: boolean): Promise<{ count: number }>
   readonly currentStatus: { connected?: boolean }
+  /** PowerSync's sync engine, when connected. We use its `triggerCrudUpload`
+   *  to FORCE an immediate upload instead of waiting for the throttled
+   *  background scheduler — the user asked to lock & wipe now. Optional/null in
+   *  not-yet-connected or local-only sessions (and absent in tests that don't
+   *  exercise it). */
+  readonly syncStreamImplementation?: { triggerCrudUpload: () => void } | null
 }
 
 export interface FlushResult {
@@ -96,9 +102,10 @@ export interface FlushOptions {
 }
 
 /**
- * Wait for PowerSync's upload queue to drain before a wipe, so unsynced edits
- * aren't silently lost. PowerSync uploads automatically while connected, so we
- * just poll {@link UploadQueueProbe.getUploadQueueStats} until it reaches 0.
+ * Drain PowerSync's upload queue before a wipe, so unsynced edits aren't
+ * silently lost. We don't wait on the throttled background scheduler: each
+ * iteration FORCES an immediate upload via `triggerCrudUpload`, then polls
+ * {@link UploadQueueProbe.getUploadQueueStats} until it reaches 0.
  *
  * Returns `{flushed:false, remaining}` — rather than blocking — when the queue
  * can't drain: offline (no point waiting) or the timeout elapses while uploads
@@ -123,6 +130,10 @@ export const flushUploadQueue = async (
     // burn the whole timeout — the user can reconnect and re-run the command.
     if (!db.currentStatus.connected) return { flushed: false, remaining: count }
     if (now() - start >= timeoutMs) return { flushed: false, remaining: count }
+    // Force the upload NOW instead of waiting for the throttled auto-scheduler.
+    // The trigger is leading-edge throttled, so calling it each poll is cheap
+    // and keeps pressure on until the queue drains.
+    db.syncStreamImplementation?.triggerCrudUpload()
     await sleep(pollMs)
     count = (await db.getUploadQueueStats()).count
   }
