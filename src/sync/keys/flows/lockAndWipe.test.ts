@@ -125,13 +125,14 @@ describe('pending-wipe marker (§6)', () => {
 })
 
 describe('lockAndWipe commit (§6)', () => {
-  it('drops every workspace key and arms the pending-wipe marker', async () => {
+  it("drops this user's workspace keys and arms the pending-wipe marker", async () => {
     const keyStore = new InMemoryWorkspaceKeyStore()
-    const clearAll = vi.spyOn(keyStore, 'clearAll')
+    const clearForUser = vi.spyOn(keyStore, 'clearForUser')
 
     await lockAndWipe({ userId: USER, keyStore })
 
-    expect(clearAll).toHaveBeenCalledTimes(1)
+    // Scoped to the wiped user (not the whole shared store).
+    expect(clearForUser).toHaveBeenCalledWith(USER)
     expect(isPendingWipe(USER)).toBe(true)
   })
 
@@ -152,13 +153,13 @@ describe('lockAndWipe commit (§6)', () => {
     // so we must refuse BEFORE dropping keys, rather than leave plaintext on
     // disk with no scheduled wipe. Mirrors the create-flow storage preflight.
     const keyStore = new InMemoryWorkspaceKeyStore()
-    const clearAll = vi.spyOn(keyStore, 'clearAll')
+    const clearForUser = vi.spyOn(keyStore, 'clearForUser')
     const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new Error('localStorage is blocked')
     })
     try {
       await expect(lockAndWipe({ userId: USER, keyStore })).rejects.toThrow(/storage/i)
-      expect(clearAll).not.toHaveBeenCalled()
+      expect(clearForUser).not.toHaveBeenCalled()
       expect(isPendingWipe(USER)).toBe(false)
     } finally {
       spy.mockRestore()
@@ -170,7 +171,7 @@ describe('lockAndWipe commit (§6)', () => {
       get: async () => null,
       put: async () => {},
       delete: async () => {},
-      clearAll: async () => {
+      clearForUser: async () => {
         throw new Error('IndexedDB clear failed')
       },
     }

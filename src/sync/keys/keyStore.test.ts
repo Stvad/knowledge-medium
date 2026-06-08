@@ -50,12 +50,32 @@ describe('InMemoryWorkspaceKeyStore', () => {
     expect(await store.get('u', 'w2')).not.toBeNull()
   })
 
-  it('clearAll drops every key (Lock & wipe, §6)', async () => {
+  it("clearForUser drops the user's keys but leaves OTHER accounts' keys (Lock & wipe, §6)", async () => {
+    // The store is shared across accounts in a browser profile, but Lock & wipe
+    // is per-user — wiping 'u' must not lock account 'other'.
     const store = new InMemoryWorkspaceKeyStore()
     await store.put('u', 'w1', await aKey())
     await store.put('u', 'w2', await aKey())
-    await store.clearAll()
+    const otherKey = await aKey()
+    await store.put('other', 'w1', otherKey)
+
+    await store.clearForUser('u')
+
     expect(await store.get('u', 'w1')).toBeNull()
     expect(await store.get('u', 'w2')).toBeNull()
+    expect(await store.get('other', 'w1')).toBe(otherKey)
+  })
+
+  it('clearForUser does not drop a different user whose id shares a prefix', async () => {
+    // 'ab' must not match 'abc' — the encoded `:` delimiter guards against it.
+    const store = new InMemoryWorkspaceKeyStore()
+    const abcKey = await aKey()
+    await store.put('ab', 'w', await aKey())
+    await store.put('abc', 'w', abcKey)
+
+    await store.clearForUser('ab')
+
+    expect(await store.get('ab', 'w')).toBeNull()
+    expect(await store.get('abc', 'w')).toBe(abcKey)
   })
 })

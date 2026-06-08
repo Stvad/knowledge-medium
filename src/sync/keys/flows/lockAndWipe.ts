@@ -157,10 +157,15 @@ export interface LockAndWipeDeps {
 }
 
 /**
- * Commit the wipe: arm the next-boot DB-file wipe, then drop every workspace
- * key on this device. Does NOT reload — the caller forces the reload (which also
+ * Commit the wipe: arm the next-boot DB-file wipe, then drop this user's
+ * workspace keys. Does NOT reload — the caller forces the reload (which also
  * clears the in-memory BlockCache and other live JS state) and the file delete
  * happens on that next boot via {@link consumePendingWipe}.
+ *
+ * Key clearing is scoped to `deps.userId`: the IndexedDB key store is shared
+ * across all accounts in the browser profile, but the wipe (marker + DB file) is
+ * per-user, so wiping account A must not drop account B's keys (which would lock
+ * B's e2ee workspaces without wiping B's DB).
  *
  * Ordering is the whole point here. The marker is what guarantees the DB (and
  * its plaintext) actually gets removed, so we ARM IT FIRST: if that localStorage
@@ -181,7 +186,7 @@ export const lockAndWipe = async (deps: LockAndWipeDeps): Promise<void> => {
   }
   markPendingWipe(deps.userId)
   try {
-    await deps.keyStore.clearAll()
+    await deps.keyStore.clearForUser(deps.userId)
   } catch (err) {
     // Couldn't drop the keys → undo the arm so we don't wipe a DB whose keys are
     // still present (and don't report success). Rollback is best-effort.
