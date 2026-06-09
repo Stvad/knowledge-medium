@@ -77,6 +77,9 @@ export function WorkspaceKeyGate({
   }
 
   const confirmPlaintext = async () => {
+    if (busy) return
+    setBusy(true)
+    setError(null)
     try {
       setModePin(userId, workspaceId, 'plaintext')
     } catch (err) {
@@ -88,8 +91,15 @@ export function WorkspaceKeyGate({
       confirmPlaintextForSession(userId, workspaceId)
     }
     try {
+      // Await — onResolved re-materializes the now-plaintext workspace's staged
+      // rows and re-resolves the layout. On a freshly-wiped device that drain can
+      // run for a while; keep the button in its busy state (it unmounts with the
+      // gate on success) so the click shows progress instead of looking dead.
       await onResolved()
     } catch (err) {
+      // Drain/re-resolve failed — recover the button and say why, rather than
+      // leaving it stuck mid-"Confirming…" with no recourse.
+      setBusy(false)
       setError(err instanceof Error ? err.message : 'Could not load this workspace.')
     }
   }
@@ -143,8 +153,8 @@ export function WorkspaceKeyGate({
               No key because it's not encrypted? Confirm to load it as a plain workspace. This
               choice is permanent for this workspace on every device.
             </p>
-            <Button type="button" variant="secondary" className="w-full" onClick={() => void confirmPlaintext()}>
-              This workspace is not encrypted
+            <Button type="button" variant="secondary" className="w-full" disabled={busy} onClick={() => void confirmPlaintext()}>
+              {busy ? 'Confirming…' : 'This workspace is not encrypted'}
             </Button>
           </div>
         )}
