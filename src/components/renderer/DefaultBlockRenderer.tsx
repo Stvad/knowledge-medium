@@ -60,6 +60,7 @@ import {
   type BlockShellProps,
 } from '@/extensions/blockInteraction.js'
 import { useShortcutSurfaceActivations } from '@/extensions/useShortcutSurfaceActivations.js'
+import { useContinuousGestures } from '@/extensions/continuousGestures.js'
 import { isFocusedBlock } from '@/data/properties.js'
 
 interface DefaultBlockRendererProps extends BlockRendererProps {
@@ -395,6 +396,12 @@ export function DefaultBlockRenderer(
     DefaultContentRenderer,
     EditContentRenderer,
   ])
+
+  // Continuous-gesture recognizers (swipe, date-scrub, …) attach native
+  // Pointer Event listeners + touch-action to the content surface and dispatch
+  // recognized gestures through the action system. A no-op until a recognizer
+  // is contributed, so blocks with none pay nothing.
+  useContinuousGestures(resolveContext, contentContainerRef)
 
   // Memoize on resolveContext so contributions that synthesize a fresh
   // component each call (e.g. plain-outliner's edit-mode dispatcher) don't

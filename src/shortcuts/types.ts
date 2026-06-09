@@ -190,14 +190,17 @@ export interface ActionContextActivation {
  * deliver a `KeyboardEvent`, imperative/swipe callers a `CustomEvent`, and
  * pointer-bound actions a React `MouseEvent` (click/double-click) or
  * `TouchEvent` (tap) — whose `currentTarget` / coordinates the handler reads
- * synchronously before any await. The descriptor used for resolution/ordering
- * is internal to the coordinator and never reaches here.
+ * synchronously before any await. A continuous gesture commits with the native
+ * `PointerEvent` that ended it (the recognizer loop works in native Pointer
+ * Events, not React synthetics). The descriptor used for resolution/ordering is
+ * internal to the coordinator and never reaches here.
  */
 export type ActionTrigger =
   | KeyboardEvent
   | CustomEvent
   | ReactMouseEvent<HTMLElement>
   | ReactTouchEvent<HTMLElement>
+  | PointerEvent
 
 /**
  * Activation primitives surfaced to action handlers as the optional third
