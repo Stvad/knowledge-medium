@@ -2,12 +2,14 @@ import {
   actionTransformsFacet,
   actionsFacet,
 } from '@/extensions/core.js'
+import { EXTEND_BLOCK_SELECTION_ACTION_ID } from '@/extensions/blockSelectionAction.js'
 import type { AppExtension } from '@/extensions/facet.js'
 import {
   ActionConfig,
   type BaseShortcutDependencies,
   type ActionTransform,
   ActionContextTypes,
+  type BlockPointerDependencies,
   type BlockShortcutDependencies,
 } from '@/shortcuts/types.js'
 import type { BlockAction } from '@/shortcuts/blockActions.js'
@@ -67,7 +69,7 @@ const locationsOf = (instances: readonly HTMLElement[]): FocusedBlockLocation[] 
     : null
 }
 
-const extendSelectionToSpatialTarget = async (
+export const extendSelectionToSpatialTarget = async (
   deps: BaseShortcutDependencies,
   target: HTMLElement,
 ): Promise<boolean> => {
@@ -327,6 +329,39 @@ const selectionVerticalDecorator = (
   }),
 })
 
+/**
+ * Shift-click selection in visible DOM order — an `ActionTransform` on the
+ * structural `extend_block_selection` action, the mouse-side counterpart of
+ * `selectionVerticalDecorator`: anchor → clicked block range across whatever is
+ * on screen (backlinks, embeds), not the data tree. Declines back to the
+ * structural base when no spatial range resolves (e.g. the clicked instance
+ * isn't in this panel / isn't a navigable item).
+ *
+ * `deps.targetElement` is the block shell the block-pointer dispatch captured —
+ * the same element the spatial shell decorator tags with `data-block-nav-item`,
+ * so the walker can locate it. Upstream gating (selection-gesture + exact
+ * shift-only pointer binding) means this only ever sees a plain shift-click, so
+ * it no longer re-checks modifiers or interactive content.
+ */
+export const spatialSelectionClickTransform: ActionTransform = {
+  actionId: EXTEND_BLOCK_SELECTION_ACTION_ID,
+  context: ActionContextTypes.BLOCK_POINTER,
+  apply: action => ({
+    ...action,
+    handler: async (deps, trigger, dispatch) => {
+      const {uiStateBlock, targetElement} = deps as BlockPointerDependencies
+      // Only the clicked block's own panel can resolve a spatial range; for a
+      // mismatched panel defer to the structural base rather than swallow it.
+      // `extendSelectionToSpatialTarget` reports a mismatch as "handled" for
+      // the keyboard contract, so gate on the panel match here.
+      if (panelOf(targetElement)?.dataset.panelId === uiStateBlock.id) {
+        if (await extendSelectionToSpatialTarget({uiStateBlock}, targetElement)) return
+      }
+      await action.handler(deps, trigger, dispatch)
+    },
+  }),
+}
+
 export function getSpatialNavigationActionDecorators(): ActionTransform[] {
   return [
     verticalDecorator('move_down', 'down', 'Move focus down (next block, then stack-sibling panel below)'),
@@ -335,6 +370,7 @@ export function getSpatialNavigationActionDecorators(): ActionTransform[] {
     selectionVerticalDecorator('extend_selection_up', ActionContextTypes.NORMAL_MODE, 'up'),
     selectionVerticalDecorator('multi_select.extend_selection_down', ActionContextTypes.MULTI_SELECT_MODE, 'down'),
     selectionVerticalDecorator('multi_select.extend_selection_up', ActionContextTypes.MULTI_SELECT_MODE, 'up'),
+    spatialSelectionClickTransform,
   ]
 }
 

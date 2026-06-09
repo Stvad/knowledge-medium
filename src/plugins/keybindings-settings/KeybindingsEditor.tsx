@@ -93,8 +93,21 @@ interface CapturingState {
 
 export const KeybindingsEditor = ({value, onChange}: PropertyEditorProps<StoredKeybindingOverrides>) => {
   const runtime = useAppRuntime()
-  const baseActions = useMemo(() => getActionsBeforeKeybindingOverrides(runtime), [runtime])
   const contextConfigs = useMemo(() => runtime.read(actionContextsFacet), [runtime])
+  // Contexts dispatched some way other than the keyboard (e.g. block-pointer,
+  // fired by pointer gestures) declare keyboardBindable: false. Their actions
+  // have no keyboard binding and must never appear in this editor as assignable
+  // — an assigned chord would be a dead binding and would pollute conflict
+  // detection. Drop them before anything downstream sees them.
+  const nonBindableContexts = useMemo(() => {
+    const set = new Set<ActionContextType>()
+    for (const c of contextConfigs) if (c.keyboardBindable === false) set.add(c.type)
+    return set
+  }, [contextConfigs])
+  const baseActions = useMemo(
+    () => getActionsBeforeKeybindingOverrides(runtime).filter(a => !nonBindableContexts.has(a.context)),
+    [runtime, nonBindableContexts],
+  )
   const contextDisplay = useMemo(() => {
     const map = new Map<ActionContextType, string>()
     for (const c of contextConfigs) map.set(c.type, c.displayName)

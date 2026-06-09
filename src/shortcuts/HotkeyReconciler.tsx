@@ -13,6 +13,7 @@ import {
   ActiveContextsMap,
 } from '@/shortcuts/ActiveContexts.js'
 import { setRunActionDispatcher } from '@/shortcuts/runAction.js'
+import { setPointerActionDispatcher } from '@/shortcuts/pointerAction.js'
 import {
   actionRuntimeKey,
   getActiveActionById,
@@ -21,14 +22,22 @@ import {
 import { keybindingOverridesFacet } from './keybindingOverrides.ts'
 import { computeInstallableContexts, resolve, resolveDeps } from './resolve.ts'
 import {
+  matchesMouseEvent,
+  pointerBindingDescriptor,
+  type PointerPhase,
+} from './canonicalizeChord.ts'
+import {
   ActionConfig,
   ActionContextConfig,
   ActionContextType,
   ActionDispatch,
+  ActionHandlerResult,
   ActionTrigger,
+  BaseShortcutDependencies,
   EventOptions,
   ShortcutBindingDefaults,
 } from '@/shortcuts/types.js'
+import type { MouseEvent as ReactMouseEvent } from 'react'
 import { hasEditableTarget, isTypingKeyEvent, withRecoveredLetterKey } from '@/shortcuts/utils.js'
 
 /**
@@ -174,9 +183,53 @@ export function HotkeyReconciler(): null {
       }
       const deps = resolveDeps(action, activeRef.current, contextConfigsByTypeRef.current)
       if (!deps) throw new Error(`[HotkeyReconciler] Context "${action.context}" is not active.`)
-      return action.handler(deps, trigger, dispatchRef.current)
+      // Imperative invocation has no candidate list to fall through to, so the
+      // not-handled sentinel is meaningless here — coerce it to undefined.
+      const result = action.handler(deps, trigger, dispatchRef.current)
+      return result === false ? undefined : result
     })
     return () => setRunActionDispatcher(null)
+  }, [runtime])
+
+  // Install the pointer-action dispatcher. Mirrors the keyboard coordinator's
+  // collect → order → run-until-handled loop, but the candidates are the
+  // pointer-bound actions whose descriptor matches this event, and deps are
+  // SUPPLIED by the caller (the clicked block — its context isn't keyboard-
+  // active). Reads refs so it always sees current active contexts / configs.
+  useEffect(() => {
+    setPointerActionDispatcher((event, supplied) => {
+      const active = activeRef.current
+      const contextConfigsByType = contextConfigsByTypeRef.current
+      const phase = phaseOfPointerEvent(event)
+      const eventLike = {
+        button: event.button,
+        detail: event.detail,
+        shiftKey: event.shiftKey,
+        altKey: event.altKey,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+      }
+      const matched = getEffectiveActions(runtime).filter(action => {
+        const spec = action.pointerBinding
+        if (!spec) return false
+        const descriptor = pointerBindingDescriptor(spec)
+        if (descriptor.phase !== phase) return false
+        if (!matchesMouseEvent(descriptor, eventLike)) return false
+        if (descriptor.role && !pointerRoleMatches(supplied.targetElement, descriptor.role)) return false
+        return true
+      })
+      if (matched.length === 0) return false
+
+      const ordered = resolve(matched, {active, contextConfigsByType}, {kind: 'pointer'})
+      return runOrderedCandidates(
+        ordered,
+        event,
+        {active, contextConfigsByType, dispatch: dispatchRef.current},
+        supplied,
+        action => applyPointerEventOptions(event, action, contextConfigsByType),
+      )
+    })
+    return () => setPointerActionDispatcher(null)
   }, [runtime])
 
   // One coordinator per phase replaces the N per-action window listeners —
@@ -288,28 +341,21 @@ export function HotkeyReconciler(): null {
       // precedence comparator), so the keyboard path can't diverge from the
       // imperative one. resolve drops candidates whose context deactivated or
       // got shadowed between matcher install and this event (filter-before-
-      // sort), then orders best-first. Dispatch the single winner: the first
-      // candidate whose deps resolve and whose canDispatch gate doesn't
-      // decline. PR 2 adds a third skip: a handler returning the not-handled
-      // sentinel.
+      // sort), then orders best-first. Dispatch the first candidate that
+      // doesn't decline through any of the three identically-treated
+      // fall-through conditions: deps don't resolve, canDispatch returns false,
+      // or the handler synchronously returns the not-handled sentinel (`false`).
       const bindings = new Map<ActionConfig, ShortcutBindingDefaults>(
         completed.map(c => [c.action, c.binding]),
       )
       const ordered = resolve([...bindings.keys()], {active, contextConfigsByType}, {kind: 'keyboard'})
-      for (const action of ordered) {
-        const deps = resolveDeps(action, active, contextConfigsByType)
-        if (!deps) continue
-        if (action.canDispatch && !action.canDispatch(deps)) continue
-        applyEventOptions(event, action, bindings.get(action)!, contextConfigsByType)
-        try {
-          void Promise.resolve(action.handler(deps, event, dispatchRef.current)).catch(error => {
-            console.error(`[HotkeyReconciler] Action ${action.id} rejected`, error)
-          })
-        } catch (error) {
-          console.error(`[HotkeyReconciler] Action ${action.id} threw`, error)
-        }
-        return // single winner (PR 1); PR 2 lets a declining handler fall through
-      }
+      runOrderedCandidates(
+        ordered,
+        event,
+        {active, contextConfigsByType, dispatch: dispatchRef.current},
+        undefined,
+        action => applyEventOptions(event, action, bindings.get(action)!, contextConfigsByType),
+      )
     }
 
     const onKeydown = (event: Event) => dispatchPhase('keydown', event)
@@ -480,6 +526,104 @@ const installHoldBinding = (config: HoldBindingInstall): (() => void) => {
     window.removeEventListener('blur', onBlur)
     cancel()
   }
+}
+
+interface CandidateRunContext {
+  active: ActiveContextsMap
+  contextConfigsByType: ReadonlyMap<ActionContextType, ActionContextConfig>
+  dispatch: ActionDispatch
+}
+
+/**
+ * Run an ordered candidate list best-first and dispatch the first that handles
+ * — the single run-until-handled loop shared by the keyboard and pointer
+ * paths. The three fall-through conditions are treated identically: deps don't
+ * resolve, `canDispatch` returns false, or the handler synchronously returns
+ * the not-handled sentinel (`false`).
+ *
+ * Event options apply only to the candidate that actually handles (or throws);
+ * a declining handler leaves the event untouched so the next candidate, or the
+ * native default, proceeds. NOTE this is a deliberate timing change from the
+ * pre-Option-D keyboard loop, which applied options BEFORE invoking the
+ * handler: here they're applied AFTER the synchronous return, because "handled"
+ * isn't known until the handler returns non-`false`. `preventDefault` is
+ * unaffected (the UA evaluates the default after the whole sync dispatch), but
+ * `stopPropagation` now fires after the handler body rather than before. No
+ * in-tree binding sets `stopPropagation: true`, so this is currently latent;
+ * a binding that does and relies on propagation already being stopped while its
+ * handler runs would see the new ordering.
+ *
+ * `supplied` deps are merged in for callers that hold them (pointer gestures,
+ * swipe) and undefined for keyboard. Returns true if a candidate handled (or
+ * threw), false if every candidate fell through.
+ */
+const runOrderedCandidates = (
+  ordered: readonly ActionConfig[],
+  trigger: ActionTrigger,
+  {active, contextConfigsByType, dispatch}: CandidateRunContext,
+  supplied: Partial<BaseShortcutDependencies> | undefined,
+  applyOptions: (action: ActionConfig) => void,
+): boolean => {
+  for (const action of ordered) {
+    const deps = resolveDeps(action, active, contextConfigsByType, supplied)
+    if (!deps) continue
+    if (action.canDispatch && !action.canDispatch(deps)) continue
+
+    let result: ActionHandlerResult
+    try {
+      result = action.handler(deps, trigger, dispatch)
+    } catch (error) {
+      console.error(`[HotkeyReconciler] Action ${action.id} threw`, error)
+      applyOptions(action)
+      return true
+    }
+    if (result === false) continue // declined — try the next candidate
+    applyOptions(action)
+    void Promise.resolve(result).catch(error => {
+      console.error(`[HotkeyReconciler] Action ${action.id} rejected`, error)
+    })
+    return true
+  }
+  return false
+}
+
+/** Map a React pointer event to the binding phase it can satisfy. `click` is
+ *  the default; `pointerdown` lets a double-click beat native text selection. */
+const phaseOfPointerEvent = (event: ReactMouseEvent<HTMLElement>): PointerPhase => {
+  switch (event.type) {
+    case 'mousedown':
+    case 'pointerdown':
+      return 'pointerdown'
+    case 'mouseup':
+    case 'pointerup':
+      return 'pointerup'
+    default:
+      return 'click'
+  }
+}
+
+/** A bound node satisfies a descriptor's `role` when it (or an ancestor)
+ *  carries the matching `data-pointer-role`. */
+const pointerRoleMatches = (target: HTMLElement, role: string): boolean =>
+  Boolean(target.closest(`[data-pointer-role="${role}"]`))
+
+/** preventDefault / stopPropagation for a handled pointer gesture. Block
+ *  selection wants both (suppress native text selection + keep the click from
+ *  bubbling into edit-mode), so that is the default; a context can override via
+ *  `defaultEventOptions`. */
+const applyPointerEventOptions = (
+  event: ReactMouseEvent<HTMLElement>,
+  action: ActionConfig,
+  contextConfigsByType: ReadonlyMap<ActionContextType, ActionContextConfig>,
+): void => {
+  const contextConfig = contextConfigsByType.get(action.context)
+  const options: EventOptions = {
+    preventDefault: true,
+    stopPropagation: true,
+    ...contextConfig?.defaultEventOptions,
+  }
+  if (options.stopPropagation) event.stopPropagation()
+  if (options.preventDefault) event.preventDefault()
 }
 
 /**

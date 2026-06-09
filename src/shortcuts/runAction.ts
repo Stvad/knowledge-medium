@@ -67,7 +67,11 @@ export function useRunAction(): RunActionByIdFn {
       }
       const deps = resolveDeps(action, active, contextConfigsByType)
       if (!deps) throw new Error(`[useRunAction] Context "${action.context}" is not active.`)
-      return action.handler(deps, trigger, dispatch)
+      // The not-handled sentinel (sync `false`) only drives the coordinator's
+      // candidate fall-through; imperative callers have no next candidate, so
+      // coerce it away to keep the `void | Promise<void>` contract.
+      const result = action.handler(deps, trigger, dispatch)
+      return result === false ? undefined : result
     },
     [runtime, active, dispatch],
   )

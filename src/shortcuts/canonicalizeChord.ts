@@ -29,12 +29,16 @@ export type Modifier = '$mod' | 'Control' | 'Alt' | 'Shift'
  *  `phase` field in `types.ts`. */
 export type ChordPhase = 'keydown' | 'keyup' | 'hold'
 
+/** When in the pointer lifecycle a mouse/touch press resolves. A
+ *  double-click binds at `pointerdown` to beat the browser's native
+ *  text-selection, which `click` is too late for. */
+export type PointerPhase = 'pointerdown' | 'pointerup' | 'click'
+
 /**
- * One press within a chord. A plain chord ('Cmd+K') is a single
- * descriptor; a sequence ('g g') is several. `kind` stays open so Phase 3
- * can add `'mouse' | 'touch'` variants rather than forcing a rewrite.
+ * One keyboard press within a chord. A plain chord ('Cmd+K') is a single
+ * descriptor; a sequence ('g g') is several.
  */
-export interface ChordDescriptor {
+export interface KeyChordDescriptor {
   readonly kind: 'key'
   /** Canonical final key, original case preserved ('k', 'K', 'Escape'). */
   readonly key: string
@@ -42,6 +46,35 @@ export interface ChordDescriptor {
   readonly mods: readonly Modifier[]
   readonly phase: ChordPhase
 }
+
+/**
+ * A single mouse/touch press. The pointer-side analogue of
+ * {@link KeyChordDescriptor}: `button`/`detail` replace `key`, the modifier
+ * model is shared (exact-set match — shift-click is `mods: ['Shift']` and does
+ * NOT match a ctrl+shift-click). `role` optionally constrains which bound node
+ * the press targets and is matched by the coordinator against the node, not by
+ * the pure matcher here.
+ */
+export interface MouseChordDescriptor {
+  readonly kind: 'mouse'
+  /** Pressed button: 0 primary, 1 middle, 2 secondary (matches `MouseEvent.button`). */
+  readonly button: number
+  /** Click count to match: 1 single, 2 double (matches `MouseEvent.detail`). */
+  readonly detail: number
+  /** Exact modifier set required, alias-folded as for keyboard. */
+  readonly mods: readonly Modifier[]
+  /** Optional semantic role the bound node must carry; matched by the
+   *  coordinator, not by {@link matchesMouseEvent}. */
+  readonly role?: string
+  readonly phase: PointerPhase
+}
+
+/**
+ * One press within a chord. `kind` discriminates keyboard from pointer; the
+ * field was left open in Phase 0 precisely so Phase 3 could add this variant
+ * without a rewrite.
+ */
+export type ChordDescriptor = KeyChordDescriptor | MouseChordDescriptor
 
 /** A chord is a sequence of presses; an ordinary chord is length 1. */
 export type ChordSequence = readonly ChordDescriptor[]
@@ -135,3 +168,91 @@ export const parseChord = (raw: string, phase: ChordPhase = 'keydown'): ChordSeq
     const {mods, key} = parsePress(press)
     return {kind: 'key', key, mods, phase}
   })
+
+/** Platform-primary detection for `$mod` (Cmd on Apple, Ctrl elsewhere),
+ *  mirroring tinykeys so keyboard and pointer agree on what `$mod` means. */
+const platformPrimaryIsMeta = (): boolean =>
+  typeof navigator !== 'undefined' &&
+  /Mac|iPhone|iPod|iPad/i.test(navigator.platform || navigator.userAgent || '')
+
+/** The four physical modifier flags a pointer event carries. */
+export interface PointerModifierState {
+  readonly shiftKey: boolean
+  readonly altKey: boolean
+  readonly ctrlKey: boolean
+  readonly metaKey: boolean
+}
+
+/** Expand a canonical modifier set to the four physical flags it requires,
+ *  resolving `$mod` to the platform-primary key. Exact-match semantics: a flag
+ *  not listed must be absent on the event. */
+const requiredModifierFlags = (mods: readonly Modifier[]): PointerModifierState => {
+  const primaryIsMeta = platformPrimaryIsMeta()
+  let shiftKey = false, altKey = false, ctrlKey = false, metaKey = false
+  for (const mod of mods) {
+    if (mod === 'Shift') shiftKey = true
+    else if (mod === 'Alt') altKey = true
+    else if (mod === 'Control') ctrlKey = true
+    else if (mod === '$mod') {
+      if (primaryIsMeta) metaKey = true
+      else ctrlKey = true
+    }
+  }
+  return {shiftKey, altKey, ctrlKey, metaKey}
+}
+
+/** The pointer-event shape {@link matchesMouseEvent} reads. Structural so the
+ *  matcher stays pure (no React/DOM import) and unit-testable. */
+export interface MouseEventLike extends PointerModifierState {
+  readonly button: number
+  readonly detail: number
+}
+
+/**
+ * A pointer (mouse) binding declared on an action — the pointer analogue of a
+ * keyboard `defaultBinding`. Structured rather than a string because pointer
+ * chords aren't sequences and don't share keyboard's phase set. Defaults:
+ * primary button, single click, no modifiers, `click` phase.
+ */
+export interface PointerBindingSpec {
+  readonly kind: 'mouse'
+  readonly button?: number
+  readonly detail?: number
+  readonly mods?: readonly Modifier[]
+  readonly role?: string
+  readonly phase?: PointerPhase
+}
+
+/** Realize a {@link PointerBindingSpec}'s declared/defaulted fields into the
+ *  descriptor the matcher and coordinator compare against. */
+export const pointerBindingDescriptor = (spec: PointerBindingSpec): MouseChordDescriptor => ({
+  kind: 'mouse',
+  button: spec.button ?? 0,
+  detail: spec.detail ?? 1,
+  mods: spec.mods ?? [],
+  ...(spec.role !== undefined ? {role: spec.role} : {}),
+  phase: spec.phase ?? 'click',
+})
+
+/**
+ * Does a mouse event satisfy a {@link MouseChordDescriptor}? Button and click
+ * count match exactly, and the modifier set matches exactly — `mods: ['Shift']`
+ * requires Shift held and Ctrl/Alt/Meta absent, so shift-click (extend
+ * selection) and ctrl-click (toggle selection) never collide. `role` is the
+ * coordinator's concern (it constrains the bound node), so it isn't consulted
+ * here.
+ */
+export const matchesMouseEvent = (
+  descriptor: MouseChordDescriptor,
+  event: MouseEventLike,
+): boolean => {
+  if (event.button !== descriptor.button) return false
+  if (event.detail !== descriptor.detail) return false
+  const required = requiredModifierFlags(descriptor.mods)
+  return (
+    event.shiftKey === required.shiftKey &&
+    event.altKey === required.altKey &&
+    event.ctrlKey === required.ctrlKey &&
+    event.metaKey === required.metaKey
+  )
+}

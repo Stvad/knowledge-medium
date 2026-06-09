@@ -38,6 +38,7 @@ import type { ActiveContextsMap } from './ActiveContexts.tsx'
 export type Trigger =
   | { kind: 'action'; actionId: string }
   | { kind: 'keyboard' }
+  | { kind: 'pointer' }
 
 /** Everything the comparator needs that isn't on the `ActionConfig`. */
 export interface ResolutionContext {
@@ -129,16 +130,34 @@ export const resolve = (
   // Modal shadowing is a keyboard-install concern only: imperative
   // id-invocation (runActionById / useRunAction) finds an action in any
   // active context, matching the old getActiveActionById. So the installable
-  // filter applies to keyboard triggers, not to `{kind:'action'}`.
+  // filter applies to keyboard triggers, not to `{kind:'action'}` or
+  // `{kind:'pointer'}`.
   const installable =
-    trigger.kind === 'action'
-      ? undefined
-      : computeInstallableContexts(ctx.active, ctx.contextConfigsByType)
+    trigger.kind === 'keyboard'
+      ? computeInstallableContexts(ctx.active, ctx.contextConfigsByType)
+      : undefined
   const candidates = actions.filter(action => {
-    if (!ctx.active.has(action.context)) return false
-    return trigger.kind === 'action'
-      ? action.id === trigger.actionId
-      : installable!.has(action.context)
+    switch (trigger.kind) {
+      case 'action':
+        // Imperative lookup: any active context, matching id.
+        return ctx.active.has(action.context) && action.id === trigger.actionId
+      case 'keyboard':
+        // Already-matched chord candidates, gated by modal shadowing.
+        return ctx.active.has(action.context) && installable!.has(action.context)
+      case 'pointer':
+        // Candidates are pre-filtered by binding match and dispatched with
+        // supplied deps, so the context need NOT be active — the click itself
+        // provides the context. resolve only orders them. Modal shadowing is
+        // deliberately NOT applied: a click on a block targets that block
+        // regardless of which mode holds keyboard focus (shift-click selection
+        // fired through a plain DOM onClick before this migration too, so this
+        // preserves behavior). FIXME(phase3): this blanket bypass is only sound
+        // for inherently spatially-targeted gestures. A future non-spatial
+        // pointer action that SHOULD be suppressed under a modal overlay (e.g.
+        // while the command palette is up) will need a per-action/context
+        // opt-in to shadowing before it can rely on this arm.
+        return true
+    }
   })
   return [...candidates].sort((x, y) => compareContexts(x.context, y.context, ctx))
 }
@@ -155,11 +174,13 @@ export const resolve = (
  * so imperative `runActionById` still resolves deps for an action in any
  * active context.
  *
- * `supplied` is plumbed for callers that hold deps the active map doesn't yet
- * (Phase 3's swipe `runBlockAction` passing `{block, uiStateBlock}` instead of
- * forking the dispatcher); it's unused for now. Validation runs only when deps
- * are supplied — active-map deps were already validated at activation, so
- * re-validating them would be redundant work.
+ * `supplied` lets callers hand in deps the active map doesn't hold — a pointer
+ * gesture supplying the CLICKED block's deps (its context isn't active), or
+ * swipe's `runBlockAction` passing `{block, uiStateBlock}` instead of forking
+ * the dispatcher. When deps are supplied the context need not be active: the
+ * merged deps are validated at this one boundary and used on their own if there
+ * is no active base. Validation runs only when deps are supplied — active-map
+ * deps were already validated at activation, so re-validating is redundant.
  */
 export const resolveDeps = (
   action: ActionConfig,
@@ -168,9 +189,8 @@ export const resolveDeps = (
   supplied?: Partial<BaseShortcutDependencies>,
 ): BaseShortcutDependencies | null => {
   const base = active.get(action.context)
-  if (!base) return null
-  if (!supplied) return base
-  const merged = {...base, ...supplied}
+  if (!supplied) return base ?? null
+  const merged = (base ? {...base, ...supplied} : supplied) as BaseShortcutDependencies
   const config = contextConfigsByType.get(action.context)
   if (config && !config.validateDependencies(merged)) return null
   return merged

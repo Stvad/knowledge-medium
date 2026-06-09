@@ -1,6 +1,7 @@
-import type { ComponentType, SVGProps } from 'react';
+import type { ComponentType, MouseEvent as ReactMouseEvent, SVGProps } from 'react';
 import { Block } from '../data/block';
 import { EditorView } from '@codemirror/view'
+import type { PointerBindingSpec } from './canonicalizeChord.js'
 
 /** Action icon — same SVG-component shape lucide-react emits, so the
  *  default action set can use those directly without an adapter. The
@@ -59,6 +60,15 @@ export interface ActionContextConfig<T extends ActionContextType = ActionContext
    */
   priority?: Priority;
   /**
+   * Whether actions in this context can be bound to a KEYBOARD chord. Defaults
+   * to true. Set false for contexts dispatched some other way — e.g.
+   * `block-pointer`, fired only by pointer gestures with supplied deps. Such
+   * actions carry no keyboard `defaultBinding`, so they must NOT surface in the
+   * keybindings editor as assignable, and must stay out of keyboard conflict
+   * detection (an assigned chord would be a dead binding).
+   */
+  keyboardBindable?: boolean;
+  /**
    * Type guard function to validate the dependencies provided when activating the context.
    */
   validateDependencies: DependencyValidator<T>;
@@ -70,6 +80,7 @@ export type BuiltInActionContextType =
   | 'edit-mode-cm'
   | 'property-editing'
   | 'multi-select-mode'
+  | 'block-pointer'
 
 export type ActionContextType = BuiltInActionContextType | (string & {})
 
@@ -79,6 +90,15 @@ export const ActionContextTypes = {
   EDIT_MODE_CM: 'edit-mode-cm',
   PROPERTY_EDITING: 'property-editing',
   MULTI_SELECT_MODE: 'multi-select-mode',
+  /**
+   * Pointer-dispatched block gestures (shift-click selection, future
+   * double-click-to-edit). Never auto-activated by a surface — it carries no
+   * persistent state to install bindings against. Instead the block shell
+   * dispatches a pointer event with the clicked block's deps SUPPLIED, and the
+   * coordinator resolves candidates against those. The context exists only to
+   * give those actions a home + a dependency validator.
+   */
+  BLOCK_POINTER: 'block-pointer',
 } as const;
 
 export interface BaseShortcutDependencies {
@@ -117,6 +137,16 @@ export interface MultiSelectModeDependencies extends BaseShortcutDependencies {
   anchorBlock: Block | null; // The block that started a shift-selection range
 }
 
+/**
+ * Dependencies for a pointer-dispatched block gesture. The clicked block plus
+ * the DOM element the pointer event targeted — captured synchronously at
+ * dispatch (React nulls `currentTarget` once the handler returns), so spatial
+ * walkers can locate the clicked instance among visible blocks.
+ */
+export interface BlockPointerDependencies extends BlockShortcutDependencies {
+  targetElement: HTMLElement;
+}
+
 export interface ShortcutDependenciesMap {
   [context: string]: BaseShortcutDependencies;
   [ActionContextTypes.GLOBAL]: BaseShortcutDependencies;
@@ -124,6 +154,7 @@ export interface ShortcutDependenciesMap {
   [ActionContextTypes.EDIT_MODE_CM]: CodeMirrorEditModeDependencies;
   [ActionContextTypes.PROPERTY_EDITING]: PropertyEditingDependencies;
   [ActionContextTypes.MULTI_SELECT_MODE]: MultiSelectModeDependencies;
+  [ActionContextTypes.BLOCK_POINTER]: BlockPointerDependencies;
 }
 
 export interface ActiveContextInfo {
@@ -137,7 +168,14 @@ export interface ActionContextActivation {
   enabled?: boolean;
 }
 
-export type ActionTrigger = KeyboardEvent | CustomEvent
+/**
+ * The raw event handed to a handler as its second argument. Keyboard chords
+ * deliver a `KeyboardEvent`, imperative/swipe callers a `CustomEvent`, and
+ * pointer-bound actions the React `MouseEvent` (whose `currentTarget` the
+ * handler reads synchronously before any await). The descriptor used for
+ * resolution/ordering is internal to the coordinator and never reaches here.
+ */
+export type ActionTrigger = KeyboardEvent | CustomEvent | ReactMouseEvent<HTMLElement>
 
 /**
  * Activation primitives surfaced to action handlers as the optional third
@@ -155,12 +193,30 @@ export interface ActionDispatch {
   deactivate: (context: ActionContextType) => void
 }
 
+/**
+ * What an action handler returns. A SYNCHRONOUS `false` is the "not handled —
+ * try the next candidate" sentinel (Option D): the single-winner coordinator
+ * treats it as a third fall-through condition, identical to `resolveDeps → null`
+ * and `canDispatch → false` — skip this candidate, never abort the loop.
+ *
+ * Everything else — `void`, `undefined`, or any `Promise` — counts as HANDLED
+ * the moment the handler returns; the loop stops there and never awaits. A
+ * `Promise` that resolves to `false` therefore does NOT fall through (the loop
+ * can't await to find out which is why the sentinel is synchronous-only). The
+ * type forbids `Promise<false>` because `Promise<false>` is not assignable to
+ * `Promise<void>` — so a handler can't accidentally declare an async decline.
+ *
+ * Imperative `runActionById` / `useRunAction` ignore the sentinel: they have no
+ * candidate list to fall through to, and coerce a `false` to `undefined`.
+ */
+export type ActionHandlerResult = void | false | Promise<void>
+
 export type ActionHandler<T extends ActionContextType = ActionContextType> = {
   bivarianceHack(
     dependencies: ShortcutDependenciesMap[T],
     trigger: ActionTrigger,
     dispatch?: ActionDispatch,
-  ): void | Promise<void>
+  ): ActionHandlerResult
 }['bivarianceHack']
 
 export type ActionCanRun<T extends ActionContextType = ActionContextType> = {
@@ -172,7 +228,11 @@ export interface Action<T extends ActionContextType = ActionContextType> {
   description: string;
   context: T;
   handler: ActionHandler<T>;
-  defaultBinding?: ShortcutBindingDefaults; // Optional default binding
+  defaultBinding?: ShortcutBindingDefaults; // Optional default keyboard binding
+  /** Optional pointer (mouse) binding — dispatched through the same coordinator
+   *  + `resolve` path as keyboard, but matched against a pointer event and
+   *  supplied the clicked block's deps. See {@link PointerBindingSpec}. */
+  pointerBinding?: PointerBindingSpec;
   /** Optional icon for surfaces that render actions visually (toolbars,
    *  swipe menus, eventual command-palette icon column). Surfaces that
    *  don't render icons just ignore the field. */

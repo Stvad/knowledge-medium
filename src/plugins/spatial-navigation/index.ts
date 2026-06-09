@@ -23,6 +23,10 @@ export const spatialNavigationPlugin: AppExtension = systemToggle({
   description: 'Vim-style h/j/k/l block & panel navigation driven by visible DOM order.',
 }).of([
   blockShellDecoratorsFacet.of(spatialNavigationShellDecorator, {source: 'spatial-navigation'}),
+  // Shift-click selection in visible DOM order (across backlinks/embeds) is now
+  // an ActionTransform on `extend_block_selection`, registered with the other
+  // spatial navigation transforms below — matching the keyboard
+  // `extend_selection_*` decorators.
   spatialNavigationActionDecoratorsExtension,
   spatialNavigationActionsExtension,
   // Per-panel watchdog: when the focused rendered location disappears

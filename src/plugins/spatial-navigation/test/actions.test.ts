@@ -15,10 +15,12 @@ import {
   ActionContextTypes,
   type ActionConfig,
   type ActionTrigger,
+  type BlockPointerDependencies,
   type BlockShortcutDependencies,
   type MultiSelectModeDependencies,
 } from '@/shortcuts/types.js'
 import { extendSelectionDown } from '@/shortcuts/blockActions.js'
+import { EXTEND_BLOCK_SELECTION_ACTION_ID } from '@/extensions/blockSelectionAction.js'
 import { getSpatialNavigationActionDecorators } from '@/plugins/spatial-navigation/actions.js'
 
 const WS = 'ws-1'
@@ -225,6 +227,87 @@ describe('spatial navigation selection actions', () => {
       selectedBlockIds: ['A'],
       anchorBlockId: 'A',
     })
+  })
+})
+
+describe('spatial navigation shift-click selection', () => {
+  const decoratePointerSelection = (action: ActionConfig): ActionConfig => {
+    const transform = getSpatialNavigationActionDecorators().find(candidate =>
+      candidate.actionId === EXTEND_BLOCK_SELECTION_ACTION_ID &&
+      candidate.context === ActionContextTypes.BLOCK_POINTER,
+    )
+    if (!transform) throw new Error('Missing spatial shift-click transform')
+    return transform.apply(action) as ActionConfig
+  }
+
+  const blockNavItem = (blockId: string): HTMLElement => {
+    const el = document.querySelector<HTMLElement>(`[data-block-id="${blockId}"]`)
+    if (!el) throw new Error(`missing nav item ${blockId}`)
+    return el
+  }
+
+  it('selects the visible DOM range from the anchor to the clicked block', async () => {
+    // Anchor is the focused A; shift-clicking the backlink result X selects the
+    // DOM-order range A..X — across the backlink, not the data tree.
+    buildPanelDom([
+      {blockId: 'A', renderScopeId: 'panel:A'},
+      {blockId: 'X', renderScopeId: 'panel:backlink:X'},
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: 'panel:A'})
+    const structural = vi.fn()
+    const action = decoratePointerSelection({
+      id: EXTEND_BLOCK_SELECTION_ACTION_ID,
+      description: 'Extend block selection to the clicked block',
+      context: ActionContextTypes.BLOCK_POINTER,
+      handler: async () => { structural() },
+    })
+
+    await action.handler({
+      block: env.repo.block('X'),
+      uiStateBlock: panel,
+      targetElement: blockNavItem('X'),
+    } as BlockPointerDependencies, {} as ActionTrigger)
+
+    expect(structural).not.toHaveBeenCalled()
+    expect(panel.peekProperty(selectionStateProp)).toEqual({
+      selectedBlockIds: ['A', 'X'],
+      anchorBlockId: 'A',
+    })
+  })
+
+  it('declines to the structural base when the clicked block is in another panel', async () => {
+    // The load-bearing decline: extendSelectionToSpatialTarget reports a panel
+    // mismatch as "handled" for the keyboard contract, so the transform gates on
+    // the panel match and must fall through to the structural handler here —
+    // otherwise a cross-panel shift-click would be silently swallowed.
+    buildPanelDom([{blockId: 'A', renderScopeId: 'panel:A'}])
+    const otherPanel = document.createElement('div')
+    otherPanel.dataset.panelId = 'other-panel'
+    const otherItem = document.createElement('div')
+    otherItem.dataset.blockNavItem = 'true'
+    otherItem.dataset.blockId = 'A'
+    otherItem.dataset.renderScopeId = 'other:A'
+    otherPanel.appendChild(otherItem)
+    document.body.appendChild(otherPanel)
+
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: 'panel:A'})
+    const structural = vi.fn()
+    const action = decoratePointerSelection({
+      id: EXTEND_BLOCK_SELECTION_ACTION_ID,
+      description: 'Extend block selection to the clicked block',
+      context: ActionContextTypes.BLOCK_POINTER,
+      handler: async () => { structural() },
+    })
+
+    await action.handler({
+      block: env.repo.block('A'),
+      uiStateBlock: panel,
+      targetElement: otherItem,
+    } as BlockPointerDependencies, {} as ActionTrigger)
+
+    expect(structural).toHaveBeenCalledTimes(1)
   })
 })
 

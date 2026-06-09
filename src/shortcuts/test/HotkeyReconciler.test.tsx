@@ -1,6 +1,8 @@
 import { describe, expect, it, afterEach, vi } from 'vitest'
 import { act, render, cleanup } from '@testing-library/react'
+import type { MouseEvent as ReactMouseEvent } from 'react'
 import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler.js'
+import { dispatchPointerAction } from '@/shortcuts/pointerAction.js'
 import {
   ActiveContextsProvider,
   useActiveContextsState,
@@ -51,6 +53,32 @@ const secondModalContextConfig: ActionContextConfig = {
   validateDependencies: (deps): deps is BaseShortcutDependencies =>
     typeof deps === 'object' && deps !== null,
 }
+
+const BLOCK_POINTER_CONTEXT = 'block-pointer' as ActionContextType
+const blockPointerContextConfig: ActionContextConfig = {
+  type: BLOCK_POINTER_CONTEXT,
+  displayName: 'Block Pointer',
+  validateDependencies: (deps): deps is BaseShortcutDependencies =>
+    typeof deps === 'object' && deps !== null,
+}
+
+const pointerEvent = (
+  overrides: Partial<{
+    type: string; button: number; detail: number
+    shiftKey: boolean; altKey: boolean; ctrlKey: boolean; metaKey: boolean
+  }> = {},
+): ReactMouseEvent<HTMLElement> => ({
+  type: 'click',
+  button: 0,
+  detail: 1,
+  shiftKey: false,
+  altKey: false,
+  ctrlKey: false,
+  metaKey: false,
+  preventDefault: vi.fn(),
+  stopPropagation: vi.fn(),
+  ...overrides,
+}) as unknown as ReactMouseEvent<HTMLElement>
 
 const HIGH_CONTEXT = 'high-priority-mode' as ActionContextType
 const highContextConfig: ActionContextConfig = {
@@ -529,6 +557,107 @@ describe('HotkeyReconciler', () => {
       expect(lowHandler).not.toHaveBeenCalled()
     })
 
+    it('falls through to the next candidate when the winner returns false', () => {
+      // Option D: a handler declares "not mine" by returning a synchronous
+      // `false`. The high-priority context would win 'k', but its handler
+      // declines, so the coordinator falls through to the lower context.
+      const declinedHandler = vi.fn(() => false as const)
+      const fallbackHandler = vi.fn()
+      const highAction = buildAction({
+        id: 'test.high-return-false',
+        context: HIGH_CONTEXT,
+        handler: declinedHandler,
+        defaultBinding: {keys: 'k'},
+      })
+      const lowAction = buildAction({
+        id: 'test.low-return-fallback',
+        context: TEST_CONTEXT,
+        handler: fallbackHandler,
+        defaultBinding: {keys: 'k'},
+      })
+
+      render(
+        <Harness
+          actions={[highAction, lowAction]}
+          contexts={[highContextConfig, testContextConfig]}
+        >
+          <SequentialActivator contexts={[HIGH_CONTEXT, TEST_CONTEXT]}/>
+        </Harness>,
+      )
+
+      act(() => dispatchKeydown('k'))
+      expect(declinedHandler).toHaveBeenCalledTimes(1)
+      expect(fallbackHandler).toHaveBeenCalledTimes(1)
+    })
+
+    it('treats a void return as handled — the next candidate does not run', () => {
+      const winnerHandler = vi.fn(() => undefined)
+      const fallbackHandler = vi.fn()
+      const highAction = buildAction({
+        id: 'test.high-void',
+        context: HIGH_CONTEXT,
+        handler: winnerHandler,
+        defaultBinding: {keys: 'k'},
+      })
+      const lowAction = buildAction({
+        id: 'test.low-void-fallback',
+        context: TEST_CONTEXT,
+        handler: fallbackHandler,
+        defaultBinding: {keys: 'k'},
+      })
+
+      render(
+        <Harness
+          actions={[highAction, lowAction]}
+          contexts={[highContextConfig, testContextConfig]}
+        >
+          <SequentialActivator contexts={[HIGH_CONTEXT, TEST_CONTEXT]}/>
+        </Harness>,
+      )
+
+      act(() => dispatchKeydown('k'))
+      expect(winnerHandler).toHaveBeenCalledTimes(1)
+      expect(fallbackHandler).not.toHaveBeenCalled()
+    })
+
+    it('does not fall through for a Promise that resolves to false (sync sentinel only)', () => {
+      // The loop chooses the next candidate within the same synchronous event
+      // and cannot await — so a Promise counts as handled the moment it
+      // returns, even if it later resolves to false. Only a synchronous false
+      // falls through. This pins that contract.
+      const asyncDeclineHandler = vi.fn(
+        // Returns Promise<false> at runtime; typed loosely since the public
+        // handler signature forbids it (Promise<false> ⊄ Promise<void>).
+        (() => Promise.resolve(false)) as unknown as () => void,
+      )
+      const fallbackHandler = vi.fn()
+      const highAction = buildAction({
+        id: 'test.high-async-false',
+        context: HIGH_CONTEXT,
+        handler: asyncDeclineHandler,
+        defaultBinding: {keys: 'k'},
+      })
+      const lowAction = buildAction({
+        id: 'test.low-async-fallback',
+        context: TEST_CONTEXT,
+        handler: fallbackHandler,
+        defaultBinding: {keys: 'k'},
+      })
+
+      render(
+        <Harness
+          actions={[highAction, lowAction]}
+          contexts={[highContextConfig, testContextConfig]}
+        >
+          <SequentialActivator contexts={[HIGH_CONTEXT, TEST_CONTEXT]}/>
+        </Harness>,
+      )
+
+      act(() => dispatchKeydown('k'))
+      expect(asyncDeclineHandler).toHaveBeenCalledTimes(1)
+      expect(fallbackHandler).not.toHaveBeenCalled()
+    })
+
     it('skips a candidate whose canDispatch declines and dispatches the next', () => {
       // The high-priority context would win 'k', but its canDispatch returns
       // false, so the coordinator falls through to the lower context's 'k'.
@@ -560,6 +689,70 @@ describe('HotkeyReconciler', () => {
       act(() => dispatchKeydown('k'))
       expect(declinedHandler).not.toHaveBeenCalled()
       expect(fallbackHandler).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('pointer dispatch', () => {
+    const pointerAction = (
+      overrides: Partial<ActionConfig> & Pick<ActionConfig, 'id' | 'handler'>,
+    ): ActionConfig => ({
+      description: 'test pointer action',
+      context: BLOCK_POINTER_CONTEXT,
+      pointerBinding: {kind: 'mouse', mods: ['Shift'], phase: 'click'},
+      ...overrides,
+    } as ActionConfig)
+
+    it('dispatches a matching shift-click to a pointer-bound action with supplied deps', () => {
+      const handler = vi.fn()
+      const action = pointerAction({id: 'pointer.shift', handler})
+
+      render(<Harness actions={[action]} contexts={[blockPointerContextConfig]}/>)
+
+      const supplied = {marker: 'clicked'} as unknown as BaseShortcutDependencies
+      let handled = false
+      act(() => {
+        handled = dispatchPointerAction(pointerEvent({shiftKey: true}), supplied as never)
+      })
+
+      // The context is NOT active — the click supplies the deps, which reach
+      // the handler unchanged.
+      expect(handled).toBe(true)
+      expect(handler).toHaveBeenCalledTimes(1)
+      expect(handler.mock.calls[0]?.[0]).toBe(supplied)
+    })
+
+    it('does not dispatch when the modifier set differs (ctrl+shift is not shift)', () => {
+      const handler = vi.fn()
+      const action = pointerAction({id: 'pointer.shift-only', handler})
+
+      render(<Harness actions={[action]} contexts={[blockPointerContextConfig]}/>)
+
+      let handled = true
+      act(() => {
+        handled = dispatchPointerAction(
+          pointerEvent({shiftKey: true, ctrlKey: true}),
+          {marker: 'x'} as never,
+        )
+      })
+
+      expect(handled).toBe(false)
+      expect(handler).not.toHaveBeenCalled()
+    })
+
+    it('falls through to the next pointer candidate when the first declines', () => {
+      const declined = vi.fn(() => false as const)
+      const fallback = vi.fn()
+      const first = pointerAction({id: 'pointer.declines', handler: declined})
+      const second = pointerAction({id: 'pointer.fallback', handler: fallback})
+
+      render(<Harness actions={[first, second]} contexts={[blockPointerContextConfig]}/>)
+
+      act(() => {
+        dispatchPointerAction(pointerEvent({shiftKey: true}), {marker: 'x'} as never)
+      })
+
+      expect(declined).toHaveBeenCalledTimes(1)
+      expect(fallback).toHaveBeenCalledTimes(1)
     })
   })
 
