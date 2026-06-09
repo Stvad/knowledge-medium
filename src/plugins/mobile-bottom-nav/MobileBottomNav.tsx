@@ -2,6 +2,7 @@ import { useIsMobile } from '@/utils/react.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { useActiveContextsState, type ActiveContextsMap } from '@/shortcuts/ActiveContexts.js'
 import { actionRuntimeKey, getEffectiveActions } from '@/shortcuts/effectiveActions.js'
+import { dispatchActionWithDeps } from '@/shortcuts/runAction.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { mobileBottomNavItemsFacet } from './facet.ts'
 import { MobileBottomNavButton } from './Button.tsx'
@@ -18,8 +19,15 @@ function MobileBottomNavActionButton({
   const handleClick = () => {
     const deps = activeContexts.get(action.context)
     if (!deps) return
-    void action.handler(
-      deps as never,
+    // Route through the supplied-deps dispatch (resolveDeps validation +
+    // canDispatch gate + error logging) rather than invoking the handler
+    // directly. The button is disabled unless its context is active, so `deps`
+    // is the active context's set; handing it in as supplied keeps the dispatch
+    // path uniform without requiring the resolver to treat the context as
+    // keyboard-active.
+    dispatchActionWithDeps(
+      action.id,
+      deps,
       new CustomEvent('mobile-bottom-nav-action', {detail: {actionId: action.id}}),
     )
   }

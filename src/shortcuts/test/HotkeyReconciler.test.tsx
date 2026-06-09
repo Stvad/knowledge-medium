@@ -1,6 +1,6 @@
 import { describe, expect, it, afterEach, vi } from 'vitest'
 import { act, render, cleanup } from '@testing-library/react'
-import type { MouseEvent as ReactMouseEvent } from 'react'
+import type { MouseEvent as ReactMouseEvent, TouchEvent as ReactTouchEvent } from 'react'
 import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler.js'
 import { dispatchPointerAction } from '@/shortcuts/pointerAction.js'
 import { dispatchActionWithDeps } from '@/shortcuts/runAction.js'
@@ -92,6 +92,18 @@ const pointerEvent = (
   stopPropagation: vi.fn(),
   ...overrides,
 }) as unknown as ReactMouseEvent<HTMLElement>
+
+// A touch gesture is discriminated from a mouse event by `changedTouches`; the
+// surface has already recognised the tap by the time it dispatches.
+const touchEvent = (
+  overrides: Partial<{target: EventTarget}> = {},
+): ReactTouchEvent<HTMLElement> => ({
+  type: 'touchend',
+  changedTouches: [{clientX: 1, clientY: 1}],
+  preventDefault: vi.fn(),
+  stopPropagation: vi.fn(),
+  ...overrides,
+}) as unknown as ReactTouchEvent<HTMLElement>
 
 const HIGH_CONTEXT = 'high-priority-mode' as ActionContextType
 const highContextConfig: ActionContextConfig = {
@@ -825,6 +837,83 @@ describe('HotkeyReconciler', () => {
 
       expect(declined).toHaveBeenCalledTimes(1)
       expect(fallback).toHaveBeenCalledTimes(1)
+    })
+
+    it('dispatches a double-click (pointerdown, detail 2) but not a single click', () => {
+      const handler = vi.fn()
+      const action = pointerAction({
+        id: 'pointer.double',
+        handler,
+        pointerBinding: {kind: 'mouse', detail: 2, phase: 'pointerdown'},
+      })
+
+      render(<Harness actions={[action]} contexts={[blockPointerContextConfig]}/>)
+
+      // A single mousedown (detail 1) at the same phase doesn't match.
+      let handled = true
+      act(() => {
+        handled = dispatchPointerAction(
+          pointerEvent({type: 'mousedown', detail: 1}),
+          {marker: 'x'} as never,
+        )
+      })
+      expect(handled).toBe(false)
+      expect(handler).not.toHaveBeenCalled()
+
+      act(() => {
+        handled = dispatchPointerAction(
+          pointerEvent({type: 'mousedown', detail: 2}),
+          {marker: 'x'} as never,
+        )
+      })
+      expect(handled).toBe(true)
+      expect(handler).toHaveBeenCalledTimes(1)
+    })
+
+    it('dispatches a touch tap to a touch-bound action', () => {
+      const handler = vi.fn()
+      const supplied = {marker: 'tapped'} as unknown as BaseShortcutDependencies
+      const action = pointerAction({
+        id: 'pointer.tap',
+        handler,
+        pointerBinding: {kind: 'touch', phase: 'tap'},
+      })
+
+      render(<Harness actions={[action]} contexts={[blockPointerContextConfig]}/>)
+
+      let handled = false
+      act(() => { handled = dispatchPointerAction(touchEvent(), supplied as never) })
+
+      expect(handled).toBe(true)
+      expect(handler).toHaveBeenCalledTimes(1)
+      expect(handler.mock.calls[0]?.[0]).toBe(supplied)
+    })
+
+    it('does not cross-match a mouse gesture to a touch binding (or vice versa)', () => {
+      const tapHandler = vi.fn()
+      const clickHandler = vi.fn()
+      const tapAction = pointerAction({
+        id: 'pointer.tap-only',
+        handler: tapHandler,
+        pointerBinding: {kind: 'touch', phase: 'tap'},
+      })
+      const clickAction = pointerAction({
+        id: 'pointer.click-only',
+        handler: clickHandler,
+        pointerBinding: {kind: 'mouse', mods: [], phase: 'click'},
+      })
+
+      render(<Harness actions={[tapAction, clickAction]} contexts={[blockPointerContextConfig]}/>)
+
+      // A plain click reaches the mouse action, not the touch one.
+      act(() => { dispatchPointerAction(pointerEvent({}), {marker: 'x'} as never) })
+      expect(clickHandler).toHaveBeenCalledTimes(1)
+      expect(tapHandler).not.toHaveBeenCalled()
+
+      // A tap reaches the touch action, not the mouse one.
+      act(() => { dispatchPointerAction(touchEvent(), {marker: 'x'} as never) })
+      expect(tapHandler).toHaveBeenCalledTimes(1)
+      expect(clickHandler).toHaveBeenCalledTimes(1)
     })
   })
 

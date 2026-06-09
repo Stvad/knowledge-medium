@@ -1,9 +1,12 @@
 import { useMemo } from 'react'
-import type { MouseEvent } from 'react'
+import type { MouseEvent, TouchEvent } from 'react'
 import {
+  blockContentSurfacePropsFacet,
+  blockPointerDepsFrom,
   blockShellDecoratorsFacet,
   isInteractiveContentEvent,
   isSelectionClick,
+  type BlockContentSurfaceContribution,
   type BlockResolveContext,
   type BlockShellDecoratorContribution,
   type BlockShellDecoratorProps,
@@ -14,8 +17,8 @@ import {
 import { editorAutocompleteExtension } from '@/extensions/editorAutocomplete.js'
 import { AppExtension } from '@/extensions/facet.js'
 import { actionsFacet } from '@/extensions/core.js'
-import { ActionContextTypes, type BlockPointerDependencies } from '@/shortcuts/types.js'
-import { dispatchPointerAction } from '@/shortcuts/pointerAction.js'
+import { ActionContextTypes } from '@/shortcuts/types.js'
+import { dispatchPointerAction, type PointerGestureEvent } from '@/shortcuts/pointerAction.js'
 import {
   extendBlockSelectionAction,
   toggleBlockSelectionAction,
@@ -42,28 +45,6 @@ export const codeMirrorEditModeActivation: ShortcutActivationContribution = cont
 const isBlockSelectionGesture = (event: MouseEvent<HTMLElement>): boolean =>
   isSelectionClick(event) && !isInteractiveContentEvent(event)
 
-/**
- * Build the deps a pointer-dispatched block gesture needs from a block's
- * resolve context plus the live event. `currentTarget` — the block shell the
- * spatial walker tags — is captured synchronously before React nulls it.
- */
-const suppliedPointerDeps = (
-  resolveContext: BlockResolveContext,
-  event: MouseEvent<HTMLElement>,
-): BlockPointerDependencies => {
-  const renderScopeId = typeof resolveContext.blockContext?.renderScopeId === 'string'
-    ? resolveContext.blockContext.renderScopeId
-    : undefined
-  return {
-    block: resolveContext.block,
-    uiStateBlock: resolveContext.uiStateBlock,
-    scopeRootId: resolveContext.scopeRootId,
-    scopeRootForcesOpen: !resolveContext.blockContext?.isNestedSurface,
-    targetElement: event.currentTarget,
-    ...(renderScopeId ? {renderScopeId} : {}),
-  }
-}
-
 export const createBlockSelectionShellState = (
   resolveContext: BlockResolveContext,
   state: BlockShellState,
@@ -86,7 +67,7 @@ export const createBlockSelectionShellState = (
       // block-pointer context's pointerTargetFilter keeps interactive descendants
       // native (no candidate matches). Fall back to any residual facet click
       // handler only when nothing claims the gesture.
-      if (!dispatchPointerAction(event, suppliedPointerDeps(resolveContext, event))) {
+      if (!dispatchPointerAction(event, blockPointerDepsFrom(resolveContext, event))) {
         state.shellProps.onClick?.(event)
       }
     },
@@ -110,6 +91,78 @@ export function BlockSelectionShellDecorator({
 export const blockSelectionShellDecorator: BlockShellDecoratorContribution = () =>
   BlockSelectionShellDecorator
 
+type ContentTouchStart = { x: number; y: number; time: number }
+
+// Per-block touch origin, kept between touchstart and touchend so a tap can be
+// told apart from a drag/scroll. Module-level because the surface contribution
+// is re-derived per render; keyed by block id, cleared on every touchend.
+const contentTouchStarts = new Map<string, ContentTouchStart>()
+
+const TAP_MOVE_PX = 10
+const TAP_MAX_MS = 300
+
+const isTap = (start: ContentTouchStart, end: ContentTouchStart): boolean =>
+  Math.abs(end.x - start.x) <= TAP_MOVE_PX &&
+  Math.abs(end.y - start.y) <= TAP_MOVE_PX &&
+  (end.time - start.time) <= TAP_MAX_MS
+
+/**
+ * Core pointer-gesture recognition on a block's CONTENT surface: routes a
+ * pointerdown-phase mouse gesture and a touch tap through the same pointer
+ * dispatch the shell uses for clicks, with the block's deps supplied. The
+ * surface only RECOGNISES and routes; what a gesture DOES is a bound
+ * `block-pointer` action (e.g. vim's double-click/tap-to-edit), so an unbound
+ * gesture is a no-op.
+ *
+ * Lives on the content surface, not the shell, so it never fires for the
+ * bullet, controls, or properties chrome — only the block's own content — and
+ * the context's `pointerTargetFilter` keeps it off interactive descendants and
+ * the CodeMirror editor while editing (where a double-click should select a
+ * word natively).
+ *
+ * Each branch recognises a discrete gesture, then routes it. A multi-click
+ * (`detail >= 2`) is the mouse gesture worth routing at the pointerdown phase —
+ * the action's binding picks the exact count (`detail: 2` for double-click),
+ * and binding at pointerdown (not `click`) lets the dispatch's preventDefault
+ * beat native word-selection. A single press isn't a gesture, so it's left for
+ * the shell's click. Touch has no single "tap" event, so the tap is recognised
+ * here (movement/duration thresholds) before routing.
+ */
+export const blockContentPointerGestures: BlockContentSurfaceContribution = context => {
+  const dispatchGesture = (event: PointerGestureEvent): void => {
+    dispatchPointerAction(event, blockPointerDepsFrom(context, event))
+  }
+
+  return {
+    onMouseDownCapture: (event: MouseEvent<HTMLDivElement>) => {
+      // A shell-level selection gesture already preventDefaulted (capture runs
+      // shell → content), so skip it here rather than double-routing.
+      if (event.defaultPrevented) return
+      // Only multi-clicks are pointerdown gestures; a single press is the
+      // shell's click to resolve, not a gesture to route.
+      if (event.detail < 2) return
+      dispatchGesture(event)
+    },
+    onTouchStart: (event: TouchEvent<HTMLDivElement>) => {
+      const touch = event.touches[0]
+      if (!touch) return
+      contentTouchStarts.set(context.block.id, {
+        x: touch.clientX,
+        y: touch.clientY,
+        time: Date.now(),
+      })
+    },
+    onTouchEnd: (event: TouchEvent<HTMLDivElement>) => {
+      const start = contentTouchStarts.get(context.block.id)
+      contentTouchStarts.delete(context.block.id)
+      const touch = event.changedTouches[0]
+      if (!start || !touch) return
+      if (!isTap(start, {x: touch.clientX, y: touch.clientY, time: Date.now()})) return
+      dispatchGesture(event)
+    },
+  }
+}
+
 export const defaultEditorInteractionExtension: AppExtension = systemToggle({
   id: 'system:default-editor-interactions',
   name: 'Default editor interactions',
@@ -120,6 +173,11 @@ export const defaultEditorInteractionExtension: AppExtension = systemToggle({
   blockShellDecoratorsFacet.of(blockFocusShellDecorator, {
     precedence: 1000,
     source: 'default-block-focus',
+  }),
+  // Content-surface pointer gestures the shell click can't see — pointerdown
+  // (double-click) and touch tap — dispatched through the same pointer path.
+  blockContentSurfacePropsFacet.of(blockContentPointerGestures, {
+    source: 'default-content-gestures',
   }),
   shortcutSurfaceActivationsFacet.of(codeMirrorEditModeActivation, {
     source: 'codemirror-edit-mode',

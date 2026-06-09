@@ -1,4 +1,9 @@
-import type { ComponentType, MouseEvent as ReactMouseEvent, SVGProps } from 'react';
+import type {
+  ComponentType,
+  MouseEvent as ReactMouseEvent,
+  TouchEvent as ReactTouchEvent,
+  SVGProps,
+} from 'react';
 import { Block } from '../data/block';
 import { EditorView } from '@codemirror/view'
 import type { PointerBindingSpec } from './canonicalizeChord.js'
@@ -74,10 +79,11 @@ export interface ActionContextConfig<T extends ActionContextType = ActionContext
    * that event. Lets a context declare "my gestures don't apply here" once,
    * centrally, instead of every action/handler re-checking — e.g. `block-pointer`
    * excludes clicks landing on interactive descendants (links, buttons) so they
-   * keep their native behavior. Keys off the actual event target. Only consulted
-   * on the pointer path; ignored for keyboard.
+   * keep their native behavior. Keys off the actual event target (works for
+   * mouse and touch alike). Only consulted on the pointer path; ignored for
+   * keyboard.
    */
-  pointerTargetFilter?: (event: ReactMouseEvent<HTMLElement>) => boolean;
+  pointerTargetFilter?: (event: ReactMouseEvent<HTMLElement> | ReactTouchEvent<HTMLElement>) => boolean;
   /**
    * Type guard function to validate the dependencies provided when activating the context.
    */
@@ -181,11 +187,16 @@ export interface ActionContextActivation {
 /**
  * The raw event handed to a handler as its second argument. Keyboard chords
  * deliver a `KeyboardEvent`, imperative/swipe callers a `CustomEvent`, and
- * pointer-bound actions the React `MouseEvent` (whose `currentTarget` the
- * handler reads synchronously before any await). The descriptor used for
- * resolution/ordering is internal to the coordinator and never reaches here.
+ * pointer-bound actions a React `MouseEvent` (click/double-click) or
+ * `TouchEvent` (tap) — whose `currentTarget` / coordinates the handler reads
+ * synchronously before any await. The descriptor used for resolution/ordering
+ * is internal to the coordinator and never reaches here.
  */
-export type ActionTrigger = KeyboardEvent | CustomEvent | ReactMouseEvent<HTMLElement>
+export type ActionTrigger =
+  | KeyboardEvent
+  | CustomEvent
+  | ReactMouseEvent<HTMLElement>
+  | ReactTouchEvent<HTMLElement>
 
 /**
  * Activation primitives surfaced to action handlers as the optional third

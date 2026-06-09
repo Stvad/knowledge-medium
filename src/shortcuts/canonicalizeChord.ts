@@ -29,10 +29,17 @@ export type Modifier = '$mod' | 'Control' | 'Alt' | 'Shift'
  *  `phase` field in `types.ts`. */
 export type ChordPhase = 'keydown' | 'keyup' | 'hold'
 
-/** When in the pointer lifecycle a mouse/touch press resolves. A
+/** When in the pointer lifecycle a mouse press resolves. A
  *  double-click binds at `pointerdown` to beat the browser's native
  *  text-selection, which `click` is too late for. */
 export type PointerPhase = 'pointerdown' | 'pointerup' | 'click'
+
+/** When in the touch lifecycle a gesture resolves. Only `tap` today — the
+ *  block surface recognises the tap (its movement/duration thresholds live
+ *  there, not in the descriptor) and dispatches at touchend. Kept a separate
+ *  phase set from {@link PointerPhase} because a tap is not a mouse press and
+ *  carries none of button/detail/modifiers. */
+export type TouchPhase = 'tap'
 
 /**
  * One keyboard press within a chord. A plain chord ('Cmd+K') is a single
@@ -70,11 +77,22 @@ export interface MouseChordDescriptor {
 }
 
 /**
+ * A single touch gesture. The touch-side analogue of {@link MouseChordDescriptor}:
+ * a tap has no button/detail/modifiers, so `phase` is the only matched field.
+ * Recognising the tap (movement/duration thresholds) is the surface's job; by
+ * the time a descriptor is compared the gesture has already been classified.
+ */
+export interface TouchChordDescriptor {
+  readonly kind: 'touch'
+  readonly phase: TouchPhase
+}
+
+/**
  * One press within a chord. `kind` discriminates keyboard from pointer; the
  * field was left open in Phase 0 precisely so Phase 3 could add this variant
  * without a rewrite.
  */
-export type ChordDescriptor = KeyChordDescriptor | MouseChordDescriptor
+export type ChordDescriptor = KeyChordDescriptor | MouseChordDescriptor | TouchChordDescriptor
 
 /** A chord is a sequence of presses; an ordinary chord is length 1. */
 export type ChordSequence = readonly ChordDescriptor[]
@@ -209,12 +227,12 @@ export interface MouseEventLike extends PointerModifierState {
 }
 
 /**
- * A pointer (mouse) binding declared on an action — the pointer analogue of a
- * keyboard `defaultBinding`. Structured rather than a string because pointer
- * chords aren't sequences and don't share keyboard's phase set. Defaults:
- * primary button, single click, no modifiers, `click` phase.
+ * A mouse binding declared on an action — the pointer analogue of a keyboard
+ * `defaultBinding`. Structured rather than a string because pointer chords
+ * aren't sequences and don't share keyboard's phase set. Defaults: primary
+ * button, single click, no modifiers, `click` phase.
  */
-export interface PointerBindingSpec {
+export interface MousePointerBindingSpec {
   readonly kind: 'mouse'
   readonly button?: number
   readonly detail?: number
@@ -223,16 +241,38 @@ export interface PointerBindingSpec {
   readonly phase?: PointerPhase
 }
 
+/**
+ * A touch binding declared on an action. A tap carries none of mouse's
+ * button/detail/modifiers, so the spec is just the kind plus an optional phase
+ * (only `tap` today). Defaults: `tap` phase.
+ */
+export interface TouchPointerBindingSpec {
+  readonly kind: 'touch'
+  readonly phase?: TouchPhase
+}
+
+/**
+ * A pointer binding declared on an action — a mouse gesture (click, ctrl-click,
+ * double-click, …) or a touch gesture (tap). Both dispatch through the same
+ * `resolve` + coordinator path with the clicked/tapped block's deps supplied.
+ */
+export type PointerBindingSpec = MousePointerBindingSpec | TouchPointerBindingSpec
+
 /** Realize a {@link PointerBindingSpec}'s declared/defaulted fields into the
  *  descriptor the matcher and coordinator compare against. */
-export const pointerBindingDescriptor = (spec: PointerBindingSpec): MouseChordDescriptor => ({
-  kind: 'mouse',
-  button: spec.button ?? 0,
-  detail: spec.detail ?? 1,
-  mods: spec.mods ?? [],
-  ...(spec.role !== undefined ? {role: spec.role} : {}),
-  phase: spec.phase ?? 'click',
-})
+export const pointerBindingDescriptor = (
+  spec: PointerBindingSpec,
+): MouseChordDescriptor | TouchChordDescriptor =>
+  spec.kind === 'touch'
+    ? {kind: 'touch', phase: spec.phase ?? 'tap'}
+    : {
+        kind: 'mouse',
+        button: spec.button ?? 0,
+        detail: spec.detail ?? 1,
+        mods: spec.mods ?? [],
+        ...(spec.role !== undefined ? {role: spec.role} : {}),
+        phase: spec.phase ?? 'click',
+      }
 
 /**
  * Does a mouse event satisfy a {@link MouseChordDescriptor}? Button and click

@@ -1,12 +1,15 @@
-import type { MouseEvent, RefObject } from 'react'
+import type { MouseEvent, RefObject, TouchEvent } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
 import type {
+  BlockContentSurfaceProps,
   BlockInteractionContext,
+  BlockResolveContext,
   BlockShellState,
 } from '@/extensions/blockInteraction'
 import {
+  blockContentPointerGestures,
   createBlockSelectionShellState,
 } from '@/extensions/defaultEditorInteractions'
 import { dispatchPointerAction } from '@/shortcuts/pointerAction'
@@ -178,5 +181,74 @@ describe('default editor interactions', () => {
 
     expect(mockDispatchPointerAction).toHaveBeenCalledTimes(1)
     expect(pluginClick).toHaveBeenCalledWith(event)
+  })
+})
+
+describe('blockContentPointerGestures (content-surface pointer gestures)', () => {
+  beforeEach(() => {
+    mockDispatchPointerAction.mockClear()
+    mockDispatchPointerAction.mockReturnValue(true)
+  })
+
+  const mouseDown = (overrides: Partial<MouseEvent<HTMLDivElement>> = {}): MouseEvent<HTMLDivElement> => ({
+    type: 'mousedown',
+    detail: 2,
+    defaultPrevented: false,
+    currentTarget: document.createElement('div'),
+    preventDefault: vi.fn(),
+    stopPropagation: vi.fn(),
+    ...overrides,
+  }) as unknown as MouseEvent<HTMLDivElement>
+
+  const touchAt = (x: number, y: number): TouchEvent<HTMLDivElement> => ({
+    currentTarget: document.createElement('div'),
+    touches: [{clientX: x, clientY: y}],
+    changedTouches: [{clientX: x, clientY: y}],
+    preventDefault: vi.fn(),
+    stopPropagation: vi.fn(),
+  }) as unknown as TouchEvent<HTMLDivElement>
+
+  const props = () =>
+    blockContentPointerGestures(context as BlockResolveContext) as BlockContentSurfaceProps
+
+  it('routes a content mousedown through the pointer dispatcher with the block supplied', () => {
+    const event = mouseDown({detail: 2})
+    props().onMouseDownCapture?.(event)
+
+    expect(mockDispatchPointerAction).toHaveBeenCalledTimes(1)
+    const [dispatchedEvent, supplied] = mockDispatchPointerAction.mock.calls[0]!
+    expect(dispatchedEvent).toBe(event)
+    expect(supplied).toMatchObject({
+      block: context.block,
+      uiStateBlock: context.uiStateBlock,
+      targetElement: event.currentTarget,
+    })
+  })
+
+  it('skips a mousedown a shell selection gesture already preventDefaulted', () => {
+    props().onMouseDownCapture?.(mouseDown({defaultPrevented: true}))
+    expect(mockDispatchPointerAction).not.toHaveBeenCalled()
+  })
+
+  it('ignores a single press (only a multi-click is a pointerdown gesture)', () => {
+    props().onMouseDownCapture?.(mouseDown({detail: 1}))
+    expect(mockDispatchPointerAction).not.toHaveBeenCalled()
+  })
+
+  it('routes a tap when touchstart→touchend stays within the tap thresholds', () => {
+    const surface = props()
+    surface.onTouchStart?.(touchAt(5, 5))
+    const end = touchAt(6, 6)
+    surface.onTouchEnd?.(end)
+
+    expect(mockDispatchPointerAction).toHaveBeenCalledTimes(1)
+    expect(mockDispatchPointerAction.mock.calls[0]![0]).toBe(end)
+  })
+
+  it('ignores a touch that moves beyond the tap threshold (a drag, not a tap)', () => {
+    const surface = props()
+    surface.onTouchStart?.(touchAt(5, 5))
+    surface.onTouchEnd?.(touchAt(80, 80))
+    expect(mockDispatchPointerAction).not.toHaveBeenCalled()
   })
 })
