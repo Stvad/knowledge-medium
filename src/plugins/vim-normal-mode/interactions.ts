@@ -25,6 +25,12 @@ import { Block } from '../../data/block'
  * one transform mechanism. Interactive descendants are excluded upstream by the
  * `block-pointer` context's `pointerTargetFilter`, so the handler doesn't
  * re-check them.
+ *
+ * Coupling note: this targets plain-outliner's action id, so single-click-focus
+ * only applies when plain-outliner is enabled (it provides the click-to-edit
+ * action this replaces). That's the normal config — vim normal mode edits the
+ * text blocks plain-outliner renders — but disabling plain-outliner while vim
+ * stays on would drop click-to-focus rather than fall back to it.
  */
 export const vimClickToFocusTransform: ActionTransform = {
   actionId: ENTER_BLOCK_EDIT_MODE_ACTION_ID,

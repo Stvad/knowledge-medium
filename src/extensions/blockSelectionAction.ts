@@ -47,6 +47,14 @@ export const extendBlockSelectionAction: ActionConfig<typeof ActionContextTypes.
  * matching the prior `ctrlKey || metaKey` behaviour). Lives in `block-pointer`
  * like the extend action; the context's `pointerTargetFilter` keeps it off
  * interactive descendants.
+ *
+ * Behaviour note: exact-set matching means a COMBINED-modifier click
+ * (ctrl/cmd+shift, ctrl+alt, …) matches neither toggle, extend, nor edit, so it
+ * falls through to native — a deliberate change from the old precedence chain
+ * (`if (ctrl||meta) toggle; else if (shift) extend`), where ctrl/meta + any
+ * other modifier still toggled. That combined-modifier toggling was incidental,
+ * not designed; if a real additive-range gesture is wanted later, bind it
+ * explicitly (e.g. `['$mod','Shift']`) rather than reviving the precedence.
  */
 export const toggleBlockSelectionAction: ActionConfig<typeof ActionContextTypes.BLOCK_POINTER> = {
   id: TOGGLE_BLOCK_SELECTION_ACTION_ID,

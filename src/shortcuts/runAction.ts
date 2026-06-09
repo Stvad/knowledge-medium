@@ -34,6 +34,14 @@ export function setRunActionDispatcher(next: RunActionByIdFn | null): void {
  * evaluated code in useAgentRuntimeBridge or one-off imperative callsites).
  *
  * Throws if called before the app mounts <HotkeyReconciler/>.
+ *
+ * NOTE: unlike the keyboard / pointer / supplied-deps dispatch paths, this does
+ * NOT consult `canDispatch` — it resolves the active action by id and invokes
+ * the handler. Callers own the precondition: an action whose handler trusts its
+ * deps (e.g. an SRS-only action) must either be unreachable here when
+ * inapplicable (the command palette filters by `isVisible`) or guard inside its
+ * handler. `dispatchActionWithDeps` below DOES gate on `canDispatch`. Unifying
+ * these gates is tracked with the broader dispatch-lifecycle work.
  */
 export const runActionById: RunActionByIdFn = (actionId, trigger) => {
   if (!dispatcher) {
