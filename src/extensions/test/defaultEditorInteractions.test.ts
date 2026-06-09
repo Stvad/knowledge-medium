@@ -105,6 +105,29 @@ describe('default editor interactions', () => {
     expect(event.preventDefault).not.toHaveBeenCalled()
   })
 
+  it('does not dispatch pointer actions for a selection-click on an interactive descendant', () => {
+    // A Shift-click on a link is not a block selection gesture (interactive
+    // targets are excluded), but it must not fall into the pointer dispatch
+    // either — extend_block_selection matches Shift-clicks without re-checking
+    // the target and would preventDefault the link. It stays native.
+    const pluginClick = vi.fn()
+    const link = document.createElement('a')
+    link.href = 'https://example.com'
+    const target = document.createElement('span')
+    link.appendChild(target)
+    const event = selectionMouseEvent(target, {
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: true,
+    })
+    const nextState = createBlockSelectionShellState(context, shellState({onClick: pluginClick}))
+
+    nextState.shellProps.onClick?.(event)
+
+    expect(mockDispatchPointerAction).not.toHaveBeenCalled()
+    expect(pluginClick).toHaveBeenCalledWith(event)
+  })
+
   it('routes selection clicks through the pointer dispatcher with the clicked block supplied', () => {
     const pluginClick = vi.fn()
     const target = document.createElement('span')

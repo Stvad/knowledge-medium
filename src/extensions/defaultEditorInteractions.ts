@@ -97,6 +97,15 @@ export const createBlockSelectionShellState = (
         dispatchSelectionClick(resolveContext, event)
         return
       }
+      // Interactive descendants (links, buttons, …) keep their native behavior.
+      // Pointer actions match on button + modifiers alone and don't re-check the
+      // target, so a Shift-click on a link would otherwise be claimed as block
+      // selection (extend_block_selection) and preventDefault'd — bypass pointer
+      // dispatch entirely here, as the pre-migration click handlers did.
+      if (isInteractiveContentEvent(event)) {
+        state.shellProps.onClick?.(event)
+        return
+      }
       // Plain (un-modified) click: route through the unified pointer dispatch
       // so click-to-edit (plain-outliner, vim-decorated) resolves the same way
       // selection gestures do. Falls back to any remaining facet click handler
