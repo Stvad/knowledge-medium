@@ -1,5 +1,4 @@
 import {
-  blockContentSurfacePropsFacet,
   shortcutSurfaceActivationsFacet,
 } from '@/extensions/blockInteraction.js'
 import { actionsFacet, actionTransformsFacet } from '@/extensions/core.js'
@@ -10,7 +9,6 @@ import { vimNormalModeActionsExtension } from './actions.ts'
 import {
   enterBlockEditModeOnGestureAction,
   vimClickToFocusTransform,
-  vimContentSurfaceBehavior,
   vimNormalModeActivation,
 } from './interactions.ts'
 
@@ -19,10 +17,6 @@ export const vimNormalModeInteractionExtension: AppExtension = [
     source: 'vim-normal-mode',
   }),
   actionsFacet.of(enterBlockEditModeOnGestureAction, {
-    source: 'vim-normal-mode',
-  }),
-  blockContentSurfacePropsFacet.of(vimContentSurfaceBehavior, {
-    precedence: 100,
     source: 'vim-normal-mode',
   }),
   shortcutSurfaceActivationsFacet.of(vimNormalModeActivation, {

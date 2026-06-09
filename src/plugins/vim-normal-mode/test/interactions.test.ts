@@ -1,9 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { MouseEvent, TouchEvent } from 'react'
 import type { Block } from '../../../data/block'
 import type { Repo } from '../../../data/repo'
 import {
-  blockContentSurfacePropsFacet,
   BlockInteractionContext,
   shortcutSurfaceActivationsFacet,
 } from '@/extensions/blockInteraction.js'
@@ -18,15 +16,13 @@ import { ENTER_BLOCK_EDIT_MODE_ACTION_ID } from '@/plugins/plain-outliner/clickT
 import {
   enterBlockEditModeOnGestureAction,
   vimClickToFocusTransform,
-  vimContentSurfaceBehavior,
   vimNormalModeActivation,
 } from '../interactions.ts'
 
-const dispatchPointerAction = vi.hoisted(() =>
-  vi.fn<(event: unknown, deps: unknown) => boolean>(() => true),
-)
-vi.mock('@/shortcuts/pointerAction.js', () => ({dispatchPointerAction}))
-
+// Vim contributes only actions/transforms now — the double-click/tap gestures
+// are recognised and dispatched by core's `blockContentPointerGestures`
+// (covered in defaultEditorInteractions.test.ts), so this suite mocks the edit
+// helpers and exercises the action handler + transform directly.
 const enterEditModeForBlock = vi.hoisted(() => vi.fn())
 const focusBlockWithoutEditing = vi.hoisted(() => vi.fn())
 vi.mock('@/extensions/blockInteraction.js', async (importOriginal) => ({
@@ -35,21 +31,12 @@ vi.mock('@/extensions/blockInteraction.js', async (importOriginal) => ({
   focusBlockWithoutEditing,
 }))
 
-// isBlockInEditMode short-circuits on isFocusedBlock, so this gate alone decides
-// whether the surface treats the block as currently editing.
-const isFocusedBlock = vi.hoisted(() => vi.fn(() => false))
-vi.mock('@/data/properties.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/data/properties.js')>()),
-  isFocusedBlock,
-}))
-
 const context = {
   block: {id: 'block-1'} as Block,
   repo: {} as Repo,
-  uiStateBlock: {id: 'panel', peekProperty: () => true} as unknown as Block,
+  uiStateBlock: {id: 'panel'} as Block,
   types: [],
   topLevelBlockId: 'root',
-  scopeRootId: 'root',
   inFocus: true,
   inEditMode: false,
   isSelected: false,
@@ -57,98 +44,7 @@ const context = {
   contentRenderers: [],
 } satisfies BlockInteractionContext
 
-const surfaceProps = () => {
-  const runtime = resolveFacetRuntimeSync([
-    blockContentSurfacePropsFacet.of(vimContentSurfaceBehavior),
-  ])
-  return runtime.read(blockContentSurfacePropsFacet)(context)
-}
-
-const mouseDown = (overrides: Partial<MouseEvent<HTMLDivElement>> = {}): MouseEvent<HTMLDivElement> => ({
-  type: 'mousedown',
-  detail: 2,
-  defaultPrevented: false,
-  currentTarget: document.createElement('div'),
-  preventDefault: vi.fn(),
-  stopPropagation: vi.fn(),
-  ...overrides,
-}) as unknown as MouseEvent<HTMLDivElement>
-
-const touchAt = (x: number, y: number) => ({
-  currentTarget: document.createElement('div'),
-  touches: [{clientX: x, clientY: y}],
-  changedTouches: [{clientX: x, clientY: y}],
-  preventDefault: vi.fn(),
-  stopPropagation: vi.fn(),
-}) as unknown as TouchEvent<HTMLDivElement>
-
 describe('vim normal mode interactions', () => {
-  it('contributes content-surface props for double-click and tap detection', () => {
-    const props = surfaceProps()
-    expect(props.onMouseDownCapture).toBeDefined()
-    expect(props.onTouchStart).toBeDefined()
-    expect(props.onTouchEnd).toBeDefined()
-  })
-
-  describe('double-click dispatch', () => {
-    it('dispatches a block-pointer gesture with the clicked block deps supplied', () => {
-      dispatchPointerAction.mockClear()
-      isFocusedBlock.mockReturnValue(false)
-      const props = surfaceProps()
-      const event = mouseDown({detail: 2})
-
-      props.onMouseDownCapture?.(event)
-
-      expect(dispatchPointerAction).toHaveBeenCalledTimes(1)
-      const [dispatchedEvent, deps] = dispatchPointerAction.mock.calls[0] as [
-        MouseEvent<HTMLDivElement>,
-        BlockPointerDependencies,
-      ]
-      expect(dispatchedEvent).toBe(event)
-      expect(deps.block).toBe(context.block)
-      expect(deps.uiStateBlock).toBe(context.uiStateBlock)
-      expect(deps.scopeRootId).toBe('root')
-      expect(deps.targetElement).toBe(event.currentTarget)
-    })
-
-    it('ignores a single click (only detail === 2 is a double-click)', () => {
-      dispatchPointerAction.mockClear()
-      isFocusedBlock.mockReturnValue(false)
-      surfaceProps().onMouseDownCapture?.(mouseDown({detail: 1}))
-      expect(dispatchPointerAction).not.toHaveBeenCalled()
-    })
-
-    it('does not dispatch while the block is already being edited', () => {
-      dispatchPointerAction.mockClear()
-      isFocusedBlock.mockReturnValue(true) // + peekProperty isEditing → true
-      surfaceProps().onMouseDownCapture?.(mouseDown({detail: 2}))
-      expect(dispatchPointerAction).not.toHaveBeenCalled()
-    })
-  })
-
-  describe('tap dispatch', () => {
-    it('dispatches when touchstart→touchend stays within the tap thresholds', () => {
-      dispatchPointerAction.mockClear()
-      isFocusedBlock.mockReturnValue(false)
-      const props = surfaceProps()
-      props.onTouchStart?.(touchAt(5, 5))
-      const end = touchAt(6, 6)
-      props.onTouchEnd?.(end)
-
-      expect(dispatchPointerAction).toHaveBeenCalledTimes(1)
-      expect(dispatchPointerAction.mock.calls[0]?.[0]).toBe(end)
-    })
-
-    it('does not dispatch when the touch moves beyond the tap threshold (a drag)', () => {
-      dispatchPointerAction.mockClear()
-      isFocusedBlock.mockReturnValue(false)
-      const props = surfaceProps()
-      props.onTouchStart?.(touchAt(5, 5))
-      props.onTouchEnd?.(touchAt(80, 80))
-      expect(dispatchPointerAction).not.toHaveBeenCalled()
-    })
-  })
-
   describe('enterBlockEditModeOnGestureAction', () => {
     it('binds both a double-click and a tap', () => {
       expect(enterBlockEditModeOnGestureAction.context).toBe(ActionContextTypes.BLOCK_POINTER)
