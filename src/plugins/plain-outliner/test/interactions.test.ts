@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { MouseEvent } from 'react'
 import type { Block } from '../../../data/block'
 import type { Repo } from '../../../data/repo'
 import type { BlockRenderer } from '@/types.js'
@@ -8,10 +7,15 @@ import {
   BlockInteractionContext,
 } from '@/extensions/blockInteraction.js'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
-import {
-  blockEditingContentRenderer,
-  plainOutlinerBlockClickBehavior,
-} from '../interactions.tsx'
+import type { ActionTrigger, BlockPointerDependencies } from '@/shortcuts/types.js'
+import { blockEditingContentRenderer } from '../interactions.tsx'
+import { enterBlockEditModeOnClickAction } from '../clickToEditAction.ts'
+
+const enterEditModeForBlock = vi.hoisted(() => vi.fn())
+vi.mock('@/extensions/blockInteraction.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/extensions/blockInteraction.js')>()),
+  enterEditModeForBlock,
+}))
 
 const PrimaryRenderer: BlockRenderer = () => null
 const SecondaryRenderer: BlockRenderer = () => null
@@ -90,50 +94,45 @@ describe('plain outliner interactions', () => {
     expect(variant?.render).toBe(PrimaryRenderer)
   })
 
-  it.each(interactiveTargets)('leaves %s clicks to the interactive descendant', async (_label, createTarget) => {
+})
+
+describe('plain outliner click-to-edit action', () => {
+  const deps = (): BlockPointerDependencies => ({
+    block: {id: 'block-1'} as Block,
+    uiStateBlock: {id: 'panel'} as Block,
+    targetElement: document.createElement('div'),
+    renderScopeId: 'scope-a',
+  })
+
+  const clickEvent = (target: EventTarget): ActionTrigger => ({
+    target,
+    clientX: 4,
+    clientY: 8,
+  }) as unknown as ActionTrigger
+
+  it('enters edit mode at the click position on a plain click', () => {
+    enterEditModeForBlock.mockClear()
+    const target = document.createElement('span')
+    const d = deps()
+
+    const result = enterBlockEditModeOnClickAction.handler(d, clickEvent(target))
+
+    // Not the not-handled sentinel — the pointer path will preventDefault.
+    expect(result).not.toBe(false)
+    expect(enterEditModeForBlock).toHaveBeenCalledWith(
+      d.block, d.uiStateBlock, 'scope-a', {x: 4, y: 8},
+    )
+  })
+
+  it.each(interactiveTargets)('declines %s clicks so native handling proceeds', (_label, createTarget) => {
+    enterEditModeForBlock.mockClear()
     const interactive = createTarget()
     const child = document.createElement('span')
     interactive.appendChild(child)
 
-    const event = {
-      target: child,
-      preventDefault: vi.fn(),
-      stopPropagation: vi.fn(),
-      ctrlKey: false,
-      metaKey: false,
-      shiftKey: false,
-      clientX: 1,
-      clientY: 1,
-    } as unknown as MouseEvent
+    const result = enterBlockEditModeOnClickAction.handler(deps(), clickEvent(child))
 
-    const handler = plainOutlinerBlockClickBehavior(context)
-    if (!handler) throw new Error('Expected plain outliner click handler')
-
-    await handler(event)
-
-    expect(event.preventDefault).not.toHaveBeenCalled()
-    expect(event.stopPropagation).not.toHaveBeenCalled()
-  })
-
-  it('leaves selection clicks to the default selection shell owner', async () => {
-    const target = document.createElement('span')
-    const event = {
-      target,
-      preventDefault: vi.fn(),
-      stopPropagation: vi.fn(),
-      ctrlKey: false,
-      metaKey: false,
-      shiftKey: true,
-      clientX: 1,
-      clientY: 1,
-    } as unknown as MouseEvent
-
-    const handler = plainOutlinerBlockClickBehavior(context)
-    if (!handler) throw new Error('Expected plain outliner click handler')
-
-    await handler(event)
-
-    expect(event.preventDefault).not.toHaveBeenCalled()
-    expect(event.stopPropagation).not.toHaveBeenCalled()
+    expect(result).toBe(false)
+    expect(enterEditModeForBlock).not.toHaveBeenCalled()
   })
 })

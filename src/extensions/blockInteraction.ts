@@ -456,15 +456,17 @@ export const isInteractiveContentEvent = (event: { target: EventTarget | null })
   return Boolean(element?.closest(interactiveContentSelector))
 }
 
-export const enterBlockEditMode = async (
-  context: BlockResolveContext,
+/**
+ * Enter edit mode for a block from its flat dependencies — the core used by
+ * both the `BlockResolveContext` wrapper below and the pointer-dispatched
+ * click-to-edit action (which only carries `{block, uiStateBlock, renderScopeId}`).
+ */
+export const enterEditModeForBlock = async (
+  block: Block,
+  uiStateBlock: Block,
+  renderScopeId?: string,
   selection?: EditorActivationSelection,
 ) => {
-  const {block, uiStateBlock} = context
-  const renderScopeId = typeof context.blockContext?.renderScopeId === 'string'
-    ? context.blockContext.renderScopeId
-    : undefined
-
   // Read-only workspace: clicks/keyboard shouldn't drop into edit mode, but
   // we still want the click target to register as focused so navigation
   // affordances (highlight, keyboard nav anchor) work. `focusBlock` honors
@@ -486,6 +488,31 @@ export const enterBlockEditMode = async (
   }
 
   requestEditorFocus(uiStateBlock)
+}
+
+export const enterBlockEditMode = async (
+  context: BlockResolveContext,
+  selection?: EditorActivationSelection,
+) => {
+  const renderScopeId = typeof context.blockContext?.renderScopeId === 'string'
+    ? context.blockContext.renderScopeId
+    : undefined
+  await enterEditModeForBlock(context.block, context.uiStateBlock, renderScopeId, selection)
+}
+
+/**
+ * Focus a block without entering edit mode, clearing any active block
+ * selection first — the "single click focuses" behaviour vim normal mode wants
+ * (and the plain-click branch of `handleBlockSelectionClick`). Operates on the
+ * flat deps a pointer-dispatched action carries.
+ */
+export const focusBlockWithoutEditing = async (
+  block: Block,
+  uiStateBlock: Block,
+  renderScopeId?: string,
+) => {
+  await resetBlockSelection(uiStateBlock)
+  void focusBlock(uiStateBlock, block.id, renderScopeId ? {renderScopeId} : undefined)
 }
 
 export const handleBlockSelectionClick = async (

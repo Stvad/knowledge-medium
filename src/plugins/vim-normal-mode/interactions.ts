@@ -1,22 +1,44 @@
-import type { MouseEvent, TouchEvent } from 'react'
+import type { MouseEvent, MouseEvent as ReactMouseEvent, TouchEvent } from 'react'
 import {
-  BlockClickContribution,
   BlockContentSurfaceContribution,
   enterBlockEditMode,
-  handleBlockSelectionClick,
+  focusBlockWithoutEditing,
   isInteractiveContentEvent,
-  isSelectionClick,
   ShortcutActivationContribution,
 } from '@/extensions/blockInteraction.js'
-import { ActionContextTypes } from '@/shortcuts/types.js'
+import {
+  ActionContextTypes,
+  type ActionTransform,
+  type ActionTrigger,
+  type BlockPointerDependencies,
+} from '@/shortcuts/types.js'
 import { isEditingProp, isFocusedBlock } from '@/data/properties.js'
+import { ENTER_BLOCK_EDIT_MODE_ACTION_ID } from '@/plugins/plain-outliner/clickToEditAction.js'
 import { Block } from '../../data/block'
 
-export const vimBlockClickBehavior: BlockClickContribution = context =>
-  event => {
-    if (isSelectionClick(event)) return
-    void handleBlockSelectionClick(context, event)
-  }
+/**
+ * Vim normal mode: a single click focuses the block instead of entering edit
+ * mode (double-click / tap still edits — see `vimContentSurfaceBehavior`).
+ *
+ * Decorates the plain-outliner click-to-edit pointer action by replacing its
+ * handler, the same Replace semantics vim used to get by winning the
+ * `blockClickHandlersFacet` last-contribution race — now expressed through the
+ * one transform mechanism. Declines on interactive content so links/buttons
+ * fall through to native handling.
+ */
+export const vimClickToFocusTransform: ActionTransform = {
+  actionId: ENTER_BLOCK_EDIT_MODE_ACTION_ID,
+  context: ActionContextTypes.BLOCK_POINTER,
+  apply: action => ({
+    ...action,
+    handler: (deps, trigger: ActionTrigger) => {
+      const event = trigger as ReactMouseEvent<HTMLElement>
+      if (isInteractiveContentEvent(event)) return false
+      const {block, uiStateBlock, renderScopeId} = deps as BlockPointerDependencies
+      void focusBlockWithoutEditing(block, uiStateBlock, renderScopeId)
+    },
+  }),
+}
 
 type TouchStart = { x: number; y: number; time: number }
 

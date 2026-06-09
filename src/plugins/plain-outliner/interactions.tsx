@@ -1,11 +1,6 @@
-import type { MouseEvent } from 'react'
 import {
-  BlockClickContribution,
   BlockContentRendererContribution,
-  enterBlockEditMode,
   getBlockContentRendererSlot,
-  isInteractiveContentEvent,
-  isSelectionClick,
 } from '@/extensions/blockInteraction.js'
 import { useInEditMode } from '@/data/globalState.js'
 import type { BlockRenderer } from '@/types.js'
@@ -43,18 +38,3 @@ export const blockEditingContentRenderer: BlockContentRendererContribution = con
     render: renderer,
   }
 }
-
-export const plainOutlinerBlockClickBehavior: BlockClickContribution = context =>
-  async (event: MouseEvent) => {
-    if (isInteractiveContentEvent(event)) return
-
-    if (isSelectionClick(event)) return
-
-    event.preventDefault()
-    event.stopPropagation()
-
-    await enterBlockEditMode(context, {
-      x: event.clientX,
-      y: event.clientY,
-    })
-  }

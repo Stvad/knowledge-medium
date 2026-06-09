@@ -41,32 +41,38 @@ const isBlockSelectionGesture = (event: MouseEvent<HTMLElement>): boolean =>
   isSelectionClick(event) && !isInteractiveContentEvent(event)
 
 /**
- * Dispatch a selection-gesture click through the unified pointer path. The
- * clicked block's deps are SUPPLIED (the gesture's context isn't keyboard-
- * active), and `currentTarget` — the block shell the spatial walker tags — is
- * captured synchronously before React nulls it. A pointer-bound action
- * (shift-click → `extend_block_selection`, possibly decorated by spatial nav)
- * may claim it; if none does (ctrl/meta toggle, plain reset), fall back to the
- * structural handler that still owns those branches.
+ * Build the deps a pointer-dispatched block gesture needs from a block's
+ * resolve context plus the live event. `currentTarget` — the block shell the
+ * spatial walker tags — is captured synchronously before React nulls it.
+ */
+const suppliedPointerDeps = (
+  resolveContext: BlockResolveContext,
+  event: MouseEvent<HTMLElement>,
+): BlockPointerDependencies => {
+  const renderScopeId = typeof resolveContext.blockContext?.renderScopeId === 'string'
+    ? resolveContext.blockContext.renderScopeId
+    : undefined
+  return {
+    block: resolveContext.block,
+    uiStateBlock: resolveContext.uiStateBlock,
+    scopeRootId: resolveContext.scopeRootId,
+    scopeRootForcesOpen: !resolveContext.blockContext?.isNestedSurface,
+    targetElement: event.currentTarget,
+    ...(renderScopeId ? {renderScopeId} : {}),
+  }
+}
+
+/**
+ * Dispatch a selection-gesture click through the unified pointer path. A
+ * pointer-bound action (shift-click → `extend_block_selection`, possibly
+ * decorated by spatial nav) may claim it; if none does (ctrl/meta toggle, plain
+ * reset), fall back to the structural handler that still owns those branches.
  */
 const dispatchSelectionClick = (
   resolveContext: BlockResolveContext,
   event: MouseEvent<HTMLElement>,
 ): void => {
-  const targetElement = event.currentTarget
-  const renderScopeId = typeof resolveContext.blockContext?.renderScopeId === 'string'
-    ? resolveContext.blockContext.renderScopeId
-    : undefined
-  const supplied: BlockPointerDependencies = {
-    block: resolveContext.block,
-    uiStateBlock: resolveContext.uiStateBlock,
-    scopeRootId: resolveContext.scopeRootId,
-    scopeRootForcesOpen: !resolveContext.blockContext?.isNestedSurface,
-    targetElement,
-    ...(renderScopeId ? {renderScopeId} : {}),
-  }
-
-  if (!dispatchPointerAction(event, supplied)) {
+  if (!dispatchPointerAction(event, suppliedPointerDeps(resolveContext, event))) {
     void handleBlockSelectionClick(resolveContext, event)
   }
 }
@@ -91,7 +97,13 @@ export const createBlockSelectionShellState = (
         dispatchSelectionClick(resolveContext, event)
         return
       }
-      state.shellProps.onClick?.(event)
+      // Plain (un-modified) click: route through the unified pointer dispatch
+      // so click-to-edit (plain-outliner, vim-decorated) resolves the same way
+      // selection gestures do. Falls back to any remaining facet click handler
+      // when no pointer action claims the gesture.
+      if (!dispatchPointerAction(event, suppliedPointerDeps(resolveContext, event))) {
+        state.shellProps.onClick?.(event)
+      }
     },
   },
   shortcutSurfaceOptions: state.shortcutSurfaceOptions,

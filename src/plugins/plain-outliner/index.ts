@@ -1,13 +1,11 @@
 import {
-  blockClickHandlersFacet,
   blockContentRendererFacet,
 } from '@/extensions/blockInteraction.js'
+import { actionsFacet } from '@/extensions/core.js'
 import { AppExtension } from '@/extensions/facet.js'
 import { systemToggle } from '@/extensions/togglable.js'
-import {
-  blockEditingContentRenderer,
-  plainOutlinerBlockClickBehavior,
-} from './interactions.tsx'
+import { blockEditingContentRenderer } from './interactions.tsx'
+import { enterBlockEditModeOnClickAction } from './clickToEditAction.ts'
 
 export const plainOutlinerPlugin: AppExtension = systemToggle({
   id: 'system:plain-outliner',
@@ -15,5 +13,7 @@ export const plainOutlinerPlugin: AppExtension = systemToggle({
   description: 'Editable text content renderer + click-to-edit behaviour used for plain text blocks.',
 }).of([
   blockContentRendererFacet.of(blockEditingContentRenderer, {source: 'plain-outliner'}),
-  blockClickHandlersFacet.of(plainOutlinerBlockClickBehavior, {source: 'plain-outliner'}),
+  // Click-to-edit as a pointer-bound action dispatched through resolve, rather
+  // than a blockClickHandlersFacet contribution that silently last-wins.
+  actionsFacet.of(enterBlockEditModeOnClickAction, {source: 'plain-outliner'}),
 ])

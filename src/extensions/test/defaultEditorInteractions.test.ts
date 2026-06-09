@@ -177,7 +177,10 @@ describe('default editor interactions', () => {
     })
   })
 
-  it('passes non-selection clicks through to the plugin click handler', () => {
+  it('routes plain clicks through the pointer dispatcher (click-to-edit) ahead of any plugin handler', () => {
+    // Click-to-edit is now a pointer-bound action; a plain click dispatches it
+    // with the clicked block supplied, and a handled gesture never reaches the
+    // residual plugin click handler.
     const pluginClick = vi.fn()
     const target = document.createElement('span')
     const event = selectionMouseEvent(target, {
@@ -189,7 +192,27 @@ describe('default editor interactions', () => {
 
     nextState.shellProps.onClick?.(event)
 
+    expect(mockDispatchPointerAction).toHaveBeenCalledTimes(1)
+    const [dispatchedEvent, supplied] = mockDispatchPointerAction.mock.calls[0]!
+    expect(dispatchedEvent).toBe(event)
+    expect(supplied).toMatchObject({block: context.block, uiStateBlock: context.uiStateBlock})
+    expect(pluginClick).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the plugin click handler when no pointer action claims a plain click', () => {
+    mockDispatchPointerAction.mockReturnValue(false)
+    const pluginClick = vi.fn()
+    const target = document.createElement('span')
+    const event = selectionMouseEvent(target, {
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+    })
+    const nextState = createBlockSelectionShellState(context, shellState({onClick: pluginClick}))
+
+    nextState.shellProps.onClick?.(event)
+
+    expect(mockDispatchPointerAction).toHaveBeenCalledTimes(1)
     expect(pluginClick).toHaveBeenCalledWith(event)
-    expect(mockDispatchPointerAction).not.toHaveBeenCalled()
   })
 })
