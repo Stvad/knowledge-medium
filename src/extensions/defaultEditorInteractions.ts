@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import type { MouseEvent } from 'react'
 import {
+  blockPointerDepsFrom,
   blockShellDecoratorsFacet,
   isInteractiveContentEvent,
   isSelectionClick,
@@ -14,7 +15,7 @@ import {
 import { editorAutocompleteExtension } from '@/extensions/editorAutocomplete.js'
 import { AppExtension } from '@/extensions/facet.js'
 import { actionsFacet } from '@/extensions/core.js'
-import { ActionContextTypes, type BlockPointerDependencies } from '@/shortcuts/types.js'
+import { ActionContextTypes } from '@/shortcuts/types.js'
 import { dispatchPointerAction } from '@/shortcuts/pointerAction.js'
 import {
   extendBlockSelectionAction,
@@ -42,28 +43,6 @@ export const codeMirrorEditModeActivation: ShortcutActivationContribution = cont
 const isBlockSelectionGesture = (event: MouseEvent<HTMLElement>): boolean =>
   isSelectionClick(event) && !isInteractiveContentEvent(event)
 
-/**
- * Build the deps a pointer-dispatched block gesture needs from a block's
- * resolve context plus the live event. `currentTarget` — the block shell the
- * spatial walker tags — is captured synchronously before React nulls it.
- */
-const suppliedPointerDeps = (
-  resolveContext: BlockResolveContext,
-  event: MouseEvent<HTMLElement>,
-): BlockPointerDependencies => {
-  const renderScopeId = typeof resolveContext.blockContext?.renderScopeId === 'string'
-    ? resolveContext.blockContext.renderScopeId
-    : undefined
-  return {
-    block: resolveContext.block,
-    uiStateBlock: resolveContext.uiStateBlock,
-    scopeRootId: resolveContext.scopeRootId,
-    scopeRootForcesOpen: !resolveContext.blockContext?.isNestedSurface,
-    targetElement: event.currentTarget,
-    ...(renderScopeId ? {renderScopeId} : {}),
-  }
-}
-
 export const createBlockSelectionShellState = (
   resolveContext: BlockResolveContext,
   state: BlockShellState,
@@ -86,7 +65,7 @@ export const createBlockSelectionShellState = (
       // block-pointer context's pointerTargetFilter keeps interactive descendants
       // native (no candidate matches). Fall back to any residual facet click
       // handler only when nothing claims the gesture.
-      if (!dispatchPointerAction(event, suppliedPointerDeps(resolveContext, event))) {
+      if (!dispatchPointerAction(event, blockPointerDepsFrom(resolveContext, event))) {
         state.shellProps.onClick?.(event)
       }
     },

@@ -1,10 +1,10 @@
 import type { MouseEvent, TouchEvent } from 'react'
 import {
+  blockPointerDepsFrom,
   BlockContentSurfaceContribution,
   enterEditModeForBlock,
   focusBlockWithoutEditing,
   ShortcutActivationContribution,
-  type BlockResolveContext,
   type EditorActivationSelection,
 } from '@/extensions/blockInteraction.js'
 import {
@@ -113,29 +113,6 @@ const isBlockInEditMode = (uiStateBlock: Block, blockId: string, renderScopeId?:
   Boolean(uiStateBlock.peekProperty(isEditingProp))
 
 /**
- * Build the deps a pointer-dispatched gesture needs from the block's resolve
- * context plus the live event. `currentTarget` (the content surface) is read
- * synchronously before React nulls it. Mirrors the shell's `suppliedPointerDeps`
- * but sourced from the content-surface contribution's context.
- */
-const suppliedGestureDeps = (
-  context: BlockResolveContext,
-  event: PointerGestureEvent,
-): BlockPointerDependencies => {
-  const renderScopeId = typeof context.blockContext?.renderScopeId === 'string'
-    ? context.blockContext.renderScopeId
-    : undefined
-  return {
-    block: context.block,
-    uiStateBlock: context.uiStateBlock,
-    scopeRootId: context.scopeRootId,
-    scopeRootForcesOpen: !context.blockContext?.isNestedSurface,
-    targetElement: event.currentTarget,
-    ...(renderScopeId ? {renderScopeId} : {}),
-  }
-}
-
-/**
  * Recognises the double-click and tap gestures on a block's content surface and
  * dispatches them through the pointer path; what they DO (enter edit mode) lives
  * in `enterBlockEditModeOnGestureAction`, decoratable like any other action.
@@ -153,7 +130,7 @@ export const vimContentSurfaceBehavior: BlockContentSurfaceContribution = contex
     : undefined
 
   const dispatchGesture = (event: PointerGestureEvent): void => {
-    dispatchPointerAction(event, suppliedGestureDeps(context, event))
+    dispatchPointerAction(event, blockPointerDepsFrom(context, event))
   }
 
   return {

@@ -25,7 +25,8 @@ import {
   type VariantContribution,
   type VariantResolver,
 } from '@/extensions/variantFacet.js'
-import type { ActionContextActivation } from '@/shortcuts/types.js'
+import type { ActionContextActivation, BlockPointerDependencies } from '@/shortcuts/types.js'
+import type { PointerGestureEvent } from '@/shortcuts/pointerAction.js'
 import type { BlockContextType, BlockRenderer } from '@/types.js'
 
 export interface BlockContentRendererSlot {
@@ -512,3 +513,30 @@ export const focusBlockWithoutEditing = async (
 
 export const isSelectionClick = (event: MouseEvent) =>
   event.ctrlKey || event.metaKey || event.shiftKey
+
+/**
+ * Build the deps a pointer-dispatched block gesture needs from a block's
+ * resolve context plus the live event — the clicked/tapped block, the surface
+ * boundary, and the DOM node the event targeted. `currentTarget` is read
+ * synchronously here (the caller is still inside the React handler) because
+ * React nulls it once the handler returns, and pointer actions (the spatial
+ * selection walker) need the bound element to locate the gesture among visible
+ * blocks. Shared by the block shell's click path and the content surface's
+ * double-click/tap path so the supplied-deps shape stays in one place.
+ */
+export const blockPointerDepsFrom = (
+  context: BlockResolveContext,
+  event: PointerGestureEvent,
+): BlockPointerDependencies => {
+  const renderScopeId = typeof context.blockContext?.renderScopeId === 'string'
+    ? context.blockContext.renderScopeId
+    : undefined
+  return {
+    block: context.block,
+    uiStateBlock: context.uiStateBlock,
+    scopeRootId: context.scopeRootId,
+    scopeRootForcesOpen: !context.blockContext?.isNestedSurface,
+    targetElement: event.currentTarget,
+    ...(renderScopeId ? {renderScopeId} : {}),
+  }
+}
