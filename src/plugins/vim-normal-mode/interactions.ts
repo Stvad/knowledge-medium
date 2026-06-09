@@ -1,14 +1,21 @@
 import type { MouseEvent, TouchEvent } from 'react'
 import {
   BlockContentSurfaceContribution,
-  enterBlockEditMode,
+  enterEditModeForBlock,
   focusBlockWithoutEditing,
-  isInteractiveContentEvent,
   ShortcutActivationContribution,
+  type BlockResolveContext,
+  type EditorActivationSelection,
 } from '@/extensions/blockInteraction.js'
 import {
+  dispatchPointerAction,
+  type PointerGestureEvent,
+} from '@/shortcuts/pointerAction.js'
+import {
   ActionContextTypes,
+  type ActionConfig,
   type ActionTransform,
+  type ActionTrigger,
   type BlockPointerDependencies,
 } from '@/shortcuts/types.js'
 import { isEditingProp, isFocusedBlock } from '@/data/properties.js'
@@ -17,7 +24,7 @@ import { Block } from '../../data/block'
 
 /**
  * Vim normal mode: a single click focuses the block instead of entering edit
- * mode (double-click / tap still edits — see `vimContentSurfaceBehavior`).
+ * mode (double-click / tap still edits — see `enterBlockEditModeOnGestureAction`).
  *
  * Decorates the plain-outliner click-to-edit pointer action by replacing its
  * handler, the same Replace semantics vim used to get by winning the
@@ -44,6 +51,56 @@ export const vimClickToFocusTransform: ActionTransform = {
   }),
 }
 
+export const ENTER_BLOCK_EDIT_MODE_GESTURE_ACTION_ID = 'vim.block.enter-edit-mode-gesture'
+
+/** Cursor position for the entered editor, taken from whichever gesture fired:
+ *  a tap's changed touch, or a mouse event's client coordinates. Other trigger
+ *  shapes (keyboard, custom) carry no position, so editing starts at the
+ *  default caret. */
+const pointerSelectionFromTrigger = (
+  trigger: ActionTrigger,
+): EditorActivationSelection | undefined => {
+  if ('changedTouches' in trigger) {
+    const touch = trigger.changedTouches[0]
+    return touch ? {x: touch.clientX, y: touch.clientY} : undefined
+  }
+  if ('clientX' in trigger) return {x: trigger.clientX, y: trigger.clientY}
+  return undefined
+}
+
+/**
+ * Vim normal mode: a double-click (mouse) or tap (touch) enters edit mode — the
+ * counterpart to `vimClickToFocusTransform`, which makes a single click focus
+ * rather than edit. A pointer-bound `block-pointer` action, so it dispatches
+ * through the same `resolve` + coordinator path as click-to-edit and selection,
+ * with the clicked/tapped block's deps SUPPLIED. The context's
+ * `pointerTargetFilter` keeps it off interactive descendants and the CodeMirror
+ * editor (once editing, the surface is contenteditable → filtered → native
+ * double-click word-select stands).
+ *
+ * Double-click binds at `pointerdown` to beat the browser's native
+ * text-selection, which the `click` phase is too late to suppress; the tap
+ * binds at the touch `tap` phase, dispatched from the content surface's
+ * touchend once it has recognised the gesture.
+ */
+export const enterBlockEditModeOnGestureAction: ActionConfig<typeof ActionContextTypes.BLOCK_POINTER> = {
+  id: ENTER_BLOCK_EDIT_MODE_GESTURE_ACTION_ID,
+  description: 'Enter edit mode on double-click or tap',
+  context: ActionContextTypes.BLOCK_POINTER,
+  pointerBinding: [
+    {kind: 'mouse', detail: 2, phase: 'pointerdown'},
+    {kind: 'touch', phase: 'tap'},
+  ],
+  handler: ({block, uiStateBlock, renderScopeId}, trigger) => {
+    void enterEditModeForBlock(
+      block,
+      uiStateBlock,
+      renderScopeId,
+      pointerSelectionFromTrigger(trigger),
+    )
+  },
+}
+
 type TouchStart = { x: number; y: number; time: number }
 
 const touchStartByBlockId = new Map<string, TouchStart>()
@@ -55,29 +112,64 @@ const isBlockInEditMode = (uiStateBlock: Block, blockId: string, renderScopeId?:
   isFocusedBlock(uiStateBlock, blockId, renderScopeId) &&
   Boolean(uiStateBlock.peekProperty(isEditingProp))
 
+/**
+ * Build the deps a pointer-dispatched gesture needs from the block's resolve
+ * context plus the live event. `currentTarget` (the content surface) is read
+ * synchronously before React nulls it. Mirrors the shell's `suppliedPointerDeps`
+ * but sourced from the content-surface contribution's context.
+ */
+const suppliedGestureDeps = (
+  context: BlockResolveContext,
+  event: PointerGestureEvent,
+): BlockPointerDependencies => {
+  const renderScopeId = typeof context.blockContext?.renderScopeId === 'string'
+    ? context.blockContext.renderScopeId
+    : undefined
+  return {
+    block: context.block,
+    uiStateBlock: context.uiStateBlock,
+    scopeRootId: context.scopeRootId,
+    scopeRootForcesOpen: !context.blockContext?.isNestedSurface,
+    targetElement: event.currentTarget,
+    ...(renderScopeId ? {renderScopeId} : {}),
+  }
+}
+
+/**
+ * Recognises the double-click and tap gestures on a block's content surface and
+ * dispatches them through the pointer path; what they DO (enter edit mode) lives
+ * in `enterBlockEditModeOnGestureAction`, decoratable like any other action.
+ * Interactive-target and edit-mode exclusion are the block-pointer context's
+ * job (`pointerTargetFilter`), so this only recognises the gesture and routes
+ * it. The dispatch path applies preventDefault/stopPropagation when an action
+ * handles the gesture — which suppresses the synthetic click a tap would
+ * otherwise raise (a single click focuses in vim, so an un-suppressed tap would
+ * focus instead of edit).
+ */
 export const vimContentSurfaceBehavior: BlockContentSurfaceContribution = context => {
   const {block, uiStateBlock} = context
   const renderScopeId = typeof context.blockContext?.renderScopeId === 'string'
     ? context.blockContext.renderScopeId
     : undefined
 
+  const dispatchGesture = (event: PointerGestureEvent): void => {
+    dispatchPointerAction(event, suppliedGestureDeps(context, event))
+  }
+
   return {
-    onMouseDownCapture: (event: MouseEvent) => {
+    onMouseDownCapture: (event: MouseEvent<HTMLElement>) => {
       if (event.defaultPrevented) return
-      if (isInteractiveContentEvent(event)) return
       if (isBlockInEditMode(uiStateBlock, block.id, renderScopeId)) return
-      // detail === 2 catches double-click before native text-selection kicks in
+      // detail === 2 catches the double-click before native text-selection kicks
+      // in; it dispatches at the pointerdown phase to beat that selection.
       if (event.detail !== 2) return
-      event.preventDefault()
-      event.stopPropagation()
-      void enterBlockEditMode(context, {x: event.clientX, y: event.clientY})
+      dispatchGesture(event)
     },
-    onTouchStart: (event: TouchEvent) => {
-      if (isInteractiveContentEvent(event)) {
+    onTouchStart: (event: TouchEvent<HTMLElement>) => {
+      if (isBlockInEditMode(uiStateBlock, block.id, renderScopeId)) {
         touchStartByBlockId.delete(block.id)
         return
       }
-      if (isBlockInEditMode(uiStateBlock, block.id, renderScopeId)) return
       const touch = event.touches[0]
       if (!touch) return
       touchStartByBlockId.set(block.id, {
@@ -86,23 +178,17 @@ export const vimContentSurfaceBehavior: BlockContentSurfaceContribution = contex
         time: Date.now(),
       })
     },
-    onTouchEnd: (event: TouchEvent) => {
-      if (isInteractiveContentEvent(event)) {
-        touchStartByBlockId.delete(block.id)
-        return
-      }
-      if (isBlockInEditMode(uiStateBlock, block.id, renderScopeId)) return
+    onTouchEnd: (event: TouchEvent<HTMLElement>) => {
       const start = touchStartByBlockId.get(block.id)
       touchStartByBlockId.delete(block.id)
+      if (isBlockInEditMode(uiStateBlock, block.id, renderScopeId)) return
       const touch = event.changedTouches[0]
       if (!start || !touch) return
 
       const end = {x: touch.clientX, y: touch.clientY, time: Date.now()}
       if (!isTap(start, end)) return
 
-      event.preventDefault()
-      event.stopPropagation()
-      void enterBlockEditMode(context, {x: touch.clientX, y: touch.clientY})
+      dispatchGesture(event)
     },
   }
 }

@@ -13,7 +13,6 @@ import {
   ActiveContextsMap,
 } from '@/shortcuts/ActiveContexts.js'
 import { setRunActionDispatcher, setActionWithDepsDispatcher } from '@/shortcuts/runAction.js'
-import { setPointerActionDispatcher } from '@/shortcuts/pointerAction.js'
 import {
   actionRuntimeKey,
   getActiveActionById,
@@ -24,9 +23,12 @@ import { computeInstallableContexts, resolve, resolveDeps } from './resolve.ts'
 import {
   matchesMouseEvent,
   pointerBindingDescriptor,
+  type MouseEventLike,
   type PointerBindingSpec,
   type PointerPhase,
+  type TouchPhase,
 } from './canonicalizeChord.ts'
+import { setPointerActionDispatcher, type PointerGestureEvent } from '@/shortcuts/pointerAction.js'
 import {
   ActionConfig,
   ActionContextConfig,
@@ -38,7 +40,7 @@ import {
   EventOptions,
   ShortcutBindingDefaults,
 } from '@/shortcuts/types.js'
-import type { MouseEvent as ReactMouseEvent } from 'react'
+import type { MouseEvent as ReactMouseEvent, TouchEvent as ReactTouchEvent } from 'react'
 import { hasEditableTarget, isTypingKeyEvent, withRecoveredLetterKey } from '@/shortcuts/utils.js'
 
 /**
@@ -227,15 +229,13 @@ export function HotkeyReconciler(): null {
     setPointerActionDispatcher((event, supplied) => {
       const active = activeRef.current
       const contextConfigsByType = contextConfigsByTypeRef.current
-      const phase = phaseOfPointerEvent(event)
-      const eventLike = {
-        button: event.button,
-        detail: event.detail,
-        shiftKey: event.shiftKey,
-        altKey: event.altKey,
-        ctrlKey: event.ctrlKey,
-        metaKey: event.metaKey,
-      }
+      // A touch tap resolves at the `tap` phase and carries none of mouse's
+      // button/detail/modifiers; a mouse gesture's phase comes from its event
+      // type and matches on those fields. `eventLike` is null for touch so a
+      // mouse descriptor can never match a tap (and vice versa).
+      const phase: PointerPhase | TouchPhase =
+        isTouchGesture(event) ? 'tap' : phaseOfPointerEvent(event)
+      const eventLike = mouseEventLikeOf(event)
       const matched = getEffectiveActions(runtime).filter(action => {
         const spec = action.pointerBinding
         if (!spec) return false
@@ -244,12 +244,17 @@ export function HotkeyReconciler(): null {
         // descendants), so none of its actions become candidates here.
         const contextFilter = contextConfigsByType.get(action.context)?.pointerTargetFilter
         if (contextFilter && !contextFilter(event)) return false
-        // A binding may list several pointer chords (ctrl-click OR meta-click);
-        // the action matches if any of them does.
+        // A binding may list several pointer chords (ctrl-click OR meta-click,
+        // double-click OR tap); the action matches if any of them does.
         const specs: readonly PointerBindingSpec[] = Array.isArray(spec) ? spec : [spec]
         return specs.some(candidate => {
           const descriptor = pointerBindingDescriptor(candidate)
           if (descriptor.phase !== phase) return false
+          // A touch descriptor matches a tap on phase alone (no button/detail);
+          // a mouse descriptor needs the mouse fields, so a tap (eventLike null)
+          // can't satisfy it.
+          if (descriptor.kind === 'touch') return true
+          if (!eventLike) return false
           if (!matchesMouseEvent(descriptor, eventLike)) return false
           if (descriptor.role && !pointerRoleMatches(supplied.targetElement, descriptor.role)) return false
           return true
@@ -624,7 +629,26 @@ const runOrderedCandidates = (
   return false
 }
 
-/** Map a React pointer event to the binding phase it can satisfy. `click` is
+/** A touch gesture carries `changedTouches`; a mouse event does not — the
+ *  discriminator the dispatcher uses to pick the tap path over the mouse path. */
+const isTouchGesture = (event: PointerGestureEvent): event is ReactTouchEvent<HTMLElement> =>
+  'changedTouches' in event
+
+/** The mouse fields a {@link MouseChordDescriptor} matches against, or null for
+ *  a touch gesture (a tap has no button/detail/modifiers). */
+const mouseEventLikeOf = (event: PointerGestureEvent): MouseEventLike | null =>
+  isTouchGesture(event)
+    ? null
+    : {
+        button: event.button,
+        detail: event.detail,
+        shiftKey: event.shiftKey,
+        altKey: event.altKey,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+      }
+
+/** Map a React mouse event to the binding phase it can satisfy. `click` is
  *  the default; `pointerdown` lets a double-click beat native text selection. */
 const phaseOfPointerEvent = (event: ReactMouseEvent<HTMLElement>): PointerPhase => {
   switch (event.type) {
@@ -649,7 +673,7 @@ const pointerRoleMatches = (target: HTMLElement, role: string): boolean =>
  *  bubbling into edit-mode), so that is the default; a context can override via
  *  `defaultEventOptions`. */
 const applyPointerEventOptions = (
-  event: ReactMouseEvent<HTMLElement>,
+  event: PointerGestureEvent,
   action: ActionConfig,
   contextConfigsByType: ReadonlyMap<ActionContextType, ActionContextConfig>,
 ): void => {

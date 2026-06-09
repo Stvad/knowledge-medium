@@ -4,6 +4,7 @@ import {
   matchesMouseEvent,
   normalizeChord,
   parseChord,
+  pointerBindingDescriptor,
   type MouseChordDescriptor,
   type MouseEventLike,
 } from './canonicalizeChord.ts'
@@ -99,6 +100,25 @@ describe('matchesMouseEvent', () => {
     }
     expect(matchesMouseEvent(plainClick, mouseEvent())).toBe(true)
     expect(matchesMouseEvent(plainClick, mouseEvent({altKey: true}))).toBe(false)
+  })
+})
+
+describe('pointerBindingDescriptor', () => {
+  it('realizes a touch tap with only its kind and phase', () => {
+    expect(pointerBindingDescriptor({kind: 'touch'})).toEqual({kind: 'touch', phase: 'tap'})
+    expect(pointerBindingDescriptor({kind: 'touch', phase: 'tap'})).toEqual({kind: 'touch', phase: 'tap'})
+  })
+
+  it('defaults a mouse binding to a plain single primary click', () => {
+    expect(pointerBindingDescriptor({kind: 'mouse'})).toEqual({
+      kind: 'mouse', button: 0, detail: 1, mods: [], phase: 'click',
+    })
+  })
+
+  it('carries a double-click through at the pointerdown phase', () => {
+    expect(pointerBindingDescriptor({kind: 'mouse', detail: 2, phase: 'pointerdown'})).toEqual({
+      kind: 'mouse', button: 0, detail: 2, mods: [], phase: 'pointerdown',
+    })
   })
 })
 
