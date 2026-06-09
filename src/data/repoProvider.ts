@@ -63,6 +63,7 @@ import {
   applyLocalSchemaContributions,
   resolveLocalSchemaContributions,
 } from '@/data/localSchema.js'
+import { guardSyncedTableWrites } from '@/data/syncedTableWriteGuard.js'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
 
 const appSchema = new Schema({})
@@ -293,7 +294,13 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // pre-index schema. Steady-state startups noop on a single LIMIT 1
   // probe of `client_schema_state`.
   const backfillDb = {
-    execute: (sql: string, params?: unknown[]) => powerSyncDb.execute(sql, params as never[] | undefined),
+    // Guarded: a LocalSchema statement/backfill that raw-writes a synced table
+    // (blocks/workspaces/workspace_members) leaves tx_context.source = NULL, so
+    // the upload trigger never fires and the write is local-only — it silently
+    // never syncs. The guard turns that class into a loud throw. Synced-table
+    // backfills must go through repo.tx (workspaceBackfillsFacet).
+    execute: guardSyncedTableWrites((sql: string, params?: unknown[]) =>
+      powerSyncDb.execute(sql, params as never[] | undefined)),
     getOptional: async <T,>(sql: string) => {
       const row = await powerSyncDb.getOptional<T>(sql)
       return row ?? null
