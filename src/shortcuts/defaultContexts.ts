@@ -8,6 +8,7 @@ import {
   MultiSelectModeDependencies,
   PropertyEditingDependencies,
 } from '@/shortcuts/types.js'
+import { isInteractiveContentEvent } from '@/extensions/blockInteraction.js'
 import { Block } from '../data/block'
 import { EditorView } from '@codemirror/view'
 
@@ -76,6 +77,11 @@ export const defaultActionContextConfigs: readonly ActionContextConfig[] = [
     type: ActionContextTypes.BLOCK_POINTER,
     displayName: 'Block Pointer Gesture',
     keyboardBindable: false,
+    // Clicks landing on interactive descendants (links, buttons, …) keep their
+    // native behavior — block gestures never apply there. Declaring it once on
+    // the context means individual pointer actions (select/toggle/edit) don't
+    // each re-check, and a Shift-click on a link can't be claimed as selection.
+    pointerTargetFilter: event => !isInteractiveContentEvent(event),
     validateDependencies: isBlockPointerDependencies,
   },
 ]

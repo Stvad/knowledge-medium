@@ -89,30 +89,15 @@ describe('vim normal mode interactions', () => {
       targetElement: document.createElement('div'),
       renderScopeId: 'scope-a',
     }
-    const clickEvent = (target: EventTarget): ActionTrigger =>
-      ({target}) as unknown as ActionTrigger
 
     it('focuses the clicked block without entering edit mode', () => {
+      // Interactive-target exclusion is the block-pointer context's job; the
+      // transform just replaces the edit handler with focus-without-editing.
       focusBlockWithoutEditing.mockClear()
-      const result = focusHandler(deps, clickEvent(document.createElement('span')))
+      focusHandler(deps, {} as ActionTrigger)
 
-      // Handled (not the not-handled sentinel) — the edit action's handler is
-      // replaced, so it never runs; the block just focuses.
-      expect(result).not.toBe(false)
       expect(editAction.handler).not.toHaveBeenCalled()
       expect(focusBlockWithoutEditing).toHaveBeenCalledWith(deps.block, deps.uiStateBlock, 'scope-a')
-    })
-
-    it.each(interactiveTargets)('declines %s clicks so native handling proceeds', (_label, createTarget) => {
-      focusBlockWithoutEditing.mockClear()
-      const interactive = createTarget()
-      const child = document.createElement('span')
-      interactive.appendChild(child)
-
-      const result = focusHandler(deps, clickEvent(child))
-
-      expect(result).toBe(false)
-      expect(focusBlockWithoutEditing).not.toHaveBeenCalled()
     })
   })
 

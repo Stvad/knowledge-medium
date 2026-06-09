@@ -2,7 +2,6 @@ import { useMemo } from 'react'
 import type { MouseEvent } from 'react'
 import {
   blockShellDecoratorsFacet,
-  handleBlockSelectionClick,
   isInteractiveContentEvent,
   isSelectionClick,
   type BlockResolveContext,
@@ -17,7 +16,10 @@ import { AppExtension } from '@/extensions/facet.js'
 import { actionsFacet } from '@/extensions/core.js'
 import { ActionContextTypes, type BlockPointerDependencies } from '@/shortcuts/types.js'
 import { dispatchPointerAction } from '@/shortcuts/pointerAction.js'
-import { extendBlockSelectionAction } from '@/extensions/blockSelectionAction.js'
+import {
+  extendBlockSelectionAction,
+  toggleBlockSelectionAction,
+} from '@/extensions/blockSelectionAction.js'
 import { blockFocusShellDecorator } from '@/extensions/BlockFocusShellDecorator.js'
 import { systemToggle } from '@/extensions/togglable.js'
 
@@ -62,21 +64,6 @@ const suppliedPointerDeps = (
   }
 }
 
-/**
- * Dispatch a selection-gesture click through the unified pointer path. A
- * pointer-bound action (shift-click → `extend_block_selection`, possibly
- * decorated by spatial nav) may claim it; if none does (ctrl/meta toggle, plain
- * reset), fall back to the structural handler that still owns those branches.
- */
-const dispatchSelectionClick = (
-  resolveContext: BlockResolveContext,
-  event: MouseEvent<HTMLElement>,
-): void => {
-  if (!dispatchPointerAction(event, suppliedPointerDeps(resolveContext, event))) {
-    void handleBlockSelectionClick(resolveContext, event)
-  }
-}
-
 export const createBlockSelectionShellState = (
   resolveContext: BlockResolveContext,
   state: BlockShellState,
@@ -85,31 +72,20 @@ export const createBlockSelectionShellState = (
     ...state.shellProps,
     onMouseDownCapture: event => {
       if (isBlockSelectionGesture(event)) {
-        // Suppress the browser's native text-selection drag a shift-click
-        // would otherwise start before the click resolves.
+        // Suppress the browser's native text-selection drag a modifier-click
+        // would otherwise start before the click resolves. (click-phase
+        // pointer actions are too late for this; it stays a mousedown concern.)
         event.preventDefault()
         return
       }
       state.shellProps.onMouseDownCapture?.(event)
     },
     onClick: event => {
-      if (isBlockSelectionGesture(event)) {
-        dispatchSelectionClick(resolveContext, event)
-        return
-      }
-      // Interactive descendants (links, buttons, …) keep their native behavior.
-      // Pointer actions match on button + modifiers alone and don't re-check the
-      // target, so a Shift-click on a link would otherwise be claimed as block
-      // selection (extend_block_selection) and preventDefault'd — bypass pointer
-      // dispatch entirely here, as the pre-migration click handlers did.
-      if (isInteractiveContentEvent(event)) {
-        state.shellProps.onClick?.(event)
-        return
-      }
-      // Plain (un-modified) click: route through the unified pointer dispatch
-      // so click-to-edit (plain-outliner, vim-decorated) resolves the same way
-      // selection gestures do. Falls back to any remaining facet click handler
-      // when no pointer action claims the gesture.
+      // Every block pointer gesture resolves through one dispatch: shift-click →
+      // extend selection, ctrl/cmd-click → toggle, plain click → edit/focus. The
+      // block-pointer context's pointerTargetFilter keeps interactive descendants
+      // native (no candidate matches). Fall back to any residual facet click
+      // handler only when nothing claims the gesture.
       if (!dispatchPointerAction(event, suppliedPointerDeps(resolveContext, event))) {
         state.shellProps.onClick?.(event)
       }
@@ -148,9 +124,10 @@ export const defaultEditorInteractionExtension: AppExtension = systemToggle({
   shortcutSurfaceActivationsFacet.of(codeMirrorEditModeActivation, {
     source: 'codemirror-edit-mode',
   }),
-  // Shift-click selection as a pointer-bound action — spatial navigation
-  // decorates it (ActionTransform) for visible-DOM-order ranges, mirroring how
-  // it decorates the keyboard extend-selection actions.
+  // Block selection as pointer-bound actions — shift-click extends (spatial
+  // navigation decorates it via ActionTransform for visible-DOM-order ranges),
+  // ctrl/cmd-click toggles. Both replace the structural handleBlockSelectionClick.
   actionsFacet.of(extendBlockSelectionAction, {source: 'default-block-selection'}),
+  actionsFacet.of(toggleBlockSelectionAction, {source: 'default-block-selection'}),
   editorAutocompleteExtension,
 ])

@@ -24,6 +24,7 @@ import { computeInstallableContexts, resolve, resolveDeps } from './resolve.ts'
 import {
   matchesMouseEvent,
   pointerBindingDescriptor,
+  type PointerBindingSpec,
   type PointerPhase,
 } from './canonicalizeChord.ts'
 import {
@@ -238,11 +239,21 @@ export function HotkeyReconciler(): null {
       const matched = getEffectiveActions(runtime).filter(action => {
         const spec = action.pointerBinding
         if (!spec) return false
-        const descriptor = pointerBindingDescriptor(spec)
-        if (descriptor.phase !== phase) return false
-        if (!matchesMouseEvent(descriptor, eventLike)) return false
-        if (descriptor.role && !pointerRoleMatches(supplied.targetElement, descriptor.role)) return false
-        return true
+        // Context-level pointer gate: a context can declare its gestures don't
+        // apply to this target (e.g. block-pointer excludes interactive
+        // descendants), so none of its actions become candidates here.
+        const contextFilter = contextConfigsByType.get(action.context)?.pointerTargetFilter
+        if (contextFilter && !contextFilter(event)) return false
+        // A binding may list several pointer chords (ctrl-click OR meta-click);
+        // the action matches if any of them does.
+        const specs: readonly PointerBindingSpec[] = Array.isArray(spec) ? spec : [spec]
+        return specs.some(candidate => {
+          const descriptor = pointerBindingDescriptor(candidate)
+          if (descriptor.phase !== phase) return false
+          if (!matchesMouseEvent(descriptor, eventLike)) return false
+          if (descriptor.role && !pointerRoleMatches(supplied.targetElement, descriptor.role)) return false
+          return true
+        })
       })
       if (matched.length === 0) return false
 

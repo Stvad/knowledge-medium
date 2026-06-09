@@ -14,13 +14,9 @@ import { Block } from '../data/block'
 import {
   editorSelection,
   focusBlock,
-  selectionStateProp,
   requestEditorFocus,
 } from '@/data/properties.js'
-import {
-  getSelectionStateSnapshot,
-  resetBlockSelection,
-} from '@/data/stateBlocks.js'
+import { resetBlockSelection } from '@/data/stateBlocks.js'
 import { Repo } from '../data/repo'
 import { combineLastContributionResult, defineFacet, isFunction } from '@/extensions/facet.js'
 import {
@@ -31,7 +27,6 @@ import {
 } from '@/extensions/variantFacet.js'
 import type { ActionContextActivation } from '@/shortcuts/types.js'
 import type { BlockContextType, BlockRenderer } from '@/types.js'
-import { extendSelection, validateSelectionHierarchy } from '@/utils/selection.js'
 
 export interface BlockContentRendererSlot {
   id: string
@@ -513,44 +508,6 @@ export const focusBlockWithoutEditing = async (
 ) => {
   await resetBlockSelection(uiStateBlock)
   void focusBlock(uiStateBlock, block.id, renderScopeId ? {renderScopeId} : undefined)
-}
-
-export const handleBlockSelectionClick = async (
-  context: BlockResolveContext,
-  event: MouseEvent,
-) => {
-  if (isInteractiveContentEvent(event)) return
-
-  const {block, repo, uiStateBlock} = context
-  const renderScopeId = typeof context.blockContext?.renderScopeId === 'string'
-    ? context.blockContext.renderScopeId
-    : undefined
-
-  event.preventDefault()
-  event.stopPropagation()
-
-  if (event.ctrlKey || event.metaKey) {
-    const selectionState = getSelectionStateSnapshot(uiStateBlock)
-    const isSelected = selectionState.selectedBlockIds.includes(block.id)
-    const newSelectedIds = isSelected
-      ? selectionState.selectedBlockIds.filter(id => id !== block.id)
-      : [...selectionState.selectedBlockIds, block.id]
-
-    const validatedIds = await validateSelectionHierarchy(newSelectedIds, repo)
-
-    void uiStateBlock.set(selectionStateProp, {
-      selectedBlockIds: validatedIds,
-      anchorBlockId: validatedIds.length > 0
-        ? (selectionState.anchorBlockId || block.id)
-        : null,
-    })
-  } else if (event.shiftKey) {
-    await extendSelection(block.id, uiStateBlock, repo, context.scopeRootId, !context.blockContext?.isNestedSurface)
-  } else {
-    await resetBlockSelection(uiStateBlock)
-  }
-
-  void focusBlock(uiStateBlock, block.id, {renderScopeId})
 }
 
 export const isSelectionClick = (event: MouseEvent) =>

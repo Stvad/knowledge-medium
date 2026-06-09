@@ -20,25 +20,6 @@ vi.mock('@/extensions/blockInteraction.js', async (importOriginal) => ({
 const PrimaryRenderer: BlockRenderer = () => null
 const SecondaryRenderer: BlockRenderer = () => null
 
-const interactiveTargets: Array<[string, () => HTMLElement]> = [
-  ['anchor', () => {
-    const link = document.createElement('a')
-    link.href = 'https://example.com'
-    return link
-  }],
-  ['button', () => document.createElement('button')],
-  ['ARIA button', () => {
-    const button = document.createElement('span')
-    button.setAttribute('role', 'button')
-    return button
-  }],
-  ['controlled video', () => {
-    const video = document.createElement('video')
-    video.controls = true
-    return video
-  }],
-]
-
 const context = {
   block: {id: 'block-1'} as Block,
   repo: {} as Repo,
@@ -111,28 +92,17 @@ describe('plain outliner click-to-edit action', () => {
   }) as unknown as ActionTrigger
 
   it('enters edit mode at the click position on a plain click', () => {
+    // Interactive-target exclusion is the block-pointer context's job
+    // (pointerTargetFilter), so this action assumes a real surface click and
+    // just enters edit mode at the click position.
     enterEditModeForBlock.mockClear()
     const target = document.createElement('span')
     const d = deps()
 
-    const result = enterBlockEditModeOnClickAction.handler(d, clickEvent(target))
+    enterBlockEditModeOnClickAction.handler(d, clickEvent(target))
 
-    // Not the not-handled sentinel — the pointer path will preventDefault.
-    expect(result).not.toBe(false)
     expect(enterEditModeForBlock).toHaveBeenCalledWith(
       d.block, d.uiStateBlock, 'scope-a', {x: 4, y: 8},
     )
-  })
-
-  it.each(interactiveTargets)('declines %s clicks so native handling proceeds', (_label, createTarget) => {
-    enterEditModeForBlock.mockClear()
-    const interactive = createTarget()
-    const child = document.createElement('span')
-    interactive.appendChild(child)
-
-    const result = enterBlockEditModeOnClickAction.handler(deps(), clickEvent(child))
-
-    expect(result).toBe(false)
-    expect(enterEditModeForBlock).not.toHaveBeenCalled()
   })
 })
