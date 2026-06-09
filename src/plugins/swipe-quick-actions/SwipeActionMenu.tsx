@@ -350,9 +350,13 @@ export const SwipeActionMenu = () => {
     // panel-scoped and operates on the main outline, so the panel's top-level
     // block is the scope root — the same value the structural handlers need
     // (delete/indent/move) — and it's a focal surface, so scopeRootForcesOpen is
-    // true. We supply scopeRootForcesOpen explicitly: resolveDeps merges supplied
-    // deps over the active context's, so omitting it could leak a *different*
-    // focused block's value into a swipe-referenced navigation action.
+    // true. renderScopeId comes from the swipe event (undefined for the normal
+    // outline, set for an embedded/backlink instance).
+    //
+    // These deps are the COMPLETE set for the swiped action: resolveDeps treats
+    // supplied deps as standalone (it does not merge the active context's deps
+    // underneath), so an omitted field resolves to undefined rather than
+    // inheriting a coincidentally-focused instance's value.
     //
     // The gesture supplies these deps through the unified dispatch path
     // (resolveDeps validation + canDispatch gate + error logging) rather than
@@ -363,7 +367,7 @@ export const SwipeActionMenu = () => {
       uiStateBlock,
       scopeRootId: topLevelBlockId,
       scopeRootForcesOpen: true,
-      ...(renderScopeId ? {renderScopeId} : {}),
+      renderScopeId,
     }
     return dispatchActionWithDeps(actionId, deps, trigger)
   }, [repo, uiStateBlock, topLevelBlockId])

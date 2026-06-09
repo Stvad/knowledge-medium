@@ -186,12 +186,26 @@ export const resolve = (
  * active context.
  *
  * `supplied` lets callers hand in deps the active map doesn't hold — a pointer
- * gesture supplying the CLICKED block's deps (its context isn't active), or
- * swipe's `runBlockAction` passing `{block, uiStateBlock}` instead of forking
- * the dispatcher. When deps are supplied the context need not be active: the
- * merged deps are validated at this one boundary and used on their own if there
- * is no active base. Validation runs only when deps are supplied — active-map
- * deps were already validated at activation, so re-validating is redundant.
+ * gesture supplying the CLICKED block's deps, or swipe's `runBlockAction`
+ * supplying the swiped block's deps. When deps are supplied they STAND ALONE:
+ * the gesture itself is the activation, so the supplied object is the complete
+ * dependency set and the active context's deps are NOT merged underneath.
+ *
+ * Standalone (rather than `{...base, ...supplied}`) is deliberate and the safer
+ * contract. A merge lets any field a caller OMITS silently inherit an unrelated
+ * active instance's value — e.g. a focused embed's `renderScopeId` /
+ * `scopeRootForcesOpen` leaking into a swipe action and making it focus/open as
+ * if from that embed. No call site can defend against that without exhaustively
+ * restating every field on every dispatch; making supplied deps standalone
+ * retires the whole class at the boundary instead. This is a behaviour change
+ * only when `action.context` is coincidentally active (the leak case): pointer
+ * contexts are never activated, and swipe already supplies a complete set, so
+ * both keep resolving the same deps they did before.
+ *
+ * Validation runs only when deps are supplied — active-map deps were already
+ * validated at activation, so re-validating is redundant. A supplied set that's
+ * incomplete now fails validation (→ null → skip) rather than borrowing missing
+ * fields from an unrelated active instance, which is the more correct failure.
  */
 export const resolveDeps = (
   action: ActionConfig,
@@ -199,10 +213,8 @@ export const resolveDeps = (
   contextConfigsByType: ReadonlyMap<ActionContextType, ActionContextConfig>,
   supplied?: Partial<BaseShortcutDependencies>,
 ): BaseShortcutDependencies | null => {
-  const base = active.get(action.context)
-  if (!supplied) return base ?? null
-  const merged = (base ? {...base, ...supplied} : supplied) as BaseShortcutDependencies
+  if (!supplied) return active.get(action.context) ?? null
   const config = contextConfigsByType.get(action.context)
-  if (config && !config.validateDependencies(merged)) return null
-  return merged
+  if (config && !config.validateDependencies(supplied)) return null
+  return supplied as BaseShortcutDependencies
 }

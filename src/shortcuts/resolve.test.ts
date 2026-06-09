@@ -3,6 +3,7 @@ import {
   compareContexts,
   computeInstallableContexts,
   resolve,
+  resolveDeps,
   type ResolutionContext,
 } from './resolve.ts'
 import {
@@ -199,6 +200,41 @@ describe('resolve by supplied deps (context need not be active)', () => {
     ]
     const ordered = resolve(all, ctx, {kind: 'supplied', actionId: 'copy_block'})
     expect(ordered.map(a => a.id)).toEqual(['copy_block'])
+  })
+})
+
+describe('resolveDeps', () => {
+  const NM = ActionContextTypes.NORMAL_MODE
+  const configs = new Map([[NM, config(NM)]])
+
+  it('returns the active deps untouched when nothing is supplied', () => {
+    const activeDeps = {renderScopeId: 'scope-a'} as unknown as BaseShortcutDependencies
+    const active = new Map([[NM, activeDeps]]) as ActiveContextsMap
+    expect(resolveDeps(action('x', NM), active, configs)).toBe(activeDeps)
+  })
+
+  it('uses supplied deps standalone — does NOT inherit fields from an active context of the same type', () => {
+    // A focused embed has NORMAL_MODE active carrying its own renderScopeId. A
+    // swipe on the main outline supplies deps WITHOUT a renderScopeId. The
+    // supplied set must win wholesale: the embed's scope must not leak in, or
+    // the swiped action would focus/open as if from that unrelated instance.
+    const active = new Map([
+      [NM, {renderScopeId: 'embed-scope', scopeRootForcesOpen: false} as unknown as BaseShortcutDependencies],
+    ]) as ActiveContextsMap
+    const supplied = {block: {id: 'b'}, uiStateBlock: {id: 'p'}} as unknown as BaseShortcutDependencies
+    const resolved = resolveDeps(action('block.swipe-right', NM), active, configs, supplied)
+    expect(resolved).toBe(supplied)
+    expect(resolved && 'renderScopeId' in resolved).toBe(false)
+  })
+
+  it('returns null when supplied deps fail the context validator', () => {
+    const strict = new Map([[NM, {
+      ...config(NM),
+      validateDependencies: (d: unknown): d is BaseShortcutDependencies =>
+        typeof d === 'object' && d !== null && 'block' in d,
+    }]])
+    const active = new Map() as ActiveContextsMap
+    expect(resolveDeps(action('x', NM), active, strict, {} as BaseShortcutDependencies)).toBeNull()
   })
 })
 
