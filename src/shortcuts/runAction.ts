@@ -9,6 +9,7 @@ import {
   ActionTrigger,
   type ActionContextConfig,
   type ActionContextType,
+  type BaseShortcutDependencies,
 } from '@/shortcuts/types.js'
 import { getActiveActionById, getEffectiveActions } from './effectiveActions.ts'
 import { resolveDeps } from './resolve.ts'
@@ -42,6 +43,38 @@ export const runActionById: RunActionByIdFn = (actionId, trigger) => {
   }
   return dispatcher(actionId, trigger)
 }
+
+export type DispatchActionWithDepsFn = (
+  actionId: string,
+  deps: Partial<BaseShortcutDependencies>,
+  trigger: ActionTrigger,
+) => boolean
+
+let withDepsDispatcher: DispatchActionWithDepsFn | null = null
+
+/**
+ * Installed by <HotkeyReconciler/> on mount; torn down on unmount so stray
+ * callers fail soft (no dispatch) rather than against a stale runtime.
+ */
+export function setActionWithDepsDispatcher(next: DispatchActionWithDepsFn | null): void {
+  withDepsDispatcher = next
+}
+
+/**
+ * Run a known action by id with caller-SUPPLIED deps, through the same
+ * `resolve` + run-until-handled path the keyboard and pointer coordinators
+ * use. Unlike `runActionById`, the action's context need NOT be keyboard-active
+ * — the caller (the swipe gesture, a quick-action menu button) holds the deps,
+ * and the gesture is itself the activation. The supplied deps are validated at
+ * the dispatch boundary (`resolveDeps`); a declining `canDispatch` or a synchronous
+ * `false` return falls through like any other candidate.
+ *
+ * Returns true when a candidate handled (or threw), false when none matched or
+ * every candidate declined — so the caller can fall back to a default. No-op
+ * returning false before the coordinator mounts.
+ */
+export const dispatchActionWithDeps: DispatchActionWithDepsFn = (actionId, deps, trigger) =>
+  withDepsDispatcher ? withDepsDispatcher(actionId, deps, trigger) : false
 
 /**
  * Hook variant for React callers. Re-computes on runtime/activeContexts changes

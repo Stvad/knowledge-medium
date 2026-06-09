@@ -171,6 +171,37 @@ describe('resolve precedence', () => {
   })
 })
 
+describe('resolve by supplied deps (context need not be active)', () => {
+  it('matches by id even when the action\'s context is not active', () => {
+    // The swipe gesture holds the clicked block's deps, but that block's
+    // context (normal-mode) isn't keyboard-active. {kind:'action'} drops it
+    // for exactly that reason; {kind:'supplied'} matches on id alone and lets
+    // resolveDeps validate the supplied deps downstream.
+    const ctx = ctxOf([], [config(ActionContextTypes.NORMAL_MODE)])
+    const all = [action('block.swipe-right', ActionContextTypes.NORMAL_MODE)]
+    const byAction = resolve(all, ctx, {kind: 'action', actionId: 'block.swipe-right'})
+    const bySupplied = resolve(all, ctx, {kind: 'supplied', actionId: 'block.swipe-right'})
+    expect(byAction).toEqual([]) // inactive context → not found
+    expect(bySupplied.map(a => a.id)).toEqual(['block.swipe-right'])
+  })
+
+  it('filters to the matching id and is not suppressed by an active modal', () => {
+    // normal-mode is active but shadowed by the 'multi' modal for the keyboard.
+    // Supplied dispatch is not a keyboard-install concern, so the id still
+    // resolves (mirrors {kind:'action'}'s shadowing exemption).
+    const ctx = ctxOf(
+      [ActionContextTypes.NORMAL_MODE, 'multi'],
+      [config(ActionContextTypes.NORMAL_MODE), config('multi', {modal: true})],
+    )
+    const all = [
+      action('copy_block', ActionContextTypes.NORMAL_MODE),
+      action('delete_block', ActionContextTypes.NORMAL_MODE),
+    ]
+    const ordered = resolve(all, ctx, {kind: 'supplied', actionId: 'copy_block'})
+    expect(ordered.map(a => a.id)).toEqual(['copy_block'])
+  })
+})
+
 describe('compareContexts', () => {
   it('is a stable comparator (antisymmetric on tier)', () => {
     const ctx = ctxOf(

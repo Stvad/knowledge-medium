@@ -3,6 +3,7 @@ import { act, render, cleanup } from '@testing-library/react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler.js'
 import { dispatchPointerAction } from '@/shortcuts/pointerAction.js'
+import { dispatchActionWithDeps } from '@/shortcuts/runAction.js'
 import {
   ActiveContextsProvider,
   useActiveContextsState,
@@ -753,6 +754,60 @@ describe('HotkeyReconciler', () => {
 
       expect(declined).toHaveBeenCalledTimes(1)
       expect(fallback).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('supplied-deps action dispatch', () => {
+    const byIdAction = (
+      overrides: Partial<ActionConfig> & Pick<ActionConfig, 'id' | 'handler'>,
+    ): ActionConfig => ({
+      description: 'test supplied action',
+      context: TEST_CONTEXT,
+      ...overrides,
+    } as ActionConfig)
+
+    it('runs an action by id with supplied deps when its context is not active', () => {
+      const handler = vi.fn()
+      const action = byIdAction({id: 'block.swipe-right', handler})
+
+      // TEST_CONTEXT is never activated (no Activator) — the deps are supplied.
+      render(<Harness actions={[action]} contexts={[testContextConfig]}/>)
+
+      const supplied = {marker: 'swiped'} as unknown as BaseShortcutDependencies
+      let handled = false
+      act(() => {
+        handled = dispatchActionWithDeps('block.swipe-right', supplied, new CustomEvent('swipe'))
+      })
+
+      expect(handled).toBe(true)
+      expect(handler).toHaveBeenCalledTimes(1)
+      expect(handler.mock.calls[0]?.[0]).toBe(supplied)
+    })
+
+    it('returns false when no action matches the id', () => {
+      render(<Harness actions={[]} contexts={[testContextConfig]}/>)
+
+      let handled = true
+      act(() => {
+        handled = dispatchActionWithDeps('nope', {marker: 'x'} as never, new CustomEvent('swipe'))
+      })
+
+      expect(handled).toBe(false)
+    })
+
+    it('falls through (not handled) when canDispatch declines', () => {
+      const handler = vi.fn()
+      const action = byIdAction({id: 'gated', handler, canDispatch: () => false})
+
+      render(<Harness actions={[action]} contexts={[testContextConfig]}/>)
+
+      let handled = true
+      act(() => {
+        handled = dispatchActionWithDeps('gated', {marker: 'x'} as never, new CustomEvent('swipe'))
+      })
+
+      expect(handled).toBe(false)
+      expect(handler).not.toHaveBeenCalled()
     })
   })
 

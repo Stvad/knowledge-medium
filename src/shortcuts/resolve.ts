@@ -28,15 +28,19 @@ import type { ActiveContextsMap } from './ActiveContexts.tsx'
  * What's being resolved. The kind selects the install-filter policy:
  *  - `'action'` — imperative lookup by id (runActionById / useRunAction).
  *    Modal shadowing is NOT applied; an action is found in any active context.
+ *    The context MUST be active (deps come from the active map).
+ *  - `'supplied'` — imperative lookup by id where the CALLER supplies the deps
+ *    (swipe gesture / quick-action menu). Like `'action'` but the context need
+ *    NOT be active — the supplied deps are the activation, validated in
+ *    `resolveDeps`. Modal shadowing is not applied.
  *  - `'keyboard'` — the coordinator's already-matched candidate set for a
  *    chord. Modal shadowing IS applied (the keyboard gather filter).
- * Phase 3 will extend the keyboard arm with a normalized pointer/touch
- * descriptor when a caller actually constructs one (see `ChordDescriptor`,
- * whose `kind` field stays open for that); resolve doesn't need the chord
- * itself, only the policy + the candidate set.
+ *  - `'pointer'` — pointer-bound candidates already matched on their binding
+ *    descriptor and dispatched with supplied deps (see the filter note below).
  */
 export type Trigger =
   | { kind: 'action'; actionId: string }
+  | { kind: 'supplied'; actionId: string }
   | { kind: 'keyboard' }
   | { kind: 'pointer' }
 
@@ -141,6 +145,13 @@ export const resolve = (
       case 'action':
         // Imperative lookup: any active context, matching id.
         return ctx.active.has(action.context) && action.id === trigger.actionId
+      case 'supplied':
+        // Imperative by-id dispatch with caller-supplied deps. The context
+        // need NOT be active — the caller (swipe gesture, quick-action menu)
+        // holds the deps and the gesture itself is the activation. resolveDeps
+        // validates the supplied deps at the dispatch boundary. Modal shadowing
+        // is a keyboard-install concern and does not apply here.
+        return action.id === trigger.actionId
       case 'keyboard':
         // Already-matched chord candidates, gated by modal shadowing.
         return ctx.active.has(action.context) && installable!.has(action.context)

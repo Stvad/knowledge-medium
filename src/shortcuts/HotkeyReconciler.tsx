@@ -12,7 +12,7 @@ import {
   useActiveContextsState,
   ActiveContextsMap,
 } from '@/shortcuts/ActiveContexts.js'
-import { setRunActionDispatcher } from '@/shortcuts/runAction.js'
+import { setRunActionDispatcher, setActionWithDepsDispatcher } from '@/shortcuts/runAction.js'
 import { setPointerActionDispatcher } from '@/shortcuts/pointerAction.js'
 import {
   actionRuntimeKey,
@@ -189,6 +189,32 @@ export function HotkeyReconciler(): null {
       return result === false ? undefined : result
     })
     return () => setRunActionDispatcher(null)
+  }, [runtime])
+
+  // Install the supplied-deps by-id dispatcher. Same resolve + run-until-handled
+  // path as keyboard/pointer, but candidates are matched by action id and deps
+  // are SUPPLIED by the caller (the swipe gesture / quick-action menu), so the
+  // action's context need not be keyboard-active. The caller owns native
+  // default-handling (swipe preventDefaults off the boolean return), so no event
+  // options are applied here.
+  useEffect(() => {
+    setActionWithDepsDispatcher((actionId, supplied, trigger) => {
+      const active = activeRef.current
+      const contextConfigsByType = contextConfigsByTypeRef.current
+      const ordered = resolve(
+        getEffectiveActions(runtime),
+        {active, contextConfigsByType},
+        {kind: 'supplied', actionId},
+      )
+      return runOrderedCandidates(
+        ordered,
+        trigger,
+        {active, contextConfigsByType, dispatch: dispatchRef.current},
+        supplied,
+        () => undefined,
+      )
+    })
+    return () => setActionWithDepsDispatcher(null)
   }, [runtime])
 
   // Install the pointer-action dispatcher. Mirrors the keyboard coordinator's

@@ -6,6 +6,7 @@ import { useUIStateBlock } from '@/data/globalState'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { usePropertyValue } from '@/hooks/block.js'
 import { getEffectiveActions } from '@/shortcuts/effectiveActions.js'
+import { dispatchActionWithDeps } from '@/shortcuts/runAction.js'
 import type { ActionConfig, ActionIcon } from '@/shortcuts/types.js'
 import { topLevelBlockIdProp } from '@/data/properties.js'
 import {
@@ -343,23 +344,18 @@ export const SwipeActionMenu = () => {
     renderScopeId: string | undefined,
     trigger: CustomEvent,
   ): boolean => {
-    const action = allActions.find(a => a.id === actionId)
-    if (!action) return false
-
     const block = repo.block(blockId)
-    // Swipe runs actions imperatively (outside a block's React context),
-    // so scopeRootId isn't injected by useShortcutSurfaceActivations.
-    // The menu is panel-scoped and operates on the main outline, so the
-    // panel's top-level block is the scope root — the same value the
-    // structural handlers need (delete/indent/move).
+    // Swipe runs actions imperatively (outside a block's React context), so
+    // scopeRootId isn't injected by useShortcutSurfaceActivations. The menu is
+    // panel-scoped and operates on the main outline, so the panel's top-level
+    // block is the scope root — the same value the structural handlers need
+    // (delete/indent/move). The gesture supplies these deps through the unified
+    // dispatch path (resolveDeps validation + canDispatch gate + error logging)
+    // rather than looking the action up and invoking its handler directly. The
+    // returned boolean tells the gesture whether to preventDefault / fall back.
     const deps = {block, uiStateBlock, scopeRootId: topLevelBlockId, ...(renderScopeId ? {renderScopeId} : {})}
-    if (action.isVisible && !action.isVisible(deps)) return false
-
-    void Promise.resolve(action.handler(deps, trigger)).catch(error => {
-      console.error(`[swipe-quick-actions] Action "${actionId}" failed`, error)
-    })
-    return true
-  }, [allActions, repo, uiStateBlock, topLevelBlockId])
+    return dispatchActionWithDeps(actionId, deps, trigger)
+  }, [repo, uiStateBlock, topLevelBlockId])
   const actionItems = runtime.read(quickActionItemsFacet)
   // Filter via the referenced action's `isVisible` (the swipe surface is
   // presentational — semantic availability lives on the action). The
