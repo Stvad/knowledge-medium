@@ -225,7 +225,11 @@ describe('materializeStagingRows — skip-stale (local edit must win)', () => {
     expect((await allBlocks())[0]!.content).toBe('local edit')
   })
 
-  it('skips when the local row is newer than the staging snapshot', async () => {
+  it('applies an older server snapshot over a non-pending newer local row (server-authoritative)', async () => {
+    // A non-pending local row that is strictly newer than the server snapshot is
+    // NOT a protected local edit — it's a speculative bootstrap default (or a
+    // dropped upload). The server's older-but-authoritative row wins, un-shadowing
+    // real synced config. Only a pending upload or an equal stamp protects local.
     await seedLocalBlock(blockData({ content: 'newer local', updatedAt: 500 }))
     await stageRow(blockData({ content: 'older server', updatedAt: 200 }))
 
@@ -235,17 +239,23 @@ describe('materializeStagingRows — skip-stale (local edit must win)', () => {
       { getMaterializability: constMat('copy'), getCek: noKey },
     )
 
-    expect(out.skippedStale).toEqual(['b1'])
-    expect((await allBlocks())[0]!.content).toBe('newer local')
+    expect(out.applied).toEqual(['b1'])
+    expect((await allBlocks())[0]!.content).toBe('older server')
   })
 
-  it('skips a stale e2ee row WITHOUT decrypting it (undecryptable stale ciphertext cannot abort the batch)', async () => {
+  it('skips a pending-protected e2ee row WITHOUT decrypting it (undecryptable ciphertext cannot abort the batch)', async () => {
     const key = await importWorkspaceKey(generateWorkspaceKeyBytes())
     const getCek: GetCek = async () => key
-    // Local row is newer than the staging snapshot.
+    // Local row has an unsent edit queued (pending) → the gate skips it before
+    // decrypt regardless of stamps. (Pending is the protection that still skips;
+    // a merely newer-stamped non-pending local row would now apply.)
     await seedLocalBlock(blockData({ id: 'x', workspaceId: 'ws-e2ee', content: 'local', updatedAt: 500 }))
+    await env.db.execute(
+      "INSERT INTO ps_crud (tx_id, data) VALUES (1, json_object('op','PATCH','type','blocks','id',?,'data',json_object()))",
+      ['x'],
+    )
     // Staging holds *undecryptable* ciphertext — decodeFromWire would throw if
-    // ever called — but the row is stale, so it must be skipped before decrypt.
+    // ever called — but the row is skipped before decrypt.
     const stale = blockData({ id: 'x', workspaceId: 'ws-e2ee', updatedAt: 200 })
     await stageRow(stale, stagingCiphertextParams(stale, {
       content: 'enc:v1:not-real-ciphertext',
@@ -287,7 +297,7 @@ describe('materializeStagingRows — batched gate (mixed outcomes, chunked)', ()
 
     // apply: strictly-newer staging snapshot, no local row.
     await stageRow(blockData({ id: 'apply', content: 'fresh', updatedAt: 300 }))
-    // skip: local row is newer than the staging snapshot.
+    // apply: a NON-pending local row that's newer is not protected — server wins.
     await seedLocalBlock(blockData({ id: 'newer', content: 'local newer', updatedAt: 500 }))
     await stageRow(blockData({ id: 'newer', content: 'stale server', updatedAt: 200 }))
     // skip: an unsent local edit is queued for this id (pending always wins).
@@ -305,10 +315,10 @@ describe('materializeStagingRows — batched gate (mixed outcomes, chunked)', ()
       { readChunkSize: 2 }, // 3 ids → 2 read chunks, so the bulk maps span a boundary
     )
 
-    expect(out.applied).toEqual(['apply'])
-    expect([...out.skippedStale].sort()).toEqual(['newer', 'pending'])
+    expect([...out.applied].sort()).toEqual(['apply', 'newer'])
+    expect(out.skippedStale).toEqual(['pending'])
     const byId = Object.fromEntries((await allBlocks()).map(b => [b.id, b.content]))
-    expect(byId).toEqual({ apply: 'fresh', newer: 'local newer', pending: 'local pending' })
+    expect(byId).toEqual({ apply: 'fresh', newer: 'stale server', pending: 'local pending' })
   })
 })
 
@@ -413,11 +423,11 @@ describe('materializeStagingRows — removed (stream-exit)', () => {
 
 describe('materializeStagingRows — Phase-1/Phase-2 TOCTOU re-gate', () => {
   // The Phase-1 staleness reads run outside the write tx, so a local edit can
-  // land between them and the lock. The clean path (Phase 1 passes and stays
-  // clean) is covered by "applies when the staging snapshot is strictly newer"
-  // above; these cover the race the second phase exists to close — Phase 1 sees
-  // a clean gate, a local edit lands in the window, and the in-tx re-gate must
-  // catch it and skip the write rather than clobber the unsynced edit.
+  // land between them and the lock. These cover the race the second phase exists
+  // to close — Phase 1 sees a clean gate, something changes in the window, and
+  // the in-tx re-gate re-reads the authoritative state. The PROTECTED change is a
+  // pending upload (an unsent local edit): the re-gate must skip it. A bare
+  // stamp bump with no pending is NOT a protected edit, so the re-gate applies.
 
   it('skips a candidate when a local edit is queued for upload in the window', async () => {
     await seedLocalBlock(blockData({ content: 'local v1', updatedAt: 200 }))
@@ -435,7 +445,7 @@ describe('materializeStagingRows — Phase-1/Phase-2 TOCTOU re-gate', () => {
     expect((await allBlocks())[0]!.content).toBe('local v1')
   })
 
-  it('skips a candidate when the local row is bumped newer in the window', async () => {
+  it('applies when the local row is bumped newer (non-pending) in the window — only pending protects', async () => {
     await seedLocalBlock(blockData({ content: 'local v1', updatedAt: 200 }))
     await stageRow(blockData({ content: 'server v2', updatedAt: 300 }))
 
@@ -447,9 +457,11 @@ describe('materializeStagingRows — Phase-1/Phase-2 TOCTOU re-gate', () => {
       { getMaterializability: constMat('copy'), getCek: noKey },
     )
 
-    expect(out.applied).toEqual([])
-    expect(out.skippedStale).toEqual(['b1'])
-    expect((await allBlocks())[0]!.content).toBe('local v1')
+    // The re-gate re-reads the bumped stamp (999) but a non-pending row is not a
+    // protected edit, so the server snapshot still applies. (The sibling test —
+    // a pending upload queued in the window — is what skip-stales.)
+    expect(out.applied).toEqual(['b1'])
+    expect((await allBlocks())[0]!.content).toBe('server v2')
   })
 })
 

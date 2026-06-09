@@ -84,16 +84,36 @@ export const decideStagingRow = (
     // snapshot overwrite it. The upload echo reconciles when it returns.
     return { kind: 'skip-stale' }
   }
-  if (local.localUpdatedAt !== null && local.localUpdatedAt >= stagingUpdatedAt) {
-    // Local row is at least as new as this snapshot. First-writer-wins on
-    // EQUAL stamps too, mirroring BlockCache.applyIfNewer's `<=`: a stale
-    // in-flight server read can carry different content under the same
-    // ms-stamp. Unlike the cache (in-memory, transient), the Layout B observer
-    // materializes into the persistent SQLite `blocks` table, so applying an
-    // equal-stamp snapshot would overwrite the local edit on disk and resurface
-    // it after a reload — the cache gate can't guard that write. Skip it.
+  if (local.localUpdatedAt !== null && local.localUpdatedAt === stagingUpdatedAt) {
+    // EQUAL stamps only. A stale in-flight server read can carry different
+    // content under the same ms-stamp; applying it would overwrite a local edit
+    // on disk and resurface after reload (the in-memory cache gate can't guard
+    // the persistent write). This is the one deliberate skip — see commit
+    // 429fd4b2.
     return { kind: 'skip-stale' }
   }
+
+  // We do NOT skip when the local row is *strictly* newer (PowerSync never had
+  // that branch). It let a speculative bootstrap default — minted with a `now`
+  // stamp the moment a deterministic-id row is read-as-absent — permanently
+  // outrank the server's older-but-authoritative row, shadowing real synced
+  // config (settings, etc.) on every fresh client. Letting the server win on
+  // disk means that shadow now HEALS ON RELOAD (a fresh `blocks` read rehydrates
+  // the cache from the server value) instead of being permanent.
+  //
+  // KNOWN-PARTIAL (intentional, interim — see the follow-up to distinguish a
+  // speculative default from a real edit, e.g. by write provenance):
+  //   * In-session, the cache's own `applyIfNewer` LWW still rejects the older
+  //     value, so the heal isn't live — it lands on the next reload. That same
+  //     cache gate is what keeps this relaxation from waking handles to the
+  //     transient disk write (the QuickFind-freeze pattern), so the disk write
+  //     stays user-invisible.
+  //   * It cannot tell a speculative default from a genuine just-drained edit
+  //     facing a stale older in-flight delivery (both are non-pending,
+  //     strictly-newer-than-staging). The latter is briefly clobbered on disk
+  //     and re-heals via its authoritative upload echo — transient, and masked
+  //     from the UI by the cache gate above.
+  return { kind: 'apply', decrypt: materializability === 'decrypt' }
 
   return { kind: 'apply', decrypt: materializability === 'decrypt' }
 }

@@ -53,6 +53,18 @@ const blocks = () =>
 const queueLen = async () =>
   (await env.db.getAll('SELECT seq FROM blocks_synced_changes')).length
 
+const BLOCK_COLS =
+  'id, workspace_id, parent_id, order_key, content, properties_json, references_json, ' +
+  'created_at, updated_at, created_by, updated_by, deleted'
+/** Seed a row straight into the app-visible `blocks` table (source NULL → no
+ *  ps_crud, i.e. non-pending) — the shape of a locally-minted bootstrap default
+ *  the observer must let the server override. */
+const seedLocalBlock = (d: BlockData) =>
+  env.db.execute(
+    `INSERT INTO blocks (${BLOCK_COLS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+    blockToRowParams(d),
+  )
+
 const constMat = (m: 'copy' | 'decrypt' | 'defer'): GetMaterializability => () => m
 const noKey: GetCek = async () => null
 
@@ -107,6 +119,31 @@ const waitFor = async (cond: () => Promise<boolean>, ms = 3000): Promise<void> =
     await new Promise(r => setTimeout(r, 15))
   }
 }
+
+describe('blocksSyncedObserver — server overrides a non-pending local default (disk heal)', () => {
+  it('a stale local default is overwritten on disk by the older server row (heals on reload)', async () => {
+    // A bootstrap default minted with a fresh now-stamp, non-pending (no ps_crud),
+    // and read into the cache at app start — the deterministic-id shadow setup.
+    const localDefault = data({ content: 'default', updatedAt: 9000 })
+    await seedLocalBlock(localDefault)
+    const { observer, cache } = start({ getMaterializability: constMat('copy') })
+    cache.setSnapshot(localDefault)
+
+    // The real, authoritative server value arrives in staging — OLDER stamp.
+    await put(data({ content: 'real synced config', updatedAt: 3000 }))
+    await observer.flush()
+
+    // Disk: the server value replaced the default despite the older stamp
+    // (decideStagingRow no longer skip-stales a non-pending strictly-newer local),
+    // so the shadow is gone from the persistent table — a reload, which rehydrates
+    // the cache from disk, surfaces it.
+    expect(await blocks()).toEqual([{ id: 'b1', content: 'real synced config' }])
+    // Cache (in-session): the cache's own applyIfNewer LWW still rejects the
+    // older value, so the live cache isn't healed yet — the interim limitation,
+    // and what keeps this disk write from waking handles. Heals on reload.
+    expect(cache.getSnapshot('b1')).toMatchObject({ content: 'default' })
+  })
+})
 
 describe('blocksSyncedObserver — drain', () => {
   it('materializes a queued plaintext row into blocks and drains the queue', async () => {

@@ -49,8 +49,8 @@ const UPDATE_ASSIGNMENTS = COLUMN_NAMES
 // ON CONFLICT DO UPDATE (not INSERT OR REPLACE): an UPDATE keeps the FTS
 // rowid stable in the derived-index triggers, whereas DELETE+INSERT would
 // reallocate `blocks_fts_rowids`. No WHERE-diff guard — `decideStagingRow`
-// already gated this to a strictly-newer snapshot, so the write is never a
-// no-op re-delivery.
+// skips equal-stamp snapshots (the only no-op re-delivery), so a row that
+// reaches this write always differs from the local row.
 const UPSERT_BLOCK_SQL = `
   INSERT INTO blocks (${COLUMN_NAMES.join(', ')})
   VALUES (${PLACEHOLDERS})
