@@ -268,6 +268,54 @@ describe('srsReschedulingPlugin', () => {
     expect(runtime.contributions(blockContentSurfacePropsFacet)).toHaveLength(1)
   })
 
+  it('gates srs.cut / srs.paste dispatch on canDispatch, not just isVisible', async () => {
+    // The swipe/quick-action path dispatches through canDispatch (the dispatch
+    // gate), so SRS-only actions whose handler trusts the block must refuse a
+    // non-SRS target there — isVisible alone (menu filtering) isn't enough.
+    let txSeq = 0
+    const repo = new Repo({
+      db: sharedDb.db,
+      cache: new BlockCache(),
+      user: {id: 'user-1'},
+      newTxSeq: () => ++txSeq,
+      startSyncObserver: false,
+    })
+    const runtime = resolveFacetRuntimeSync([
+      kernelDataExtension,
+      dailyNotesDataExtension,
+      srsReschedulingPlugin,
+    ])
+    repo.setFacetRuntime(runtime)
+
+    const snapshot = repo.snapshotTypeRegistries()
+    await repo.tx(async tx => {
+      await tx.create({id: 'srs-block', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'SRS'})
+      await repo.addTypeInTx(tx, 'srs-block', SRS_SM25_TYPE, {}, snapshot)
+      await tx.create({id: 'plain-block', workspaceId: 'ws-1', parentId: null, orderKey: 'a1', content: 'Plain'})
+    }, {scope: ChangeScope.BlockDefault, description: 'seed cut/paste blocks'})
+
+    const actions = getEffectiveActions(runtime)
+    const cut = actions.find(it => it.id === 'srs.cut')!
+    const paste = actions.find(it => it.id === 'srs.paste')!
+
+    const srsBlock = repo.block('srs-block')
+    const plainBlock = repo.block('plain-block')
+    await srsBlock.load()
+    await plainBlock.load()
+
+    // cut: only an SRS block is a valid dispatch target.
+    expect(cut.canDispatch?.({block: srsBlock, uiStateBlock: srsBlock})).toBe(true)
+    expect(cut.canDispatch?.({block: plainBlock, uiStateBlock: plainBlock})).toBe(false)
+
+    // paste: only with something on the clipboard, and not onto its source.
+    clearSrsClipboard()
+    expect(paste.canDispatch?.({block: srsBlock, uiStateBlock: srsBlock})).toBe(false)
+    setSrsClipboard({sourceBlockId: 'srs-block', sourceWorkspaceId: 'ws-1'})
+    expect(paste.canDispatch?.({block: plainBlock, uiStateBlock: plainBlock})).toBe(true)
+    expect(paste.canDispatch?.({block: srsBlock, uiStateBlock: srsBlock})).toBe(false)
+    clearSrsClipboard()
+  })
+
   it('decorates the swipe-right block action to archive SRS blocks', async () => {
     let txSeq = 0
     const repo = new Repo({
