@@ -19,7 +19,7 @@ import { DAILY_NOTE_TYPE, dailyNoteDateProp } from './schema.ts'
  *  Throws on invalid input. Callers must validate via `isValidDateAlias`
  *  upstream — the references-processor routing decision is the canonical
  *  gate, so reaching this with a bad iso is a caller bug. */
-const dailyNoteDateValue = (iso: string): Date => {
+export const dailyNoteDateValue = (iso: string): Date => {
   const ms = Date.parse(`${iso}T00:00:00Z`)
   if (Number.isNaN(ms)) {
     throw new Error(`Invalid ISO date for daily note: ${iso}`)

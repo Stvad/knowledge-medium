@@ -1063,6 +1063,22 @@ export const CLEAR_REPROJECT_REF_MARKER_SQL = `
   DELETE FROM client_schema_state WHERE key = ?
 `
 
+/** Completion markers for workspace-scoped repo.tx data backfills
+ *  (`workspaceBackfillsFacet`). Keyed `workspace_backfill:<workspaceId>:<id>`;
+ *  a row lands once a backfill has run for a workspace, so subsequent opens
+ *  skip it. Local (never synced) — like the reproject markers, each device
+ *  records its own completion. */
+export const WORKSPACE_BACKFILL_MARKER_PREFIX = 'workspace_backfill:'
+
+export const SELECT_WORKSPACE_BACKFILL_MARKERS_SQL = `
+  SELECT key FROM client_schema_state WHERE key LIKE '${WORKSPACE_BACKFILL_MARKER_PREFIX}%'
+`
+
+export const RECORD_WORKSPACE_BACKFILL_MARKER_SQL = `
+  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
+  VALUES (?, strftime('%s', 'now') * 1000)
+`
+
 // ============================================================================
 // Bulk-apply ordered list. Run after `blocks` exists (PowerSync's schema
 // initialization creates it). Idempotent (`IF NOT EXISTS`).

@@ -17,6 +17,8 @@ import type {
   AnyQuery,
   AnySameTxProcessor,
   AnyValuePreset,
+  ChangeScope,
+  Tx,
   TypeContribution,
 } from '@/data/api'
 import type { InvalidationRule } from './invalidation.ts'
@@ -58,6 +60,47 @@ const isLocalSchemaContribution = (value: unknown): value is LocalSchemaContribu
     value.backfills === undefined ||
     (Array.isArray(value.backfills) && value.backfills.every(isLocalSchemaBackfill))
   )
+
+/**
+ * A workspace-scoped, one-shot data backfill that runs through `repo.tx` — the
+ * synced-table counterpart to a `LocalSchemaContribution.backfill`.
+ *
+ * A LocalSchema backfill writes via a raw `db.execute`, which leaves
+ * `tx_context.source = NULL`: fine for local derived-index tables, but a write
+ * to a *synced* table (blocks/workspaces/workspace_members) never fires the
+ * upload trigger and silently never syncs (the daily-note:date bug; guarded by
+ * `syncedTableWriteGuard`). A `WorkspaceBackfill` instead writes through
+ * `repo.tx`, so its rows carry `source = 'user'` and actually upload — the
+ * server, and every other client, converge.
+ *
+ * The repo runs each registered backfill at most once per (workspace, id),
+ * deferred off the workspace-open critical path — see
+ * `Repo.scheduleWorkspaceBackfills`.
+ */
+export interface WorkspaceBackfill {
+  /** Stable id; doubles as the per-workspace completion-marker suffix. Change
+   *  it to force a re-run on every workspace. */
+  readonly id: string
+  run: (ctx: WorkspaceBackfillContext) => Promise<void>
+}
+
+export interface WorkspaceBackfillContext {
+  /** The single workspace this run is scoped to. Every read and write MUST be
+   *  filtered to it — a backfill never touches another workspace (that was the
+   *  cross-workspace cold-start hazard the original raw backfill had). */
+  readonly workspaceId: string
+  /** Raw read against the local DB — use to find candidate rows. */
+  getAll: <T>(sql: string, params?: readonly unknown[]) => Promise<T[]>
+  /** Run a writing transaction. Routes through `repo.tx`, so writes carry
+   *  source='user' and upload (the whole point — a raw write would not). */
+  tx: <R>(
+    fn: (tx: Tx) => Promise<R>,
+    opts: {scope: ChangeScope; description?: string},
+  ) => Promise<R>
+}
+
+const isWorkspaceBackfill = (value: unknown): value is WorkspaceBackfill =>
+  isRecord(value) && typeof value.id === 'string' && typeof value.run === 'function'
 
 const isInvalidationRule = (value: unknown): value is InvalidationRule =>
   isRecord(value) &&
@@ -230,6 +273,11 @@ export const sameTxProcessorsFacet = defineFacet<AnySameTxProcessor, ReadonlyMap
 export const localSchemaFacet = defineFacet<LocalSchemaContribution, readonly LocalSchemaContribution[]>({
   id: 'data.localSchema',
   validate: isLocalSchemaContribution,
+})
+
+export const workspaceBackfillsFacet = defineFacet<WorkspaceBackfill, readonly WorkspaceBackfill[]>({
+  id: 'data.workspaceBackfills',
+  validate: isWorkspaceBackfill,
 })
 
 /** Default inner-property to use when filtering a `ref`/`refList`

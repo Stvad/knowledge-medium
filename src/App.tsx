@@ -299,6 +299,15 @@ const resolveInitialLayout = async (
   // the key gate (no switcher), trapping the user away from accessible spaces.
   rememberWorkspace(workspaceId)
 
+  // Workspace-scoped one-shot data backfills (workspaceBackfillsFacet) — e.g.
+  // daily-notes deriving daily-note:date for pre-existing rows. Fire-and-forget:
+  // the repo defers it off this critical path and gates it to run once per
+  // workspace. Placed AFTER the access gate (above) so we never write into a
+  // locked / read-only workspace; routed through repo.tx so the derived rows
+  // upload — a raw write would stay local, which is exactly how the original
+  // daily-note:date backfill silently never synced.
+  repo.scheduleWorkspaceBackfills(workspaceId)
+
   // Freshly inserted personal workspace: install the starter tutorial
   // as its own parent-less page. The [[Tutorial]] bullet on today's
   // daily note (added below) makes it discoverable from the landing

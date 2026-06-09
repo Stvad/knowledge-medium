@@ -17,12 +17,11 @@ const DAILY_NOTE_DATE_JSON_PATH = `$."${dailyNoteDateProp.name}"`
  *  here.
  *
  *  `dailyNoteDateProp` is written at daily-note creation
- *  (`getOrCreateDailyNote`), so the index stays populated without a
- *  backfill. The legacy one-shot backfill that derived the property
- *  from each row's ISO alias was dropped once the migration had run on
- *  active workspaces — it scanned/wrote across ALL workspaces at cold
- *  start (touching ones the user never opened); re-add a
- *  workspace-scoped pass if a never-migrated graph ever surfaces. */
+ *  (`getOrCreateDailyNote`); pre-existing rows are filled by the
+ *  workspace-scoped `dailyNoteDateBackfill` (see `backfill.ts`), which
+ *  runs through `repo.tx` so the derived property uploads. (The original
+ *  cold-start backfill was a raw `UPDATE blocks` that touched every
+ *  workspace AND never synced — see backfill.ts for that history.) */
 const CREATE_DAILY_NOTE_DATE_INDEX_SQL = `
   CREATE INDEX IF NOT EXISTS idx_blocks_daily_note_date
   ON blocks (json_extract(properties_json, '${DAILY_NOTE_DATE_JSON_PATH}'))

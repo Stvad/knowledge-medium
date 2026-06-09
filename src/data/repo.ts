@@ -67,6 +67,9 @@ import {
   queriesFacet,
   typesFacet,
   valuePresetsFacet,
+  workspaceBackfillsFacet,
+  type WorkspaceBackfill,
+  type WorkspaceBackfillContext,
 } from './facets'
 import { ProcessorRunner } from './internals/processorRunner'
 import { Block } from './block'
@@ -94,6 +97,9 @@ import {
   RECORD_REPROJECT_REF_MARKER_SQL,
   REPROJECT_REF_MARKER_PREFIX,
   SELECT_REPROJECT_REF_MARKERS_SQL,
+  RECORD_WORKSPACE_BACKFILL_MARKER_SQL,
+  WORKSPACE_BACKFILL_MARKER_PREFIX,
+  SELECT_WORKSPACE_BACKFILL_MARKERS_SQL,
 } from './internals/clientSchema'
 import { UndoManager, type UndoEntry } from './internals/undoManager'
 import { CallbackSet } from '@/utils/callbackSet'
@@ -297,6 +303,12 @@ const latestRefProjectionSchema = (
  *  colons (e.g. `roam:isa`). */
 const reprojectionMarkerKey = (workspaceId: string, name: string): string =>
   `${workspaceId}:${name}`
+
+/** Suffix (after the `workspace_backfill:` prefix) of a per-workspace
+ *  workspace-backfill completion marker — `<workspaceId>:<backfillId>`. Same
+ *  shape/rationale as `reprojectionMarkerKey`. */
+const workspaceBackfillMarkerKey = (workspaceId: string, id: string): string =>
+  `${workspaceId}:${id}`
 
 /** A named rebuild step. Declares which facets it reads via `inputs`
  *  so the runtime contribution path can run only the steps whose
@@ -629,6 +641,18 @@ export class Repo {
    *  test quiescence and to keep a stray reprojection from writing into
    *  the next test on a shared DB. Entries remove themselves on settle. */
   private readonly pendingReprojections = new Set<Promise<void>>()
+  /** Registered workspace backfills (`workspaceBackfillsFacet` snapshot,
+   *  refreshed by the `workspaceBackfills` rebuild step). Run once per
+   *  workspace by `scheduleWorkspaceBackfills`. */
+  private _workspaceBackfills: readonly WorkspaceBackfill[] = []
+  /** Lazy in-memory mirror of the workspace-backfill completion markers in
+   *  `client_schema_state` (rows keyed `workspace_backfill:<ws>:<id>`), same
+   *  pattern as `reprojectionMarkers`. `null` until first load. */
+  private workspaceBackfillMarkers: Set<string> | null = null
+  /** In-flight workspace-backfill runs whose deferral timer has fired —
+   *  drained by `awaitWorkspaceBackfills()` for deterministic test quiescence,
+   *  mirroring `pendingReprojections`. */
+  private readonly pendingWorkspaceBackfills = new Set<Promise<void>>()
   /** Slowest writeTransaction observed since the last reset, by
    *  description (`opts.description` passed to `repo.tx`). Updated only
    *  when a tx exceeds the previous high-water mark, so the field is
@@ -1792,6 +1816,87 @@ export class Repo {
     this.reprojectionMarkers = null
   }
 
+  /**
+   * Run the registered workspace backfills (`workspaceBackfillsFacet`) for
+   * `workspaceId`. These are the synced-table counterpart to LocalSchema
+   * backfills: they write through `repo.tx`, so their rows carry
+   * source='user' and actually upload — unlike a raw `db.execute`, which would
+   * leave the rows local-only (the daily-note:date sync gap). Deferred off the
+   * workspace-open critical path (`requestIdleCallback`, 2 s cap; `setTimeout`
+   * under Node/jsdom — same scheme as `scheduleReprojection`) and gated so each
+   * backfill runs at most once per workspace.
+   *
+   * Call AFTER the access gate confirms the workspace is materializable: a
+   * read-only / locked / unverified workspace must not be written (the same
+   * reason App.tsx defers bootstrap writes past the gate). Fire-and-forget —
+   * returns immediately; tests drain via `awaitWorkspaceBackfills()`.
+   */
+  scheduleWorkspaceBackfills(workspaceId: string): void {
+    if (this.isReadOnly || !workspaceId || this._workspaceBackfills.length === 0) return
+    const backfills = this._workspaceBackfills
+    const run = () => {
+      const p = this.runWorkspaceBackfills(workspaceId, backfills)
+        .finally(() => { this.pendingWorkspaceBackfills.delete(p) })
+      this.pendingWorkspaceBackfills.add(p)
+    }
+    const idle = (globalThis as {requestIdleCallback?: (cb: () => void, opts?: {timeout: number}) => void}).requestIdleCallback
+    if (typeof idle === 'function') {
+      idle(run, {timeout: 2000})
+    } else {
+      setTimeout(run, 0)
+    }
+  }
+
+  private async runWorkspaceBackfills(
+    workspaceId: string,
+    backfills: readonly WorkspaceBackfill[],
+  ): Promise<void> {
+    const markers = await this.loadWorkspaceBackfillMarkers()
+    for (const backfill of backfills) {
+      // A role flip to read-only during the deferral window must stop further
+      // writes — re-check per backfill (the loop can span several txs).
+      if (this.isReadOnly) return
+      if (markers.has(workspaceBackfillMarkerKey(workspaceId, backfill.id))) continue
+      const ctx: WorkspaceBackfillContext = {
+        workspaceId,
+        getAll: <T>(sql: string, params?: readonly unknown[]) =>
+          this.db.getAll<T>(sql, params as unknown[] | undefined),
+        tx: <R>(fn: (tx: Tx) => Promise<R>, opts: {scope: ChangeScope; description?: string}) =>
+          this.tx(fn, opts),
+      }
+      try {
+        await backfill.run(ctx)
+        // Record the marker only after a clean run — a thrown backfill leaves
+        // it unset so the next open retries (backfills are written idempotent
+        // via a per-row recheck, so a retry is cheap).
+        await this.setWorkspaceBackfillMarker(workspaceId, backfill.id)
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err)
+        console.error(
+          `[workspaceBackfills] "${backfill.id}" failed for workspace ${workspaceId}: ${reason}`,
+        )
+      }
+    }
+  }
+
+  private async loadWorkspaceBackfillMarkers(): Promise<Set<string>> {
+    if (this.workspaceBackfillMarkers !== null) return this.workspaceBackfillMarkers
+    const rows = await this.db.getAll<{key: string}>(SELECT_WORKSPACE_BACKFILL_MARKERS_SQL)
+    const set = new Set<string>()
+    for (const r of rows) set.add(r.key.slice(WORKSPACE_BACKFILL_MARKER_PREFIX.length))
+    this.workspaceBackfillMarkers = set
+    return set
+  }
+
+  private async setWorkspaceBackfillMarker(workspaceId: string, id: string): Promise<void> {
+    const suffix = workspaceBackfillMarkerKey(workspaceId, id)
+    await this.db.execute(
+      RECORD_WORKSPACE_BACKFILL_MARKER_SQL,
+      [`${WORKSPACE_BACKFILL_MARKER_PREFIX}${suffix}`],
+    )
+    this.workspaceBackfillMarkers?.add(suffix)
+  }
+
   private async _addTypeInTx(
     tx: Tx,
     types: ReadonlyMap<string, TypeContribution>,
@@ -2009,6 +2114,11 @@ export class Repo {
         run: (rt) => { this.invalidationRules = rt.read(invalidationRulesFacet) },
       },
       {
+        id: 'workspaceBackfills',
+        inputs: [workspaceBackfillsFacet as Facet<unknown, unknown>],
+        run: (rt) => { this._workspaceBackfills = rt.read(workspaceBackfillsFacet) },
+      },
+      {
         // Reads typesFacet AND propertySchemasFacet — both inputs feed
         // mergeLiftedSchemas, so a change to either re-runs the merge.
         id: 'propertySchemas',
@@ -2102,6 +2212,15 @@ export class Repo {
   async awaitReprojections(): Promise<void> {
     while (this.pendingReprojections.size > 0) {
       await Promise.all([...this.pendingReprojections])
+    }
+  }
+
+  /** Wait until every workspace backfill whose deferral timer has already
+   *  fired has finished. Mirror of `awaitReprojections` — does NOT advance
+   *  timers; fake-timer callers must advance the clock first. */
+  async awaitWorkspaceBackfills(): Promise<void> {
+    while (this.pendingWorkspaceBackfills.size > 0) {
+      await Promise.all([...this.pendingWorkspaceBackfills])
     }
   }
 
