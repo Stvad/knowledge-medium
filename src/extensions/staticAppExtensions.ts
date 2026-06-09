@@ -43,6 +43,7 @@ import { srsReschedulingPlugin } from '@/plugins/srs-rescheduling'
 import { srsReviewPlugin } from '@/plugins/srs-review'
 import { todoPlugin } from '@/plugins/todo'
 import { syncStatusPlugin } from '@/plugins/sync-status'
+import { dbMaintenancePlugin } from '@/plugins/db-maintenance'
 import { extensionsSettingsPlugin } from '@/plugins/extensions-settings'
 import { keybindingsSettingsPlugin } from '@/plugins/keybindings-settings'
 import { colemakKeybindingsPlugin } from '@/plugins/colemak-keybindings'
@@ -119,6 +120,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   srsReschedulingPlugin,
   srsReviewPlugin({repo}),
   syncStatusPlugin,
+  dbMaintenancePlugin({repo}),
   updateIndicatorPlugin,
   agentRuntimePlugin,
   roamImportPlugin({repo}),

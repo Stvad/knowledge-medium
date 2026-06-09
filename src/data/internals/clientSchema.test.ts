@@ -38,15 +38,18 @@ import {
 } from '@/data/workspaceSchema'
 import {
   ALIAS_BACKFILL_MARKER_KEY,
-  ANALYZE_MARKER_KEY,
-  ANALYZE_REFRESH_INTERVAL_MS,
+  ANALYZE_GROWTH_FACTOR,
+  ANALYZE_MIN_BLOCKS,
   BACKFILL_BLOCK_ALIASES_SQL,
   BACKFILL_BLOCKS_FTS_SQL,
   BLOCKS_FTS_BACKFILL_MARKER_KEY,
   CLIENT_SCHEMA_STATEMENTS,
+  analyzeIsWarranted,
   backfillBlockAliasesIfEmpty,
   backfillBlocksFtsIfEmpty,
-  runAnalyzeIfDue,
+  getBlocksStatEstimate,
+  runAnalyzeIfStale,
+  runAnalyzeNow,
 } from './clientSchema'
 
 interface TestDb {
@@ -940,66 +943,143 @@ describe('block_aliases backfill', () => {
   })
 })
 
-describe('runAnalyzeIfDue', () => {
-  // Adapter that records every `execute` call so the assertions can
-  // tell whether ANALYZE actually ran without poking at sqlite_stat1
-  // (which depends on how much data was indexed).
-  const buildRunner = (now: () => number) => {
-    const executed: string[] = []
-    const run = async () => {
-      const ran = await runAnalyzeIfDue({
-        execute: async (sql, params) => {
-          executed.push(sql.trim())
-          if (params && params.length > 0) {
-            h.db.prepare(sql).run(...(params as Array<string | number | null>))
-          } else {
-            h.db.exec(sql)
-          }
-        },
-        getOptional: async <T,>(sql: string) => {
-          const row = h.db.prepare(sql).get() as T | undefined
-          return row ?? null
-        },
-      }, now)
-      return {ran, executed}
+// Real-SQLite adapter recording every executed statement, so a test can
+// assert whether ANALYZE actually ran in addition to inspecting the result.
+const buildRecordingDb = () => {
+  const executed: string[] = []
+  const db = {
+    execute: async (sql: string, params?: unknown[]) => {
+      executed.push(sql.trim())
+      const stmt = h.db.prepare(sql)
+      if (params && params.length > 0) {
+        stmt.run(...(params as Array<string | number | null>))
+      } else {
+        stmt.run()
+      }
+    },
+    getOptional: async <T,>(sql: string) => {
+      const row = h.db.prepare(sql).get() as T | undefined
+      return row ?? null
+    },
+  }
+  return {db, executed, ranAnalyze: () => executed.includes('ANALYZE')}
+}
+
+// `analyzeIsWarranted` is the pure drift predicate; `runAnalyzeIfStale`
+// wires it to the DB. wa-sqlite never auto-populates `sqlite_stat1`, so a
+// large `blocks` table gets pessimal join orders until ANALYZE runs — but
+// running it on an empty table (the init-before-sync race) records "0 rows"
+// stats that are WORSE than none. The decision is therefore drift-based:
+// re-ANALYZE only once the live count has diverged from the count baked
+// into `sqlite_stat1` (the implicit marker — no separate state row).
+describe('analyzeIsWarranted (drift predicate)', () => {
+  it('skips a table too small for join order to matter, whatever the stats', () => {
+    expect(analyzeIsWarranted(null, ANALYZE_MIN_BLOCKS - 1)).toBe(false)
+    // Even badly-stale stats on a sub-threshold table aren't worth a scan —
+    // and recording a tiny estimate could itself mislead the planner.
+    expect(analyzeIsWarranted(0, ANALYZE_MIN_BLOCKS - 1)).toBe(false)
+  })
+
+  it('analyzes once there is real data but no stats yet', () => {
+    // Fresh device after the first sync lands: no sqlite_stat1 baseline.
+    expect(analyzeIsWarranted(null, ANALYZE_MIN_BLOCKS)).toBe(true)
+  })
+
+  it('leaves a stable workspace alone (no repeat multi-second scan)', () => {
+    expect(analyzeIsWarranted(320_000, 321_000)).toBe(false)
+  })
+
+  it('force-corrects the legacy "0 rows" stats over a large table', () => {
+    expect(analyzeIsWarranted(0, 320_000)).toBe(true)
+  })
+
+  it('re-analyzes after growth past the factor (import / initial sync)', () => {
+    expect(analyzeIsWarranted(1_000, 1_000 * ANALYZE_GROWTH_FACTOR)).toBe(true)
+    expect(analyzeIsWarranted(1_000, 1_000 * ANALYZE_GROWTH_FACTOR - 1)).toBe(false)
+  })
+
+  it('re-analyzes after a large prune below the factor', () => {
+    // Both ends above the floor, estimate >> count → re-tighten.
+    const estimate = ANALYZE_MIN_BLOCKS * ANALYZE_GROWTH_FACTOR * 2
+    const count = ANALYZE_MIN_BLOCKS * 2
+    expect(estimate).toBeGreaterThanOrEqual(count * ANALYZE_GROWTH_FACTOR)
+    expect(analyzeIsWarranted(estimate, count)).toBe(true)
+  })
+})
+
+describe('runAnalyzeIfStale', () => {
+  // Small thresholds keep the seeded row count tiny; the constants
+  // themselves (1000 / 4×) aren't restated, only their behavior.
+  const opts = {minBlocks: 4, growthFactor: 2}
+
+  const seedBlocks = (n: number, startIndex = 0) => {
+    for (let i = startIndex; i < startIndex + n; i++) {
+      h.insertBlock({id: `blk-${i}`, order_key: `a${i}`})
     }
-    return run
   }
 
-  const recordedAt = (): number | null => {
-    const row = h.db
-      .prepare(`SELECT completed_at FROM client_schema_state WHERE key = '${ANALYZE_MARKER_KEY}'`)
-      .get() as {completed_at: number} | undefined
-    return row?.completed_at ?? null
-  }
-
-  it('runs ANALYZE and records the marker on first call', async () => {
-    expect(recordedAt()).toBeNull()
-    const run = buildRunner(() => 1_700_000_000_000)
-    const {ran, executed} = await run()
-    expect(ran).toBe(true)
-    expect(executed.some(sql => sql === 'ANALYZE')).toBe(true)
-    expect(recordedAt()).toBe(1_700_000_000_000)
+  it('does not ANALYZE an empty table — never records the "0 rows" stats', async () => {
+    const {db, ranAnalyze} = buildRecordingDb()
+    const result = await runAnalyzeIfStale(db, opts)
+    expect(result.analyzed).toBe(false)
+    expect(ranAnalyze()).toBe(false)
+    // The original bug: ANALYZE on empty wrote a sqlite_stat1 estimate the
+    // planner then trusted for 30 days. With no ANALYZE, no such estimate.
+    expect(await getBlocksStatEstimate(db)).toBeNull()
   })
 
-  it('is a no-op within the refresh interval', async () => {
-    await buildRunner(() => 1_700_000_000_000)()
-    // One ms before the interval elapses — still fresh, must skip.
-    const run = buildRunner(() => 1_700_000_000_000 + ANALYZE_REFRESH_INTERVAL_MS - 1)
-    const {ran, executed} = await run()
-    expect(ran).toBe(false)
-    expect(executed).toEqual([])
-    expect(recordedAt()).toBe(1_700_000_000_000)
+  it('runs ANALYZE once data is present and records the real row count', async () => {
+    seedBlocks(opts.minBlocks)
+    const {db, ranAnalyze} = buildRecordingDb()
+    const result = await runAnalyzeIfStale(db, opts)
+    expect(result.analyzed).toBe(true)
+    expect(ranAnalyze()).toBe(true)
+    expect(await getBlocksStatEstimate(db)).toBe(opts.minBlocks)
   })
 
-  it('refreshes once the interval has elapsed', async () => {
-    await buildRunner(() => 1_700_000_000_000)()
-    const refreshAt = 1_700_000_000_000 + ANALYZE_REFRESH_INTERVAL_MS + 1
-    const run = buildRunner(() => refreshAt)
-    const {ran, executed} = await run()
-    expect(ran).toBe(true)
-    expect(executed.some(sql => sql === 'ANALYZE')).toBe(true)
-    expect(recordedAt()).toBe(refreshAt)
+  it('does not re-run on a stable table', async () => {
+    seedBlocks(opts.minBlocks)
+    await runAnalyzeIfStale(buildRecordingDb().db, opts)
+    const {db, ranAnalyze} = buildRecordingDb()
+    const result = await runAnalyzeIfStale(db, opts)
+    expect(result.analyzed).toBe(false)
+    expect(ranAnalyze()).toBe(false)
+  })
+
+  it('re-runs after the table grows past the drift factor', async () => {
+    seedBlocks(opts.minBlocks)
+    await runAnalyzeIfStale(buildRecordingDb().db, opts)
+    // Grow well past the baseline * growthFactor.
+    seedBlocks(opts.minBlocks * opts.growthFactor, opts.minBlocks)
+    const {db, ranAnalyze} = buildRecordingDb()
+    const result = await runAnalyzeIfStale(db, opts)
+    expect(result.analyzed).toBe(true)
+    expect(ranAnalyze()).toBe(true)
+    expect(await getBlocksStatEstimate(db)).toBe(opts.minBlocks + opts.minBlocks * opts.growthFactor)
+  })
+
+  it('force-corrects stale near-empty stats over a now-large table', async () => {
+    seedBlocks(opts.minBlocks)
+    await runAnalyzeIfStale(buildRecordingDb().db, opts)
+    // Simulate the legacy "0 0" bug state: stats say ~empty, table isn't.
+    h.db.prepare("UPDATE sqlite_stat1 SET stat = '0' WHERE tbl = 'blocks'").run()
+    expect(await getBlocksStatEstimate(buildRecordingDb().db)).toBe(0)
+    const {db, ranAnalyze} = buildRecordingDb()
+    const result = await runAnalyzeIfStale(db, opts)
+    expect(result.analyzed).toBe(true)
+    expect(ranAnalyze()).toBe(true)
+    expect(await getBlocksStatEstimate(db)).toBe(opts.minBlocks)
+  })
+})
+
+describe('runAnalyzeNow', () => {
+  it('runs ANALYZE unconditionally and reports the live count', async () => {
+    // No drift gate: a single block (well below the floor) still analyzes.
+    h.insertBlock({id: 'only-block'})
+    const {db, ranAnalyze} = buildRecordingDb()
+    const {count} = await runAnalyzeNow(db)
+    expect(count).toBe(1)
+    expect(ranAnalyze()).toBe(true)
   })
 })
 

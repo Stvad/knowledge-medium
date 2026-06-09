@@ -982,32 +982,59 @@ export const BACKFILL_BLOCKS_FTS_SQL = `
     )
 `
 
-/** Planner-stats marker. wa-sqlite ships without an automatic
- *  `sqlite_stat1`, so the planner falls back to row-count heuristics
- *  that consistently mis-rank join orders on `blocks` once the
- *  workspace is large — a 4-id `json_each` lookup with
- *  `(workspace_id, deleted)` filtering scans the workspace partial
- *  index (300k+ rows) instead of driving from the small set into the
- *  PK. Running `ANALYZE` once populates `sqlite_stat1` and flips that
- *  decision; the recorded `completed_at` lets the bootstrap re-run on
- *  a long interval so stats don't drift indefinitely as the workspace
- *  grows. */
-export const ANALYZE_MARKER_KEY = 'analyze_v1'
+/** Planner-stats freshness, decided by *drift* rather than a clock.
+ *  wa-sqlite ships without an automatic `sqlite_stat1`, so the planner
+ *  falls back to row-count heuristics that consistently mis-rank join
+ *  orders on `blocks` once the workspace is large — a 4-id `json_each`
+ *  lookup with `(workspace_id, deleted)` filtering scans the workspace
+ *  partial index (300k+ rows) instead of driving from the small set into
+ *  the PK. Running `ANALYZE` populates `sqlite_stat1` and flips that
+ *  decision.
+ *
+ *  WHEN to re-run is the subtle part: `sqlite_stat1` already records the
+ *  row count seen at the last ANALYZE, so we re-run whenever the live
+ *  `blocks` count has diverged from that baseline by more than
+ *  {@link ANALYZE_GROWTH_FACTOR}×. That one rule covers every case a timer
+ *  can't: the empty-table-at-init race (no baseline → ANALYZE once data
+ *  lands, never over the empty table), a large initial sync, a bulk
+ *  import, and the legacy "0 0" stats bug (baseline ~0 over a huge table →
+ *  force re-ANALYZE). A stable workspace stays within the factor and is
+ *  left alone, so the multi-second scan doesn't repeat every boot. No
+ *  marker row is needed — `sqlite_stat1` itself is the source of truth. */
 
-/** How long stats stay fresh before the bootstrap schedules another
- *  refresh. 30 days is well past steady-state churn for a personal
- *  workspace; users with huge import bursts can clear the marker by
- *  hand. The cost paid per refresh is one ANALYZE pass at idle. */
-export const ANALYZE_REFRESH_INTERVAL_MS = 30 * 24 * 60 * 60 * 1000
+/** Below this many `blocks` rows the planner's join-order choices don't
+ *  cause the multi-second freezes (scanning a sub-thousand-row table is
+ *  cheap either way), so ANALYZE buys nothing — and recording a tiny
+ *  row-estimate mid-sync could itself mislead the planner into scanning a
+ *  table that's actually still filling. Gates whether ANALYZE runs at
+ *  all. */
+export const ANALYZE_MIN_BLOCKS = 1000
 
-export const SELECT_ANALYZE_COMPLETED_AT_SQL = `
-  SELECT completed_at FROM client_schema_state WHERE key = '${ANALYZE_MARKER_KEY}'
+/** Re-ANALYZE once the live `blocks` count diverges from the count baked
+ *  into `sqlite_stat1` by this factor in either direction. 4× keeps the
+ *  estimate within the same order of magnitude the planner cares about
+ *  (join order turns on order-of-magnitude differences, not 4×), so a
+ *  gradually-growing workspace re-analyzes rarely while an import or
+ *  initial sync that multiplies the table triggers it promptly. */
+export const ANALYZE_GROWTH_FACTOR = 4
+
+/** Estimated `blocks` row count recorded at the last ANALYZE. `stat` is a
+ *  space-separated string ("<rows> <avg-rows-per-key>…"); `CAST(... AS
+ *  INTEGER)` parses its leading integer. MAX across the per-index rows is
+ *  the table estimate (the partial workspace index reports live rows, the
+ *  PK reports all rows; MAX takes the table total to match COUNT(*)).
+ *  NULL when ANALYZE has never populated stats for `blocks`. */
+export const SELECT_BLOCKS_STAT_ESTIMATE_SQL = `
+  SELECT MAX(CAST(stat AS INTEGER)) AS rows FROM sqlite_stat1 WHERE tbl = 'blocks'
 `
 
-export const RECORD_ANALYZE_DONE_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES ('${ANALYZE_MARKER_KEY}', ?)
+/** `sqlite_stat1` only exists once ANALYZE has run at least once; querying
+ *  it before then throws "no such table". Probe `sqlite_master` first. */
+export const SELECT_SQLITE_STAT1_EXISTS_SQL = `
+  SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_stat1' LIMIT 1
 `
+
+export const SELECT_BLOCKS_COUNT_SQL = `SELECT COUNT(*) AS count FROM blocks`
 
 /** Per-name reprojection markers. Once `reprojectRefTypedProperties`
  *  has done a catch-up pass for property name `X`, a row keyed
@@ -1187,29 +1214,90 @@ export const backfillBlocksFtsIfEmpty = async (
   await db.execute(RECORD_BLOCKS_FTS_BACKFILL_DONE_SQL)
 }
 
-/** Run `ANALYZE` if the marker is missing (first install) or the
- *  recorded `completed_at` is older than `intervalMs`. Caller is
- *  responsible for scheduling this off the cold-start critical path
- *  (see `repoProvider.ts` — runs via `scheduleIdle`), since the scan
- *  itself can take seconds on a multi-GB DB and we don't want to
- *  block first paint behind it.
- *
- *  `now` is injected so tests can drive the interval check
- *  deterministically without `vi.useFakeTimers` reaching into the
- *  trigger bodies that already depend on `julianday('now')`.
- *  Returns `true` iff `ANALYZE` actually ran. */
-export const runAnalyzeIfDue = async (
+/** Row count `sqlite_stat1` recorded for `blocks` at the last ANALYZE, or
+ *  `null` if ANALYZE has never run for it. See {@link SELECT_BLOCKS_STAT_ESTIMATE_SQL}. */
+export const getBlocksStatEstimate = async (
   db: ClientSchemaBootstrapDb,
-  now: () => number,
-  intervalMs: number = ANALYZE_REFRESH_INTERVAL_MS,
-): Promise<boolean> => {
-  const existing = await db.getOptional<{completed_at: number}>(SELECT_ANALYZE_COMPLETED_AT_SQL)
-  const nowMs = now()
-  if (existing !== null && nowMs - existing.completed_at < intervalMs) {
-    return false
+): Promise<number | null> => {
+  // sqlite_stat1 doesn't exist until the first ANALYZE — probe to avoid a
+  // "no such table" throw on a fresh device.
+  const hasStatTable = await db.getOptional<{present: number}>(SELECT_SQLITE_STAT1_EXISTS_SQL)
+  if (hasStatTable === null) return null
+  const row = await db.getOptional<{rows: number | null}>(SELECT_BLOCKS_STAT_ESTIMATE_SQL)
+  return row?.rows ?? null
+}
+
+/** Live `blocks` row count — a covering index scan: cheap relative to
+ *  ANALYZE, but not free on a large table, so callers run it at idle. */
+export const getBlocksCount = async (
+  db: ClientSchemaBootstrapDb,
+): Promise<number> => {
+  const row = await db.getOptional<{count: number}>(SELECT_BLOCKS_COUNT_SQL)
+  return row?.count ?? 0
+}
+
+/** Pure drift predicate (no I/O) so the thresholds stay unit-testable
+ *  without a database. Given the count baked into `sqlite_stat1`
+ *  (`estimate`, `null` = never analyzed) and the live `count`, decide
+ *  whether ANALYZE is worth running. See {@link ANALYZE_MIN_BLOCKS} /
+ *  {@link ANALYZE_GROWTH_FACTOR} for the rationale behind each branch. */
+export const analyzeIsWarranted = (
+  estimate: number | null,
+  count: number,
+  minBlocks: number = ANALYZE_MIN_BLOCKS,
+  growthFactor: number = ANALYZE_GROWTH_FACTOR,
+): boolean => {
+  // Too small for join order to matter — and a tiny recorded estimate
+  // could mislead the planner mid-sync. Leave the table's stats alone.
+  if (count < minBlocks) return false
+  // Real data but no baseline yet (fresh sync / first import).
+  if (estimate === null) return true
+  // Grew far past the baseline (import / initial sync / the "0 0" bug,
+  // where estimate≈0 makes any real count exceed estimate*factor).
+  if (count >= estimate * growthFactor) return true
+  // Shrank far below it (e.g. a large prune) — re-tighten the estimate.
+  if (estimate >= count * growthFactor) return true
+  return false
+}
+
+export interface AnalyzeResult {
+  /** Whether `ANALYZE` was run this call. */
+  analyzed: boolean
+  /** Live `blocks` count observed (drives the decision + any toast). */
+  count: number
+  /** Recorded estimate before this call (`null` = never analyzed). */
+  previousEstimate: number | null
+}
+
+/** Run `ANALYZE` only if the live `blocks` count has drifted from the
+ *  `sqlite_stat1` baseline (see {@link analyzeIsWarranted}). Callers MUST
+ *  schedule this off the first-paint critical path (idle / post-sync):
+ *  the count is a full index scan and ANALYZE itself is a multi-second
+ *  pass on a large DB, both on the single SQLite worker. */
+export const runAnalyzeIfStale = async (
+  db: ClientSchemaBootstrapDb,
+  opts: {minBlocks?: number; growthFactor?: number} = {},
+): Promise<AnalyzeResult> => {
+  const minBlocks = opts.minBlocks ?? ANALYZE_MIN_BLOCKS
+  const growthFactor = opts.growthFactor ?? ANALYZE_GROWTH_FACTOR
+  const previousEstimate = await getBlocksStatEstimate(db)
+  const count = await getBlocksCount(db)
+  if (!analyzeIsWarranted(previousEstimate, count, minBlocks, growthFactor)) {
+    return {analyzed: false, count, previousEstimate}
   }
   await db.execute('ANALYZE')
-  await db.execute(RECORD_ANALYZE_DONE_SQL, [nowMs])
-  return true
+  return {analyzed: true, count, previousEstimate}
+}
+
+/** Unconditional `ANALYZE` for the manual command-palette command — runs
+ *  regardless of drift (the user explicitly asked) and reports the table
+ *  size so the caller can surface it. Still belongs off the render
+ *  path. */
+export const runAnalyzeNow = async (
+  db: ClientSchemaBootstrapDb,
+): Promise<{count: number}> => {
+  const count = await getBlocksCount(db)
+  await db.execute('ANALYZE')
+  return {count}
 }
 

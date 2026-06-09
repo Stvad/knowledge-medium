@@ -56,7 +56,7 @@ import {
   backfillBlockAliasesIfEmpty,
   backfillBlocksFtsIfEmpty,
   backfillBlockTypesIfEmpty,
-  runAnalyzeIfDue,
+  runAnalyzeIfStale,
 } from '@/data/internals/clientSchema'
 import { scheduleIdle } from '@/utils/scheduleIdle.js'
 import {
@@ -308,16 +308,41 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   )
 
   // ANALYZE off the cold-start path. wa-sqlite never auto-populates
-  // `sqlite_stat1`, so the planner makes pessimal join-order choices
-  // on `blocks` once a workspace is large (a 4-id `json_each` lookup
-  // can degenerate to a 4-second scan of the workspace partial index).
-  // First-install + 30-day refresh keeps stats meaningful without
-  // blocking first paint behind the multi-second scan. Fire-and-forget
-  // — runtime queries that race the analyze keep using prior plans
-  // until it finishes, which is fine for the bootstrap window.
-  scheduleIdle(() => {
-    void runAnalyzeIfDue(backfillDb, () => Date.now()).catch(error => {
-      console.warn('[Repo] ANALYZE refresh failed:', error)
+  // `sqlite_stat1`, so the planner makes pessimal join-order choices on
+  // `blocks` once a workspace is large (a 4-id `json_each` lookup can
+  // degenerate to a 4-second scan of the workspace partial index).
+  // `runAnalyzeIfStale` re-runs only when the live `blocks` count has
+  // drifted from the count the stats were built on (see clientSchema), so
+  // a stable workspace pays nothing and a grown one self-corrects. Both
+  // the count probe and ANALYZE run on the single SQLite worker, so every
+  // trigger below is idle-deferred — never on the first-paint path.
+  //
+  // (a) Boot: catches anything that changed since the last session — a
+  // prior-session import, organic growth, or the legacy "0 0" stats bug.
+  const scheduleAnalyzeCheck = (reason: string) => {
+    scheduleIdle(() => {
+      void runAnalyzeIfStale(backfillDb).catch(error => {
+        console.warn(`[Repo] ANALYZE check failed (${reason}):`, error)
+      })
     })
-  })
+  }
+  scheduleAnalyzeCheck('boot')
+
+  // (b) First sync of THIS session: a fresh device boots with an empty
+  // `blocks`, so (a) skips. Once PowerSync finishes the initial sync and
+  // the observer materializes the rows, the table is large and the boot
+  // baseline is stale — re-check then so the user gets good plans the same
+  // session instead of after a reload. One-shot; disposes after the first
+  // `hasSynced`. If the first sync already completed in a prior session,
+  // (a) above already covered it, so don't bother registering.
+  if (!powerSyncDb.currentStatus?.hasSynced) {
+    let disposeSyncListener = () => {}
+    disposeSyncListener = powerSyncDb.registerListener({
+      statusChanged: status => {
+        if (!status.hasSynced) return
+        disposeSyncListener()
+        scheduleAnalyzeCheck('first-sync')
+      },
+    })
+  }
 }
