@@ -69,6 +69,16 @@ export interface ActionContextConfig<T extends ActionContextType = ActionContext
    */
   keyboardBindable?: boolean;
   /**
+   * Optional gate for POINTER dispatch: when present and it returns false for a
+   * pointer event, none of this context's actions are considered candidates for
+   * that event. Lets a context declare "my gestures don't apply here" once,
+   * centrally, instead of every action/handler re-checking — e.g. `block-pointer`
+   * excludes clicks landing on interactive descendants (links, buttons) so they
+   * keep their native behavior. Keys off the actual event target. Only consulted
+   * on the pointer path; ignored for keyboard.
+   */
+  pointerTargetFilter?: (event: ReactMouseEvent<HTMLElement>) => boolean;
+  /**
    * Type guard function to validate the dependencies provided when activating the context.
    */
   validateDependencies: DependencyValidator<T>;
@@ -231,8 +241,10 @@ export interface Action<T extends ActionContextType = ActionContextType> {
   defaultBinding?: ShortcutBindingDefaults; // Optional default keyboard binding
   /** Optional pointer (mouse) binding — dispatched through the same coordinator
    *  + `resolve` path as keyboard, but matched against a pointer event and
-   *  supplied the clicked block's deps. See {@link PointerBindingSpec}. */
-  pointerBinding?: PointerBindingSpec;
+   *  supplied the clicked block's deps. A list binds the action to several
+   *  pointer chords (e.g. ctrl-click OR meta-click both toggle selection), since
+   *  modifier matching is exact-set. See {@link PointerBindingSpec}. */
+  pointerBinding?: PointerBindingSpec | readonly PointerBindingSpec[];
   /** Optional icon for surfaces that render actions visually (toolbars,
    *  swipe menus, eventual command-palette icon column). Surfaces that
    *  don't render icons just ignore the field. */

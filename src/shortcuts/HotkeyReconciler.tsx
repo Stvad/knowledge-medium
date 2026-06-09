@@ -12,7 +12,7 @@ import {
   useActiveContextsState,
   ActiveContextsMap,
 } from '@/shortcuts/ActiveContexts.js'
-import { setRunActionDispatcher } from '@/shortcuts/runAction.js'
+import { setRunActionDispatcher, setActionWithDepsDispatcher } from '@/shortcuts/runAction.js'
 import { setPointerActionDispatcher } from '@/shortcuts/pointerAction.js'
 import {
   actionRuntimeKey,
@@ -24,6 +24,7 @@ import { computeInstallableContexts, resolve, resolveDeps } from './resolve.ts'
 import {
   matchesMouseEvent,
   pointerBindingDescriptor,
+  type PointerBindingSpec,
   type PointerPhase,
 } from './canonicalizeChord.ts'
 import {
@@ -191,6 +192,32 @@ export function HotkeyReconciler(): null {
     return () => setRunActionDispatcher(null)
   }, [runtime])
 
+  // Install the supplied-deps by-id dispatcher. Same resolve + run-until-handled
+  // path as keyboard/pointer, but candidates are matched by action id and deps
+  // are SUPPLIED by the caller (the swipe gesture / quick-action menu), so the
+  // action's context need not be keyboard-active. The caller owns native
+  // default-handling (swipe preventDefaults off the boolean return), so no event
+  // options are applied here.
+  useEffect(() => {
+    setActionWithDepsDispatcher((actionId, supplied, trigger) => {
+      const active = activeRef.current
+      const contextConfigsByType = contextConfigsByTypeRef.current
+      const ordered = resolve(
+        getEffectiveActions(runtime),
+        {active, contextConfigsByType},
+        {kind: 'supplied', actionId},
+      )
+      return runOrderedCandidates(
+        ordered,
+        trigger,
+        {active, contextConfigsByType, dispatch: dispatchRef.current},
+        supplied,
+        () => undefined,
+      )
+    })
+    return () => setActionWithDepsDispatcher(null)
+  }, [runtime])
+
   // Install the pointer-action dispatcher. Mirrors the keyboard coordinator's
   // collect → order → run-until-handled loop, but the candidates are the
   // pointer-bound actions whose descriptor matches this event, and deps are
@@ -212,11 +239,21 @@ export function HotkeyReconciler(): null {
       const matched = getEffectiveActions(runtime).filter(action => {
         const spec = action.pointerBinding
         if (!spec) return false
-        const descriptor = pointerBindingDescriptor(spec)
-        if (descriptor.phase !== phase) return false
-        if (!matchesMouseEvent(descriptor, eventLike)) return false
-        if (descriptor.role && !pointerRoleMatches(supplied.targetElement, descriptor.role)) return false
-        return true
+        // Context-level pointer gate: a context can declare its gestures don't
+        // apply to this target (e.g. block-pointer excludes interactive
+        // descendants), so none of its actions become candidates here.
+        const contextFilter = contextConfigsByType.get(action.context)?.pointerTargetFilter
+        if (contextFilter && !contextFilter(event)) return false
+        // A binding may list several pointer chords (ctrl-click OR meta-click);
+        // the action matches if any of them does.
+        const specs: readonly PointerBindingSpec[] = Array.isArray(spec) ? spec : [spec]
+        return specs.some(candidate => {
+          const descriptor = pointerBindingDescriptor(candidate)
+          if (descriptor.phase !== phase) return false
+          if (!matchesMouseEvent(descriptor, eventLike)) return false
+          if (descriptor.role && !pointerRoleMatches(supplied.targetElement, descriptor.role)) return false
+          return true
+        })
       })
       if (matched.length === 0) return false
 

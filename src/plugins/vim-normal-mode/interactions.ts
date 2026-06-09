@@ -1,22 +1,48 @@
 import type { MouseEvent, TouchEvent } from 'react'
 import {
-  BlockClickContribution,
   BlockContentSurfaceContribution,
   enterBlockEditMode,
-  handleBlockSelectionClick,
+  focusBlockWithoutEditing,
   isInteractiveContentEvent,
-  isSelectionClick,
   ShortcutActivationContribution,
 } from '@/extensions/blockInteraction.js'
-import { ActionContextTypes } from '@/shortcuts/types.js'
+import {
+  ActionContextTypes,
+  type ActionTransform,
+  type BlockPointerDependencies,
+} from '@/shortcuts/types.js'
 import { isEditingProp, isFocusedBlock } from '@/data/properties.js'
+import { ENTER_BLOCK_EDIT_MODE_ACTION_ID } from '@/plugins/plain-outliner/clickToEditAction.js'
 import { Block } from '../../data/block'
 
-export const vimBlockClickBehavior: BlockClickContribution = context =>
-  event => {
-    if (isSelectionClick(event)) return
-    void handleBlockSelectionClick(context, event)
-  }
+/**
+ * Vim normal mode: a single click focuses the block instead of entering edit
+ * mode (double-click / tap still edits — see `vimContentSurfaceBehavior`).
+ *
+ * Decorates the plain-outliner click-to-edit pointer action by replacing its
+ * handler, the same Replace semantics vim used to get by winning the
+ * `blockClickHandlersFacet` last-contribution race — now expressed through the
+ * one transform mechanism. Interactive descendants are excluded upstream by the
+ * `block-pointer` context's `pointerTargetFilter`, so the handler doesn't
+ * re-check them.
+ *
+ * Coupling note: this targets plain-outliner's action id, so single-click-focus
+ * only applies when plain-outliner is enabled (it provides the click-to-edit
+ * action this replaces). That's the normal config — vim normal mode edits the
+ * text blocks plain-outliner renders — but disabling plain-outliner while vim
+ * stays on would drop click-to-focus rather than fall back to it.
+ */
+export const vimClickToFocusTransform: ActionTransform = {
+  actionId: ENTER_BLOCK_EDIT_MODE_ACTION_ID,
+  context: ActionContextTypes.BLOCK_POINTER,
+  apply: action => ({
+    ...action,
+    handler: (deps) => {
+      const {block, uiStateBlock, renderScopeId} = deps as BlockPointerDependencies
+      void focusBlockWithoutEditing(block, uiStateBlock, renderScopeId)
+    },
+  }),
+}
 
 type TouchStart = { x: number; y: number; time: number }
 

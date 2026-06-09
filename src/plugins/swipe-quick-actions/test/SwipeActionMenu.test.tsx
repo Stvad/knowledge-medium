@@ -7,9 +7,12 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import type { Block } from '@/data/block'
-import { actionTransformsFacet, actionsFacet } from '@/extensions/core'
-import { resolveFacetRuntimeSync, type FacetRuntime } from '@/extensions/facet'
+import { actionContextsFacet, actionTransformsFacet, actionsFacet } from '@/extensions/core'
+import { resolveFacetRuntimeSync, type AppExtension, type FacetRuntime } from '@/extensions/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
+import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
+import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler'
+import { defaultActionContextConfigs } from '@/shortcuts/defaultContexts'
 import { type ActionConfig, ActionContextTypes, type BlockShortcutDependencies } from '@/shortcuts/types'
 import { topLevelBlockIdProp } from '@/data/properties'
 import { quickActionItemsFacet, SWIPE_RIGHT_BLOCK_ACTION_ID } from '../actions'
@@ -71,6 +74,16 @@ const runEvent = (
     detail: renderScopeId ? {blockId, renderScopeId, actionId} : {blockId, actionId},
   })
 
+// The swipe menu dispatches actions through the unified by-id path, which is a
+// no-op until <HotkeyReconciler/> installs its dispatcher — so every runtime
+// here registers the default action contexts (for deps validation) and the
+// render mounts the coordinator inside an ActiveContextsProvider.
+const buildRuntime = (contributions: AppExtension): FacetRuntime =>
+  resolveFacetRuntimeSync([
+    ...defaultActionContextConfigs.map(c => actionContextsFacet.of(c)),
+    contributions,
+  ])
+
 describe('SwipeActionMenu', () => {
   let sharedDb: TestDb
   let h: TestDb
@@ -93,7 +106,7 @@ describe('SwipeActionMenu', () => {
       startSyncObserver: false,
     })
     repo.setActiveWorkspaceId(WS)
-    runtime = resolveFacetRuntimeSync([
+    runtime = buildRuntime([
       actionsFacet.of({
         id: 'copy_block',
         description: 'Copy block',
@@ -143,10 +156,13 @@ describe('SwipeActionMenu', () => {
   const renderMenu = () =>
     render(
       <AppRuntimeContextProvider value={runtime}>
-        <div className="panel">
-          <div data-block-id="block-1">Block</div>
-          <SwipeActionMenu/>
-        </div>
+        <ActiveContextsProvider>
+          <HotkeyReconciler/>
+          <div className="panel">
+            <div data-block-id="block-1">Block</div>
+            <SwipeActionMenu/>
+          </div>
+        </ActiveContextsProvider>
       </AppRuntimeContextProvider>,
     )
 
@@ -265,7 +281,7 @@ describe('SwipeActionMenu', () => {
       isVisible: ({block}) => block.id !== 'block-1',
       handler: vi.fn(),
     }
-    runtime = resolveFacetRuntimeSync([
+    runtime = buildRuntime([
       actionsFacet.of(alwaysAction, {source: 'test'}),
       actionsFacet.of(gatedAction, {source: 'test'}),
       quickActionItemsFacet.of({actionId: 'always', label: 'Always'}, {source: 'test'}),
@@ -286,7 +302,7 @@ describe('SwipeActionMenu', () => {
       expect(deps.block.id).toBe('block-1')
     })
     const isVisible = vi.fn((deps: BlockShortcutDependencies) => deps.block.id === 'block-1')
-    runtime = resolveFacetRuntimeSync([
+    runtime = buildRuntime([
       actionsFacet.of({
         id: 'scoped_action',
         description: 'Scoped action',
@@ -298,11 +314,14 @@ describe('SwipeActionMenu', () => {
     ])
     render(
       <AppRuntimeContextProvider value={runtime}>
-        <div className="panel">
-          <div data-block-id="block-1" data-render-scope-id="scope-a">Outline</div>
-          <div data-block-id="block-1" data-render-scope-id="scope-b">Embed</div>
-          <SwipeActionMenu/>
-        </div>
+        <ActiveContextsProvider>
+          <HotkeyReconciler/>
+          <div className="panel">
+            <div data-block-id="block-1" data-render-scope-id="scope-a">Outline</div>
+            <div data-block-id="block-1" data-render-scope-id="scope-b">Embed</div>
+            <SwipeActionMenu/>
+          </div>
+        </ActiveContextsProvider>
       </AppRuntimeContextProvider>,
     )
 
@@ -330,7 +349,7 @@ describe('SwipeActionMenu', () => {
         calls.push(`base:${block.id}:${renderScopeId ?? ''}`)
       },
     }
-    runtime = resolveFacetRuntimeSync([
+    runtime = buildRuntime([
       actionsFacet.of(baseAction, {source: 'test'}),
       actionTransformsFacet.of({
         actionId: SWIPE_RIGHT_BLOCK_ACTION_ID,

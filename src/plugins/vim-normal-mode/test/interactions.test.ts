@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { MouseEvent, TouchEvent } from 'react'
+import type { TouchEvent } from 'react'
 import type { Block } from '../../../data/block'
 import type { Repo } from '../../../data/repo'
 import {
@@ -8,12 +8,24 @@ import {
   shortcutSurfaceActivationsFacet,
 } from '@/extensions/blockInteraction.js'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
-import { ActionContextTypes } from '@/shortcuts/types.js'
 import {
-  vimBlockClickBehavior,
+  ActionContextTypes,
+  type ActionConfig,
+  type ActionTrigger,
+  type BlockPointerDependencies,
+} from '@/shortcuts/types.js'
+import { ENTER_BLOCK_EDIT_MODE_ACTION_ID } from '@/plugins/plain-outliner/clickToEditAction.js'
+import {
+  vimClickToFocusTransform,
   vimContentSurfaceBehavior,
   vimNormalModeActivation,
 } from '../interactions.ts'
+
+const focusBlockWithoutEditing = vi.hoisted(() => vi.fn())
+vi.mock('@/extensions/blockInteraction.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/extensions/blockInteraction.js')>()),
+  focusBlockWithoutEditing,
+}))
 
 const interactiveTargets: Array<[string, () => HTMLElement]> = [
   ['anchor', () => {
@@ -60,44 +72,33 @@ describe('vim normal mode interactions', () => {
     expect(props.onTouchEnd).toBeDefined()
   })
 
-  it.each(interactiveTargets)('leaves %s clicks to the interactive descendant', async (_label, createTarget) => {
-    const interactive = createTarget()
-    const child = document.createElement('span')
-    interactive.appendChild(child)
+  describe('click-to-focus transform (single click focuses, does not edit)', () => {
+    const editAction: ActionConfig = {
+      id: ENTER_BLOCK_EDIT_MODE_ACTION_ID,
+      description: 'Enter edit mode on click',
+      context: ActionContextTypes.BLOCK_POINTER,
+      handler: vi.fn(),
+    }
+    const transformed = vimClickToFocusTransform.apply(editAction)
+    if (!transformed) throw new Error('expected vim transform to return a decorated action')
+    const focusHandler = transformed.handler
 
-    const event = {
-      target: child,
-      preventDefault: vi.fn(),
-      stopPropagation: vi.fn(),
-    } as unknown as MouseEvent
+    const deps: BlockPointerDependencies = {
+      block: {id: 'block-1'} as Block,
+      uiStateBlock: {id: 'panel'} as Block,
+      targetElement: document.createElement('div'),
+      renderScopeId: 'scope-a',
+    }
 
-    const handler = vimBlockClickBehavior(context)
-    if (!handler) throw new Error('Expected Vim block click handler')
+    it('focuses the clicked block without entering edit mode', () => {
+      // Interactive-target exclusion is the block-pointer context's job; the
+      // transform just replaces the edit handler with focus-without-editing.
+      focusBlockWithoutEditing.mockClear()
+      focusHandler(deps, {} as ActionTrigger)
 
-    await handler(event)
-
-    expect(event.preventDefault).not.toHaveBeenCalled()
-    expect(event.stopPropagation).not.toHaveBeenCalled()
-  })
-
-  it('leaves selection clicks to the default selection shell owner', async () => {
-    const target = document.createElement('span')
-    const event = {
-      target,
-      preventDefault: vi.fn(),
-      stopPropagation: vi.fn(),
-      ctrlKey: false,
-      metaKey: false,
-      shiftKey: true,
-    } as unknown as MouseEvent
-
-    const handler = vimBlockClickBehavior(context)
-    if (!handler) throw new Error('Expected Vim block click handler')
-
-    await handler(event)
-
-    expect(event.preventDefault).not.toHaveBeenCalled()
-    expect(event.stopPropagation).not.toHaveBeenCalled()
+      expect(editAction.handler).not.toHaveBeenCalled()
+      expect(focusBlockWithoutEditing).toHaveBeenCalledWith(deps.block, deps.uiStateBlock, 'scope-a')
+    })
   })
 
   it.each(interactiveTargets)('does not turn %s taps into edit-mode taps', (_label, createTarget) => {

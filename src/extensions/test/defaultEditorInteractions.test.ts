@@ -9,26 +9,19 @@ import type {
 import {
   createBlockSelectionShellState,
 } from '@/extensions/defaultEditorInteractions'
-import { handleBlockSelectionClick } from '@/extensions/blockInteraction'
 import { dispatchPointerAction } from '@/shortcuts/pointerAction'
 
-// Selection clicks route through the unified pointer dispatcher; mock it so
+// All block clicks route through the unified pointer dispatcher; mock it so
 // these unit tests don't need a mounted coordinator. Returning true = "a
-// pointer-bound action handled it" (no structural fallback); false exercises
-// the fallback branch.
+// pointer-bound action handled it"; false exercises the facet fallback branch.
+// (Interactive-target exclusion now lives on the block-pointer context's
+// pointerTargetFilter — exercised in HotkeyReconciler's dispatch tests, not at
+// the shell, which dispatches uniformly.)
 vi.mock('@/shortcuts/pointerAction', () => ({
   dispatchPointerAction: vi.fn(() => true),
 }))
 
-// The structural fallback runs against real data; stub it so the fallback-
-// wiring test can assert it's reached without standing up a repo/block.
-vi.mock('@/extensions/blockInteraction', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/extensions/blockInteraction')>()),
-  handleBlockSelectionClick: vi.fn(),
-}))
-
 const mockDispatchPointerAction = vi.mocked(dispatchPointerAction)
-const mockHandleBlockSelectionClick = vi.mocked(handleBlockSelectionClick)
 
 const context = {
   block: {id: 'block-1'} as Block,
@@ -71,7 +64,6 @@ describe('default editor interactions', () => {
   beforeEach(() => {
     mockDispatchPointerAction.mockClear()
     mockDispatchPointerAction.mockReturnValue(true)
-    mockHandleBlockSelectionClick.mockClear()
   })
 
   it('prevents native text selection when a block selection gesture starts on the shell', () => {
@@ -89,7 +81,7 @@ describe('default editor interactions', () => {
     expect(event.stopPropagation).not.toHaveBeenCalled()
   })
 
-  it('leaves interactive descendants to their native mouse handling', () => {
+  it('leaves interactive descendants to their native mouse handling on mousedown', () => {
     const button = document.createElement('button')
     const target = document.createElement('span')
     button.appendChild(target)
@@ -105,7 +97,7 @@ describe('default editor interactions', () => {
     expect(event.preventDefault).not.toHaveBeenCalled()
   })
 
-  it('routes selection clicks through the pointer dispatcher with the clicked block supplied', () => {
+  it('routes a click through the pointer dispatcher with the clicked block supplied', () => {
     const pluginClick = vi.fn()
     const target = document.createElement('span')
     const event = selectionMouseEvent(target, {
@@ -125,35 +117,29 @@ describe('default editor interactions', () => {
       uiStateBlock: context.uiStateBlock,
       targetElement: event.currentTarget,
     })
-    // A handled gesture never reaches the plugin click handler.
+    // A handled gesture never reaches the residual plugin click handler.
     expect(pluginClick).not.toHaveBeenCalled()
   })
 
-  it('falls back to the structural handler when no pointer action claims the gesture', () => {
-    // ctrl/meta toggle and plain reset have no pointer binding, so the
-    // dispatcher returns false and the structural handler runs — never the
-    // plugin click handler.
-    mockDispatchPointerAction.mockReturnValue(false)
-    const pluginClick = vi.fn()
-    const target = document.createElement('span')
-    const event = selectionMouseEvent(target, {
-      ctrlKey: true,
-      metaKey: false,
-      shiftKey: false,
-    })
-    const nextState = createBlockSelectionShellState(context, shellState({onClick: pluginClick}))
-
-    nextState.shellProps.onClick?.(event)
-
-    expect(mockDispatchPointerAction).toHaveBeenCalledTimes(1)
-    expect(mockHandleBlockSelectionClick).toHaveBeenCalledWith(context, event)
-    expect(pluginClick).not.toHaveBeenCalled()
+  it('dispatches plain and modifier clicks uniformly (no shell-level branching)', () => {
+    // shift (extend), ctrl/cmd (toggle), and plain (edit/focus) all resolve
+    // through the same dispatch — the shell no longer special-cases by modifier.
+    const nextState = createBlockSelectionShellState(context, shellState())
+    for (const modifiers of [
+      {ctrlKey: false, metaKey: false, shiftKey: true},
+      {ctrlKey: true, metaKey: false, shiftKey: false},
+      {ctrlKey: false, metaKey: false, shiftKey: false},
+    ]) {
+      mockDispatchPointerAction.mockClear()
+      nextState.shellProps.onClick?.(selectionMouseEvent(document.createElement('span'), modifiers))
+      expect(mockDispatchPointerAction).toHaveBeenCalledTimes(1)
+    }
   })
 
   it('supplies scope + render-scope deps derived from a nested surface context', () => {
-    // The deps the spatial transform and structural handler actually consume —
-    // scopeRootId, scopeRootForcesOpen (= !isNestedSurface), renderScopeId — must
-    // be forwarded faithfully, not just block/uiStateBlock/targetElement.
+    // The deps the pointer actions consume — scopeRootId, scopeRootForcesOpen
+    // (= !isNestedSurface), renderScopeId — must be forwarded faithfully, not
+    // just block/uiStateBlock/targetElement.
     const nestedContext = {
       ...context,
       scopeRootId: 'scope-root',
@@ -177,7 +163,8 @@ describe('default editor interactions', () => {
     })
   })
 
-  it('passes non-selection clicks through to the plugin click handler', () => {
+  it('falls back to the plugin click handler when no pointer action claims the click', () => {
+    mockDispatchPointerAction.mockReturnValue(false)
     const pluginClick = vi.fn()
     const target = document.createElement('span')
     const event = selectionMouseEvent(target, {
@@ -189,7 +176,7 @@ describe('default editor interactions', () => {
 
     nextState.shellProps.onClick?.(event)
 
+    expect(mockDispatchPointerAction).toHaveBeenCalledTimes(1)
     expect(pluginClick).toHaveBeenCalledWith(event)
-    expect(mockDispatchPointerAction).not.toHaveBeenCalled()
   })
 })

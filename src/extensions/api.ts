@@ -81,7 +81,6 @@ export {
   shortcutSurfaceActivationsFacet,
   enterBlockEditMode,
   getBlockContentRendererSlot,
-  handleBlockSelectionClick,
   isSelectionClick,
   type BlockChildrenFooterContribution,
   type BlockClickContribution,

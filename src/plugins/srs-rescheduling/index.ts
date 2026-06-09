@@ -483,15 +483,27 @@ const createScrubRescheduleAction = (
   }
 }
 
+const isSrsBlockTarget = ({block}: BlockShortcutDependencies): boolean => {
+  const data = block.peek()
+  return !!data && getBlockTypes(data).includes(SRS_SM25_TYPE)
+}
+
+const canPasteSrsState = ({block}: BlockShortcutDependencies): boolean => {
+  const entry = getSrsClipboard()
+  return entry !== null && entry.sourceBlockId !== block.id
+}
+
 const srsCutAction: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
   id: 'srs.cut',
   description: 'SRS: Cut state',
   context: ActionContextTypes.NORMAL_MODE,
   icon: Scissors,
-  isVisible: ({block}) => {
-    const data = block.peek()
-    return !!data && getBlockTypes(data).includes(SRS_SM25_TYPE)
-  },
+  // isVisible filters the menu/palette; canDispatch is the dispatch gate. The
+  // handler stashes whatever block it's given (SRS-ness lives only in these
+  // predicates), so canDispatch must mirror isVisible — otherwise an imperative
+  // dispatch (a stale swipe menu, a run event) could cut a non-SRS block.
+  isVisible: isSrsBlockTarget,
+  canDispatch: isSrsBlockTarget,
   handler: async ({block}: BlockShortcutDependencies) => {
     const data = block.peek() ?? await block.load()
     if (!data) return
@@ -507,10 +519,8 @@ const srsPasteAction: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
   description: 'SRS: Paste state',
   context: ActionContextTypes.NORMAL_MODE,
   icon: ClipboardPaste,
-  isVisible: ({block}) => {
-    const entry = getSrsClipboard()
-    return entry !== null && entry.sourceBlockId !== block.id
-  },
+  isVisible: canPasteSrsState,
+  canDispatch: canPasteSrsState,
   handler: async ({block}: BlockShortcutDependencies) => {
     const entry = getSrsClipboard()
     if (!entry) return

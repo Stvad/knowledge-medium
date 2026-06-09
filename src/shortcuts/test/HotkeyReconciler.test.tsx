@@ -3,6 +3,7 @@ import { act, render, cleanup } from '@testing-library/react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler.js'
 import { dispatchPointerAction } from '@/shortcuts/pointerAction.js'
+import { dispatchActionWithDeps } from '@/shortcuts/runAction.js'
 import {
   ActiveContextsProvider,
   useActiveContextsState,
@@ -62,10 +63,22 @@ const blockPointerContextConfig: ActionContextConfig = {
     typeof deps === 'object' && deps !== null,
 }
 
+const FILTERED_POINTER_CONTEXT = 'filtered-pointer' as ActionContextType
+const filteredPointerContextConfig: ActionContextConfig = {
+  type: FILTERED_POINTER_CONTEXT,
+  displayName: 'Filtered Pointer',
+  // Reject events whose target is an anchor — stands in for block-pointer's
+  // "exclude interactive descendants" pointerTargetFilter.
+  pointerTargetFilter: event => (event.target as HTMLElement | null)?.tagName !== 'A',
+  validateDependencies: (deps): deps is BaseShortcutDependencies =>
+    typeof deps === 'object' && deps !== null,
+}
+
 const pointerEvent = (
   overrides: Partial<{
     type: string; button: number; detail: number
     shiftKey: boolean; altKey: boolean; ctrlKey: boolean; metaKey: boolean
+    target: EventTarget
   }> = {},
 ): ReactMouseEvent<HTMLElement> => ({
   type: 'click',
@@ -739,6 +752,65 @@ describe('HotkeyReconciler', () => {
       expect(handler).not.toHaveBeenCalled()
     })
 
+    it('does not dispatch when the context pointerTargetFilter rejects the target', () => {
+      const handler = vi.fn()
+      const action = {
+        id: 'pointer.filtered',
+        description: 'filtered pointer action',
+        context: FILTERED_POINTER_CONTEXT,
+        pointerBinding: {kind: 'mouse', mods: ['Shift'], phase: 'click'},
+        handler,
+      } as ActionConfig
+
+      render(<Harness actions={[action]} contexts={[filteredPointerContextConfig]}/>)
+
+      // Target is an anchor → the context filter rejects it → no candidate.
+      let handled = true
+      act(() => {
+        handled = dispatchPointerAction(
+          pointerEvent({shiftKey: true, target: document.createElement('a')}),
+          {marker: 'x'} as never,
+        )
+      })
+      expect(handled).toBe(false)
+      expect(handler).not.toHaveBeenCalled()
+
+      // A non-anchor target passes the filter.
+      act(() => {
+        dispatchPointerAction(
+          pointerEvent({shiftKey: true, target: document.createElement('span')}),
+          {marker: 'x'} as never,
+        )
+      })
+      expect(handler).toHaveBeenCalledTimes(1)
+    })
+
+    it('matches when any of several pointer bindings matches (ctrl-OR-meta style)', () => {
+      const handler = vi.fn()
+      const action = {
+        id: 'pointer.multi',
+        description: 'multi-binding pointer action',
+        context: BLOCK_POINTER_CONTEXT,
+        pointerBinding: [
+          {kind: 'mouse', mods: ['Shift'], phase: 'click'},
+          {kind: 'mouse', mods: ['Alt'], phase: 'click'},
+        ],
+        handler,
+      } as ActionConfig
+
+      render(<Harness actions={[action]} contexts={[blockPointerContextConfig]}/>)
+
+      act(() => { dispatchPointerAction(pointerEvent({shiftKey: true}), {marker: 'x'} as never) })
+      act(() => { dispatchPointerAction(pointerEvent({altKey: true}), {marker: 'x'} as never) })
+      expect(handler).toHaveBeenCalledTimes(2)
+
+      // A plain click matches neither binding.
+      let handled = true
+      act(() => { handled = dispatchPointerAction(pointerEvent({}), {marker: 'x'} as never) })
+      expect(handled).toBe(false)
+      expect(handler).toHaveBeenCalledTimes(2)
+    })
+
     it('falls through to the next pointer candidate when the first declines', () => {
       const declined = vi.fn(() => false as const)
       const fallback = vi.fn()
@@ -753,6 +825,60 @@ describe('HotkeyReconciler', () => {
 
       expect(declined).toHaveBeenCalledTimes(1)
       expect(fallback).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('supplied-deps action dispatch', () => {
+    const byIdAction = (
+      overrides: Partial<ActionConfig> & Pick<ActionConfig, 'id' | 'handler'>,
+    ): ActionConfig => ({
+      description: 'test supplied action',
+      context: TEST_CONTEXT,
+      ...overrides,
+    } as ActionConfig)
+
+    it('runs an action by id with supplied deps when its context is not active', () => {
+      const handler = vi.fn()
+      const action = byIdAction({id: 'block.swipe-right', handler})
+
+      // TEST_CONTEXT is never activated (no Activator) — the deps are supplied.
+      render(<Harness actions={[action]} contexts={[testContextConfig]}/>)
+
+      const supplied = {marker: 'swiped'} as unknown as BaseShortcutDependencies
+      let handled = false
+      act(() => {
+        handled = dispatchActionWithDeps('block.swipe-right', supplied, new CustomEvent('swipe'))
+      })
+
+      expect(handled).toBe(true)
+      expect(handler).toHaveBeenCalledTimes(1)
+      expect(handler.mock.calls[0]?.[0]).toBe(supplied)
+    })
+
+    it('returns false when no action matches the id', () => {
+      render(<Harness actions={[]} contexts={[testContextConfig]}/>)
+
+      let handled = true
+      act(() => {
+        handled = dispatchActionWithDeps('nope', {marker: 'x'} as never, new CustomEvent('swipe'))
+      })
+
+      expect(handled).toBe(false)
+    })
+
+    it('falls through (not handled) when canDispatch declines', () => {
+      const handler = vi.fn()
+      const action = byIdAction({id: 'gated', handler, canDispatch: () => false})
+
+      render(<Harness actions={[action]} contexts={[testContextConfig]}/>)
+
+      let handled = true
+      act(() => {
+        handled = dispatchActionWithDeps('gated', {marker: 'x'} as never, new CustomEvent('swipe'))
+      })
+
+      expect(handled).toBe(false)
+      expect(handler).not.toHaveBeenCalled()
     })
   })
 
