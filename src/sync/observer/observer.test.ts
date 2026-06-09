@@ -10,7 +10,7 @@ import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams } from '@/data/blockSchema'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { startBlocksSyncedObserver, type BlocksSyncedObserver } from './observer.js'
-import type { GetMaterializability } from './materialize.js'
+import type { GetMaterializability, Materializability } from './materialize.js'
 import { encodeForWire, type GetCek } from '../transform.js'
 import { generateWorkspaceKeyBytes, importWorkspaceKey } from '../crypto/workspaceKey.js'
 import type { ChangeNotification } from '@/data/internals/handleStore'
@@ -181,6 +181,38 @@ describe('blocksSyncedObserver — defer + drainWorkspace', () => {
     mat = 'decrypt'
     await observer.drainWorkspace('ws-e2ee')
     expect(await blocks()).toEqual([{ id: 'e1', content: 'locked' }])
+  })
+
+  it('drains a deferred backlog in bounded windows, committing each independently', async () => {
+    // A workspace that synced while still unpinned (fresh-device initial sync)
+    // defers every row AND has its queue signal consumed — only a later
+    // drainWorkspace recovers it. With a large staged backlog that recovery
+    // drain must be windowed like the queue drain: a single unbounded
+    // materialize pass wraps every upsert in one transaction that freezes the
+    // tab and, on any mid-pass failure, rolls back ALL progress (the bug that
+    // stranded ~230k rows on a real client). Fail the 2nd window and assert the
+    // 1st survived — the old single-transaction drain would leave 0 rows.
+    for (let i = 0; i < 4; i++) await put(data({ id: `b${i}`, workspaceId: 'ws', content: `c${i}` }))
+    let mode: Materializability = 'defer'
+    let windows = 0
+    const getMaterializability: GetMaterializability = () => {
+      if (mode === 'defer') return 'defer'
+      windows += 1
+      if (windows >= 2) throw new Error('boom')
+      return 'copy'
+    }
+    const errors: unknown[] = []
+    const { observer } = start({ getMaterializability, drainChunkSize: 2, onError: e => errors.push(e) })
+    await observer.flush()
+    expect(await blocks()).toEqual([]) // all deferred; queue consumed
+    expect(await queueLen()).toBe(0)
+
+    mode = 'copy'
+    await observer.drainWorkspace('ws')
+
+    // Window 1 (b0,b1) committed; window 2's throw didn't roll it back.
+    expect(await blocks()).toEqual([{ id: 'b0', content: 'c0' }, { id: 'b1', content: 'c1' }])
+    expect(errors.some(e => e instanceof Error && e.message === 'boom')).toBe(true)
   })
 })
 

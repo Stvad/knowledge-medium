@@ -166,6 +166,18 @@ export const startBlocksSyncedObserver = (
     await runCycleScan(outcome.snapshots)
   }
 
+  /** Materialize one bounded window + run its invalidation. The shared per-window
+   *  step of both drain paths (queue-driven {@link drainQueueOnce} and
+   *  workspace-rescan {@link materializeWorkspace}); they differ only in where
+   *  the window's ids come from and what bookkeeping follows it. */
+  const applyWindow = async (
+    upserted: readonly string[],
+    removed: readonly string[],
+  ): Promise<void> => {
+    const outcome = await materializeStagingRows(db, { upserted, removed }, deps)
+    await applyOutcome(outcome)
+  }
+
   const drainQueueOnce = async (): Promise<void> => {
     // Loop over the queue in bounded seq-ordered windows until it's empty, so a
     // large backlog never builds the whole working set in one in-memory pass /
@@ -190,8 +202,7 @@ export const startBlocksSyncedObserver = (
       const removed: string[] = []
       for (const [id, op] of opById) (op === 'upsert' ? upserted : removed).push(id)
 
-      const outcome = await materializeStagingRows(db, { upserted, removed }, deps)
-      await applyOutcome(outcome)
+      await applyWindow(upserted, removed)
 
       // Consume only this window. Rows appended mid-drain have seq > maxSeq and
       // survive for a later window. Done last so a throw above leaves this window
@@ -207,12 +218,22 @@ export const startBlocksSyncedObserver = (
   const materializeWorkspace = async (workspaceId: string): Promise<void> => {
     if (disposed) return
     const ids = (await db.getAll<{ id: string }>(
-      'SELECT id FROM blocks_synced WHERE workspace_id = ?',
+      'SELECT id FROM blocks_synced WHERE workspace_id = ? ORDER BY id',
       [workspaceId],
     )).map(row => row.id)
-    if (ids.length === 0) return
-    const outcome = await materializeStagingRows(db, { upserted: ids, removed: [] }, deps)
-    await applyOutcome(outcome)
+    // Materialize in the same bounded windows as drainQueueOnce. A workspace
+    // that synced while still unpinned (fresh-device initial sync: every row
+    // defers and drainQueueOnce consumes its queue signal) can strand hundreds
+    // of thousands of staged rows that only this re-pass recovers. Doing it in
+    // one materializeStagingRows call would build the whole working set in
+    // memory and wrap every upsert in a single transaction — the freeze a real
+    // client hit on a 320k workspace, which then rolled back ALL progress when
+    // interrupted. Independently-committed windows keep memory flat and let a
+    // re-invocation resume (already-materialized rows LWW-skip next pass).
+    for (let i = 0; i < ids.length; i += drainChunk) {
+      if (disposed) return
+      await applyWindow(ids.slice(i, i + drainChunk), [])
+    }
   }
 
   // Serialize all work on one chain so drains never overlap and flush() awaits
