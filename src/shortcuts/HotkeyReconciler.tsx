@@ -29,6 +29,13 @@ import {
   type TouchPhase,
 } from './canonicalizeChord.ts'
 import { setPointerActionDispatcher, type PointerGestureEvent } from '@/shortcuts/pointerAction.js'
+import { setGestureActionDispatcher } from '@/shortcuts/gestureAction.js'
+import {
+  gestureBindingDescriptor,
+  matchesGestureEvent,
+  type GestureBindingSpec,
+  type GesturePhase,
+} from './gestureBinding.ts'
 import {
   ActionConfig,
   ActionContextConfig,
@@ -272,6 +279,41 @@ export function HotkeyReconciler(): null {
       )
     })
     return () => setPointerActionDispatcher(null)
+  }, [runtime])
+
+  // Install the gesture-action dispatcher. The continuous-gesture analogue of
+  // the pointer effect above: a recognizer (or escape-hatch surface) emits a
+  // gesture NAME, and the candidates are the actions whose `gestureBinding`
+  // names it — matched by name+phase, not by an event's intrinsic fields, since
+  // the recognizer has already classified the motion. Deps are SUPPLIED by the
+  // caller (the block the gesture ran on; its context isn't keyboard-active),
+  // then ordered and run through the same loop as keyboard/pointer.
+  useEffect(() => {
+    setGestureActionDispatcher((gesture, supplied, event, phase: GesturePhase = 'commit') => {
+      const active = activeRef.current
+      const contextConfigsByType = contextConfigsByTypeRef.current
+      const matched = getEffectiveActions(runtime).filter(action => {
+        const spec = action.gestureBinding
+        if (!spec) return false
+        // A binding may list several gestures; the action matches if any names
+        // this gesture at this phase.
+        const specs: readonly GestureBindingSpec[] = Array.isArray(spec) ? spec : [spec]
+        return specs.some(candidate =>
+          matchesGestureEvent(gestureBindingDescriptor(candidate), {gesture, phase}),
+        )
+      })
+      if (matched.length === 0) return false
+
+      const ordered = resolve(matched, {active, contextConfigsByType}, {kind: 'gesture'})
+      return runOrderedCandidates(
+        ordered,
+        event,
+        {active, contextConfigsByType, dispatch: dispatchRef.current},
+        supplied,
+        action => applyGestureEventOptions(event, action, contextConfigsByType),
+      )
+    })
+    return () => setGestureActionDispatcher(null)
   }, [runtime])
 
   // One coordinator per phase replaces the N per-action window listeners —
@@ -674,6 +716,27 @@ const pointerRoleMatches = (target: HTMLElement, role: string): boolean =>
  *  `defaultEventOptions`. */
 const applyPointerEventOptions = (
   event: PointerGestureEvent,
+  action: ActionConfig,
+  contextConfigsByType: ReadonlyMap<ActionContextType, ActionContextConfig>,
+): void => {
+  const contextConfig = contextConfigsByType.get(action.context)
+  const options: EventOptions = {
+    preventDefault: true,
+    stopPropagation: true,
+    ...contextConfig?.defaultEventOptions,
+  }
+  if (options.stopPropagation) event.stopPropagation()
+  if (options.preventDefault) event.preventDefault()
+}
+
+/** preventDefault / stopPropagation for a handled gesture commit. Same defaults
+ *  and context override as the pointer path, but typed for the broader
+ *  `ActionTrigger` a gesture carries (the originating pointer/touch event, or a
+ *  synthetic CustomEvent) — both expose preventDefault/stopPropagation. Eating
+ *  the commit event suppresses the trailing synthesized click on touchend, which
+ *  is what today's swipe/scrub `event.preventDefault()` does by hand. */
+const applyGestureEventOptions = (
+  event: ActionTrigger,
   action: ActionConfig,
   contextConfigsByType: ReadonlyMap<ActionContextType, ActionContextConfig>,
 ): void => {

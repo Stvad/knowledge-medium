@@ -203,6 +203,21 @@ describe('resolve by supplied deps (context need not be active)', () => {
   })
 })
 
+describe('resolve gesture arm (pre-matched, no shadowing, context need not be active)', () => {
+  it('includes a pre-matched gesture candidate whose context is inactive and modal-shadowed', () => {
+    // Candidates arrive already matched on their gestureBinding (the coordinator
+    // did that). resolve must keep them regardless of active/modal state — a
+    // recognized gesture targets the block it ran on — so an inactive context is
+    // NOT dropped and an active modal does NOT shadow it, exactly like 'pointer'.
+    const ctx = ctxOf(
+      ['scrub-modal'],
+      [config(ActionContextTypes.NORMAL_MODE), config('scrub-modal', {modal: true})],
+    )
+    const all = [action('block.swipe-right', ActionContextTypes.NORMAL_MODE)]
+    expect(resolve(all, ctx, {kind: 'gesture'}).map(a => a.id)).toEqual(['block.swipe-right'])
+  })
+})
+
 describe('resolveDeps', () => {
   const NM = ActionContextTypes.NORMAL_MODE
   const configs = new Map([[NM, config(NM)]])
