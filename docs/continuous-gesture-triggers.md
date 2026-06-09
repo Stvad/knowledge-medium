@@ -101,7 +101,37 @@ collapsing them.
   recognizer loop) that registers real non-passive `pointermove`/`touchmove`
   listeners on a content surface, usable by both the recognizer loop and raw
   escape-hatch contributions (React surface props can't `preventDefault` a
-  passive move).
+  passive move). On mouse/pen this is the whole scroll-suppression story; on
+  touch it is *not* — see below.
+- **`touch-action` strategy (load-bearing for touch).** A non-passive
+  `pointermove` + `preventDefault` does **not** reliably stop native
+  pan/zoom/scroll under Pointer Events: the browser decides scrolling from CSS
+  [`touch-action`](https://developer.mozilla.org/docs/Web/CSS/touch-action)
+  *before* move listeners run, and once it starts scrolling it delivers
+  `pointercancel` instead of further `pointermove`s. `touch-action` is static —
+  it must be set on the element *ahead* of the gesture, not flipped mid-drag.
+  So:
+  - A recognizer **declares the `touch-action` it needs** (e.g. `'pan-y'` —
+    keep native vertical page scroll, hand horizontal motion to JS — which fits
+    both horizontal swipe and horizontal two-finger scrub; `'none'` only when a
+    gesture genuinely owns both axes). The core loop applies the **union** of
+    its recognizers' requirements to the content surface as a static
+    `style.touchAction`, computed at contribution time.
+  - Every recognizer **must treat `pointercancel` as a real terminal phase**
+    (`onPointerCancel`) — the browser can still cancel mid-gesture (a
+    `touch-action: pan-y` surface scrolled vertically past the lock, an OS
+    interrupt), and the recognizer has to drop in-flight state and release its
+    claim, exactly as today's `onTouchCancel` does.
+  - Trade-off noted: `touch-action: pan-y` on a content surface disables
+    pinch-zoom and native horizontal scroll *on that surface*. Acceptable for
+    block content (the gestures we want are horizontal); flagged so a future
+    image/code surface can opt out by contributing no horizontal recognizer.
+  - **Fallback:** if `touch-action` proves insufficient for a specific gesture,
+    the seam still exposes a non-passive native `touchmove` path (TouchEvents
+    *do* honour `preventDefault` for scroll suppression) — recognition stays on
+    Pointer Events, scroll-suppression can fall back to a `touchmove`
+    preventDefault for that recognizer. We prefer `touch-action` and reach for
+    this only if forced.
 
 ### 2. Recognizer facet (core owns the loop)
 
@@ -115,10 +145,11 @@ A recognizer is a state machine returning a verdict:
 ```ts
 interface GestureRecognizer<Deps = unknown> {
   id: string                       // arbitration key (absorbs blockGestureConflicts ids)
+  touchAction?: TouchActionValue   // CSS touch-action this gesture needs (e.g. 'pan-y'); core unions them onto the surface
   onPointerDown?(s: GestureSession, ctx): GesturePhaseResult
   onPointerMove?(s: GestureSession, ctx): GesturePhaseResult
   onPointerUp?(s: GestureSession, ctx): GesturePhaseResult
-  onPointerCancel?(s: GestureSession, ctx): void
+  onPointerCancel?(s: GestureSession, ctx): void   // REQUIRED in practice: the browser can cancel mid-gesture
 }
 
 type GesturePhaseResult =
