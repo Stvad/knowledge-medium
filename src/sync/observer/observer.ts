@@ -43,6 +43,7 @@ import {
   type MaterializeOutcome,
   type SyncSnapshot,
 } from './materialize.js'
+import type { ReconcileMode } from './reconcile.js'
 import {
   applySyncInvalidation,
   type SyncCache,
@@ -84,8 +85,14 @@ export interface BlocksSyncedObserver {
    *  drain enqueued before it). */
   flush(): Promise<void>
   /** Re-materialize a workspace's staged rows after it becomes materializable
-   *  (WK paste / plaintext confirm). Reads `blocks_synced` directly. */
+   *  (WK paste / plaintext confirm). Reads `blocks_synced` directly. Uses the
+   *  strict reconcile gate (steady-state semantics). */
   drainWorkspace(workspaceId: string): Promise<void>
+  /** One-time recovery rescan: like {@link drainWorkspace}, but runs the gate
+   *  in `healing` mode so a pre-provenance shadow (a real-user-stamped default
+   *  that the strict gate would protect) still yields to the server. Used by
+   *  `Repo.scheduleReconcileRescan`. */
+  healWorkspace(workspaceId: string): Promise<void>
   /** Stop the subscription. Idempotent. */
   dispose(): void
 }
@@ -173,8 +180,9 @@ export const startBlocksSyncedObserver = (
   const applyWindow = async (
     upserted: readonly string[],
     removed: readonly string[],
+    gateMode: ReconcileMode = 'strict',
   ): Promise<void> => {
-    const outcome = await materializeStagingRows(db, { upserted, removed }, deps)
+    const outcome = await materializeStagingRows(db, { upserted, removed }, deps, { gateMode })
     await applyOutcome(outcome)
   }
 
@@ -215,7 +223,10 @@ export const startBlocksSyncedObserver = (
     }
   }
 
-  const materializeWorkspace = async (workspaceId: string): Promise<void> => {
+  const materializeWorkspace = async (
+    workspaceId: string,
+    gateMode: ReconcileMode = 'strict',
+  ): Promise<void> => {
     if (disposed) return
     const ids = (await db.getAll<{ id: string }>(
       'SELECT id FROM blocks_synced WHERE workspace_id = ? ORDER BY id',
@@ -232,7 +243,7 @@ export const startBlocksSyncedObserver = (
     // re-invocation resume (already-materialized rows LWW-skip next pass).
     for (let i = 0; i < ids.length; i += drainChunk) {
       if (disposed) return
-      await applyWindow(ids.slice(i, i + drainChunk), [])
+      await applyWindow(ids.slice(i, i + drainChunk), [], gateMode)
     }
   }
 
@@ -254,7 +265,9 @@ export const startBlocksSyncedObserver = (
 
   const flush = (): Promise<void> => enqueue(drainQueueOnce)
   const drainWorkspace = (workspaceId: string): Promise<void> =>
-    enqueue(() => materializeWorkspace(workspaceId))
+    enqueue(() => materializeWorkspace(workspaceId, 'strict'))
+  const healWorkspace = (workspaceId: string): Promise<void> =>
+    enqueue(() => materializeWorkspace(workspaceId, 'healing'))
 
   // Subscribe first, then drain once: the subscription catches future appends,
   // and the initial drain catches rows already queued — including any that
@@ -272,6 +285,7 @@ export const startBlocksSyncedObserver = (
   return {
     flush,
     drainWorkspace,
+    healWorkspace,
     dispose() {
       if (disposed) return
       disposed = true

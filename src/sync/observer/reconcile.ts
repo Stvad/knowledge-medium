@@ -49,7 +49,31 @@ export interface LocalRowState {
    *  edit for this block id. A pending edit always wins over an incoming
    *  snapshot regardless of stamps — the echo will reconcile. */
   readonly hasPendingUpload: boolean
+  /** True iff the local `blocks` row is THIS client's own pristine
+   *  speculative default — `updated_by === system:<currentUserId>` (see
+   *  `systemAuthor`). Such a row was minted on read-as-absent before the
+   *  server's authoritative version materialized; under the strict gate it
+   *  yields to an older server row (heals the shadow) where a real edit
+   *  keeps strictly-newer protection. Exact-match the CURRENT user (not any
+   *  `system:*`) so only a row we minted ourselves yields — a `system:other`
+   *  row that arrived via sync is already server truth. */
+  readonly isOwnSystemMint: boolean
 }
+
+/** Which conflict rule the gate applies when a non-pending local row is
+ *  strictly newer than the incoming staging snapshot.
+ *
+ *   - `strict` (steady state): the server wins ONLY for this client's own
+ *     pristine system mint (heals the shadow); a real local edit keeps
+ *     strictly-newer protection so the upload-window replay can't clobber it.
+ *
+ *   - `healing` (one-time recovery rescan): the server always wins on a
+ *     strictly-newer non-pending row — the interim rule. Needed because
+ *     shadows minted by PRE-provenance code are stamped with the real user,
+ *     so `strict` would protect them as if they were edits and re-permanent
+ *     them. Pending + equal-stamp guards still hold, so the blast radius is
+ *     the same as the already-shipped interim relaxation. */
+export type ReconcileMode = 'strict' | 'healing'
 
 export type ReconcileAction =
   /** Materialize the staging row into `blocks`. `decrypt` = run the
@@ -66,11 +90,13 @@ export type ReconcileAction =
  * @param materializability how the row's workspace can be materialized
  * @param stagingUpdatedAt  `updated_at` of the incoming staging row
  * @param local             local state for this block id
+ * @param mode              strict (steady state) or healing (recovery rescan)
  */
 export const decideStagingRow = (
   materializability: Materializability,
   stagingUpdatedAt: number,
   local: LocalRowState,
+  mode: ReconcileMode = 'strict',
 ): ReconcileAction => {
   if (materializability === 'defer') {
     return { kind: 'defer' }
@@ -84,36 +110,33 @@ export const decideStagingRow = (
     // snapshot overwrite it. The upload echo reconciles when it returns.
     return { kind: 'skip-stale' }
   }
-  if (local.localUpdatedAt !== null && local.localUpdatedAt === stagingUpdatedAt) {
-    // EQUAL stamps only. A stale in-flight server read can carry different
-    // content under the same ms-stamp; applying it would overwrite a local edit
-    // on disk and resurface after reload (the in-memory cache gate can't guard
-    // the persistent write). This is the one deliberate skip — see commit
-    // 429fd4b2.
-    return { kind: 'skip-stale' }
+  if (local.localUpdatedAt !== null && local.localUpdatedAt >= stagingUpdatedAt) {
+    // The local row is newer-or-equal to this incoming snapshot. Decide whether
+    // that local row is authoritative (protect it) or a speculative default the
+    // server should overwrite (heal).
+    if (local.localUpdatedAt === stagingUpdatedAt) {
+      // EQUAL stamps. A stale in-flight server read can carry different content
+      // under the same ms-stamp; applying it would overwrite a local edit on
+      // disk and resurface after reload (the in-memory cache gate can't guard
+      // the persistent write). The one deliberate skip in both modes — see
+      // commit 429fd4b2.
+      return { kind: 'skip-stale' }
+    }
+    // STRICTLY newer local row. The shadow/replay ambiguity the doc calls out:
+    // both a speculative default and a just-uploaded edit present as
+    // non-pending + strictly-newer-than-staging. The discriminator is write
+    // provenance:
+    //   - healing mode: server always wins (interim rule) — heals pre-provenance
+    //     shadows, which are stamped with the real user and so look like edits.
+    //   - strict mode: server wins ONLY for this client's own pristine system
+    //     mint (heals the new-style shadow); a real edit is protected so the
+    //     upload-window replay can't clobber it (the QuickFind-freeze canary).
+    const serverWins = mode === 'healing' || local.isOwnSystemMint
+    if (!serverWins) {
+      return { kind: 'skip-stale' }
+    }
+    // else fall through to apply — the server's older value heals the default.
   }
-
-  // We do NOT skip when the local row is *strictly* newer (PowerSync never had
-  // that branch). It let a speculative bootstrap default — minted with a `now`
-  // stamp the moment a deterministic-id row is read-as-absent — permanently
-  // outrank the server's older-but-authoritative row, shadowing real synced
-  // config (settings, etc.) on every fresh client. Letting the server win on
-  // disk means that shadow now HEALS ON RELOAD (a fresh `blocks` read rehydrates
-  // the cache from the server value) instead of being permanent.
-  //
-  // KNOWN-PARTIAL (intentional, interim — see the follow-up to distinguish a
-  // speculative default from a real edit, e.g. by write provenance):
-  //   * In-session, the cache's own `applyIfNewer` LWW still rejects the older
-  //     value, so the heal isn't live — it lands on the next reload. That same
-  //     cache gate is what keeps this relaxation from waking handles to the
-  //     transient disk write (the QuickFind-freeze pattern), so the disk write
-  //     stays user-invisible.
-  //   * It cannot tell a speculative default from a genuine just-drained edit
-  //     facing a stale older in-flight delivery (both are non-pending,
-  //     strictly-newer-than-staging). The latter is briefly clobbered on disk
-  //     and re-heals via its authoritative upload echo — transient, and masked
-  //     from the UI by the cache gate above.
-  return { kind: 'apply', decrypt: materializability === 'decrypt' }
 
   return { kind: 'apply', decrypt: materializability === 'decrypt' }
 }

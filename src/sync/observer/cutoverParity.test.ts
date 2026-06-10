@@ -96,7 +96,7 @@ const stageAndMaterialize = async (db: TestDb['db'], b: BlockData) => {
   return materializeStagingRows(
     db,
     { upserted: [b.id], removed: [] },
-    { getMaterializability: constMat('copy'), getCek: noKey },
+    { getMaterializability: constMat('copy'), getCek: noKey, currentUserId: 'user-1' },
   )
 }
 
@@ -153,7 +153,7 @@ describe('cutover parity — plaintext block: observer path vs a direct blocks w
     const out = await materializeStagingRows(
       obs.db,
       { upserted: [], removed: [block.id] },
-      { getMaterializability: constMat('copy'), getCek: noKey },
+      { getMaterializability: constMat('copy'), getCek: noKey, currentUserId: 'user-1' },
     )
     expect(out.deleted).toEqual([block.id])
 

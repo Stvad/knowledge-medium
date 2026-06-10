@@ -381,12 +381,15 @@ export interface RepoOptions {
   startSyncObserver?: boolean
   /** Options forwarded to the sync observer when started. */
   syncObserverOptions?: SyncObserverOptions
-  /** Layout B materialization deps — the §6 mode/key resolver (getCek +
+  /** Layout B materialization POLICY — the §6 mode/key resolver (getCek +
    *  getMaterializability). Production (initRepo) passes the real resolver so
    *  e2ee rows decrypt, plaintext copies through, and locked/unpinned
    *  workspaces defer. Omitted in tests, which fall back to the plaintext
-   *  copy-through stub below (no key). */
-  syncObserverDeps?: MaterializeDeps
+   *  copy-through stub below (no key). The remaining materialization input —
+   *  `currentUserId`, which the reconcile gate needs to recognize this
+   *  client's own system mints — is the Repo's own identity (`this.user.id`),
+   *  injected in `startSyncObserver`, not supplied by the caller. */
+  syncObserverDeps?: Omit<MaterializeDeps, 'currentUserId'>
 }
 
 /** Repo-level knobs for the Layout B sync observer. `db` / `cache` /
@@ -676,8 +679,9 @@ export class Repo {
    *  created on first start, replaced on subsequent starts. Tests can
    *  `dispose()` and re-`start` for deterministic flushing. */
   private syncObserver: BlocksSyncedObserver | null = null
-  /** §6 mode/key resolver for the observer (undefined ⇒ plaintext stub). */
-  private readonly syncObserverDeps?: MaterializeDeps
+  /** §6 mode/key resolver for the observer (undefined ⇒ plaintext stub).
+   *  Policy only — `currentUserId` is injected from `this.user.id` at start. */
+  private readonly syncObserverDeps?: Omit<MaterializeDeps, 'currentUserId'>
   /** Backing field for `activeWorkspaceId` (see getter/setter below). */
   private _activeWorkspaceId: string | null = null
   /** Instance discriminator for memoization keys that need to vary
@@ -901,9 +905,14 @@ export class Repo {
       handleStore: this.handleStore,
       // Production passes the §6 mode/key resolver (initRepo). Tests omit it
       // and fall back to plaintext copy-through with no key — the historical
-      // behavior, so non-e2ee tests are unaffected.
-      deps: this.syncObserverDeps
-        ?? { getMaterializability: (): Materializability => 'copy', getCek: async () => null },
+      // behavior, so non-e2ee tests are unaffected. The Repo injects its own
+      // identity (`currentUserId`) — the gate needs it to recognize this
+      // client's own system mints — so callers supply policy only.
+      deps: {
+        ...(this.syncObserverDeps
+          ?? { getMaterializability: (): Materializability => 'copy', getCek: async () => null }),
+        currentUserId: this.user.id,
+      },
       getInvalidationRules: () => this.invalidationRules,
       onCycleDetected: options?.onCycleDetected,
       throttleMs: options?.throttleMs,
@@ -934,6 +943,17 @@ export class Repo {
    *  if the observer isn't running. */
   async drainSyncWorkspace(workspaceId: string): Promise<void> {
     if (this.syncObserver) await this.syncObserver.drainWorkspace(workspaceId)
+  }
+
+  /** One-time recovery re-materialization: re-reads `blocks_synced` directly
+   *  and re-applies the reconcile gate in `healing` mode, so a pre-provenance
+   *  shadow — a default minted by code that stamped the real user, which the
+   *  steady-state strict gate would now PROTECT as if it were an edit — still
+   *  yields to the server. Used only by `scheduleReconcileRescan`; steady-state
+   *  drains use `drainSyncWorkspace` (strict). No-op if the observer isn't
+   *  running. */
+  async healSyncWorkspace(workspaceId: string): Promise<void> {
+    if (this.syncObserver) await this.syncObserver.healWorkspace(workspaceId)
   }
 
   /** Frozen snapshot of internal data-layer counters + timings
@@ -1905,15 +1925,27 @@ export class Repo {
 
   /**
    * One-time post-upgrade recovery for the deterministic-id shadow bug. A client
-   * that skip-staled the server's authoritative row under the *old* reconcile
+   * that skip-staled the server's authoritative row under an *old* reconcile
    * gate consumed its `blocks_synced_changes` entry, so a normal queue-driven
    * drain never re-evaluates it — the shadow persists across reloads. This
-   * re-runs `drainWorkspace`, which re-reads `blocks_synced` DIRECTLY (bypassing
-   * the consumed queue) and re-applies the relaxed gate, healing the shadow on
-   * disk. Marker-gated to run at most once per (workspace, client); deferred off
-   * the open path; windowed + resumable (drainWorkspace) and idempotent (a
-   * settled workspace re-scans to no-ops). The live cache still holds the stale
-   * default this session — it rehydrates from the healed disk on next reload.
+   * re-runs the materialization for the workspace via `healWorkspace`, which
+   * re-reads `blocks_synced` DIRECTLY (bypassing the consumed queue) and
+   * re-applies the gate in HEALING mode, un-shadowing the server's value on disk.
+   *
+   * Healing (not strict) mode is essential here: a shadow minted by
+   * pre-provenance code is stamped with the real user, so the steady-state
+   * strict gate would now PROTECT it as a real edit and re-permanent it. Healing
+   * mode lets the server win on any strictly-newer non-pending row (the interim
+   * rule), while the pending + equal-stamp guards still hold — so an unsent edit
+   * is never lost. This also covers clients that upgrade straight from a
+   * pre-interim build (no `reconcile_rescan` marker yet) past the provenance
+   * build in one step.
+   *
+   * Marker-gated to run at most once per (workspace, client); deferred off the
+   * open path; windowed + resumable (healWorkspace) and idempotent (a settled
+   * workspace re-scans to no-ops). The live cache still holds the stale default
+   * this session — it rehydrates from the healed disk on next reload (the live
+   * cache heal is a separate path).
    *
    * Call after the access gate (a locked/unverified workspace must not be
    * re-materialized here — its own gate-resolution path runs drainWorkspace).
@@ -1938,9 +1970,9 @@ export class Repo {
     const done = await this.db.getOptional<{key: string}>(SELECT_RECONCILE_RESCAN_MARKER_SQL, [key])
     if (done) return
     try {
-      await this.drainSyncWorkspace(workspaceId)
+      await this.healSyncWorkspace(workspaceId)
       // Marker only after a clean pass — a thrown/interrupted re-scan leaves it
-      // unset so the next open retries (drainWorkspace is resumable + idempotent).
+      // unset so the next open retries (healWorkspace is resumable + idempotent).
       await this.db.execute(RECORD_RECONCILE_RESCAN_MARKER_SQL, [key])
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)
