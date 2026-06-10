@@ -28,6 +28,20 @@ export const SWIPE_QUICK_ACTION_CLOSE_EVENT = 'swipe-quick-actions:close'
 export const SWIPE_QUICK_ACTION_RUN_EVENT = 'swipe-quick-actions:run'
 export const SWIPE_QUICK_ACTION_PROGRESS_EVENT = 'swipe-quick-actions:progress'
 
+/** The streamed progress TICK the recognizer hands to its `progress`-phase
+ *  action as the trigger (in-memory, NOT dispatched to the DOM). The action
+ *  reads `dx` and bridges to the menu via {@link dispatchSwipeQuickActionProgressEvent}.
+ *  Separate from SWIPE_QUICK_ACTION_PROGRESS_EVENT, which is the action→menu
+ *  DOM event. */
+export const SWIPE_QUICK_ACTION_PROGRESS_TICK_EVENT = 'swipe-quick-actions:progress-tick'
+
+export interface SwipeProgressTickDetail {
+  dx: number
+}
+
+export const swipeProgressTickEvent = (dx: number): CustomEvent<SwipeProgressTickDetail> =>
+  new CustomEvent<SwipeProgressTickDetail>(SWIPE_QUICK_ACTION_PROGRESS_TICK_EVENT, {detail: {dx}})
+
 export const isSwipeQuickActionMenuEvent = (
   event: Event,
 ): event is SwipeQuickActionMenuEvent => {
