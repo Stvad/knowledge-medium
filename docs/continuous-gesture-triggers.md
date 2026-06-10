@@ -86,17 +86,32 @@ collapsing them.
 - **`{kind:'gesture'}`** added to the `resolve` `Trigger` union.
 - **`gestureBinding?: GestureBindingSpec | readonly GestureBindingSpec[]`** on
   `ActionConfig` — the analogue of `pointerBinding` / `defaultBinding`.
-  `GestureBindingSpec = { gesture: string; phase?: 'commit' }`.
+  `GestureBindingSpec = { gesture: string; phase?: 'commit' | 'progress' }`.
   - Gesture names are **opaque strings**, like chords — no mandatory
     registration to emit or bind one.
-  - `phase` defaults to `'commit'`. The field is reserved so `'start'` /
-    `'cancel'` can become bindable later; we do not build them until something
-    needs them. Live preview is recognizer-private, not a bindable trigger.
+  - `phase` defaults to `'commit'`.
+    - **`commit`** — the gesture completed; dispatched **run-until-handled**
+      (first non-declining action wins), like a chord.
+    - **`progress`** — the live preview *is* a bindable trigger, so a preview can
+      be **overridden per context**: resolved to a **single winner ONCE at
+      gesture start** by context priority (a higher-priority context's preview
+      shadows the default), then every streamed tick and the terminal settle go
+      to that one action. Single-winner, not run-until-handled — a streamed tick
+      has no meaningful "decline". The tick payload (delta / fraction) rides in
+      the `ActionTrigger` the recognizer builds, opaque to the dispatch layer
+      (just as a `commit` action interprets the `PointerEvent` it receives).
 - **`dispatchGesture(gestureName, suppliedDeps, event)`** — module-level entry
   point mirroring `dispatchPointerAction`. Matches actions whose
   `gestureBinding` names `gestureName`, `resolve(…, {kind:'gesture'})`,
   run-until-handled with supplied deps. This is the *only* thing a gesture needs
   to reach the action system — facet or escape hatch.
+- **`beginGestureProgress(gestureName, suppliedDeps)`** — the preview channel,
+  separate from `dispatchGesture` because the semantics differ. Resolves the
+  winning `progress`-phase action **once** (context priority) and returns a
+  `{ update(trigger), cancel() }` handle the recognizer streams to; returns null
+  when nothing binds the gesture's progress phase (so a recognizer skips
+  previewing for free). `update` forwards a streamed tick; `cancel` delivers a
+  synthesized settle trigger when the gesture ends without committing.
 - **Non-passive listener seam** — a standalone primitive (not buried in the
   recognizer loop) that registers real non-passive `pointermove`/`touchmove`
   listeners on a content surface, usable by both the recognizer loop and raw
@@ -155,19 +170,35 @@ interface GestureRecognizer<Deps = unknown> {
 type GesturePhaseResult =
   | { status: 'idle' }                                    // not mine / not yet
   | { status: 'active' }                                  // claimed → core cancels others, preventDefaults moves
+  | { status: 'progress'; gesture: string; deps: Deps; event: ActionTrigger }  // claimed + stream a preview tick to the progress winner (resolved once)
   | { status: 'commit'; gesture: string; deps: Deps }     // core dispatches via resolve({kind:'gesture'})
-  | { status: 'cancel' }                                  // release my claim
+  | { status: 'cancel' }                                  // release my claim (settles an in-flight preview)
 ```
 
 - The verdict emits a **gesture name, not an action id** — that is the
   decoupling.
-- The recognizer body may run arbitrary side-effects during `active` (scrub
-  calls `overlay.update(...)`, swipe dispatches its progress-preview event);
-  core only *consumes the verdict*.
+- The live preview **rides the action system** via the `progress` verdict: the
+  recognizer emits a gesture name + payload, core resolves the winning
+  `progress`-phase action once and streams to it, so previews are
+  context-overridable the same way commits are — no bespoke per-recognizer
+  preview event. (A recognizer may still run private side-effects during
+  `active`/`progress`; core only *consumes the verdict*.)
 - **Arbitration** = the generalized `blockGestureConflicts`: one `active`
   recognizer per block; a new claim evicts the rest and fires their cancel.
   `blockGestureConflictsFacet` is absorbed and retired once both consumers ride
   the loop.
+- **preventDefault has one authority: the action layer.** A recognizer/controller
+  never calls `preventDefault` for a `commit` itself — the dispatcher's
+  `applyGestureEventOptions` (suppress-by-default, overridable per context)
+  decides it on the commit event, so a context opts out with
+  `defaultEventOptions: {preventDefault: false}` exactly as keyboard/pointer
+  actions do. The controller **mirrors** that decision (reads
+  `event.defaultPrevented`) and only then swallows the trailing synthesized
+  `click` — which Pointer Events do NOT suppress via a canceled `pointerup`
+  (only a canceled `pointerdown` suppresses compat mouse events). Move-time
+  `preventDefault` (the `active`/`progress` scroll fallback) is a separate,
+  controller-owned concern. This single-owner rule is what keeps the
+  "you suppressed the wrong thing" class of bugs from recurring.
 
 ### 3–5. Migration
 

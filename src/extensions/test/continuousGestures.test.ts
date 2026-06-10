@@ -7,6 +7,7 @@ import {
   type GestureRecognizer,
   type GestureSession,
   type PointerSample,
+  type ActionTrigger,
 } from '@/extensions/continuousGestures.js'
 import type { BaseShortcutDependencies } from '@/shortcuts/types.js'
 
@@ -111,6 +112,102 @@ describe('createBlockGestureController', () => {
     controller.handlePointerUp(sample(1, 80, 0))
 
     expect(finalX).toBe(80)
+  })
+
+  describe('progress preview streaming', () => {
+    const trigger = (n: number): ActionTrigger => ({type: 'progress', detail: {n}}) as unknown as ActionTrigger
+
+    const previewRecognizer = (
+      overrides: Partial<GestureRecognizer> = {},
+    ): GestureRecognizer => {
+      let n = 0
+      return {
+        id: 'swipe',
+        onPointerMove: () => ({status: 'progress', gesture: 'swipe-left', deps, event: trigger(n++)}),
+        ...overrides,
+      }
+    }
+
+    it('resolves the progress winner once, then streams every tick to that one handle', () => {
+      const update = vi.fn()
+      const beginProgress = vi.fn(() => ({update, cancel: vi.fn()}))
+      const controller = createBlockGestureController({
+        recognizers: [previewRecognizer()], element, dispatch: makeDispatch(), beginProgress,
+      })
+
+      controller.handlePointerDown(sample(1, 0, 0))
+      expect(controller.handlePointerMove(sample(1, -10, 0))).toBe(true) // claims block → preventDefault
+      controller.handlePointerMove(sample(1, -20, 0))
+
+      expect(beginProgress).toHaveBeenCalledTimes(1) // resolved ONCE, not per tick
+      expect(beginProgress.mock.calls[0]).toEqual(['swipe-left', deps])
+      expect(update).toHaveBeenCalledTimes(2)
+    })
+
+    it('settles the preview when the gesture ends without committing', () => {
+      const cancel = vi.fn()
+      const beginProgress = vi.fn(() => ({update: vi.fn(), cancel}))
+      const controller = createBlockGestureController({
+        recognizers: [previewRecognizer({onPointerUp: () => GESTURE_IDLE})],
+        element, dispatch: makeDispatch(), beginProgress,
+      })
+
+      controller.handlePointerDown(sample(1, 0, 0))
+      controller.handlePointerMove(sample(1, -20, 0))
+      controller.handlePointerUp(sample(1, -20, 0)) // released before threshold
+
+      expect(cancel).toHaveBeenCalledTimes(1)
+    })
+
+    it('does NOT settle the preview when the gesture commits — the commit action takes over the visual', () => {
+      const cancel = vi.fn()
+      const beginProgress = vi.fn(() => ({update: vi.fn(), cancel}))
+      const dispatch = makeDispatch()
+      const controller = createBlockGestureController({
+        recognizers: [previewRecognizer({
+          onPointerUp: () => ({status: 'commit', gesture: 'swipe-left', deps}),
+        })],
+        element, dispatch, beginProgress,
+      })
+
+      controller.handlePointerDown(sample(1, 0, 0))
+      controller.handlePointerMove(sample(1, -60, 0))
+      controller.handlePointerUp(sample(1, -60, 0))
+
+      expect(dispatch).toHaveBeenCalledTimes(1)
+      expect(cancel).not.toHaveBeenCalled()
+    })
+
+    it('settles the preview on a browser pointercancel', () => {
+      const cancel = vi.fn()
+      const beginProgress = vi.fn(() => ({update: vi.fn(), cancel}))
+      const controller = createBlockGestureController({
+        recognizers: [previewRecognizer()], element, dispatch: makeDispatch(), beginProgress,
+      })
+
+      controller.handlePointerDown(sample(1, 0, 0))
+      controller.handlePointerMove(sample(1, -20, 0))
+      controller.handlePointerCancel(sample(1, -20, 0))
+
+      expect(cancel).toHaveBeenCalledTimes(1)
+    })
+
+    it('previews nothing (no crash) when the gesture binds no dispatchable progress action', () => {
+      const beginProgress = vi.fn(() => null)
+      const controller = createBlockGestureController({
+        recognizers: [previewRecognizer({onPointerUp: () => GESTURE_IDLE})],
+        element, dispatch: makeDispatch(), beginProgress,
+      })
+
+      controller.handlePointerDown(sample(1, 0, 0))
+      controller.handlePointerMove(sample(1, -20, 0))
+      // The recognizer still claimed the block even though nothing previewed.
+      expect(controller.handlePointerMove(sample(1, -30, 0))).toBe(true)
+      controller.handlePointerUp(sample(1, -30, 0))
+      // Resolution is attempted ONCE and the null result is remembered, so an
+      // unpreviewed gesture doesn't re-resolve on every move tick.
+      expect(beginProgress).toHaveBeenCalledTimes(1)
+    })
   })
 
   it('evicts rivals when one recognizer goes active: their onPointerCancel fires and they stop receiving events', () => {

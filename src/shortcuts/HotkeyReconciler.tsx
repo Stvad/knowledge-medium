@@ -29,7 +29,11 @@ import {
   type TouchPhase,
 } from './canonicalizeChord.ts'
 import { setPointerActionDispatcher, type PointerGestureEvent } from '@/shortcuts/pointerAction.js'
-import { setGestureActionDispatcher } from '@/shortcuts/gestureAction.js'
+import {
+  setGestureActionDispatcher,
+  setGestureProgressDispatcher,
+  gestureProgressCancelEvent,
+} from '@/shortcuts/gestureAction.js'
 import {
   gestureBindingDescriptor,
   matchesGestureEvent,
@@ -314,6 +318,45 @@ export function HotkeyReconciler(): null {
       )
     })
     return () => setGestureActionDispatcher(null)
+  }, [runtime])
+
+  // Install the gesture PROGRESS dispatcher — the single-winner preview channel
+  // (commit, above, is run-until-handled). A live preview resolves to ONE action
+  // at gesture start by context priority; the returned handle streams every tick
+  // and the terminal settle to that one action. Resolving once (not per tick) is
+  // both cheaper at pointer-move frequency and correct — the winner can't change
+  // mid-drag. Returns null when nothing binds the gesture's progress phase, so a
+  // recognizer skips previewing for free.
+  useEffect(() => {
+    setGestureProgressDispatcher((gesture, supplied) => {
+      const active = activeRef.current
+      const contextConfigsByType = contextConfigsByTypeRef.current
+      const matched = getEffectiveActions(runtime).filter(action => {
+        const spec = action.gestureBinding
+        if (!spec) return false
+        const specs: readonly GestureBindingSpec[] = Array.isArray(spec) ? spec : [spec]
+        return specs.some(candidate =>
+          matchesGestureEvent(gestureBindingDescriptor(candidate), {gesture, phase: 'progress'}),
+        )
+      })
+      if (matched.length === 0) return null
+
+      // Resolve once, best-first by context priority; bind to the first candidate
+      // with valid deps that doesn't decline via canDispatch.
+      const ordered = resolve(matched, {active, contextConfigsByType}, {kind: 'gesture'})
+      for (const action of ordered) {
+        const deps = resolveDeps(action, active, contextConfigsByType, supplied)
+        if (!deps) continue
+        if (action.canDispatch && !action.canDispatch(deps)) continue
+        const {handler} = action
+        return {
+          update: event => { handler(deps, event, dispatchRef.current) },
+          cancel: () => { handler(deps, gestureProgressCancelEvent(gesture), dispatchRef.current) },
+        }
+      }
+      return null
+    })
+    return () => setGestureProgressDispatcher(null)
   }, [runtime])
 
   // One coordinator per phase replaces the N per-action window listeners —

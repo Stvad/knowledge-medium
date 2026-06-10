@@ -29,7 +29,11 @@ import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import type { BlockResolveContext } from '@/extensions/blockInteraction.js'
 import type { ActionTrigger, BaseShortcutDependencies } from '@/shortcuts/types.js'
 import type { GesturePhase } from '@/shortcuts/gestureBinding.js'
-import { dispatchGesture as defaultDispatchGesture } from '@/shortcuts/gestureAction.js'
+import {
+  dispatchGesture as defaultDispatchGesture,
+  beginGestureProgress as defaultBeginGestureProgress,
+  type GestureProgressDispatch,
+} from '@/shortcuts/gestureAction.js'
 
 /** A pointer currently in contact with the gesture surface. */
 export interface GesturePointer {
@@ -63,12 +67,28 @@ export interface GestureEventContext {
  *  - `idle` — not mine, or not yet.
  *  - `active` — I've claimed this block; the loop cancels other recognizers and
  *    preventDefaults subsequent moves (the documented `touch-action` fallback).
+ *  - `progress` — like `active` (claims the block, preventDefaults), and ALSO
+ *    streams a live-preview tick to the action resolved for this gesture's
+ *    `progress` phase. The winner is resolved ONCE on the first progress tick
+ *    (by context priority) and every later tick goes to it; `event` carries the
+ *    recognizer's payload (drag delta, …). Settle is automatic: the loop tells
+ *    the resolved action to settle on `cancel` / `pointercancel` / a release
+ *    that doesn't `commit`.
  *  - `commit` — dispatch this named gesture with these deps through `resolve`.
- *  - `cancel` — drop my claim; I'm out for the rest of this session.
+ *    Ends any in-flight preview WITHOUT a settle (the commit action takes over
+ *    the visual).
+ *  - `cancel` — drop my claim; I'm out for the rest of this session. Settles an
+ *    in-flight preview back.
  */
 export type GesturePhaseResult =
   | { readonly status: 'idle' }
   | { readonly status: 'active' }
+  | {
+      readonly status: 'progress'
+      readonly gesture: string
+      readonly deps: BaseShortcutDependencies
+      readonly event: ActionTrigger
+    }
   | {
       readonly status: 'commit'
       readonly gesture: string
@@ -159,6 +179,7 @@ interface ControllerArgs {
   readonly recognizers: readonly GestureRecognizer[]
   readonly element: HTMLElement
   readonly dispatch?: typeof defaultDispatchGesture
+  readonly beginProgress?: typeof defaultBeginGestureProgress
 }
 
 export interface BlockGestureController {
@@ -182,6 +203,7 @@ export const createBlockGestureController = ({
   recognizers,
   element,
   dispatch = defaultDispatchGesture,
+  beginProgress = defaultBeginGestureProgress,
 }: ControllerArgs): BlockGestureController => {
   const pointers = new Map<number, GesturePointer>()
   // The recognizer that claimed the block (went active); null before any does.
@@ -189,8 +211,26 @@ export const createBlockGestureController = ({
   // Recognizers out for the rest of this session — evicted by an active rival,
   // self-cancelled, or already committed.
   const cancelled = new Set<string>()
+  // The live-preview resolution for the recognizer currently streaming
+  // `progress`. Set once on its first tick and held for the rest of the gesture:
+  // `dispatch` is the resolved winner's handle, or null when the gesture's
+  // progress phase bound no dispatchable action. Keeping the record even when
+  // `dispatch` is null is what stops us re-resolving (getEffectiveActions +
+  // filter) on every pointer-move tick of an unpreviewed gesture. `progress`
+  // itself is null only when nothing is streaming.
+  let progress: { readonly recognizerId: string; readonly dispatch: GestureProgressDispatch | null } | null = null
+
+  // Settle an in-flight preview back to rest and forget it. Called on every
+  // non-committing end (cancel verdict, pointercancel, release without commit).
+  const settleProgress = (): void => {
+    progress?.dispatch?.cancel()
+    progress = null
+  }
 
   const resetSession = (): void => {
+    // A release that didn't commit leaves the preview open — settle it so the
+    // toolbar/affordance animates home rather than freezing mid-reveal.
+    settleProgress()
     activeId = null
     cancelled.clear()
   }
@@ -247,7 +287,25 @@ export const createBlockGestureController = ({
           cancelOthers(recognizer.id, session, ctx)
         }
         return {handled: false, prevent: true}
+      case 'progress':
+        // Streaming a preview claims the block exactly like `active` (evict
+        // rivals, preventDefault the move so native scroll yields).
+        if (activeId !== recognizer.id) {
+          activeId = recognizer.id
+          cancelOthers(recognizer.id, session, ctx)
+        }
+        // Resolve the winning preview action once (first tick of this recognizer),
+        // then stream every tick — including this one — to it. The record is kept
+        // even when resolution finds nothing, so we don't re-resolve per tick.
+        if (!progress || progress.recognizerId !== recognizer.id) {
+          progress = {recognizerId: recognizer.id, dispatch: beginProgress(verdict.gesture, verdict.deps)}
+        }
+        progress.dispatch?.update(verdict.event)
+        return {handled: false, prevent: true}
       case 'commit': {
+        // The commit action takes over the visual, so drop the preview WITHOUT
+        // settling it (no animate-home).
+        if (progress?.recognizerId === recognizer.id) progress = null
         dispatch(verdict.gesture, verdict.deps, ctx.event, verdict.phase)
         cancelled.add(recognizer.id)
         if (activeId === recognizer.id) activeId = null
@@ -264,6 +322,7 @@ export const createBlockGestureController = ({
         return {handled: true, prevent: ctx.event.defaultPrevented}
       }
       case 'cancel':
+        if (progress?.recognizerId === recognizer.id) settleProgress()
         cancelled.add(recognizer.id)
         if (activeId === recognizer.id) activeId = null
         return {handled: false, prevent: false}

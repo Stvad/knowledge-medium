@@ -15,12 +15,24 @@
  */
 
 /**
- * When in the gesture lifecycle a binding resolves. Only `'commit'` today —
- * `'start'` / `'cancel'` are reserved so they can become bindable without a
- * rewrite (the live preview during a drag stays recognizer-private and is NOT a
- * bindable trigger). Mirrors the keyboard `phase` / pointer `phase` fields.
+ * When in the gesture lifecycle a binding resolves. Mirrors the keyboard
+ * `phase` / pointer `phase` fields.
+ *  - `commit` — the gesture completed (release past threshold). Dispatched
+ *    run-until-handled, like a keyboard chord: the first candidate that doesn't
+ *    decline wins and the rest are skipped.
+ *  - `progress` — the gesture is in flight (the live preview during a drag).
+ *    Bindable so a preview can be OVERRIDDEN per context: the winning action is
+ *    resolved ONCE at gesture start by context priority (a higher-priority
+ *    context's preview shadows the default), then every streamed tick — and the
+ *    terminal settle — goes to that one resolved action. Single-winner, not
+ *    run-until-handled: a streamed tick has no meaningful "decline".
+ *
+ * The progress trigger's concrete payload (drag delta, fraction, …) rides in the
+ * `ActionTrigger` the recognizer builds — opaque to the dispatch layer, agreed
+ * between a recognizer and the actions that bind its gesture, exactly as a
+ * `commit` action interprets the `PointerEvent` it receives.
  */
-export type GesturePhase = 'commit'
+export type GesturePhase = 'commit' | 'progress'
 
 /**
  * A gesture binding declared on an action — names a gesture a recognizer emits

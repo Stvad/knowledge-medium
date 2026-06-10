@@ -36,3 +36,58 @@ export const setGestureActionDispatcher = (next: DispatchGestureFn | null): void
  *  returning false before the coordinator mounts. */
 export const dispatchGesture: DispatchGestureFn = (gesture, suppliedDeps, event, phase) =>
   dispatcher ? dispatcher(gesture, suppliedDeps, event, phase) : false
+
+/**
+ * A live-preview session bound to the ONE action resolved for a gesture's
+ * `progress` phase at gesture start. Streaming through this handle — rather than
+ * re-dispatching every tick — is what gives the preview a stable, context-priority
+ * winner for the whole drag (re-resolving per tick could change winners mid-drag
+ * and re-runs the resolver at pointer-move frequency).
+ */
+export interface GestureProgressDispatch {
+  /** Forward one in-flight tick to the resolved action. The `event` carries the
+   *  recognizer's payload (drag delta, fraction, …); the dispatch layer doesn't
+   *  read it. */
+  update(event: ActionTrigger): void
+  /** Tell the resolved action the gesture ended WITHOUT committing (released
+   *  before threshold, reversed, or `pointercancel`) so the preview settles back.
+   *  Delivers a synthesized cancel trigger — there's no recognizer event for a
+   *  browser-initiated cancel. */
+  cancel(): void
+}
+
+/**
+ * Resolve the winning `progress`-phase action for `gesture` ONCE (by context
+ * priority, with the block's deps SUPPLIED) and return a handle that streams to
+ * it. Returns null when no progress action is bound / dispatchable for the
+ * gesture, so a recognizer can cheaply skip previewing. The commit phase still
+ * goes through {@link dispatchGesture} (run-until-handled) — this is only the
+ * single-winner preview channel.
+ */
+export type BeginGestureProgressFn = (
+  gesture: string,
+  suppliedDeps: BaseShortcutDependencies,
+) => GestureProgressDispatch | null
+
+/** Event type a progress action receives on its `cancel()` — the gesture ended
+ *  without committing. A progress action distinguishes a settle from an active
+ *  tick by `event.type === GESTURE_PROGRESS_CANCEL_EVENT`; active ticks carry the
+ *  recognizer's own event type + payload. */
+export const GESTURE_PROGRESS_CANCEL_EVENT = 'gesture-progress-cancel'
+
+/** Build the synthesized trigger delivered to a progress action when its gesture
+ *  is cancelled (released before threshold / reversed / `pointercancel`). */
+export const gestureProgressCancelEvent = (gesture: string): CustomEvent =>
+  new CustomEvent(GESTURE_PROGRESS_CANCEL_EVENT, {detail: {gesture}})
+
+let progressDispatcher: BeginGestureProgressFn | null = null
+
+/** Installed alongside the commit dispatcher by <HotkeyReconciler/>. */
+export const setGestureProgressDispatcher = (next: BeginGestureProgressFn | null): void => {
+  progressDispatcher = next
+}
+
+/** Module-level entry point mirroring {@link dispatchGesture}. No-op returning
+ *  null before the coordinator mounts. */
+export const beginGestureProgress: BeginGestureProgressFn = (gesture, suppliedDeps) =>
+  progressDispatcher ? progressDispatcher(gesture, suppliedDeps) : null
