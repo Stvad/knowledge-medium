@@ -20,8 +20,10 @@ export interface User {
  *  Derived per-user (`system:<userId>`) rather than a single global
  *  sentinel so the write stays attributable — which device/user's
  *  bootstrap minted the row is still legible in `blocks_history` and in
- *  plain SQL — and so the reserved namespace can't collide with a real
- *  user id (those are opaque UUIDs and never start with `system:`). */
+ *  plain SQL — and so it can't collide with a real author: no real *user
+ *  id* starts with `system:` (they're opaque UUIDs). (The `system:` prefix
+ *  is used elsewhere for built-in plugin/property ids, but those never land
+ *  in `created_by` / `updated_by`, so there's no overlap in this column.) */
 export const SYSTEM_AUTHOR_PREFIX = 'system:'
 
 /** The system author for a given user — the value written to `updated_by`

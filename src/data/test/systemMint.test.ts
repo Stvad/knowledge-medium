@@ -2,15 +2,17 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { Repo } from '../repo'
 import { BlockCache } from '../blockCache'
 import { ChangeScope, systemAuthor } from '../api'
+import { createOrRestoreTargetBlock } from '../targets'
 import { createTestDb, resetTestDb, type TestDb } from './createTestDb'
 
 /**
  * Write-side provenance: `tx.create` / `tx.createOrGet` with `{systemMint:
- * true}` stamp `created_by` / `updated_by` as the current user's system
- * author, and same-tx follow-up writes (the `addTypeInTx` / `setProperty`
- * shaping every deterministic-id mint does) inherit that authorship instead
- * of promoting the row back to a real user edit. The first real edit in a
- * LATER tx promotes it. This is the discriminator the reconcile gate reads.
+ * true}` stamp `updated_by` (NOT `created_by`, which stays the real user) as
+ * the current user's system author, and same-tx follow-up writes (the
+ * `addTypeInTx` / `setProperty` shaping every deterministic-id mint does)
+ * inherit that authorship instead of promoting the row back to a real user
+ * edit. The first real edit in a LATER tx promotes `updated_by`. This is the
+ * discriminator the reconcile gate reads.
  */
 describe('systemMint authorship', () => {
   const USER = 'user-1'
@@ -87,5 +89,41 @@ describe('systemMint authorship', () => {
     // user all along (the row's owner never changed).
     expect(row?.updatedBy).toBe(USER)
     expect(row?.createdBy).toBe(USER)
+  })
+
+  it('does NOT inherit system authorship on a createOrGet live-hit', async () => {
+    // markSystemMint fires only on a real INSERT. A createOrGet that hits a
+    // live row must not mark it, or a same-tx edit would demote a real user's
+    // row to system: and let the gate yield it to the server. Guards against a
+    // refactor that marks the row before the insert/live branch.
+    await create('exists') // plain user-authored row
+    await repo.tx(async tx => {
+      const result = await tx.createOrGet(
+        {id: 'exists', workspaceId: 'ws', parentId: null, orderKey: 'a0', content: 'x'},
+        {systemMint: true},
+      )
+      expect(result.inserted).toBe(false) // live hit, no insert
+      await tx.update('exists', {content: 'edited'})
+    }, {scope: ChangeScope.BlockDefault})
+    expect((await repo.load('exists'))?.updatedBy).toBe(USER)
+  })
+
+  it('a tombstone restore stays user-authored even via the systemMint primitive', async () => {
+    // createOrRestoreTargetBlock's tombstone branch restores via tx.restore,
+    // which is an UPDATE — systemMint is insert-only, so a RESTORED seat is NOT
+    // a system mint. This is deliberate (the restore-door is a separate, narrower
+    // concern); pin it so a future "make restore inherit the mint author" change
+    // — which would re-introduce shadow-on-restore — fails loudly here.
+    const seat = {id: 'seat', workspaceId: 'ws', parentId: null, orderKey: 'a0', freshContent: 's', systemMint: true}
+    await repo.tx(async tx => { await createOrRestoreTargetBlock(tx, seat) }, {scope: ChangeScope.BlockDefault})
+    expect((await repo.load('seat'))?.updatedBy).toBe(SYS) // born a system mint
+
+    await repo.tx(async tx => { await tx.delete('seat') }, {scope: ChangeScope.BlockDefault})
+    const restored = await repo.tx(
+      async tx => createOrRestoreTargetBlock(tx, seat),
+      {scope: ChangeScope.BlockDefault},
+    )
+    expect(restored.inserted).toBe(true) // restore counts as "this tx wrote it"
+    expect((await repo.load('seat'))?.updatedBy).toBe(USER) // restored ⇒ user, not system
   })
 })
