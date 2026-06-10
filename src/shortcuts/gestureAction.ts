@@ -1,14 +1,14 @@
 import type { ActionTrigger, BaseShortcutDependencies } from './types.js'
-import type { GesturePhase } from './gestureBinding.js'
 
 /**
- * Dispatch a recognized continuous gesture through the same `resolve` +
+ * Dispatch a recognized continuous gesture's COMMIT through the same `resolve` +
  * coordinator + run-until-handled path keyboard chords and pointer gestures
  * use. The caller — a core/plugin recognizer, or a raw surface-props escape
  * hatch — supplies the gesture NAME (not an action id), the target block's deps
  * SUPPLIED (the gesture's context isn't keyboard-active), and the originating
  * event (for `preventDefault` / `stopPropagation` on the trailing
- * synthesized click, and logging).
+ * synthesized click, and logging). This is the commit path only; the live
+ * preview goes through {@link BeginGestureProgressFn}.
  *
  * This is the ONLY thing a gesture needs to reach the action system, which is
  * what keeps the trigger vocabulary open: anything that can call `dispatchGesture`
@@ -20,7 +20,6 @@ export type DispatchGestureFn = (
   gesture: string,
   suppliedDeps: BaseShortcutDependencies,
   event: ActionTrigger,
-  phase?: GesturePhase,
 ) => boolean
 
 let dispatcher: DispatchGestureFn | null = null
@@ -34,8 +33,8 @@ export const setGestureActionDispatcher = (next: DispatchGestureFn | null): void
 /** Module-level entry point so non-React callers (recognizers, escape-hatch
  *  surfaces) can dispatch a gesture without threading the runtime. No-op
  *  returning false before the coordinator mounts. */
-export const dispatchGesture: DispatchGestureFn = (gesture, suppliedDeps, event, phase) =>
-  dispatcher ? dispatcher(gesture, suppliedDeps, event, phase) : false
+export const dispatchGesture: DispatchGestureFn = (gesture, suppliedDeps, event) =>
+  dispatcher ? dispatcher(gesture, suppliedDeps, event) : false
 
 /**
  * A live-preview session bound to the ONE action resolved for a gesture's
@@ -52,8 +51,9 @@ export interface GestureProgressDispatch {
   /** Tell the resolved action the gesture ended WITHOUT committing (released
    *  before threshold, reversed, or `pointercancel`) so the preview settles back.
    *  Delivers a synthesized cancel trigger — there's no recognizer event for a
-   *  browser-initiated cancel. */
-  cancel(): void
+   *  browser-initiated cancel. Named `settle` (not `cancel`) to keep it distinct
+   *  from the controller's `cancel` verdict and `onPointerCancel`. */
+  settle(): void
 }
 
 /**

@@ -38,7 +38,6 @@ import {
   gestureBindingDescriptor,
   matchesGestureEvent,
   type GestureBindingSpec,
-  type GesturePhase,
 } from './gestureBinding.ts'
 import {
   ActionConfig,
@@ -293,17 +292,18 @@ export function HotkeyReconciler(): null {
   // caller (the block the gesture ran on; its context isn't keyboard-active),
   // then ordered and run through the same loop as keyboard/pointer.
   useEffect(() => {
-    setGestureActionDispatcher((gesture, supplied, event, phase: GesturePhase = 'commit') => {
+    setGestureActionDispatcher((gesture, supplied, event) => {
       const active = activeRef.current
       const contextConfigsByType = contextConfigsByTypeRef.current
       const matched = getEffectiveActions(runtime).filter(action => {
         const spec = action.gestureBinding
         if (!spec) return false
         // A binding may list several gestures; the action matches if any names
-        // this gesture at this phase.
+        // this gesture. dispatchGesture is the COMMIT path (progress goes through
+        // beginGestureProgress), so we match the commit phase here.
         const specs: readonly GestureBindingSpec[] = Array.isArray(spec) ? spec : [spec]
         return specs.some(candidate =>
-          matchesGestureEvent(gestureBindingDescriptor(candidate), {gesture, phase}),
+          matchesGestureEvent(gestureBindingDescriptor(candidate), {gesture, phase: 'commit'}),
         )
       })
       if (matched.length === 0) return false
@@ -351,7 +351,7 @@ export function HotkeyReconciler(): null {
         const {handler} = action
         return {
           update: event => { handler(deps, event, dispatchRef.current) },
-          cancel: () => { handler(deps, gestureProgressCancelEvent(gesture), dispatchRef.current) },
+          settle: () => { handler(deps, gestureProgressCancelEvent(gesture), dispatchRef.current) },
         }
       }
       return null

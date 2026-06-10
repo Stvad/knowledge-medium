@@ -28,7 +28,6 @@ import { defineFacet, isFunction } from '@/extensions/facet.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import type { BlockResolveContext } from '@/extensions/blockInteraction.js'
 import type { ActionTrigger, BaseShortcutDependencies } from '@/shortcuts/types.js'
-import type { GesturePhase } from '@/shortcuts/gestureBinding.js'
 import {
   dispatchGesture as defaultDispatchGesture,
   beginGestureProgress as defaultBeginGestureProgress,
@@ -93,7 +92,6 @@ export type GesturePhaseResult =
       readonly status: 'commit'
       readonly gesture: string
       readonly deps: BaseShortcutDependencies
-      readonly phase?: GesturePhase
     }
   | { readonly status: 'cancel' }
 
@@ -223,7 +221,7 @@ export const createBlockGestureController = ({
   // Settle an in-flight preview back to rest and forget it. Called on every
   // non-committing end (cancel verdict, pointercancel, release without commit).
   const settleProgress = (): void => {
-    progress?.dispatch?.cancel()
+    progress?.dispatch?.settle()
     progress = null
   }
 
@@ -270,6 +268,19 @@ export const createBlockGestureController = ({
     }
   }
 
+  // Claim the block for `recognizer`: first claim of the gesture evicts every
+  // rival (one active recognizer per block). Shared by the `active` and
+  // `progress` verdicts, which claim identically.
+  const claim = (
+    recognizer: GestureRecognizer,
+    session: GestureSession,
+    ctx: GestureEventContext,
+  ): void => {
+    if (activeId === recognizer.id) return
+    activeId = recognizer.id
+    cancelOthers(recognizer.id, session, ctx)
+  }
+
   // Apply one recognizer's verdict. Returns whether the event was HANDLED (a
   // commit — stops further recognizers this event) and whether to preventDefault.
   const applyVerdict = (
@@ -282,18 +293,15 @@ export const createBlockGestureController = ({
       case 'idle':
         return {handled: false, prevent: false}
       case 'active':
-        if (activeId !== recognizer.id) {
-          activeId = recognizer.id
-          cancelOthers(recognizer.id, session, ctx)
-        }
+        // An `active` verdict from the recognizer that WAS previewing means
+        // "I'm taking over without a preview" — settle the in-flight one so it
+        // can't freeze mid-reveal while the finger stays down.
+        if (progress?.recognizerId === recognizer.id) settleProgress()
+        claim(recognizer, session, ctx)
         return {handled: false, prevent: true}
       case 'progress':
-        // Streaming a preview claims the block exactly like `active` (evict
-        // rivals, preventDefault the move so native scroll yields).
-        if (activeId !== recognizer.id) {
-          activeId = recognizer.id
-          cancelOthers(recognizer.id, session, ctx)
-        }
+        // Streaming a preview claims the block exactly like `active`.
+        claim(recognizer, session, ctx)
         // Resolve the winning preview action once (first tick of this recognizer),
         // then stream every tick — including this one — to it. The record is kept
         // even when resolution finds nothing, so we don't re-resolve per tick.
@@ -306,7 +314,7 @@ export const createBlockGestureController = ({
         // The commit action takes over the visual, so drop the preview WITHOUT
         // settling it (no animate-home).
         if (progress?.recognizerId === recognizer.id) progress = null
-        dispatch(verdict.gesture, verdict.deps, ctx.event, verdict.phase)
+        dispatch(verdict.gesture, verdict.deps, ctx.event)
         cancelled.add(recognizer.id)
         if (activeId === recognizer.id) activeId = null
         // The recognizer DID commit, so it's out and no other recognizer should
@@ -443,6 +451,11 @@ export const suppressNextClick = (element: HTMLElement): void => {
  * silently killing gestures on the new surface. The caller's own `elementRef` is
  * still written through, so other consumers of that ref (the shell decorator
  * stack, …) keep seeing the node.
+ *
+ * `context` MUST be referentially stable across renders — `recognizers` is
+ * memoized on it, and a new identity each render would rebuild the controller
+ * mid-drag, dropping in-flight gesture / arbitration / preview state. Callers
+ * pass a memoized resolve context (the block shell already does).
  */
 export const useContinuousGestures = (
   context: BlockResolveContext,

@@ -51,7 +51,7 @@ describe('createBlockGestureController', () => {
     const prevented = controller.handlePointerUp(up)
 
     expect(dispatch).toHaveBeenCalledTimes(1)
-    expect(dispatch.mock.calls[0]).toEqual(['swipe-right', deps, up.event, undefined])
+    expect(dispatch.mock.calls[0]).toEqual(['swipe-right', deps, up.event])
     expect(prevented).toBe(true)
   })
 
@@ -130,7 +130,7 @@ describe('createBlockGestureController', () => {
 
     it('resolves the progress winner once, then streams every tick to that one handle', () => {
       const update = vi.fn()
-      const beginProgress = vi.fn(() => ({update, cancel: vi.fn()}))
+      const beginProgress = vi.fn(() => ({update, settle: vi.fn()}))
       const controller = createBlockGestureController({
         recognizers: [previewRecognizer()], element, dispatch: makeDispatch(), beginProgress,
       })
@@ -144,9 +144,28 @@ describe('createBlockGestureController', () => {
       expect(update).toHaveBeenCalledTimes(2)
     })
 
+    it('claims the block and evicts a rival recognizer when it starts previewing', () => {
+      const loserCancel = vi.fn()
+      const beginProgress = vi.fn(() => ({update: vi.fn(), settle: vi.fn()}))
+      const previewer = previewRecognizer()
+      const loser: GestureRecognizer = {id: 'loser', onPointerMove: () => GESTURE_IDLE, onPointerCancel: loserCancel}
+      // loser is contributed first so it runs first; the previewer's progress
+      // verdict must still claim the block and evict it.
+      const controller = createBlockGestureController({
+        recognizers: [loser, previewer], element, dispatch: makeDispatch(), beginProgress,
+      })
+
+      controller.handlePointerDown(sample(1, 0, 0))
+      controller.handlePointerMove(sample(1, -20, 0))
+
+      expect(loserCancel).toHaveBeenCalledTimes(1) // evicted by the progress claim
+      controller.handlePointerMove(sample(1, -30, 0))
+      expect(beginProgress).toHaveBeenCalledTimes(1) // still one preview owner
+    })
+
     it('settles the preview when the gesture ends without committing', () => {
-      const cancel = vi.fn()
-      const beginProgress = vi.fn(() => ({update: vi.fn(), cancel}))
+      const settle = vi.fn()
+      const beginProgress = vi.fn(() => ({update: vi.fn(), settle}))
       const controller = createBlockGestureController({
         recognizers: [previewRecognizer({onPointerUp: () => GESTURE_IDLE})],
         element, dispatch: makeDispatch(), beginProgress,
@@ -156,12 +175,12 @@ describe('createBlockGestureController', () => {
       controller.handlePointerMove(sample(1, -20, 0))
       controller.handlePointerUp(sample(1, -20, 0)) // released before threshold
 
-      expect(cancel).toHaveBeenCalledTimes(1)
+      expect(settle).toHaveBeenCalledTimes(1)
     })
 
     it('does NOT settle the preview when the gesture commits — the commit action takes over the visual', () => {
-      const cancel = vi.fn()
-      const beginProgress = vi.fn(() => ({update: vi.fn(), cancel}))
+      const settle = vi.fn()
+      const beginProgress = vi.fn(() => ({update: vi.fn(), settle}))
       const dispatch = makeDispatch()
       const controller = createBlockGestureController({
         recognizers: [previewRecognizer({
@@ -175,12 +194,12 @@ describe('createBlockGestureController', () => {
       controller.handlePointerUp(sample(1, -60, 0))
 
       expect(dispatch).toHaveBeenCalledTimes(1)
-      expect(cancel).not.toHaveBeenCalled()
+      expect(settle).not.toHaveBeenCalled()
     })
 
     it('settles the preview on a browser pointercancel', () => {
-      const cancel = vi.fn()
-      const beginProgress = vi.fn(() => ({update: vi.fn(), cancel}))
+      const settle = vi.fn()
+      const beginProgress = vi.fn(() => ({update: vi.fn(), settle}))
       const controller = createBlockGestureController({
         recognizers: [previewRecognizer()], element, dispatch: makeDispatch(), beginProgress,
       })
@@ -189,7 +208,28 @@ describe('createBlockGestureController', () => {
       controller.handlePointerMove(sample(1, -20, 0))
       controller.handlePointerCancel(sample(1, -20, 0))
 
-      expect(cancel).toHaveBeenCalledTimes(1)
+      expect(settle).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not resurrect the preview after it settles (settled, then a fresh gesture re-resolves)', () => {
+      const update = vi.fn()
+      const settle = vi.fn()
+      const beginProgress = vi.fn(() => ({update, settle}))
+      const controller = createBlockGestureController({
+        recognizers: [previewRecognizer()], element, dispatch: makeDispatch(), beginProgress,
+      })
+
+      controller.handlePointerDown(sample(1, 0, 0))
+      controller.handlePointerMove(sample(1, -20, 0)) // previews
+      controller.handlePointerCancel(sample(1, -20, 0)) // settles + forgets
+      expect(settle).toHaveBeenCalledTimes(1)
+
+      const updatesAfterSettle = update.mock.calls.length
+      // A brand-new gesture re-resolves a fresh preview (does not reuse the old).
+      controller.handlePointerDown(sample(2, 0, 0))
+      controller.handlePointerMove(sample(2, -20, 0))
+      expect(beginProgress).toHaveBeenCalledTimes(2) // re-resolved for the new gesture
+      expect(update.mock.calls.length).toBeGreaterThan(updatesAfterSettle)
     })
 
     it('previews nothing (no crash) when the gesture binds no dispatchable progress action', () => {

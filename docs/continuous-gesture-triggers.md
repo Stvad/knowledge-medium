@@ -100,6 +100,12 @@ collapsing them.
       has no meaningful "decline". The tick payload (delta / fraction) rides in
       the `ActionTrigger` the recognizer builds, opaque to the dispatch layer
       (just as a `commit` action interprets the `PointerEvent` it receives).
+    - **Progress and commit resolve independently.** `progress` resolves a
+      single-winner preview; `commit` separately resolves run-until-handled at
+      the `commit` phase — they are *different binding sets* and can be owned by
+      different contexts/plugins. That is intended (preview and the committed
+      action are separate concerns), but it means a plugin wanting the preview
+      and the commit to stay in lockstep must bind *both* phases itself.
 - **`dispatchGesture(gestureName, suppliedDeps, event)`** — module-level entry
   point mirroring `dispatchPointerAction`. Matches actions whose
   `gestureBinding` names `gestureName`, `resolve(…, {kind:'gesture'})`,
