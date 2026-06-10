@@ -248,18 +248,20 @@ export const createBlockGestureController = ({
         }
         return {handled: false, prevent: true}
       case 'commit': {
-        const dispatched = dispatch(verdict.gesture, verdict.deps, ctx.event, verdict.phase)
+        dispatch(verdict.gesture, verdict.deps, ctx.event, verdict.phase)
         cancelled.add(recognizer.id)
         if (activeId === recognizer.id) activeId = null
         // The recognizer DID commit, so it's out and no other recognizer should
         // reinterpret the same motion — `handled` stops the loop regardless.
-        // But only suppress the native default (the trailing synthesized click,
-        // native scroll, …) when an action actually handled the gesture: an
-        // unhandled commit — no action bound to this gesture, or every
-        // candidate's `canDispatch` declined — must leave the event untouched,
-        // matching the pointer/swipe path. Otherwise a recognizer-without-binding
-        // would silently eat clicks.
-        return {handled: true, prevent: dispatched}
+        // Whether the native default is suppressed (and the trailing synthesized
+        // click swallowed) is the DISPATCHER's call, not ours: `dispatch` runs
+        // applyGestureEventOptions, which preventDefaults `ctx.event` per the
+        // winning action's context event-options. We mirror that decision via
+        // `defaultPrevented` instead of forcing it on `handled`, so the same
+        // event-options contract keyboard/pointer honor applies here: an action
+        // whose context opts out (`preventDefault: false`), and an unhandled
+        // commit (nothing prevented it), both leave the native click/focus alone.
+        return {handled: true, prevent: ctx.event.defaultPrevented}
       }
       case 'cancel':
         cancelled.add(recognizer.id)

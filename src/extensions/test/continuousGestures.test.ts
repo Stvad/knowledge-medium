@@ -13,18 +13,28 @@ import type { BaseShortcutDependencies } from '@/shortcuts/types.js'
 const element = {} as unknown as HTMLElement
 const deps = {marker: 'x'} as unknown as BaseShortcutDependencies
 
-// Typed so `dispatch.mock.calls[i]` is indexable (a bare `vi.fn(() => true)`
-// infers a zero-length args tuple).
-const makeDispatch = () => vi.fn<(...args: unknown[]) => boolean>(() => true)
-
-const sample = (pointerId: number, x: number, y: number): PointerSample => ({
-  pointerId,
-  clientX: x,
-  clientY: y,
-  pointerType: 'touch',
-  target: null,
-  event: {preventDefault: vi.fn()} as unknown as PointerEvent,
+// A dispatch that HANDLES the gesture and (like the real dispatcher's
+// applyGestureEventOptions, which defaults to preventDefault: true) cancels the
+// event's default. The controller reads `event.defaultPrevented` to decide
+// whether to suppress, so a faithful mock must mutate it. Typed so
+// `dispatch.mock.calls[i]` is indexable.
+const makeDispatch = () => vi.fn<(...args: unknown[]) => boolean>((...args) => {
+  ;(args[2] as Event | undefined)?.preventDefault()
+  return true
 })
+
+const sample = (pointerId: number, x: number, y: number): PointerSample => {
+  // A minimal cancelable-event stub whose `defaultPrevented` flips on
+  // preventDefault, so tests can model both the default (suppressing) dispatcher
+  // and an opt-out context that leaves the native default intact.
+  let defaultPrevented = false
+  const event = {
+    preventDefault: () => { defaultPrevented = true },
+    stopPropagation: () => {},
+    get defaultPrevented() { return defaultPrevented },
+  } as unknown as PointerEvent
+  return {pointerId, clientX: x, clientY: y, pointerType: 'touch', target: null, event}
+}
 
 describe('createBlockGestureController', () => {
   it('dispatches a recognized gesture (name + deps) at commit, and asks to preventDefault', () => {
@@ -61,6 +71,25 @@ describe('createBlockGestureController', () => {
     expect(dispatch).toHaveBeenCalledTimes(1) // committed → attempted dispatch
     expect(prevented).toBe(false) // unhandled → leave the native default alone
     expect(second).not.toHaveBeenCalled() // committed → still wins the event
+  })
+
+  it('leaves the native default alone when a handled commit opted out of preventDefault', () => {
+    // dispatch HANDLES the gesture but does not cancel the event — mirrors
+    // applyGestureEventOptions for a context with defaultEventOptions:
+    // {preventDefault: false}. The controller must not force preventDefault /
+    // click-suppression on `handled` alone.
+    const dispatch = vi.fn<(...args: unknown[]) => boolean>(() => true)
+    const recognizer: GestureRecognizer = {
+      id: 'swipe',
+      onPointerUp: () => ({status: 'commit', gesture: 'swipe-right', deps}),
+    }
+    const controller = createBlockGestureController({recognizers: [recognizer], element, dispatch})
+
+    controller.handlePointerDown(sample(1, 0, 0))
+    const prevented = controller.handlePointerUp(sample(1, 60, 0))
+
+    expect(dispatch).toHaveBeenCalledTimes(1) // handled
+    expect(prevented).toBe(false) // opted out → native click/focus preserved
   })
 
   it("exposes the lifted pointer's final position in session.pointers on pointerup", () => {
