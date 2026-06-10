@@ -166,7 +166,7 @@ const ensureStateChild = async (
       orderKey: 'a0',
       content: displayContent,
       properties: initialProperties,
-    })
+    }, {systemMint: true})
     if (type) {
       await repo.addTypeInTx(tx, childId, type.id, {}, typeSnapshot)
     }
@@ -286,7 +286,7 @@ export const getUserBlock = memoize(
         parentId: null,
         orderKey: 'a0',
         content: displayName,
-      })
+      }, {systemMint: true})
       await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: aliases}, typeSnapshot)
       await repo.addTypeInTx(tx, id, USER_TYPE, {[userIdProp.name]: user.id}, typeSnapshot)
     }, {scope: ChangeScope.UserPrefs})

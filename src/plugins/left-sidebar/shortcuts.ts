@@ -50,6 +50,7 @@ export const getOrCreateShortcutsBlock = memoize(
         parentId: userBlock.id,
         orderKey: keyAtEnd(siblings.at(-1)?.orderKey ?? null),
         freshContent: SHORTCUTS_BLOCK_CONTENT,
+        systemMint: true,
       })
 
       // Only seed default children on first creation / restore of the
@@ -63,6 +64,7 @@ export const getOrCreateShortcutsBlock = memoize(
         parentId: shortcutsId,
         orderKey: keyAtEnd(),
         freshContent: JOURNAL_SHORTCUT_CONTENT,
+        systemMint: true,
         onInsertedOrRestored: async (tx, id) => {
           await tx.update(id, {
             references: [{id: journal.id, alias: JOURNAL_SHORTCUT_ALIAS}],
