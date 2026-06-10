@@ -22,8 +22,8 @@
  * this facet, contribute raw `blockContentSurfacePropsFacet` handlers, and reach
  * the same trigger via `dispatchGesture` directly (the escape hatch).
  */
-import { useEffect, useMemo } from 'react'
-import type { RefObject } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { RefCallback, RefObject } from 'react'
 import { defineFacet, isFunction } from '@/extensions/facet.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import type { BlockResolveContext } from '@/extensions/blockInteraction.js'
@@ -204,7 +204,14 @@ export const createBlockGestureController = ({
   })
 
   const sessionWith = (changed: GesturePointer): GestureSession => ({
-    pointers: [...pointers.values()],
+    // The changed pointer's map entry can hold stale coordinates relative to
+    // this event: `handlePointerUp` runs BEFORE the map is updated (so the
+    // ending pointer is still present, as the API promises) and `handlePointerCancel`
+    // reads before deleting. Override that entry with `changed` so a recognizer
+    // reading `session.pointers` sees the ending pointer's FINAL position, not
+    // its previous pointerdown/last-move one. For down/move the map already holds
+    // `changed`, so this is a no-op there.
+    pointers: [...pointers.values()].map(p => (p.pointerId === changed.pointerId ? changed : p)),
     changed,
   })
 
@@ -335,11 +342,21 @@ const toSample = (event: PointerEvent): PointerSample => ({
  * as the `touch-action` fallback) and applies the recognizers' union
  * `touch-action`. A no-op when no recognizer is contributed, so every block that
  * has none pays nothing.
+ *
+ * Returns a CALLBACK REF the caller must attach to the content node (instead of
+ * a plain ref object). Tracking the live node in state — rather than reading a
+ * stable `RefObject.current` — is what lets the listener effect re-run when the
+ * content node is REMOUNTED (e.g. `ContentSlot` swaps after a renderer / surface
+ * change) while `recognizers` is unchanged. A ref object's identity never
+ * changes, so the effect wouldn't re-run and the listeners would stay bound to
+ * the now-detached old node, silently killing gestures on the new surface. The
+ * caller's own `elementRef` is still written through, so other consumers of that
+ * ref (the shell decorator stack, …) keep seeing the node.
  */
 export const useContinuousGestures = (
   context: BlockResolveContext,
   elementRef: RefObject<HTMLElement | null>,
-): void => {
+): RefCallback<HTMLElement> => {
   const runtime = useAppRuntime()
   const resolveRecognizers = runtime.read(continuousGestureRecognizersFacet)
   const recognizers = useMemo(
@@ -347,8 +364,16 @@ export const useContinuousGestures = (
     [resolveRecognizers, context],
   )
 
+  const [element, setElement] = useState<HTMLElement | null>(null)
+  const setRef = useCallback(
+    (node: HTMLElement | null): void => {
+      elementRef.current = node
+      setElement(node)
+    },
+    [elementRef],
+  )
+
   useEffect(() => {
-    const element = elementRef.current
     if (!element || recognizers.length === 0) return
 
     const controller = createBlockGestureController({recognizers, element})
@@ -384,7 +409,9 @@ export const useContinuousGestures = (
       element.removeEventListener('pointercancel', onCancel)
       element.style.touchAction = previousTouchAction
     }
-  }, [recognizers, elementRef])
+  }, [recognizers, element])
+
+  return setRef
 }
 
 // Re-exported so callers building commit verdicts get the trigger type without

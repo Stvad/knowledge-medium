@@ -63,6 +63,27 @@ describe('createBlockGestureController', () => {
     expect(second).not.toHaveBeenCalled() // committed → still wins the event
   })
 
+  it("exposes the lifted pointer's final position in session.pointers on pointerup", () => {
+    // The recognizer reads session.pointers (not just `changed`) on up; the map
+    // entry must reflect the up event's coordinates, not the stale pointerdown
+    // ones, or a commit-on-up gesture classifies with the wrong final position.
+    const dispatch = makeDispatch()
+    let finalX: number | undefined
+    const recognizer: GestureRecognizer = {
+      id: 'swipe',
+      onPointerUp: (session: GestureSession) => {
+        finalX = session.pointers.find(p => p.pointerId === 1)?.x
+        return GESTURE_IDLE
+      },
+    }
+    const controller = createBlockGestureController({recognizers: [recognizer], element, dispatch})
+
+    controller.handlePointerDown(sample(1, 0, 0))
+    controller.handlePointerUp(sample(1, 80, 0))
+
+    expect(finalX).toBe(80)
+  })
+
   it('evicts rivals when one recognizer goes active: their onPointerCancel fires and they stop receiving events', () => {
     const dispatch = makeDispatch()
     const winnerMove = vi.fn(() => GESTURE_ACTIVE)

@@ -401,7 +401,7 @@ export function DefaultBlockRenderer(
   // Pointer Event listeners + touch-action to the content surface and dispatch
   // recognized gestures through the action system. A no-op until a recognizer
   // is contributed, so blocks with none pay nothing.
-  useContinuousGestures(resolveContext, contentContainerRef)
+  const contentGestureRef = useContinuousGestures(resolveContext, contentContainerRef)
 
   // Memoize on resolveContext so contributions that synthesize a fresh
   // component each call (e.g. plain-outliner's edit-mode dispatcher) don't
@@ -499,7 +499,7 @@ export function DefaultBlockRenderer(
           {...contentSurfaceProps}
           data-block-visibility-target="true"
           className={`block-content${topLevelClass}${contentSurfaceProps.className ? ` ${contentSurfaceProps.className}` : ''}`}
-          ref={contentContainerRef}
+          ref={contentGestureRef}
         >
           <ErrorBoundary FallbackComponent={FallbackComponent}>
             {/* ContentRenderer comes from the registry-driven
@@ -511,7 +511,7 @@ export function DefaultBlockRenderer(
         </div>
       )
     }
-  }, [block, ContentRenderer, contentSurfaceProps, isTopLevel])
+  }, [block, ContentRenderer, contentSurfaceProps, isTopLevel, contentGestureRef])
 
   const PropertiesSlot = useMemo<ComponentType | null>(() => {
     if (!showProperties) return null
