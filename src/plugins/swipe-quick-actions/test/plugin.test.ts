@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { panelMountsFacet } from '@/extensions/core.js'
-import { blockContentSurfacePropsFacet } from '@/extensions/blockInteraction.js'
+import { actionsFacet, panelMountsFacet } from '@/extensions/core.js'
+import { continuousGestureRecognizersFacet } from '@/extensions/continuousGestures.js'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
 import {
   SwipeActionMenu,
@@ -9,12 +9,19 @@ import {
 } from '../index.ts'
 
 describe('swipeQuickActionsPlugin', () => {
-  it('contributes the gesture surface, menu mount, and action items', () => {
+  it('contributes the gesture recognizer, swipe actions, menu mount, and action items', () => {
     const runtime = resolveFacetRuntimeSync(swipeQuickActionsPlugin)
     const panelMounts = runtime.read(panelMountsFacet)
     const items = runtime.read(quickActionItemsFacet)
+    const actionIds = runtime.read(actionsFacet).map(a => a.id)
 
-    expect(runtime.contributions(blockContentSurfacePropsFacet)).toHaveLength(1)
+    // Recognition rides the continuous-gesture loop now (not a raw content surface).
+    expect(runtime.contributions(continuousGestureRecognizersFacet)).toHaveLength(1)
+    // Swipe-left's behavior is two gesture-bound actions; swipe-right's is the
+    // todo cycle action, contributed by that plugin (not here).
+    expect(actionIds).toEqual(
+      expect.arrayContaining(['swipe-quick-actions.reveal', 'swipe-quick-actions.open']),
+    )
     expect(panelMounts).toEqual([
       {
         id: 'swipe-quick-actions.panel-menu',

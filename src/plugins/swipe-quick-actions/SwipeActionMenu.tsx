@@ -28,7 +28,7 @@ import {
   getSwipeActionAnchorRect,
   type AnchorRect,
 } from './anchor.ts'
-import { SWIPE_TRIGGER_PX } from './swipeGesture.ts'
+import { SWIPE_TRIGGER_PX } from './swipeRecognizer.ts'
 
 /** Track the swiped block content's bounding rect so the floating bar
  *  follows the visible text row, not the full block shell with open
