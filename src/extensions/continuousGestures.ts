@@ -22,7 +22,7 @@
  * this facet, contribute raw `blockContentSurfacePropsFacet` handlers, and reach
  * the same trigger via `dispatchGesture` directly (the escape hatch).
  */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { RefCallback, RefObject } from 'react'
 import { defineFacet, isFunction } from '@/extensions/facet.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
@@ -336,6 +336,36 @@ const toSample = (event: PointerEvent): PointerSample => ({
   event,
 })
 
+/** How long a click swallow stays armed waiting for the synthesized click. The
+ *  click follows `pointerup` within a frame; this generous window only matters
+ *  as a self-disarm so a gesture that produced NO click can't eat a later real
+ *  one. */
+const SUPPRESS_CLICK_WINDOW_MS = 400
+
+/**
+ * Swallow the next `click` on `element` (capture phase, one-shot). Under Pointer
+ * Events, canceling `pointerup` does NOT suppress the compatibility `click` —
+ * only canceling `pointerdown` suppresses compat mouse events, and we can't do
+ * that (a down can't know it will become a committed gesture, and it would also
+ * kill focus/selection). So after a committed up-gesture we explicitly eat the
+ * trailing click here, or it lands on the block / an interactive descendant
+ * after the gesture action already ran. Capture + `stopPropagation` keeps it from
+ * descendants; `once` disarms on the first click and the timeout disarms if none
+ * is synthesized (desktop, or a browser that already suppressed it).
+ */
+export const suppressNextClick = (element: HTMLElement): void => {
+  const onClick = (event: Event): void => {
+    event.preventDefault()
+    event.stopPropagation()
+  }
+  // `once` disarms on the first click; the timeout disarms if no click is
+  // synthesized (desktop, or a browser that already suppressed it) so a later
+  // real click isn't swallowed. If the click already fired, removeEventListener
+  // is a harmless no-op.
+  element.addEventListener('click', onClick, {capture: true, once: true})
+  setTimeout(() => element.removeEventListener('click', onClick, true), SUPPRESS_CLICK_WINDOW_MS)
+}
+
 /**
  * Wire the per-block recognition loop onto a content-surface element. Attaches
  * native Pointer Event listeners (move is non-passive so `preventDefault` works
@@ -344,14 +374,14 @@ const toSample = (event: PointerEvent): PointerSample => ({
  * has none pays nothing.
  *
  * Returns a CALLBACK REF the caller must attach to the content node (instead of
- * a plain ref object). Tracking the live node in state — rather than reading a
- * stable `RefObject.current` — is what lets the listener effect re-run when the
- * content node is REMOUNTED (e.g. `ContentSlot` swaps after a renderer / surface
- * change) while `recognizers` is unchanged. A ref object's identity never
- * changes, so the effect wouldn't re-run and the listeners would stay bound to
- * the now-detached old node, silently killing gestures on the new surface. The
- * caller's own `elementRef` is still written through, so other consumers of that
- * ref (the shell decorator stack, …) keep seeing the node.
+ * a plain ref object). The callback bumps a version counter the listener effect
+ * depends on, so the effect re-runs when the content node is REMOUNTED (e.g.
+ * `ContentSlot` swaps after a renderer / surface change) while `recognizers` is
+ * unchanged. A plain ref object's identity never changes, so the effect wouldn't
+ * re-run and the listeners would stay bound to the now-detached old node,
+ * silently killing gestures on the new surface. The caller's own `elementRef` is
+ * still written through, so other consumers of that ref (the shell decorator
+ * stack, …) keep seeing the node.
  */
 export const useContinuousGestures = (
   context: BlockResolveContext,
@@ -364,16 +394,24 @@ export const useContinuousGestures = (
     [resolveRecognizers, context],
   )
 
-  const [element, setElement] = useState<HTMLElement | null>(null)
+  // The live content node, kept in a ref (not state) so the imperative
+  // `touch-action` / listener mutations below aren't flagged as state writes —
+  // and a version counter, bumped on each attach/detach, that the effect depends
+  // on so it re-runs when the node identity changes (the remount case). Reading
+  // a stable RefObject alone wouldn't re-trigger the effect.
+  const nodeRef = useRef<HTMLElement | null>(null)
+  const [nodeVersion, setNodeVersion] = useState(0)
   const setRef = useCallback(
     (node: HTMLElement | null): void => {
       elementRef.current = node
-      setElement(node)
+      nodeRef.current = node
+      setNodeVersion(v => v + 1)
     },
     [elementRef],
   )
 
   useEffect(() => {
+    const element = nodeRef.current
     if (!element || recognizers.length === 0) return
 
     const controller = createBlockGestureController({recognizers, element})
@@ -391,7 +429,12 @@ export const useContinuousGestures = (
       if (controller.handlePointerMove(toSample(event))) event.preventDefault()
     }
     const onUp = (event: PointerEvent): void => {
-      if (controller.handlePointerUp(toSample(event))) event.preventDefault()
+      if (controller.handlePointerUp(toSample(event))) {
+        event.preventDefault()
+        // pointerup cancelation can't stop the synthesized click (PE spec) — arm
+        // a one-shot swallow so a handled up-gesture doesn't also fire a click.
+        suppressNextClick(element)
+      }
     }
     const onCancel = (event: PointerEvent): void => {
       controller.handlePointerCancel(toSample(event))
@@ -409,7 +452,10 @@ export const useContinuousGestures = (
       element.removeEventListener('pointercancel', onCancel)
       element.style.touchAction = previousTouchAction
     }
-  }, [recognizers, element])
+    // nodeVersion is the re-run trigger: it changes whenever the attached node
+    // does, so the effect tears down the old node's listeners and rebinds to the
+    // new one. The effect reads nodeRef.current directly.
+  }, [recognizers, nodeVersion])
 
   return setRef
 }

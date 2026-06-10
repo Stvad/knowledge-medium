@@ -8,6 +8,7 @@ import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import {
   continuousGestureRecognizersFacet,
   useContinuousGestures,
+  suppressNextClick,
   GESTURE_IDLE,
   type GestureRecognizer,
 } from '@/extensions/continuousGestures'
@@ -64,5 +65,31 @@ describe('useContinuousGestures', () => {
 
     firePointerDown(getByTestId('b'))
     expect(onPointerDown).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('suppressNextClick', () => {
+  it('swallows the next click (capture + stopPropagation) then disarms', () => {
+    const el = document.createElement('div')
+    const child = document.createElement('button')
+    el.appendChild(child)
+    document.body.appendChild(el)
+    const childClick = vi.fn()
+    child.addEventListener('click', childClick)
+
+    suppressNextClick(el)
+
+    const first = new MouseEvent('click', {bubbles: true, cancelable: true})
+    child.dispatchEvent(first)
+    expect(first.defaultPrevented).toBe(true) // synthesized click eaten
+    expect(childClick).not.toHaveBeenCalled() // stopPropagation kept it off the child
+
+    // One-shot: a later, legitimate click is untouched.
+    const second = new MouseEvent('click', {bubbles: true, cancelable: true})
+    child.dispatchEvent(second)
+    expect(second.defaultPrevented).toBe(false)
+    expect(childClick).toHaveBeenCalledTimes(1)
+
+    el.remove()
   })
 })
