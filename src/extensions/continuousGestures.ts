@@ -14,8 +14,11 @@
  *  - the per-block pointer SESSION (which pointers are down, where), built from
  *    Pointer Events (mouse/touch/pen unified; `pointerId` pairs an event to its
  *    pointer the way the old code tracked `Touch.identifier` by hand);
- *  - ARBITRATION — one recognizer at a time owns a block; when one goes
- *    `active` the others are cancelled (this absorbs `blockGestureConflicts`);
+ *  - ARBITRATION — one recognizer at a time owns a block (LAST-ACTIVE-WINS):
+ *    when one goes `active` the others are evicted (their in-flight state
+ *    dropped) but stay ELIGIBLE, so a later gesture can take the block over once
+ *    the owner releases — the 1-finger swipe yields on a 2nd finger and the
+ *    2-finger scrub then claims. This absorbs `blockGestureConflicts`;
  *  - the non-passive listener + `touch-action` SEAM for scroll suppression.
  *
  * Recognition that the model can't express stays possible: a plugin can ignore
@@ -206,9 +209,12 @@ export const createBlockGestureController = ({
   const pointers = new Map<number, GesturePointer>()
   // The recognizer that claimed the block (went active); null before any does.
   let activeId: string | null = null
-  // Recognizers out for the rest of this session — evicted by an active rival,
-  // self-cancelled, or already committed.
-  const cancelled = new Set<string>()
+  // Recognizers OUT for the rest of this session: committed, or self-cancelled
+  // (a `cancel` verdict). Eviction by a rival does NOT add here — that drops the
+  // evicted recognizer's in-flight state but leaves it eligible, so a later
+  // gesture can take the block over (last-active-wins). The active recognizer
+  // still shuts rivals out meanwhile via `isEligible`'s `activeId` gate.
+  const out = new Set<string>()
   // The live-preview resolution for the recognizer currently streaming
   // `progress`. Set once on its first tick and held for the rest of the gesture:
   // `dispatch` is the resolved winner's handle, or null when the gesture's
@@ -230,7 +236,7 @@ export const createBlockGestureController = ({
     // toolbar/affordance animates home rather than freezing mid-reveal.
     settleProgress()
     activeId = null
-    cancelled.clear()
+    out.clear()
   }
 
   const toPointer = (sample: PointerSample): GesturePointer => ({
@@ -254,16 +260,21 @@ export const createBlockGestureController = ({
   })
 
   const isEligible = (recognizer: GestureRecognizer): boolean =>
-    !cancelled.has(recognizer.id) && (activeId === null || activeId === recognizer.id)
+    !out.has(recognizer.id) && (activeId === null || activeId === recognizer.id)
 
-  const cancelOthers = (
+  // Evict every OTHER recognizer for the claimer: fire their onPointerCancel so
+  // they drop in-flight state (a half-built swipe `start`, a previewing menu),
+  // but do NOT bar them — they stay eligible so a later gesture can take the
+  // block over once the claimer releases (last-active-wins). Only a `commit` or
+  // `cancel` verdict adds to `out`; skip those here so a recognizer that's
+  // already done isn't cancelled twice.
+  const evictRivals = (
     keepId: string,
     session: GestureSession,
     ctx: GestureEventContext,
   ): void => {
     for (const recognizer of recognizers) {
-      if (recognizer.id === keepId || cancelled.has(recognizer.id)) continue
-      cancelled.add(recognizer.id)
+      if (recognizer.id === keepId || out.has(recognizer.id)) continue
       recognizer.onPointerCancel?.(session, ctx)
     }
   }
@@ -278,7 +289,7 @@ export const createBlockGestureController = ({
   ): void => {
     if (activeId === recognizer.id) return
     activeId = recognizer.id
-    cancelOthers(recognizer.id, session, ctx)
+    evictRivals(recognizer.id, session, ctx)
   }
 
   // Apply one recognizer's verdict. Returns whether the event was HANDLED (a
@@ -315,7 +326,7 @@ export const createBlockGestureController = ({
         // settling it (no animate-home).
         if (progress?.recognizerId === recognizer.id) progress = null
         dispatch(verdict.gesture, verdict.deps, ctx.event)
-        cancelled.add(recognizer.id)
+        out.add(recognizer.id)
         if (activeId === recognizer.id) activeId = null
         // The recognizer DID commit, so it's out and no other recognizer should
         // reinterpret the same motion — `handled` stops the loop regardless.
@@ -331,7 +342,7 @@ export const createBlockGestureController = ({
       }
       case 'cancel':
         if (progress?.recognizerId === recognizer.id) settleProgress()
-        cancelled.add(recognizer.id)
+        out.add(recognizer.id)
         if (activeId === recognizer.id) activeId = null
         return {handled: false, prevent: false}
     }
@@ -384,7 +395,7 @@ export const createBlockGestureController = ({
       const session = sessionWith(changed)
       const ctx: GestureEventContext = {element, event: sample.event}
       for (const recognizer of recognizers) {
-        if (cancelled.has(recognizer.id)) continue
+        if (out.has(recognizer.id)) continue
         recognizer.onPointerCancel?.(session, ctx)
       }
       pointers.delete(sample.pointerId)

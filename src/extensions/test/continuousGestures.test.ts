@@ -3,6 +3,7 @@ import {
   createBlockGestureController,
   unionTouchAction,
   GESTURE_ACTIVE,
+  GESTURE_CANCEL,
   GESTURE_IDLE,
   type GestureRecognizer,
   type GestureSession,
@@ -264,10 +265,39 @@ describe('createBlockGestureController', () => {
     expect(prevented).toBe(true) // active → preventDefault the move
     expect(loserCancel).toHaveBeenCalledTimes(1) // evicted on the spot
 
-    // The loser is out for the rest of the session — a later move skips it.
+    // While the winner stays active it owns the block, so the loser doesn't run
+    // (the `activeId` gate, not a permanent bar — see the takeover test below).
     controller.handlePointerMove(sample(1, 40, 0))
     expect(loserMove).not.toHaveBeenCalled()
     expect(loserCancel).toHaveBeenCalledTimes(1)
+  })
+
+  it('lets an evicted rival take the block over once the active recognizer releases (last-active-wins)', () => {
+    // The swipe↔scrub handoff: a recognizer evicted when another went active is
+    // NOT barred for the session — once the owner yields (a `cancel` verdict),
+    // the evicted rival is eligible again and can claim. (The old loop barred it,
+    // which left a 2-finger scrub dead after the 1-finger swipe had previewed.)
+    const dispatch = makeDispatch()
+    let swipeYields = false
+    const swipeMove = vi.fn(() => (swipeYields ? GESTURE_CANCEL : GESTURE_ACTIVE))
+    const scrubMove = vi.fn(() => GESTURE_ACTIVE)
+    const scrubCancel = vi.fn()
+    const swipe: GestureRecognizer = {id: 'swipe', onPointerMove: swipeMove}
+    const scrub: GestureRecognizer = {id: 'scrub', onPointerMove: scrubMove, onPointerCancel: scrubCancel}
+    const controller = createBlockGestureController({recognizers: [swipe, scrub], element, dispatch})
+
+    controller.handlePointerDown(sample(1, 0, 0))
+    controller.handlePointerMove(sample(1, 20, 0)) // swipe goes active, evicts scrub
+    expect(scrubCancel).toHaveBeenCalledTimes(1)
+
+    swipeYields = true
+    controller.handlePointerMove(sample(1, 30, 0)) // swipe yields → activeId frees
+    // Same event: scrub is eligible again (activeId null) and claims.
+    expect(scrubMove).toHaveBeenCalledTimes(1)
+    // A further move stays with scrub; the yielded swipe is out for the session.
+    expect(controller.handlePointerMove(sample(1, 40, 0))).toBe(true)
+    expect(scrubMove).toHaveBeenCalledTimes(2)
+    expect(swipeMove).toHaveBeenCalledTimes(2)
   })
 
   it('resets arbitration state once all pointers lift, so the next gesture starts fresh', () => {
