@@ -65,6 +65,34 @@ describe('resolve precedence', () => {
     expect(ordered.map(a => a.context)).toEqual(['report', ActionContextTypes.NORMAL_MODE])
   })
 
+  it('a non-active high-priority context outranks an active default on a gesture', () => {
+    // block-pointer is never "active" (it carries supplied deps, not installed
+    // state), so for a gesture trigger it isn't in the active map at all and the
+    // recency tiebreak alone would rank the focused normal-mode candidate first.
+    // Priority `high` must still order block-pointer ahead — this is what lets a
+    // right-swipe close an open menu (block-pointer) win over the todo cycle
+    // (normal-mode) bound to the same `swipe-right`.
+    const ctx = ctxOf(
+      [ActionContextTypes.NORMAL_MODE],
+      [
+        config(ActionContextTypes.BLOCK_POINTER, {priority: 'high'}),
+        config(ActionContextTypes.NORMAL_MODE),
+      ],
+    )
+    const ordered = resolve(
+      [
+        action('cycle', ActionContextTypes.NORMAL_MODE),
+        action('close', ActionContextTypes.BLOCK_POINTER),
+      ],
+      ctx,
+      {kind: 'gesture'},
+    )
+    expect(ordered.map(a => a.context)).toEqual([
+      ActionContextTypes.BLOCK_POINTER,
+      ActionContextTypes.NORMAL_MODE,
+    ])
+  })
+
   it('equal priority falls back to the most-recently-activated context', () => {
     const ctx = ctxOf(
       [ActionContextTypes.NORMAL_MODE, 'other'],

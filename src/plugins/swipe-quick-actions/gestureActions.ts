@@ -61,18 +61,20 @@ export const swipeLeftOpenAction: ActionConfig<typeof ActionContextTypes.BLOCK_P
 }
 
 /**
- * `swipe-right` COMMIT (fallback): close an open quick-action menu. Restores the
- * fallback the bespoke `swipeGesture.ts` had — a right-swipe on content closed
- * the open menu when nothing else claimed `swipe-right`. The todo plugin also
- * binds `swipe-right` (cycle a todo); this is a SEPARATE candidate in the same
- * run-until-handled gesture, so ordering matters: it's DECLINABLE. The CLOSE
- * event is `cancelable` and the menu calls `preventDefault` only when a menu for
- * this block was actually open, so `dispatchEvent` returns false in that case
- * (a menu closed → this action handled it, return void) and true otherwise (no
- * menu was open → return false to DECLINE, so the loop falls through to the todo
- * cycle action). Net: a right-swipe cycles a todo when no menu is open, and
- * closes the menu when one is — and disabling Todo still leaves the close
- * affordance intact.
+ * `swipe-right` COMMIT: close an open quick-action menu. The todo plugin also
+ * binds `swipe-right` (cycle a todo); both are candidates in the same
+ * run-until-handled gesture. Two mechanisms make "close wins when a menu is
+ * open, else the todo cycles" hold regardless of which plugins are enabled:
+ *  - ORDER — this action's `block-pointer` context is priority `high`, so it's
+ *    resolved BEFORE the todo cycle's `normal-mode` candidate (which would
+ *    otherwise win the recency tiebreak, since block-pointer is never "active").
+ *  - DECLINE — the CLOSE event is `cancelable` and the menu calls
+ *    `preventDefault` only when a menu for this block was actually open, so
+ *    `dispatchEvent` returns false (a menu closed → handled, return void) when
+ *    one was and true otherwise (none open → return false to DECLINE, letting
+ *    the loop fall through to the todo cycle).
+ * Net: a right-swipe closes the menu when one is open and cycles a todo when not
+ * — and disabling Todo still leaves the close affordance intact.
  */
 export const swipeRightCloseAction: ActionConfig<typeof ActionContextTypes.BLOCK_POINTER> = {
   id: 'swipe-quick-actions.close',
