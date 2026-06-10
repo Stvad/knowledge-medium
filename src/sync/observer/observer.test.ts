@@ -170,7 +170,8 @@ describe('blocksSyncedObserver — server overrides an own system default (disk 
       content: 'shadow default', updatedAt: 9000, updatedBy: 'user-1', workspaceId: 'ws-heal',
     })
     await seedLocalBlock(preProvenanceShadow)
-    const { observer } = start({ getMaterializability: constMat('copy') })
+    const { observer, cache } = start({ getMaterializability: constMat('copy') })
+    cache.setSnapshot(preProvenanceShadow)
 
     await put(data({ content: 'real synced config', updatedAt: 3000, workspaceId: 'ws-heal' }))
     await observer.flush() // strict queue drain
@@ -178,9 +179,13 @@ describe('blocksSyncedObserver — server overrides an own system default (disk 
     // Strict mode protects it (the re-permanent risk healing mode exists to fix).
     expect(await blocks()).toEqual([{ id: 'b1', content: 'shadow default' }])
 
-    // Healing rescan re-reads blocks_synced directly and lets the server win.
+    // Healing rescan re-reads blocks_synced directly and lets the server win ON
+    // DISK. The cache is NOT force-healed (healing mode passes forceHeal=false),
+    // so it stays masked this session and rehydrates from disk on reload —
+    // avoiding a force-clobber of any concurrently-draining real edit.
     await observer.healWorkspace('ws-heal')
     expect(await blocks()).toEqual([{ id: 'b1', content: 'real synced config' }])
+    expect(cache.getSnapshot('b1')).toMatchObject({ content: 'shadow default' })
   })
 })
 

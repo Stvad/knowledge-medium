@@ -106,6 +106,27 @@ describe('applySyncInvalidation', () => {
     expect(handle.calls).toHaveLength(1)
   })
 
+  it('does NOT force-heal the cache when forceHeal is false (one-time healing rescan)', () => {
+    // The healing rescan heals disk but passes forceHeal=false so the cache
+    // stays LWW-masked — a real edit that just drained but not echoed must not
+    // be force-clobbered in the live cache during the rescan window. The older
+    // server `after` is rejected by LWW even though it matches `before`.
+    const cache = new BlockCache()
+    const staleDefault = block({ content: 'default', updatedAt: 9000 })
+    cache.applyIfNewer(staleDefault, 'sync')
+    const handle = target()
+
+    const serverValue = block({ content: 'real synced config', updatedAt: 3000 })
+    const out = applySyncInvalidation(
+      cache, handle, snapshots({ b1: { before: staleDefault, after: serverValue } }), [], false,
+    )
+
+    // Cache keeps the default (heals on reload from disk); nothing dispatched.
+    expect(cache.getSnapshot('b1')).toMatchObject({ content: 'default' })
+    expect(out).toBeNull()
+    expect(handle.calls).toHaveLength(0)
+  })
+
   it('evicts on removal and invalidates the row + its prior parent', () => {
     const cache = new BlockCache()
     cache.applyIfNewer(block({ id: 'child', parentId: 'parent-1' }), 'sync')

@@ -167,9 +167,14 @@ export const startBlocksSyncedObserver = (
   }
 
   /** Post-materialization side effects shared by both drain paths: invalidate
-   *  cache + handles (one LWW gate), then run cycle detection. */
-  const applyOutcome = async (outcome: MaterializeOutcome): Promise<void> => {
-    applySyncInvalidation(cache, handleStore, outcome.snapshots, rules())
+   *  cache + handles, then run cycle detection. Only the steady-state strict
+   *  gate force-heals the live cache; the one-time healing rescan heals disk
+   *  and lets the cache rehydrate on reload (see `applySyncInvalidation`). */
+  const applyOutcome = async (
+    outcome: MaterializeOutcome,
+    gateMode: ReconcileMode,
+  ): Promise<void> => {
+    applySyncInvalidation(cache, handleStore, outcome.snapshots, rules(), gateMode === 'strict')
     await runCycleScan(outcome.snapshots)
   }
 
@@ -183,7 +188,7 @@ export const startBlocksSyncedObserver = (
     gateMode: ReconcileMode = 'strict',
   ): Promise<void> => {
     const outcome = await materializeStagingRows(db, { upserted, removed }, deps, { gateMode })
-    await applyOutcome(outcome)
+    await applyOutcome(outcome, gateMode)
   }
 
   const drainQueueOnce = async (): Promise<void> => {

@@ -37,7 +37,7 @@ export interface SyncInvalidationTarget {
 }
 
 /** The cache surface the observer writes through. */
-export type SyncCache = Pick<BlockCache, 'applyFromSync' | 'markMissing'>
+export type SyncCache = Pick<BlockCache, 'applyFromSync' | 'applyIfNewer' | 'markMissing'>
 
 /**
  * Reflect a materialization pass's `snapshots` into the cache and notify
@@ -53,6 +53,13 @@ export const applySyncInvalidation = (
   handleStore: SyncInvalidationTarget,
   snapshots: ReadonlyMap<string, SyncSnapshot>,
   invalidationRules: readonly InvalidationRule[] = [],
+  /** Whether the cache may FORCE-apply an older server row that still matches
+   *  the pre-write disk row (the live shadow heal). True for the steady-state
+   *  strict gate. The one-time HEALING rescan passes false so it heals disk
+   *  only and lets the cache rehydrate on reload (interim LWW masking): a real
+   *  edit that just drained but hasn't echoed could otherwise be force-clobbered
+   *  in the live cache during the rescan window — a transient the LWW gate hides. */
+  forceHeal = true,
 ): ChangeNotification | null => {
   const accepted = new Map<string, ChangeSnapshot>()
   for (const [id, snap] of snapshots) {
@@ -64,7 +71,9 @@ export const applySyncInvalidation = (
     // invalidate its parent-edge deps. Mirrors the fast path's post-commit
     // cache walk (commitPipeline step 6) and the retired tail's delete branch.
     const changed = snap.after
-      ? cache.applyFromSync(snap.after, snap.before)
+      ? (forceHeal
+          ? cache.applyFromSync(snap.after, snap.before)
+          : cache.applyIfNewer(snap.after, 'sync'))
       : cache.markMissing(id)
     if (changed) accepted.set(id, snap)
   }
