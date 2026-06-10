@@ -18,6 +18,7 @@ import { useUser } from '@/components/Login.js'
 import { useRepo } from '@/context/repo.js'
 import {
   ChangeScope,
+  isSystemAuthor,
   type PropertySchema,
   type TypeContribution,
 } from '@/data/api'
@@ -94,11 +95,18 @@ export function useUserPage(userId: string): {name: string; blockId?: string} {
   const workspaceId = requireWorkspaceId(repo, 'useUserPage')
   const id = userPageBlockId(workspaceId, userId)
   const block = repo.block(id)
-  return useHandle(block, {
+  const resolved = useHandle(block, {
     selector: doc => doc
       ? {name: doc.content || userId, blockId: id}
       : {name: userId},
   })
+  // A system author (`system:<userId>`, written to `updated_by` on a pristine
+  // deterministic-id mint) is not a user — render it as "System" with no link
+  // rather than leaking the raw prefixed id into attribution surfaces. (The
+  // useHandle subscription above runs unconditionally per the rules of hooks;
+  // its result is simply unused for system authors.)
+  if (isSystemAuthor(userId)) return {name: 'System'}
+  return resolved
 }
 
 /** Hook to access and modify a UI-state property on the active UI-state

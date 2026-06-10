@@ -5,8 +5,10 @@ describe('system author', () => {
   // The namespace-safety property the whole provenance fix rests on: a
   // real user id (opaque UUID) must never read as a system author, and an
   // engine mint must always read back as one. The exact prefix string is
-  // an implementation detail not worth restating; these two invariants are
-  // the contract the reconcile gate and display surfaces depend on.
+  // an implementation detail not worth restating. `isSystemAuthor` is the
+  // *display*-side check (badge/hide automatic writes — see useUserPage /
+  // UpdateIndicator); the reconcile gate uses the stronger EXACT match
+  // against the current user's system author, not this predicate.
   it('round-trips a minted author and rejects a real user id', () => {
     const userId = '99b1b4e5-6f58-4fd2-9089-dc3b358dd4df'
     expect(isSystemAuthor(systemAuthor(userId))).toBe(true)
