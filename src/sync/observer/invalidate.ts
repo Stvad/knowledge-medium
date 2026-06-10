@@ -10,12 +10,16 @@
  * re-deriving them from a serialized audit row.
  *
  * One gate, not two: `materializeStagingRows` already consulted `ps_crud` /
- * `updated_at` to decide what to write to disk, so `snapshots` only contains
- * rows that won that gate. The remaining cache gate here is the in-memory LWW
- * (`applyIfNewer`), which also dedups fingerprint-identical re-deliveries — a
- * row the cache rejects produced no user-visible change, so (as in the old
- * tail) it contributes no invalidation, avoiding the re-read flicker that
- * waking handles to stale SQL would cause.
+ * `updated_at` / provenance to decide what to write to disk, so `snapshots`
+ * only contains rows that won that gate. The cache write here is
+ * `applyFromSync(after, before)`: it takes the observer's row when the cache
+ * still matches the pre-write disk row (`before`) — healing the
+ * deterministic-id shadow LIVE even when `after` is older-stamped — and
+ * otherwise falls back to the in-memory LWW so a newer local edit is never
+ * clobbered. A row the cache rejects produced no user-visible change, so (as in
+ * the old tail) it contributes no invalidation, avoiding the re-read flicker
+ * that waking handles to stale SQL would cause. Replay deliveries are already
+ * skip-staled at the disk gate, so they never reach this force path.
  */
 
 import type { BlockCache } from '@/data/blockCache.js'
@@ -33,13 +37,13 @@ export interface SyncInvalidationTarget {
 }
 
 /** The cache surface the observer writes through. */
-export type SyncCache = Pick<BlockCache, 'applyIfNewer' | 'markMissing'>
+export type SyncCache = Pick<BlockCache, 'applyFromSync' | 'markMissing'>
 
 /**
  * Reflect a materialization pass's `snapshots` into the cache and notify
- * handles. Updates each row's cache snapshot (`applyIfNewer('sync')` for an
- * apply, `markMissing` for a removal) and, for the rows the cache accepted,
- * emits one `ChangeNotification` (rowIds / parentIds / workspaceIds / plugin).
+ * handles. Updates each row's cache snapshot (`applyFromSync` for an apply,
+ * `markMissing` for a removal) and, for the rows the cache accepted, emits one
+ * `ChangeNotification` (rowIds / parentIds / workspaceIds / plugin).
  *
  * Returns the notification that was dispatched, or null if every row was
  * rejected by the cache gate (nothing to notify).
@@ -60,7 +64,7 @@ export const applySyncInvalidation = (
     // invalidate its parent-edge deps. Mirrors the fast path's post-commit
     // cache walk (commitPipeline step 6) and the retired tail's delete branch.
     const changed = snap.after
-      ? cache.applyIfNewer(snap.after, 'sync')
+      ? cache.applyFromSync(snap.after, snap.before)
       : cache.markMissing(id)
     if (changed) accepted.set(id, snap)
   }

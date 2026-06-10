@@ -47,6 +47,12 @@ export class BlockCacheMetrics {
    *  expected — every cached row re-read during a query resolves to
    *  a reject — and are essentially free (Map.get + comparison). */
   applyIfNewerHydrateRejected = 0
+  /** `applyFromSync` force-applies: a sync row the disk gate accepted that
+   *  replaced a cache snapshot still matching the pre-write disk row, even
+   *  though it was older-stamped (the in-session deterministic-id shadow
+   *  heal). A non-zero count on a fresh client confirms the live heal fired;
+   *  the rest of `applyFromSync` falls through to the `applyIfNewer` buckets. */
+  applyFromSyncForced = 0
   /** Total internal `notify(id)` invocations across all paths
    *  (setSnapshot writes, deleteSnapshot, markMissing, clearMissing).
    *  Counts the call, not the per-listener fan-out. */
@@ -60,6 +66,7 @@ export class BlockCacheMetrics {
     this.applyIfNewerSyncRejected = 0
     this.applyIfNewerHydrateCalls = 0
     this.applyIfNewerHydrateRejected = 0
+    this.applyFromSyncForced = 0
     this.notifies = 0
   }
 
@@ -74,6 +81,7 @@ export class BlockCacheMetrics {
       applyIfNewerSyncRejected: this.applyIfNewerSyncRejected,
       applyIfNewerHydrateCalls: this.applyIfNewerHydrateCalls,
       applyIfNewerHydrateRejected: this.applyIfNewerHydrateRejected,
+      applyFromSyncForced: this.applyFromSyncForced,
       notifies: this.notifies,
     })
   }
@@ -181,6 +189,36 @@ export class BlockCache {
       return false
     }
     return this.setSnapshot(snapshot)
+  }
+
+  /** Heal-aware sync write, used by the Layout B observer for rows the disk
+   *  gate ALREADY applied (server-wins — including the own-system-mint shadow
+   *  heal). Unlike `applyIfNewer`, this can land an OLDER-stamped row, but
+   *  only when the cache still matches the pre-write disk row (`before`) the
+   *  observer based its decision on. In that case the observer's `after` is
+   *  the authoritative successor, so it replaces the stale cache snapshot
+   *  LIVE (no reload) — which is what heals the deterministic-id shadow
+   *  in-session, where `applyIfNewer`'s LWW would reject the older value and
+   *  defer the heal to the next reload.
+   *
+   *  If the cache has DIVERGED from `before` (a local commit advanced it
+   *  between the observer's before-read and here), fall back to the LWW gate
+   *  so a newer local edit is never clobbered. This is safe against the
+   *  upload-window replay freeze: the disk gate skip-stales a strictly-newer
+   *  real edit BEFORE it enters the observer's snapshots, so a replay delivery
+   *  never reaches here — the force path only ever lands a genuine server-wins
+   *  heal, and waking handles for that one-time transition is correct. */
+  applyFromSync(after: BlockData, before: BlockData | null): boolean {
+    const existing = this.snapshots.get(after.id)
+    const cacheMatchesBefore =
+      before !== null &&
+      existing !== undefined &&
+      blockFingerprint(existing) === blockFingerprint(before)
+    if (cacheMatchesBefore) {
+      this.metrics.applyFromSyncForced++
+      return this.setSnapshot(after)
+    }
+    return this.applyIfNewer(after, 'sync')
   }
 
   deleteSnapshot(id: string): boolean {

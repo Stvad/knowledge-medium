@@ -125,8 +125,8 @@ const waitFor = async (cond: () => Promise<boolean>, ms = 3000): Promise<void> =
   }
 }
 
-describe('blocksSyncedObserver — server overrides an own system default (disk heal)', () => {
-  it('a stale own system default is overwritten on disk by the older server row (heals on reload)', async () => {
+describe('blocksSyncedObserver — server overrides an own system default (disk + live heal)', () => {
+  it('overwrites a stale own system default with the older server row, on disk AND in the cache', async () => {
     // A bootstrap default minted with a fresh now-stamp and THIS client's system
     // author (start() runs as currentUserId 'user-1'), non-pending (no ps_crud),
     // read into the cache at app start — the deterministic-id shadow setup.
@@ -140,15 +140,11 @@ describe('blocksSyncedObserver — server overrides an own system default (disk 
     await observer.flush()
 
     // Disk: the server value replaced the pristine default despite the older
-    // stamp (the strict gate lets an own system mint yield), so the shadow is
-    // gone from the persistent table — a reload, which rehydrates the cache from
-    // disk, surfaces it.
+    // stamp (the strict gate lets an own system mint yield).
     expect(await blocks()).toEqual([{ id: 'b1', content: 'real synced config' }])
-    // Cache (in-session): the cache's own applyIfNewer LWW still rejects the
-    // older value, so the live cache isn't healed yet — the interim limitation,
-    // and what keeps this disk write from waking handles. Heals on reload (and
-    // live once applyFromSync lands).
-    expect(cache.getSnapshot('b1')).toMatchObject({ content: 'default' })
+    // Cache (in-session): applyFromSync force-applies the server row because the
+    // cache still matched the pre-write disk row — the LIVE heal, no reload.
+    expect(cache.getSnapshot('b1')).toMatchObject({ content: 'real synced config' })
   })
 
   it('protects a strictly-newer REAL local edit from an older delivery (replay-safe)', async () => {
