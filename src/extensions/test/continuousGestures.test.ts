@@ -44,6 +44,25 @@ describe('createBlockGestureController', () => {
     expect(prevented).toBe(true)
   })
 
+  it('does not preventDefault a commit no action handled, but still stops later recognizers', () => {
+    // dispatch returns false: no action bound to this gesture, or every
+    // candidate declined. The commit must not eat the trailing click/default.
+    const dispatch = vi.fn<(...args: unknown[]) => boolean>(() => false)
+    const second = vi.fn(() => ({status: 'commit', gesture: 'b', deps}) as const)
+    const recognizers: GestureRecognizer[] = [
+      {id: 'first', onPointerUp: () => ({status: 'commit', gesture: 'a', deps})},
+      {id: 'second', onPointerUp: second},
+    ]
+    const controller = createBlockGestureController({recognizers, element, dispatch})
+
+    controller.handlePointerDown(sample(1, 0, 0))
+    const prevented = controller.handlePointerUp(sample(1, 60, 0))
+
+    expect(dispatch).toHaveBeenCalledTimes(1) // committed → attempted dispatch
+    expect(prevented).toBe(false) // unhandled → leave the native default alone
+    expect(second).not.toHaveBeenCalled() // committed → still wins the event
+  })
+
   it('evicts rivals when one recognizer goes active: their onPointerCancel fires and they stop receiving events', () => {
     const dispatch = makeDispatch()
     const winnerMove = vi.fn(() => GESTURE_ACTIVE)
