@@ -737,9 +737,16 @@ export class TxImpl implements Tx {
 
   /** Build a fresh BlockData for `tx.create` / `tx.createOrGet` insert
    *  paths. Engine sets all four metadata columns from tx_context unless
-   *  `opts.skipMetadata` (used only by bookkeeping writes). `opts.systemMint`
-   *  stamps the system author on `created_by` / `updated_by` so the row is
-   *  born as a speculative default the reconcile gate can let yield. */
+   *  `opts.skipMetadata` (used only by bookkeeping writes).
+   *
+   *  `opts.systemMint` marks the row as a speculative default the reconcile
+   *  gate can let yield — but ONLY on `updated_by`, not `created_by`. The
+   *  `system:` prefix is load-bearing on `updated_by` (the field the gate
+   *  reads, restamped on every write, so it self-clears to the real user on
+   *  the first edit). `created_by` is pure identity/ownership — always the
+   *  real user, so it stays a trustworthy user id for every consumer and
+   *  "blocks created by X" is a clean `created_by = X`. Containing the prefix
+   *  to the one column that needs it keeps it out of creator attribution. */
   private buildNewBlockRow(
     id: string,
     data: NewBlockData,
@@ -748,7 +755,8 @@ export class TxImpl implements Tx {
     const now = this.ctx.now()
     const userId = this.meta.user.id
     const ts = opts?.skipMetadata ? 0 : now
-    const by = opts?.skipMetadata
+    const createdBy = opts?.skipMetadata ? '' : userId
+    const updatedBy = opts?.skipMetadata
       ? ''
       : opts?.systemMint
         ? systemAuthor(userId)
@@ -766,8 +774,8 @@ export class TxImpl implements Tx {
       references: data.references ?? [],
       createdAt: ts,
       updatedAt: ts,
-      createdBy: by,
-      updatedBy: by,
+      createdBy,
+      updatedBy,
       deleted: false,
     }
   }

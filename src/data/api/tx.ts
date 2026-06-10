@@ -19,14 +19,15 @@ export interface TxWriteOpts {
  *  deliberately NOT on the shared {@link TxWriteOpts}: a row may only be
  *  born as a speculative engine default, never *promoted* into one by a
  *  later update — so `tx.update(..., {systemMint})` is a type error by
- *  construction. When set, the inserted row's `created_by` / `updated_by`
- *  are stamped with the current user's `system:<userId>` author (see
- *  `systemAuthor`), and same-tx follow-up writes to that row inherit the
- *  system authorship rather than promoting it to a real user edit — so the
- *  `addTypeInTx` / `setProperty` shaping every deterministic-id mint does
- *  stays pristine for the reconcile gate. The first real edit in a LATER
- *  tx promotes it. Ignored alongside `skipMetadata` (a system mint is not
- *  a metadata-skipping bookkeeping write). */
+ *  construction. When set, the inserted row's `updated_by` is stamped with
+ *  the current user's `system:<userId>` author (see `systemAuthor`);
+ *  `created_by` stays the real user (the prefix is contained to `updated_by`,
+ *  the gate's self-clearing signal). Same-tx follow-up writes to that row
+ *  inherit the system authorship rather than promoting it to a real user edit
+ *  — so the `addTypeInTx` / `setProperty` shaping every deterministic-id mint
+ *  does stays pristine for the reconcile gate. The first real edit in a LATER
+ *  tx promotes `updated_by`. Ignored alongside `skipMetadata` (a system mint
+ *  is not a metadata-skipping bookkeeping write). */
 export interface TxInsertOpts extends TxWriteOpts {
   systemMint?: boolean
 }

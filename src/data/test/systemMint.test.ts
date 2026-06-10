@@ -41,11 +41,13 @@ describe('systemMint authorship', () => {
     expect(row?.createdBy).toBe(USER)
   })
 
-  it('stamps a systemMint create with the system author', async () => {
+  it('stamps a systemMint create: system updated_by, real-user created_by', async () => {
+    // The `system:` marker is contained to updated_by (the gate's self-clearing
+    // signal). created_by stays the real user — pure identity/ownership.
     await create('mint', {systemMint: true})
     const row = await repo.load('mint')
     expect(row?.updatedBy).toBe(SYS)
-    expect(row?.createdBy).toBe(SYS)
+    expect(row?.createdBy).toBe(USER)
   })
 
   it('stamps a systemMint createOrGet insert with the system author', async () => {
@@ -75,14 +77,15 @@ describe('systemMint authorship', () => {
     expect(row?.updatedBy).toBe(SYS)
   })
 
-  it('promotes to the real user on the first edit in a later tx', async () => {
+  it('promotes updated_by to the real user on the first edit in a later tx', async () => {
     await create('mint2', {systemMint: true})
     await repo.tx(async tx => {
       await tx.update('mint2', {content: 'user-edit'})
     }, {scope: ChangeScope.BlockDefault})
     const row = await repo.load('mint2')
+    // updated_by self-clears on the first real edit; created_by was the real
+    // user all along (the row's owner never changed).
     expect(row?.updatedBy).toBe(USER)
-    // created_by is immutable — the mint provenance is still legible there.
-    expect(row?.createdBy).toBe(SYS)
+    expect(row?.createdBy).toBe(USER)
   })
 })
