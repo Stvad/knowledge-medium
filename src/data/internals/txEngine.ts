@@ -37,12 +37,14 @@ import type {
   SiblingAnchor,
   SiblingDirection,
   Tx,
+  TxInsertOpts,
   TxMeta,
   TxSource,
   TxWriteOpts,
   User,
 } from '@/data/api'
 import {
+  systemAuthor,
   BlockNotFoundError,
   CycleError,
   DeletedConflictError,
@@ -215,6 +217,16 @@ export class TxImpl implements Tx {
    *  (or first write candidate that the engine validated to insert). */
   private workspacePinned = false
 
+  /** Ids inserted in THIS tx via a `{systemMint: true}` create/createOrGet.
+   *  Same-tx follow-up writes (`update` / `setProperty` / `move` / …) to one
+   *  of these inherit the `system:<userId>` author instead of stamping the
+   *  real user — mirrors the upload compactor's same-tx CREATE+PATCH fusion
+   *  (`createTxId`), so the multi-write shaping a deterministic-id mint does
+   *  (content + alias prop + type marker) stays a single pristine system
+   *  default. Per-tx (the engine builds a fresh TxImpl per `repo.tx`), so it
+   *  never leaks across transactions. */
+  private readonly systemMintedIds = new Set<string>()
+
   constructor(ctx: TxImplContext) {
     this.ctx = ctx
     this.meta = ctx.meta
@@ -238,7 +250,7 @@ export class TxImpl implements Tx {
 
   // ──── Lifecycle ────
 
-  async create(data: NewBlockData, opts?: TxWriteOpts): Promise<string> {
+  async create(data: NewBlockData, opts?: TxInsertOpts): Promise<string> {
     this.checkWorkspace(data.workspaceId)
     await this.requireParentInWorkspace(data.parentId, data.workspaceId)
     const id = data.id ?? this.ctx.newId()
@@ -249,6 +261,7 @@ export class TxImpl implements Tx {
       if (isUniqueConstraint(e, 'blocks.id')) throw new DuplicateIdError(id)
       throw e
     }
+    this.markSystemMint(id, opts)
     this.pinWorkspace(data.workspaceId)
     recordWrite(this.ctx.snapshots, id, null, row)
     return id
@@ -256,7 +269,7 @@ export class TxImpl implements Tx {
 
   async createOrGet(
     data: NewBlockData & { id: string },
-    opts?: TxWriteOpts,
+    opts?: TxInsertOpts,
   ): Promise<{ id: string; inserted: boolean }> {
     this.checkWorkspace(data.workspaceId)
     const existing = await this.ctx.txDb.getOptional<BlockRow>(SELECT_BY_ID_SQL, [data.id])
@@ -265,6 +278,7 @@ export class TxImpl implements Tx {
       await this.requireParentInWorkspace(data.parentId, data.workspaceId)
       const row = this.buildNewBlockRow(data.id, data, opts)
       await this.ctx.txDb.execute(INSERT_SQL, blockToRowParams(row))
+      this.markSystemMint(data.id, opts)
       this.pinWorkspace(data.workspaceId)
       recordWrite(this.ctx.snapshots, data.id, null, row)
       return {id: data.id, inserted: true}
@@ -302,7 +316,7 @@ export class TxImpl implements Tx {
     const after: BlockData = {
       ...before,
       deleted: true,
-      ...this.metadataPatch(false),
+      ...this.metadataPatch(id, false),
     }
     await this.ctx.txDb.execute(
       `UPDATE blocks SET deleted = 1, updated_at = ?, updated_by = ? WHERE id = ?`,
@@ -327,7 +341,7 @@ export class TxImpl implements Tx {
       // see src/data/internals/normalizeReferencesProcessor.ts.
       ...(patch?.references !== undefined ? {references: patch.references} : {}),
       ...(patch?.properties !== undefined ? {properties: patch.properties} : {}),
-      ...this.metadataPatch(opts?.skipMetadata),
+      ...this.metadataPatch(id, opts?.skipMetadata),
     }
     await this.ctx.txDb.execute(
       `UPDATE blocks SET deleted = 0, content = ?, references_json = ?, properties_json = ?, updated_at = ?, updated_by = ? WHERE id = ?`,
@@ -356,7 +370,7 @@ export class TxImpl implements Tx {
       // See note on `restore` above re: same-tx normalization.
       ...(patch.references !== undefined ? {references: patch.references} : {}),
       ...(patch.properties !== undefined ? {properties: patch.properties} : {}),
-      ...this.metadataPatch(opts?.skipMetadata),
+      ...this.metadataPatch(id, opts?.skipMetadata),
     }
     await this.ctx.txDb.execute(
       `UPDATE blocks SET content = ?, references_json = ?, properties_json = ?, updated_at = ?, updated_by = ? WHERE id = ?`,
@@ -406,7 +420,7 @@ export class TxImpl implements Tx {
       ...before,
       parentId: target.parentId,
       orderKey: target.orderKey,
-      ...this.metadataPatch(opts?.skipMetadata),
+      ...this.metadataPatch(id, opts?.skipMetadata),
     }
     await this.ctx.txDb.execute(
       `UPDATE blocks SET parent_id = ?, order_key = ?, updated_at = ?, updated_by = ? WHERE id = ?`,
@@ -432,7 +446,7 @@ export class TxImpl implements Tx {
     const after: BlockData = {
       ...before,
       properties,
-      ...this.metadataPatch(opts?.skipMetadata),
+      ...this.metadataPatch(id, opts?.skipMetadata),
     }
     await this.ctx.txDb.execute(
       `UPDATE blocks SET properties_json = ?, updated_at = ?, updated_by = ? WHERE id = ?`,
@@ -695,26 +709,50 @@ export class TxImpl implements Tx {
     this.workspacePinned = true
   }
 
-  private metadataPatch(skipMetadata?: boolean): {
+  /** Record that `id` was just system-minted in this tx, so same-tx
+   *  follow-up writes inherit the system author (see `systemMintedIds`).
+   *  No-op unless `opts.systemMint` — and `systemMint` is insert-only at the
+   *  type level ({@link TxInsertOpts}), so this is only ever reached from
+   *  `create` / `createOrGet`. */
+  private markSystemMint(id: string, opts: TxInsertOpts | undefined): void {
+    if (opts?.systemMint) this.systemMintedIds.add(id)
+  }
+
+  /** The author to stamp on a write to `id`: the current user, unless the
+   *  row was system-minted in THIS tx, in which case follow-up writes
+   *  inherit the system author so the whole mint stays one pristine
+   *  default. */
+  private authorFor(id: string): string {
+    const userId = this.meta.user.id
+    return this.systemMintedIds.has(id) ? systemAuthor(userId) : userId
+  }
+
+  private metadataPatch(id: string, skipMetadata?: boolean): {
     updatedAt: number
     updatedBy: string
   } | Record<string, never> {
     if (skipMetadata) return {}
-    return {updatedAt: this.ctx.now(), updatedBy: this.meta.user.id}
+    return {updatedAt: this.ctx.now(), updatedBy: this.authorFor(id)}
   }
 
   /** Build a fresh BlockData for `tx.create` / `tx.createOrGet` insert
    *  paths. Engine sets all four metadata columns from tx_context unless
-   *  `opts.skipMetadata` (used only by bookkeeping writes). */
+   *  `opts.skipMetadata` (used only by bookkeeping writes). `opts.systemMint`
+   *  stamps the system author on `created_by` / `updated_by` so the row is
+   *  born as a speculative default the reconcile gate can let yield. */
   private buildNewBlockRow(
     id: string,
     data: NewBlockData,
-    opts: TxWriteOpts | undefined,
+    opts: TxInsertOpts | undefined,
   ): BlockData {
     const now = this.ctx.now()
     const userId = this.meta.user.id
     const ts = opts?.skipMetadata ? 0 : now
-    const by = opts?.skipMetadata ? '' : userId
+    const by = opts?.skipMetadata
+      ? ''
+      : opts?.systemMint
+        ? systemAuthor(userId)
+        : userId
     return {
       id,
       workspaceId: data.workspaceId,
