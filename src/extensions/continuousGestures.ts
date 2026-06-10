@@ -405,6 +405,24 @@ const toSample = (event: PointerEvent): PointerSample => ({
   event,
 })
 
+/**
+ * Capture the pointer to the surface once a recognizer engages it, so a drag
+ * that wanders off the block still delivers its terminal `pointerup` /
+ * `pointercancel` HERE. Touch pointers are implicitly captured to their target
+ * on `pointerdown`; mouse and pen are NOT — so without this an off-block mouse/
+ * pen release lands elsewhere, the controller never sees the up, and the block
+ * stays stranded in an in-flight gesture (later gestures then route only to the
+ * stale active recognizer). Idempotent per spec, and guarded: jsdom lacks the
+ * API and the call can throw if the pointer is already gone — both non-fatal.
+ */
+const capturePointer = (element: HTMLElement, pointerId: number): void => {
+  try {
+    element.setPointerCapture(pointerId)
+  } catch {
+    // unsupported (jsdom) or the pointer is no longer active — nothing to hold.
+  }
+}
+
 /** How long a click swallow stays armed waiting for the synthesized click. The
  *  click follows `pointerup` within a frame; this generous window only matters
  *  as a self-disarm so a gesture that produced NO click can't eat a later real
@@ -500,7 +518,14 @@ export const useContinuousGestures = (
       if (controller.handlePointerDown(toSample(event))) event.preventDefault()
     }
     const onMove = (event: PointerEvent): void => {
-      if (controller.handlePointerMove(toSample(event))) event.preventDefault()
+      if (controller.handlePointerMove(toSample(event))) {
+        event.preventDefault()
+        // A prevented move means a recognizer claimed the block (went
+        // active/progress) — the gesture has engaged, so pin the stream to this
+        // element for the rest of the drag (no-op for the already-captured touch
+        // case; the fix is for mouse/pen). Capture auto-releases on up/cancel.
+        capturePointer(element, event.pointerId)
+      }
     }
     const onUp = (event: PointerEvent): void => {
       if (controller.handlePointerUp(toSample(event))) {

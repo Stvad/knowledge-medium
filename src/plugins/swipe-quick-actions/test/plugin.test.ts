@@ -17,10 +17,15 @@ describe('swipeQuickActionsPlugin', () => {
 
     // Recognition rides the continuous-gesture loop now (not a raw content surface).
     expect(runtime.contributions(continuousGestureRecognizersFacet)).toHaveLength(1)
-    // Swipe-left's behavior is two gesture-bound actions; swipe-right's is the
-    // todo cycle action, contributed by that plugin (not here).
+    // Swipe-left's behavior is two gesture-bound actions (reveal preview + open);
+    // swipe-right's primary behavior is the todo cycle action from that plugin,
+    // with a declinable close fallback here so disabling Todo still closes the menu.
     expect(actionIds).toEqual(
-      expect.arrayContaining(['swipe-quick-actions.reveal', 'swipe-quick-actions.open']),
+      expect.arrayContaining([
+        'swipe-quick-actions.reveal',
+        'swipe-quick-actions.open',
+        'swipe-quick-actions.close',
+      ]),
     )
     expect(panelMounts).toEqual([
       {

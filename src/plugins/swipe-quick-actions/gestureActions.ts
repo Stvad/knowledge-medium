@@ -19,6 +19,7 @@ import { GESTURE_PROGRESS_CANCEL_EVENT } from '@/shortcuts/gestureAction.js'
 import {
   dispatchSwipeQuickActionMenuEvent,
   dispatchSwipeQuickActionProgressEvent,
+  SWIPE_QUICK_ACTION_CLOSE_EVENT,
   SWIPE_QUICK_ACTION_OPEN_EVENT,
   type SwipeProgressTickDetail,
 } from './events.ts'
@@ -59,7 +60,41 @@ export const swipeLeftOpenAction: ActionConfig<typeof ActionContextTypes.BLOCK_P
   },
 }
 
+/**
+ * `swipe-right` COMMIT (fallback): close an open quick-action menu. Restores the
+ * fallback the bespoke `swipeGesture.ts` had — a right-swipe on content closed
+ * the open menu when nothing else claimed `swipe-right`. The todo plugin also
+ * binds `swipe-right` (cycle a todo); this is a SEPARATE candidate in the same
+ * run-until-handled gesture, so ordering matters: it's DECLINABLE. The CLOSE
+ * event is `cancelable` and the menu calls `preventDefault` only when a menu for
+ * this block was actually open, so `dispatchEvent` returns false in that case
+ * (a menu closed → this action handled it, return void) and true otherwise (no
+ * menu was open → return false to DECLINE, so the loop falls through to the todo
+ * cycle action). Net: a right-swipe cycles a todo when no menu is open, and
+ * closes the menu when one is — and disabling Todo still leaves the close
+ * affordance intact.
+ */
+export const swipeRightCloseAction: ActionConfig<typeof ActionContextTypes.BLOCK_POINTER> = {
+  id: 'swipe-quick-actions.close',
+  description: 'Swipe right: close the quick-action menu',
+  context: ActionContextTypes.BLOCK_POINTER,
+  gestureBinding: {gesture: 'swipe-right'},
+  handler: ({block, targetElement, renderScopeId}) => {
+    // dispatchEvent returns true when nothing cancelled it — i.e. no menu was
+    // open for this block — so decline and let the todo cycle action run.
+    if (dispatchSwipeQuickActionMenuEvent(
+      targetElement,
+      SWIPE_QUICK_ACTION_CLOSE_EVENT,
+      block.id,
+      renderScopeId,
+    )) {
+      return false
+    }
+  },
+}
+
 export const swipeGestureActions: readonly ActionConfig[] = [
   swipeLeftRevealAction,
   swipeLeftOpenAction,
+  swipeRightCloseAction,
 ]

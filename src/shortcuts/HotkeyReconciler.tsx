@@ -349,9 +349,26 @@ export function HotkeyReconciler(): null {
         if (!deps) continue
         if (action.canDispatch && !action.canDispatch(deps)) continue
         const {handler} = action
+        // A preview streams MANY ticks; a throwing/rejecting handler must be
+        // contained the same way the commit/keyboard path contains it
+        // (runOrderedCandidates), or one bad tick becomes an uncaught error /
+        // unhandled rejection on every pointer-move. Log and swallow so the
+        // gesture keeps running.
+        const runProgress = (event: ActionTrigger): void => {
+          let result: ActionHandlerResult
+          try {
+            result = handler(deps, event, dispatchRef.current)
+          } catch (error) {
+            console.error(`[HotkeyReconciler] Progress action ${action.id} threw`, error)
+            return
+          }
+          void Promise.resolve(result).catch(error => {
+            console.error(`[HotkeyReconciler] Progress action ${action.id} rejected`, error)
+          })
+        }
         return {
-          update: event => { handler(deps, event, dispatchRef.current) },
-          settle: () => { handler(deps, gestureProgressCancelEvent(gesture), dispatchRef.current) },
+          update: event => runProgress(event),
+          settle: () => runProgress(gestureProgressCancelEvent(gesture)),
         }
       }
       return null
