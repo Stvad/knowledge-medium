@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { isSystemAuthor } from '@/data/api'
 import { Block } from '../../data/block'
 import { useInFocus, usePluginPrefsProperty, useUserPage } from '@/data/globalState'
 import { useUpdateMetadata } from '@/hooks/block.js'
@@ -19,7 +20,11 @@ export const UpdateIndicator = ({block}: { block: Block }) => {
 
   if (!updateInfo) return null
 
+  // A pristine deterministic-id mint is authored `system:<self>` until the
+  // first real edit. That is not "another user" — don't raise the indicator
+  // for it (and `system:<self> !== self` would otherwise read as one).
   const updatedByOtherUser = updateInfo.updatedBy !== block.repo.user.id
+    && !isSystemAuthor(updateInfo.updatedBy)
     && updateInfo.updatedAt > (previousLoadTime ?? 0)
   const shouldShowUpdateIndicator = updatedByOtherUser && !seen
 

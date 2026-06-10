@@ -98,7 +98,7 @@ export const getOrCreateKernelPage = async (
       parentId: null,
       orderKey,
       content: spec.alias,
-    })
+    }, {systemMint: true})
     await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: aliases}, typeSnapshot)
     await repo.addTypeInTx(tx, id, spec.markerType, {[aliasesProp.name]: aliases}, typeSnapshot)
   }, {scope: ChangeScope.BlockDefault})

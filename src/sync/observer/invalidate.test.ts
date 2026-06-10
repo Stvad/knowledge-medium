@@ -74,11 +74,55 @@ describe('applySyncInvalidation', () => {
     cache.applyIfNewer(block({ content: 'newer', updatedAt: 5000 }), 'sync')
     const handle = target()
 
+    // `before: null` ⇒ applyFromSync can't force; it falls back to LWW, which
+    // rejects the older delivery.
     const stale = block({ content: 'older', updatedAt: 2000 })
     const out = applySyncInvalidation(cache, handle, snapshots({ b1: { before: null, after: stale } }))
 
     // Cache keeps the newer value; nothing dispatched.
     expect(cache.getSnapshot('b1')).toMatchObject({ content: 'newer' })
+    expect(out).toBeNull()
+    expect(handle.calls).toHaveLength(0)
+  })
+
+  it('heals the cache LIVE: an older server row replaces a default the cache still matches', () => {
+    // The deterministic-id shadow heal in-session. The cache holds the stale
+    // default; the observer applied the older server row to disk and passes the
+    // default as `before`. applyFromSync force-applies, and because the cache
+    // changed, the row's handles are invalidated so the UI re-reads.
+    const cache = new BlockCache()
+    const staleDefault = block({ content: 'default', updatedAt: 9000 })
+    cache.applyIfNewer(staleDefault, 'sync')
+    const handle = target()
+
+    const serverValue = block({ content: 'real synced config', updatedAt: 3000 })
+    const out = applySyncInvalidation(
+      cache, handle, snapshots({ b1: { before: staleDefault, after: serverValue } }),
+    )
+
+    expect(cache.getSnapshot('b1')).toMatchObject({ content: 'real synced config' })
+    expect(out).not.toBeNull()
+    expect(arr(out!.rowIds)).toEqual(['b1'])
+    expect(handle.calls).toHaveLength(1)
+  })
+
+  it('does NOT force-heal the cache when forceHeal is false (one-time healing rescan)', () => {
+    // The healing rescan heals disk but passes forceHeal=false so the cache
+    // stays LWW-masked — a real edit that just drained but not echoed must not
+    // be force-clobbered in the live cache during the rescan window. The older
+    // server `after` is rejected by LWW even though it matches `before`.
+    const cache = new BlockCache()
+    const staleDefault = block({ content: 'default', updatedAt: 9000 })
+    cache.applyIfNewer(staleDefault, 'sync')
+    const handle = target()
+
+    const serverValue = block({ content: 'real synced config', updatedAt: 3000 })
+    const out = applySyncInvalidation(
+      cache, handle, snapshots({ b1: { before: staleDefault, after: serverValue } }), [], false,
+    )
+
+    // Cache keeps the default (heals on reload from disk); nothing dispatched.
+    expect(cache.getSnapshot('b1')).toMatchObject({ content: 'default' })
     expect(out).toBeNull()
     expect(handle.calls).toHaveLength(0)
   })

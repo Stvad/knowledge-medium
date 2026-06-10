@@ -220,6 +220,48 @@ describe('BlockCache applyIfNewer (LWW)', () => {
   })
 })
 
+describe('BlockCache applyFromSync (heal-aware sync write)', () => {
+  it('force-applies an OLDER row when the cache still matches the pre-write disk row', () => {
+    // The live shadow heal: cache holds a now-stamped default; the observer
+    // applied the older server row to disk and passes the default as `before`.
+    // Because the cache still equals `before`, the older `after` replaces it.
+    const cache = new BlockCache()
+    const staleDefault = snap({content: 'default', updatedAt: 9000})
+    cache.setSnapshot(staleDefault)
+
+    const healed = cache.applyFromSync(snap({content: 'real config', updatedAt: 3000}), staleDefault)
+
+    expect(healed).toBe(true)
+    expect(cache.getSnapshot('block-1')?.content).toBe('real config')
+    expect(cache.metrics.applyFromSyncForced).toBe(1)
+  })
+
+  it('falls back to LWW (no clobber) when the cache has diverged from before', () => {
+    // A local commit advanced the cache past `before` after the observer read
+    // it. The older `after` must NOT clobber the newer local edit — fall back
+    // to the LWW gate, which rejects it.
+    const cache = new BlockCache()
+    const before = snap({content: 'default', updatedAt: 9000})
+    cache.setSnapshot(snap({content: 'local edit', updatedAt: 12000})) // cache moved on
+
+    const out = cache.applyFromSync(snap({content: 'older server', updatedAt: 3000}), before)
+
+    expect(out).toBe(false)
+    expect(cache.getSnapshot('block-1')?.content).toBe('local edit')
+    expect(cache.metrics.applyFromSyncForced).toBe(0)
+  })
+
+  it('falls back to LWW for a first-seen row (before is null)', () => {
+    // No pre-write disk row: nothing to "match", so this is an ordinary
+    // newer-wins sync write through the LWW gate.
+    const cache = new BlockCache()
+    const out = cache.applyFromSync(snap({content: 'fresh', updatedAt: 100}), null)
+    expect(out).toBe(true)
+    expect(cache.getSnapshot('block-1')?.content).toBe('fresh')
+    expect(cache.metrics.applyFromSyncForced).toBe(0)
+  })
+})
+
 describe('BlockCache trackedIds', () => {
   it('returns the set of subscribed ids', () => {
     const cache = new BlockCache()
@@ -382,6 +424,7 @@ describe('BlockCache metrics counters', () => {
       applyIfNewerSyncRejected: 0,
       applyIfNewerHydrateCalls: 0,
       applyIfNewerHydrateRejected: 0,
+      applyFromSyncForced: 0,
       notifies: 0,
     })
   })

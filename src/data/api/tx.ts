@@ -15,6 +15,23 @@ export interface TxWriteOpts {
   skipMetadata?: boolean
 }
 
+/** Insert-only opts (`tx.create` / `tx.createOrGet`). `systemMint` is
+ *  deliberately NOT on the shared {@link TxWriteOpts}: a row may only be
+ *  born as a speculative engine default, never *promoted* into one by a
+ *  later update — so `tx.update(..., {systemMint})` is a type error by
+ *  construction. When set, the inserted row's `updated_by` is stamped with
+ *  the current user's `system:<userId>` author (see `systemAuthor`);
+ *  `created_by` stays the real user (the prefix is contained to `updated_by`,
+ *  the gate's self-clearing signal). Same-tx follow-up writes to that row
+ *  inherit the system authorship rather than promoting it to a real user edit
+ *  — so the `addTypeInTx` / `setProperty` shaping every deterministic-id mint
+ *  does stays pristine for the reconcile gate. The first real edit in a LATER
+ *  tx promotes `updated_by`. Ignored alongside `skipMetadata` (a system mint
+ *  is not a metadata-skipping bookkeeping write). */
+export interface TxInsertOpts extends TxWriteOpts {
+  systemMint?: boolean
+}
+
 /** Tx metadata exposed to mutators / processor `apply` bodies.
  *  - `txId` — uuid for this tx; written into `command_events.tx_id` and
  *    every `row_events.tx_id` for this tx.
@@ -69,7 +86,7 @@ export interface Tx {
    *  storage trigger's collapsed parent/workspace constraint can surface.
    *  Soft-deleted-parent is a kernel-mutator UX rule and does NOT fire on
    *  raw `tx.create` — see §4.7 Layer 1 (v4.30). */
-  create(data: NewBlockData, opts?: TxWriteOpts): Promise<string>
+  create(data: NewBlockData, opts?: TxInsertOpts): Promise<string>
 
   /** Insert OR fetch the live row at a deterministic id. **No tombstone
    *  resurrection in the primitive** — see §10.4. Throws
@@ -80,7 +97,7 @@ export interface Tx {
    *  The insert path uses the same parent preflight as `tx.create`. */
   createOrGet(
     data: NewBlockData & { id: string },
-    opts?: TxWriteOpts,
+    opts?: TxInsertOpts,
   ): Promise<{ id: string; inserted: boolean }>
 
   /** Soft-delete: sets `deleted = 1`. Fires the UPDATE trigger; row_events

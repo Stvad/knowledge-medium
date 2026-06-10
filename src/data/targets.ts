@@ -68,11 +68,20 @@ export interface CreateOrRestoreArgs {
   orderKey: string
   /** Applied on both insert and restore. */
   freshContent: string
+  /** Mint the row as a speculative engine default (`system:<userId>`
+   *  author) so it yields to an older-but-authoritative server row under
+   *  the reconcile gate. Applies to the INSERT path only — a tombstone
+   *  restore is an update and stays user-authored (create-only, per
+   *  TxInsertOpts). Seat materializers (alias / daily-note seats,
+   *  shortcuts) set this; content-bearing creators (Roam import, which
+   *  uses its own tx.create, not this primitive) do not. */
+  systemMint?: boolean
   /** Optional callback invoked after the row is inserted OR restored
    *  (NOT on the live-row-hit path). Used by per-domain wrappers to
    *  write properties (e.g. the alias list via tx.setProperty) that
    *  need codec encoding. The callback runs synchronously inside the
-   *  outer tx; awaitable. */
+   *  outer tx; awaitable. On the insert path, these same-tx writes
+   *  inherit the system author when `systemMint` is set. */
   onInsertedOrRestored?: (tx: Tx, id: string) => Promise<void> | void
 }
 
@@ -89,7 +98,7 @@ export const createOrRestoreTargetBlock = async (
       parentId: args.parentId,
       orderKey: args.orderKey,
       content: args.freshContent,
-    })
+    }, {systemMint: args.systemMint})
     if (result.inserted && args.onInsertedOrRestored) {
       await args.onInsertedOrRestored(tx, args.id)
     }
@@ -374,6 +383,9 @@ export const ensureAliasTarget = async (
     parentId: null,
     orderKey: keyAtEnd(),
     freshContent: seed.content,
+    // A freshly-probed alias seat is a speculative default: if the server
+    // already has a real page for this alias, the local seat must yield.
+    systemMint: true,
     // The setProperty + addTypeInTx pair below must produce exactly
     // `seed.properties` on disk; the `ensureAliasTarget writes the seed
     // shape` test in targets.test.ts asserts this and is the contract

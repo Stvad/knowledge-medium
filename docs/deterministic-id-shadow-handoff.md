@@ -1,7 +1,59 @@
 # Handoff: deterministic-id "default shadows server" bug
 
-Status as of this session. Two interim fixes have shipped; the real fix is still
-open. This doc is self-contained so a fresh session can pick it up.
+**Status: RESOLVED** (provenance fix, Option 1). The interim disk-only heal has
+been superseded by a full live fix; the bug description and root cause below are
+retained as the record. See **Resolution (shipped)** for what landed and why.
+
+## Resolution (shipped)
+
+Implemented Option 1 (write provenance), `system:<userId>` author, across five
+commits:
+
+1. `system:<userId>` author helpers (`api/user.ts`: `systemAuthor` /
+   `isSystemAuthor`).
+2. `systemMint` insert-only opt on `tx.create` / `tx.createOrGet`
+   (`TxInsertOpts`), with same-tx author inheritance (a per-tx id set so the
+   `addTypeInTx` / `setProperty` shaping a mint does inherits the system author
+   instead of promoting the row to a real edit).
+3. Marked every speculative deterministic-id mint site (`stateBlocks`,
+   `kernelPage`, journal / daily-note / daily-note seat, alias seats via the
+   shared `createOrRestoreTargetBlock`, shortcuts). Roam import and
+   `ensureLocalPersonalWorkspace` deliberately NOT marked.
+4. Provenance-aware reconcile gate: a non-pending strictly-newer local row
+   yields to the server iff it's THIS client's own system mint
+   (`updated_by === systemAuthor(currentUserId)`); a real edit keeps
+   strictly-newer protection (replay-safe). Plus a `healing` gate mode and
+   `healWorkspace`, wired into `scheduleReconcileRescan`, so pre-provenance
+   (real-user-stamped) shadows still un-shadow on upgrade.
+5. Live cache heal: `BlockCache.applyFromSync(after, before)` force-applies the
+   server row when the cache still matches the pre-write disk row, so the heal
+   is in-session (no reload). Freeze-safe because replay is skip-staled at the
+   disk gate before it reaches the cache.
+
+Key decisions made during implementation:
+
+- **`system:` marker lives ONLY on `updated_by`, not `created_by`.** `updated_by`
+  is the field the gate reads and that self-clears on the first edit (it's
+  restamped every write); `created_by` stays the real user so it remains a
+  trustworthy identity and `created_by = X` queries stay clean. The marker is
+  contained to the one column that structurally needs it.
+- **Per-user derivation** (`system:<userId>`, not a global sentinel): keeps the
+  mint attributable (history/SQL show which client minted it), makes the
+  reserved namespace collision-safe (real ids are UUIDs), and lets the gate
+  exact-match THIS client's own mint.
+- **No server-side blocker**: the `blocks_write` RLS policy gates on
+  workspace-writer membership only — it never compares `created_by`/`updated_by`
+  to `auth.uid()` — and `apply_block_patches` is `SECURITY INVOKER` and passes
+  the author through. So `system:<userId>` uploads fine.
+- The original `tentative`-flag / props_json-flag / separate-column alternatives
+  were re-evaluated and rejected: each re-introduces a promote-on-edit step,
+  because only `updated_by` tracks "not yet user-edited" for free.
+
+---
+
+## Original investigation (retained)
+
+The sections below are the pre-fix handoff, kept for the record.
 
 ## The bug
 

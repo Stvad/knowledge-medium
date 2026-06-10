@@ -15,6 +15,7 @@ import { encodeForWire, type GetCek } from '../transform.js'
 import { generateWorkspaceKeyBytes, importWorkspaceKey } from '../crypto/workspaceKey.js'
 import type { ChangeNotification } from '@/data/internals/handleStore'
 import type { BlockData, CycleDetectedEvent } from '@/data/api'
+import { systemAuthor } from '@/data/api'
 
 const data = (o: Partial<BlockData> = {}): BlockData => ({
   id: 'b1', workspaceId: 'ws-plain', parentId: null, orderKey: 'a0', content: 'hello',
@@ -87,7 +88,11 @@ const start = (opts: {
     db: env.db,
     cache,
     handleStore: { invalidate: (n) => notifications.push(n) },
-    deps: { getMaterializability: opts.getMaterializability, getCek: opts.getCek ?? noKey },
+    deps: {
+      getMaterializability: opts.getMaterializability,
+      getCek: opts.getCek ?? noKey,
+      currentUserId: 'user-1',
+    },
     onCycleDetected: opts.onCycleDetected,
     throttleMs: 5,
     drainChunkSize: opts.drainChunkSize,
@@ -120,11 +125,12 @@ const waitFor = async (cond: () => Promise<boolean>, ms = 3000): Promise<void> =
   }
 }
 
-describe('blocksSyncedObserver — server overrides a non-pending local default (disk heal)', () => {
-  it('a stale local default is overwritten on disk by the older server row (heals on reload)', async () => {
-    // A bootstrap default minted with a fresh now-stamp, non-pending (no ps_crud),
-    // and read into the cache at app start — the deterministic-id shadow setup.
-    const localDefault = data({ content: 'default', updatedAt: 9000 })
+describe('blocksSyncedObserver — server overrides an own system default (disk + live heal)', () => {
+  it('overwrites a stale own system default with the older server row, on disk AND in the cache', async () => {
+    // A bootstrap default minted with a fresh now-stamp and THIS client's system
+    // author (start() runs as currentUserId 'user-1'), non-pending (no ps_crud),
+    // read into the cache at app start — the deterministic-id shadow setup.
+    const localDefault = data({ content: 'default', updatedAt: 9000, updatedBy: systemAuthor('user-1') })
     await seedLocalBlock(localDefault)
     const { observer, cache } = start({ getMaterializability: constMat('copy') })
     cache.setSnapshot(localDefault)
@@ -133,15 +139,53 @@ describe('blocksSyncedObserver — server overrides a non-pending local default 
     await put(data({ content: 'real synced config', updatedAt: 3000 }))
     await observer.flush()
 
-    // Disk: the server value replaced the default despite the older stamp
-    // (decideStagingRow no longer skip-stales a non-pending strictly-newer local),
-    // so the shadow is gone from the persistent table — a reload, which rehydrates
-    // the cache from disk, surfaces it.
+    // Disk: the server value replaced the pristine default despite the older
+    // stamp (the strict gate lets an own system mint yield).
     expect(await blocks()).toEqual([{ id: 'b1', content: 'real synced config' }])
-    // Cache (in-session): the cache's own applyIfNewer LWW still rejects the
-    // older value, so the live cache isn't healed yet — the interim limitation,
-    // and what keeps this disk write from waking handles. Heals on reload.
-    expect(cache.getSnapshot('b1')).toMatchObject({ content: 'default' })
+    // Cache (in-session): applyFromSync force-applies the server row because the
+    // cache still matched the pre-write disk row — the LIVE heal, no reload.
+    expect(cache.getSnapshot('b1')).toMatchObject({ content: 'real synced config' })
+  })
+
+  it('protects a strictly-newer REAL local edit from an older delivery (replay-safe)', async () => {
+    // Same shape, but the local row is a real user edit (updated_by = the real
+    // user), not a system mint. The strict gate must NOT overwrite it — this is
+    // the upload-window replay the QuickFind-freeze canary guards.
+    const localEdit = data({ content: 'my edit', updatedAt: 9000, updatedBy: 'user-1' })
+    await seedLocalBlock(localEdit)
+    const { observer } = start({ getMaterializability: constMat('copy') })
+
+    await put(data({ content: 'stale server', updatedAt: 3000 }))
+    await observer.flush()
+
+    expect(await blocks()).toEqual([{ id: 'b1', content: 'my edit' }])
+  })
+
+  it('healWorkspace un-shadows a pre-provenance (real-user-stamped) default the strict drain protects', async () => {
+    // A shadow minted by PRE-provenance code is stamped with the real user, so
+    // the steady-state strict gate protects it as if it were an edit — it would
+    // re-permanent on upgrade. The one-time recovery rescan runs in healing
+    // mode, where the server wins on any strictly-newer non-pending row.
+    const preProvenanceShadow = data({
+      content: 'shadow default', updatedAt: 9000, updatedBy: 'user-1', workspaceId: 'ws-heal',
+    })
+    await seedLocalBlock(preProvenanceShadow)
+    const { observer, cache } = start({ getMaterializability: constMat('copy') })
+    cache.setSnapshot(preProvenanceShadow)
+
+    await put(data({ content: 'real synced config', updatedAt: 3000, workspaceId: 'ws-heal' }))
+    await observer.flush() // strict queue drain
+
+    // Strict mode protects it (the re-permanent risk healing mode exists to fix).
+    expect(await blocks()).toEqual([{ id: 'b1', content: 'shadow default' }])
+
+    // Healing rescan re-reads blocks_synced directly and lets the server win ON
+    // DISK. The cache is NOT force-healed (healing mode passes forceHeal=false),
+    // so it stays masked this session and rehydrates from disk on reload —
+    // avoiding a force-clobber of any concurrently-draining real edit.
+    await observer.healWorkspace('ws-heal')
+    expect(await blocks()).toEqual([{ id: 'b1', content: 'real synced config' }])
+    expect(cache.getSnapshot('b1')).toMatchObject({ content: 'shadow default' })
   })
 })
 

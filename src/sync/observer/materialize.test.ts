@@ -25,10 +25,16 @@ import { materializeStagingRows, type Materializability } from './materialize.js
 import { encodeForWire, type GetCek } from '../transform.js'
 import { generateWorkspaceKeyBytes, importWorkspaceKey } from '../crypto/workspaceKey.js'
 import type { BlockData } from '@/data/api'
+import { systemAuthor } from '@/data/api'
 import type { PowerSyncDb } from '@/data/internals/commitPipeline.js'
 
 const COLUMN_NAMES = BLOCK_STORAGE_COLUMNS.map(c => c.name)
 const INSERT_BLOCK_SQL = `INSERT INTO blocks (${COLUMN_NAMES.join(', ')}) VALUES (${COLUMN_NAMES.map(() => '?').join(', ')})`
+
+// The gate compares a local row's `updated_by` to `systemAuthor(currentUserId)`.
+// The default seeded `blockData` is authored by `user-1`, so deps use the same
+// id; tests that exercise the own-system-mint branch stamp `system:user-1`.
+const USER = 'user-1'
 
 const blockData = (overrides: Partial<BlockData> = {}): BlockData => ({
   id: 'b1',
@@ -120,7 +126,7 @@ describe('materializeStagingRows — copy-through (plaintext workspace)', () => 
     const out = await materializeStagingRows(
       env.db,
       { upserted: ['b1'], removed: [] },
-      { getMaterializability: constMat('copy'), getCek: noKey },
+      { getMaterializability: constMat('copy'), getCek: noKey, currentUserId: USER },
     )
 
     expect(out.applied).toEqual(['b1'])
@@ -167,7 +173,7 @@ describe('materializeStagingRows — decrypt (e2ee workspace with WK)', () => {
     const out = await materializeStagingRows(
       env.db,
       { upserted: ['enc1'], removed: [] },
-      { getMaterializability: constMat('decrypt'), getCek },
+      { getMaterializability: constMat('decrypt'), getCek, currentUserId: USER },
     )
 
     expect(out.applied).toEqual(['enc1'])
@@ -193,7 +199,7 @@ describe('materializeStagingRows — defer (not materializable yet)', () => {
     const out = await materializeStagingRows(
       env.db,
       { upserted: ['locked'], removed: [] },
-      { getMaterializability: constMat('defer'), getCek: noKey },
+      { getMaterializability: constMat('defer'), getCek: noKey, currentUserId: USER },
     )
 
     expect(out.deferred).toEqual(['locked'])
@@ -218,30 +224,16 @@ describe('materializeStagingRows — skip-stale (local edit must win)', () => {
     const out = await materializeStagingRows(
       env.db,
       { upserted: ['b1'], removed: [] },
-      { getMaterializability: constMat('copy'), getCek: noKey },
+      { getMaterializability: constMat('copy'), getCek: noKey, currentUserId: USER },
     )
 
     expect(out.skippedStale).toEqual(['b1'])
     expect((await allBlocks())[0]!.content).toBe('local edit')
   })
 
-  it('applies an older server snapshot over a non-pending newer local row (server-authoritative)', async () => {
-    // A non-pending local row that is strictly newer than the server snapshot is
-    // NOT a protected local edit — it's a speculative bootstrap default (or a
-    // dropped upload). The server's older-but-authoritative row wins, un-shadowing
-    // real synced config. Only a pending upload or an equal stamp protects local.
-    await seedLocalBlock(blockData({ content: 'newer local', updatedAt: 500 }))
-    await stageRow(blockData({ content: 'older server', updatedAt: 200 }))
-
-    const out = await materializeStagingRows(
-      env.db,
-      { upserted: ['b1'], removed: [] },
-      { getMaterializability: constMat('copy'), getCek: noKey },
-    )
-
-    expect(out.applied).toEqual(['b1'])
-    expect((await allBlocks())[0]!.content).toBe('older server')
-  })
+  // (The "non-pending strictly-newer local row" case is now split by write
+  //  provenance — heal vs replay-protect — and covered at DB level in the
+  //  "provenance gate" describe below, and exhaustively in reconcile.test.ts.)
 
   it('skips a pending-protected e2ee row WITHOUT decrypting it (undecryptable ciphertext cannot abort the batch)', async () => {
     const key = await importWorkspaceKey(generateWorkspaceKeyBytes())
@@ -266,7 +258,7 @@ describe('materializeStagingRows — skip-stale (local edit must win)', () => {
     const out = await materializeStagingRows(
       env.db,
       { upserted: ['x'], removed: [] },
-      { getMaterializability: constMat('decrypt'), getCek },
+      { getMaterializability: constMat('decrypt'), getCek, currentUserId: USER },
     )
 
     expect(out.skippedStale).toEqual(['x'])
@@ -280,7 +272,7 @@ describe('materializeStagingRows — skip-stale (local edit must win)', () => {
     const out = await materializeStagingRows(
       env.db,
       { upserted: ['b1'], removed: [] },
-      { getMaterializability: constMat('copy'), getCek: noKey },
+      { getMaterializability: constMat('copy'), getCek: noKey, currentUserId: USER },
     )
 
     expect(out.applied).toEqual(['b1'])
@@ -297,8 +289,11 @@ describe('materializeStagingRows — batched gate (mixed outcomes, chunked)', ()
 
     // apply: strictly-newer staging snapshot, no local row.
     await stageRow(blockData({ id: 'apply', content: 'fresh', updatedAt: 300 }))
-    // apply: a NON-pending local row that's newer is not protected — server wins.
-    await seedLocalBlock(blockData({ id: 'newer', content: 'local newer', updatedAt: 500 }))
+    // apply (heal): a newer local row that is THIS client's own system mint
+    // yields to the older server row — the shadow heal.
+    await seedLocalBlock(blockData({
+      id: 'newer', content: 'local newer', updatedAt: 500, updatedBy: systemAuthor(USER),
+    }))
     await stageRow(blockData({ id: 'newer', content: 'stale server', updatedAt: 200 }))
     // skip: an unsent local edit is queued for this id (pending always wins).
     await seedLocalBlock(blockData({ id: 'pending', content: 'local pending', updatedAt: 100 }))
@@ -311,7 +306,7 @@ describe('materializeStagingRows — batched gate (mixed outcomes, chunked)', ()
     const out = await materializeStagingRows(
       env.db,
       { upserted: ['apply', 'newer', 'pending'], removed: [] },
-      { getMaterializability: constMat('copy'), getCek: noKey },
+      { getMaterializability: constMat('copy'), getCek: noKey, currentUserId: USER },
       { readChunkSize: 2 }, // 3 ids → 2 read chunks, so the bulk maps span a boundary
     )
 
@@ -319,6 +314,68 @@ describe('materializeStagingRows — batched gate (mixed outcomes, chunked)', ()
     expect(out.skippedStale).toEqual(['pending'])
     const byId = Object.fromEntries((await allBlocks()).map(b => [b.id, b.content]))
     expect(byId).toEqual({ apply: 'fresh', newer: 'stale server', pending: 'local pending' })
+  })
+})
+
+describe('materializeStagingRows — provenance gate (deterministic-id shadow)', () => {
+  // The headline fix. A deterministic-id default minted on read-as-absent gets a
+  // fresh `now` stamp; the server's authoritative row is older. Same shape, two
+  // outcomes, decided by updated_by.
+
+  it('heals: an own pristine system default yields to the older server row', async () => {
+    // Local mint stamped now (500) by THIS client's system author; server's real
+    // config is older (200). Without provenance the local default would shadow
+    // the server forever — with it, the server wins on disk.
+    await seedLocalBlock(blockData({
+      content: 'local default', updatedAt: 500, updatedBy: systemAuthor(USER),
+    }))
+    await stageRow(blockData({ content: 'real synced config', updatedAt: 200 }))
+
+    const out = await materializeStagingRows(
+      env.db,
+      { upserted: ['b1'], removed: [] },
+      { getMaterializability: constMat('copy'), getCek: noKey, currentUserId: USER },
+    )
+
+    expect(out.applied).toEqual(['b1'])
+    expect((await allBlocks())[0]!.content).toBe('real synced config')
+  })
+
+  it('protects: a real strictly-newer local edit skips the older delivery (replay-safe)', async () => {
+    // Identical stamps to the heal case, but authored by the real user — a
+    // just-uploaded edit facing a stale older in-flight delivery. Must NOT be
+    // clobbered (the QuickFind-freeze pattern).
+    await seedLocalBlock(blockData({ content: 'my edit', updatedAt: 500, updatedBy: USER }))
+    await stageRow(blockData({ content: 'stale server', updatedAt: 200 }))
+
+    const out = await materializeStagingRows(
+      env.db,
+      { upserted: ['b1'], removed: [] },
+      { getMaterializability: constMat('copy'), getCek: noKey, currentUserId: USER },
+    )
+
+    expect(out.applied).toEqual([])
+    expect(out.skippedStale).toEqual(['b1'])
+    expect((await allBlocks())[0]!.content).toBe('my edit')
+  })
+
+  it('does not treat another client\'s system mint as a local default (exact-user match)', async () => {
+    // `system:other` arrived via sync — it is already server truth, not a row we
+    // minted. A strictly-newer such row is protected like any real edit; only
+    // OUR own system author yields.
+    await seedLocalBlock(blockData({
+      content: 'theirs', updatedAt: 500, updatedBy: systemAuthor('other-user'),
+    }))
+    await stageRow(blockData({ content: 'older delivery', updatedAt: 200 }))
+
+    const out = await materializeStagingRows(
+      env.db,
+      { upserted: ['b1'], removed: [] },
+      { getMaterializability: constMat('copy'), getCek: noKey, currentUserId: USER },
+    )
+
+    expect(out.skippedStale).toEqual(['b1'])
+    expect((await allBlocks())[0]!.content).toBe('theirs')
   })
 })
 
@@ -348,7 +405,7 @@ describe('materializeStagingRows — quarantine (undecryptable)', () => {
     const out = await materializeStagingRows(
       env.db,
       { upserted: ['good', 'bad'], removed: [] },
-      { getMaterializability: constMat('decrypt'), getCek: async () => key },
+      { getMaterializability: constMat('decrypt'), getCek: async () => key, currentUserId: USER },
     )
     warn.mockRestore()
 
@@ -366,7 +423,7 @@ describe('materializeStagingRows — chunked staging reads', () => {
     const out = await materializeStagingRows(
       env.db,
       { upserted: ids, removed: [] },
-      { getMaterializability: constMat('copy'), getCek: noKey },
+      { getMaterializability: constMat('copy'), getCek: noKey, currentUserId: USER },
       { readChunkSize: 2 }, // 5 ids → 3 chunks (2, 2, 1)
     )
 
@@ -387,7 +444,7 @@ describe('materializeStagingRows — removed (stream-exit)', () => {
     const out = await materializeStagingRows(
       env.db,
       { upserted: [], removed: ['b1'] },
-      { getMaterializability: constMat('copy'), getCek: noKey },
+      { getMaterializability: constMat('copy'), getCek: noKey, currentUserId: USER },
     )
 
     expect(out.deleted).toEqual(['b1'])
@@ -413,7 +470,7 @@ describe('materializeStagingRows — removed (stream-exit)', () => {
     const out = await materializeStagingRows(
       env.db,
       { upserted: [], removed: ['b1'] },
-      { getMaterializability: constMat('copy'), getCek: noKey },
+      { getMaterializability: constMat('copy'), getCek: noKey, currentUserId: USER },
     )
 
     expect(out.deleted).toEqual([])
@@ -425,9 +482,12 @@ describe('materializeStagingRows — Phase-1/Phase-2 TOCTOU re-gate', () => {
   // The Phase-1 staleness reads run outside the write tx, so a local edit can
   // land between them and the lock. These cover the race the second phase exists
   // to close — Phase 1 sees a clean gate, something changes in the window, and
-  // the in-tx re-gate re-reads the authoritative state. The PROTECTED change is a
-  // pending upload (an unsent local edit): the re-gate must skip it. A bare
-  // stamp bump with no pending is NOT a protected edit, so the re-gate applies.
+  // the in-tx re-gate re-reads the AUTHORITATIVE state (both updated_at and
+  // updated_by). Two ways a window change protects the local row: a pending
+  // upload, and — under the strict provenance gate — a real (non-system) edit
+  // that bumps the stamp strictly above staging. A window change to an own
+  // system mint instead heals (applies), proving the re-gate isn't a mere
+  // skip-detector.
 
   it('skips a candidate when a local edit is queued for upload in the window', async () => {
     await seedLocalBlock(blockData({ content: 'local v1', updatedAt: 200 }))
@@ -436,7 +496,7 @@ describe('materializeStagingRows — Phase-1/Phase-2 TOCTOU re-gate', () => {
     const out = await materializeStagingRows(
       racingDb(env.db, () => queuePendingUpload('b1')),
       { upserted: ['b1'], removed: [] },
-      { getMaterializability: constMat('copy'), getCek: noKey },
+      { getMaterializability: constMat('copy'), getCek: noKey, currentUserId: USER },
     )
 
     expect(out.applied).toEqual([])
@@ -445,7 +505,7 @@ describe('materializeStagingRows — Phase-1/Phase-2 TOCTOU re-gate', () => {
     expect((await allBlocks())[0]!.content).toBe('local v1')
   })
 
-  it('applies when the local row is bumped newer (non-pending) in the window — only pending protects', async () => {
+  it('skips when a real edit bumps the local stamp strictly-newer in the window', async () => {
     await seedLocalBlock(blockData({ content: 'local v1', updatedAt: 200 }))
     await stageRow(blockData({ content: 'server v2', updatedAt: 300 }))
 
@@ -454,12 +514,34 @@ describe('materializeStagingRows — Phase-1/Phase-2 TOCTOU re-gate', () => {
         await env.db.execute('UPDATE blocks SET updated_at = ? WHERE id = ?', [999, 'b1'])
       }),
       { upserted: ['b1'], removed: [] },
-      { getMaterializability: constMat('copy'), getCek: noKey },
+      { getMaterializability: constMat('copy'), getCek: noKey, currentUserId: USER },
     )
 
-    // The re-gate re-reads the bumped stamp (999) but a non-pending row is not a
-    // protected edit, so the server snapshot still applies. (The sibling test —
-    // a pending upload queued in the window — is what skip-stales.)
+    // Phase 1 saw local@200 < staging@300 (applyable). The window bumped the
+    // real-user row to 999; the re-gate re-reads it and now protects the edit
+    // (strict gate — replay-safe). Proves Phase 2 uses authoritative in-tx
+    // state, not the stale Phase-1 read.
+    expect(out.applied).toEqual([])
+    expect(out.skippedStale).toEqual(['b1'])
+    expect((await allBlocks())[0]!.content).toBe('local v1')
+  })
+
+  it('applies (heals) when an own system mint is bumped newer in the window', async () => {
+    await seedLocalBlock(blockData({ content: 'local v1', updatedAt: 200, updatedBy: systemAuthor(USER) }))
+    await stageRow(blockData({ content: 'server v2', updatedAt: 300 }))
+
+    const out = await materializeStagingRows(
+      racingDb(env.db, async () => {
+        await env.db.execute('UPDATE blocks SET updated_at = ? WHERE id = ?', [999, 'b1'])
+      }),
+      { upserted: ['b1'], removed: [] },
+      { getMaterializability: constMat('copy'), getCek: noKey, currentUserId: USER },
+    )
+
+    // The window bumps the stamp but leaves updated_by = system:user-1, so the
+    // re-gate still recognizes a pristine default and the server's value heals
+    // it — Phase 2 reading updated_by authoritatively is what makes this apply
+    // rather than skip.
     expect(out.applied).toEqual(['b1'])
     expect((await allBlocks())[0]!.content).toBe('server v2')
   })
@@ -478,7 +560,7 @@ describe('materializeStagingRows — soft-delete (tombstone) materialization', (
     const out = await materializeStagingRows(
       env.db,
       { upserted: ['b1'], removed: [] },
-      { getMaterializability: constMat('copy'), getCek: noKey },
+      { getMaterializability: constMat('copy'), getCek: noKey, currentUserId: USER },
     )
 
     expect(out.applied).toEqual(['b1'])
@@ -497,7 +579,7 @@ describe('materializeStagingRows — soft-delete (tombstone) materialization', (
     const out = await materializeStagingRows(
       env.db,
       { upserted: ['b1'], removed: [] },
-      { getMaterializability: constMat('copy'), getCek: noKey },
+      { getMaterializability: constMat('copy'), getCek: noKey, currentUserId: USER },
     )
 
     expect(out.applied).toEqual(['b1'])

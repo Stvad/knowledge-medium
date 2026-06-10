@@ -140,7 +140,7 @@ export const getOrCreateJournalBlock = async (
       parentId: null,
       orderKey: 'a0',
       content: JOURNAL_ALIAS,
-    })
+    }, {systemMint: true})
     await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: JOURNAL_ALIASES}, typeSnapshot)
   }, {scope: ChangeScope.BlockDefault})
 
@@ -240,7 +240,7 @@ export const getOrCreateDailyNote = async (
       parentId: journal.id,
       orderKey,
       content: longLabel,
-    })
+    }, {systemMint: true})
     await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
     await repo.addTypeInTx(
       tx, id, DAILY_NOTE_TYPE,
@@ -314,6 +314,10 @@ export const ensureDailyNoteTarget = async (
     parentId: null,
     orderKey: keyAtEnd(),
     freshContent: date,
+    // A daily-note seat materialized from a reference is a speculative
+    // default — it must yield to a real daily-note row the server already
+    // has for this date.
+    systemMint: true,
     onInsertedOrRestored: async (tx, id) => {
       await tx.setProperty(id, aliasesProp, [date])
       await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: [date]}, typeSnapshot)

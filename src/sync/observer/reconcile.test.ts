@@ -1,7 +1,22 @@
 import { describe, expect, it } from 'vitest'
 import { decideStagingRow, type LocalRowState } from './reconcile.js'
 
-const noLocal: LocalRowState = { localUpdatedAt: null, hasPendingUpload: false }
+const noLocal: LocalRowState = {
+  localUpdatedAt: null,
+  hasPendingUpload: false,
+  isOwnSystemMint: false,
+}
+
+/** A non-pending local row with the given stamp; `isOwnSystemMint` toggles
+ *  whether it's this client's pristine speculative default or a real edit. */
+const local = (
+  localUpdatedAt: number,
+  opts: { pending?: boolean; systemMint?: boolean } = {},
+): LocalRowState => ({
+  localUpdatedAt,
+  hasPendingUpload: opts.pending ?? false,
+  isOwnSystemMint: opts.systemMint ?? false,
+})
 
 describe('decideStagingRow — materializability', () => {
   it('defers when the workspace is not materializable (locked / quarantine)', () => {
@@ -26,32 +41,49 @@ describe('decideStagingRow — materializability', () => {
 
 describe('decideStagingRow — local-edit reconciliation', () => {
   it('skips when an upload is pending for this id (echo will reconcile)', () => {
-    const action = decideStagingRow('copy', 999, { localUpdatedAt: 1, hasPendingUpload: true })
+    const action = decideStagingRow('copy', 999, local(1, { pending: true }))
     expect(action).toEqual({ kind: 'skip-stale' })
   })
 
   it('pending upload wins even if the staging row looks newer', () => {
     // hasPendingUpload short-circuits before the stamp comparison.
-    const action = decideStagingRow('decrypt', Number.MAX_SAFE_INTEGER, {
-      localUpdatedAt: 0,
-      hasPendingUpload: true,
-    })
+    const action = decideStagingRow('decrypt', Number.MAX_SAFE_INTEGER, local(0, { pending: true }))
     expect(action).toEqual({ kind: 'skip-stale' })
   })
 
-  it('applies even when the local row is strictly newer (non-pending → server wins)', () => {
-    // A non-pending local row that differs from the server is NOT a local edit
-    // (PowerSync's model: server-authoritative-except-pending) — it's a
-    // speculative bootstrap default minted with a fresh `now` stamp, or a
-    // dropped upload. The server's older-but-authoritative value must win, or it
-    // shadows real synced config on every fresh client. Only `hasPendingUpload`
-    // (a genuine local edit) or an equal stamp protects the local row.
-    const action = decideStagingRow('copy', 100, { localUpdatedAt: 200, hasPendingUpload: false })
+  it('strict: protects a strictly-newer REAL local edit (replay-safe)', () => {
+    // A non-pending, non-system local row strictly newer than the staging
+    // snapshot is a just-uploaded edit facing a stale older in-flight delivery.
+    // Protect it — overwriting on disk then re-healing via the upload echo is
+    // the QuickFind-freeze pattern the canary guards.
+    const action = decideStagingRow('copy', 100, local(200))
+    expect(action).toEqual({ kind: 'skip-stale' })
+  })
+
+  it('strict: a strictly-newer OWN system mint yields to the server (heals)', () => {
+    // The pristine speculative default minted on read-as-absent. The server's
+    // older-but-authoritative value must win or it shadows real synced config.
+    const action = decideStagingRow('copy', 100, local(200, { systemMint: true }))
     expect(action).toEqual({ kind: 'apply', decrypt: false })
   })
 
+  it('healing: a strictly-newer REAL local edit also yields (pre-provenance shadow)', () => {
+    // Pre-provenance shadows are stamped with the real user, so strict mode
+    // would protect them. The one-time recovery rescan runs in healing mode,
+    // where the server wins on any strictly-newer non-pending row.
+    const action = decideStagingRow('copy', 100, local(200), 'healing')
+    expect(action).toEqual({ kind: 'apply', decrypt: false })
+  })
+
+  it('healing still respects the pending-upload guard', () => {
+    // Healing relaxes only the strictly-newer branch — an unsent edit is never
+    // lost, in either mode.
+    const action = decideStagingRow('copy', 100, local(200, { pending: true }), 'healing')
+    expect(action).toEqual({ kind: 'skip-stale' })
+  })
+
   it('applies when the staging row is newer than the local row', () => {
-    const action = decideStagingRow('decrypt', 300, { localUpdatedAt: 200, hasPendingUpload: false })
+    const action = decideStagingRow('decrypt', 300, local(200))
     expect(action).toEqual({ kind: 'apply', decrypt: true })
   })
 
@@ -60,15 +92,11 @@ describe('decideStagingRow — local-edit reconciliation', () => {
     // updated_at. The observer materializes into the persistent SQLite `blocks`
     // table, so applying an equal-stamp snapshot would overwrite a local edit on
     // disk and resurface it after reload — the cache gate can't guard that.
-    const action = decideStagingRow('copy', 200, { localUpdatedAt: 200, hasPendingUpload: false })
-    expect(action).toEqual({ kind: 'skip-stale' })
-  })
-
-  it('a pending upload still wins over a strictly-older staging row', () => {
-    // The pending guard is the genuine-local-edit signal; it must short-circuit
-    // before the (now relaxed) stamp comparison so an unsent edit is never lost.
-    const action = decideStagingRow('copy', 100, { localUpdatedAt: 200, hasPendingUpload: true })
-    expect(action).toEqual({ kind: 'skip-stale' })
+    // Holds in both modes, and even for an own system mint.
+    expect(decideStagingRow('copy', 200, local(200))).toEqual({ kind: 'skip-stale' })
+    expect(decideStagingRow('copy', 200, local(200, { systemMint: true })))
+      .toEqual({ kind: 'skip-stale' })
+    expect(decideStagingRow('copy', 200, local(200), 'healing')).toEqual({ kind: 'skip-stale' })
   })
 
   it('applies a first-seen row (no local copy yet)', () => {
@@ -77,7 +105,7 @@ describe('decideStagingRow — local-edit reconciliation', () => {
 
   it('defer takes precedence over any local state', () => {
     expect(
-      decideStagingRow('defer', 1, { localUpdatedAt: 999, hasPendingUpload: true }),
+      decideStagingRow('defer', 1, local(999, { pending: true })),
     ).toEqual({ kind: 'defer' })
   })
 })
