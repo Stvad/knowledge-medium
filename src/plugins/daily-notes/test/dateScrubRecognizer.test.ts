@@ -2,7 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { dateScrubRecognizer } from '../dateScrubRecognizer.ts'
-import type { DateScrubProgressDetail } from '../dateScrubGesture.ts'
+import { registerScrubHandler, type DateScrubProgressDetail, type ScrubHandler } from '../dateScrubGesture.ts'
 import type {
   GestureEventContext,
   GesturePhaseResult,
@@ -155,19 +155,27 @@ describe('dateScrubRecognizer', () => {
     expect(v.status).toBe('cancel')
   })
 
-  it('keeps the scrub alive when an untracked extra finger is cancelled', () => {
-    const r = make()
-    lock(r)
-    expect(progressDetail(moveBy(r, 28, 0)).begin).toBeDefined() // activated
-    // A third, untracked finger receives pointercancel while anchors 1, 2 stay
-    // down — the scrub must survive (next tick streams, no re-activation).
-    const extra = pointer(3, 200, 100)
-    r.onPointerCancel?.(session(extra, [pointer(1, 128, 100), pointer(2, 168, 100), extra]), eventCtx())
-    expect(progressDetail(moveBy(r, 42, 0)).begin).toBeUndefined()
-    // A tracked finger's cancel resets: the next move re-locks (dx≈0 → idle)
-    // rather than continuing the old scrub from the original anchor.
-    r.onPointerCancel?.(session(pointer(1, 142, 100), [pointer(1, 142, 100), pointer(2, 182, 100)]), eventCtx())
-    expect(moveBy(r, 56, 0).status).toBe('idle')
+  it('keeps the scrub on an untracked finger cancel, but reverts immediately on a tracked one', () => {
+    const handler: ScrubHandler = {start: vi.fn(() => true), update: vi.fn(), end: vi.fn()}
+    const unregister = registerScrubHandler(handler)
+    try {
+      const r = make()
+      lock(r)
+      expect(progressDetail(moveBy(r, 28, 0)).begin).toBeDefined() // activated
+      // A third, untracked finger receives pointercancel while anchors 1, 2 stay
+      // down — the scrub must survive (next tick streams, no revert/re-activation).
+      const extra = pointer(3, 200, 100)
+      r.onPointerCancel?.(session(extra, [pointer(1, 128, 100), pointer(2, 168, 100), extra]), eventCtx())
+      expect(handler.end).not.toHaveBeenCalled()
+      expect(progressDetail(moveBy(r, 42, 0)).begin).toBeUndefined()
+      // A tracked finger's cancel reverts the overlay NOW (end(false)) and resets,
+      // so the next move re-locks (dx≈0 → idle) rather than continuing the scrub.
+      r.onPointerCancel?.(session(pointer(1, 142, 100), [pointer(1, 142, 100), pointer(2, 182, 100)]), eventCtx())
+      expect(handler.end).toHaveBeenCalledWith(false)
+      expect(moveBy(r, 56, 0).status).toBe('idle')
+    } finally {
+      unregister()
+    }
   })
 
   it('ignores non-touch pointers (mouse)', () => {

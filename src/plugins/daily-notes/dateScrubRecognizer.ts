@@ -37,6 +37,7 @@ import { pickBlockDateAdapter } from './blockDateAdapter.ts'
 import {
   computeDeltaDays,
   dateScrubProgressTickEvent,
+  endTouchScrub,
   DATE_SCRUB_COMMIT_GESTURE,
   DATE_SCRUB_GESTURE,
 } from './dateScrubGesture.ts'
@@ -249,11 +250,17 @@ export const dateScrubRecognizer: BlockGestureRecognizerContribution = context =
       // would revert a scrub neither tracked finger left.
       if (!anchor) return
       if (session.changed.pointerId !== anchor.idA && session.changed.pointerId !== anchor.idB) return
-      // A tracked finger was cancelled: drop local state. The loop settles the
-      // in-flight preview (→ the reveal action's end(false)) once the remaining
-      // pointers lift.
+      // A tracked finger was cancelled — revert the preview NOW, matching the
+      // old touch path. The loop only settles the progress action once ALL
+      // pointers are gone, but a two-finger gesture must revert the moment a
+      // tracked finger is cancelled, or the overlay lingers (and a fresh finger
+      // could be read as continuing this scrub) while the other finger stays
+      // down. end is idempotent, so the loop's eventual all-gone settle is a
+      // no-op once we've reverted here.
+      const wasScrubbing = scrubbing
       anchor = null
       scrubbing = false
+      if (wasScrubbing) endTouchScrub(false)
     },
   }
 }
