@@ -96,19 +96,24 @@ export const dateScrubRecognizer: BlockGestureRecognizerContribution = context =
     scrubbing = false
   }
 
-  // Touch + mobile only, off the editor / interactive descendants (links + video
-  // excepted), not while this block is being edited.
-  const canTrack = (ctx: GestureEventContext): boolean =>
-    ctx.event.pointerType === 'touch' &&
-    isMobileViewport() &&
-    !(isInteractiveContentEvent(ctx.event) && !isScrubSurfaceEvent(ctx.event.target)) &&
-    !editing()
+  // Gesture-wide gate: touch + mobile + not editing. The per-POINTER interactive
+  // check is separate (isEligibleSurface), applied to each anchor finger at lock
+  // time — so a finger that began on a button/editor can't be half of the pair.
+  const gestureAllowed = (ctx: GestureEventContext): boolean =>
+    ctx.event.pointerType === 'touch' && isMobileViewport() && !editing()
 
-  // Lock onto the first two fingers as the anchor pair, using their LIVE session
-  // positions (so a finger that drifted before its partner landed doesn't leave
-  // a stale midpoint).
+  // A finger may anchor a scrub only if it began OFF interactive content (links
+  // and video excepted). Touch pointers get implicit capture, so a pointer's
+  // session `target` stays its down target — reliable to check at lock time.
+  const isEligibleSurface = (target: EventTarget | null): boolean =>
+    isScrubSurfaceEvent(target) || !isInteractiveContentEvent({target})
+
+  // Lock onto the first two ELIGIBLE fingers as the anchor pair, using their LIVE
+  // session positions (so a finger that drifted before its partner landed doesn't
+  // leave a stale midpoint). A finger resting on an interactive control is skipped,
+  // so a two-finger scrub can't start with one finger on a control it would consume.
   const lockAnchor = (session: GestureSession): void => {
-    const [a, b] = session.pointers
+    const [a, b] = session.pointers.filter(p => isEligibleSurface(p.target))
     if (!a || !b) return
     const mid = midpointOf(a, b)
     anchor = { idA: a.pointerId, idB: b.pointerId, midX: mid.x, midY: mid.y, lastMidX: mid.x, lastMidY: mid.y }
@@ -124,13 +129,14 @@ export const dateScrubRecognizer: BlockGestureRecognizerContribution = context =
   const onTwoFinger = (session: GestureSession, ctx: GestureEventContext): GesturePhaseResult => {
     // Anchor lazily: the loop may not have run our onPointerDown for the 2nd
     // finger if a rival owned the block when it landed, so the first event we
-    // get to process can be a move with both fingers already down.
+    // get to process can be a move with both fingers already down. lockAnchor
+    // only sets the anchor when two ELIGIBLE fingers are present.
     if (!anchor) {
-      if (!canTrack(ctx)) return GESTURE_IDLE
+      if (!gestureAllowed(ctx)) return GESTURE_IDLE
       lockAnchor(session)
     }
     const pair = trackedPair(session)
-    if (!pair) return GESTURE_IDLE // one tracked finger missing — up settles it
+    if (!pair) return GESTURE_IDLE // <2 eligible fingers, or one tracked finger lifted
 
     const mid = midpointOf(pair.a, pair.b)
     anchor!.lastMidX = mid.x
@@ -168,7 +174,7 @@ export const dateScrubRecognizer: BlockGestureRecognizerContribution = context =
     touchAction: 'pan-y',
 
     onPointerDown(session, ctx) {
-      if (!canTrack(ctx)) return GESTURE_IDLE
+      if (!gestureAllowed(ctx)) return GESTURE_IDLE
       if (!anchor && session.pointers.length >= 2) lockAnchor(session)
       return GESTURE_IDLE
     },

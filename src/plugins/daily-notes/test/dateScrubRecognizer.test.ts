@@ -106,6 +106,24 @@ describe('dateScrubRecognizer', () => {
     expect(verdict.status).toBe('idle')
   })
 
+  it('does not start when one anchor finger began on an interactive control', () => {
+    installHandler(true)
+    const r = make()
+    const button = document.createElement('button')
+    const onButton = (x: number, y: number): GesturePointer =>
+      ({pointerId: 1, x, y, pointerType: 'touch', target: button})
+    // Finger 1 lands on a button; finger 2 on normal content (null target).
+    r.onPointerDown?.(session(pointer(2, 140, 100), [onButton(100, 100), pointer(2, 140, 100)]), eventCtx())
+    // Drag the midpoint horizontally past the lock — must NOT start: only one of
+    // the two fingers is on an eligible surface, so there's no anchor pair.
+    const verdict = r.onPointerMove?.(
+      session(onButton(128, 100), [onButton(128, 100), pointer(2, 168, 100)]),
+      eventCtx(),
+    ) as GesturePhaseResult
+    expect(handler.start).not.toHaveBeenCalled()
+    expect(verdict.status).toBe('idle')
+  })
+
   it('stays idle for a single finger', () => {
     installHandler(true)
     const r = make()
