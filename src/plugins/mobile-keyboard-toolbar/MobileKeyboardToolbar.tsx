@@ -13,6 +13,7 @@ import { useRunAction } from '@/shortcuts/runAction.js'
 import { useActiveContextsState } from '@/shortcuts/ActiveContexts.js'
 import { ActionContextTypes, type CodeMirrorEditModeDependencies } from '@/shortcuts/types.js'
 import { acquireBlurExitSuppression } from '@/components/BlockEditor.js'
+import { setEditingToolbarHeight } from '@/utils/keyboardViewport.js'
 import {
   INSERT_BLOCK_REF_TRIGGER_ACTION_ID,
   INSERT_PAGE_REF_TRIGGER_ACTION_ID,
@@ -183,6 +184,27 @@ export function MobileKeyboardToolbar() {
   // toolbar is on screen.
   const keyboardInset = useKeyboardInset(isMobile && isEditing)
 
+  // Publish the toolbar's rendered height so keyboardAwareScroll can keep
+  // the caret above the toolbar, not just above the keyboard. Measured
+  // (rather than hardcoded) so it tracks button/padding/safe-area changes,
+  // and re-published via ResizeObserver; cleared to 0 on unmount.
+  const toolbarRef = useRef<HTMLDivElement | null>(null)
+  useLayoutEffect(() => {
+    const el = toolbarRef.current
+    if (!el) {
+      setEditingToolbarHeight(0)
+      return
+    }
+    const measure = () => setEditingToolbarHeight(el.getBoundingClientRect().height)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => {
+      observer.disconnect()
+      setEditingToolbarHeight(0)
+    }
+  }, [isMobile, isEditing])
+
   if (!isMobile || !isEditing) return null
 
   // Prevent the editor from blurring when a button is pressed — losing
@@ -252,6 +274,7 @@ export function MobileKeyboardToolbar() {
 
   return (
     <div
+      ref={toolbarRef}
       // `keyboardInset` is 0 on browsers where bottom:0 already lands
       // above the keyboard (Chrome on Android, iOS Safari) and equals
       // the keyboard's CSS-px height on browsers that anchor

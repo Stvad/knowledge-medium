@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getKeyboardOverlap, subscribeKeyboardViewport } from '@/utils/keyboardViewport'
+import {
+  getBottomEditingInset,
+  getKeyboardOverlap,
+  setEditingToolbarHeight,
+  subscribeKeyboardViewport,
+} from '@/utils/keyboardViewport'
 
 /** Minimal stand-in for window.visualViewport that lets tests drive the
  *  height/offsetTop the overlap formula reads, and records listeners so
@@ -26,6 +31,8 @@ const installViewport = (initial: {height: number; offsetTop?: number}) => {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  // Module-level state — reset so it doesn't bleed between tests.
+  setEditingToolbarHeight(0)
 })
 
 describe('getKeyboardOverlap', () => {
@@ -83,5 +90,35 @@ describe('subscribeKeyboardViewport', () => {
     unsub()
     vv.emit('resize')
     expect(seen).toHaveBeenCalledTimes(2) // no longer notified
+  })
+
+  it('notifies subscribers when the editing toolbar height changes', () => {
+    installViewport({height: 500})
+    const seen = vi.fn()
+    const unsub = subscribeKeyboardViewport(seen)
+
+    setEditingToolbarHeight(48)
+    expect(seen).toHaveBeenCalledTimes(1)
+
+    setEditingToolbarHeight(48) // unchanged — no notification
+    expect(seen).toHaveBeenCalledTimes(1)
+
+    unsub()
+  })
+})
+
+describe('getBottomEditingInset', () => {
+  it('adds the editing toolbar height on top of the keyboard overlap', () => {
+    vi.stubGlobal('innerHeight', 800)
+    installViewport({height: 500}) // 300px keyboard overlap
+    setEditingToolbarHeight(48)
+    expect(getBottomEditingInset()).toBe(348)
+  })
+
+  it('is just the toolbar height when there is no keyboard', () => {
+    vi.stubGlobal('innerHeight', 500)
+    installViewport({height: 500}) // 0px overlap
+    setEditingToolbarHeight(48)
+    expect(getBottomEditingInset()).toBe(48)
   })
 })
