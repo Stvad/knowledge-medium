@@ -1,0 +1,951 @@
+import {
+  actionsFacet, ActionContextTypes, appEffectsFacet, appMountsFacet,
+  ChangeScope, codecs, defineBlockType, defineProperty, definePropertyEditorOverride,
+  getPluginPrefsBlock, propertyEditorOverridesFacet, propertySchemasFacet,
+  showError, showInfo, showSuccess, showPropertiesProp, typesFacet, useRepo,
+  type PropertyEditorProps,
+} from '@/extensions/api.js'
+import { keyAtEnd, keysBetween } from '@/data/orderKey.js'
+import { addBlockTypeToProperties } from '@/data/properties.js'
+import { dailyNoteBlockId, getOrCreateDailyNote, todayIso } from '@/plugins/daily-notes/index.js'
+import { computePromotedFromChildren } from '@/plugins/roam-import/plan.js'
+import { navigate } from '@/utils/navigation.js'
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog.js'
+import { Button } from '@/components/ui/button.js'
+import { Input } from '@/components/ui/input.js'
+import { Label } from '@/components/ui/label.js'
+import { useEffect, useState } from 'react'
+import * as matrixSdk from 'https://esm.sh/matrix-js-sdk@38.0.0?bundle'
+
+// ---------------------------------------------------------------------------
+// constants
+
+const source = 'matrix-chat-client'
+const MATRIX_MESSAGE_TYPE = 'matrix-message'
+const TAG_BLOCK_CONTENT = '[[matrix-messages]]'
+const POLL_ERROR_DELAY_MS = 5_000
+
+// secret — lives only in localStorage, never in a synced block or toast output
+const TOKEN_KEY = 'knowledge-medium:matrix:token:v1'
+// per-client long-poll cursor — device/server specific, must NOT sync, so
+// it stays in localStorage rather than the (synced) prefs block.
+const NEXT_BATCH_PREFIX = 'knowledge-medium:matrix:next-batch:v1'
+// one-time migration marker (per workspace) — see migrateEventNamespace.
+const MIGRATION_FLAG_PREFIX = 'knowledge-medium:matrix:migrated:event-ns:v1'
+
+const OPEN_SETUP_EVENT = 'matrix:setup:open'
+const RESTART_EVENT = 'matrix:ingest:restart'
+
+// ---------------------------------------------------------------------------
+// properties — config lives on the per-plugin prefs block; the access token
+// stays in localStorage. Event metadata on message blocks lives under the
+// reserved `matrix-event:*` namespace so it can never collide with `key::value`
+// attributes promoted out of message *content* (which keep the `matrix:*`
+// namespace — see matrixPromotionOptions below).
+
+const homeserverProp = defineProperty<string>('matrix:homeserver', {
+  codec: codecs.string,
+  defaultValue: 'https://matrix.org',
+  changeScope: ChangeScope.BlockDefault,
+})
+const roomIdProp = defineProperty<string>('matrix:roomId', {
+  codec: codecs.string,
+  defaultValue: '',
+  changeScope: ChangeScope.BlockDefault,
+})
+const autoStartProp = defineProperty<boolean>('matrix:autoStart', {
+  codec: codecs.boolean,
+  defaultValue: true,
+  changeScope: ChangeScope.BlockDefault,
+})
+// UI hints mirrored onto the prefs block so the settings panel can render
+// connection/status without subscribing to localStorage or the poll loop.
+const connectedHintProp = defineProperty<boolean>('matrix:connected', {
+  codec: codecs.boolean,
+  defaultValue: false,
+  changeScope: ChangeScope.UserPrefs,
+})
+const statusProp = defineProperty<string | undefined>('matrix:status', {
+  codec: codecs.optionalString,
+  defaultValue: undefined,
+  changeScope: ChangeScope.UserPrefs,
+})
+
+// Per-message event metadata. Reserved `matrix-event:*` namespace.
+const eventIdProp = defineProperty<string>('matrix-event:id', {
+  codec: codecs.string,
+  defaultValue: '',
+  changeScope: ChangeScope.BlockDefault,
+})
+const eventRoomProp = defineProperty<string>('matrix-event:room', {
+  codec: codecs.string,
+  defaultValue: '',
+  changeScope: ChangeScope.BlockDefault,
+})
+const eventUrlProp = defineProperty<string | undefined>('matrix-event:url', {
+  codec: codecs.optionalString,
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+const eventAuthorProp = defineProperty<string | undefined>('matrix-event:author', {
+  codec: codecs.optionalString,
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+const eventTimestampProp = defineProperty<number | undefined>('matrix-event:timestamp', {
+  codec: codecs.optionalNumber,
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+const matrixChatPrefsType = defineBlockType({
+  id: 'matrix-chat-prefs',
+  label: 'Matrix',
+  properties: [homeserverProp, roomIdProp, autoStartProp, connectedHintProp, statusProp],
+})
+const matrixMessageType = defineBlockType({
+  id: MATRIX_MESSAGE_TYPE,
+  label: 'Matrix message',
+  description: 'A message ingested from a Matrix room.',
+  properties: [eventIdProp, eventRoomProp, eventUrlProp, eventAuthorProp, eventTimestampProp],
+})
+
+// Mapping for the one-time rename of the legacy `matrix:*` event-metadata
+// keys onto the reserved `matrix-event:*` namespace.
+const EVENT_KEY_RENAMES: ReadonlyArray<readonly [string, string]> = [
+  ['matrix:eventId', eventIdProp.name],
+  ['matrix:roomId', eventRoomProp.name],
+  ['matrix:url', eventUrlProp.name],
+  ['matrix:author', eventAuthorProp.name],
+  ['matrix:timestamp', eventTimestampProp.name],
+]
+
+// ---------------------------------------------------------------------------
+// config / secret storage
+
+const normalizeBaseUrl = (value: string): string => value.replace(/\/+$/, '')
+
+const loadToken = (): string | null => window.localStorage.getItem(TOKEN_KEY)
+const saveToken = (t: string) => window.localStorage.setItem(TOKEN_KEY, t)
+const clearToken = () => window.localStorage.removeItem(TOKEN_KEY)
+
+interface MatrixConfig {
+  baseUrl: string
+  roomId: string
+  accessToken: string
+  autoStart: boolean
+}
+
+const prefsBlock = (repo: any) => {
+  const workspaceId = repo.activeWorkspaceId
+  if (!workspaceId) return null
+  return getPluginPrefsBlock(repo, workspaceId, repo.user, matrixChatPrefsType)
+}
+
+const loadConfig = async (repo: any): Promise<MatrixConfig | null> => {
+  const prefs = await prefsBlock(repo)
+  if (!prefs) return null
+  const baseUrl = normalizeBaseUrl(prefs.get(homeserverProp))
+  const roomId = prefs.get(roomIdProp)
+  const accessToken = loadToken()
+  if (!baseUrl || !roomId || !accessToken) return null
+  return {baseUrl, roomId, accessToken, autoStart: prefs.get(autoStartProp)}
+}
+
+const setStatus = async (repo: any, status: string): Promise<void> => {
+  try {
+    const prefs = await prefsBlock(repo)
+    if (prefs && prefs.peekProperty(statusProp) !== status) await prefs.set(statusProp, status)
+  } catch {
+    // status is a best-effort UI hint — never let it break the poll loop
+  }
+}
+
+// ---------------------------------------------------------------------------
+// long-poll cursor (localStorage)
+
+const nextBatchKey = (config: MatrixConfig): string =>
+  `${NEXT_BATCH_PREFIX}:${normalizeBaseUrl(config.baseUrl)}:${config.roomId}`
+
+const loadNextBatch = (config: MatrixConfig): string | null =>
+  window.localStorage.getItem(nextBatchKey(config))
+
+const saveNextBatch = (config: MatrixConfig, nextBatch: string) =>
+  window.localStorage.setItem(nextBatchKey(config), nextBatch)
+
+const clearNextBatch = (config: Pick<MatrixConfig, 'baseUrl' | 'roomId'>) =>
+  window.localStorage.removeItem(
+    `${NEXT_BATCH_PREFIX}:${normalizeBaseUrl(config.baseUrl)}:${config.roomId}`,
+  )
+
+// ---------------------------------------------------------------------------
+// matrix sync
+
+const sleep = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
+  const timeout = window.setTimeout(resolve, ms)
+  signal.addEventListener('abort', () => {
+    window.clearTimeout(timeout)
+    reject(new DOMException('Aborted', 'AbortError'))
+  }, {once: true})
+})
+
+const syncFilter = (config: MatrixConfig) => ({
+  room: {
+    rooms: [config.roomId],
+    timeline: {types: ['m.room.message'], limit: 30},
+    state: {types: []},
+    ephemeral: {types: []},
+    account_data: {types: []},
+  },
+  presence: {types: []},
+  account_data: {types: []},
+})
+
+const buildSyncQueryParams = (config: MatrixConfig, since: string | null) => {
+  const queryParams: Record<string, string> = {
+    timeout: since ? '30000' : '0',
+    filter: JSON.stringify(syncFilter(config)),
+  }
+  if (since) queryParams.since = since
+  return queryParams
+}
+
+const createMatrixClient = (config: MatrixConfig) =>
+  matrixSdk.createClient({
+    baseUrl: normalizeBaseUrl(config.baseUrl),
+    accessToken: config.accessToken,
+  })
+
+const fetchMatrixSync = (config: MatrixConfig, since: string | null, signal: AbortSignal, matrixClient: any) =>
+  matrixClient.http.authedRequest(
+    'GET',
+    '/sync',
+    buildSyncQueryParams(config, since),
+    undefined,
+    {abortSignal: signal},
+  )
+
+const roomEventsFromSync = (syncBody: any, roomId: string): any[] => {
+  const events = syncBody?.rooms?.join?.[roomId]?.timeline?.events
+  return Array.isArray(events) ? events : []
+}
+
+const eventTimestamp = (event: any): number => {
+  const ts = event?.origin_server_ts
+  return typeof ts === 'number' && Number.isFinite(ts) ? ts : Date.now()
+}
+
+// ---------------------------------------------------------------------------
+// message text → markdown
+
+const escapeRegex = (value: unknown) => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+const unwrapLinks = (value: unknown): string => {
+  let text = String(value ?? '')
+  text = text.replace(
+    /\[(.*?)]\(https:\/\/roamresearch\.com\/#\/app\/[^/]+\/page\/[a-zA-Z-_0-9]+?\)/g,
+    '$1',
+  )
+
+  const origin = window.location?.origin
+  if (origin) {
+    text = text.replace(new RegExp(`\\[(.*?)]\\(${escapeRegex(origin)}\\/[^)]*\\)`, 'g'), '$1')
+  }
+
+  return text
+}
+
+const mxcToHttpUrl = (mxcUrl: unknown, matrixClient: any): string => {
+  if (typeof mxcUrl !== 'string' || !mxcUrl.startsWith('mxc://')) return (mxcUrl as string) || ''
+
+  return matrixClient.mxcUrlToHttp(
+    mxcUrl,
+    undefined,
+    undefined,
+    undefined,
+    false,
+    true,
+    false,
+  ) || ''
+}
+
+const getMediaLabel = (content: any, fallback: string): string =>
+  String(content.body || content.filename || fallback).trim() || fallback
+
+const getMessageText = (event: any, matrixClient: any): string => {
+  const content = event.content && typeof event.content === 'object' ? event.content : {}
+  const msgtype = typeof content.msgtype === 'string' ? content.msgtype : 'm.room.message'
+
+  if (msgtype === 'm.audio') {
+    return `{{[[audio]]: ${mxcToHttpUrl(content.url, matrixClient)} }}`
+  }
+
+  if (msgtype === 'm.image') {
+    return `![${getMediaLabel(content, 'image')}](${mxcToHttpUrl(content.url, matrixClient)})`
+  }
+
+  if (msgtype === 'm.file' || msgtype === 'm.video') {
+    return `[${getMediaLabel(content, msgtype)}](${mxcToHttpUrl(content.url, matrixClient)})`
+  }
+
+  if (msgtype === 'm.emote') return `* ${unwrapLinks(content.body)}`
+  return unwrapLinks(content.body || content.url || msgtype)
+}
+
+interface BlockDef {
+  content: string
+  children?: BlockDef[]
+  properties?: Record<string, unknown>
+}
+
+const isListItem = (line: string) => /^(\s*)-\s+/.test(line)
+
+const parseListItem = (line: string) => {
+  const listItemMatch = line.match(/^(\s*)-\s+(.*)/)
+  if (!listItemMatch) throw new Error('Invalid list item format')
+  return {leadingSpaces: listItemMatch[1].length, content: listItemMatch[2]}
+}
+
+const isValidIndentation = (spaces: number) => spaces % 2 === 0
+
+const appendContinuationLine = (block: BlockDef, line: string) => {
+  block.content += `\n${line.trim()}`
+}
+
+const parseLines = (lines: string[], level = 0): BlockDef[] | null => {
+  const blocks: BlockDef[] = []
+
+  while (lines.length > 0) {
+    const line = lines[0]
+
+    if (isListItem(line)) {
+      const {leadingSpaces, content} = parseListItem(line)
+      if (!isValidIndentation(leadingSpaces)) return null
+
+      const indentationLevel = leadingSpaces / 2
+      if (indentationLevel < level) break
+
+      if (indentationLevel > level) {
+        if (!blocks.length) return null
+        const nestedBlocks = parseLines(lines, indentationLevel)
+        if (!nestedBlocks) return null
+        const parent = blocks[blocks.length - 1]
+        parent.children = [...(parent.children ?? []), ...nestedBlocks]
+        continue
+      }
+
+      lines.shift()
+      blocks.push({content})
+      continue
+    }
+
+    if (!blocks.length) return null
+    appendContinuationLine(blocks[blocks.length - 1], line)
+    lines.shift()
+  }
+
+  return blocks
+}
+
+const parseMarkdownToBlockDefinitions = (markdownText: string): BlockDef[] => {
+  const source = String(markdownText ?? '')
+  const lines = source.split(/\r?\n/).filter(line => line.trim() !== '')
+  const blocks = parseLines([...lines])
+  return blocks && blocks.length ? blocks : [{content: source.trim() || '(empty message)'}]
+}
+
+// ---------------------------------------------------------------------------
+// attribute promotion — `key::value` children of message *content* are hoisted
+// onto their parent under the `matrix:*` namespace. This is deliberately
+// distinct from the reserved `matrix-event:*` keys the ingest sets, so a chat
+// message that happens to contain `timestamp::…` can never overwrite the
+// event's own timestamp.
+
+const matrixEventUrl = (roomId: string, eventId: string) => `https://matrix.to/#/${roomId}/${eventId}`
+const matrixPromotionOptions = {
+  namespacePrefix: 'matrix',
+  transformKey: (key: string) => key.toLowerCase(),
+}
+
+const propertyValues = (value: unknown): unknown[] => Array.isArray(value) ? value : [value]
+
+const samePropertyValue = (left: unknown, right: unknown) => Object.is(left, right)
+
+const mergePropertyValue = (current: unknown, incoming: unknown): unknown => {
+  if (current === undefined) return incoming
+
+  const values: unknown[] = []
+  for (const value of [...propertyValues(current), ...propertyValues(incoming)]) {
+    if (!values.some(existing => samePropertyValue(existing, value))) {
+      values.push(value)
+    }
+  }
+  return values.length === 1 ? values[0] : values
+}
+
+const mergeProperties = (...propertyBags: Array<Record<string, unknown> | undefined>): Record<string, unknown> | undefined => {
+  const merged: Record<string, unknown> = {}
+  for (const bag of propertyBags) {
+    if (!bag || typeof bag !== 'object') continue
+    for (const [key, value] of Object.entries(bag)) {
+      merged[key] = mergePropertyValue(merged[key], value)
+    }
+  }
+  return Object.keys(merged).length ? merged : undefined
+}
+
+const blockPathUid = (path: number[]) => `matrix-message:${path.join('.')}`
+
+const toRoamBlock = (block: BlockDef, path: number[]): any => ({
+  uid: blockPathUid(path),
+  string: block.content,
+  children: (block.children ?? []).map((child, index) => toRoamBlock(child, [...path, index])),
+})
+
+const withPromotedMatrixProperties = (blocks: BlockDef[], bubbled = new Set<string>(), path: number[] = []): BlockDef[] =>
+  blocks.map((block, index) => {
+    const blockPath = [...path, index]
+    const children = Array.isArray(block.children) ? block.children : []
+    const promotion = computePromotedFromChildren(
+      children.map((child, childIndex) => toRoamBlock(child, [...blockPath, childIndex])),
+      bubbled,
+      matrixPromotionOptions,
+    )
+
+    for (const uid of promotion.bubbled) bubbled.add(uid)
+
+    const promotedChildren = withPromotedMatrixProperties(children, bubbled, blockPath)
+    return {
+      ...block,
+      properties: mergeProperties(block.properties, promotion.promoted),
+      children: promotedChildren.length ? promotedChildren : undefined,
+    }
+  })
+
+const nestTopLevelBlocksUnderFirst = (blocks: BlockDef[]): BlockDef[] => {
+  if (blocks.length <= 1) return blocks
+  const [first, ...rest] = blocks
+  return [{
+    ...first,
+    children: [...(first.children ?? []), ...rest],
+  }]
+}
+
+const createBlocksFromEvent = (event: any, matrixClient: any): BlockDef[] => {
+  const text = getMessageText(event, matrixClient)
+  return withPromotedMatrixProperties(
+    nestTopLevelBlocksUnderFirst(parseMarkdownToBlockDefinitions(text)),
+  )
+}
+
+// ---------------------------------------------------------------------------
+// write the message into today's daily note
+
+const createBlockTree = async (
+  tx: any,
+  workspaceId: string,
+  parentId: string,
+  blockDefinitions: BlockDef[],
+  rootProperties?: Record<string, unknown>,
+): Promise<void> => {
+  if (!blockDefinitions.length) return
+
+  const existingChildren = await tx.childrenOf(parentId, workspaceId)
+  const orderKeys = keysBetween(
+    existingChildren.at(-1)?.orderKey ?? null,
+    null,
+    blockDefinitions.length,
+  )
+
+  for (const [index, block] of blockDefinitions.entries()) {
+    const merged = mergeProperties(index === 0 ? rootProperties : undefined, block.properties)
+    // The message root is marked as a `matrix-message` block so its event
+    // metadata renders under that type in the property panel. addBlockType…
+    // re-encodes `types` through the list codec — going through our own
+    // mergeProperties would collapse a single-element list back to a scalar.
+    const properties = index === 0
+      ? addBlockTypeToProperties(merged ?? {}, MATRIX_MESSAGE_TYPE)
+      : merged
+
+    const id = await tx.create({
+      workspaceId,
+      parentId,
+      orderKey: orderKeys[index],
+      content: block.content,
+      properties,
+    })
+
+    if (Array.isArray(block.children) && block.children.length) {
+      await createBlockTree(tx, workspaceId, id, block.children)
+    }
+  }
+}
+
+const appendMatrixMessage = async (repo: any, config: MatrixConfig, event: any, matrixClient: any): Promise<void> => {
+  const eventId = typeof event.event_id === 'string' ? event.event_id : null
+  if (!eventId) return
+
+  const workspaceId = repo.activeWorkspaceId
+  if (!workspaceId) throw new Error('Matrix message ingest requires an active workspace')
+
+  const iso = todayIso(new Date(eventTimestamp(event)))
+  await getOrCreateDailyNote(repo, workspaceId, iso)
+  const dailyId = dailyNoteBlockId(workspaceId, iso)
+
+  await repo.tx(async (tx: any) => {
+    const dailyChildren = await tx.childrenOf(dailyId, workspaceId)
+    let tagBlock = dailyChildren.find((child: any) => child.content.trim() === TAG_BLOCK_CONTENT)
+    let tagBlockId = tagBlock?.id
+
+    if (!tagBlockId) {
+      tagBlockId = await tx.create({
+        workspaceId,
+        parentId: dailyId,
+        orderKey: keyAtEnd(dailyChildren.at(-1)?.orderKey ?? null),
+        content: TAG_BLOCK_CONTENT,
+      })
+    }
+
+    const messageChildren = await tx.childrenOf(tagBlockId, workspaceId)
+    const alreadyPosted = messageChildren.some((child: any) =>
+      child.properties?.[eventIdProp.name] === eventId,
+    )
+    if (alreadyPosted) return
+
+    await createBlockTree(
+      tx,
+      workspaceId,
+      tagBlockId,
+      createBlocksFromEvent(event, matrixClient),
+      {
+        [eventIdProp.name]: eventId,
+        [eventRoomProp.name]: config.roomId,
+        [eventUrlProp.name]: matrixEventUrl(config.roomId, eventId),
+        [eventAuthorProp.name]: typeof event.sender === 'string' ? event.sender : '',
+        [eventTimestampProp.name]: eventTimestamp(event),
+      },
+    )
+  }, {scope: ChangeScope.BlockDefault, description: 'matrix message ingest'})
+}
+
+// ---------------------------------------------------------------------------
+// one-time migration: rename legacy `matrix:*` event metadata onto the
+// reserved `matrix-event:*` namespace. Runs once per workspace, scoped to the
+// active workspace, idempotent (per-row recheck + localStorage marker). The
+// discriminator is the camelCased `matrix:eventId`, which only the ingest sets
+// — content promotion lowercases keys, so it can never produce it.
+
+const migrationFlagKey = (workspaceId: string) => `${MIGRATION_FLAG_PREFIX}:${workspaceId}`
+
+const migrateEventNamespace = async (repo: any): Promise<void> => {
+  const workspaceId = repo.activeWorkspaceId
+  if (!workspaceId || repo.isReadOnly) return
+  if (window.localStorage.getItem(migrationFlagKey(workspaceId))) return
+
+  // Candidate roots: carry the legacy key but not the new one yet. The JSON
+  // paths are fixed literals (no user input), so inlining them is safe.
+  const candidates = await repo.db.getAll(
+    `SELECT id FROM blocks
+       WHERE workspace_id = ?
+         AND deleted = 0
+         AND json_extract(properties_json, '$."matrix:eventId"') IS NOT NULL
+         AND json_extract(properties_json, '$."matrix-event:id"') IS NULL`,
+    [workspaceId],
+  ) as Array<{id: string}>
+
+  const BATCH = 200
+  for (let i = 0; i < candidates.length; i += BATCH) {
+    const batch = candidates.slice(i, i + BATCH)
+    await repo.tx(async (tx: any) => {
+      for (const {id} of batch) {
+        const block = await tx.get(id)
+        if (!block || block.deleted) continue
+        // Re-check inside the tx — a concurrent ingest may have raced us.
+        if (block.properties['matrix:eventId'] === undefined) continue
+        if (block.properties[eventIdProp.name] !== undefined) continue
+
+        const next: Record<string, unknown> = {...block.properties}
+        for (const [oldKey, newKey] of EVENT_KEY_RENAMES) {
+          if (!(oldKey in next)) continue
+          if (!(newKey in next)) next[newKey] = next[oldKey]
+          delete next[oldKey]
+        }
+        await tx.update(id, {properties: addBlockTypeToProperties(next, MATRIX_MESSAGE_TYPE)})
+      }
+    }, {scope: ChangeScope.BlockDefault, description: 'matrix: migrate event metadata namespace'})
+  }
+
+  window.localStorage.setItem(migrationFlagKey(workspaceId), new Date().toISOString())
+  if (candidates.length > 0) {
+    showInfo(`Matrix: migrated ${candidates.length} message(s) to the matrix-event namespace.`)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// poll loop
+
+const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSignal, matrixClient: any): Promise<void> => {
+  let nextBatch = loadNextBatch(config)
+  let erroredOnce = false
+  await setStatus(repo, 'running')
+
+  while (!signal.aborted) {
+    try {
+      const syncBody = await fetchMatrixSync(config, nextBatch, signal, matrixClient)
+      const events = nextBatch ? roomEventsFromSync(syncBody, config.roomId) : []
+
+      for (const event of events) {
+        if (event?.type !== 'm.room.message') continue
+        await appendMatrixMessage(repo, config, event, matrixClient)
+      }
+
+      const newBatch = syncBody?.next_batch
+      if (typeof newBatch === 'string') {
+        nextBatch = newBatch
+        saveNextBatch(config, newBatch)
+      }
+      if (erroredOnce) {
+        erroredOnce = false
+        await setStatus(repo, 'running')
+      }
+    } catch (error) {
+      if (signal.aborted) return
+      const message = error instanceof Error ? error.message : String(error)
+      console.error('[matrix-messages]', error)
+      // Surface the error once per failure streak — a long-poll can fail
+      // every few seconds and we don't want to bury the user in toasts.
+      if (!erroredOnce) {
+        erroredOnce = true
+        await setStatus(repo, `error: ${message}`)
+        showError(`Matrix ingest error: ${message}`)
+      }
+      await sleep(POLL_ERROR_DELAY_MS, signal).catch(() => undefined)
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// background effect — owns the poll lifecycle. No window-global singleton:
+// the effect runtime calls our cleanup on hot-reload / disable, and we abort
+// the in-flight poll there.
+
+const matrixIngestEffect = {
+  id: 'matrix-chat-client.ingest',
+  start: ({repo}: {repo: any}) => {
+    let currentAbort: AbortController | null = null
+    let cancelled = false
+
+    const startPoll = async () => {
+      currentAbort?.abort()
+      currentAbort = null
+      if (cancelled) return
+
+      const config = await loadConfig(repo).catch(() => null)
+      if (!config) {
+        await setStatus(repo, 'unconfigured')
+        return
+      }
+      if (!config.autoStart) {
+        await setStatus(repo, 'stopped')
+        return
+      }
+
+      const abort = new AbortController()
+      currentAbort = abort
+      const matrixClient = createMatrixClient(config)
+      void pollLoop(repo, config, abort.signal, matrixClient).catch(error => {
+        if (!abort.signal.aborted) console.error('[matrix-messages]', error)
+      })
+    }
+
+    const onRestart = () => { void startPoll() }
+    window.addEventListener(RESTART_EVENT, onRestart)
+
+    void (async () => {
+      try {
+        await migrateEventNamespace(repo)
+      } catch (error) {
+        console.error('[matrix-messages] migration', error)
+      }
+      await startPoll()
+    })()
+
+    return () => {
+      cancelled = true
+      window.removeEventListener(RESTART_EVENT, onRestart)
+      currentAbort?.abort()
+      currentAbort = null
+    }
+  },
+}
+
+const requestRestart = () => window.dispatchEvent(new CustomEvent(RESTART_EVENT))
+
+// ---------------------------------------------------------------------------
+// setup dialog (homeserver / room / token)
+
+const MatrixSetupDialog = () => {
+  const repo = useRepo()
+  const [open, setOpen] = useState(false)
+  const [homeserver, setHomeserver] = useState('https://matrix.org')
+  const [roomId, setRoomId] = useState('')
+  const [token, setToken] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    const onOpen = async () => {
+      setToken('')
+      try {
+        const prefs = await prefsBlock(repo)
+        if (prefs) {
+          setHomeserver(prefs.get(homeserverProp) || 'https://matrix.org')
+          setRoomId(prefs.get(roomIdProp) || '')
+        }
+      } catch {
+        // fall back to defaults
+      }
+      setOpen(true)
+    }
+    window.addEventListener(OPEN_SETUP_EVENT, onOpen)
+    return () => window.removeEventListener(OPEN_SETUP_EVENT, onOpen)
+  }, [repo])
+
+  const save = async () => {
+    setSaving(true)
+    try {
+      const prefs = await prefsBlock(repo)
+      if (!prefs) {
+        showError('No active workspace')
+        return
+      }
+      const tokenToUse = token || loadToken()
+      if (!tokenToUse) {
+        showError('An access token is required.')
+        return
+      }
+      await prefs.set(homeserverProp, normalizeBaseUrl(homeserver))
+      await prefs.set(roomIdProp, roomId.trim())
+      await prefs.set(autoStartProp, true)
+      await prefs.set(connectedHintProp, true)
+      if (token) saveToken(token)
+      requestRestart()
+      showSuccess('Matrix connected.')
+      setOpen(false)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Connect Matrix</DialogTitle>
+          <DialogDescription>
+            Point at your homeserver and the room to ingest, then paste an access token.
+            The token is stored locally and never synced.
+          </DialogDescription>
+        </DialogHeader>
+        <div className='flex flex-col gap-3'>
+          <div className='flex flex-col gap-1'>
+            <Label htmlFor='mx-homeserver'>Homeserver URL</Label>
+            <Input
+              id='mx-homeserver'
+              value={homeserver}
+              onChange={e => setHomeserver(e.target.value)}
+              disabled={saving}
+              placeholder='https://matrix.org'
+            />
+          </div>
+          <div className='flex flex-col gap-1'>
+            <Label htmlFor='mx-room'>Room ID</Label>
+            <Input
+              id='mx-room'
+              value={roomId}
+              onChange={e => setRoomId(e.target.value)}
+              disabled={saving}
+              placeholder='!roomid:matrix.org'
+            />
+          </div>
+          <div className='flex flex-col gap-1'>
+            <Label htmlFor='mx-token'>Access token</Label>
+            <Input
+              id='mx-token'
+              value={token}
+              onChange={e => setToken(e.target.value)}
+              disabled={saving}
+              type='password'
+              placeholder={loadToken() ? 'leave blank to keep saved token' : 'paste token'}
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant='ghost' onClick={() => setOpen(false)} disabled={saving}>Cancel</Button>
+          <Button onClick={save} disabled={!roomId || saving}>
+            {saving ? 'Saving…' : 'Save'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// property editors (rendered on the prefs block's property panel)
+
+const ConnectedEditor = ({value, onChange}: PropertyEditorProps<boolean>) => {
+  const repo = useRepo()
+  const tokenPresent = loadToken() != null
+  const connected = value && tokenPresent
+  return (
+    <div className='flex items-center gap-2'>
+      <span>{connected ? 'Connected ✓' : 'Not connected'}</span>
+      {connected
+        ? (
+          <Button
+            variant='outline'
+            size='sm'
+            onClick={() => {
+              clearToken()
+              onChange(false)
+              requestRestart()
+              showInfo('Matrix disconnected.')
+            }}
+          >Disconnect</Button>
+          )
+        : (
+          <Button
+            size='sm'
+            onClick={() => window.dispatchEvent(new CustomEvent(OPEN_SETUP_EVENT))}
+          >Connect…</Button>
+          )}
+      <Button
+        variant='outline'
+        size='sm'
+        onClick={() => { void repo; requestRestart() }}
+        disabled={!tokenPresent}
+      >Restart ingest</Button>
+    </div>
+  )
+}
+
+const StatusEditor = ({value}: PropertyEditorProps<string | undefined>) => (
+  <span style={{color: 'var(--muted-foreground)'}}>{value ?? 'idle'}</span>
+)
+
+const connectedEditor = definePropertyEditorOverride<boolean>({
+  name: connectedHintProp.name,
+  label: 'Matrix',
+  Editor: ConnectedEditor,
+})
+const statusEditor = definePropertyEditorOverride<string | undefined>({
+  name: statusProp.name,
+  label: 'Status',
+  Editor: StatusEditor,
+})
+const homeserverEditor = definePropertyEditorOverride<string>({
+  name: homeserverProp.name,
+  label: 'Homeserver URL',
+})
+const roomIdEditor = definePropertyEditorOverride<string>({
+  name: roomIdProp.name,
+  label: 'Room ID',
+})
+const autoStartEditor = definePropertyEditorOverride<boolean>({
+  name: autoStartProp.name,
+  label: 'Auto-start ingest',
+})
+
+// ---------------------------------------------------------------------------
+// actions
+
+const openSettingsAction = {
+  id: 'matrix.configure',
+  description: 'Matrix: open settings',
+  context: ActionContextTypes.GLOBAL,
+  handler: async ({uiStateBlock}: {uiStateBlock: any}) => {
+    const repo = uiStateBlock.repo
+    const workspaceId = repo.activeWorkspaceId
+    if (!workspaceId) return
+    const prefs = await getPluginPrefsBlock(repo, workspaceId, repo.user, matrixChatPrefsType)
+    await prefs.set(showPropertiesProp, true)
+    navigate(repo, {target: 'new-panel', blockId: prefs.id, workspaceId})
+  },
+}
+
+const connectAction = {
+  id: 'matrix.connect',
+  description: 'Matrix: connect / change token',
+  context: ActionContextTypes.GLOBAL,
+  handler: () => { window.dispatchEvent(new CustomEvent(OPEN_SETUP_EVENT)) },
+}
+
+const startAction = {
+  id: 'matrix.start',
+  description: 'Matrix: start message ingest',
+  context: ActionContextTypes.GLOBAL,
+  handler: async ({uiStateBlock}: {uiStateBlock: any}) => {
+    const prefs = await prefsBlock(uiStateBlock.repo)
+    if (prefs) await prefs.set(autoStartProp, true)
+    requestRestart()
+  },
+}
+
+const stopAction = {
+  id: 'matrix.stop',
+  description: 'Matrix: stop message ingest',
+  context: ActionContextTypes.GLOBAL,
+  handler: async ({uiStateBlock}: {uiStateBlock: any}) => {
+    const prefs = await prefsBlock(uiStateBlock.repo)
+    if (prefs) await prefs.set(autoStartProp, false)
+    requestRestart()
+  },
+}
+
+const resetPositionAction = {
+  id: 'matrix.reset-position',
+  description: 'Matrix: reset message ingest position',
+  context: ActionContextTypes.GLOBAL,
+  handler: async ({uiStateBlock}: {uiStateBlock: any}) => {
+    const prefs = await prefsBlock(uiStateBlock.repo)
+    if (!prefs) return
+    clearNextBatch({baseUrl: prefs.get(homeserverProp), roomId: prefs.get(roomIdProp)})
+    requestRestart()
+  },
+}
+
+// ---------------------------------------------------------------------------
+// wiring
+
+export default [
+  typesFacet.of(matrixChatPrefsType, {source}),
+  typesFacet.of(matrixMessageType, {source}),
+
+  propertySchemasFacet.of(homeserverProp, {source}),
+  propertySchemasFacet.of(roomIdProp, {source}),
+  propertySchemasFacet.of(autoStartProp, {source}),
+  propertySchemasFacet.of(connectedHintProp, {source}),
+  propertySchemasFacet.of(statusProp, {source}),
+  propertySchemasFacet.of(eventIdProp, {source}),
+  propertySchemasFacet.of(eventRoomProp, {source}),
+  propertySchemasFacet.of(eventUrlProp, {source}),
+  propertySchemasFacet.of(eventAuthorProp, {source}),
+  propertySchemasFacet.of(eventTimestampProp, {source}),
+
+  propertyEditorOverridesFacet.of(connectedEditor, {source}),
+  propertyEditorOverridesFacet.of(statusEditor, {source}),
+  propertyEditorOverridesFacet.of(homeserverEditor, {source}),
+  propertyEditorOverridesFacet.of(roomIdEditor, {source}),
+  propertyEditorOverridesFacet.of(autoStartEditor, {source}),
+
+  appMountsFacet.of({id: 'matrix.setup-dialog', component: MatrixSetupDialog}, {source}),
+  appEffectsFacet.of(matrixIngestEffect, {source}),
+
+  actionsFacet.of(openSettingsAction, {source}),
+  actionsFacet.of(connectAction, {source}),
+  actionsFacet.of(startAction, {source}),
+  actionsFacet.of(stopAction, {source}),
+  actionsFacet.of(resetPositionAction, {source}),
+]
