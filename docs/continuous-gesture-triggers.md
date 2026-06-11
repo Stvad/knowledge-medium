@@ -220,9 +220,14 @@ type GesturePhaseResult =
    `gestureBinding: {gesture: 'swipe-right'}` — no more `SWIPE_RIGHT_BLOCK_ACTION_ID`
    by name.
 4. **Scrub → daily-notes recognizer.** Stays contributed by the daily-notes
-   plugin, proving the third-party recognizer path. Emits e.g.
-   `'date-scrub-commit'`; the keyboard/wheel scrub stays as-is (no touch
-   competitor).
+   plugin, proving the third-party recognizer path. It pre-checks
+   date-shiftability (`pickBlockDateAdapter`) so it only claims a block a scrub
+   can act on — then emits `'date-scrub'` (progress) and `'date-scrub-commit'`
+   (commit); the gesture-bound actions drive the same `ScrubHandler`/overlay the
+   keyboard/wheel scrub already reaches through `DATE_SCRUB_CONTEXT` actions, so
+   all three input paths ride the action system. (Progress/commit resolve
+   independently, as above — the recognizer streams the preview through
+   `date-scrub` and writes on `date-scrub-commit`.)
 5. **Retire `blockGestureConflicts`** once both ride the loop's arbitration.
 
 ## Escape hatch (first-class, not a fallback)

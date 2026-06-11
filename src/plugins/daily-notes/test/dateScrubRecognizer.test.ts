@@ -2,7 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { dateScrubRecognizer } from '../dateScrubRecognizer.ts'
-import { registerScrubHandler, type ScrubHandler } from '../dateScrubGesture.ts'
+import type { DateScrubProgressDetail } from '../dateScrubGesture.ts'
 import type {
   GestureEventContext,
   GesturePhaseResult,
@@ -16,14 +16,19 @@ import type { Block } from '@/data/block'
 const fakeBlock = (id: string): Block =>
   ({id, peekProperty: vi.fn(() => undefined)} as unknown as Block)
 
-const context = (): BlockResolveContext =>
+// The recognizer pre-checks date-shiftability via `context.repo.facetRuntime`
+// (pickBlockDateAdapter → runtime.read(blockDateAdapterFacet)); a fake runtime
+// returns a matching adapter when `shiftable`, none otherwise.
+const context = (shiftable = true): BlockResolveContext =>
   ({
     block: fakeBlock('b1'),
     uiStateBlock: {
       peek: vi.fn(() => ({properties: {}})),
       peekProperty: vi.fn(() => undefined),
     } as unknown as Block,
-    repo: {} as never,
+    repo: {
+      facetRuntime: {read: () => (shiftable ? [{canHandle: () => true}] : [])},
+    } as never,
     types: [],
     isTopLevel: false,
   } as unknown as BlockResolveContext)
@@ -37,18 +42,10 @@ const session = (changed: GesturePointer, all: readonly GesturePointer[]): Gestu
 const eventCtx = (pointerType = 'touch'): GestureEventContext =>
   ({element: document.createElement('div'), event: {pointerType, target: null} as unknown as PointerEvent})
 
-const make = (): GestureRecognizer => {
-  const r = dateScrubRecognizer(context())
+const make = (shiftable = true): GestureRecognizer => {
+  const r = dateScrubRecognizer(context(shiftable))
   if (!r) throw new Error('recognizer not contributed')
   return r
-}
-
-let handler: ScrubHandler
-let unregister: (() => void) | null = null
-
-const installHandler = (accept = true): void => {
-  handler = {start: vi.fn(() => accept), update: vi.fn(), end: vi.fn()}
-  unregister = registerScrubHandler(handler)
 }
 
 // Lock the two-finger anchor at (120,100): fingers 1 and 2, midpoint there.
@@ -65,49 +62,56 @@ const moveBy = (r: GestureRecognizer, dx: number, dy: number): GesturePhaseResul
   return r.onPointerMove?.(session(a, [a, b]), eventCtx()) as GesturePhaseResult
 }
 
+const progressDetail = (v: GesturePhaseResult): DateScrubProgressDetail => {
+  if (v.status !== 'progress') throw new Error(`expected progress, got ${v.status}`)
+  return (v.event as CustomEvent<DateScrubProgressDetail>).detail
+}
+
 beforeEach(() => {
   window.matchMedia = vi.fn().mockReturnValue({matches: true}) as unknown as typeof window.matchMedia
 })
 afterEach(() => {
-  unregister?.()
-  unregister = null
   vi.restoreAllMocks()
 })
 
 describe('dateScrubRecognizer', () => {
-  it('starts the scrub and streams day deltas on a two-finger horizontal drag', () => {
-    installHandler(true)
+  it('claims and streams a `date-scrub` progress tick on a two-finger horizontal drag', () => {
     const r = make()
     lock(r)
-    const verdict = moveBy(r, 28, 0) // +28px ≈ 2 days, horizontal dominates
-    expect(verdict.status).toBe('active')
-    expect(handler.start).toHaveBeenCalledWith(
-      expect.objectContaining({blockId: 'b1', startX: 120, startY: 100}),
-    )
-    expect(handler.update).toHaveBeenCalledWith(2, false)
+    const v = moveBy(r, 28, 0) // +28px ≈ 2 days, horizontal dominates
+    expect(v.status).toBe('progress')
+    if (v.status !== 'progress') return
+    expect(v.gesture).toBe('date-scrub')
+    const detail = progressDetail(v)
+    expect(detail.deltaDays).toBe(2)
+    expect(detail.cancelIntent).toBe(false)
+    // The activation tick carries the lock midpoint so the action opens there.
+    expect(detail.begin).toEqual({startX: 120, startY: 100})
   })
 
-  it('yields when the overlay rejects the block (not date-shiftable)', () => {
-    installHandler(false)
+  it('drops `begin` after the activation tick (overlay opens once)', () => {
     const r = make()
     lock(r)
-    const verdict = moveBy(r, 28, 0)
-    expect(handler.start).toHaveBeenCalledTimes(1)
-    expect(handler.update).not.toHaveBeenCalled()
-    expect(verdict.status).toBe('cancel') // drop the claim so a rival can have it
+    moveBy(r, 28, 0)
+    const detail = progressDetail(moveBy(r, 42, 0))
+    expect(detail.begin).toBeUndefined()
+    expect(detail.deltaDays).toBe(3)
   })
 
-  it('does not start on a two-finger vertical drag (scroll, not scrub)', () => {
-    installHandler(true)
+  it('yields (cancel) when the block is not date-shiftable — no phantom claim', () => {
+    const r = make(false)
+    lock(r)
+    const v = moveBy(r, 28, 0)
+    expect(v.status).toBe('cancel') // drop the claim so a rival can have it
+  })
+
+  it('does not activate on a two-finger vertical drag (scroll, not scrub)', () => {
     const r = make()
     lock(r)
-    const verdict = moveBy(r, 0, 40)
-    expect(handler.start).not.toHaveBeenCalled()
-    expect(verdict.status).toBe('idle')
+    expect(moveBy(r, 0, 40).status).toBe('idle')
   })
 
   it('does not start when one anchor finger began on an interactive control', () => {
-    installHandler(true)
     const r = make()
     const button = document.createElement('button')
     const onButton = (x: number, y: number): GesturePointer =>
@@ -120,58 +124,53 @@ describe('dateScrubRecognizer', () => {
       session(onButton(128, 100), [onButton(128, 100), pointer(2, 168, 100)]),
       eventCtx(),
     ) as GesturePhaseResult
-    expect(handler.start).not.toHaveBeenCalled()
     expect(verdict.status).toBe('idle')
   })
 
   it('stays idle for a single finger', () => {
-    installHandler(true)
     const r = make()
     const a = pointer(1, 100, 100)
     const verdict = r.onPointerMove?.(session(a, [a]), eventCtx()) as GesturePhaseResult
     expect(verdict.status).toBe('idle')
-    expect(handler.start).not.toHaveBeenCalled()
   })
 
-  it('commits on release when the scrub ended on a horizontal note', () => {
-    installHandler(true)
+  it('commits `date-scrub-commit` on release when the scrub ended on a horizontal note', () => {
     const r = make()
     lock(r)
     moveBy(r, 28, 0)
     const a = pointer(1, 128, 100)
-    const verdict = r.onPointerUp?.(session(a, [a, pointer(2, 168, 100)]), eventCtx()) as GesturePhaseResult
-    expect(handler.end).toHaveBeenCalledWith(true)
-    expect(verdict.status).toBe('active') // claims the up so the click is suppressed
+    const v = r.onPointerUp?.(session(a, [a, pointer(2, 168, 100)]), eventCtx()) as GesturePhaseResult
+    expect(v.status).toBe('commit')
+    if (v.status !== 'commit') return
+    expect(v.gesture).toBe('date-scrub-commit')
   })
 
-  it('reverts on release when the final vertical travel reads as cancel', () => {
-    installHandler(true)
+  it('yields (cancel → the loop settles the preview) when the final vertical travel reads as cancel', () => {
     const r = make()
     lock(r)
     moveBy(r, 28, 0) // activate
     moveBy(r, 28, 80) // drag down past the cancel threshold
     const a = pointer(1, 128, 180)
-    r.onPointerUp?.(session(a, [a, pointer(2, 168, 180)]), eventCtx())
-    expect(handler.end).toHaveBeenCalledWith(false)
+    const v = r.onPointerUp?.(session(a, [a, pointer(2, 168, 180)]), eventCtx()) as GesturePhaseResult
+    expect(v.status).toBe('cancel')
   })
 
   it('keeps the scrub alive when an untracked extra finger is cancelled', () => {
-    installHandler(true)
     const r = make()
     lock(r)
-    moveBy(r, 28, 0) // activate
-    // A third, untracked finger on the same block receives pointercancel while
-    // both anchor fingers (1, 2) stay down — must NOT end the scrub.
+    expect(progressDetail(moveBy(r, 28, 0)).begin).toBeDefined() // activated
+    // A third, untracked finger receives pointercancel while anchors 1, 2 stay
+    // down — the scrub must survive (next tick streams, no re-activation).
     const extra = pointer(3, 200, 100)
     r.onPointerCancel?.(session(extra, [pointer(1, 128, 100), pointer(2, 168, 100), extra]), eventCtx())
-    expect(handler.end).not.toHaveBeenCalled()
-    // A tracked finger's cancel does revert the scrub.
-    r.onPointerCancel?.(session(pointer(1, 128, 100), [pointer(1, 128, 100), pointer(2, 168, 100)]), eventCtx())
-    expect(handler.end).toHaveBeenCalledWith(false)
+    expect(progressDetail(moveBy(r, 42, 0)).begin).toBeUndefined()
+    // A tracked finger's cancel resets: the next move re-locks (dx≈0 → idle)
+    // rather than continuing the old scrub from the original anchor.
+    r.onPointerCancel?.(session(pointer(1, 142, 100), [pointer(1, 142, 100), pointer(2, 182, 100)]), eventCtx())
+    expect(moveBy(r, 56, 0).status).toBe('idle')
   })
 
   it('ignores non-touch pointers (mouse)', () => {
-    installHandler(true)
     const r = make()
     const verdict = r.onPointerDown?.(
       session(pointer(1, 100, 100), [pointer(1, 100, 100), pointer(2, 140, 100)]),

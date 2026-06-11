@@ -1,42 +1,48 @@
 /**
- * Date-scrub recognizer for the continuous-gesture loop — the migration of the
- * bespoke two-finger touch handlers (the old `dateScrubContentSurface`) onto
- * `continuousGestureRecognizersFacet`.
+ * Date-scrub recognizer for the continuous-gesture loop.
  *
- * It classifies a TWO-finger horizontal drag and drives the registered
- * `ScrubHandler` (the `DateScrubOverlay`) directly — start / update / end —
- * rather than dispatching a named gesture through the action system. The overlay
- * owns the live numeric preview + the accept/reject decision, and the keyboard /
- * wheel scrub path already talks to the same handler, so the recognizer is just
- * the touch INPUT driver for it.
+ * It classifies a TWO-finger horizontal drag and — like the swipe recognizer —
+ * emits NAMED gestures rather than driving the overlay itself:
+ *  - on activation it PRE-CHECKS date-shiftability (`pickBlockDateAdapter`), so
+ *    it only CLAIMS a block a scrub can act on — no phantom claim of a non-date
+ *    block (the claim would otherwise evict rivals / suppress moves for nothing);
+ *  - then streams `date-scrub` PROGRESS ticks (the first carries `begin`, the
+ *    locked midpoint, so the bound action opens the overlay there);
+ *  - and emits a `date-scrub-commit` COMMIT on a committing release, or yields
+ *    (`cancel`) on a release/abort that should revert — the loop settles the
+ *    in-flight preview back.
+ * The gesture-bound ACTIONS (`dateScrubGestureActions.ts`) drive the registered
+ * `ScrubHandler` (the `DateScrubOverlay`) — the same singleton the keyboard /
+ * wheel scrub already routes through `DATE_SCRUB_CONTEXT` actions. So all three
+ * input paths ride the action system; this is just the touch INPUT driver.
  *
  * The loop supplies the pointer SESSION and ARBITRATION, so this no longer
- * tracks `Touch.identifier`s by hand or coordinate with the swipe via
- * `blockGestureConflicts`: the 1-finger swipe yields on the 2nd finger (a cancel
- * verdict, which settles its preview) and last-active-wins lets this recognizer
- * claim the block.
+ * tracks `Touch.identifier`s by hand or coordinates with the swipe via
+ * `blockGestureConflicts`: the 1-finger swipe yields on the 2nd finger and
+ * last-active-wins lets this recognizer claim the block.
  */
 import type {
   BlockGestureRecognizerContribution,
   GestureEventContext,
   GesturePhaseResult,
   GesturePointer,
-  GestureRecognizer,
   GestureSession,
 } from '@/extensions/continuousGestures.js'
-import { GESTURE_ACTIVE, GESTURE_CANCEL, GESTURE_IDLE } from '@/extensions/continuousGestures.js'
+import { GESTURE_CANCEL, GESTURE_IDLE } from '@/extensions/continuousGestures.js'
 import { isInteractiveContentEvent } from '@/extensions/blockInteraction.js'
 import { isEditingProp, isFocusedBlock } from '@/data/properties.js'
 import type { Block } from '@/data/block'
+import type { BlockPointerDependencies } from '@/shortcuts/types.js'
+import { pickBlockDateAdapter } from './blockDateAdapter.ts'
 import {
   computeDeltaDays,
-  endTouchScrub,
-  startTouchScrub,
-  updateTouchScrub,
+  dateScrubProgressTickEvent,
+  DATE_SCRUB_COMMIT_GESTURE,
+  DATE_SCRUB_GESTURE,
 } from './dateScrubGesture.ts'
 
-/** Arbitration key (also the recognizer id). */
-export const DATE_SCRUB_GESTURE_ID = 'date-scrub'
+/** Arbitration key (also the recognizer id); equals the PROGRESS gesture name. */
+export const DATE_SCRUB_GESTURE_ID = DATE_SCRUB_GESTURE
 
 const MOBILE_BREAKPOINT_QUERY = '(max-width: 767px)'
 const isMobileViewport = (): boolean =>
@@ -89,13 +95,6 @@ export const dateScrubRecognizer: BlockGestureRecognizerContribution = context =
 
   const editing = (): boolean => isBlockEditing(block.id, uiStateBlock, renderScopeId)
 
-  // Tear down. Ends the overlay (commit-or-revert) if a scrub was live.
-  const reset = (commit: boolean): void => {
-    if (scrubbing) endTouchScrub(commit)
-    anchor = null
-    scrubbing = false
-  }
-
   // Per-event ownership: a scrub is a TOUCH gesture, so a mouse/pen pointer
   // isn't ours. The coarse applicability gate (mobile + not editing) lives in
   // `isEnabled` below — the loop won't even call these handlers when it's false.
@@ -109,6 +108,35 @@ export const dateScrubRecognizer: BlockGestureRecognizerContribution = context =
   // session `target` stays its down target — reliable to check at lock time.
   const isEligibleSurface = (target: EventTarget | null): boolean =>
     isScrubSurfaceEvent(target) || !isInteractiveContentEvent({target})
+
+  // The swiped/scrubbed block's deps for the gesture-bound actions: a
+  // `block-pointer` action validates `BlockPointerDependencies`. The actions
+  // drive the module-singleton overlay, so they only read `block`, but the full
+  // shape keeps the deps valid for dispatch (mirrors the swipe recognizer).
+  const depsFor = (ctx: GestureEventContext): BlockPointerDependencies => ({
+    block,
+    uiStateBlock,
+    scopeRootId: context.scopeRootId,
+    scopeRootForcesOpen: !context.blockContext?.isNestedSurface,
+    targetElement: ctx.element,
+    ...(renderScopeId ? { renderScopeId } : {}),
+  })
+
+  const progressTick = (
+    dx: number,
+    dy: number,
+    ctx: GestureEventContext,
+    begin?: { startX: number; startY: number },
+  ): GesturePhaseResult => ({
+    status: 'progress',
+    gesture: DATE_SCRUB_GESTURE,
+    deps: depsFor(ctx),
+    event: dateScrubProgressTickEvent({
+      deltaDays: computeDeltaDays(dx),
+      cancelIntent: Math.abs(dy) > VERTICAL_CANCEL_PX,
+      ...(begin ? { begin } : {}),
+    }),
+  })
 
   // Lock onto the first two ELIGIBLE fingers as the anchor pair, using their LIVE
   // session positions (so a finger that drifted before its partner landed doesn't
@@ -150,25 +178,24 @@ export const dateScrubRecognizer: BlockGestureRecognizerContribution = context =
       // Pre-activation gate: horizontal travel past the lock AND dominating
       // vertical — rejects pinch (midpoint stays put) and two-finger scroll.
       if (Math.abs(dx) <= HORIZONTAL_LOCK_PX || Math.abs(dx) <= Math.abs(dy)) return GESTURE_IDLE
-      const accepted = startTouchScrub({
-        block,
-        blockId: block.id,
-        startX: anchor!.midX,
-        startY: anchor!.midY,
-      })
-      if (!accepted) {
-        // Not date-shiftable — yield the block (drop our claim and state).
+      // Pre-check date-shiftability so we only CLAIM a block a scrub can act on
+      // (no phantom claim). `pickBlockDateAdapter` is the same predicate the
+      // overlay's `start` re-checks — one source of truth, read in two places.
+      const runtime = context.repo.facetRuntime
+      if (!runtime || !pickBlockDateAdapter(runtime, block)) {
         anchor = null
         return GESTURE_CANCEL
       }
       scrubbing = true
+      // First (activation) tick carries `begin` so the bound action opens the
+      // overlay at the lock midpoint before the first update.
+      return progressTick(dx, dy, ctx, { startX: anchor!.midX, startY: anchor!.midY })
     }
 
-    updateTouchScrub(computeDeltaDays(dx), Math.abs(dy) > VERTICAL_CANCEL_PX)
-    return GESTURE_ACTIVE
+    return progressTick(dx, dy, ctx)
   }
 
-  const recognizer: GestureRecognizer = {
+  return {
     id: DATE_SCRUB_GESTURE_ID,
     // Applicability gate (mobile only, and a scrub is meaningless on an editing
     // block): the loop skips these handlers and drops this pan-y when false, so
@@ -194,7 +221,7 @@ export const dateScrubRecognizer: BlockGestureRecognizerContribution = context =
       return onTwoFinger(session, ctx)
     },
 
-    onPointerUp(session) {
+    onPointerUp(session, ctx) {
       if (!anchor) return GESTURE_IDLE
       const isOurs = session.changed.pointerId === anchor.idA || session.changed.pointerId === anchor.idB
       if (!isOurs) return GESTURE_IDLE
@@ -202,25 +229,31 @@ export const dateScrubRecognizer: BlockGestureRecognizerContribution = context =
         anchor = null
         return GESTURE_IDLE
       }
-      // A tracked finger lifted mid-scrub → end. Commit unless the final
-      // vertical travel reads as a cancel.
+      // A tracked finger lifted mid-scrub. Commit unless the final vertical
+      // travel reads as a cancel.
       const cancel = Math.abs(anchor.lastMidY - anchor.midY) > VERTICAL_CANCEL_PX
-      reset(!cancel)
-      // Claim the up (prevent: true) so the loop suppresses the synthesized
-      // click on the block after the scrub.
-      return GESTURE_ACTIVE
+      anchor = null
+      scrubbing = false
+      // cancel → yield so the loop settles the preview back (the reveal action's
+      // end(false)); commit → the bound commit action runs end(true). A handled
+      // commit also lets the loop swallow the trailing synthesized click.
+      return cancel
+        ? GESTURE_CANCEL
+        : { status: 'commit', gesture: DATE_SCRUB_COMMIT_GESTURE, deps: depsFor(ctx) }
     },
 
     onPointerCancel(session) {
       // Only a CANCEL of a tracked anchor finger ends the scrub. An extra /
-      // untracked finger on the same block can receive `pointercancel` (e.g. the
-      // browser drops it) while both anchored fingers stay down — reverting then
-      // would abort a scrub neither tracked finger left.
+      // untracked finger on the same block can receive `pointercancel` (the
+      // browser drops it) while both anchored fingers stay down — aborting then
+      // would revert a scrub neither tracked finger left.
       if (!anchor) return
       if (session.changed.pointerId !== anchor.idA && session.changed.pointerId !== anchor.idB) return
-      reset(false)
+      // A tracked finger was cancelled: drop local state. The loop settles the
+      // in-flight preview (→ the reveal action's end(false)) once the remaining
+      // pointers lift.
+      anchor = null
+      scrubbing = false
     },
   }
-
-  return recognizer
 }

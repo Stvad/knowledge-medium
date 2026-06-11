@@ -17,15 +17,17 @@
  *   - The React overlay (`DateScrubOverlay`) registers itself as the
  *     `ScrubHandler` on mount and unregisters on unmount. The overlay
  *     owns the runtime + adapter resolution + tooltip rendering.
- *   - This module owns the gesture tracking: per-block touch state,
- *     module-level keyboard/wheel scrub state, thresholds, scrub-active flag.
- *   - When midpoint horizontal travel crosses the activation
- *     threshold (and dominates vertical travel — so a two-finger
- *     vertical scroll doesn't trip it, and a pinch-zoom where the
- *     midpoint stays put doesn't either), we ask the overlay to
- *     start. If it accepts, we cancel the swipe-quick-actions
- *     candidate so the same gesture doesn't also open the swipe menu.
- *   - Either tracked finger lifting ends the mobile scrub.
+ *   - This module owns the SHARED scrub core: the touch-scrub wrappers
+ *     the gesture actions call, the module-level keyboard/wheel scrub
+ *     state machine, thresholds, and the px→day mapping.
+ *   - The TOUCH path rides the action system: `dateScrubRecognizer`
+ *     classifies the two-finger drag, pre-checks date-shiftability, and
+ *     emits `date-scrub` (progress) / `date-scrub-commit` (commit);
+ *     `dateScrubGestureActions` bind those and drive the overlay via the
+ *     wrappers below — symmetric with the keyboard/wheel path's
+ *     `DATE_SCRUB_CONTEXT` actions. Arbitration with the swipe is the
+ *     recognizer loop's (last-active-wins), not a manual swipe-candidate
+ *     cancel.
  */
 import type { Block } from '@/data/block'
 import type { BlockDateAdapter } from './blockDateAdapter.ts'
@@ -122,6 +124,36 @@ export const updateTouchScrub = (deltaDays: number, intentCancel: boolean): void
 export const endTouchScrub = (commit: boolean): void => {
   activeHandler?.end(commit)
 }
+
+/** Named gestures the date-scrub recognizer (`dateScrubRecognizer.ts`) emits for
+ *  actions (`dateScrubGestureActions.ts`) to bind: `date-scrub` carries the live
+ *  PROGRESS preview, `date-scrub-commit` the COMMIT on a committing release.
+ *  `DATE_SCRUB_GESTURE` doubles as the recognizer's arbitration id. */
+export const DATE_SCRUB_GESTURE = 'date-scrub'
+export const DATE_SCRUB_COMMIT_GESTURE = 'date-scrub-commit'
+
+/**
+ * The payload a date-scrub PROGRESS tick carries to the bound `date-scrub`
+ * action. `deltaDays` / `cancelIntent` drive the overlay's `update`; the
+ * activation (first) tick also carries `begin` — the locked two-finger midpoint
+ * — so the action opens the overlay there before the first update. Opaque to the
+ * dispatch layer, agreed between the recognizer and the action (as the swipe
+ * tick carries its `dx`).
+ */
+export interface DateScrubProgressDetail {
+  readonly deltaDays: number
+  readonly cancelIntent: boolean
+  readonly begin?: { readonly startX: number; readonly startY: number }
+}
+
+/** Event type the recognizer streams on each progress tick. The terminal settle
+ *  arrives as the dispatcher's `GESTURE_PROGRESS_CANCEL_EVENT` instead. */
+export const DATE_SCRUB_PROGRESS_TICK_EVENT = 'date-scrub-progress-tick'
+
+export const dateScrubProgressTickEvent = (
+  detail: DateScrubProgressDetail,
+): CustomEvent<DateScrubProgressDetail> =>
+  new CustomEvent(DATE_SCRUB_PROGRESS_TICK_EVENT, {detail})
 
 const finishKeyboardScrub = (commit: boolean): void => {
   const current = keyboardScrub

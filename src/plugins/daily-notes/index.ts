@@ -73,6 +73,7 @@ import { ReschedulePicker } from './ReschedulePicker.tsx'
 import { DateScrubOverlay } from './DateScrubOverlay.tsx'
 import { DateKeyboardScrubController } from './DateKeyboardScrubController.tsx'
 import { dateScrubRecognizer } from './dateScrubRecognizer.ts'
+import { dateScrubGestureActions } from './dateScrubGestureActions.ts'
 import {
   dateScrubActionContext,
   dateScrubActions,
@@ -198,8 +199,12 @@ export const dailyNotesPlugin = ({repo}: {repo: Repo}): AppExtension =>
     wikilinkDisplayDecoratorFacet.of(dailyDateWikilinkDecorator, {source: 'daily-notes'}),
     // Two-finger date scrub rides the core continuous-gesture loop now
     // (arbitration + the touch-action / pointer-listener seam live there); the
-    // recognizer drives the same ScrubHandler/overlay the keyboard path uses.
+    // recognizer emits named gestures and the gesture-bound actions below drive
+    // the same ScrubHandler/overlay the keyboard path uses.
     continuousGestureRecognizersFacet.of(dateScrubRecognizer, {source: 'daily-notes'}),
+    dateScrubGestureActions.map(action =>
+      actionsFacet.of(action, {source: 'daily-notes'}),
+    ),
     actionContextsFacet.of(dateScrubActionContext, {source: 'daily-notes'}),
     dateScrubActions.map(action =>
       actionsFacet.of(action, {source: 'daily-notes'}),
