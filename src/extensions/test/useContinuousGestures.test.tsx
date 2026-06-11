@@ -66,6 +66,48 @@ describe('useContinuousGestures', () => {
     firePointerDown(getByTestId('b'))
     expect(onPointerDown).toHaveBeenCalledTimes(2)
   })
+
+  it('re-applies touch-action when the viewport crosses a recognizer breakpoint', () => {
+    // The host re-renders on edit-mode but NOT on a breakpoint cross (its
+    // useIsMobile lives in child slots), so without a viewport subscription a
+    // recognizer that becomes enabled/disabled by width would strand a stale
+    // (or missing) pan-y. The hook subscribes to resizes to recompute.
+    const original = window.matchMedia
+    let mobile = false
+    window.matchMedia = ((query: string) => ({
+      matches: mobile,
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    })) as unknown as typeof window.matchMedia
+
+    const recognizer: GestureRecognizer = {
+      id: 'swipe',
+      isEnabled: () => window.matchMedia('(max-width: 767px)').matches,
+      touchAction: 'pan-y',
+    }
+    const runtime = resolveFacetRuntimeSync([
+      continuousGestureRecognizersFacet.of(() => recognizer),
+    ])
+
+    const {getByTestId} = render(
+      <AppRuntimeContextProvider value={runtime}>
+        <Harness which="a"/>
+      </AppRuntimeContextProvider>,
+    )
+    const el = getByTestId('a')
+    expect(el.style.touchAction).toBe('') // desktop: recognizer disabled → no pan-y
+
+    mobile = true
+    act(() => { window.dispatchEvent(new Event('resize')) })
+    expect(el.style.touchAction).toBe('pan-y') // crossed into mobile → applied
+
+    mobile = false
+    act(() => { window.dispatchEvent(new Event('resize')) })
+    expect(el.style.touchAction).toBe('') // crossed back out → removed
+
+    window.matchMedia = original
+  })
 })
 
 describe('suppressNextClick', () => {

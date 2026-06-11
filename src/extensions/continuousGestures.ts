@@ -32,7 +32,7 @@
  * this facet, contribute raw `blockContentSurfacePropsFacet` handlers, and reach
  * the same trigger via `dispatchGesture` directly (the escape hatch).
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { RefCallback, RefObject } from 'react'
 import { defineFacet, isFunction } from '@/extensions/facet.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
@@ -516,6 +516,25 @@ export const suppressNextClick = (element: HTMLElement): void => {
 }
 
 /**
+ * Subscribe to viewport changes that can flip a recognizer's `isEnabled`
+ * (crossing a width breakpoint, an orientation change). Deliberately generic —
+ * it carries no specific media query, so whatever breakpoint a recognizer reads
+ * is covered; the `touch-action` snapshot's value-equality (a string) keeps a
+ * resize that doesn't change enablement from re-rendering. Module-level so its
+ * identity is stable across renders (a changing `subscribe` would re-subscribe
+ * every render).
+ */
+const subscribeViewport = (onChange: () => void): (() => void) => {
+  if (typeof window === 'undefined') return () => {}
+  window.addEventListener('resize', onChange)
+  window.addEventListener('orientationchange', onChange)
+  return () => {
+    window.removeEventListener('resize', onChange)
+    window.removeEventListener('orientationchange', onChange)
+  }
+}
+
+/**
  * Wire the per-block recognition loop onto a content-surface element. Attaches
  * native Pointer Event listeners (move is non-passive so `preventDefault` works
  * as the `touch-action` fallback) and applies the recognizers' union
@@ -615,13 +634,27 @@ export const useContinuousGestures = (
   // module header), applied in its OWN effect — separate from the listener loop
   // above — so an enablement change re-applies it WITHOUT rebuilding the
   // controller (which would drop in-flight gesture / arbitration / preview
-  // state). `enabledTouchAction` reads each recognizer's `isEnabled` live, and
-  // the host re-renders when enablement changes (edit mode, viewport), so this
-  // recomputes and the effect re-runs as the value changes. React never manages
-  // this property, so capture and restore the prior value rather than clobbering
-  // it. The loop's per-event `isEnabled` gate is the behavioral source of truth;
-  // this only keeps the static surface hint in agreement with it.
-  const desiredTouchAction = enabledTouchAction(recognizers)
+  // state). `enabledTouchAction` reads each recognizer's `isEnabled` LIVE, so the
+  // value has to be recomputed whenever enablement changes:
+  //   - EDITING flips re-render the host already (it reads edit mode), and the
+  //     snapshot is re-read on every render, so those are picked up for free;
+  //   - VIEWPORT changes are NOT otherwise observed here — the host's
+  //     `useIsMobile` lives in child slot components, so crossing the breakpoint
+  //     re-renders those children, not this hook. `useSyncExternalStore`
+  //     subscribes to viewport resizes so a breakpoint cross recomputes and
+  //     re-applies, rather than stranding a stale `pan-y` (gesture refuses to
+  //     run yet scroll is suppressed) or a missing one (browser cancels the
+  //     swipe/scrub before JS sees it).
+  // The string snapshot makes the store's Object.is bail-out a no-op for resizes
+  // that don't change enablement. React never manages this property, so the
+  // effect captures and restores the prior value rather than clobbering it. The
+  // loop's per-event `isEnabled` gate stays the behavioral source of truth; this
+  // only keeps the surface hint in agreement with it.
+  const desiredTouchAction = useSyncExternalStore(
+    subscribeViewport,
+    () => enabledTouchAction(recognizers),
+    () => enabledTouchAction(recognizers),
+  )
   useEffect(() => {
     const element = nodeRef.current
     if (!element || recognizers.length === 0) return
