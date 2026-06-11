@@ -37,7 +37,6 @@ import { pickBlockDateAdapter } from './blockDateAdapter.ts'
 import {
   computeDeltaDays,
   dateScrubProgressTickEvent,
-  endTouchScrub,
   DATE_SCRUB_COMMIT_GESTURE,
   DATE_SCRUB_GESTURE,
 } from './dateScrubGesture.ts'
@@ -244,23 +243,19 @@ export const dateScrubRecognizer: BlockGestureRecognizerContribution = context =
     },
 
     onPointerCancel(session) {
-      // Only a CANCEL of a tracked anchor finger ends the scrub. An extra /
-      // untracked finger on the same block can receive `pointercancel` (the
-      // browser drops it) while both anchored fingers stay down — aborting then
-      // would revert a scrub neither tracked finger left.
-      if (!anchor) return
-      if (session.changed.pointerId !== anchor.idA && session.changed.pointerId !== anchor.idB) return
-      // A tracked finger was cancelled — revert the preview NOW, matching the
-      // old touch path. The loop only settles the progress action once ALL
-      // pointers are gone, but a two-finger gesture must revert the moment a
-      // tracked finger is cancelled, or the overlay lingers (and a fresh finger
-      // could be read as continuing this scrub) while the other finger stays
-      // down. end is idempotent, so the loop's eventual all-gone settle is a
-      // no-op once we've reverted here.
-      const wasScrubbing = scrubbing
+      // An extra / untracked finger on the same block can receive `pointercancel`
+      // (the browser drops it) while both anchored fingers stay down — ignore it,
+      // or we'd abort a scrub neither tracked finger left.
+      if (!anchor) return GESTURE_IDLE
+      if (session.changed.pointerId !== anchor.idA && session.changed.pointerId !== anchor.idB) return GESTURE_IDLE
+      // A tracked finger was cancelled. Yield CANCEL so the LOOP settles the
+      // in-flight preview now — whichever action won the `date-scrub` progress
+      // binding (the default overlay OR a higher-priority override), via that
+      // resolved action's settle — rather than poking the overlay directly (which
+      // would miss an override) or waiting for the other finger to lift.
       anchor = null
       scrubbing = false
-      if (wasScrubbing) endTouchScrub(false)
+      return GESTURE_CANCEL
     },
   }
 }

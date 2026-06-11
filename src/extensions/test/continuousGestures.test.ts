@@ -235,6 +235,25 @@ describe('createBlockGestureController', () => {
       expect(settle).toHaveBeenCalledTimes(1)
     })
 
+    it('settles the preview immediately when a recognizer yields CANCEL while other pointers remain', () => {
+      const settle = vi.fn()
+      const beginProgress = vi.fn(() => ({update: vi.fn(), settle}))
+      // A multi-pointer recognizer whose tracked pointer was cancelled yields
+      // CANCEL from onPointerCancel; the loop must settle NOW, not wait for the
+      // remaining pointer to lift (resetSession).
+      const controller = createBlockGestureController({
+        recognizers: [previewRecognizer({onPointerCancel: () => GESTURE_CANCEL})],
+        element, dispatch: makeDispatch(), beginProgress,
+      })
+
+      controller.handlePointerDown(sample(1, 0, 0))
+      controller.handlePointerDown(sample(2, 5, 0))
+      controller.handlePointerMove(sample(1, -20, 0)) // previews
+      controller.handlePointerCancel(sample(1, -20, 0)) // one finger cancels; finger 2 stays down
+
+      expect(settle).toHaveBeenCalledTimes(1)
+    })
+
     it('does not resurrect the preview after it settles (settled, then a fresh gesture re-resolves)', () => {
       const update = vi.fn()
       const settle = vi.fn()

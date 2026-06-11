@@ -141,7 +141,14 @@ export interface GestureRecognizer {
   onPointerDown?(session: GestureSession, ctx: GestureEventContext): GesturePhaseResult
   onPointerMove?(session: GestureSession, ctx: GestureEventContext): GesturePhaseResult
   onPointerUp?(session: GestureSession, ctx: GestureEventContext): GesturePhaseResult
-  onPointerCancel?(session: GestureSession, ctx: GestureEventContext): void
+  /** The browser cancelled a pointer mid-stream (a `pan-y` surface scrolled past
+   *  the lock, an OS interrupt). Drop in-flight state. May RETURN a verdict the
+   *  loop applies: `cancel` settles this recognizer's in-flight preview NOW (and
+   *  releases the block) — needed for a MULTI-pointer gesture whose tracked
+   *  pointer was cancelled while another stays down, where the loop's all-gone
+   *  settle wouldn't fire yet. Returning nothing / `idle` leaves the gesture
+   *  untouched (e.g. an extra finger's cancel that isn't part of the pair). */
+  onPointerCancel?(session: GestureSession, ctx: GestureEventContext): GesturePhaseResult | void
 }
 
 export type BlockGestureRecognizerContribution =
@@ -460,7 +467,14 @@ export const createBlockGestureController = ({
       const ctx: GestureEventContext = {element, event: sample.event}
       for (const recognizer of recognizers) {
         if (out.has(recognizer.id)) continue
-        recognizer.onPointerCancel?.(session, ctx)
+        // A recognizer can YIELD on cancel (its tracked pointer was cancelled) to
+        // settle its in-flight preview NOW; otherwise we'd only settle once ALL
+        // pointers are gone (resetSession below), stranding the resolved preview
+        // action — including an overridden one — while another finger of a
+        // multi-pointer gesture stays down. `applyVerdict('cancel')` runs that
+        // recognizer's settle through the same dispatcher the preview resolved to.
+        const verdict = recognizer.onPointerCancel?.(session, ctx)
+        if (verdict) applyVerdict(recognizer, verdict, session, ctx)
       }
       pointers.delete(sample.pointerId)
       if (pointers.size === 0) resetSession()
