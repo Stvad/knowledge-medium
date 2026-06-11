@@ -78,6 +78,7 @@ export const surfaceProcessorRejectionFor = (repo: Repo) =>
           conflictingBlockTitle,
           workspaceId,
           dropSourceAliases,
+          collisionOrigin,
         } = error.meta
         // Blank-title fallback: a block can legitimately claim an
         // alias with empty content, in which case the title would be
@@ -85,7 +86,13 @@ export const surfaceProcessorRejectionFor = (repo: Repo) =>
         const displayTitle = conflictingBlockTitle.trim() === ''
           ? `"${alias}"`
           : `"${truncate(conflictingBlockTitle, 60)}"`
-        const message = `Alias "${alias}" is already used by ${displayTitle}. Your edit was reverted — try a different name or merge with the existing page.`
+        // `collisionOrigin: 'create'` — the rejected block was created
+        // in the rolled-back tx, so it no longer exists and there is
+        // nothing to merge from. Don't offer a merge that would fail.
+        const offerMerge = collisionOrigin !== 'create'
+        const message = offerMerge
+          ? `Alias "${alias}" is already used by ${displayTitle}. Your edit was reverted — try a different name or merge with the existing page.`
+          : `Alias "${alias}" is already used by ${displayTitle}. Nothing was created — try a different name.`
         showCustom(
           id => createElement(AliasCollisionToast, {
             toastId: id,
@@ -96,6 +103,7 @@ export const surfaceProcessorRejectionFor = (repo: Repo) =>
             conflictingBlockTitle,
             workspaceId,
             dropSourceAliases,
+            offerMerge,
             repo,
           }),
           {duration: 12000},

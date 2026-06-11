@@ -1606,6 +1606,14 @@ export class Repo {
     // without touching it). Defensive fallback uses the bare info
     // from the RAISE message if the lookup somehow misses.
     const claimant = claimantRow === null ? null : parseBlockRow(claimantRow)
+    // If the attempting block was CREATED in the rejected tx, the
+    // rollback erased it — there is no row at all (a tombstone would
+    // still be a row). Mark these `collisionOrigin: 'create'` so the
+    // toast doesn't offer a "Merge into …" whose source no longer
+    // exists.
+    const attemptedRow = await this.db.getOptional<{id: string}>(
+      'SELECT id FROM blocks WHERE id = ?', [collision.attemptedBlockId],
+    )
     return new ProcessorRejection(
       `Alias "${collision.alias}" is already used by another block`,
       'alias.collision',
@@ -1617,6 +1625,7 @@ export class Repo {
         conflictingBlockTitle: claimant?.content.slice(0, 80) ?? '',
         workspaceId: collision.workspaceId,
         attemptedOn: collision.attemptedBlockId,
+        ...(attemptedRow === null ? {collisionOrigin: 'create'} : {}),
       },
     )
   }

@@ -753,6 +753,50 @@ describe('alias.collision — RAISE payload tolerates control chars in alias tex
   })
 })
 
+// ──── collisionOrigin: 'create' — rejected source never existed ────
+//
+// When the colliding claim comes from a block CREATED in the rejected
+// tx, the rollback erases the block entirely: there is no source for
+// the toast's "Merge into …" action to operate on (the merge mutator
+// would throw "source not found"). The trigger-translation path marks
+// these rejections `collisionOrigin: 'create'` so the UI can drop the
+// merge affordance instead of offering a dead-end button.
+
+describe("alias.collision — collisionOrigin 'create' for sources erased by rollback", () => {
+  it("marks a fresh-insert collision with collisionOrigin 'create'", async () => {
+    await seatAt('Taken', 'Taken')
+
+    let caught: unknown
+    try {
+      await env.repo.tx(async tx => {
+        await tx.create({id: 'fresh', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'fresh'})
+        await tx.setProperty('fresh', aliasesProp, ['Taken'])
+      }, {scope: ChangeScope.BlockDefault})
+    } catch (err) { caught = err }
+    expect(caught).toBeInstanceOf(ProcessorRejection)
+    expect((caught as ProcessorRejection).meta?.collisionOrigin).toBe('create')
+  })
+
+  it('does NOT mark a collision whose source block survives the rollback', async () => {
+    await seatAt('Shared', 'Shared')
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'b', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'distinct'})
+      await tx.setProperty('b', aliasesProp, ['distinct'])
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    let caught: unknown
+    try {
+      await env.repo.tx(
+        tx => tx.setProperty('b', aliasesProp, ['distinct', 'Shared']),
+        {scope: ChangeScope.BlockDefault},
+      )
+    } catch (err) { caught = err }
+    expect(caught).toBeInstanceOf(ProcessorRejection)
+    expect((caught as ProcessorRejection).meta?.collisionOrigin).toBeUndefined()
+  })
+})
+
 describe('alias.collision — user-error listener wiring', () => {
   it('fires onUserError with the ProcessorRejection', async () => {
     await seatAt('Taken', 'Taken')

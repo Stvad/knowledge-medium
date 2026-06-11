@@ -32,6 +32,10 @@ export interface AliasCollisionToastProps {
   conflictingBlockTitle: string
   workspaceId: string
   dropSourceAliases?: string[]
+  /** False when the rejected source block was created inside the
+   *  rolled-back tx — it no longer exists, so a merge would throw
+   *  "source not found". The merge button is hidden instead. */
+  offerMerge: boolean
   repo: Repo
 }
 
@@ -47,6 +51,7 @@ export const AliasCollisionToast = ({
   conflictingBlockTitle,
   workspaceId,
   dropSourceAliases,
+  offerMerge,
   repo,
 }: AliasCollisionToastProps) => {
   const [pending, setPending] = useState(false)
@@ -94,9 +99,11 @@ export const AliasCollisionToast = ({
         <Button variant="ghost" size="sm" disabled={pending} onClick={openExisting}>
           Open
         </Button>
-        <Button variant="default" size="sm" disabled={pending} onClick={() => { void mergeIntoExisting() }}>
-          {pending ? 'Merging…' : mergeLabel}
-        </Button>
+        {offerMerge && (
+          <Button variant="default" size="sm" disabled={pending} onClick={() => { void mergeIntoExisting() }}>
+            {pending ? 'Merging…' : mergeLabel}
+          </Button>
+        )}
       </div>
     </div>
   )

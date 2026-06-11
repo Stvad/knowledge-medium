@@ -12,7 +12,7 @@
 import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
 import { CurrentLocationError, getCurrentPosition } from './currentLocation'
-import { createOrFindPlace } from './createOrFindPlace'
+import { createOrFindPlaceInteractive } from './placeNameCollision'
 import {
   GooglePlacesError,
   createGooglePlacesClient,
@@ -66,7 +66,9 @@ export const pickCurrentLocation = async (
       if (closest && closest.distanceM <= SNAP_RADIUS_M) {
         const sessionToken = newSessionToken()
         const details = await client.getDetails(closest.placeId, {sessionToken})
-        const block = await createOrFindPlace(repo, workspaceId, {
+        // A name collision opens the resolution toast; `null` here means
+        // the user cancelled it — treated like "nothing picked".
+        const resolved = await createOrFindPlaceInteractive(repo, workspaceId, {
           name: details.name,
           lat: details.lat,
           lng: details.lng,
@@ -77,7 +79,8 @@ export const pickCurrentLocation = async (
           phone: details.phone,
           categories: details.categories,
         })
-        return {block, accuracyM: fix.accuracy, snappedToPOI: true}
+        if (!resolved) return null
+        return {block: resolved.block, accuracyM: fix.accuracy, snappedToPOI: true}
       }
     } catch (err) {
       if (err instanceof GooglePlacesError) {
@@ -88,11 +91,12 @@ export const pickCurrentLocation = async (
     }
   }
 
-  // Fall back to an ad-hoc coord pin.
-  const block = await createOrFindPlace(repo, workspaceId, {
+  // Fall back to an ad-hoc coord pin (nameless — can't collide).
+  const resolved = await createOrFindPlaceInteractive(repo, workspaceId, {
     name: '',
     lat: fix.lat,
     lng: fix.lng,
   })
-  return {block, accuracyM: fix.accuracy, snappedToPOI: false}
+  if (!resolved) return null
+  return {block: resolved.block, accuracyM: fix.accuracy, snappedToPOI: false}
 }

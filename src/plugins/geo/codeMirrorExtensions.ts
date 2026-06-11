@@ -39,7 +39,8 @@ import {
   type GooglePlacesClient,
   type NearbyCandidate,
 } from './googlePlacesClient'
-import { createOrFindPlace, type PlaceCandidate } from './createOrFindPlace'
+import type { PlaceCandidate } from './createOrFindPlace'
+import { createOrFindPlaceInteractive } from './placeNameCollision'
 import { CurrentLocationError, getCurrentPosition } from './currentLocation'
 
 const GOOGLE_MIN_QUERY_LEN = 2
@@ -72,16 +73,6 @@ const aliasesOf = (block: { properties: Record<string, unknown> }): readonly str
 const isPlaceBlock = (block: { properties: Record<string, unknown> }): boolean => {
   const raw = block.properties[typesProp.name]
   return Array.isArray(raw) && raw.includes(PLACE_TYPE)
-}
-
-const displayName = (
-  block: { properties: Record<string, unknown>, content: string } | null | undefined,
-  fallback: string,
-): string => {
-  if (!block) return fallback
-  const aliases = aliasesOf(block)
-  const friendly = aliases.find(a => !a.startsWith('place:') && !a.startsWith('geo:'))
-  return friendly ?? block.content ?? fallback
 }
 
 const buildPlaceCompletionSource = ({repo}: CodeMirrorExtensionContext): CompletionSource => {
@@ -280,8 +271,9 @@ const buildPlaceCompletionSource = ({repo}: CodeMirrorExtensionContext): Complet
           phone: details.phone,
           categories: details.categories,
         }
-        const placeBlock = await createOrFindPlace(repo, workspaceId, candidatePayload)
-        return {kind: 'insert', name: displayName(placeBlock.peek(), details.name)}
+        const resolved = await createOrFindPlaceInteractive(repo, workspaceId, candidatePayload)
+        if (!resolved) return null
+        return {kind: 'insert', name: resolved.linkName}
       } catch (err) {
         console.warn('[geo] Google details / place creation failed', err)
         return null
@@ -297,12 +289,13 @@ const buildPlaceCompletionSource = ({repo}: CodeMirrorExtensionContext): Complet
 
     if (candidate.source === 'drop-pin') {
       if (!candidate.coords) return null
-      const block = await createOrFindPlace(repo, workspaceId, {
+      const resolved = await createOrFindPlaceInteractive(repo, workspaceId, {
         name: '',
         lat: candidate.coords.lat,
         lng: candidate.coords.lng,
       })
-      return {kind: 'insert', name: displayName(block.peek(), 'Location')}
+      if (!resolved) return null
+      return {kind: 'insert', name: resolved.linkName}
     }
 
     if (candidate.source === 'create-named') {
@@ -312,12 +305,13 @@ const buildPlaceCompletionSource = ({repo}: CodeMirrorExtensionContext): Complet
         : null
       const trimmed = name?.trim()
       if (!trimmed) return null
-      const block = await createOrFindPlace(repo, workspaceId, {
+      const resolved = await createOrFindPlaceInteractive(repo, workspaceId, {
         name: trimmed,
         lat: candidate.coords.lat,
         lng: candidate.coords.lng,
       })
-      return {kind: 'insert', name: displayName(block.peek(), trimmed)}
+      if (!resolved) return null
+      return {kind: 'insert', name: resolved.linkName}
     }
 
     return null
