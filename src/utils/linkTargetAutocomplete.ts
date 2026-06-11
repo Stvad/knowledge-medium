@@ -169,6 +169,7 @@ const runFuzzyAliasSearch = async (
   const candidates = await repo.query.aliasMatchesFuzzy({
     workspaceId,
     prefixes,
+    query,
     limit: fetchLimit,
   }).load()
 

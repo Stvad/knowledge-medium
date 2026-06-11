@@ -585,6 +585,23 @@ describe('repo.query.aliasMatchesFuzzy', () => {
     expect(out).toHaveLength(2)
   })
 
+  it('keeps an exact alias in the candidate pool ahead of mere substring matches', async () => {
+    // The substring-only row is created first and sorts alphabetically
+    // ahead of the exact match, so an unordered pre-filter LIMIT would
+    // evict the exact alias before the JS ranker ever sees it.
+    await create({id: 'sub', aliases: ['Accommodating']})
+    await create({id: 'exact', aliases: ['Dating']})
+
+    const out = await env.repo.query.aliasMatchesFuzzy({
+      workspaceId: WS,
+      prefixes: ['dat'],
+      query: 'dating',
+      limit: 1,
+    }).load()
+
+    expect(out.map(row => row.alias)).toEqual(['Dating'])
+  })
+
   it('excludes tombstoned blocks', async () => {
     await create({id: 'live', aliases: ['Foo Live']})
     await create({id: 'dead', aliases: ['Foo Dead']})

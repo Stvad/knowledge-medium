@@ -350,6 +350,15 @@ export const SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_EXCLUDING_SQL = `
  *  word-start / substring / edit-distance-1 plus recency. Returns
  *  `updated_at` so the JS ranker can boost recently-edited rows.
  *
+ *  Orders exact whole-query matches first, then prefix matches, before
+ *  applying `LIMIT`: the prefix is only 3 chars, so a single trigram can
+ *  match far more aliases than the over-fetch budget. Without this an
+ *  unordered LIMIT could evict the very alias the user typed verbatim
+ *  before the JS ranker (which rewards exact matches) ever sees it. The
+ *  full lowered query is bound for the exact/prefix comparisons; pass `''`
+ *  for the empty-query "browse all aliases" path (everything ties as a
+ *  prefix match and falls through to the deterministic created_at order).
+ *
  *  Falls back to a workspace-scoped scan when `tokenCount === 0` (empty
  *  query) so the same query handle can also serve the "browse all
  *  aliases" path. */
@@ -368,6 +377,14 @@ export const buildFuzzyAliasMatchesSql = (tokenCount: number): string => {
     WHERE ba.workspace_id = ?
       AND b.deleted = 0
       AND (${filters})
+    ORDER BY
+      CASE
+        WHEN ba.alias_lower = ? THEN 0
+        WHEN ba.alias_lower LIKE ? || '%' THEN 1
+        ELSE 2
+      END,
+      b.created_at,
+      ba.alias
     LIMIT ?
   `
 }
@@ -1109,13 +1126,14 @@ export const aliasMatchesQuery = defineQuery<
  *  Empty `prefixes` returns every (alias, block) pair in the workspace
  *  up to `limit`, suitable for the "browse all" path. */
 export const aliasMatchesFuzzyQuery = defineQuery<
-  {workspaceId: string; prefixes: string[]; limit?: number},
+  {workspaceId: string; prefixes: string[]; query?: string; limit?: number},
   AliasMatchWithRecency[]
 >({
   name: 'core.aliasMatchesFuzzy',
   argsSchema: z.object({
     workspaceId: z.string(),
     prefixes: z.array(z.string()),
+    query: z.string().optional(),
     limit: z.number().optional(),
   }),
   resultSchema: z.array(z.object({
@@ -1124,7 +1142,7 @@ export const aliasMatchesFuzzyQuery = defineQuery<
     content: z.string(),
     updatedAt: z.number(),
   })),
-  resolve: async ({workspaceId, prefixes, limit = 100}, ctx) => {
+  resolve: async ({workspaceId, prefixes, query = '', limit = 100}, ctx) => {
     if (!workspaceId) return []
     ctx.depend({
       kind: 'plugin',
@@ -1132,7 +1150,10 @@ export const aliasMatchesFuzzyQuery = defineQuery<
       key: kernelAliasesKey(workspaceId),
     })
     const sql = buildFuzzyAliasMatchesSql(prefixes.length)
-    const params: (string | number)[] = [workspaceId, ...prefixes, limit]
+    // The two extra params back the exact/prefix ORDER BY so the LIMIT
+    // retains the verbatim match; `alias_lower` is already lowercased.
+    const queryLower = query.toLowerCase()
+    const params: (string | number)[] = [workspaceId, ...prefixes, queryLower, queryLower, limit]
     const rows = await ctx.db.getAll<AliasMatchWithRecency>(sql, params)
     // Same reasoning as `aliasMatches`: this query returns a custom row
     // shape (no BlockData hydration), so per-row deps have to be

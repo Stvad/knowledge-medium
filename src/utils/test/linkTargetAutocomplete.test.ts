@@ -299,6 +299,28 @@ describe('link target autocomplete helpers', () => {
     ])
   })
 
+  it('ranks an exact alias first even when prefix-sharing aliases crowd the pre-filter', async () => {
+    // "backup dancer" is a real partial match; the "dana NN" rows only
+    // share the 3-char filter prefix ("dan") and never match the full
+    // "dancer" token, so they exist purely to overflow the candidate pool
+    // the pre-filter LIMIT pulls before JS ranking. The exact alias is
+    // created last, so an unordered LIMIT evicts it from the pool.
+    await create({id: 'partial', aliases: ['backup dancer']})
+    for (let i = 0; i < 30; i++) {
+      await create({id: `decoy-${i}`, aliases: [`dana ${String(i).padStart(2, '0')}`]})
+    }
+    await create({id: 'exact', aliases: ['dancer']})
+
+    const out = await searchLinkTargetIdCandidates(env.repo, {
+      workspaceId: WS,
+      query: 'dancer',
+      limit: 5,
+    })
+
+    expect(out[0]).toMatchObject({id: 'exact', label: 'dancer'})
+    expect(out.map(candidate => candidate.id)).toContain('partial')
+  })
+
   it('builds value candidates with excluded labels', async () => {
     await create({id: 'page', content: 'Dating notes', aliases: ['Dating']})
     await create({id: 'block', content: 'My Dating notes'})
