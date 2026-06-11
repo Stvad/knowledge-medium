@@ -37,12 +37,17 @@ import type { ActiveContextsMap } from './ActiveContexts.tsx'
  *    chord. Modal shadowing IS applied (the keyboard gather filter).
  *  - `'pointer'` — pointer-bound candidates already matched on their binding
  *    descriptor and dispatched with supplied deps (see the filter note below).
+ *  - `'gesture'` — continuous-gesture candidates already matched on their
+ *    `gestureBinding` (recognizer-emitted name) and dispatched with supplied
+ *    deps. Treated exactly like `'pointer'`: context need not be active, no
+ *    modal shadowing — a recognized gesture targets the block it ran on.
  */
 export type Trigger =
   | { kind: 'action'; actionId: string }
   | { kind: 'supplied'; actionId: string }
   | { kind: 'keyboard' }
   | { kind: 'pointer' }
+  | { kind: 'gesture' }
 
 /** Everything the comparator needs that isn't on the `ActionConfig`. */
 export interface ResolutionContext {
@@ -156,16 +161,18 @@ export const resolve = (
         // Already-matched chord candidates, gated by modal shadowing.
         return ctx.active.has(action.context) && installable!.has(action.context)
       case 'pointer':
-        // Candidates are pre-filtered by binding match and dispatched with
-        // supplied deps, so the context need NOT be active — the click itself
-        // provides the context. resolve only orders them. Modal shadowing is
-        // deliberately NOT applied: a click on a block targets that block
+      case 'gesture':
+        // Candidates are pre-filtered by binding match (pointer descriptor or
+        // recognizer-emitted gesture name) and dispatched with supplied deps,
+        // so the context need NOT be active — the gesture itself provides the
+        // context. resolve only orders them. Modal shadowing is deliberately
+        // NOT applied: a pointer/gesture on a block targets that block
         // regardless of which mode holds keyboard focus (shift-click selection
         // fired through a plain DOM onClick before this migration too, so this
         // preserves behavior). FIXME(phase3): this blanket bypass is only sound
         // for inherently spatially-targeted gestures. A future non-spatial
-        // pointer action that SHOULD be suppressed under a modal overlay (e.g.
-        // while the command palette is up) will need a per-action/context
+        // pointer/gesture action that SHOULD be suppressed under a modal overlay
+        // (e.g. while the command palette is up) will need a per-action/context
         // opt-in to shadowing before it can rely on this arm.
         return true
     }

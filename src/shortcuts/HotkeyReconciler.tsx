@@ -30,6 +30,16 @@ import {
 } from './canonicalizeChord.ts'
 import { setPointerActionDispatcher, type PointerGestureEvent } from '@/shortcuts/pointerAction.js'
 import {
+  setGestureActionDispatcher,
+  setGestureProgressDispatcher,
+  gestureProgressCancelEvent,
+} from '@/shortcuts/gestureAction.js'
+import {
+  gestureBindingDescriptor,
+  matchesGestureEvent,
+  type GestureBindingSpec,
+} from './gestureBinding.ts'
+import {
   ActionConfig,
   ActionContextConfig,
   ActionContextType,
@@ -268,10 +278,102 @@ export function HotkeyReconciler(): null {
         event,
         {active, contextConfigsByType, dispatch: dispatchRef.current},
         supplied,
-        action => applyPointerEventOptions(event, action, contextConfigsByType),
+        action => applyTriggerEventOptions(event, action, contextConfigsByType),
       )
     })
     return () => setPointerActionDispatcher(null)
+  }, [runtime])
+
+  // Install the gesture-action dispatcher. The continuous-gesture analogue of
+  // the pointer effect above: a recognizer (or escape-hatch surface) emits a
+  // gesture NAME, and the candidates are the actions whose `gestureBinding`
+  // names it — matched by name+phase, not by an event's intrinsic fields, since
+  // the recognizer has already classified the motion. Deps are SUPPLIED by the
+  // caller (the block the gesture ran on; its context isn't keyboard-active),
+  // then ordered and run through the same loop as keyboard/pointer.
+  useEffect(() => {
+    setGestureActionDispatcher((gesture, supplied, event) => {
+      const active = activeRef.current
+      const contextConfigsByType = contextConfigsByTypeRef.current
+      const matched = getEffectiveActions(runtime).filter(action => {
+        const spec = action.gestureBinding
+        if (!spec) return false
+        // A binding may list several gestures; the action matches if any names
+        // this gesture. dispatchGesture is the COMMIT path (progress goes through
+        // beginGestureProgress), so we match the commit phase here.
+        const specs: readonly GestureBindingSpec[] = Array.isArray(spec) ? spec : [spec]
+        return specs.some(candidate =>
+          matchesGestureEvent(gestureBindingDescriptor(candidate), {gesture, phase: 'commit'}),
+        )
+      })
+      if (matched.length === 0) return false
+
+      const ordered = resolve(matched, {active, contextConfigsByType}, {kind: 'gesture'})
+      return runOrderedCandidates(
+        ordered,
+        event,
+        {active, contextConfigsByType, dispatch: dispatchRef.current},
+        supplied,
+        action => applyTriggerEventOptions(event, action, contextConfigsByType),
+      )
+    })
+    return () => setGestureActionDispatcher(null)
+  }, [runtime])
+
+  // Install the gesture PROGRESS dispatcher — the single-winner preview channel
+  // (commit, above, is run-until-handled). A live preview resolves to ONE action
+  // on the first progress tick by context priority; the returned handle streams every tick
+  // and the terminal settle to that one action. Resolving once (not per tick) is
+  // both cheaper at pointer-move frequency and correct — the winner can't change
+  // mid-drag. Returns null when nothing binds the gesture's progress phase, so a
+  // recognizer skips previewing for free.
+  useEffect(() => {
+    setGestureProgressDispatcher((gesture, supplied) => {
+      const active = activeRef.current
+      const contextConfigsByType = contextConfigsByTypeRef.current
+      const matched = getEffectiveActions(runtime).filter(action => {
+        const spec = action.gestureBinding
+        if (!spec) return false
+        const specs: readonly GestureBindingSpec[] = Array.isArray(spec) ? spec : [spec]
+        return specs.some(candidate =>
+          matchesGestureEvent(gestureBindingDescriptor(candidate), {gesture, phase: 'progress'}),
+        )
+      })
+      if (matched.length === 0) return null
+
+      // Resolve once, best-first by context priority; bind to the first candidate
+      // with valid deps that doesn't decline via canDispatch.
+      const ordered = resolve(matched, {active, contextConfigsByType}, {kind: 'gesture'})
+      for (const action of ordered) {
+        const deps = resolveDeps(action, active, contextConfigsByType, supplied)
+        if (!deps) continue
+        if (action.canDispatch && !action.canDispatch(deps)) continue
+        const {handler} = action
+        // A preview streams MANY ticks; a throwing/rejecting handler must be
+        // contained the same way the commit/keyboard path contains it
+        // (runOrderedCandidates), or one bad tick becomes an uncaught error /
+        // unhandled rejection on every pointer-move. Log and swallow so the
+        // gesture keeps running.
+        const runProgress = (event: ActionTrigger): void => {
+          let result: ActionHandlerResult
+          try {
+            result = handler(deps, event, dispatchRef.current)
+          } catch (error) {
+            console.error(`[HotkeyReconciler] Progress action ${action.id} threw`, error)
+            return
+          }
+          void Promise.resolve(result).catch(error => {
+            console.error(`[HotkeyReconciler] Progress action ${action.id} rejected`, error)
+          })
+        }
+        return {
+          update: event => runProgress(event),
+          settle: () => runProgress(gestureProgressCancelEvent(gesture)),
+        }
+      }
+      return null
+    })
+    return () => setGestureProgressDispatcher(null)
   }, [runtime])
 
   // One coordinator per phase replaces the N per-action window listeners —
@@ -668,12 +770,21 @@ const phaseOfPointerEvent = (event: ReactMouseEvent<HTMLElement>): PointerPhase 
 const pointerRoleMatches = (target: HTMLElement, role: string): boolean =>
   Boolean(target.closest(`[data-pointer-role="${role}"]`))
 
-/** preventDefault / stopPropagation for a handled pointer gesture. Block
- *  selection wants both (suppress native text selection + keep the click from
- *  bubbling into edit-mode), so that is the default; a context can override via
- *  `defaultEventOptions`. */
-const applyPointerEventOptions = (
-  event: PointerGestureEvent,
+/** preventDefault / stopPropagation for a handled pointer OR gesture-commit
+ *  action — one body, since both want the same thing. Block selection wants
+ *  native text-selection suppressed and the trailing synthesized click kept out
+ *  of edit-mode, so the defaults are `{preventDefault: true, stopPropagation:
+ *  true}`; a context overrides via `defaultEventOptions`. Typed on the broad
+ *  `ActionTrigger` so it serves the pointer path (a React Mouse/Touch event —
+ *  `PointerGestureEvent` is a subset) and the gesture commit (the native
+ *  `PointerEvent` that ended the drag, or a synthetic `CustomEvent`) alike; all
+ *  expose preventDefault/stopPropagation. Eating the commit event is what
+ *  suppresses the trailing touchend click that today's swipe/scrub
+ *  `event.preventDefault()` does by hand. Keyboard's `applyEventOptions` stays
+ *  separate — different defaults (no stopPropagation) and binding-level
+ *  precedence. */
+const applyTriggerEventOptions = (
+  event: ActionTrigger,
   action: ActionConfig,
   contextConfigsByType: ReadonlyMap<ActionContextType, ActionContextConfig>,
 ): void => {

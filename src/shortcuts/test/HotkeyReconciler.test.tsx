@@ -3,6 +3,11 @@ import { act, render, cleanup } from '@testing-library/react'
 import type { MouseEvent as ReactMouseEvent, TouchEvent as ReactTouchEvent } from 'react'
 import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler.js'
 import { dispatchPointerAction } from '@/shortcuts/pointerAction.js'
+import {
+  dispatchGesture,
+  beginGestureProgress,
+  GESTURE_PROGRESS_CANCEL_EVENT,
+} from '@/shortcuts/gestureAction.js'
 import { dispatchActionWithDeps } from '@/shortcuts/runAction.js'
 import {
   ActiveContextsProvider,
@@ -914,6 +919,202 @@ describe('HotkeyReconciler', () => {
       act(() => { dispatchPointerAction(touchEvent(), {marker: 'x'} as never) })
       expect(tapHandler).toHaveBeenCalledTimes(1)
       expect(clickHandler).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('gesture dispatch', () => {
+    // The commit event a recognizer hands the dispatcher — any ActionTrigger;
+    // a CustomEvent stands in here. Spied so we can assert the dispatch ate it
+    // (suppressing the trailing synthesized click).
+    const gestureTrigger = (): import('@/shortcuts/types.js').ActionTrigger => ({
+      type: 'gesture-commit',
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    }) as never
+
+    const gestureAction = (
+      overrides: Partial<ActionConfig> & Pick<ActionConfig, 'id' | 'handler'>,
+    ): ActionConfig => ({
+      description: 'test gesture action',
+      context: BLOCK_POINTER_CONTEXT,
+      gestureBinding: {gesture: 'swipe-right'},
+      ...overrides,
+    } as ActionConfig)
+
+    it('dispatches a matching gesture to a gesture-bound action with supplied deps', () => {
+      const handler = vi.fn()
+      const action = gestureAction({id: 'gesture.swipe-right', handler})
+
+      render(<Harness actions={[action]} contexts={[blockPointerContextConfig]}/>)
+
+      // The context is NOT active — the gesture supplies the deps, which reach
+      // the handler unchanged.
+      const supplied = {marker: 'swiped'} as unknown as BaseShortcutDependencies
+      const trigger = gestureTrigger()
+      let handled = false
+      act(() => { handled = dispatchGesture('swipe-right', supplied, trigger) })
+
+      expect(handled).toBe(true)
+      expect(handler).toHaveBeenCalledTimes(1)
+      expect(handler.mock.calls[0]?.[0]).toBe(supplied)
+      // Default event options ate the commit event.
+      expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not dispatch when the emitted gesture name differs from the binding', () => {
+      const handler = vi.fn()
+      render(
+        <Harness actions={[gestureAction({id: 'g', handler})]} contexts={[blockPointerContextConfig]}/>,
+      )
+
+      let handled = true
+      act(() => { handled = dispatchGesture('swipe-left', {marker: 'x'} as never, gestureTrigger()) })
+
+      expect(handled).toBe(false)
+      expect(handler).not.toHaveBeenCalled()
+    })
+
+    it('matches when any of several gesture bindings names the gesture', () => {
+      const handler = vi.fn()
+      const action = gestureAction({
+        id: 'g.multi',
+        handler,
+        gestureBinding: [{gesture: 'swipe-left'}, {gesture: 'swipe-right'}],
+      })
+
+      render(<Harness actions={[action]} contexts={[blockPointerContextConfig]}/>)
+
+      act(() => { dispatchGesture('swipe-left', {marker: 'x'} as never, gestureTrigger()) })
+      act(() => { dispatchGesture('swipe-right', {marker: 'x'} as never, gestureTrigger()) })
+      expect(handler).toHaveBeenCalledTimes(2)
+
+      // A gesture neither binding names matches nothing.
+      let handled = true
+      act(() => { handled = dispatchGesture('two-finger-scrub', {marker: 'x'} as never, gestureTrigger()) })
+      expect(handled).toBe(false)
+      expect(handler).toHaveBeenCalledTimes(2)
+    })
+
+    it('falls through to the next gesture candidate when the first declines', () => {
+      const declined = vi.fn(() => false as const)
+      const fallback = vi.fn()
+      const first = gestureAction({id: 'g.declines', handler: declined})
+      const second = gestureAction({id: 'g.fallback', handler: fallback})
+
+      render(<Harness actions={[first, second]} contexts={[blockPointerContextConfig]}/>)
+
+      act(() => { dispatchGesture('swipe-right', {marker: 'x'} as never, gestureTrigger()) })
+
+      expect(declined).toHaveBeenCalledTimes(1)
+      expect(fallback).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('gesture progress dispatch', () => {
+    // The progress dispatcher (the single-winner preview channel) has only ever
+    // been exercised through the controller's mock; these drive the real
+    // `beginGestureProgress` the reconciler installs. Swipe-left is its only
+    // production caller today, so the contract lives here.
+    const progressTick = (): import('@/shortcuts/types.js').ActionTrigger =>
+      new CustomEvent('date-scrub-tick', {detail: {deltaDays: 1}})
+
+    const progressAction = (
+      overrides: Partial<ActionConfig> & Pick<ActionConfig, 'id' | 'handler'>,
+    ): ActionConfig => ({
+      description: 'test progress action',
+      context: BLOCK_POINTER_CONTEXT,
+      gestureBinding: {gesture: 'date-scrub', phase: 'progress'},
+      ...overrides,
+    } as ActionConfig)
+
+    it('streams every tick and the terminal settle to one resolved winner', () => {
+      const handler = vi.fn()
+      render(<Harness actions={[progressAction({id: 'p.scrub', handler})]} contexts={[blockPointerContextConfig]}/>)
+
+      // The context is NOT active — the gesture supplies the deps, which reach
+      // every tick unchanged (resolved once, not re-resolved per tick).
+      const supplied = {marker: 'scrubbing'} as unknown as BaseShortcutDependencies
+      let dispatch: ReturnType<typeof beginGestureProgress> = null
+      act(() => { dispatch = beginGestureProgress('date-scrub', supplied) })
+      expect(dispatch).not.toBeNull()
+
+      act(() => { dispatch!.update(progressTick()) })
+      act(() => { dispatch!.update(progressTick()) })
+      act(() => { dispatch!.settle() })
+
+      expect(handler).toHaveBeenCalledTimes(3)
+      expect(handler.mock.calls.every(call => call[0] === supplied)).toBe(true)
+      // Active ticks carry the recognizer's own event; the settle arrives as the
+      // synthesized cancel event so a progress action can tell them apart.
+      expect((handler.mock.calls[0]?.[1] as CustomEvent).type).toBe('date-scrub-tick')
+      expect((handler.mock.calls[2]?.[1] as CustomEvent).type).toBe(GESTURE_PROGRESS_CANCEL_EVENT)
+    })
+
+    it('returns null when only a commit binding names the gesture', () => {
+      const handler = vi.fn()
+      // Defaults to the commit phase, so no progress binding matches.
+      const commitOnly = progressAction({id: 'p.commit', handler, gestureBinding: {gesture: 'date-scrub'}})
+      render(<Harness actions={[commitOnly]} contexts={[blockPointerContextConfig]}/>)
+
+      let dispatch: ReturnType<typeof beginGestureProgress> = {} as never
+      act(() => { dispatch = beginGestureProgress('date-scrub', {marker: 'x'} as never) })
+
+      expect(dispatch).toBeNull()
+      expect(handler).not.toHaveBeenCalled()
+    })
+
+    it('binds a single winner — a second matching action never receives ticks', () => {
+      const winner = vi.fn()
+      const other = vi.fn()
+      render(
+        <Harness
+          actions={[
+            progressAction({id: 'p.winner', handler: winner}),
+            progressAction({id: 'p.other', handler: other}),
+          ]}
+          contexts={[blockPointerContextConfig]}
+        />,
+      )
+
+      let dispatch: ReturnType<typeof beginGestureProgress> = null
+      act(() => { dispatch = beginGestureProgress('date-scrub', {marker: 'x'} as never) })
+      act(() => { dispatch!.update(progressTick()) })
+
+      expect(winner).toHaveBeenCalledTimes(1)
+      expect(other).not.toHaveBeenCalled()
+    })
+
+    it('skips a candidate whose canDispatch declines and binds the next', () => {
+      const declinedHandler = vi.fn()
+      const fallback = vi.fn()
+      const declines = progressAction({
+        id: 'p.declines',
+        handler: declinedHandler,
+        canDispatch: () => false,
+      })
+      const second = progressAction({id: 'p.fallback', handler: fallback})
+      render(<Harness actions={[declines, second]} contexts={[blockPointerContextConfig]}/>)
+
+      let dispatch: ReturnType<typeof beginGestureProgress> = null
+      act(() => { dispatch = beginGestureProgress('date-scrub', {marker: 'x'} as never) })
+      act(() => { dispatch!.update(progressTick()) })
+
+      expect(declinedHandler).not.toHaveBeenCalled()
+      expect(fallback).toHaveBeenCalledTimes(1)
+    })
+
+    it('contains a throwing progress handler instead of letting it escape the tick', () => {
+      const handler = vi.fn(() => { throw new Error('bad tick') })
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      render(<Harness actions={[progressAction({id: 'p.throws', handler})]} contexts={[blockPointerContextConfig]}/>)
+
+      let dispatch: ReturnType<typeof beginGestureProgress> = null
+      act(() => { dispatch = beginGestureProgress('date-scrub', {marker: 'x'} as never) })
+
+      expect(() => act(() => { dispatch!.update(progressTick()) })).not.toThrow()
+      expect(handler).toHaveBeenCalledTimes(1)
+      expect(errorSpy).toHaveBeenCalled()
+      errorSpy.mockRestore()
     })
   })
 

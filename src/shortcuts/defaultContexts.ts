@@ -72,11 +72,20 @@ export const defaultActionContextConfigs: readonly ActionContextConfig[] = [
   },
   {
     // Never auto-activated; dispatched with supplied deps from the block shell.
-    // Carries no bindings to install, so modal/priority are irrelevant, and its
-    // pointer-only actions must not surface as keyboard-bindable.
+    // Its actions must not surface as keyboard-bindable.
     type: ActionContextTypes.BLOCK_POINTER,
     displayName: 'Block Pointer Gesture',
     keyboardBindable: false,
+    // A pointer/gesture physically targeting a block outranks an ambient-mode
+    // binding for the SAME trigger: this context is never "active" (it carries
+    // supplied deps, not installed state), so without a priority it would lose
+    // the recency tiebreak in `compareContexts` to whatever scoped mode (e.g.
+    // normal-mode) is focused. `high` flips that for pointer/gesture dispatch —
+    // e.g. a right-swipe that closes an open quick-action menu (block-pointer)
+    // wins over the todo cycle (normal-mode) bound to the same `swipe-right`.
+    // Modal contexts still outrank it (tier beats priority), and it carries no
+    // keyboard bindings, so this only reorders the pointer/gesture path.
+    priority: 'high',
     // Clicks landing on interactive descendants (links, buttons, …) keep their
     // native behavior — block gestures never apply there. Declaring it once on
     // the context means individual pointer actions (select/toggle/edit) don't

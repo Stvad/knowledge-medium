@@ -54,11 +54,7 @@ import {
   type HeaderItemContribution,
 } from '@/extensions/core.js'
 import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
-import { blockContentSurfacePropsFacet } from '@/extensions/blockInteraction.js'
-import {
-  blockGestureConflictsFacet,
-  type BlockGestureConflictContribution,
-} from '@/extensions/blockGestureConflicts.js'
+import { continuousGestureRecognizersFacet } from '@/extensions/continuousGestures.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { parseAppHash } from '@/utils/routing.js'
 import { CalendarDays } from 'lucide-react'
@@ -76,20 +72,12 @@ import { dailyDateWikilinkDecorator } from './wikilinkDateDecorator.ts'
 import { ReschedulePicker } from './ReschedulePicker.tsx'
 import { DateScrubOverlay } from './DateScrubOverlay.tsx'
 import { DateKeyboardScrubController } from './DateKeyboardScrubController.tsx'
-import {
-  cancelDateScrubForBlock,
-  dateScrubContentSurface,
-  DATE_SCRUB_GESTURE_ID,
-} from './dateScrubGesture.ts'
+import { dateScrubRecognizer } from './dateScrubRecognizer.ts'
+import { dateScrubGestureActions } from './dateScrubGestureActions.ts'
 import {
   dateScrubActionContext,
   dateScrubActions,
 } from './dateScrubActions.ts'
-
-const dateScrubGestureConflictContribution: BlockGestureConflictContribution = {
-  id: DATE_SCRUB_GESTURE_ID,
-  onCancel: cancelDateScrubForBlock,
-}
 import {
   rescheduleBlockDateAction,
   rescheduleQuickActionItem,
@@ -209,10 +197,14 @@ export const dailyNotesPlugin = ({repo}: {repo: Repo}): AppExtension =>
     ),
     blockDateAdapterFacet.of(referenceDateAdapter, {source: 'daily-notes'}),
     wikilinkDisplayDecoratorFacet.of(dailyDateWikilinkDecorator, {source: 'daily-notes'}),
-    blockContentSurfacePropsFacet.of(dateScrubContentSurface, {source: 'daily-notes'}),
-    blockGestureConflictsFacet.of(dateScrubGestureConflictContribution, {
-      source: 'daily-notes',
-    }),
+    // Two-finger date scrub rides the core continuous-gesture loop now
+    // (arbitration + the touch-action / pointer-listener seam live there); the
+    // recognizer emits named gestures and the gesture-bound actions below drive
+    // the same ScrubHandler/overlay the keyboard path uses.
+    continuousGestureRecognizersFacet.of(dateScrubRecognizer, {source: 'daily-notes'}),
+    dateScrubGestureActions.map(action =>
+      actionsFacet.of(action, {source: 'daily-notes'}),
+    ),
     actionContextsFacet.of(dateScrubActionContext, {source: 'daily-notes'}),
     dateScrubActions.map(action =>
       actionsFacet.of(action, {source: 'daily-notes'}),

@@ -7,6 +7,7 @@ import type {
 import { Block } from '../data/block';
 import { EditorView } from '@codemirror/view'
 import type { PointerBindingSpec } from './canonicalizeChord.js'
+import type { GestureBindingSpec } from './gestureBinding.js'
 
 /** Action icon — same SVG-component shape lucide-react emits, so the
  *  default action set can use those directly without an adapter. The
@@ -189,14 +190,17 @@ export interface ActionContextActivation {
  * deliver a `KeyboardEvent`, imperative/swipe callers a `CustomEvent`, and
  * pointer-bound actions a React `MouseEvent` (click/double-click) or
  * `TouchEvent` (tap) — whose `currentTarget` / coordinates the handler reads
- * synchronously before any await. The descriptor used for resolution/ordering
- * is internal to the coordinator and never reaches here.
+ * synchronously before any await. A continuous gesture commits with the native
+ * `PointerEvent` that ended it (the recognizer loop works in native Pointer
+ * Events, not React synthetics). The descriptor used for resolution/ordering is
+ * internal to the coordinator and never reaches here.
  */
 export type ActionTrigger =
   | KeyboardEvent
   | CustomEvent
   | ReactMouseEvent<HTMLElement>
   | ReactTouchEvent<HTMLElement>
+  | PointerEvent
 
 /**
  * Activation primitives surfaced to action handlers as the optional third
@@ -256,6 +260,13 @@ export interface Action<T extends ActionContextType = ActionContextType> {
    *  pointer chords (e.g. ctrl-click OR meta-click both toggle selection), since
    *  modifier matching is exact-set. See {@link PointerBindingSpec}. */
   pointerBinding?: PointerBindingSpec | readonly PointerBindingSpec[];
+  /** Optional continuous-gesture binding — names a gesture a recognizer emits
+   *  (e.g. `{gesture: 'swipe-right'}`), dispatched through the same coordinator
+   *  + `resolve` path as keyboard/pointer with the gesture's block deps
+   *  supplied. The recognizer never names the action; the action names the
+   *  gesture, symmetric with `pointerBinding`. A list binds several gestures.
+   *  See {@link GestureBindingSpec} and docs/continuous-gesture-triggers.md. */
+  gestureBinding?: GestureBindingSpec | readonly GestureBindingSpec[];
   /** Optional icon for surfaces that render actions visually (toolbars,
    *  swipe menus, eventual command-palette icon column). Surfaces that
    *  don't render icons just ignore the field. */
