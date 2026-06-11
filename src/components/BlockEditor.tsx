@@ -13,7 +13,8 @@ import { placeCursorAtX, placeCursorAtCoords } from '@/utils/codemirror.js'
 import { useContentRevision, usePropertyValue } from '@/hooks/block.js'
 import { shouldExitEditModeAfterBlur } from '@/utils/dom.js'
 import { EditorView } from '@codemirror/view'
-import { EditorSelection } from '@codemirror/state'
+import { EditorSelection, type Extension } from '@codemirror/state'
+import { keyboardAwareScroll } from '@/utils/keyboardAwareScroll.js'
 import { useShortcutSurfaceActivations } from '@/extensions/useShortcutSurfaceActivations.js'
 import { useBlockContext } from '@/context/block.js'
 
@@ -205,16 +206,30 @@ export const BlockEditor = ({
       editorView.focus()
 
       const selection = uiStateBlock.peekProperty(editorSelection)
-      if (cancelled || selection?.blockId !== block.id) return
-
-      if (selection.x !== undefined && selection.y !== undefined) {
-        placeCursorAtCoords(editorView, {x: selection.x, y: selection.y})
-      } else if (selection.x !== undefined) {
-        placeCursorAtX(editorView, selection.x, selection.line === 'last')
-      } else if (selection.start !== undefined) {
-        const end = selection.end ?? selection.start
-        editorView.dispatch({selection: {anchor: selection.start, head: end}})
+      if (!cancelled && selection?.blockId === block.id) {
+        if (selection.x !== undefined && selection.y !== undefined) {
+          placeCursorAtCoords(editorView, {x: selection.x, y: selection.y})
+        } else if (selection.x !== undefined) {
+          placeCursorAtX(editorView, selection.x, selection.line === 'last')
+        } else if (selection.start !== undefined) {
+          const end = selection.end ?? selection.start
+          editorView.dispatch({selection: {anchor: selection.start, head: end}})
+        }
       }
+
+      if (cancelled) return
+      // Pull the caret into view on edit-entry. `view.focus()` uses
+      // preventScroll (CodeMirror's default), so nothing else scrolls
+      // here — and when the on-screen keyboard is already up (tapping a
+      // second block while editing) no visualViewport resize fires for
+      // keyboardAwareScroll's plugin to catch, making this the only
+      // chance to lift the caret above the keyboard. The scrollMargins
+      // contributed by keyboardAwareScroll keep that landing keyboard-
+      // aware; on desktop the margin is 0 and this is a cheap no-op for
+      // an already-visible caret.
+      editorView.dispatch({
+        effects: EditorView.scrollIntoView(editorView.state.selection.main.head),
+      })
     })
 
     return () => {
@@ -228,6 +243,15 @@ export const BlockEditor = ({
   // mounted — for any consumer (markdown editor, extension editor, future).
   const shortcutSurfaceOptions = useMemo(() => ({editorView: editorView ?? undefined}), [editorView])
   useShortcutSurfaceActivations(block, 'codemirror', shortcutSurfaceOptions)
+
+  // Every block editor gets keyboard-aware scrolling so the caret stays
+  // above the on-screen keyboard (see keyboardAwareScroll). Prepended so
+  // a caller-supplied extension can still override anything if it needs to.
+  const {extensions: providedExtensions, ...restCodeMirrorProps} = codeMirrorProps
+  const mergedExtensions = useMemo<Extension[]>(
+    () => [keyboardAwareScroll(), ...(providedExtensions ?? [])],
+    [providedExtensions],
+  )
 
   if (!blockEditData) return null
 
@@ -287,7 +311,8 @@ export const BlockEditor = ({
           setIsEditing(false)
         })
       }}
-      {...codeMirrorProps}
+      extensions={mergedExtensions}
+      {...restCodeMirrorProps}
     />
   )
 }
