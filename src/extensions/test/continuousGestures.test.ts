@@ -199,6 +199,28 @@ describe('createBlockGestureController', () => {
       expect(settle).not.toHaveBeenCalled()
     })
 
+    it('settles the preview when the commit goes unhandled (nothing took over the visual)', () => {
+      const settle = vi.fn()
+      const beginProgress = vi.fn(() => ({update: vi.fn(), settle}))
+      // dispatch returns false: no action bound the gesture, every candidate's
+      // canDispatch declined, or every handler returned false.
+      const dispatch = vi.fn<(...args: unknown[]) => boolean>(() => false)
+      const controller = createBlockGestureController({
+        recognizers: [previewRecognizer({
+          onPointerUp: () => ({status: 'commit', gesture: 'swipe-left', deps}),
+        })],
+        element, dispatch, beginProgress,
+      })
+
+      controller.handlePointerDown(sample(1, 0, 0))
+      controller.handlePointerMove(sample(1, -60, 0))
+      controller.handlePointerUp(sample(1, -60, 0))
+
+      expect(dispatch).toHaveBeenCalledTimes(1)
+      // Unhandled commit → the preview must settle back, not freeze mid-reveal.
+      expect(settle).toHaveBeenCalledTimes(1)
+    })
+
     it('settles the preview on a browser pointercancel', () => {
       const settle = vi.fn()
       const beginProgress = vi.fn(() => ({update: vi.fn(), settle}))

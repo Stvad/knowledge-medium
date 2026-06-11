@@ -358,10 +358,18 @@ export const createBlockGestureController = ({
         progress.dispatch?.update(verdict.event)
         return {handled: false, prevent: true}
       case 'commit': {
-        // The commit action takes over the visual, so drop the preview WITHOUT
-        // settling it (no animate-home).
-        if (progress?.recognizerId === recognizer.id) progress = null
-        dispatch(verdict.gesture, verdict.deps, ctx.event)
+        // A HANDLED commit takes over the visual, so drop the preview WITHOUT
+        // settling it (no animate-home). An UNHANDLED commit (nothing bound the
+        // gesture, every candidate's `canDispatch` declined, or every handler
+        // returned false) leaves nothing to take over — settle the preview back
+        // instead, or `resetSession` would later find `progress === null` and
+        // the resolved preview action would never get its settle, freezing the
+        // reveal after release. So dispatch FIRST, then decide.
+        const committed = dispatch(verdict.gesture, verdict.deps, ctx.event)
+        if (progress?.recognizerId === recognizer.id) {
+          if (committed) progress = null
+          else settleProgress()
+        }
         out.add(recognizer.id)
         if (activeId === recognizer.id) activeId = null
         // The recognizer DID commit, so it's out and no other recognizer should
