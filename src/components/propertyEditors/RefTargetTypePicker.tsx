@@ -17,7 +17,30 @@ export function RefTargetTypePicker({
 }: ValuePresetConfigEditorProps<RefCodecOptions>) {
   const runtime = useAppRuntime()
   const types = runtime.read(typesFacet)
-  const known = useMemo(() => Array.from(types.values()).map(t => t.id).sort(), [types])
+
+  // Constraints are stored as type ids, but users think in labels — built-in
+  // types have readable slug ids, while user-defined ones are UUIDs. Show the
+  // human label everywhere and resolve a picked/typed label back to its id on
+  // commit. The fallbacks keep an unlabeled type (or a directly-pasted
+  // slug/id) working: display its id and store whatever was typed verbatim.
+  const labelFor = useCallback(
+    (typeId: string) => (types.get(typeId)?.label ?? '').trim() || typeId,
+    [types],
+  )
+
+  const options = useMemo(
+    () =>
+      Array.from(types.values())
+        .map(t => ({id: t.id, label: (t.label ?? '').trim() || t.id}))
+        .sort((a, b) => a.label.localeCompare(b.label)),
+    [types],
+  )
+
+  const idForLabel = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const opt of options) map.set(opt.label.toLowerCase(), opt.id)
+    return map
+  }, [options])
 
   const targets = useMemo<readonly string[]>(
     () => Array.isArray(value.targetTypes) ? value.targetTypes : [],
@@ -36,9 +59,10 @@ export function RefTargetTypePicker({
   const addDraft = useCallback(() => {
     const trimmed = draft.trim()
     if (!trimmed) return
-    setTargets([...targets, trimmed])
+    const id = idForLabel.get(trimmed.toLowerCase()) ?? trimmed
+    setTargets([...targets, id])
     setDraft('')
-  }, [draft, setTargets, targets])
+  }, [draft, idForLabel, setTargets, targets])
 
   const remove = useCallback(
     (typeId: string) => setTargets(targets.filter(t => t !== typeId)),
@@ -57,7 +81,7 @@ export function RefTargetTypePicker({
       <div className="text-xs text-muted-foreground">
         {targets.length === 0
           ? 'Accepts any block type. Add one or more types to constrain.'
-          : `Accepts only: ${targets.join(', ')}`}
+          : `Accepts only: ${targets.map(labelFor).join(', ')}`}
       </div>
 
       {targets.length > 0 && (
@@ -67,10 +91,10 @@ export function RefTargetTypePicker({
               key={typeId}
               className="inline-flex items-center gap-1 rounded-md border border-border bg-muted px-2 py-0.5 text-xs"
             >
-              {typeId}
+              {labelFor(typeId)}
               <button
                 type="button"
-                aria-label={`Remove target type ${typeId}`}
+                aria-label={`Remove target type ${labelFor(typeId)}`}
                 className="text-muted-foreground hover:text-foreground"
                 onClick={() => remove(typeId)}
               >
@@ -95,10 +119,10 @@ export function RefTargetTypePicker({
         </Button>
       </div>
 
-      {known.length > 0 && (
+      {options.length > 0 && (
         <datalist id="ref-target-type-options">
-          {known.map(typeId => (
-            <option key={typeId} value={typeId} />
+          {options.map(opt => (
+            <option key={opt.id} value={opt.label} />
           ))}
         </datalist>
       )}
