@@ -21,6 +21,7 @@ import type {
   CodeMirrorExtensionContext,
   CodeMirrorExtensionContribution,
 } from '@/extensions/editor.js'
+import { ChangeScope } from '@/data/api'
 import { typesProp } from '@/data/properties'
 import { aliasesProp } from '@/data/internals/coreProperties'
 import { PLACE_TYPE } from './blockTypes'
@@ -75,7 +76,7 @@ const isPlaceBlock = (block: { properties: Record<string, unknown> }): boolean =
   return Array.isArray(raw) && raw.includes(PLACE_TYPE)
 }
 
-const buildPlaceCompletionSource = ({repo}: CodeMirrorExtensionContext): CompletionSource => {
+const buildPlaceCompletionSource = ({repo, block}: CodeMirrorExtensionContext): CompletionSource => {
   const apiKey = resolveApiKey()
   const googleClient: GooglePlacesClient | null = apiKey
     ? createGooglePlacesClient({apiKey})
@@ -317,7 +318,24 @@ const buildPlaceCompletionSource = ({repo}: CodeMirrorExtensionContext): Complet
     return null
   }
 
-  return placeCompletionSource({getCandidates, resolvePlace, consumePendingCandidates})
+  // The collision toast (and any slow resolution) outlives the pick:
+  // clicking it blurs the block, the per-block editor unmounts, and the
+  // captured view can't take the insert anymore. Apply the same
+  // replacement to the block's content instead — read-modify-write
+  // inside a tx so a pending editor flush can't be clobbered.
+  const persistInsert = async ({triggerText, insert}: {triggerText: string, insert: string}) => {
+    await repo.tx(async tx => {
+      const data = await tx.get(block.id)
+      if (!data || data.deleted) return
+      const idx = data.content.indexOf(triggerText)
+      if (idx === -1) return
+      const next = data.content.slice(0, idx) + insert
+        + data.content.slice(idx + triggerText.length)
+      await tx.update(block.id, {content: next})
+    }, {scope: ChangeScope.BlockDefault, description: 'insert place link'})
+  }
+
+  return placeCompletionSource({getCandidates, resolvePlace, consumePendingCandidates, persistInsert})
 }
 
 export const geoCodeMirrorExtensions: CodeMirrorExtensionContribution = (ctx) => {

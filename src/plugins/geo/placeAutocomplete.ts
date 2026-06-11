@@ -101,6 +101,14 @@ export interface PlaceAutocompleteOptions {
     span: {from: number, to: number}
     candidates: PlaceAutocompleteCandidate[]
   } | null
+  /** Persistence fallback for the resolved wikilink. `resolvePlace` can
+   *  settle long after the pick (details fetch, collision toast) — by
+   *  then the interaction may have moved focus out of the editor, and
+   *  the per-block CodeMirror view unmounts with it, so dispatching the
+   *  insert into the captured view goes nowhere. When the view can no
+   *  longer take the change, this is called to apply the same
+   *  trigger-text → wikilink replacement to the underlying block. */
+  persistInsert?: (args: {triggerText: string; insert: string}) => Promise<void>
 }
 
 interface TriggerMatch {
@@ -175,25 +183,71 @@ export const matchAtTrigger = (text: string, pos: number): TriggerMatch | null =
   return {from: atPos, query}
 }
 
+/** Where to apply the trigger-text → wikilink replacement once the
+ *  resolution settles. Prefers the recorded span if the text is still
+ *  there; re-locates by content when the doc drifted around it (other
+ *  edits landed while the resolution was pending); `null` when the
+ *  trigger text is gone — the user deleted it, nothing to replace.
+ *  Exported for direct testing. */
+export const planResolvedInsert = (
+  doc: string,
+  span: {from: number; to: number},
+  triggerText: string,
+): {from: number; to: number} | null => {
+  if (triggerText.length === 0) return null
+  if (doc.slice(span.from, span.to) === triggerText) return span
+  const idx = doc.indexOf(triggerText)
+  if (idx === -1) return null
+  return {from: idx, to: idx + triggerText.length}
+}
+
+/** Try to deliver the insert through the editor view. False when the
+ *  view is unmounted/destroyed or the trigger text is no longer in its
+ *  doc — the caller falls back to `persistInsert`. */
+const applyInsertToView = (
+  view: EditorView,
+  span: {from: number; to: number},
+  triggerText: string,
+  insert: string,
+): boolean => {
+  // `EditorView.destroyed` is private API; a detached root is the
+  // observable signature of an unmounted per-block editor.
+  if (!view.dom.isConnected) return false
+  const plan = planResolvedInsert(view.state.doc.toString(), span, triggerText)
+  if (plan === null) return false
+  try {
+    view.dispatch({
+      changes: {from: plan.from, to: plan.to, insert},
+      selection: EditorSelection.cursor(plan.from + insert.length),
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
 const candidateToOption = (
   candidate: PlaceAutocompleteCandidate,
-  resolve: PlaceAutocompleteOptions['resolvePlace'],
+  options: PlaceAutocompleteOptions,
 ): Completion => ({
   label: candidate.label,
   detail: candidate.detail,
   type: candidate.source === 'sentinel:current-location' ? 'keyword' : 'class',
   apply: (view, _completion, applyFrom, applyTo) => {
+    // Snapshot the trigger text now — by the time the resolution
+    // settles the doc (or the view itself) may be gone.
+    const triggerText = view.state.doc.sliceString(applyFrom, applyTo)
     // Fire-and-forget — the dropdown closes immediately. Errors
     // surface via the resolvePlace impl (toast, console).
     void (async () => {
-      const resolved = await resolve(candidate, {view, from: applyFrom, to: applyTo})
+      const resolved = await options.resolvePlace(candidate, {view, from: applyFrom, to: applyTo})
       if (!resolved) return
       if (resolved.kind === 'handled') return
       const insert = `[[${resolved.name}]]`
-      view.dispatch({
-        changes: {from: applyFrom, to: applyTo, insert},
-        selection: EditorSelection.cursor(applyFrom + insert.length),
-      })
+      const delivered = applyInsertToView(
+        view, {from: applyFrom, to: applyTo}, triggerText, insert,
+      )
+      if (!delivered) await options.persistInsert?.({triggerText, insert})
     })()
   },
 })
@@ -208,7 +262,7 @@ export const placeCompletionSource = (
         from: pending.span.from,
         to: pending.span.to,
         filter: false,
-        options: pending.candidates.map(c => candidateToOption(c, options.resolvePlace)),
+        options: pending.candidates.map(c => candidateToOption(c, options)),
       }
     }
 
@@ -235,7 +289,7 @@ export const placeCompletionSource = (
       // filter would hide e.g. a "Use current location" sentinel whose
       // label doesn't contain the typed text.
       filter: false,
-      options: candidates.map(c => candidateToOption(c, options.resolvePlace)),
+      options: candidates.map(c => candidateToOption(c, options)),
     }
   }
 }
