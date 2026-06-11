@@ -38,9 +38,42 @@ describe('matchAtTrigger', () => {
     expect(matchAtTrigger('hello world', 11)).toBeNull()
   })
 
-  it('matches multi-word queries up to the cursor', () => {
+  it('matches multi-word queries up to a mid-word cursor', () => {
     const m = matchAtTrigger('lunch @blue bottle', 11)
     expect(m).toEqual({from: 6, query: 'blue'})
+  })
+
+  it('matches multi-word place names across single spaces', () => {
+    const m = matchAtTrigger('lunch @blue bottle', 18)
+    expect(m).toEqual({from: 6, query: 'blue bottle'})
+  })
+
+  it('keeps matching with a trailing space (mid-typing between words)', () => {
+    const m = matchAtTrigger('@blue ', 6)
+    expect(m).toEqual({from: 0, query: 'blue '})
+  })
+
+  it('does NOT match across a double space (query is over, prose resumed)', () => {
+    expect(matchAtTrigger('@home  later that day', 21)).toBeNull()
+  })
+
+  it('does NOT match when the query starts with a space ("see you @ 5pm")', () => {
+    expect(matchAtTrigger('see you @ 5pm', 13)).toBeNull()
+  })
+
+  it('does NOT match across tabs', () => {
+    expect(matchAtTrigger('@foo\tbar', 8)).toBeNull()
+  })
+
+  it('does NOT match once the query exceeds the word cap', () => {
+    expect(matchAtTrigger('@one two three four five six', 28))
+      .toEqual({from: 0, query: 'one two three four five six'})
+    expect(matchAtTrigger('@one two three four five six seven', 34)).toBeNull()
+  })
+
+  it('does NOT match once the query exceeds the length cap', () => {
+    const long = `@${'a'.repeat(60)}`
+    expect(matchAtTrigger(long, long.length)).toBeNull()
   })
 })
 

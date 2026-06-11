@@ -2,9 +2,12 @@
  *
  *  Trigger shape: `@<query>` at start of line or after whitespace, with
  *  no `[` in the query (so we don't fire inside `[[`) and no preceding
- *  word character (so we don't fire mid-email `a@b`). The query may be
- *  empty — that's the moment to surface the "Use current location"
- *  sentinel (Phase F).
+ *  word character (so we don't fire mid-email `a@b`). The query may
+ *  contain single spaces ("Blue Bottle Coffee") — a double space, other
+ *  whitespace, or the length/word caps end it so prose after a bare
+ *  `@word` doesn't keep the dropdown alive. The query may be empty —
+ *  that's the moment to surface the "Use current location" sentinel
+ *  (Phase F).
  *
  *  On select: the caller-supplied `resolvePlace` returns a
  *  `PlaceResolveResult`. Two kinds:
@@ -123,21 +126,42 @@ const isInsideUnclosedWikilink = (text: string, beforePos: number): boolean => {
   return opens > closes
 }
 
+/** Place names routinely contain spaces ("Blue Bottle Coffee"), so the
+ *  query may span words. The caps below decide when an `@` earlier in
+ *  the line stops owning what the user types: a double space or any
+ *  non-space whitespace ends the query immediately, and a query longer
+ *  than this many chars/words is prose, not a place name. Without the
+ *  caps, every sentence containing a bare `@word` would re-open the
+ *  dropdown on each keystroke until end of line. */
+const MAX_QUERY_LEN = 50
+const MAX_QUERY_WORDS = 6
+
 /** Pure trigger-detection helper. Exported for direct testing — the
  *  CompletionSource glue just adapts to CodeMirror's call shape. */
 export const matchAtTrigger = (text: string, pos: number): TriggerMatch | null => {
-  // Walk backward from the cursor to find the most recent `@`. Bail on
-  // whitespace or wikilink brackets between the cursor and the `@` —
-  // those interrupt the trigger sequence.
+  // Walk backward from the cursor to find the most recent `@`. Single
+  // spaces are part of the query; wikilink brackets, non-space
+  // whitespace, a double space, or an over-long scan interrupt the
+  // trigger sequence.
   let i = pos
   while (i > 0) {
     const c = text[i - 1]
     if (c === '@') break
-    if (/\s/.test(c)) return null
+    if (c === ' ') {
+      if (i >= 2 && text[i - 2] === ' ') return null
+    } else if (/\s/.test(c)) {
+      return null
+    }
     if (c === '[' || c === ']') return null
+    if (pos - i >= MAX_QUERY_LEN) return null
     i -= 1
   }
   if (i === 0 || text[i - 1] !== '@') return null
+
+  const query = text.slice(i, pos)
+  // `@ 5pm` is prose, not a half-typed place query.
+  if (query.startsWith(' ')) return null
+  if (query.split(' ').filter(w => w.length > 0).length > MAX_QUERY_WORDS) return null
 
   const atPos = i - 1
   // Word char immediately before `@` → email-like (`a@b`); skip.
@@ -148,7 +172,7 @@ export const matchAtTrigger = (text: string, pos: number): TriggerMatch | null =
   // line → the wikilink autocomplete owns this input.
   if (isInsideUnclosedWikilink(text, atPos)) return null
 
-  return {from: atPos, query: text.slice(i, pos)}
+  return {from: atPos, query}
 }
 
 const candidateToOption = (
