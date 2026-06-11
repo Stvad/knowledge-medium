@@ -2,6 +2,7 @@ import { EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view'
 import type { Extension } from '@codemirror/state'
 import {
   getBottomEditingInset,
+  getEditingToolbarHeight,
   getKeyboardOverlap,
   subscribeKeyboardViewport,
 } from './keyboardViewport.js'
@@ -62,7 +63,17 @@ export const keyboardAwareScroll = (): Extension => [
       private subscribe(view: EditorView) {
         if (this.unsubscribe) return
         this.unsubscribe = subscribeKeyboardViewport(() => {
-          if (!view.hasFocus || getKeyboardOverlap() < MIN_KEYBOARD_OVERLAP) return
+          if (!view.hasFocus) return
+          // Re-scroll when there's a real keyboard OR the editing toolbar
+          // is present. The toolbar height is only ever nonzero while the
+          // toolbar is actually rendered (mobile + editing), so it's a
+          // reliable signal rather than viewport noise. This matters on
+          // Chrome Android's resizes-content path, where the keyboard
+          // overlap stays 0 (the layout viewport shrank with the keyboard)
+          // yet the toolbar still obscures the caret.
+          if (getKeyboardOverlap() < MIN_KEYBOARD_OVERLAP && getEditingToolbarHeight() === 0) {
+            return
+          }
           view.dispatch({
             effects: EditorView.scrollIntoView(view.state.selection.main.head),
           })
