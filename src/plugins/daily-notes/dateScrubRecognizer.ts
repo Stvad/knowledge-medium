@@ -96,11 +96,13 @@ export const dateScrubRecognizer: BlockGestureRecognizerContribution = context =
     scrubbing = false
   }
 
-  // Gesture-wide gate: touch + mobile + not editing. The per-POINTER interactive
-  // check is separate (isEligibleSurface), applied to each anchor finger at lock
-  // time — so a finger that began on a button/editor can't be half of the pair.
-  const gestureAllowed = (ctx: GestureEventContext): boolean =>
-    ctx.event.pointerType === 'touch' && isMobileViewport() && !editing()
+  // Per-event ownership: a scrub is a TOUCH gesture, so a mouse/pen pointer
+  // isn't ours. The coarse applicability gate (mobile + not editing) lives in
+  // `isEnabled` below — the loop won't even call these handlers when it's false.
+  // The per-POINTER interactive check is separate again (isEligibleSurface),
+  // applied to each anchor finger at lock time so a finger that began on a
+  // button/editor can't be half of the pair.
+  const isTouch = (ctx: GestureEventContext): boolean => ctx.event.pointerType === 'touch'
 
   // A finger may anchor a scrub only if it began OFF interactive content (links
   // and video excepted). Touch pointers get implicit capture, so a pointer's
@@ -132,7 +134,7 @@ export const dateScrubRecognizer: BlockGestureRecognizerContribution = context =
     // get to process can be a move with both fingers already down. lockAnchor
     // only sets the anchor when two ELIGIBLE fingers are present.
     if (!anchor) {
-      if (!gestureAllowed(ctx)) return GESTURE_IDLE
+      if (!isTouch(ctx)) return GESTURE_IDLE
       lockAnchor(session)
     }
     const pair = trackedPair(session)
@@ -148,7 +150,6 @@ export const dateScrubRecognizer: BlockGestureRecognizerContribution = context =
       // Pre-activation gate: horizontal travel past the lock AND dominating
       // vertical — rejects pinch (midpoint stays put) and two-finger scroll.
       if (Math.abs(dx) <= HORIZONTAL_LOCK_PX || Math.abs(dx) <= Math.abs(dy)) return GESTURE_IDLE
-      if (editing()) return GESTURE_IDLE
       const accepted = startTouchScrub({
         block,
         blockId: block.id,
@@ -169,12 +170,17 @@ export const dateScrubRecognizer: BlockGestureRecognizerContribution = context =
 
   const recognizer: GestureRecognizer = {
     id: DATE_SCRUB_GESTURE_ID,
+    // Applicability gate (mobile only, and a scrub is meaningless on an editing
+    // block): the loop skips these handlers and drops this pan-y when false, so
+    // the handlers below state only per-event ownership. Read live, so a resize
+    // / edit toggle is reflected without re-running the factory.
+    isEnabled: () => isMobileViewport() && !editing(),
     // pan-y keeps native vertical scroll (so a two-finger vertical scroll isn't
     // ours) while handing horizontal motion to JS; unions with the swipe's pan-y.
     touchAction: 'pan-y',
 
     onPointerDown(session, ctx) {
-      if (!gestureAllowed(ctx)) return GESTURE_IDLE
+      if (!isTouch(ctx)) return GESTURE_IDLE
       if (!anchor && session.pointers.length >= 2) lockAnchor(session)
       return GESTURE_IDLE
     },

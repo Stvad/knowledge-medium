@@ -164,4 +164,10 @@ describe('dateScrubRecognizer', () => {
     ) as GesturePhaseResult
     expect(verdict.status).toBe('idle')
   })
+
+  it('isEnabled gates on the viewport (the mobile gate the loop reads, moved out of the handlers)', () => {
+    expect(make().isEnabled?.()).toBe(true) // beforeEach reports a mobile viewport
+    window.matchMedia = vi.fn().mockReturnValue({matches: false}) as unknown as typeof window.matchMedia
+    expect(make().isEnabled?.()).toBe(false)
+  })
 })

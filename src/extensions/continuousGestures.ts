@@ -8,7 +8,7 @@
  * NAME + the block's deps; the loop dispatches it via `dispatchGesture`, so the
  * recognizer never names the action. See `docs/continuous-gesture-triggers.md`.
  *
- * This module owns three cross-cutting concerns so recognizers don't each
+ * This module owns four cross-cutting concerns so recognizers don't each
  * re-implement them (the bespoke `swipeGesture.ts` / `dateScrubGesture.ts`
  * machinery this replaces did):
  *  - the per-block pointer SESSION (which pointers are down, where), built from
@@ -19,6 +19,13 @@
  *    dropped) but stay ELIGIBLE, so a later gesture can take the block over once
  *    the owner releases — the 1-finger swipe yields on a 2nd finger and the
  *    2-finger scrub then claims. This absorbs `blockGestureConflicts`;
+ *  - ENABLEMENT — a recognizer's `isEnabled` gate (mobile viewport, not editing,
+ *    …) is the single source of truth for whether it's applicable here-and-now:
+ *    the loop skips a disabled recognizer's handlers and drops it from the
+ *    `touch-action` union, so each recognizer states applicability ONCE instead
+ *    of re-checking it in every handler. Per-event OWNERSHIP (pointer type,
+ *    finger count, interactive target) is the separate concern that stays in the
+ *    handlers;
  *  - the non-passive listener + `touch-action` SEAM for scroll suppression.
  *
  * Recognition that the model can't express stays possible: a plugin can ignore
@@ -113,9 +120,22 @@ export interface GestureRecognizer {
   /** Arbitration key — the loop cancels every OTHER recognizer when this one
    *  goes active. (Absorbs the old `blockGestureConflicts` gesture ids.) */
   readonly id: string
-  /** CSS `touch-action` this gesture needs (e.g. `'pan-y'`). The loop applies
-   *  the union of its recognizers' values to the surface, statically, so the
-   *  browser yields the right axis BEFORE the gesture starts — a non-passive
+  /** Reactive applicability: is this gesture live for this block RIGHT NOW? The
+   *  coarse, surface-level gate (e.g. mobile viewport, not editing) that the
+   *  recognizer's pointer handlers would otherwise each re-check. The loop reads
+   *  it as the single source of truth: a recognizer that isn't enabled is
+   *  excluded from the `touch-action` union AND skipped in the recognition loop,
+   *  so its handlers only ever see events it could actually own — per-event
+   *  OWNERSHIP (pointer type, finger count, interactive target) is a separate
+   *  concern that stays in the handlers. Omitted ⇒ always enabled. Read live (no
+   *  event arg), so keep it a cheap synchronous check; the React layer recomputes
+   *  `touch-action` from it each render. If a recognizer becomes disabled
+   *  mid-gesture while it owns the block, the loop cancels it so it drops
+   *  in-flight state. */
+  isEnabled?(): boolean
+  /** CSS `touch-action` this gesture needs WHILE enabled (e.g. `'pan-y'`). The
+   *  loop applies the union of its ENABLED recognizers' values to the surface so
+   *  the browser yields the right axis BEFORE the gesture starts — a non-passive
    *  move listener alone can't suppress native scroll under Pointer Events. */
   readonly touchAction?: string
   onPointerDown?(session: GestureSession, ctx: GestureEventContext): GesturePhaseResult
@@ -175,6 +195,17 @@ export const unionTouchAction = (values: readonly string[]): string | undefined 
   const unique = [...new Set(present)]
   return unique.length === 1 ? unique[0] : 'none'
 }
+
+/**
+ * The `touch-action` a surface should carry right now: the union (see
+ * `unionTouchAction`) over only the recognizers that are currently ENABLED. A
+ * disabled recognizer can't fire, so it must not constrain the surface — this is
+ * what keeps `pan-y` off a block whose gesture is inapplicable (desktop
+ * viewport, an editing block, …). `isEnabled` is read live, so the React layer
+ * recomputes this each render as enablement changes.
+ */
+export const enabledTouchAction = (recognizers: readonly GestureRecognizer[]): string | undefined =>
+  unionTouchAction(recognizers.filter(r => r.isEnabled?.() ?? true).map(r => r.touchAction ?? ''))
 
 interface ControllerArgs {
   readonly recognizers: readonly GestureRecognizer[]
@@ -262,6 +293,11 @@ export const createBlockGestureController = ({
   const isEligible = (recognizer: GestureRecognizer): boolean =>
     !out.has(recognizer.id) && (activeId === null || activeId === recognizer.id)
 
+  // The recognizer's own applicability gate (mobile viewport, not editing, …),
+  // read live per event. Absent ⇒ always enabled. This is the single source of
+  // truth the per-event loop and the `touch-action` union both consult.
+  const enabled = (recognizer: GestureRecognizer): boolean => recognizer.isEnabled?.() ?? true
+
   // Evict every OTHER recognizer for the claimer: fire their onPointerCancel so
   // they drop in-flight state (a half-built swipe `start`, a previewing menu),
   // but do NOT bar them — they stay eligible so a later gesture can take the
@@ -348,6 +384,20 @@ export const createBlockGestureController = ({
     }
   }
 
+  // An owner whose enablement gate flipped off mid-gesture (the block entered
+  // edit mode, the viewport crossed the mobile breakpoint, …) can no longer
+  // fire, so release it cleanly: fire its cancel so it drops in-flight state (an
+  // open scrub overlay, a half-built swipe) and settle any preview it streamed.
+  // It is NOT added to `out` — once re-enabled it can claim a fresh gesture.
+  const releaseDisabledOwner = (session: GestureSession, ctx: GestureEventContext): void => {
+    if (activeId === null) return
+    const owner = recognizers.find(r => r.id === activeId)
+    if (!owner || enabled(owner)) return
+    owner.onPointerCancel?.(session, ctx)
+    if (progress?.recognizerId === owner.id) settleProgress()
+    activeId = null
+  }
+
   const run = (
     phase: 'down' | 'move' | 'up',
     sample: PointerSample,
@@ -355,11 +405,12 @@ export const createBlockGestureController = ({
     const changed = toPointer(sample)
     const session = sessionWith(changed)
     const ctx: GestureEventContext = {element, event: sample.event}
+    releaseDisabledOwner(session, ctx)
     let prevent = false
     // Contribution order is the tiebreak: the first recognizer to commit wins
     // this event; an `active` recognizer has already evicted the rest.
     for (const recognizer of recognizers) {
-      if (!isEligible(recognizer)) continue
+      if (!isEligible(recognizer) || !enabled(recognizer)) continue
       const handler =
         phase === 'down' ? recognizer.onPointerDown
           : phase === 'move' ? recognizer.onPointerMove
@@ -402,7 +453,7 @@ export const createBlockGestureController = ({
       if (pointers.size === 0) resetSession()
     },
     get touchAction() {
-      return unionTouchAction(recognizers.map(r => r.touchAction ?? ''))
+      return enabledTouchAction(recognizers)
     },
   }
 }
@@ -519,12 +570,6 @@ export const useContinuousGestures = (
 
     const controller = createBlockGestureController({recognizers, element})
 
-    // touch-action is the load-bearing scroll-suppression mechanism for touch
-    // (see module header). Set imperatively and restored on cleanup; React
-    // never manages this property so it won't be clobbered by re-renders.
-    const previousTouchAction = element.style.touchAction
-    if (controller.touchAction) element.style.touchAction = controller.touchAction
-
     const onDown = (event: PointerEvent): void => {
       if (controller.handlePointerDown(toSample(event))) event.preventDefault()
     }
@@ -560,12 +605,32 @@ export const useContinuousGestures = (
       element.removeEventListener('pointermove', onMove)
       element.removeEventListener('pointerup', onUp)
       element.removeEventListener('pointercancel', onCancel)
-      element.style.touchAction = previousTouchAction
     }
     // nodeVersion is the re-run trigger: it changes whenever the attached node
     // does, so the effect tears down the old node's listeners and rebinds to the
     // new one. The effect reads nodeRef.current directly.
   }, [recognizers, nodeVersion])
+
+  // touch-action is the load-bearing scroll-suppression hint for touch (see
+  // module header), applied in its OWN effect — separate from the listener loop
+  // above — so an enablement change re-applies it WITHOUT rebuilding the
+  // controller (which would drop in-flight gesture / arbitration / preview
+  // state). `enabledTouchAction` reads each recognizer's `isEnabled` live, and
+  // the host re-renders when enablement changes (edit mode, viewport), so this
+  // recomputes and the effect re-runs as the value changes. React never manages
+  // this property, so capture and restore the prior value rather than clobbering
+  // it. The loop's per-event `isEnabled` gate is the behavioral source of truth;
+  // this only keeps the static surface hint in agreement with it.
+  const desiredTouchAction = enabledTouchAction(recognizers)
+  useEffect(() => {
+    const element = nodeRef.current
+    if (!element || recognizers.length === 0) return
+    const previousTouchAction = element.style.touchAction
+    if (desiredTouchAction) element.style.touchAction = desiredTouchAction
+    return () => {
+      element.style.touchAction = previousTouchAction
+    }
+  }, [desiredTouchAction, recognizers, nodeVersion])
 
   return setRef
 }

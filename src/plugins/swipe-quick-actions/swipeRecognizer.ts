@@ -100,14 +100,20 @@ export const swipeRecognizer: BlockGestureRecognizerContribution = context => {
 
   const recognizer: GestureRecognizer = {
     id: SWIPE_QUICK_ACTIONS_GESTURE_ID,
+    // Applicability gate (the menu is mobile-only and a swipe is meaningless on
+    // an editing block): the loop drops the recognizer's handlers and its pan-y
+    // when this is false, so the handlers below only state per-event ownership.
+    // Read live, so a resize / edit toggle is reflected without re-running the
+    // factory.
+    isEnabled: () => isMobileViewport() && !editing(),
     // pan-y hands horizontal motion to JS while keeping native vertical scroll,
     // so the recognizer doesn't have to preventDefault moves to suppress scroll.
     touchAction: 'pan-y',
 
     onPointerDown(session: GestureSession, ctx: GestureEventContext): GesturePhaseResult {
-      // Touch + mobile only; a second pointer means this isn't a one-finger
-      // swipe, so yield (drop any claim) and let a multi-finger gesture have it.
-      if (ctx.event.pointerType !== 'touch' || !isMobileViewport()) return GESTURE_IDLE
+      // Touch only; a second pointer means this isn't a one-finger swipe, so
+      // yield (drop any claim) and let a multi-finger gesture have it.
+      if (ctx.event.pointerType !== 'touch') return GESTURE_IDLE
       if (session.pointers.length > 1) {
         start = null
         return GESTURE_CANCEL
@@ -117,7 +123,6 @@ export const swipeRecognizer: BlockGestureRecognizerContribution = context => {
       if (!isSwipeSurfaceEvent(ctx.event.target) && isInteractiveContentEvent(ctx.event)) {
         return GESTURE_IDLE
       }
-      if (editing()) return GESTURE_IDLE
       start = {x: session.changed.x, y: session.changed.y, pointerId: session.changed.pointerId, decided: null, previewed: false}
       return GESTURE_IDLE
     },
@@ -147,7 +152,7 @@ export const swipeRecognizer: BlockGestureRecognizerContribution = context => {
 
       // Only the leftward (opening) gesture previews; rightward runs a semantic
       // action and needs no intermediate feedback, but still claims the block.
-      if (dx < 0 && !editing()) {
+      if (dx < 0) {
         start.previewed = true
         return {status: 'progress', gesture: 'swipe-left', deps: dependenciesFor(context, ctx), event: swipeProgressTickEvent(dx)}
       }
@@ -164,7 +169,7 @@ export const swipeRecognizer: BlockGestureRecognizerContribution = context => {
 
       // Horizontal-only — vertical scrolls and taps are someone else's job.
       if (Math.abs(dx) > Math.abs(dy)) {
-        if (dx <= -SWIPE_TRIGGER_PX && !editing()) {
+        if (dx <= -SWIPE_TRIGGER_PX) {
           return {status: 'commit', gesture: 'swipe-left', deps: dependenciesFor(context, ctx)}
         }
         if (dx >= SWIPE_TRIGGER_PX) {

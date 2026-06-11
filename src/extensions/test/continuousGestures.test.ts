@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   createBlockGestureController,
   unionTouchAction,
+  enabledTouchAction,
   GESTURE_ACTIVE,
   GESTURE_CANCEL,
   GESTURE_IDLE,
@@ -364,6 +365,46 @@ describe('createBlockGestureController', () => {
   })
 })
 
+describe('enablement (isEnabled)', () => {
+  it('skips a disabled recognizer: its handlers never run and it is dropped from the touch-action union', () => {
+    const onPointerDown = vi.fn(() => GESTURE_ACTIVE)
+    const recognizer: GestureRecognizer = {
+      id: 'swipe',
+      isEnabled: () => false,
+      touchAction: 'pan-y',
+      onPointerDown,
+    }
+    const controller = createBlockGestureController({recognizers: [recognizer], element})
+
+    expect(controller.handlePointerDown(sample(1, 0, 0))).toBe(false)
+    expect(onPointerDown).not.toHaveBeenCalled()
+    expect(controller.touchAction).toBeUndefined()
+  })
+
+  it('releases an owner whose gate flips off mid-gesture: fires its cancel and stops routing to it', () => {
+    let enabled = true
+    const onPointerCancel = vi.fn()
+    const onPointerMove = vi.fn(() => GESTURE_ACTIVE)
+    const recognizer: GestureRecognizer = {
+      id: 'scrub',
+      isEnabled: () => enabled,
+      onPointerMove,
+      onPointerCancel,
+    }
+    const controller = createBlockGestureController({recognizers: [recognizer], element})
+
+    controller.handlePointerDown(sample(1, 0, 0))
+    expect(controller.handlePointerMove(sample(1, 10, 0))).toBe(true) // claims the block
+    expect(onPointerMove).toHaveBeenCalledTimes(1)
+
+    // The gate flips off (e.g. the block entered edit mode) while it owns the block.
+    enabled = false
+    expect(controller.handlePointerMove(sample(1, 20, 0))).toBe(false)
+    expect(onPointerCancel).toHaveBeenCalledTimes(1) // released cleanly, drops in-flight state
+    expect(onPointerMove).toHaveBeenCalledTimes(1)   // no further routing while disabled
+  })
+})
+
 describe('unionTouchAction', () => {
   it('collapses identical requirements and lets none dominate; differing requirements fall back to none', () => {
     expect(unionTouchAction(['pan-y', 'pan-y'])).toBe('pan-y')
@@ -371,5 +412,14 @@ describe('unionTouchAction', () => {
     expect(unionTouchAction(['pan-y', 'pan-x'])).toBe('none')
     expect(unionTouchAction([])).toBeUndefined()
     expect(unionTouchAction(['', ''])).toBeUndefined()
+  })
+
+  it('enabledTouchAction unions only the enabled recognizers', () => {
+    const on: GestureRecognizer = {id: 'on', isEnabled: () => true, touchAction: 'pan-y'}
+    const off: GestureRecognizer = {id: 'off', isEnabled: () => false, touchAction: 'none'}
+    const always: GestureRecognizer = {id: 'always', touchAction: 'pan-y'} // no gate ⇒ enabled
+    expect(enabledTouchAction([on, off])).toBe('pan-y') // the disabling 'none' is excluded
+    expect(enabledTouchAction([on, always])).toBe('pan-y')
+    expect(enabledTouchAction([off])).toBeUndefined()
   })
 })

@@ -135,9 +135,14 @@ collapsing them.
   - A recognizer **declares the `touch-action` it needs** (e.g. `'pan-y'` —
     keep native vertical page scroll, hand horizontal motion to JS — which fits
     both horizontal swipe and horizontal two-finger scrub; `'none'` only when a
-    gesture genuinely owns both axes). The core loop applies the **union** of
-    its recognizers' requirements to the content surface as a static
-    `style.touchAction`, computed at contribution time.
+    gesture genuinely owns both axes). The core loop applies the **union** of its
+    **enabled** recognizers' requirements to the content surface as
+    `style.touchAction`. It's still set *ahead* of the gesture (not flipped mid-
+    drag for an in-flight one); but because applicability (`isEnabled`) is live,
+    the React layer recomputes the union each render and re-applies it when a
+    recognizer's enablement flips — so a block that can't be swiped right now
+    (desktop, an editing block) carries no `pan-y`, instead of advertising it
+    unconditionally.
   - Every recognizer **must treat `pointercancel` as a real terminal phase**
     (`onPointerCancel`) — the browser can still cancel mid-gesture (a
     `touch-action: pan-y` surface scrolled vertically past the lock, an OS
@@ -166,7 +171,8 @@ A recognizer is a state machine returning a verdict:
 ```ts
 interface GestureRecognizer<Deps = unknown> {
   id: string                       // arbitration key (absorbs blockGestureConflicts ids)
-  touchAction?: TouchActionValue   // CSS touch-action this gesture needs (e.g. 'pan-y'); core unions them onto the surface
+  isEnabled?(): boolean            // applicability gate (mobile viewport, not editing, …); read live. Single source of truth: core skips a disabled recognizer's handlers AND drops it from the touch-action union. Omitted ⇒ always enabled. Per-event ownership (pointer type, finger count, target) stays in the handlers.
+  touchAction?: TouchActionValue   // CSS touch-action this gesture needs WHILE enabled (e.g. 'pan-y'); core unions the ENABLED recognizers onto the surface
   onPointerDown?(s: GestureSession, ctx): GesturePhaseResult
   onPointerMove?(s: GestureSession, ctx): GesturePhaseResult
   onPointerUp?(s: GestureSession, ctx): GesturePhaseResult
