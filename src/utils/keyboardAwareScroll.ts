@@ -1,6 +1,10 @@
 import { EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view'
 import type { Extension } from '@codemirror/state'
-import { getKeyboardOverlap, subscribeKeyboardViewport } from './keyboardViewport.js'
+import {
+  getBottomEditingInset,
+  getKeyboardOverlap,
+  subscribeKeyboardViewport,
+} from './keyboardViewport.js'
 
 // Below this many CSS px we treat the overlap as viewport noise (URL-bar
 // jitter, sub-pixel rounding) rather than a real on-screen keyboard, and
@@ -11,25 +15,28 @@ const MIN_KEYBOARD_OVERLAP = 60
 /** Keeps the caret visible above the on-screen keyboard while editing.
  *
  *  Two cooperating pieces:
- *  - `scrollMargins` reserves the keyboard's height at the bottom of the
+ *  - `scrollMargins` reserves the bottom editing inset (keyboard height
+ *    plus the editing toolbar floating above it) at the bottom of the
  *    editor's scroll target, so CodeMirror's own "scroll the cursor into
  *    view" (on edit-entry and as the user types near the bottom) lands
- *    the caret above the keyboard instead of behind it. CodeMirror
- *    measures the scroller in layout coordinates, which is exactly what
- *    `getKeyboardOverlap` reports.
+ *    the caret above that chrome instead of behind it. CodeMirror measures
+ *    the scroller in layout coordinates, which is exactly what
+ *    `getBottomEditingInset` reports.
  *  - a ViewPlugin re-asserts the caret when the keyboard *opens after*
  *    focus. Tapping a block focuses it, but the keyboard then animates up
  *    a few frames later — a visualViewport resize that the focus call
- *    can't wait for. BlockEditor's edit-entry scroll covers the inverse
- *    case (keyboard already up when you tap a second block), which fires
- *    no resize.
+ *    can't wait for. The same subscription also fires when the editing
+ *    toolbar mounts/resizes, so a late-arriving toolbar still lifts the
+ *    caret clear. BlockEditor's edit-entry scroll covers the inverse case
+ *    (keyboard already up when you tap a second block), which fires no
+ *    resize.
  *
- *  Inert on desktop: with no keyboard the overlap is 0, so the margin is
+ *  Inert on desktop: with no keyboard the inset is 0, so the margin is
  *  null and the re-assert is gated out. */
 export const keyboardAwareScroll = (): Extension => [
   EditorView.scrollMargins.of(() => {
-    const overlap = getKeyboardOverlap()
-    return overlap > 0 ? {bottom: overlap} : null
+    const inset = getBottomEditingInset()
+    return inset > 0 ? {bottom: inset} : null
   }),
   ViewPlugin.fromClass(
     class {

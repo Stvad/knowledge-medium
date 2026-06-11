@@ -61,9 +61,10 @@ const detach = () => {
 }
 
 /** Subscribe to visual-viewport geometry changes (keyboard open/close,
- *  URL-bar collapse, rotation). Listeners are attached lazily on the
- *  first subscription and torn down once the last one leaves, so an app
- *  with no active editors carries no global listeners. */
+ *  URL-bar collapse, rotation) *and* editing-toolbar height changes.
+ *  Listeners are attached lazily on the first subscription and torn down
+ *  once the last one leaves, so an app with no active editors carries no
+ *  global listeners. */
 export const subscribeKeyboardViewport = (listener: Listener): (() => void) => {
   listeners.add(listener)
   attach()
@@ -72,3 +73,30 @@ export const subscribeKeyboardViewport = (listener: Listener): (() => void) => {
     if (listeners.size === 0) detach()
   }
 }
+
+// The mobile editing toolbar floats just above the keyboard while a block
+// is being edited, so it obscures another strip of the otherwise-visible
+// area. The toolbar publishes its measured height here (0 when it isn't
+// shown) so scroll math can keep the caret above it too, not just above
+// the keyboard.
+let editingToolbarHeight = 0
+
+/** Height of the mobile editing toolbar currently on screen, in CSS px
+ *  (0 when none is shown). */
+export const getEditingToolbarHeight = (): number => editingToolbarHeight
+
+/** Publish the editing toolbar's measured height. Notifies viewport
+ *  subscribers on change so a focused editor can re-assert the caret when
+ *  the toolbar mounts/resizes after the keyboard is already up. */
+export const setEditingToolbarHeight = (height: number): void => {
+  const next = Math.max(0, Math.round(height))
+  if (next === editingToolbarHeight) return
+  editingToolbarHeight = next
+  notify()
+}
+
+/** Total height obscured at the bottom of the editing surface — the
+ *  on-screen keyboard plus the editing toolbar floating above it. This is
+ *  the bottom scroll margin needed to land the caret in the clear. */
+export const getBottomEditingInset = (): number =>
+  getKeyboardOverlap() + editingToolbarHeight
