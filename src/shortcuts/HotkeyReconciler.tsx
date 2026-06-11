@@ -278,7 +278,7 @@ export function HotkeyReconciler(): null {
         event,
         {active, contextConfigsByType, dispatch: dispatchRef.current},
         supplied,
-        action => applyPointerEventOptions(event, action, contextConfigsByType),
+        action => applyTriggerEventOptions(event, action, contextConfigsByType),
       )
     })
     return () => setPointerActionDispatcher(null)
@@ -314,7 +314,7 @@ export function HotkeyReconciler(): null {
         event,
         {active, contextConfigsByType, dispatch: dispatchRef.current},
         supplied,
-        action => applyGestureEventOptions(event, action, contextConfigsByType),
+        action => applyTriggerEventOptions(event, action, contextConfigsByType),
       )
     })
     return () => setGestureActionDispatcher(null)
@@ -322,7 +322,7 @@ export function HotkeyReconciler(): null {
 
   // Install the gesture PROGRESS dispatcher — the single-winner preview channel
   // (commit, above, is run-until-handled). A live preview resolves to ONE action
-  // at gesture start by context priority; the returned handle streams every tick
+  // on the first progress tick by context priority; the returned handle streams every tick
   // and the terminal settle to that one action. Resolving once (not per tick) is
   // both cheaper at pointer-move frequency and correct — the winner can't change
   // mid-drag. Returns null when nothing binds the gesture's progress phase, so a
@@ -770,32 +770,20 @@ const phaseOfPointerEvent = (event: ReactMouseEvent<HTMLElement>): PointerPhase 
 const pointerRoleMatches = (target: HTMLElement, role: string): boolean =>
   Boolean(target.closest(`[data-pointer-role="${role}"]`))
 
-/** preventDefault / stopPropagation for a handled pointer gesture. Block
- *  selection wants both (suppress native text selection + keep the click from
- *  bubbling into edit-mode), so that is the default; a context can override via
- *  `defaultEventOptions`. */
-const applyPointerEventOptions = (
-  event: PointerGestureEvent,
-  action: ActionConfig,
-  contextConfigsByType: ReadonlyMap<ActionContextType, ActionContextConfig>,
-): void => {
-  const contextConfig = contextConfigsByType.get(action.context)
-  const options: EventOptions = {
-    preventDefault: true,
-    stopPropagation: true,
-    ...contextConfig?.defaultEventOptions,
-  }
-  if (options.stopPropagation) event.stopPropagation()
-  if (options.preventDefault) event.preventDefault()
-}
-
-/** preventDefault / stopPropagation for a handled gesture commit. Same defaults
- *  and context override as the pointer path, but typed for the broader
- *  `ActionTrigger` a gesture carries (the originating pointer/touch event, or a
- *  synthetic CustomEvent) — both expose preventDefault/stopPropagation. Eating
- *  the commit event suppresses the trailing synthesized click on touchend, which
- *  is what today's swipe/scrub `event.preventDefault()` does by hand. */
-const applyGestureEventOptions = (
+/** preventDefault / stopPropagation for a handled pointer OR gesture-commit
+ *  action — one body, since both want the same thing. Block selection wants
+ *  native text-selection suppressed and the trailing synthesized click kept out
+ *  of edit-mode, so the defaults are `{preventDefault: true, stopPropagation:
+ *  true}`; a context overrides via `defaultEventOptions`. Typed on the broad
+ *  `ActionTrigger` so it serves the pointer path (a React Mouse/Touch event —
+ *  `PointerGestureEvent` is a subset) and the gesture commit (the native
+ *  `PointerEvent` that ended the drag, or a synthetic `CustomEvent`) alike; all
+ *  expose preventDefault/stopPropagation. Eating the commit event is what
+ *  suppresses the trailing touchend click that today's swipe/scrub
+ *  `event.preventDefault()` does by hand. Keyboard's `applyEventOptions` stays
+ *  separate — different defaults (no stopPropagation) and binding-level
+ *  precedence. */
+const applyTriggerEventOptions = (
   event: ActionTrigger,
   action: ActionConfig,
   contextConfigsByType: ReadonlyMap<ActionContextType, ActionContextConfig>,

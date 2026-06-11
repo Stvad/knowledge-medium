@@ -389,6 +389,11 @@ export const createBlockGestureController = ({
   // fire, so release it cleanly: fire its cancel so it drops in-flight state (an
   // open scrub overlay, a half-built swipe) and settle any preview it streamed.
   // It is NOT added to `out` — once re-enabled it can claim a fresh gesture.
+  // NOT redundant with the per-event `enabled()` gate in `run` below: that gate
+  // only SKIPS a disabled recognizer's handlers, which would silently strand an
+  // already-active owner mid-gesture (its in-flight state never cancelled,
+  // `activeId` never cleared, the block stuck). This tears that owner down, so
+  // it runs first on every event.
   const releaseDisabledOwner = (session: GestureSession, ctx: GestureEventContext): void => {
     if (activeId === null) return
     const owner = recognizers.find(r => r.id === activeId)

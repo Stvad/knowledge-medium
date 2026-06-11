@@ -22,7 +22,7 @@
  *    decline wins and the rest are skipped.
  *  - `progress` — the gesture is in flight (the live preview during a drag).
  *    Bindable so a preview can be OVERRIDDEN per context: the winning action is
- *    resolved ONCE at gesture start by context priority (a higher-priority
+ *    resolved ONCE on the first progress tick by context priority (a higher-priority
  *    context's preview shadows the default), then every streamed tick — and the
  *    terminal settle — goes to that one resolved action. Single-winner, not
  *    run-until-handled: a streamed tick has no meaningful "decline".

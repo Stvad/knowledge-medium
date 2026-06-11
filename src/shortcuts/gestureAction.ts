@@ -38,7 +38,7 @@ export const dispatchGesture: DispatchGestureFn = (gesture, suppliedDeps, event)
 
 /**
  * A live-preview session bound to the ONE action resolved for a gesture's
- * `progress` phase at gesture start. Streaming through this handle — rather than
+ * `progress` phase on its first tick. Streaming through this handle — rather than
  * re-dispatching every tick — is what gives the preview a stable, context-priority
  * winner for the whole drag (re-resolving per tick could change winners mid-drag
  * and re-runs the resolver at pointer-move frequency).

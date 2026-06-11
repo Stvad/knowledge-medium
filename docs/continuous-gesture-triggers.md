@@ -93,8 +93,8 @@ collapsing them.
     - **`commit`** — the gesture completed; dispatched **run-until-handled**
       (first non-declining action wins), like a chord.
     - **`progress`** — the live preview *is* a bindable trigger, so a preview can
-      be **overridden per context**: resolved to a **single winner ONCE at
-      gesture start** by context priority (a higher-priority context's preview
+      be **overridden per context**: resolved to a **single winner ONCE on the
+      first progress tick** by context priority (a higher-priority context's preview
       shadows the default), then every streamed tick and the terminal settle go
       to that one action. Single-winner, not run-until-handled — a streamed tick
       has no meaningful "decline". The tick payload (delta / fraction) rides in
