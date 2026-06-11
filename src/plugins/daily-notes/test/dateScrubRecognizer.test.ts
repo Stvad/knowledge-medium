@@ -155,6 +155,21 @@ describe('dateScrubRecognizer', () => {
     expect(handler.end).toHaveBeenCalledWith(false)
   })
 
+  it('keeps the scrub alive when an untracked extra finger is cancelled', () => {
+    installHandler(true)
+    const r = make()
+    lock(r)
+    moveBy(r, 28, 0) // activate
+    // A third, untracked finger on the same block receives pointercancel while
+    // both anchor fingers (1, 2) stay down — must NOT end the scrub.
+    const extra = pointer(3, 200, 100)
+    r.onPointerCancel?.(session(extra, [pointer(1, 128, 100), pointer(2, 168, 100), extra]), eventCtx())
+    expect(handler.end).not.toHaveBeenCalled()
+    // A tracked finger's cancel does revert the scrub.
+    r.onPointerCancel?.(session(pointer(1, 128, 100), [pointer(1, 128, 100), pointer(2, 168, 100)]), eventCtx())
+    expect(handler.end).toHaveBeenCalledWith(false)
+  })
+
   it('ignores non-touch pointers (mouse)', () => {
     installHandler(true)
     const r = make()

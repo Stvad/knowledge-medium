@@ -211,7 +211,13 @@ export const dateScrubRecognizer: BlockGestureRecognizerContribution = context =
       return GESTURE_ACTIVE
     },
 
-    onPointerCancel() {
+    onPointerCancel(session) {
+      // Only a CANCEL of a tracked anchor finger ends the scrub. An extra /
+      // untracked finger on the same block can receive `pointercancel` (e.g. the
+      // browser drops it) while both anchored fingers stay down — reverting then
+      // would abort a scrub neither tracked finger left.
+      if (!anchor) return
+      if (session.changed.pointerId !== anchor.idA && session.changed.pointerId !== anchor.idB) return
       reset(false)
     },
   }
