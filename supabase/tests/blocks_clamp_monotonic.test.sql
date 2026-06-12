@@ -10,7 +10,7 @@ BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
 SET LOCAL search_path TO public, extensions;
 
-SELECT plan(14);
+SELECT plan(16);
 
 CREATE TEMP TABLE clamp_test_ctx AS
 SELECT
@@ -243,6 +243,49 @@ SELECT cmp_ok(
   (SELECT then_ms + 1 FROM clamp_test_ctx),
   'RPC content-only patch still bumps the row-version via the clamp trigger'
 );
+
+-------------------------------------------------------------------------
+-- 11. INSERT does NOT floor/bump (no OLD; the floor is TG_OP='UPDATE'-only).
+--     A past stamp on INSERT lands verbatim — proves the UPDATE guard.
+-------------------------------------------------------------------------
+INSERT INTO public.blocks (
+  id, workspace_id, parent_id, order_key, content,
+  properties_json, created_at, updated_at, user_updated_at, created_by, updated_by
+)
+SELECT 'ins-low', workspace_id, NULL, 'k', 'c',
+       '{}', then_ms, then_ms, then_ms, user_id, user_id
+FROM clamp_test_ctx;
+
+SELECT is(
+  (SELECT updated_at FROM public.blocks WHERE id = 'ins-low'),
+  (SELECT then_ms FROM clamp_test_ctx),
+  'INSERT with a past stamp lands unchanged (no floor/bump on INSERT)'
+);
+
+-------------------------------------------------------------------------
+-- 12. created_at future-clamp (the trigger clamps created_at too, not just
+--     updated_at — otherwise untested).
+-------------------------------------------------------------------------
+INSERT INTO public.blocks (
+  id, workspace_id, parent_id, order_key, content,
+  properties_json, created_at, updated_at, user_updated_at, created_by, updated_by
+)
+SELECT 'ins-futcreated', workspace_id, NULL, 'k', 'c',
+       '{}', now_ms + 3600000, then_ms, then_ms, user_id, user_id
+FROM clamp_test_ctx;
+
+SELECT cmp_ok(
+  (SELECT created_at FROM public.blocks WHERE id = 'ins-futcreated'),
+  '<=',
+  (extract(epoch from now()) * 1000)::bigint + 1000,
+  'future created_at is clamped down to ~server now'
+);
+
+-- (The UPDATE-path COALESCE-on-NULL case — a pre-migration row not yet
+-- backfilled — uses the identical `coalesce(NEW.user_updated_at,
+-- NEW.updated_at)` expression already proven on the INSERT path in test #1.
+-- Re-staging it here would require DISABLE TRIGGER mid-transaction, which
+-- Postgres rejects once `blocks` has pending trigger events from earlier DML.)
 
 SELECT * FROM finish();
 

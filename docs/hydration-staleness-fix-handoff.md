@@ -453,7 +453,25 @@ ALTER TABLE public.blocks ENABLE TRIGGER blocks_clamp_updated_at_trg;
 floor `greatest(NEW.updated_at, OLD.updated_at)` pins `updated_at` back to `OLD`
 and the `= 0` never lands. (The one place we deliberately push a stamp *down*;
 every other path is forbidden from doing so, which is why the trigger must be
-off.) **`user_updated_at` is set in the same SET list, before zeroing [r3 Codex
+off.)
+
+**Pre-check before this UPDATE — the e2ee-ciphertext trigger stays ENABLED**
+(`blocks_require_ciphertext_for_e2ee_trg`, `20260529120000`), and we want it to:
+this UPDATE touches only `updated_at`/`updated_by`/`user_updated_at` (never
+content), so for an e2ee row it re-validates the *existing* envelope and passes
+— **unless** some historical `system:` row in an e2ee workspace holds *plaintext*
+content (possible only if a deterministic-id mint landed before that trigger
+existed), in which case the UPDATE raises `23514` and aborts. Before running the
+bulk UPDATE, count such rows and triage them (re-seal or exclude):
+```sql
+SELECT count(*) FROM blocks b
+  JOIN workspaces w ON w.id = b.workspace_id
+ WHERE b.updated_by LIKE 'system:%'
+   AND w.encryption_mode = 'e2ee'
+   AND b.content NOT LIKE 'enc:v1:%';
+```
+Expected zero on this fleet (mints are plaintext-workspace bootstrap rows), but
+confirm rather than assume — a nonzero count would abort the cleanup mid-way. **`user_updated_at` is set in the same SET list, before zeroing [r3 Codex
 P2]** — so display/sort consumers that move to `user_updated_at` show the real
 last-edit time, not the 0 sentinel; the step-1 backfill's `WHERE
 user_updated_at IS NULL` then no-ops for these rows regardless of order. Safe

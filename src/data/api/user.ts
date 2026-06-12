@@ -22,8 +22,9 @@ export interface User {
 export const SYSTEM_AUTHOR_PREFIX = 'system:'
 
 /** The historical system author for a user. No longer written by live code
- *  (mints now use the real user + the `updated_at = 0` sentinel); retained for
- *  the one-time cleanup migration and historical-row tests. */
+ *  (mints now use the real user + the `updated_at = 0` sentinel); kept as the
+ *  constructor paired with `isSystemAuthor` (the live display shim) — used to
+ *  build / recognize the `system:<uid>` values pre-migration rows still carry. */
 export const systemAuthor = (userId: string): string => `${SYSTEM_AUTHOR_PREFIX}${userId}`
 
 /** True iff `author` is an engine-minted historical system author. DISPLAY

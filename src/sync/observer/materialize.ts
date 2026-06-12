@@ -172,29 +172,28 @@ const readStagingRows = async (
   return out
 }
 
-/** The local gate inputs for one id: the `blocks` row's `updated_at` (the LWW
- *  stamp) and `updated_by` (the provenance discriminator). */
+/** The local gate input for one id: the `blocks` row's `updated_at`
+ *  (the row-version the gate compares). */
 interface LocalGateRow {
   readonly updatedAt: number
-  readonly updatedBy: string
 }
 
 /** Local gate inputs for the `ids` the app already has a `blocks` row for,
  *  keyed by id. Chunked so the IN-clause never exceeds SQLite's bound-parameter
  *  limit. Absent ids = no local row. This is the Phase-1 slim read (id +
- *  updated_at + updated_by) — Phase 2 re-derives the same fields from the full
- *  before-rows it already loads. */
+ *  updated_at) — Phase 2 re-derives the same field from the full before-rows
+ *  it already loads. */
 const readLocalGateRows = async (
   db: RowsReader, ids: readonly string[], chunkSize: number,
 ): Promise<Map<string, LocalGateRow>> => {
   const out = new Map<string, LocalGateRow>()
   for (let i = 0; i < ids.length; i += chunkSize) {
     const chunk = ids.slice(i, i + chunkSize)
-    const rows = await db.getAll<{ id: string; updated_at: number; updated_by: string }>(
-      `SELECT id, updated_at, updated_by FROM blocks WHERE id IN (${buildInClause(chunk.length)})`,
+    const rows = await db.getAll<{ id: string; updated_at: number }>(
+      `SELECT id, updated_at FROM blocks WHERE id IN (${buildInClause(chunk.length)})`,
       chunk,
     )
-    for (const row of rows) out.set(row.id, { updatedAt: row.updated_at, updatedBy: row.updated_by })
+    for (const row of rows) out.set(row.id, { updatedAt: row.updated_at })
   }
   return out
 }

@@ -218,12 +218,12 @@ export class TxImpl implements Tx {
 
   /** Ids inserted in THIS tx via a `{systemMint: true}` create/createOrGet.
    *  Same-tx follow-up writes (`update` / `setProperty` / `move` / …) to one
-   *  of these inherit the `system:<userId>` author instead of stamping the
-   *  real user — mirrors the upload compactor's same-tx CREATE+PATCH fusion
+   *  of these HOLD `updated_at` at the `0` pristine sentinel instead of
+   *  advancing it — mirrors the upload compactor's same-tx CREATE+PATCH fusion
    *  (`createTxId`), so the multi-write shaping a deterministic-id mint does
-   *  (content + alias prop + type marker) stays a single pristine system
-   *  default. Per-tx (the engine builds a fresh TxImpl per `repo.tx`), so it
-   *  never leaks across transactions. */
+   *  (content + alias prop + type marker) uploads as a single pristine default
+   *  the reconcile gate lets yield. Per-tx (the engine builds a fresh TxImpl
+   *  per `repo.tx`), so it never leaks across transactions. */
   private readonly systemMintedIds = new Set<string>()
 
   constructor(ctx: TxImplContext) {
@@ -635,14 +635,16 @@ export class TxImpl implements Tx {
       const after: BlockData = {
         ...beforeData,
         deleted: true,
-        updatedAt: now,
-        // Undo IS a user action → fresh display stamp.
+        // Row-version stays locally monotonic (invariant I3) even on undo: a
+        // device whose clock trails the server's ratcheted stamp must not
+        // regress it. Undo IS a user action → fresh display stamp.
+        updatedAt: Math.max(now, beforeData.updatedAt + 1),
         userUpdatedAt: now,
         updatedBy: userId,
       }
       await this.ctx.txDb.execute(
         `UPDATE blocks SET deleted = 1, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
-        [now, now, userId, id],
+        [after.updatedAt, now, userId, id],
       )
       this.pinWorkspace(beforeData.workspaceId)
       recordWrite(this.ctx.snapshots, id, beforeData, after)
@@ -676,9 +678,10 @@ export class TxImpl implements Tx {
     // row. updated_at / updated_by stamp the replay action.
     const after: BlockData = {
       ...target,
-      updatedAt: now,
-      // Undo IS a user action → fresh display stamp (also overrides a
-      // pre-migration snapshot's missing `userUpdatedAt`).
+      // Locally monotonic row-version (invariant I3) — see the soft-delete
+      // branch above. Undo IS a user action → fresh display stamp (also
+      // overrides a pre-migration snapshot's missing `userUpdatedAt`).
+      updatedAt: Math.max(now, beforeData.updatedAt + 1),
       userUpdatedAt: now,
       updatedBy: userId,
     }
@@ -691,7 +694,7 @@ export class TxImpl implements Tx {
         JSON.stringify(target.properties),
         JSON.stringify(target.references),
         target.deleted ? 1 : 0,
-        now,
+        after.updatedAt,
         now,
         userId,
         id,
@@ -758,17 +761,15 @@ export class TxImpl implements Tx {
   }
 
   /** Build a fresh BlockData for `tx.create` / `tx.createOrGet` insert
-   *  paths. Engine sets all four metadata columns from tx_context unless
+   *  paths. Engine sets all metadata columns from tx_context unless
    *  `opts.skipMetadata` (used only by bookkeeping writes).
    *
    *  `opts.systemMint` marks the row as a speculative default the reconcile
-   *  gate can let yield — but ONLY on `updated_by`, not `created_by`. The
-   *  `system:` prefix is load-bearing on `updated_by` (the field the gate
-   *  reads, restamped on every write, so it self-clears to the real user on
-   *  the first edit). `created_by` is pure identity/ownership — always the
-   *  real user, so it stays a trustworthy user id for every consumer and
-   *  "blocks created by X" is a clean `created_by = X`. Containing the prefix
-   *  to the one column that needs it keeps it out of creator attribution. */
+   *  gate can let yield: it stamps `updated_at = 0` (the pristine sentinel the
+   *  gate's stamp-0 exemption recognizes), while `created_by` / `updated_by`
+   *  stay the REAL user — authorship is no longer the discriminator (the gate
+   *  reads `updated_at === 0`, not a `system:` prefix). The first real edit in
+   *  a later tx ratchets `updated_at` off 0 via `metadataPatch`'s I3 floor. */
   private buildNewBlockRow(
     id: string,
     data: NewBlockData,

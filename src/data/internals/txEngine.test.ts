@@ -393,6 +393,30 @@ describe('tx.update (data-fields-only)', () => {
     expect(patch!.data).toHaveProperty('references_json')     // the bookkeeping content
     expect(patch!.data).not.toHaveProperty('user_updated_at') // display frozen
   })
+
+  it('keeps updated_at locally monotonic when the row-version is ahead of the local clock (I3)', async () => {
+    // A slow-clock device whose now() trails a server-ratcheted stamp must not
+    // regress the row-version: metadataPatch stamps max(now, before.updatedAt+1),
+    // not now(). Without the max(), a fresh edit would stamp BELOW the row's
+    // current version and the gate would turn the next delivery into a disk
+    // revert. (This guard is invisible to tests with a strictly-increasing
+    // clock — hence the explicit raw ratchet below.)
+    const id = await env.repo.tx(
+      tx => tx.create({workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'x'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    // Simulate the server ratcheting the row-version far ahead of this device's
+    // clock. Raw write (no repo.tx) → no upload trigger; the SQLite table has no
+    // clamp (that's server-side), so this lands verbatim.
+    const ratcheted = env.tick() + 1_000_000
+    await env.h.db.execute('UPDATE blocks SET updated_at = ? WHERE id = ?', [ratcheted, id])
+
+    await env.repo.tx(tx => tx.update(id, {content: 'edited'}), {scope: ChangeScope.BlockDefault})
+
+    const snap = env.cache.getSnapshot(id)!
+    expect(snap.updatedAt).toBe(ratcheted + 1)                 // floored to before+1, not now()
+    expect(snap.userUpdatedAt).toBeLessThan(snap.updatedAt)    // display stamp is plain now()
+  })
 })
 
 // ──── tx.delete + tx.restore ────
