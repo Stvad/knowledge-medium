@@ -1,8 +1,8 @@
 /**
  * Boundary-aware FacetRuntime resolver.
  *
- * Wraps the existing facet collector pattern (see `facet.ts:259/287`)
- * with two behaviours the bare collectors don't have:
+ * A thin configuration of the shared `walkAppExtension` skeleton (see
+ * `facet.ts`) adding two behaviours the bare collector visitor doesn't:
  *
  *   1. `getBoundary(node)` on an array → look up `isEnabled(handle,
  *      overrides)`; skip the whole subtree when the toggle resolves
@@ -14,10 +14,10 @@
  *      itself passed validation — dragged-along extensions exist to
  *      support their parent and are dropped when the parent is.
  *
- * Both behaviours apply identically across the sync and async walks
- * (mirroring the facet.ts pair). The async walk additionally awaits
+ * Both behaviours live in `resolverVisitor` and apply identically across
+ * the sync and async walks. The async walk additionally awaits
  * function-valued AppExtensions; the sync walk throws on them, matching
- * the existing `collectContributionsSync` policy.
+ * the shared walker's policy.
  *
  * facet.ts has no awareness of `@/extensions/togglable.ts`; this module
  * is the only place the two meet. Anyone calling `resolveFacetRuntime`
@@ -28,7 +28,11 @@
 
 import {
   FacetRuntime,
+  pushValidatedContribution,
+  walkAppExtension,
+  walkAppExtensionSync,
   type AppExtension,
+  type AppExtensionVisitor,
   type FacetContribution,
   type FacetResolveContext,
 } from '@/extensions/facet.js'
@@ -66,6 +70,24 @@ const shouldKeepBoundary = (
   return isEnabled(handle, overrides)
 }
 
+/** The only thing the resolver adds to the shared walker: a togglable
+ *  boundary array is pruned when its handle resolves to off, and a
+ *  contribution recurses into `enables` only if it survived validation
+ *  (dragged-along extensions exist to support their parent and are
+ *  dropped when the parent is). `output` is the threaded sink. */
+const resolverVisitor = (
+  overrides: Overrides,
+  safeMode: boolean,
+): AppExtensionVisitor<FacetContribution<unknown>[]> => ({
+  array: (node, output) => {
+    const handle = getBoundary(node)
+    if (handle && !shouldKeepBoundary(handle, overrides, safeMode)) return null
+    return output
+  },
+  contribution: (node, output) =>
+    pushValidatedContribution(node, output) ? output : null,
+})
+
 /** Build a FacetRuntime from an AppExtension tree, evaluating toggle
  *  boundaries with the supplied overrides. Async — awaits any
  *  function-valued nodes (e.g. `dynamicExtensionsExtension`). */
@@ -76,15 +98,17 @@ export async function resolveAppRuntime(
   const context = options.context ?? {}
   const safeMode = options.safeMode ?? false
   const collected: FacetContribution<unknown>[] = []
-  const seen = new Set<FacetContribution<unknown>>()
-  await walk(extensions, options.overrides, safeMode, context, collected, seen)
+  await walkAppExtension(extensions, collected, resolverVisitor(options.overrides, safeMode), {
+    context,
+    seen: new Set(),
+  })
   return new FacetRuntime(context, collected)
 }
 
-/** Sync variant. Throws if a function-valued AppExtension is reached,
- *  matching `collectContributionsSync` in facet.ts:300. The static
- *  extension tree contains no functions today; `AppRuntimeProvider`
- *  relies on that for first-paint resolution before React can await. */
+/** Sync variant. Throws if a function-valued AppExtension is reached.
+ *  The static extension tree contains no functions today;
+ *  `AppRuntimeProvider` relies on that for first-paint resolution before
+ *  React can await. */
 export function resolveAppRuntimeSync(
   extensions: AppExtension | readonly AppExtension[],
   options: ResolveAppRuntimeOptions,
@@ -92,108 +116,11 @@ export function resolveAppRuntimeSync(
   const context = options.context ?? {}
   const safeMode = options.safeMode ?? false
   const collected: FacetContribution<unknown>[] = []
-  const seen = new Set<FacetContribution<unknown>>()
-  walkSync(extensions, options.overrides, safeMode, collected, seen)
-  return new FacetRuntime(context, collected)
-}
-
-// ──────────────────────────────────────────────────────────────────────
-// Walk implementations
-// ──────────────────────────────────────────────────────────────────────
-
-/** Validation step mirrors `pushValidatedContribution` in facet.ts:243.
- *  Returns whether the contribution was accepted so the walk knows
- *  whether to recurse into its `enables`. */
-function pushValidatedContribution(
-  contribution: FacetContribution<unknown>,
-  output: FacetContribution<unknown>[],
-): boolean {
-  const validate = contribution.facet.validate
-  if (validate && !validate(contribution.value)) {
-    console.error(
-      `Dropping invalid contribution for facet "${contribution.facet.id}"`,
-      {source: contribution.source, value: contribution.value},
-    )
-    return false
-  }
-  output.push(contribution)
-  return true
-}
-
-const isFacetContribution = (
-  value: unknown,
-): value is FacetContribution<unknown> =>
-  typeof value === 'object' &&
-  value !== null &&
-  (value as {type?: unknown}).type === 'facet-contribution'
-
-async function walk(
-  node: AppExtension | readonly AppExtension[],
-  overrides: Overrides,
-  safeMode: boolean,
-  context: FacetResolveContext,
-  output: FacetContribution<unknown>[],
-  seen: Set<FacetContribution<unknown>>,
-): Promise<void> {
-  if (!node) return
-
-  if (typeof node === 'function') {
-    try {
-      await walk(await node(context), overrides, safeMode, context, output, seen)
-    } catch (error) {
-      console.error('Failed to resolve app extension', error)
-    }
-    return
-  }
-
-  if (Array.isArray(node)) {
-    const handle = getBoundary(node)
-    if (handle && !shouldKeepBoundary(handle, overrides, safeMode)) return
-    for (const child of node) {
-      await walk(child as AppExtension, overrides, safeMode, context, output, seen)
-    }
-    return
-  }
-
-  if (isFacetContribution(node)) {
-    if (seen.has(node)) return
-    seen.add(node)
-    const accepted = pushValidatedContribution(node, output)
-    if (accepted && node.enables) {
-      await walk(node.enables, overrides, safeMode, context, output, seen)
-    }
-  }
-}
-
-function walkSync(
-  node: AppExtension | readonly AppExtension[],
-  overrides: Overrides,
-  safeMode: boolean,
-  output: FacetContribution<unknown>[],
-  seen: Set<FacetContribution<unknown>>,
-): void {
-  if (!node) return
-
-  if (typeof node === 'function') {
-    throw new Error(
+  walkAppExtensionSync(extensions, collected, resolverVisitor(options.overrides, safeMode), {
+    onFunction:
       'resolveAppRuntimeSync: cannot resolve function-valued AppExtension. ' +
       'Use resolveAppRuntime (async) for trees that contain dynamic extensions.',
-    )
-  }
-
-  if (Array.isArray(node)) {
-    const handle = getBoundary(node)
-    if (handle && !shouldKeepBoundary(handle, overrides, safeMode)) return
-    for (const child of node) {
-      walkSync(child as AppExtension, overrides, safeMode, output, seen)
-    }
-    return
-  }
-
-  if (isFacetContribution(node)) {
-    if (seen.has(node)) return
-    seen.add(node)
-    const accepted = pushValidatedContribution(node, output)
-    if (accepted && node.enables) walkSync(node.enables, overrides, safeMode, output, seen)
-  }
+    seen: new Set(),
+  })
+  return new FacetRuntime(context, collected)
 }

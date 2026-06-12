@@ -243,7 +243,7 @@ export async function resolveFacetRuntime(
   context: FacetResolveContext = {},
 ): Promise<FacetRuntime> {
   const contributions: FacetContribution<unknown>[] = []
-  await collectContributions(extensions, context, contributions)
+  await walkAppExtension(extensions, contributions, collectVisitor, {context})
   return new FacetRuntime(context, contributions)
 }
 
@@ -252,76 +252,176 @@ export function resolveFacetRuntimeSync(
   context: FacetResolveContext = {},
 ): FacetRuntime {
   const contributions: FacetContribution<unknown>[] = []
-  collectContributionsSync(extensions, contributions)
+  walkAppExtensionSync(extensions, contributions, collectVisitor, {
+    onFunction: 'Cannot resolve function app extensions synchronously',
+  })
   return new FacetRuntime(context, contributions)
 }
 
-const pushValidatedContribution = (
+/** Validate a contribution against its facet's `validate` guard and, if
+ *  it passes, append it to `output`. Returns whether it was accepted —
+ *  the boundary-aware resolver uses the result to decide whether to
+ *  recurse into the contribution's `enables` subtree. */
+export const pushValidatedContribution = (
   contribution: FacetContribution<unknown>,
   output: FacetContribution<unknown>[],
-): void => {
+): boolean => {
   const validate = contribution.facet.validate
   if (validate && !validate(contribution.value)) {
     console.error(
       `Dropping invalid contribution for facet "${contribution.facet.id}"`,
       {source: contribution.source, value: contribution.value},
     )
-    return
+    return false
   }
 
   output.push(contribution)
+  return true
 }
 
-async function collectContributions(
+/** Bare collector visitor: append every valid contribution and never
+ *  recurse into `enables`. This is the historical, togglable-blind
+ *  semantics of the facet.ts collectors — there's no `array` hook, so
+ *  togglable boundaries are walked like any other array. Callers that
+ *  need toggle boundaries go through `resolveAppRuntime` instead. */
+const collectVisitor: AppExtensionVisitor<FacetContribution<unknown>[]> = {
+  contribution: (node, output) => {
+    pushValidatedContribution(node, output)
+    return null
+  },
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Unified AppExtension walker
+// ──────────────────────────────────────────────────────────────────────
+
+/** Runtime type guard for a FacetContribution leaf. Shared by every
+ *  AppExtension walk (collector, boundary-aware resolver, toggle
+ *  discovery, dynamic loader) so the grammar's leaf shape is recognised
+ *  in exactly one place. */
+export const isFacetContribution = (
+  value: unknown,
+): value is FacetContribution<unknown> =>
+  typeof value === 'object' &&
+  value !== null &&
+  (value as {type?: unknown}).type === 'facet-contribution'
+
+const isExtensionArray = (
   extension: AppExtension | readonly AppExtension[],
-  context: FacetResolveContext,
-  output: FacetContribution<unknown>[],
+): extension is readonly AppExtension[] => Array.isArray(extension)
+
+/**
+ * Per-site policy for `walkAppExtension` / `walkAppExtensionSync`.
+ *
+ * The grammar recursion (array, function, contribution, nullish) is
+ * fixed; only these two hooks vary across the bare collector, the
+ * boundary-aware resolver, and toggle-tree discovery. `C` is the
+ * threaded accumulator/target — an output array for the collectors and
+ * resolver, a `ToggleNode[]` sink for discovery.
+ */
+export interface AppExtensionVisitor<C> {
+  /** Visit an array node before descending. Return `null` to prune the
+   *  subtree, or the context to thread into its children. Omitted ⇒
+   *  descend with the parent context unchanged. The togglable-aware
+   *  walks read the boundary marker here — facet.ts stays ignorant of
+   *  togglable.ts; that policy is injected by the caller. */
+  array?: (node: readonly AppExtension[], ctx: C) => C | null
+  /** Visit a FacetContribution leaf. Return `null` to skip its
+   *  `enables` subtree, or the context to walk `enables` with. */
+  contribution: (node: FacetContribution<unknown>, ctx: C) => C | null
+}
+
+export interface WalkAppExtensionOptions {
+  context: FacetResolveContext
+  /** De-duplicate contributions by identity across the whole walk.
+   *  Needed when `enables` edges can reach the same contribution by
+   *  more than one path (the resolver). */
+  seen?: Set<FacetContribution<unknown>>
+}
+
+export interface WalkAppExtensionSyncOptions {
+  /** Error message thrown when a function-valued node is reached — sync
+   *  walks can't await. Call-site-specific so the thrown message names
+   *  the offending entry point. */
+  onFunction: string
+  seen?: Set<FacetContribution<unknown>>
+}
+
+/** Async walk over the AppExtension grammar — awaits function-valued
+ *  nodes (e.g. the dynamic-extensions loader) and logs + recovers if one
+ *  rejects, so a single bad subtree can't abort the whole resolution. */
+export async function walkAppExtension<C>(
+  node: AppExtension | readonly AppExtension[],
+  ctx: C,
+  visitor: AppExtensionVisitor<C>,
+  options: WalkAppExtensionOptions,
 ): Promise<void> {
-  if (!extension) return
+  if (!node) return
 
-  if (isExtensionArray(extension)) {
-    for (const child of extension) {
-      await collectContributions(child, context, output)
-    }
-    return
-  }
-
-  if (typeof extension === 'function') {
+  if (typeof node === 'function') {
     try {
-      await collectContributions(await extension(context), context, output)
+      await walkAppExtension(await node(options.context), ctx, visitor, options)
     } catch (error) {
       console.error('Failed to resolve app extension', error)
     }
     return
   }
 
-  if (extension.type === 'facet-contribution') {
-    pushValidatedContribution(extension, output)
-  }
-}
-
-function collectContributionsSync(
-  extension: AppExtension | readonly AppExtension[],
-  output: FacetContribution<unknown>[],
-): void {
-  if (!extension) return
-
-  if (isExtensionArray(extension)) {
-    for (const child of extension) {
-      collectContributionsSync(child, output)
+  if (isExtensionArray(node)) {
+    const childCtx = visitor.array ? visitor.array(node, ctx) : ctx
+    if (childCtx === null) return
+    for (const child of node) {
+      await walkAppExtension(child, childCtx, visitor, options)
     }
     return
   }
 
-  if (typeof extension === 'function') {
-    throw new Error('Cannot resolve function app extensions synchronously')
-  }
-
-  if (extension.type === 'facet-contribution') {
-    pushValidatedContribution(extension, output)
+  if (isFacetContribution(node)) {
+    const {seen} = options
+    if (seen) {
+      if (seen.has(node)) return
+      seen.add(node)
+    }
+    const enablesCtx = visitor.contribution(node, ctx)
+    if (enablesCtx !== null && node.enables) {
+      await walkAppExtension(node.enables, enablesCtx, visitor, options)
+    }
   }
 }
 
-const isExtensionArray = (
-  extension: AppExtension | readonly AppExtension[],
-): extension is readonly AppExtension[] => Array.isArray(extension)
+/** Sync walk over the AppExtension grammar — throws on function-valued
+ *  nodes (the static extension tree has none, and first-paint resolution
+ *  can't await). */
+export function walkAppExtensionSync<C>(
+  node: AppExtension | readonly AppExtension[],
+  ctx: C,
+  visitor: AppExtensionVisitor<C>,
+  options: WalkAppExtensionSyncOptions,
+): void {
+  if (!node) return
+
+  if (typeof node === 'function') {
+    throw new Error(options.onFunction)
+  }
+
+  if (isExtensionArray(node)) {
+    const childCtx = visitor.array ? visitor.array(node, ctx) : ctx
+    if (childCtx === null) return
+    for (const child of node) {
+      walkAppExtensionSync(child, childCtx, visitor, options)
+    }
+    return
+  }
+
+  if (isFacetContribution(node)) {
+    const {seen} = options
+    if (seen) {
+      if (seen.has(node)) return
+      seen.add(node)
+    }
+    const enablesCtx = visitor.contribution(node, ctx)
+    if (enablesCtx !== null && node.enables) {
+      walkAppExtensionSync(node.enables, enablesCtx, visitor, options)
+    }
+  }
+}

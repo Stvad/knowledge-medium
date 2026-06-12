@@ -16,10 +16,12 @@
  *     async awaits and recurses, logging + recovering on rejection
  */
 
-import type {
-  AppExtension,
-  FacetContribution,
-  FacetResolveContext,
+import {
+  walkAppExtension,
+  walkAppExtensionSync,
+  type AppExtension,
+  type AppExtensionVisitor,
+  type FacetResolveContext,
 } from '@/extensions/facet.js'
 import {getBoundary, type Togglable} from '@/extensions/togglable.js'
 
@@ -28,12 +30,27 @@ export interface ToggleNode {
   children: ToggleNode[]
 }
 
-const isFacetContribution = (
-  value: unknown,
-): value is FacetContribution<unknown> =>
-  typeof value === 'object' &&
-  value !== null &&
-  (value as {type?: unknown}).type === 'facet-contribution'
+/** Discovery's configuration of the shared walker. The threaded `sink`
+ *  is the `ToggleNode[]` we're filling:
+ *
+ *   - a boundary array produces a node and retargets descent into its
+ *     `children`; a non-boundary array descends into the current sink
+ *   - a contribution produces no row of its own, but `enables` descends
+ *     into the current sink (so any togglable inside a drag-along
+ *     surfaces as a sibling under the enclosing boundary, or at root)
+ *
+ *  No `isEnabled` filter — the settings tree must surface *every*
+ *  togglable so the user can re-enable a disabled one. No dedup. */
+const discoveryVisitor: AppExtensionVisitor<ToggleNode[]> = {
+  array: (node, sink) => {
+    const handle = getBoundary(node)
+    if (!handle) return sink
+    const child: ToggleNode = {handle, children: []}
+    sink.push(child)
+    return child.children
+  },
+  contribution: (_node, sink) => sink,
+}
 
 /** Sync discovery — usable on the static extension tree which has no
  *  function-valued nodes. Throws on a function (matches the resolver
@@ -43,36 +60,12 @@ export const discoverToggleTreeSync = (
   tree: AppExtension | readonly AppExtension[],
 ): ToggleNode[] => {
   const roots: ToggleNode[] = []
-  walkSync(tree, roots)
-  return roots
-}
-
-function walkSync(
-  node: AppExtension | readonly AppExtension[],
-  sink: ToggleNode[],
-): void {
-  if (!node) return
-
-  if (typeof node === 'function') {
-    throw new Error(
+  walkAppExtensionSync(tree, roots, discoveryVisitor, {
+    onFunction:
       'discoverToggleTreeSync: cannot resolve function-valued AppExtension. ' +
       'Use discoverToggleTree (async) for trees that contain dynamicExtensionsExtension.',
-    )
-  }
-
-  if (Array.isArray(node)) {
-    const handle = getBoundary(node)
-    if (handle) {
-      const child: ToggleNode = {handle, children: []}
-      sink.push(child)
-      for (const inner of node) walkSync(inner as AppExtension, child.children)
-    } else {
-      for (const inner of node) walkSync(inner as AppExtension, sink)
-    }
-    return
-  }
-
-  if (isFacetContribution(node) && node.enables) walkSync(node.enables, sink)
+  })
+  return roots
 }
 
 /** Async discovery — required when the tree contains
@@ -84,43 +77,6 @@ export const discoverToggleTree = async (
   context: FacetResolveContext,
 ): Promise<ToggleNode[]> => {
   const roots: ToggleNode[] = []
-  await walk(tree, context, roots)
+  await walkAppExtension(tree, roots, discoveryVisitor, {context})
   return roots
-}
-
-async function walk(
-  node: AppExtension | readonly AppExtension[],
-  context: FacetResolveContext,
-  sink: ToggleNode[],
-): Promise<void> {
-  if (!node) return
-
-  if (typeof node === 'function') {
-    try {
-      await walk(await node(context), context, sink)
-    } catch (error) {
-      console.error('discoverToggleTree: failed to resolve function', error)
-    }
-    return
-  }
-
-  if (Array.isArray(node)) {
-    const handle = getBoundary(node)
-    if (handle) {
-      const child: ToggleNode = {handle, children: []}
-      sink.push(child)
-      for (const inner of node) {
-        await walk(inner as AppExtension, context, child.children)
-      }
-    } else {
-      for (const inner of node) {
-        await walk(inner as AppExtension, context, sink)
-      }
-    }
-    return
-  }
-
-  if (isFacetContribution(node) && node.enables) {
-    await walk(node.enables, context, sink)
-  }
 }

@@ -32,7 +32,8 @@ import { getOrCreateRecentsPage } from '@/data/recentsPage.js'
 import { useMyWorkspaceRoles } from '@/hooks/useWorkspaces.js'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks.js'
 import { workspaceLandingFacet } from '@/extensions/core.js'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { resolveAppRuntimeSync } from '@/extensions/resolveAppRuntime.js'
+import { readOverridesCache } from '@/extensions/overridesCache.js'
 import { staticAppExtensions } from '@/extensions/staticAppExtensions.js'
 import { getLayoutSessionId } from '@/utils/layoutSessionId.js'
 import {
@@ -190,20 +191,36 @@ const replaceHash = (hash: string): void => {
 // `workspaceLandingFacet` resolvers only need the kernel + static
 // plugin contributions — dynamic plugins haven't loaded yet at this
 // point in bootstrap, and we don't want to give them the power to
-// redirect a user's first paint. The cache keeps the cost down across
-// re-entries via getInitialLayout's promise cache; entries are bound
-// to `repo.instanceId` so a fresh Repo (new login) builds a fresh
-// runtime.
-const landingRuntimeCache = new Map<number, ReturnType<typeof resolveFacetRuntimeSync>>()
+// redirect a user's first paint.
+//
+// Resolution goes through `resolveAppRuntimeSync` with the workspace's
+// cached toggle overrides — NOT the bare collector — so a togglable
+// boundary the user has disabled is honoured here too. Without this, a
+// disabled non-essential plugin (e.g. `system:daily-notes`, the sole
+// `workspaceLandingFacet` contributor) would still steer first paint.
+//
+// The cache keeps the cost down across re-entries via getInitialLayout's
+// promise cache; entries are keyed by `repo.instanceId` + workspace so a
+// fresh Repo (new login) or a workspace switch (different overrides)
+// builds a fresh runtime.
+const landingRuntimeCache = new Map<string, ReturnType<typeof resolveAppRuntimeSync>>()
 const getLandingRuntime = (repo: Repo) => {
-  const cached = landingRuntimeCache.get(repo.instanceId)
+  const workspaceId = repo.activeWorkspaceId
+  const cacheKey = `${repo.instanceId}:${workspaceId ?? ''}`
+  const cached = landingRuntimeCache.get(cacheKey)
   if (cached) return cached
-  const runtime = resolveFacetRuntimeSync(staticAppExtensions({repo}), {
-    repo,
-    workspaceId: repo.activeWorkspaceId,
-    safeMode: false,
+  const overrides = workspaceId
+    ? readOverridesCache(workspaceId)
+    : new Map<string, boolean>()
+  const runtime = resolveAppRuntimeSync(staticAppExtensions({repo}), {
+    overrides,
+    context: {
+      repo,
+      workspaceId,
+      safeMode: false,
+    },
   })
-  landingRuntimeCache.set(repo.instanceId, runtime)
+  landingRuntimeCache.set(cacheKey, runtime)
   return runtime
 }
 
