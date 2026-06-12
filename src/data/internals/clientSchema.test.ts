@@ -102,6 +102,7 @@ interface BlockInsert {
   references_json: string
   created_at: number
   updated_at: number
+  user_updated_at: number | null
   created_by: string
   updated_by: string
   deleted: 0 | 1
@@ -117,6 +118,7 @@ const defaultBlock: BlockInsert = {
   references_json: '[]',
   created_at: 1700000000000,
   updated_at: 1700000000000,
+  user_updated_at: 1700000000000,
   created_by: 'user-1',
   updated_by: 'user-1',
   deleted: 0,

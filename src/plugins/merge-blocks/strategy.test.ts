@@ -14,6 +14,7 @@ const makeBlock = (overrides: Partial<BlockData> = {}): BlockData => ({
   references: [],
   createdAt: 0,
   updatedAt: 0,
+  userUpdatedAt: 0,
   createdBy: 'u',
   updatedBy: 'u',
   deleted: false,

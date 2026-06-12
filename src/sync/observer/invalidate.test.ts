@@ -25,6 +25,7 @@ const block = (overrides: Partial<BlockData> = {}): BlockData => ({
   references: [],
   createdAt: 1000,
   updatedAt: 1000,
+  userUpdatedAt: 1000,
   createdBy: 'u',
   updatedBy: 'u',
   deleted: false,

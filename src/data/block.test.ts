@@ -352,7 +352,7 @@ describe('Block.load', () => {
         content: 'live',
         properties: {},
         references: [],
-        createdAt: 1, updatedAt: 1,
+        createdAt: 1, updatedAt: 1, userUpdatedAt: 1,
         createdBy: 'u', updatedBy: 'u',
         deleted: false,
       }, 'sync')

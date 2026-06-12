@@ -17,6 +17,7 @@ const fixture: BlockData = {
   references: [{id: 'ref-1', alias: 'Inbox'}],
   createdAt: 1700000000000,
   updatedAt: 1700000005000,
+  userUpdatedAt: 1700000005000,
   createdBy: 'user-1',
   updatedBy: 'user-2',
   deleted: false,
@@ -73,7 +74,7 @@ describe('blockToRowParams / parseBlockRow round-trip', () => {
   it('encodes deleted=true as 1 and decodes back to boolean true', () => {
     const tombstone: BlockData = {...fixture, deleted: true}
     const params = blockToRowParams(tombstone)
-    expect(params[11]).toBe(1)
+    expect(params[12]).toBe(1)
     expect(parseBlockRow(rowFromParams(params)).deleted).toBe(true)
   })
 

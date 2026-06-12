@@ -19,7 +19,7 @@ import { systemAuthor } from '@/data/api'
 
 const data = (o: Partial<BlockData> = {}): BlockData => ({
   id: 'b1', workspaceId: 'ws-plain', parentId: null, orderKey: 'a0', content: 'hello',
-  properties: {}, references: [], createdAt: 1, updatedAt: 1, createdBy: 'u',
+  properties: {}, references: [], createdAt: 1, updatedAt: 1, userUpdatedAt: 1, createdBy: 'u',
   updatedBy: 'u', deleted: false, ...o,
 })
 
@@ -56,13 +56,13 @@ const queueLen = async () =>
 
 const BLOCK_COLS =
   'id, workspace_id, parent_id, order_key, content, properties_json, references_json, ' +
-  'created_at, updated_at, created_by, updated_by, deleted'
+  'created_at, updated_at, user_updated_at, created_by, updated_by, deleted'
 /** Seed a row straight into the app-visible `blocks` table (source NULL → no
  *  ps_crud, i.e. non-pending) — the shape of a locally-minted bootstrap default
  *  the observer must let the server override. */
 const seedLocalBlock = (d: BlockData) =>
   env.db.execute(
-    `INSERT INTO blocks (${BLOCK_COLS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+    `INSERT INTO blocks (${BLOCK_COLS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     blockToRowParams(d),
   )
 

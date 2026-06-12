@@ -67,6 +67,7 @@ streams:
           blocks_synced.references_json,
           blocks_synced.created_at,
           blocks_synced.updated_at,
+          blocks_synced.user_updated_at,
           blocks_synced.created_by,
           blocks_synced.updated_by,
           blocks_synced.deleted

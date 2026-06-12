@@ -44,7 +44,6 @@ import type {
   User,
 } from '@/data/api'
 import {
-  systemAuthor,
   BlockNotFoundError,
   CycleError,
   DeletedConflictError,
@@ -316,11 +315,11 @@ export class TxImpl implements Tx {
     const after: BlockData = {
       ...before,
       deleted: true,
-      ...this.metadataPatch(id, false),
+      ...this.metadataPatch(id, before, false),
     }
     await this.ctx.txDb.execute(
-      `UPDATE blocks SET deleted = 1, updated_at = ?, updated_by = ? WHERE id = ?`,
-      [after.updatedAt, after.updatedBy, id],
+      `UPDATE blocks SET deleted = 1, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
+      [after.updatedAt, after.userUpdatedAt, after.updatedBy, id],
     )
     this.pinWorkspace(before.workspaceId)
     recordWrite(this.ctx.snapshots, id, before, after)
@@ -341,15 +340,16 @@ export class TxImpl implements Tx {
       // see src/data/internals/normalizeReferencesProcessor.ts.
       ...(patch?.references !== undefined ? {references: patch.references} : {}),
       ...(patch?.properties !== undefined ? {properties: patch.properties} : {}),
-      ...this.metadataPatch(id, opts?.skipMetadata),
+      ...this.metadataPatch(id, beforeData, opts?.skipMetadata),
     }
     await this.ctx.txDb.execute(
-      `UPDATE blocks SET deleted = 0, content = ?, references_json = ?, properties_json = ?, updated_at = ?, updated_by = ? WHERE id = ?`,
+      `UPDATE blocks SET deleted = 0, content = ?, references_json = ?, properties_json = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
       [
         after.content,
         JSON.stringify(after.references),
         JSON.stringify(after.properties),
         after.updatedAt,
+        after.userUpdatedAt,
         after.updatedBy,
         id,
       ],
@@ -370,15 +370,16 @@ export class TxImpl implements Tx {
       // See note on `restore` above re: same-tx normalization.
       ...(patch.references !== undefined ? {references: patch.references} : {}),
       ...(patch.properties !== undefined ? {properties: patch.properties} : {}),
-      ...this.metadataPatch(id, opts?.skipMetadata),
+      ...this.metadataPatch(id, before, opts?.skipMetadata),
     }
     await this.ctx.txDb.execute(
-      `UPDATE blocks SET content = ?, references_json = ?, properties_json = ?, updated_at = ?, updated_by = ? WHERE id = ?`,
+      `UPDATE blocks SET content = ?, references_json = ?, properties_json = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
       [
         after.content,
         JSON.stringify(after.references),
         JSON.stringify(after.properties),
         after.updatedAt,
+        after.userUpdatedAt,
         after.updatedBy,
         id,
       ],
@@ -420,11 +421,11 @@ export class TxImpl implements Tx {
       ...before,
       parentId: target.parentId,
       orderKey: target.orderKey,
-      ...this.metadataPatch(id, opts?.skipMetadata),
+      ...this.metadataPatch(id, before, opts?.skipMetadata),
     }
     await this.ctx.txDb.execute(
-      `UPDATE blocks SET parent_id = ?, order_key = ?, updated_at = ?, updated_by = ? WHERE id = ?`,
-      [target.parentId, target.orderKey, after.updatedAt, after.updatedBy, id],
+      `UPDATE blocks SET parent_id = ?, order_key = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
+      [target.parentId, target.orderKey, after.updatedAt, after.userUpdatedAt, after.updatedBy, id],
     )
     this.pinWorkspace(before.workspaceId)
     recordWrite(this.ctx.snapshots, id, before, after)
@@ -446,11 +447,11 @@ export class TxImpl implements Tx {
     const after: BlockData = {
       ...before,
       properties,
-      ...this.metadataPatch(id, opts?.skipMetadata),
+      ...this.metadataPatch(id, before, opts?.skipMetadata),
     }
     await this.ctx.txDb.execute(
-      `UPDATE blocks SET properties_json = ?, updated_at = ?, updated_by = ? WHERE id = ?`,
-      [JSON.stringify(properties), after.updatedAt, after.updatedBy, id],
+      `UPDATE blocks SET properties_json = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
+      [JSON.stringify(properties), after.updatedAt, after.userUpdatedAt, after.updatedBy, id],
     )
     this.pinWorkspace(before.workspaceId)
     recordWrite(this.ctx.snapshots, id, before, after)
@@ -635,11 +636,13 @@ export class TxImpl implements Tx {
         ...beforeData,
         deleted: true,
         updatedAt: now,
+        // Undo IS a user action → fresh display stamp.
+        userUpdatedAt: now,
         updatedBy: userId,
       }
       await this.ctx.txDb.execute(
-        `UPDATE blocks SET deleted = 1, updated_at = ?, updated_by = ? WHERE id = ?`,
-        [now, userId, id],
+        `UPDATE blocks SET deleted = 1, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
+        [now, now, userId, id],
       )
       this.pinWorkspace(beforeData.workspaceId)
       recordWrite(this.ctx.snapshots, id, beforeData, after)
@@ -655,6 +658,9 @@ export class TxImpl implements Tx {
       const inserted: BlockData = {
         ...target,
         updatedAt: now,
+        // Undo IS a user action; also overrides a pre-migration snapshot's
+        // missing `userUpdatedAt` (the `...target` spread would carry undefined).
+        userUpdatedAt: now,
         updatedBy: userId,
       }
       await this.ctx.txDb.execute(INSERT_SQL, blockToRowParams(inserted))
@@ -671,10 +677,13 @@ export class TxImpl implements Tx {
     const after: BlockData = {
       ...target,
       updatedAt: now,
+      // Undo IS a user action → fresh display stamp (also overrides a
+      // pre-migration snapshot's missing `userUpdatedAt`).
+      userUpdatedAt: now,
       updatedBy: userId,
     }
     await this.ctx.txDb.execute(
-      `UPDATE blocks SET parent_id = ?, order_key = ?, content = ?, properties_json = ?, references_json = ?, deleted = ?, updated_at = ?, updated_by = ? WHERE id = ?`,
+      `UPDATE blocks SET parent_id = ?, order_key = ?, content = ?, properties_json = ?, references_json = ?, deleted = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
       [
         target.parentId,
         target.orderKey,
@@ -682,6 +691,7 @@ export class TxImpl implements Tx {
         JSON.stringify(target.properties),
         JSON.stringify(target.references),
         target.deleted ? 1 : 0,
+        now,
         now,
         userId,
         id,
@@ -710,29 +720,41 @@ export class TxImpl implements Tx {
   }
 
   /** Record that `id` was just system-minted in this tx, so same-tx
-   *  follow-up writes inherit the system author (see `systemMintedIds`).
-   *  No-op unless `opts.systemMint` — and `systemMint` is insert-only at the
-   *  type level ({@link TxInsertOpts}), so this is only ever reached from
+   *  follow-up shaping writes (`setProperty` / `addTypeInTx` / …) keep its
+   *  `updated_at` pinned at the `0` pristine sentinel instead of advancing it
+   *  (see `metadataPatch` and `systemMintedIds`). Without this, the same-tx
+   *  shaping a deterministic-id mint does — and the upload compactor's
+   *  PUT+PATCH fusion — would overwrite the `0`, so the sentinel the reconcile
+   *  gate lets yield to the server would never exist. No-op unless
+   *  `opts.systemMint` — and `systemMint` is insert-only at the type level
+   *  ({@link TxInsertOpts}), so this is only ever reached from
    *  `create` / `createOrGet`. */
   private markSystemMint(id: string, opts: TxInsertOpts | undefined): void {
     if (opts?.systemMint) this.systemMintedIds.add(id)
   }
 
-  /** The author to stamp on a write to `id`: the current user, unless the
-   *  row was system-minted in THIS tx, in which case follow-up writes
-   *  inherit the system author so the whole mint stays one pristine
-   *  default. */
-  private authorFor(id: string): string {
-    const userId = this.meta.user.id
-    return this.systemMintedIds.has(id) ? systemAuthor(userId) : userId
-  }
-
-  private metadataPatch(id: string, skipMetadata?: boolean): {
-    updatedAt: number
-    updatedBy: string
-  } | Record<string, never> {
-    if (skipMetadata) return {}
-    return {updatedAt: this.ctx.now(), updatedBy: this.authorFor(id)}
+  /** Metadata stamps for a content-changing write to `id`.
+   *  - `updatedAt` (the row-version / sync-gate discriminator) ALWAYS advances
+   *    and is locally monotonic (invariant I3): `max(now, before.updatedAt + 1)`,
+   *    so a fresh local edit can never stamp at or below the row's current
+   *    version even when the server has ratcheted ahead of this device's clock.
+   *    EXCEPT ids system-minted in THIS tx, held at the `0` pristine sentinel
+   *    (see `markSystemMint`).
+   *  - `userUpdatedAt` (display) + `updatedBy` advance only on a real user
+   *    edit; a `{skipMetadata}` bookkeeping write leaves them untouched while
+   *    still advancing `updatedAt`. `updatedBy` is now a plain user-pair field
+   *    (no `system:` prefix) — the gate reads `updatedAt === 0` for pristineness. */
+  private metadataPatch(
+    id: string,
+    before: BlockData,
+    skipMetadata?: boolean,
+  ):
+    | {updatedAt: number}
+    | {updatedAt: number; userUpdatedAt: number; updatedBy: string} {
+    const now = this.ctx.now()
+    const updatedAt = this.systemMintedIds.has(id) ? 0 : Math.max(now, before.updatedAt + 1)
+    if (skipMetadata) return {updatedAt}
+    return {updatedAt, userUpdatedAt: now, updatedBy: this.meta.user.id}
   }
 
   /** Build a fresh BlockData for `tx.create` / `tx.createOrGet` insert
@@ -754,13 +776,15 @@ export class TxImpl implements Tx {
   ): BlockData {
     const now = this.ctx.now()
     const userId = this.meta.user.id
-    const ts = opts?.skipMetadata ? 0 : now
+    // `updated_at` is the row-version. A speculative `systemMint` default and a
+    // `skipMetadata` bookkeeping create are born at the `0` pristine sentinel so
+    // the reconcile gate lets the server win; a normal create starts at `now`.
+    const updatedAt = opts?.skipMetadata || opts?.systemMint ? 0 : now
+    const createdAt = opts?.skipMetadata ? 0 : now
     const createdBy = opts?.skipMetadata ? '' : userId
-    const updatedBy = opts?.skipMetadata
-      ? ''
-      : opts?.systemMint
-        ? systemAuthor(userId)
-        : userId
+    // `updated_by` is a plain user-pair field — the real user even for a
+    // systemMint (no more `system:` prefix; the gate reads `updated_at === 0`).
+    const updatedBy = opts?.skipMetadata ? '' : userId
     return {
       id,
       workspaceId: data.workspaceId,
@@ -772,8 +796,11 @@ export class TxImpl implements Tx {
       // user fn returns; empty default is already canonical so the
       // common (no-refs) insert path is a same-tx no-op.
       references: data.references ?? [],
-      createdAt: ts,
-      updatedAt: ts,
+      createdAt,
+      updatedAt,
+      // Display "last edited" = creation moment for every create, including the
+      // `0`-versioned pristine/bookkeeping rows (so they never show 1970).
+      userUpdatedAt: now,
       createdBy,
       updatedBy,
       deleted: false,

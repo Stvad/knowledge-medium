@@ -42,6 +42,7 @@ const fixture: BlockData = {
   references: [],
   createdAt: 1700000000000,
   updatedAt: 1700000005000,
+  userUpdatedAt: 1700000005000,
   createdBy: 'user-1',
   updatedBy: 'user-1',
   deleted: false,

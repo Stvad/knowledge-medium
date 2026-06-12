@@ -46,6 +46,7 @@ const richBlock = (overrides: Partial<BlockData> = {}): BlockData => ({
   references: [{ id: 'target-1', alias: 'Target', sourceField: 'body' }],
   createdAt: 1700000000000,
   updatedAt: 1700000000000,
+  userUpdatedAt: 1700000000000,
   createdBy: 'user-1',
   updatedBy: 'user-1',
   deleted: false,

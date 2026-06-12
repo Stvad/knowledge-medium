@@ -433,6 +433,7 @@ describe('sync observer: sync-applied invalidation', () => {
       references: o.references ?? [],
       createdAt: 0,
       updatedAt: o.updatedAt ?? 0,
+      userUpdatedAt: o.updatedAt ?? 0,
       createdBy: 'remote',
       updatedBy: 'remote',
       deleted: o.deleted ?? false,

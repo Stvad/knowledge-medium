@@ -346,20 +346,27 @@ describe('tx.update (data-fields-only)', () => {
     expect(env.cache.getSnapshot('upd-noop')!.updatedAt).toBe(beforeUpdatedAt)
   })
 
-  it('bumps updatedAt + updatedBy unless skipMetadata', async () => {
+  it('always advances updatedAt; userUpdatedAt + updatedBy bump only on a real edit', async () => {
     const id = await env.repo.tx(
       tx => tx.create({workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
       {scope: ChangeScope.BlockDefault},
     )
-    const tsAfterCreate = env.cache.getSnapshot(id)!.updatedAt
+    const created = env.cache.getSnapshot(id)!
     env.tick()  // advance virtual clock
     await env.repo.tx(tx => tx.update(id, {content: 'x'}), {scope: ChangeScope.BlockDefault})
-    expect(env.cache.getSnapshot(id)!.updatedAt).toBeGreaterThan(tsAfterCreate)
+    const afterEdit = env.cache.getSnapshot(id)!
+    // A real edit advances both the row-version and the display stamp.
+    expect(afterEdit.updatedAt).toBeGreaterThan(created.updatedAt)
+    expect(afterEdit.userUpdatedAt).toBeGreaterThan(created.userUpdatedAt)
 
-    const beforeBookkeeping = env.cache.getSnapshot(id)!.updatedAt
     env.tick()
     await env.repo.tx(tx => tx.update(id, {references: [{id: 'ref', alias: 'a'}]}, {skipMetadata: true}), {scope: ChangeScope.References})
-    expect(env.cache.getSnapshot(id)!.updatedAt).toBe(beforeBookkeeping)
+    const afterBookkeeping = env.cache.getSnapshot(id)!
+    // A {skipMetadata} bookkeeping write STILL advances the row-version (so
+    // peers hydrate the change — this is the staleness fix) but leaves the
+    // user-facing display stamp frozen.
+    expect(afterBookkeeping.updatedAt).toBeGreaterThan(afterEdit.updatedAt)
+    expect(afterBookkeeping.userUpdatedAt).toBe(afterEdit.userUpdatedAt)
   })
 })
 

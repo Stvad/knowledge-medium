@@ -262,6 +262,7 @@ export const importRoam = async (
         references: [],
         createdAt: 0,
         updatedAt: 0,
+        userUpdatedAt: 0,
         createdBy: options.currentUserId,
         updatedBy: options.currentUserId,
         deleted: false,

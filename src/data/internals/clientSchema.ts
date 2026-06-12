@@ -359,6 +359,7 @@ const blockJsonObjectSql = (rowRef: 'NEW' | 'OLD') => `
         'references', json(${rowRef}.references_json),
         'createdAt', ${rowRef}.created_at,
         'updatedAt', ${rowRef}.updated_at,
+        'userUpdatedAt', coalesce(${rowRef}.user_updated_at, ${rowRef}.updated_at),
         'createdBy', ${rowRef}.created_by,
         'updatedBy', ${rowRef}.updated_by,
         'deleted', json(CASE WHEN ${rowRef}.deleted THEN 'true' ELSE 'false' END)
@@ -478,6 +479,7 @@ const BLOCK_UPLOAD_COLUMNS: readonly UploadColumnSpec[] = [
   {name: 'references_json', jsonValue: rowRef => `${rowRef}.references_json`},
   {name: 'created_at', jsonValue: rowRef => `${rowRef}.created_at`},
   {name: 'updated_at', jsonValue: rowRef => `${rowRef}.updated_at`},
+  {name: 'user_updated_at', jsonValue: rowRef => `${rowRef}.user_updated_at`},
   {name: 'created_by', jsonValue: rowRef => `${rowRef}.created_by`},
   {name: 'updated_by', jsonValue: rowRef => `${rowRef}.updated_by`},
   {

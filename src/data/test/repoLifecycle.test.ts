@@ -155,7 +155,7 @@ describe('repo.metrics() / resetMetrics()', () => {
     env.repo.cache.setSnapshot({
       id: 'block-1', workspaceId: 'ws', parentId: null, orderKey: 'a',
       content: '', properties: {}, references: [],
-      createdAt: 0, updatedAt: 0, createdBy: 'u', updatedBy: 'u', deleted: false,
+      createdAt: 0, updatedAt: 0, userUpdatedAt: 0, createdBy: 'u', updatedBy: 'u', deleted: false,
     })
     const before = env.repo.metrics()
     expect(before.blockCache.setSnapshotCalls).toBe(1)
