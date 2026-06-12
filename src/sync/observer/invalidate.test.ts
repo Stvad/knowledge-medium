@@ -107,25 +107,25 @@ describe('applySyncInvalidation', () => {
     expect(handle.calls).toHaveLength(1)
   })
 
-  it('does NOT force-heal the cache when forceHeal is false (one-time healing rescan)', () => {
-    // The healing rescan heals disk but passes forceHeal=false so the cache
-    // stays LWW-masked — a real edit that just drained but not echoed must not
-    // be force-clobbered in the live cache during the rescan window. The older
-    // server `after` is rejected by LWW even though it matches `before`.
+  it('force-heals unconditionally: a permanently-rejected edit rolls back to server truth', () => {
+    // No more forceHeal=false path. A local edit that was permanently rejected
+    // (quarantined, no echo ever coming) leaves the cache pinning the rejected
+    // newer stamp; the observer applied server truth to disk and passes the
+    // rejected edit as `before`. applyFromSync force-applies the (older) server
+    // row so the cache converges instead of lying forever.
     const cache = new BlockCache()
-    const staleDefault = block({ content: 'default', updatedAt: 9000 })
-    cache.applyIfNewer(staleDefault, 'sync')
+    const rejectedEdit = block({ content: 'rejected local edit', updatedAt: 9000 })
+    cache.applyIfNewer(rejectedEdit, 'sync')
     const handle = target()
 
-    const serverValue = block({ content: 'real synced config', updatedAt: 3000 })
+    const serverValue = block({ content: 'server truth', updatedAt: 3000 })
     const out = applySyncInvalidation(
-      cache, handle, snapshots({ b1: { before: staleDefault, after: serverValue } }), [], false,
+      cache, handle, snapshots({ b1: { before: rejectedEdit, after: serverValue } }),
     )
 
-    // Cache keeps the default (heals on reload from disk); nothing dispatched.
-    expect(cache.getSnapshot('b1')).toMatchObject({ content: 'default' })
-    expect(out).toBeNull()
-    expect(handle.calls).toHaveLength(0)
+    expect(cache.getSnapshot('b1')).toMatchObject({ content: 'server truth' })
+    expect(out).not.toBeNull()
+    expect(handle.calls).toHaveLength(1)
   })
 
   it('evicts on removal and invalidates the row + its prior parent', () => {

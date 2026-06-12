@@ -33,12 +33,10 @@ import {
   type BlockRow,
 } from '@/data/blockSchema.js'
 import type { BlockData } from '@/data/api'
-import { systemAuthor } from '@/data/api'
 import type { PowerSyncDb } from '@/data/internals/commitPipeline.js'
 import {
   decideStagingRow,
   type Materializability,
-  type ReconcileMode,
 } from './reconcile.js'
 import { decodeFromWire, type GetCek } from '../transform.js'
 
@@ -97,12 +95,6 @@ export interface MaterializeDeps {
   readonly getMaterializability: GetMaterializability
   /** Workspace-key lookup, threaded to {@link decodeFromWire} for decrypt. */
   readonly getCek: GetCek
-  /** The current client's user id. The gate compares a local row's
-   *  `updated_by` against `systemAuthor(currentUserId)` to recognize THIS
-   *  client's own pristine speculative default (which yields to the server).
-   *  A `system:other` row that arrived via sync is already server truth and
-   *  must not be treated as a local mint, hence the exact-current-user match. */
-  readonly currentUserId: string
 }
 
 /** The staging-table delta to process: ids whose staging row changed, and ids
@@ -253,11 +245,6 @@ const readExistingStagingIds = async (
 /** Tunables (batch sizing). Defaults are production values; tests override. */
 export interface MaterializeOptions {
   readonly readChunkSize?: number
-  /** Which conflict rule the gate applies (default `strict`). The one-time
-   *  recovery rescan passes `healing` so pre-provenance shadows — stamped with
-   *  the real user, so `strict` would protect them — still yield to the
-   *  server. See {@link ReconcileMode}. */
-  readonly gateMode?: ReconcileMode
 }
 
 /**
@@ -283,11 +270,6 @@ export const materializeStagingRows = async (
 ): Promise<MaterializeOutcome> => {
   const { getMaterializability, getCek } = deps
   const readChunkSize = options.readChunkSize ?? STAGING_READ_CHUNK
-  const gateMode = options.gateMode ?? 'strict'
-  // This client's own system author. A local row whose `updated_by` equals it
-  // is a pristine speculative default we minted ourselves (yields to the
-  // server); `system:<otherUser>` and real-user authors do not match.
-  const ownSystemAuthor = systemAuthor(deps.currentUserId)
   const deferred: string[] = []
   const skippedStale: string[] = []
   const quarantined: string[] = []
@@ -324,8 +306,7 @@ export const materializeStagingRows = async (
     const action = decideStagingRow(materializability, row.updated_at, {
       localUpdatedAt: localRow?.updatedAt ?? null,
       hasPendingUpload: pendingUploadIds.has(row.id),
-      isOwnSystemMint: localRow?.updatedBy === ownSystemAuthor,
-    }, gateMode)
+    })
     if (action.kind !== 'apply') {
       // Skip-stale BEFORE decrypt: a stale ciphertext never gets decoded.
       skippedStale.push(row.id)
@@ -383,8 +364,7 @@ export const materializeStagingRows = async (
       const action = decideStagingRow(materializability, stagingUpdatedAt, {
         localUpdatedAt: beforeRow?.updated_at ?? null,
         hasPendingUpload: pendingNow.has(plaintext.id),
-        isOwnSystemMint: beforeRow?.updated_by === ownSystemAuthor,
-      }, gateMode)
+      })
       if (action.kind === 'apply') {
         await tx.execute(UPSERT_BLOCK_SQL, blockRowParams(plaintext))
         applied.push(plaintext.id)

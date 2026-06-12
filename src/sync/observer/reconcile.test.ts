@@ -4,18 +4,15 @@ import { decideStagingRow, type LocalRowState } from './reconcile.js'
 const noLocal: LocalRowState = {
   localUpdatedAt: null,
   hasPendingUpload: false,
-  isOwnSystemMint: false,
 }
 
-/** A non-pending local row with the given stamp; `isOwnSystemMint` toggles
- *  whether it's this client's pristine speculative default or a real edit. */
+/** A non-pending local row with the given row-version stamp. */
 const local = (
   localUpdatedAt: number,
-  opts: { pending?: boolean; systemMint?: boolean } = {},
+  opts: { pending?: boolean } = {},
 ): LocalRowState => ({
   localUpdatedAt,
   hasPendingUpload: opts.pending ?? false,
-  isOwnSystemMint: opts.systemMint ?? false,
 })
 
 describe('decideStagingRow — materializability', () => {
@@ -51,35 +48,14 @@ describe('decideStagingRow — local-edit reconciliation', () => {
     expect(action).toEqual({ kind: 'skip-stale' })
   })
 
-  it('strict: protects a strictly-newer REAL local edit (replay-safe)', () => {
-    // A non-pending, non-system local row strictly newer than the staging
-    // snapshot is a just-uploaded edit facing a stale older in-flight delivery.
-    // Protect it — overwriting on disk then re-healing via the upload echo is
-    // the QuickFind-freeze pattern the canary guards.
+  it('applies the server row over a strictly-newer NON-pending local row', () => {
+    // No more strictly-newer protection: with server-enforced monotonicity, a
+    // genuinely-newer local edit is either pending (caught above) or acked, and
+    // its echo (server stamp >= local) re-asserts it. A strictly-older delivery
+    // here is an in-flight replay; applying it is a transient revert that the
+    // echo converges. The only deliberate hold is the equal-nonzero guard below.
     const action = decideStagingRow('copy', 100, local(200))
-    expect(action).toEqual({ kind: 'skip-stale' })
-  })
-
-  it('strict: a strictly-newer OWN system mint yields to the server (heals)', () => {
-    // The pristine speculative default minted on read-as-absent. The server's
-    // older-but-authoritative value must win or it shadows real synced config.
-    const action = decideStagingRow('copy', 100, local(200, { systemMint: true }))
     expect(action).toEqual({ kind: 'apply', decrypt: false })
-  })
-
-  it('healing: a strictly-newer REAL local edit also yields (pre-provenance shadow)', () => {
-    // Pre-provenance shadows are stamped with the real user, so strict mode
-    // would protect them. The one-time recovery rescan runs in healing mode,
-    // where the server wins on any strictly-newer non-pending row.
-    const action = decideStagingRow('copy', 100, local(200), 'healing')
-    expect(action).toEqual({ kind: 'apply', decrypt: false })
-  })
-
-  it('healing still respects the pending-upload guard', () => {
-    // Healing relaxes only the strictly-newer branch — an unsent edit is never
-    // lost, in either mode.
-    const action = decideStagingRow('copy', 100, local(200, { pending: true }), 'healing')
-    expect(action).toEqual({ kind: 'skip-stale' })
   })
 
   it('applies when the staging row is newer than the local row', () => {
@@ -87,16 +63,24 @@ describe('decideStagingRow — local-edit reconciliation', () => {
     expect(action).toEqual({ kind: 'apply', decrypt: true })
   })
 
-  it('skips on equal stamps — the one deliberate stamp guard (commit 429fd4b2)', () => {
-    // A stale in-flight server read can carry DIFFERENT content under the same
-    // updated_at. The observer materializes into the persistent SQLite `blocks`
-    // table, so applying an equal-stamp snapshot would overwrite a local edit on
-    // disk and resurface it after reload — the cache gate can't guard that.
-    // Holds in both modes, and even for an own system mint.
+  it('skips on equal NONZERO stamps — the one deliberate stamp guard (commit 429fd4b2)', () => {
+    // Equal nonzero stamps ⟺ identical content (the server floor+bump strictly
+    // advances the stamp on any content change). A stale in-flight server read
+    // carrying DIFFERENT content under the same ms-stamp would otherwise clobber
+    // a local edit on the persistent `blocks` table and resurface after reload.
     expect(decideStagingRow('copy', 200, local(200))).toEqual({ kind: 'skip-stale' })
-    expect(decideStagingRow('copy', 200, local(200, { systemMint: true })))
-      .toEqual({ kind: 'skip-stale' })
-    expect(decideStagingRow('copy', 200, local(200), 'healing')).toEqual({ kind: 'skip-stale' })
+  })
+
+  it('applies on equal ZERO stamps — the stamp-0 exemption (I2)', () => {
+    // Two devices that minted the same deterministic id both sit at 0. Without
+    // the exemption the insert-or-skip loser would equal-stamp-skip forever and
+    // never converge to the server's created_at / created_by / user_updated_at
+    // (or content). A 0-stamped pristine local row always yields to the server.
+    expect(decideStagingRow('copy', 0, local(0))).toEqual({ kind: 'apply', decrypt: false })
+  })
+
+  it('applies a nonzero server row over a 0-stamped pristine local default', () => {
+    expect(decideStagingRow('copy', 500, local(0))).toEqual({ kind: 'apply', decrypt: false })
   })
 
   it('applies a first-seen row (no local copy yet)', () => {

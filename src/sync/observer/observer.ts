@@ -43,7 +43,6 @@ import {
   type MaterializeOutcome,
   type SyncSnapshot,
 } from './materialize.js'
-import type { ReconcileMode } from './reconcile.js'
 import {
   applySyncInvalidation,
   type SyncCache,
@@ -85,14 +84,10 @@ export interface BlocksSyncedObserver {
    *  drain enqueued before it). */
   flush(): Promise<void>
   /** Re-materialize a workspace's staged rows after it becomes materializable
-   *  (WK paste / plaintext confirm). Reads `blocks_synced` directly. Uses the
-   *  strict reconcile gate (steady-state semantics). */
+   *  (WK paste / plaintext confirm), or as the on-open recovery rescan. Reads
+   *  `blocks_synced` directly. Server-enforced `updated_at` monotonicity makes
+   *  one gate correct for both — no separate healing mode. */
   drainWorkspace(workspaceId: string): Promise<void>
-  /** One-time recovery rescan: like {@link drainWorkspace}, but runs the gate
-   *  in `healing` mode so a pre-provenance shadow (a real-user-stamped default
-   *  that the strict gate would protect) still yields to the server. Used by
-   *  `Repo.scheduleReconcileRescan`. */
-  healWorkspace(workspaceId: string): Promise<void>
   /** Stop the subscription. Idempotent. */
   dispose(): void
 }
@@ -166,15 +161,13 @@ export const startBlocksSyncedObserver = (
     }
   }
 
-  /** Post-materialization side effects shared by both drain paths: invalidate
-   *  cache + handles, then run cycle detection. Only the steady-state strict
-   *  gate force-heals the live cache; the one-time healing rescan heals disk
-   *  and lets the cache rehydrate on reload (see `applySyncInvalidation`). */
+  /** Post-materialization side effects shared by every drain path: invalidate
+   *  cache + handles (force-healing the live cache so it follows disk — see
+   *  `applySyncInvalidation`), then run cycle detection. */
   const applyOutcome = async (
     outcome: MaterializeOutcome,
-    gateMode: ReconcileMode,
   ): Promise<void> => {
-    applySyncInvalidation(cache, handleStore, outcome.snapshots, rules(), gateMode === 'strict')
+    applySyncInvalidation(cache, handleStore, outcome.snapshots, rules())
     await runCycleScan(outcome.snapshots)
   }
 
@@ -185,10 +178,9 @@ export const startBlocksSyncedObserver = (
   const applyWindow = async (
     upserted: readonly string[],
     removed: readonly string[],
-    gateMode: ReconcileMode = 'strict',
   ): Promise<void> => {
-    const outcome = await materializeStagingRows(db, { upserted, removed }, deps, { gateMode })
-    await applyOutcome(outcome, gateMode)
+    const outcome = await materializeStagingRows(db, { upserted, removed }, deps)
+    await applyOutcome(outcome)
   }
 
   const drainQueueOnce = async (): Promise<void> => {
@@ -230,7 +222,6 @@ export const startBlocksSyncedObserver = (
 
   const materializeWorkspace = async (
     workspaceId: string,
-    gateMode: ReconcileMode = 'strict',
   ): Promise<void> => {
     if (disposed) return
     const ids = (await db.getAll<{ id: string }>(
@@ -248,7 +239,7 @@ export const startBlocksSyncedObserver = (
     // re-invocation resume (already-materialized rows LWW-skip next pass).
     for (let i = 0; i < ids.length; i += drainChunk) {
       if (disposed) return
-      await applyWindow(ids.slice(i, i + drainChunk), [], gateMode)
+      await applyWindow(ids.slice(i, i + drainChunk), [])
     }
   }
 
@@ -270,9 +261,7 @@ export const startBlocksSyncedObserver = (
 
   const flush = (): Promise<void> => enqueue(drainQueueOnce)
   const drainWorkspace = (workspaceId: string): Promise<void> =>
-    enqueue(() => materializeWorkspace(workspaceId, 'strict'))
-  const healWorkspace = (workspaceId: string): Promise<void> =>
-    enqueue(() => materializeWorkspace(workspaceId, 'healing'))
+    enqueue(() => materializeWorkspace(workspaceId))
 
   // Subscribe first, then drain once: the subscription catches future appends,
   // and the initial drain catches rows already queued — including any that
@@ -290,7 +279,6 @@ export const startBlocksSyncedObserver = (
   return {
     flush,
     drainWorkspace,
-    healWorkspace,
     dispose() {
       if (disposed) return
       disposed = true
