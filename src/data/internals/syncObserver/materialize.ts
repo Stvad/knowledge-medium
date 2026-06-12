@@ -37,12 +37,16 @@ import { systemAuthor } from '@/data/api'
 import type { PowerSyncDb } from '@/data/internals/commitPipeline.js'
 import {
   decideStagingRow,
-  type Materializability,
   type ReconcileMode,
 } from './reconcile.js'
-import { decodeFromWire, type GetCek } from '../transform.js'
+import {
+  decodeFromWire,
+  type GetCek,
+  type GetMaterializability,
+  type Materializability,
+} from '@/sync/transform.js'
 
-export type { Materializability } from './reconcile.js'
+export type { GetMaterializability, Materializability } from '@/sync/transform.js'
 
 const COLUMN_NAMES = BLOCK_STORAGE_COLUMNS.map(column => column.name)
 const PLACEHOLDERS = COLUMN_NAMES.map(() => '?').join(', ')
@@ -85,13 +89,6 @@ const blockRowParams = (row: BlockRow): unknown[] =>
 type RowsReader = {
   getAll<T>(sql: string, params?: unknown[]): Promise<T[]>
 }
-
-/** Resolve how a workspace's rows can be materialized right now. The policy
- *  (pin lookup, WK presence, §6 quarantine) is injected; the observer core
- *  is agnostic to how that decision is reached. */
-export type GetMaterializability = (
-  workspaceId: string,
-) => Materializability | Promise<Materializability>
 
 export interface MaterializeDeps {
   readonly getMaterializability: GetMaterializability

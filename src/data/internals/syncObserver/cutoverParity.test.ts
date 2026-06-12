@@ -27,7 +27,7 @@ import {
 } from '@/data/blockSchema'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { materializeStagingRows, type Materializability } from './materialize.js'
-import type { GetCek } from '../transform.js'
+import type { GetCek } from '@/sync/transform.js'
 import type { BlockData } from '@/data/api'
 
 const noKey: GetCek = async () => null

@@ -35,8 +35,7 @@
  * mode 'none' — instead of resolving against a stale id.
  */
 
-import type { GetCek, SyncMode } from '../transform.js'
-import type { GetMaterializability } from '../observer/materialize.js'
+import type { GetCek, GetMaterializability, SyncMode } from '../transform.js'
 import type { WorkspaceKeyStore } from './keyStore.js'
 import { getModePin } from './modePin.js'
 

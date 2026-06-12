@@ -31,8 +31,9 @@
 
 import { PowerSyncDatabase, Schema, WASQLiteOpenFactory, WASQLiteVFS } from '@powersync/web'
 import { createPowerSyncConnector, hasRemoteSyncConfig } from '@/services/powersync.js'
-import { createSyncResolver } from '@/sync/keys/resolver.js'
+import { createSyncResolver, type SyncResolver } from '@/sync/keys/resolver.js'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore.js'
+import type { MaterializeDeps } from '@/data/internals/syncObserver/materialize.js'
 import { seedModePinsFromWorkspaces } from '@/sync/keys/rolloutSeed.js'
 import { consumePendingWipe } from '@/sync/keys/flows/lockAndWipe.js'
 import { removeOpfsDbFile } from '@/utils/exportSqliteDb.js'
@@ -106,6 +107,36 @@ const dbsByUser = new Map<string, PowerSyncDatabase>()
 const initPromises = new Map<string, Promise<void>>()
 let activeUserId: string | null = null
 let connectChain: Promise<void> = Promise.resolve()
+
+// One §6 sync resolver per user, shared by both halves of the Layout B
+// seam: the upload connector (encrypt-on-upload) and the Repo's download
+// observer (materializability + key lookup). Built here so the Repo
+// bootstrap (context/repo.tsx) doesn't re-derive a second resolver against
+// the same shared key store + mode pins.
+const syncResolversByUser = new Map<string, SyncResolver>()
+const resolverForUser = (userId: string): SyncResolver => {
+  let resolver = syncResolversByUser.get(userId)
+  if (!resolver) {
+    resolver = createSyncResolver(() => userId, getWorkspaceKeyStore())
+    syncResolversByUser.set(userId, resolver)
+  }
+  return resolver
+}
+
+/** Observer deps for the Repo's `syncObserverDeps` parameter, drawn from
+ *  the same per-user resolver the upload connector uses — so download
+ *  (decrypt/copy/defer) and upload (encrypt) share one §6 policy source.
+ *  `currentUserId` is injected by the Repo in `startSyncObserver`, so it's
+ *  omitted here. */
+export const syncObserverDepsFor = (
+  userId: string,
+): Omit<MaterializeDeps, 'currentUserId'> => {
+  const resolver = resolverForUser(userId)
+  return {
+    getMaterializability: resolver.getMaterializability,
+    getCek: resolver.getCek,
+  }
+}
 
 // Firefox and Safari block OPFS in private browsing — `getDirectory()`
 // throws SecurityError. Probe once and surface a useful message before
@@ -216,8 +247,9 @@ export const ensurePowerSyncReady = async (
       }
       // Encrypt-on-upload (§9.2): bind the connector's mode/key lookups to this
       // user's mode pins + shared workspace-key store. Plaintext workspaces
-      // resolve mode 'none' (no-op); e2ee workspaces seal content columns.
-      const resolver = createSyncResolver(() => userId, getWorkspaceKeyStore())
+      // resolve mode 'none' (no-op); e2ee workspaces seal content columns. Same
+      // per-user resolver the observer deps draw from (`syncObserverDepsFor`).
+      const resolver = resolverForUser(userId)
       await db.connect(createPowerSyncConnector({
         getWorkspaceMode: resolver.getMode,
         getCek: resolver.getCek,

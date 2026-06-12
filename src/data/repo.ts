@@ -90,8 +90,9 @@ import {
   startBlocksSyncedObserver,
   type BlocksSyncedObserver,
   type BlocksSyncedObserverArgs,
-} from '@/sync/observer/observer'
-import type { Materializability, MaterializeDeps } from '@/sync/observer/materialize'
+} from '@/data/internals/syncObserver/observer'
+import type { MaterializeDeps } from '@/data/internals/syncObserver/materialize'
+import type { Materializability } from '@/sync/transform'
 import {
   CLEAR_REPROJECT_REF_MARKER_SQL,
   RECORD_REPROJECT_REF_MARKER_SQL,

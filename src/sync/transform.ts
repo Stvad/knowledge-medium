@@ -35,6 +35,27 @@ export type SyncMode = 'none' | 'e2ee'
  *  CryptoKey handle, never raw bytes (§5). */
 export type GetCek = (workspaceId: string) => Promise<CryptoKey | null>
 
+/** How a workspace's rows should be materialized into `blocks`. This is
+ *  sync-seam vocabulary, not observer-internal: the §6 resolver
+ *  (`sync/keys/resolver.ts`) produces it and the data-engine observer
+ *  consumes it, so it lives in the lower data-free sync layer that both
+ *  sides can depend on without a cycle. */
+export type Materializability =
+  /** e2ee with the WK loaded — decrypt the content columns. */
+  | 'decrypt'
+  /** plaintext workspace — copy the row through unchanged (no key). */
+  | 'copy'
+  /** e2ee without WK (locked / key-required) or encryption-uncertain —
+   *  can't turn into plaintext yet; leave staged. */
+  | 'defer'
+
+/** Resolve how a workspace's rows can be materialized right now. The policy
+ *  (pin lookup, WK presence, §6 quarantine) is injected by the resolver; the
+ *  observer core is agnostic to how that decision is reached. */
+export type GetMaterializability = (
+  workspaceId: string,
+) => Materializability | Promise<Materializability>
+
 /** The block columns the seam transforms. Identifiers (id, workspace_id)
  *  stay in clear — they're needed for routing and AAD binding — and the
  *  three content columns are the encrypted payload in E2EE mode. Extra
