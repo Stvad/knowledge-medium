@@ -5,6 +5,7 @@ import {
 import {
   AppExtension,
   FacetContribution,
+  isFacetContribution,
 } from '@/extensions/facet.js'
 import {
   attachBoundary,
@@ -136,11 +137,6 @@ export const dynamicExtensionsExtension = (
 
   return collected
 }
-
-const isFacetContribution = (value: unknown): value is FacetContribution<unknown> =>
-  typeof value === 'object' &&
-  value !== null &&
-  (value as {type?: unknown}).type === 'facet-contribution'
 
 /**
  * Walks an AppExtension tree, validates shape, and force-prefixes every
