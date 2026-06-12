@@ -22,6 +22,12 @@ const TMPDIR_FAIL_MB = 100
 // (multi-GB), not normal operation.
 const WAL_WARN_MB = 2000
 const WAL_FAIL_MB = 5000
+// DB size — Pro plan starts on an 8 GB disk that autoscales, so there is no
+// fixed plan cap (unlike Free's 500 MB). These are growth/cost backstops sized
+// to go red BEFORE the included disk fills, not a hard cap. The writable check
+// below is the true disk-full detector; bump these if you provision a larger disk.
+const DB_SIZE_WARN_MB = 5000
+const DB_SIZE_FAIL_MB = 7000
 const IDLE_IN_TX_FAIL_SECONDS = 60 * 60
 const CONNECTIONS_WARN_PCT = 0.83
 const CONNECTIONS_FAIL_PCT = 0.97
@@ -80,6 +86,23 @@ async function checkServiceEndpoints() {
 }
 
 async function runDbChecks(client) {
+  // Writability — the single most important signal. When the disk fills (or the
+  // project is otherwise locked) Supabase flips the DB to read-only: every SELECT
+  // still succeeds, so a read-only probe stays green while writes are dead. Check
+  // the flag directly. pg_is_in_recovery() catches the related "landed on a
+  // replica / in recovery" case.
+  const rw = (await client.query(`
+    select current_setting('default_transaction_read_only') as read_only,
+           pg_is_in_recovery() as in_recovery
+  `)).rows[0]
+  const readOnly = rw.read_only === 'on'
+  result.checks.writable = { status: 'pass', read_only: readOnly, in_recovery: rw.in_recovery }
+  if (readOnly || rw.in_recovery) {
+    result.checks.writable.status = 'fail'
+    if (readOnly) fail('writable', 'database is in read-only mode (default_transaction_read_only=on) — disk full or project locked')
+    if (rw.in_recovery) fail('writable', 'database is in recovery (pg_is_in_recovery()=true) — not the writable primary')
+  }
+
   // Replication slots — main PowerSync leak indicator
   const slots = (await client.query(`
     select slot_name, slot_type, plugin, active,
@@ -171,10 +194,18 @@ async function runDbChecks(client) {
     warn('wal', `${round2(walMb)} MB exceeds ${WAL_WARN_MB} MB`)
   }
 
-  // DB size — informational, used for disk reconciliation
+  // DB size — backstop against unbounded growth toward the disk ceiling. Still
+  // feeds the disk-reconciliation summary; now also thresholded (see constants).
   const dbSize = (await client.query(`select pg_database_size('postgres')::bigint as bytes`)).rows[0]
   const dbMb = Number(dbSize.bytes) / 1024 / 1024
   result.checks.db_size = { status: 'pass', size_mb: round2(dbMb) }
+  if (dbMb >= DB_SIZE_FAIL_MB) {
+    result.checks.db_size.status = 'fail'
+    fail('db_size', `${round2(dbMb)} MB exceeds ${DB_SIZE_FAIL_MB} MB`)
+  } else if (dbMb >= DB_SIZE_WARN_MB) {
+    result.checks.db_size.status = 'warn'
+    warn('db_size', `${round2(dbMb)} MB exceeds ${DB_SIZE_WARN_MB} MB`)
+  }
 
   // Connections — Free-tier 60-connection cap is easy to hit
   const conn = (await client.query(`
