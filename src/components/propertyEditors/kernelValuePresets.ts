@@ -20,8 +20,8 @@ import {
   type RefCodecOptions,
 } from '@/data/api'
 import { valuePresetsFacet } from '@/data/facets.js'
-import type { AppExtension } from '@/extensions/facet.js'
-import { systemToggle } from '@/extensions/togglable.js'
+import type { AppExtension } from '@/facets/facet.js'
+import { systemToggle } from '@/facets/togglable.js'
 import {
   BooleanPropertyEditor,
   DatePropertyEditor,

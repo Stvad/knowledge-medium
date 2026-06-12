@@ -7,7 +7,7 @@
 // of `exclude`, not in the query we build. These tests run the actual
 // query so that regression stays caught.
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { resolveFacetRuntimeSync } from '@/extensions/facet'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { ChangeScope, type BlockReference } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'

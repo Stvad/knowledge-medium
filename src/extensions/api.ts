@@ -25,10 +25,10 @@ export {
   type FacetResolveContext,
   type FacetRuntime,
   type OptionalContributionResult,
-} from '@/extensions/facet.js'
+} from '@/facets/facet.js'
 
-// --- Runtime toggle types (full surface lives in @/extensions/togglable.ts) ---
-export type { Togglable } from '@/extensions/togglable.js'
+// --- Runtime toggle types (full surface lives in @/facets/togglable.ts) ---
+export type { Togglable } from '@/facets/togglable.js'
 export {
   defineVariantFacet,
   defineVariant,
@@ -36,7 +36,7 @@ export {
   type VariantContribution,
   type VariantResolver,
   type VariantSelection,
-} from '@/extensions/variantFacet.js'
+} from '@/facets/variantFacet.js'
 
 // --- Blessed core facets ---
 export {

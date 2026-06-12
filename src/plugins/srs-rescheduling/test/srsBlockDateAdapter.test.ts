@@ -6,7 +6,7 @@ import { BlockCache } from '@/data/blockCache'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { typesProp } from '@/data/properties.js'
 import {
   blockDateAdapterFacet,

@@ -3,7 +3,7 @@ import {
   actionTransformsFacet,
   actionsFacet,
 } from '@/extensions/core.js'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { getActiveActionById, getEffectiveActions } from '@/shortcuts/effectiveActions.js'
 import type { ResolutionContext } from '@/shortcuts/resolve.js'
 import {

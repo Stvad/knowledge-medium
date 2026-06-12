@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { appMountsFacet } from '@/extensions/core.js'
 import { mutatorsFacet, queriesFacet } from '@/data/facets.js'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import {
   FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
   FIND_REPLACE_SEARCH_CONTENT_QUERY,

@@ -5,11 +5,11 @@ import {
   AppExtension,
   FacetResolveContext,
   FacetRuntime,
-} from '@/extensions/facet.js'
+} from '@/facets/facet.js'
 import {
   resolveAppRuntime,
   resolveAppRuntimeSync,
-} from '@/extensions/resolveAppRuntime.js'
+} from '@/facets/resolveAppRuntime.js'
 import {useOverrides} from '@/extensions/useOverrides.js'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.js'
 import { appEffectsFacet, appMountsFacet, type AppEffectCleanup } from '@/extensions/core.js'

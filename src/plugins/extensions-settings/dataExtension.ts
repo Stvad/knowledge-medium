@@ -19,7 +19,7 @@
  *     new panel.
  */
 import {actionsFacet, appEffectsFacet} from '@/extensions/core.js'
-import type {AppExtension} from '@/extensions/facet.js'
+import type {AppExtension} from '@/facets/facet.js'
 import {propertyEditorOverridesFacet, propertySchemasFacet} from '@/data/facets.js'
 import {pluginPrefsExtension} from '@/data/pluginStateExtensions.js'
 import {openExtensionsSettingsAction} from './actions.ts'

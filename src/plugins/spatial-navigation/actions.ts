@@ -3,7 +3,7 @@ import {
   actionsFacet,
 } from '@/extensions/core.js'
 import { EXTEND_BLOCK_SELECTION_ACTION_ID } from '@/extensions/blockSelectionAction.js'
-import type { AppExtension } from '@/extensions/facet.js'
+import type { AppExtension } from '@/facets/facet.js'
 import {
   ActionConfig,
   type BaseShortcutDependencies,

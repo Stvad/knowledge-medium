@@ -1,7 +1,7 @@
 import { ArchiveX, GraduationCap } from 'lucide-react'
 import type { Repo } from '@/data/repo'
-import type { AppExtension } from '@/extensions/facet.js'
-import { systemToggle } from '@/extensions/togglable.js'
+import type { AppExtension } from '@/facets/facet.js'
+import { systemToggle } from '@/facets/togglable.js'
 import { actionContextsFacet, actionsFacet, blockRenderersFacet } from '@/extensions/core.js'
 import { blockLayoutFacet } from '@/extensions/blockInteraction.js'
 import {

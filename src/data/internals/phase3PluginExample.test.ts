@@ -30,7 +30,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { createElement, type JSX } from 'react'
-import { resolveFacetRuntimeSync } from '@/extensions/facet'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {
   ChangeScope,
   codecs,

@@ -29,7 +29,7 @@ import { Repo } from '@/data/repo'
 import { computeAliasSeatId } from '@/data/targets'
 import { dailyNoteBlockId, dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { propertySchemasFacet } from '@/data/facets.js'
-import { resolveFacetRuntimeSync, type AppExtension } from '@/extensions/facet.js'
+import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet.js'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { referencesDataExtension } from '../dataExtension.ts'
 import {

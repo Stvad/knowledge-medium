@@ -1,5 +1,5 @@
-import { defineFacet } from '@/extensions/facet.js'
-import type { FacetRuntime } from '@/extensions/facet.js'
+import { defineFacet } from '@/facets/facet.js'
+import type { FacetRuntime } from '@/facets/facet.js'
 import type { Repo } from '../data/repo'
 import type { Block } from '../data/block'
 import {

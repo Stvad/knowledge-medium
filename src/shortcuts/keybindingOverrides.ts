@@ -21,7 +21,7 @@
  *     That's the "shadow + warn" case the settings UI surfaces;
  *     hotkeys-js will dispatch both handlers.
  */
-import { defineFacet } from '@/extensions/facet.js'
+import { defineFacet } from '@/facets/facet.js'
 import type { ActionContextType, KeyCombination } from '@/shortcuts/types.js'
 
 export interface KeyOverrideBound {

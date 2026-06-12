@@ -1,6 +1,6 @@
 import { actionsFacet, appMountsFacet, type AppMountContribution } from '@/extensions/core.js'
-import type { AppExtension } from '@/extensions/facet.js'
-import { systemToggle } from '@/extensions/togglable.js'
+import type { AppExtension } from '@/facets/facet.js'
+import { systemToggle } from '@/facets/togglable.js'
 import { mobileKeyboardToolbarActions } from './actions.ts'
 import { MobileKeyboardToolbar } from './MobileKeyboardToolbar.tsx'
 

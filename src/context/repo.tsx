@@ -9,7 +9,7 @@ import { createSyncResolver } from '@/sync/keys/resolver.js'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore.js'
 import { User } from '@/types.js'
 import { memoize } from 'lodash'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
 import { surfaceProcessorRejectionFor } from '@/utils/processorRejectionToast.js'
 

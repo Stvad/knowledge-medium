@@ -9,7 +9,7 @@ import { dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { typesProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { resolveFacetRuntimeSync } from '@/extensions/facet'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {
   formatRescheduleToastMessage,
   rescheduleBlock,

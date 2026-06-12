@@ -12,9 +12,9 @@
  * fails to compile (which is the point — TDD on the type).
  */
 import {describe, expect, it} from 'vitest'
-import {defineFacet, type AppExtension} from '@/extensions/facet.js'
-import {resolveAppRuntimeSync} from '@/extensions/resolveAppRuntime.js'
-import {systemToggle, type Overrides} from '@/extensions/togglable.js'
+import {defineFacet, type AppExtension} from '@/facets/facet.js'
+import {resolveAppRuntimeSync} from '@/facets/resolveAppRuntime.js'
+import {systemToggle, type Overrides} from '@/facets/togglable.js'
 
 const emptyOverrides: Overrides = new Map()
 

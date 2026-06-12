@@ -1,7 +1,7 @@
 import { blockChildrenFooterFacet } from '@/extensions/blockInteraction.js'
 import { propertySchemasFacet } from '@/data/facets.js'
-import type { AppExtension } from '@/extensions/facet.js'
-import { systemToggle } from '@/extensions/togglable.js'
+import type { AppExtension } from '@/facets/facet.js'
+import { systemToggle } from '@/facets/togglable.js'
 import { backlinksViewFooterContribution } from './BacklinksViewSection.tsx'
 import { backlinksViewProp } from './prop.ts'
 

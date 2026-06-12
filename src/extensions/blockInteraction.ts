@@ -18,13 +18,13 @@ import {
 } from '@/data/properties.js'
 import { resetBlockSelection } from '@/data/stateBlocks.js'
 import { Repo } from '../data/repo'
-import { combineLastContributionResult, defineFacet, isFunction } from '@/extensions/facet.js'
+import { combineLastContributionResult, defineFacet, isFunction } from '@/facets/facet.js'
 import {
   defineVariantFacet,
   type Variant,
   type VariantContribution,
   type VariantResolver,
-} from '@/extensions/variantFacet.js'
+} from '@/facets/variantFacet.js'
 import type { ActionContextActivation, BlockPointerDependencies } from '@/shortcuts/types.js'
 import type { PointerGestureEvent } from '@/shortcuts/pointerAction.js'
 import type { BlockContextType, BlockRenderer } from '@/types.js'

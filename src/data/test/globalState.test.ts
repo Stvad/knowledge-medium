@@ -36,7 +36,7 @@ import { sameTxProcessorsFacet, typesFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { addedTypes } from '@/data/properties'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { resolveFacetRuntimeSync } from '@/extensions/facet'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { Repo } from '../repo'
 import { PAGE_TYPE, USER_TYPE } from '@/data/blockTypes'
 import {

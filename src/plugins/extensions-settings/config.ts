@@ -18,7 +18,7 @@ import {
   decodeOverrides as decodeOverridesFromJson,
   encodeOverrides,
 } from '@/extensions/overridesCache.js'
-import type {Overrides} from '@/extensions/togglable.js'
+import type {Overrides} from '@/facets/togglable.js'
 
 const expectedShape = 'object<string, boolean>'
 

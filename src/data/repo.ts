@@ -15,7 +15,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid'
-import type { FacetRuntime, Facet } from '@/extensions/facet'
+import type { FacetRuntime, Facet } from '@/facets/facet'
 import type {
   AnyMutator,
   AnyPostCommitProcessor,

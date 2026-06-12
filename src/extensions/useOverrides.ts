@@ -25,8 +25,8 @@
 
 import {useEffect, useMemo, useState} from 'react'
 import {readOverridesCache} from '@/extensions/overridesCache.js'
-import {appRuntimeUpdateEvent} from '@/extensions/runtimeEvents.js'
-import type {Overrides} from '@/extensions/togglable.js'
+import {appRuntimeUpdateEvent} from '@/facets/runtimeEvents.js'
+import type {Overrides} from '@/facets/togglable.js'
 
 export interface UseOverridesResult {
   overrides: Overrides

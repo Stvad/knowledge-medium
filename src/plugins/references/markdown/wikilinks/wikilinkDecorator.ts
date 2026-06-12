@@ -15,7 +15,7 @@
  */
 import { isValidElement, type ReactNode } from 'react'
 import type { Block } from '@/data/block'
-import { defineFacet, type FacetRuntime } from '@/extensions/facet.js'
+import { defineFacet, type FacetRuntime } from '@/facets/facet.js'
 
 export interface WikilinkDisplayContext {
   alias: string

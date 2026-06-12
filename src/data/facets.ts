@@ -8,7 +8,7 @@
  * machinery comes online.
  */
 
-import { defineFacet } from '@/extensions/facet'
+import { defineFacet } from '@/facets/facet'
 import type {
   AnyMutator,
   AnyPostCommitProcessor,

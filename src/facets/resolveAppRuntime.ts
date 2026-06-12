@@ -19,7 +19,7 @@
  * function-valued AppExtensions; the sync walk throws on them, matching
  * the shared walker's policy.
  *
- * facet.ts has no awareness of `@/extensions/togglable.ts`; this module
+ * facet.ts has no awareness of `@/facets/togglable.ts`; this module
  * is the only place the two meet. Anyone calling `resolveFacetRuntime`
  * directly still gets the bare behaviour — which is fine for the unit
  * tests that don't care about toggle semantics. Production wiring goes
@@ -35,13 +35,13 @@ import {
   type AppExtensionVisitor,
   type FacetContribution,
   type FacetResolveContext,
-} from '@/extensions/facet.js'
+} from '@/facets/facet.js'
 import {
   getBoundary,
   isEnabled,
   type Overrides,
   type Togglable,
-} from '@/extensions/togglable.js'
+} from '@/facets/togglable.js'
 
 export interface ResolveAppRuntimeOptions {
   overrides: Overrides

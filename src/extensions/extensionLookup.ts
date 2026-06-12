@@ -13,7 +13,7 @@ import type {BlockData} from '@/data/api'
 import type {Repo} from '@/data/repo'
 import {EXTENSION_TYPE} from '@/data/blockTypes'
 import type {BlockProperties} from '@/types.js'
-import {extensionAliasValues} from '@/extensions/togglable.js'
+import {extensionAliasValues} from '@/extensions/extensionToggles.js'
 
 export interface ExtensionHandle {
   /** Extension block id. Either `id` or `label` is required. */

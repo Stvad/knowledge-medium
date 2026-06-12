@@ -1,7 +1,7 @@
 import {actionsFacet, appEffectsFacet} from '@/extensions/core.js'
 import {propertyEditorOverridesFacet, propertySchemasFacet} from '@/data/facets.js'
 import {pluginPrefsExtension} from '@/data/pluginStateExtensions.js'
-import type {AppExtension} from '@/extensions/facet.js'
+import type {AppExtension} from '@/facets/facet.js'
 import {openKeybindingsSettingsAction} from './actions.ts'
 import {keybindingOverridesProp, keybindingsPrefsType} from './config.ts'
 import {keybindingsSyncEffect} from './effect.ts'

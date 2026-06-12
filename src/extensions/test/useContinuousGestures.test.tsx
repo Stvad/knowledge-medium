@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useMemo, useRef } from 'react'
 import { act, cleanup, render } from '@testing-library/react'
-import { resolveFacetRuntimeSync } from '@/extensions/facet'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import {
   continuousGestureRecognizersFacet,

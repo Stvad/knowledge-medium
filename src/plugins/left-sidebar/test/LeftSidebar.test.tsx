@@ -2,7 +2,7 @@ import { Suspense, useEffect, type ReactNode } from 'react'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.js'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.js'
 import {
   ActiveContextsProvider,

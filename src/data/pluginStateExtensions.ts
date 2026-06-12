@@ -13,7 +13,7 @@
 import type { TypeContribution } from '@/data/api'
 import { typesFacet } from '@/data/facets.js'
 import { appEffectsFacet, type AppEffect } from '@/extensions/core.js'
-import type { AppExtension } from '@/extensions/facet.js'
+import type { AppExtension } from '@/facets/facet.js'
 import { getPluginPrefsBlock, getPluginUIStateBlock } from '@/data/stateBlocks.js'
 import { scheduleIdle } from '@/utils/scheduleIdle.js'
 

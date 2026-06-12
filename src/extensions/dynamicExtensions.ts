@@ -6,15 +6,17 @@ import {
   AppExtension,
   FacetContribution,
   isFacetContribution,
-} from '@/extensions/facet.js'
+} from '@/facets/facet.js'
 import {
   attachBoundary,
   getBoundary,
   isEnabled,
+  type Overrides,
+} from '@/facets/togglable.js'
+import {
   userExtensionShellToggle,
   userExtensionToggle,
-  type Overrides,
-} from '@/extensions/togglable.js'
+} from '@/extensions/extensionToggles.js'
 import { Repo } from '../data/repo'
 import { BlockData } from '@/types.js'
 

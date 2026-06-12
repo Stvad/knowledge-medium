@@ -3,7 +3,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { renderHook } from '@testing-library/react'
 import { actionsFacet, actionContextsFacet } from '@/extensions/core.js'
-import { resolveFacetRuntimeSync, type FacetRuntime } from '@/extensions/facet.js'
+import { resolveFacetRuntimeSync, type FacetRuntime } from '@/facets/facet.js'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.js'
 import { defaultActionContextConfigs } from '@/shortcuts/defaultContexts.js'
 import {

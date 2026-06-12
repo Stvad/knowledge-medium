@@ -1,4 +1,4 @@
-import { FacetRuntime } from '@/extensions/facet.js'
+import { FacetRuntime } from '@/facets/facet.js'
 import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.js'
 import { Repo } from '@/data/repo'
 import {
