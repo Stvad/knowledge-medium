@@ -174,6 +174,33 @@ New migration under `supabase/migrations/` (use the `supabase` skill).
   change). Do NOT use `session_replication_role = replica` (it would also
   disable the clamp and e2ee-validation triggers). Re-enable after. Same
   bracketing applies to the recovery touch (step 7).
+- **One-time `system:` migration [user-requested]** — fold the historical
+  `system:<uid>` cleanup into this migration (see step 6 for the rationale):
+  ```sql
+  ALTER TABLE public.blocks DISABLE TRIGGER blocks_clamp_updated_at_trg;
+  ALTER TABLE public.blocks DISABLE TRIGGER blocks_record_history_trg;
+  UPDATE blocks
+     SET updated_at = 0,                                    -- pristine sentinel; re-replicates + heals shadows
+         updated_by = substring(updated_by from length('system:') + 1)
+   WHERE updated_by LIKE 'system:%';
+  ALTER TABLE public.blocks ENABLE TRIGGER blocks_record_history_trg;
+  ALTER TABLE public.blocks ENABLE TRIGGER blocks_clamp_updated_at_trg;
+  ```
+  **The clamp/floor trigger MUST be disabled for this UPDATE** — otherwise the
+  new floor `greatest(NEW.updated_at, OLD.updated_at)` pins `updated_at` back to
+  `OLD` and the `= 0` never lands. (This is the one place we deliberately push a
+  stamp *down*; every other path is forbidden from doing so, which is exactly
+  why the trigger must be off.) Safe because a row still authored
+  `system:<uid>` is provably pristine (a real edit self-clears the author). On
+  re-replication each client applies the 0-stamped row via the gate's stamp-0
+  exemption, converging shadows to server truth — so this also subsumes shadow
+  recovery for these rows. Audit history (`row_events`/`blocks_history`) is
+  intentionally NOT rewritten; the `isSystemAuthor` display shim (step 6) covers
+  time-travel over those rows. **Ordering:** populate `user_updated_at` from the
+  *pre-zero* `updated_at` in this same statement (add
+  `user_updated_at = COALESCE(user_updated_at, updated_at)` to the SET list
+  above), so the display stamp survives the zeroing; the separate backfill's
+  `WHERE user_updated_at IS NULL` then no-ops for these rows regardless of order.
 - **pgTAP**: content-change bumps `updated_at` by ≥1 over OLD; metadata-only
   change floors but does not bump; clock-skew regression attempt is floored up;
   old-style INSERT without `user_updated_at` gets it populated; RPC PATCH
@@ -334,13 +361,26 @@ No code asserts `updated_at >= created_at` (Q1: verified, comments only) — the
   ack-to-echo window. Steady-state queue-driven drains can't even hit it (the
   pre-edit staging row was already consumed; the next delivery for that id IS
   the echo).
-- **Retain [r2]:** `systemAuthor`/`isSystemAuthor` (`api/user.ts`) — historical
-  rows keep `system:<uid>` in `updated_by` forever (the recovery touch bumps
-  stamps, not authors), and two display consumers are load-bearing:
-  `globalState.ts:108` (render "System") and `UpdateIndicator.tsx:27` (suppress
-  the badge). New-style mints stamp the real user, so the indicator needs the
-  new pristine signal too: suppress when `updated_at === 0` **or**
-  `isSystemAuthor(updatedBy)`.
+- **Retire `system:` via a one-time migration [r2 + user-requested], not by
+  carrying it forever.** r1 (and the first r2 pass) proposed keeping
+  `systemAuthor`/`isSystemAuthor` indefinitely because historical rows keep
+  `system:<uid>` in `updated_by`. Cleaner: a one-time server migration converts
+  every remaining `system:` row to the new pristine representation (step 1's
+  "system: migration" bullet) — set `updated_at = 0` (the new pristine signal,
+  which also *heals shadows*: the 0-stamped server row re-replicates and every
+  client applies it via the stamp-0 exemption) and rewrite `updated_by` from
+  `system:<uid>` back to `<uid>`. A remaining `system:` row is provably
+  pristine — a real edit self-clears the author — so this is safe. After it
+  runs, the new pristine signal is purely `updated_at === 0`; the
+  `UpdateIndicator` suppresses on that, and `globalState.ts:108`/`:` "System"
+  rendering and `isSystemAuthor` can be **deleted** from live paths.
+  - **Caveat:** historical `row_events`/`blocks_history` snapshots still carry
+    `system:<uid>` strings (we don't rewrite audit history). So keep
+    `isSystemAuthor` as a *pure display fallback* for time-travel/undo of a
+    pre-migration snapshot (an undo restoring `updated_by = system:<uid>` should
+    still render sanely), but stop using it for the gate and for live mint
+    stamping. "Delete from live paths, keep as a history-display shim" — not a
+    full delete.
 - **Cache layer [r2 — r1 had no plan here]:** keep `applyFromSync` (the
   before-matching force heal, `blockCache.ts:206-219`) and make the
   `forceHeal` parameter of `applySyncInvalidation` unconditional (it was
@@ -422,6 +462,33 @@ churn. Scope first; full touch only as the fallback.
 3. **Drain each device** (`ps_crud` empty; check `ps_crud_rejected` while
    there), then **ship the client bundle**.
 4. **Recovery touch** (scoped; pre-checks above).
+
+**Known mixed-window artifact — old-client edits show a stale "last edited"
+(Codex P2, accepted as bounded).** While a device is still on the old bundle, a
+genuine user edit bumps `updated_at` (new edit time) but carries no
+`user_updated_at`; the trigger's `COALESCE(NEW.user_updated_at, NEW.updated_at)`
+fires only when the value is NULL, so for an *existing* row it leaves
+`OLD.user_updated_at` in place. Once new clients repoint display to
+`user_updated_at` (step 5), such an edit displays/sorts at the *previous* edit
+time until the device upgrades or the block is next edited from a new client.
+
+Codex's proposed trigger heuristic ("key off metadata changes old skipMetadata
+writes don't make") **does not work** and the doc should not adopt it: at the
+server, an old-client *user edit* (content+, `updated_at`+, `user_updated_at`
+absent) is indistinguishable from a new-client *skipMetadata* write (content+,
+`updated_at`+, `user_updated_at` absent) — and `updated_by` is not a reliable
+discriminator because consecutive edits by the same author don't change it. No
+trigger-only rule separates them. Two honest mitigations, implementer's choice:
+  - **(a) Accept it.** Bounded to the mixed-version window (minutes–hours per the
+    drain-then-swap playbook, 2 users / 5 devices), display-only, self-corrects
+    on the next new-client edit. Recommended — the cost is trivial at this fleet
+    size.
+  - **(b) Defer the display repoint.** Ship the new bundle still reading
+    `updated_at` for display, flip to `user_updated_at` in a *second* bundle once
+    the fleet is fully upgraded. Eliminates the artifact entirely, at the cost of
+    a two-phase client ship (and during the window, new-client bookkeeping writes
+    would float blocks in recency instead — the symmetric trade). Only worth it
+    if "last edited" precision during the window matters.
 
 ---
 
