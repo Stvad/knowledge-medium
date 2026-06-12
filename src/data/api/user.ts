@@ -7,36 +7,27 @@ export interface User {
   name?: string
 }
 
-/** Author prefix for engine-minted speculative defaults — the
- *  deterministic-id bootstrap rows (settings, ui-state, the user page,
- *  kernel pages, daily-note seats, …). These are minted the moment a
- *  deterministic-id row is read-as-absent, *before* the server's
- *  authoritative version has materialized, so they must NOT outrank a
- *  real-but-older synced row under wall-clock LWW. Stamping their
- *  `updated_by` with this prefix is the conflict-resolution discriminator
- *  the reconcile gate reads to let such a pristine default yield to the
- *  server (see `decideStagingRow`).
+/** Author prefix that engine-minted speculative defaults *used to* stamp into
+ *  `updated_by`. HISTORICAL: the reconcile gate no longer reads provenance —
+ *  pristineness is now `updated_at === 0` (the sentinel set by `buildNewBlockRow`
+ *  for a `systemMint`), and new mints stamp the real user in `updated_by`. A
+ *  one-time post-upgrade migration rewrites surviving `system:<uid>` rows back
+ *  to `<uid>` and zeroes their `updated_at`.
  *
- *  Derived per-user (`system:<userId>`) rather than a single global
- *  sentinel so the write stays attributable — which device/user's
- *  bootstrap minted the row is still legible in `blocks_history` and in
- *  plain SQL — and so it can't collide with a real author: no real *user
- *  id* starts with `system:` (they're opaque UUIDs). (The `system:` prefix
- *  is used elsewhere for built-in plugin/property ids, but those never land
- *  in `created_by` / `updated_by`, so there's no overlap in this column.) */
+ *  Retained only as a DISPLAY shim: pre-migration rows and time-travel /
+ *  undo over historical `row_events` / `blocks_history` snapshots still carry
+ *  `system:<uid>` in `updated_by`, and `isSystemAuthor` lets those render
+ *  sanely ("System"). Derived per-user (`system:<userId>`) so the historical
+ *  write stays attributable and can't collide with a real (opaque-UUID) id. */
 export const SYSTEM_AUTHOR_PREFIX = 'system:'
 
-/** The system author for a given user — the value written to `updated_by`
- *  (NOT `created_by`) on that user's client when it mints a speculative
- *  deterministic-id default. `created_by` stays the real user: the prefix is
- *  contained to `updated_by`, the one field the gate reads and that
- *  self-clears to the real user on the first edit. */
+/** The historical system author for a user. No longer written by live code
+ *  (mints now use the real user + the `updated_at = 0` sentinel); retained for
+ *  the one-time cleanup migration and historical-row tests. */
 export const systemAuthor = (userId: string): string => `${SYSTEM_AUTHOR_PREFIX}${userId}`
 
-/** True iff `author` is any client's system author (an `updated_by` value
- *  that was engine-minted, not a real user edit). Display surfaces use this
- *  to badge / hide automatic writes; the reconcile gate uses the stronger
- *  *exact* match against the current user's system author (only this client's
- *  own pristine mint yields). */
+/** True iff `author` is an engine-minted historical system author. DISPLAY
+ *  shim only (badge / "System" rendering for pre-migration + time-travel rows).
+ *  The reconcile gate no longer reads this — it uses `updated_at === 0`. */
 export const isSystemAuthor = (author: string): boolean =>
   author.startsWith(SYSTEM_AUTHOR_PREFIX)

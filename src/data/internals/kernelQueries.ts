@@ -264,7 +264,7 @@ export const SELECT_BLOCKS_BY_CONTENT_SQL = `
       WHEN LOWER(b.content) LIKE LOWER(?) || '%' THEN 1
       ELSE 2
     END,
-    b.updated_at DESC
+    coalesce(b.user_updated_at, b.updated_at) DESC
   LIMIT ?
 `
 
@@ -275,7 +275,7 @@ export const SELECT_RECENT_BLOCKS_SQL = `
   WHERE workspace_id = ?
     AND deleted = 0
     AND content != ''
-  ORDER BY updated_at DESC, id ASC
+  ORDER BY coalesce(user_updated_at, updated_at) DESC, id ASC
   LIMIT ?
 `
 
@@ -347,8 +347,9 @@ export const SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_EXCLUDING_SQL = `
  *  query token (typically the first 3 chars of each token, see
  *  `buildFilterPrefixes` in fuzzyRank.ts). Permissive on purpose: the
  *  final rank/keep decision happens in JS, where we score per-token
- *  word-start / substring / edit-distance-1 plus recency. Returns
- *  `updated_at` so the JS ranker can boost recently-edited rows.
+ *  word-start / substring / edit-distance-1 plus recency. Returns the
+ *  user-facing stamp (`coalesce(user_updated_at, updated_at)`) so the JS
+ *  ranker can boost recently-edited rows.
  *
  *  Orders exact whole-query matches first, then prefix matches, before
  *  applying `LIMIT`: the prefix is only 3 chars, so a single trigram can
@@ -371,7 +372,7 @@ export const buildFuzzyAliasMatchesSql = (tokenCount: number): string => {
       ba.alias AS alias,
       b.id AS blockId,
       b.content AS content,
-      b.updated_at AS updatedAt
+      coalesce(b.user_updated_at, b.updated_at) AS updatedAt
     FROM block_aliases ba
     JOIN blocks b ON b.id = ba.block_id
     WHERE ba.workspace_id = ?
