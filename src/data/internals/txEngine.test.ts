@@ -368,6 +368,31 @@ describe('tx.update (data-fields-only)', () => {
     expect(afterBookkeeping.updatedAt).toBeGreaterThan(afterEdit.updatedAt)
     expect(afterBookkeeping.userUpdatedAt).toBe(afterEdit.userUpdatedAt)
   })
+
+  it('a {skipMetadata} write uploads a PATCH carrying the bumped updated_at, not user_updated_at', async () => {
+    // The headline staleness fix, at the upload boundary. A bookkeeping refs
+    // write (alias/backlink reindex) advances the row-version but freezes the
+    // display stamp. The column-narrow PATCH must carry the bumped `updated_at`
+    // — so a peer's reconcile gate sees a newer version and applies the change
+    // (pre-fix it froze updated_at and the peer skip-staled it forever) — and
+    // must NOT carry `user_updated_at` (display stays put).
+    const id = await env.repo.tx(
+      tx => tx.create({workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'x'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    env.tick()
+    await env.repo.tx(
+      tx => tx.update(id, {references: [{id: 'ref', alias: 'a'}]}, {skipMetadata: true}),
+      {scope: ChangeScope.References},
+    )
+    const patch = (await env.psCrud())
+      .map(r => JSON.parse(r.data) as {op: string; id: string; data: Record<string, unknown>})
+      .find(e => e.op === 'PATCH' && e.id === id)
+    expect(patch).toBeDefined()
+    expect(patch!.data).toHaveProperty('updated_at')          // peers see a newer version
+    expect(patch!.data).toHaveProperty('references_json')     // the bookkeeping content
+    expect(patch!.data).not.toHaveProperty('user_updated_at') // display frozen
+  })
 })
 
 // ──── tx.delete + tx.restore ────
