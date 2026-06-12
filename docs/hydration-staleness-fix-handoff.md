@@ -174,33 +174,16 @@ New migration under `supabase/migrations/` (use the `supabase` skill).
   change). Do NOT use `session_replication_role = replica` (it would also
   disable the clamp and e2ee-validation triggers). Re-enable after. Same
   bracketing applies to the recovery touch (step 7).
-- **One-time `system:` migration [user-requested]** — fold the historical
-  `system:<uid>` cleanup into this migration (see step 6 for the rationale):
-  ```sql
-  ALTER TABLE public.blocks DISABLE TRIGGER blocks_clamp_updated_at_trg;
-  ALTER TABLE public.blocks DISABLE TRIGGER blocks_record_history_trg;
-  UPDATE blocks
-     SET updated_at = 0,                                    -- pristine sentinel; re-replicates + heals shadows
-         updated_by = substring(updated_by from length('system:') + 1)
-   WHERE updated_by LIKE 'system:%';
-  ALTER TABLE public.blocks ENABLE TRIGGER blocks_record_history_trg;
-  ALTER TABLE public.blocks ENABLE TRIGGER blocks_clamp_updated_at_trg;
-  ```
-  **The clamp/floor trigger MUST be disabled for this UPDATE** — otherwise the
-  new floor `greatest(NEW.updated_at, OLD.updated_at)` pins `updated_at` back to
-  `OLD` and the `= 0` never lands. (This is the one place we deliberately push a
-  stamp *down*; every other path is forbidden from doing so, which is exactly
-  why the trigger must be off.) Safe because a row still authored
-  `system:<uid>` is provably pristine (a real edit self-clears the author). On
-  re-replication each client applies the 0-stamped row via the gate's stamp-0
-  exemption, converging shadows to server truth — so this also subsumes shadow
-  recovery for these rows. Audit history (`row_events`/`blocks_history`) is
-  intentionally NOT rewritten; the `isSystemAuthor` display shim (step 6) covers
-  time-travel over those rows. **Ordering:** populate `user_updated_at` from the
-  *pre-zero* `updated_at` in this same statement (add
-  `user_updated_at = COALESCE(user_updated_at, updated_at)` to the SET list
-  above), so the display stamp survives the zeroing; the separate backfill's
-  `WHERE user_updated_at IS NULL` then no-ops for these rows regardless of order.
+- **One-time `system:` cleanup [user-requested] — does NOT run here.** **[r3]
+  Codex P1:** it must run in the **post-upgrade recovery phase** (step 7 /
+  rollout step 5), not in this initial migration. If zeroed now, any old client
+  that mints a deterministic-id row *after* this runs but *before* it upgrades
+  writes a fresh **nonzero** `system:<uid>` row — and the new gate recognizes
+  pristine only as `updated_at === 0`, with the provenance branch deleted, so
+  that shadow would never yield. Running it once after the fleet is fully on the
+  new bundle (which mints pristine rows at `updated_at = 0` directly, so no new
+  `system:` rows are created) catches every historical row and nothing
+  regenerates them. SQL + rationale live in step 7.
 - **pgTAP**: content-change bumps `updated_at` by ≥1 over OLD; metadata-only
   change floors but does not bump; clock-skew regression attempt is floored up;
   old-style INSERT without `user_updated_at` gets it populated; RPC PATCH
@@ -365,8 +348,9 @@ No code asserts `updated_at >= created_at` (Q1: verified, comments only) — the
   carrying it forever.** r1 (and the first r2 pass) proposed keeping
   `systemAuthor`/`isSystemAuthor` indefinitely because historical rows keep
   `system:<uid>` in `updated_by`. Cleaner: a one-time server migration converts
-  every remaining `system:` row to the new pristine representation (step 1's
-  "system: migration" bullet) — set `updated_at = 0` (the new pristine signal,
+  every remaining `system:` row to the new pristine representation (the
+  post-upgrade `system:` cleanup in step 7) — set `updated_at = 0` (the new
+  pristine signal,
   which also *heals shadows*: the 0-stamped server row re-replicates and every
   client applies it via the stamp-0 exemption) and rewrite `updated_by` from
   `system:<uid>` back to `<uid>`. A remaining `system:` row is provably
@@ -447,6 +431,39 @@ churn. Scope first; full touch only as the fallback.
   the quarantine envelope. That clobber is the *correct* end-state for a
   permanently-rejected write, but it must be a decision, not a surprise.
 
+**One-time `system:` cleanup [user-requested; r3 Codex P1 — runs HERE, not in
+the step-1 migration].** Run once after the fleet is fully on the new bundle
+(new clients mint pristine rows at `updated_at = 0` directly, so no nonzero
+`system:` rows are being created anymore — running it earlier would strand rows
+minted by not-yet-upgraded old clients):
+
+```sql
+ALTER TABLE public.blocks DISABLE TRIGGER blocks_clamp_updated_at_trg;
+ALTER TABLE public.blocks DISABLE TRIGGER blocks_record_history_trg;
+UPDATE blocks
+   SET user_updated_at = COALESCE(user_updated_at, updated_at),  -- keep display stamp BEFORE zeroing
+       updated_at      = 0,                                      -- pristine sentinel; re-replicates + heals shadows
+       updated_by      = substring(updated_by from length('system:') + 1)
+ WHERE updated_by LIKE 'system:%';
+ALTER TABLE public.blocks ENABLE TRIGGER blocks_record_history_trg;
+ALTER TABLE public.blocks ENABLE TRIGGER blocks_clamp_updated_at_trg;
+```
+
+**The clamp/floor trigger MUST be disabled for this UPDATE** — otherwise the
+floor `greatest(NEW.updated_at, OLD.updated_at)` pins `updated_at` back to `OLD`
+and the `= 0` never lands. (The one place we deliberately push a stamp *down*;
+every other path is forbidden from doing so, which is why the trigger must be
+off.) **`user_updated_at` is set in the same SET list, before zeroing [r3 Codex
+P2]** — so display/sort consumers that move to `user_updated_at` show the real
+last-edit time, not the 0 sentinel; the step-1 backfill's `WHERE
+user_updated_at IS NULL` then no-ops for these rows regardless of order. Safe
+because a row still authored `system:<uid>` is provably pristine (a real edit
+self-clears the author). On re-replication each client applies the 0-stamped row
+via the gate's stamp-0 exemption, converging shadows to server truth — so this
+subsumes shadow recovery for these rows. Audit history
+(`row_events`/`blocks_history`) is intentionally NOT rewritten; the
+`isSystemAuthor` display shim (step 6) covers time-travel over those rows.
+
 ### Rollout sequence (strict order) [r2]
 
 1. **Supabase migration** (column nullable + trigger COALESCE/floor/bump + RPC
@@ -461,7 +478,11 @@ churn. Scope first; full touch only as the fallback.
    gates still skip).
 3. **Drain each device** (`ps_crud` empty; check `ps_crud_rejected` while
    there), then **ship the client bundle**.
-4. **Recovery touch** (scoped; pre-checks above).
+4. **Confirm the fleet is fully upgraded** (no device still on the old bundle —
+   otherwise it can still mint nonzero `system:` rows), then **recovery touch**
+   (scoped; pre-checks above) **and the one-time `system:` cleanup** (above).
+   Both run in this last phase; the `system:` cleanup specifically requires "no
+   old clients left minting" (r3 Codex P1).
 
 **Known mixed-window artifact — old-client edits show a stale "last edited"
 (Codex P2, accepted as bounded).** While a device is still on the old bundle, a
