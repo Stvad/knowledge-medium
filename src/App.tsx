@@ -200,18 +200,26 @@ const replaceHash = (hash: string): void => {
 // `workspaceLandingFacet` contributor) would still steer first paint.
 //
 // The cache keeps the cost down across re-entries via getInitialLayout's
-// promise cache; entries are keyed by `repo.instanceId` + workspace so a
-// fresh Repo (new login) or a workspace switch (different overrides)
-// builds a fresh runtime.
+// promise cache; entries are keyed by `repo.instanceId` + workspace +
+// the override state, so a fresh Repo (new login), a workspace switch,
+// or a mid-session toggle change (Settings dispatches
+// `refreshAppRuntime`) all build a fresh runtime instead of replaying a
+// stale one — otherwise a just-disabled daily-notes could still steer a
+// later empty-layout navigation until a full reload.
 const landingRuntimeCache = new Map<string, ReturnType<typeof resolveAppRuntimeSync>>()
 const getLandingRuntime = (repo: Repo) => {
   const workspaceId = repo.activeWorkspaceId
-  const cacheKey = `${repo.instanceId}:${workspaceId ?? ''}`
-  const cached = landingRuntimeCache.get(cacheKey)
-  if (cached) return cached
   const overrides = workspaceId
     ? readOverridesCache(workspaceId)
     : new Map<string, boolean>()
+  // Sparse map (only entries diverging from manifest defaults), sorted
+  // for a stable key regardless of insertion order.
+  const overridesFingerprint = JSON.stringify(
+    [...overrides.entries()].sort(([a], [b]) => a.localeCompare(b)),
+  )
+  const cacheKey = `${repo.instanceId}:${workspaceId ?? ''}:${overridesFingerprint}`
+  const cached = landingRuntimeCache.get(cacheKey)
+  if (cached) return cached
   const runtime = resolveAppRuntimeSync(staticAppExtensions({repo}), {
     overrides,
     context: {
