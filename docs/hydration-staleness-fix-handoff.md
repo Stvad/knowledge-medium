@@ -1,9 +1,13 @@
 # Handoff: hydration staleness fix (`updated_at` overload → split + server-enforced monotonicity)
 
-**Status: design agreed, ready to implement.** This doc is the implementation
-brief. Author: investigation/design pass (Fable). Implementer: Opus.
+**Status: design agreed; r2 after adversarial review — ready to implement.**
+This doc is the implementation brief. r1 was reviewed by two adversarial
+passes (client-side and server/rollout-side) plus the Codex bot on PR #131;
+r2 folds in their corrections. The five r1 errors that would have broken the
+implementation are marked **[r2]** inline so the implementer knows which
+parts are load-bearing corrections, not optional polish.
 
-Branch: `claude/hydration-staleness-fix-6iruwh`.
+Branch: `claude/hydration-staleness-fix-6iruwh` (PR #131).
 
 ---
 
@@ -16,25 +20,43 @@ timestamp**. `{skipMetadata: true}` writes freeze it to serve (b), which breaks
 download. Decision:
 
 1. **Split the field.** `updated_at` becomes a pure **row-version** (advances on
-   every content-changing write). Add **`user_updated_at`** (and keep
-   `updated_by` semantics; see Q2 below) to carry the user-facing "last edited"
-   meaning. Repoint display/sort consumers to `user_updated_at`.
-2. **Enforce monotonicity server-side**, not client-side: the Postgres clamp
-   trigger bumps `updated_at` to `greatest(NEW.updated_at, OLD.updated_at + 1)`
-   whenever any content column actually changed. This makes `updated_at` a true
-   monotonic row-version immune to client clock skew, same-ms collisions, AND
-   skipMetadata freezes — all three failure modes at once.
-3. **Retire the `system:<userId>` shadow apparatus.** With display moved off
-   `updated_at`, speculative deterministic-id defaults can be minted at
-   `updated_at = 0` and heal automatically (server always wins). Delete the
-   provenance discriminator, the `strict`/`healing` ReconcileMode, and the
-   `healWorkspace` healing path.
-4. **Recovery rides for free:** a one-time `UPDATE blocks SET updated_at =
-   updated_at + 1` (per workspace) re-replicates every row as strictly-newer, so
-   every client's gate re-applies it and all latent stale rows converge.
+   every content-changing write, locally monotonic per row). Add
+   **`user_updated_at`** carrying the user-facing "last edited"; `updated_by`
+   stays a user-pair field (frozen together with `user_updated_at` on
+   skipMetadata writes — Q2 option A). Repoint display/sort consumers to
+   `user_updated_at`.
+2. **Enforce monotonicity server-side** in the clamp trigger: an unconditional
+   floor `greatest(NEW.updated_at, OLD.updated_at)` on every UPDATE, **plus 1**
+   when any content column actually changed. Immune to client clock skew,
+   same-ms collisions, AND skipMetadata freezes — all three failure modes.
+3. **Speculative deterministic-id mints stamp `updated_at = 0`** (the
+   "pristine" sentinel) instead of carrying a `system:<userId>` author for the
+   gate. The gate gets a stamp-0 exemption so a 0-stamped local row always
+   yields to the server. The `systemMint` opt is **retained and repurposed**
+   (it now selects the 0 stamp); the `system:` author helpers are retained for
+   historical rows and display, but the gate stops reading provenance.
+4. **The gate simplifies** to: defer → pending-upload skip → equal-nonzero-stamp
+   skip → apply. `ReconcileMode` (`strict`/`healing`), `isOwnSystemMint`, and
+   `healWorkspace`'s healing variant are deleted.
+5. **Recovery** is a **scoped** server-side touch (`updated_at = updated_at + 1`
+   on the actually-divergent rows, enumerated from `blocks_history`), with
+   pre-checks, falling back to a full touch only if needed.
 
-This is "A2 with monotonicity enforced server-side." It keeps the client gate
-nearly unchanged (its input just becomes trustworthy), rather than gutting it.
+This is "A2 with monotonicity enforced server-side." The client gate barely
+changes shape — its input becomes trustworthy.
+
+### Design invariants (what the rest of the doc serves)
+
+- **I1 (server):** if the server row's content differs from any client's local
+  row content, the server row's `updated_at` is strictly greater than that
+  client's local stamp — *for stamps > 0*. Enforced by the trigger floor+bump.
+- **I2 (sentinel):** `updated_at = 0` means "speculative local default, never
+  user-edited, server always wins (unless an upload is pending)". It is the
+  only stamp exempt from I1 and from the equal-stamp skip.
+- **I3 (local):** local stamps are per-row monotonic too
+  (`max(now, before.updated_at + 1)`), so a fresh local edit can never stamp at
+  or below the row's current stamp even when the server has ratcheted ahead of
+  this device's clock.
 
 ---
 
@@ -45,7 +67,7 @@ nearly unchanged (its input just becomes trustworthy), rather than gutting it.
   `apply_block_patches` assigns `updated_at = COALESCE(patch->>'updated_at',
   updated_at)` (straight assignment, `20260527180103_add_apply_block_patches_rpc.sql:63`)
   and the clamp only clamps *future* stamps down — so a slow-clock client's newer
-  write can regress the stamp and be rejected by peers forever. The server bump
+  write can regress the stamp and be rejected by peers forever. The server floor
   closes this.
 - **Gut the gate** (drop the timestamp branch, trust PowerSync echo to heal): we
   confirmed via PowerSync's [consistency](https://docs.powersync.com/architecture/consistency)
@@ -58,6 +80,12 @@ nearly unchanged (its input just becomes trustworthy), rather than gutting it.
   *provably* correct instead of approximately so.
 - **Content-aware gate / deterministic tiebreak:** re-opens the stale-read hazard
   the equal-stamp skip exists to prevent. Rejected.
+- **Keep `system:<userId>` as the gate discriminator:** the split removes the
+  only recorded objection (`deterministic-id-shadow-handoff.md`, "Rejected:
+  fake/sentinel updated_at") to the simpler 0-stamp sentinel — that objection
+  was display pollution ("edited 56 years ago"), and display moves to
+  `user_updated_at`. The 0 stamp is strictly simpler for the gate; provenance
+  display survives independently (see step 6).
 
 ---
 
@@ -88,208 +116,369 @@ in-memory cache could be transiently stale).
 | `src/data/repo.ts:1747` | `references_json` | same |
 | `src/plugins/daily-notes/dailyNotes.ts:210,234` | `parent_id`/`order_key` | reparent invisible to peers |
 
-This is the same staleness `docs/field-level-sync-merge.md` (on hold) flagged for
-`references_json`; this fix subsumes it for all columns.
+Two sibling failure modes share the root cause and are fixed by the same
+invariant: same-ms same-client stamp collisions, and cross-client clock-skew
+stamp regressions. This subsumes the `references_json` staleness flagged in the
+on-hold `docs/field-level-sync-merge.md`.
 
 ---
 
 ## Implementation plan
 
-Order matters for rollout (server first, invisible to old clients; then client).
+Steps are ordered for rollout. **[r2]** markers = corrections from review.
 
 ### 1. Supabase migration (server)
 
-New migration under `supabase/migrations/` (use the `supabase` skill to write +
-`db push`). Contents:
+New migration under `supabase/migrations/` (use the `supabase` skill).
 
-- **Add columns** to `public.blocks`:
-  - `user_updated_at bigint` — backfill `= updated_at` for existing rows; NOT NULL
-    after backfill. Carries user-facing "last edited."
-  - (Decide Q2) optionally `user_updated_by text` — backfill `= updated_by`.
-- **Monotonic bump in the clamp trigger.** Extend `blocks_clamp_updated_at`
-  (`20260510222352_consolidated_initial.sql:168`) so that on `UPDATE`, when any
-  *content-bearing* column `IS DISTINCT FROM OLD` (`parent_id, order_key, content,
-  properties_json, references_json, deleted`), set
-  `NEW.updated_at := greatest(NEW.updated_at, OLD.updated_at + 1)` **after** the
-  existing future-clamp. INSERT path unchanged except future-clamp. This makes the
-  server the monotonicity authority for both the literal-PATCH path and the RPC.
-  - Verify it composes with `apply_block_patches` (the RPC UPDATEs `blocks`, so
-    the BEFORE trigger fires on its writes too — good, no RPC change strictly
-    needed, but double check the RPC isn't `SET session_replication_role` or
-    otherwise bypassing triggers; it's `SECURITY INVOKER`, normal UPDATE → trigger
-    fires).
-  - `user_updated_at` must NOT be in the content-change test (it's metadata), so a
-    pure user-timestamp change doesn't self-trigger a version bump loop.
-- **Recovery touch (separate, run after deploy):** `UPDATE blocks SET updated_at =
-  updated_at + 1;` — batched per workspace if large. Forces re-replication of every
-  row as strictly-newer → clients re-apply → latent staleness converges. Because
-  `user_updated_at` is already backfilled and untouched, display is unaffected.
-  Keep this as a documented manual/ops step or a guarded one-shot, not auto-run on
-  every deploy.
-- pgTAP coverage: content-change bumps `updated_at`; metadata-only
-  (`user_updated_at`/`updated_by`) change does NOT bump; equal-content re-PATCH is
-  a no-op; clock-skew regression is clamped up not down.
+- **Add column** `user_updated_at bigint` to `public.blocks` — **nullable, NO
+  `NOT NULL`** **[r2]**. A NOT NULL would make old-client CREATEs in the
+  mixed-version window violate 23502, which `classifyUploadError` treats as
+  permanent (`src/services/uploadErrorClassifier.ts:31-32`) → the whole tx is
+  quarantined to `ps_crud_rejected` → **silent data loss** for blocks created on
+  not-yet-upgraded devices. (Confirmed independently by the Codex review on
+  PR #131.) Population is guaranteed trigger-side instead (next bullet); a
+  later migration MAY tighten to NOT NULL once the fleet is upgraded, or never —
+  the trigger makes it an invariant anyway. Postgres can't express
+  `DEFAULT updated_at` (no cross-column defaults), hence the trigger.
+- **Extend `blocks_clamp_updated_at`**
+  (`20260510222352_consolidated_initial.sql:168`):
+  - INSERT and UPDATE: existing future-clamp on `updated_at`/`created_at` stays
+    first. Then `NEW.user_updated_at := COALESCE(NEW.user_updated_at,
+    NEW.updated_at)` — populates old-client writes and pre-split rows.
+  - UPDATE only, **after** the future-clamp: **unconditional floor**
+    `NEW.updated_at := greatest(NEW.updated_at, OLD.updated_at)`; **plus**, when
+    any content column changed (`parent_id, order_key, content, properties_json,
+    references_json, deleted` — each `IS DISTINCT FROM OLD`), add 1:
+    `NEW.updated_at := greatest(NEW.updated_at, OLD.updated_at + 1)`.
+    **[r2] The floor must be unconditional**, not content-gated: a
+    metadata-only PATCH from a slow-clock client would otherwise regress the
+    stamp through the RPC's straight assignment, and a later non-content write
+    would un-ratchet a previously floored stamp — either breaks invariant I1.
+    The floor may exceed wall-clock slightly under rapid writes; that's inherent
+    to ratcheting and harmless (the future-clamp runs before the floor by
+    design, not after).
+  - `user_updated_at` / `user_updated_by` / `updated_by` / `created_*` are NOT
+    in the content-change test (metadata must not self-trigger version bumps).
+- **Extend `apply_block_patches`** **[r2]**: the RPC's UPDATE is a closed column
+  list (`20260527180103:55-67`) — unknown patch keys are silently ignored, so
+  without this change every new-client PATCH **drops `user_updated_at`** and
+  the user-facing half of the split ships permanently frozen. Add
+  `user_updated_at = COALESCE((patch->>'user_updated_at')::bigint,
+  user_updated_at)` to the UPDATE. (r1 said "no RPC change strictly needed" —
+  that was wrong.)
+- **Backfill** `UPDATE blocks SET user_updated_at = updated_at WHERE
+  user_updated_at IS NULL` — **with `ALTER TABLE public.blocks DISABLE TRIGGER
+  blocks_record_history_trg` around it** **[r2]**, else one history row per
+  block (`20260522062437:167-170`; the no-op skip doesn't help — the column DID
+  change). Do NOT use `session_replication_role = replica` (it would also
+  disable the clamp and e2ee-validation triggers). Re-enable after. Same
+  bracketing applies to the recovery touch (step 7).
+- **pgTAP**: content-change bumps `updated_at` by ≥1 over OLD; metadata-only
+  change floors but does not bump; clock-skew regression attempt is floored up;
+  old-style INSERT without `user_updated_at` gets it populated; RPC PATCH
+  carries `user_updated_at` through. Note **[r2]**: the "equal-content re-PATCH
+  is a no-op" case holds for **plaintext only** — e2ee re-uploads re-seal with a
+  fresh nonce (`src/sync/crypto/aead.ts:24`, `transform.ts:110-127`), so
+  ciphertext differs and the bump fires; harmless (peers apply
+  identical-plaintext), but don't write the test expecting no bump for e2ee.
+- Cross-reference: if the on-hold `field-level-sync-merge.md` work is ever
+  revived, its `app.skip_blocks_clamp` GUC bypass must be reconciled with the
+  floor (a bypassed write must still not regress the stamp).
 
-### 2. Sync config
+### 2. PowerSync sync rules — a hard-ordered rollout step [r2]
 
-After adding columns to `src/data/blockSchema.ts` (next step), run
-`yarn gen:sync-config` and commit `powersync/sync-config.yaml`. `user_updated_at`
-(+ `user_updated_by` if chosen) must sync. Deploy with the `powersync` skill.
-**Plaintext columns** — fine for e2ee workspaces (stamps are not encrypted; the
-content-change test keys off ciphertext columns which DO change when content does).
+r1 omitted this step entirely; its ordering is load-bearing. The
+`blocks_synced` stream's column list is generated from `BLOCK_STORAGE_COLUMNS`
+(`scripts/gen-sync-config.ts`), so after step 3 run `yarn gen:sync-config`,
+commit `powersync/sync-config.yaml`, and deploy with the `powersync` skill —
+**after** the Supabase migration (the rules reference the new column and error
+against the old schema) and **before** the client bundle. Old client + new
+rules is safe (extra downloaded column simply isn't bound). New client + old
+rules is additionally defended by making the local column **nullable** (step 3)
+so a missing stream column binds NULL instead of failing NOT NULL on every
+downloaded row.
 
-### 3. Client schema / codecs
+Plaintext column — fine for e2ee workspaces (stamps are never sealed; only
+`content`/`properties_json`/`references_json` are, `transform.ts:51`, enforced
+server-side by `20260529120000:211-214`).
 
-- `src/data/blockSchema.ts`: add `user_updated_at` to `BLOCK_STORAGE_COLUMNS`
-  (and `BLOCK_SYNCED_*` shape), the `BlockData`/`BlockRow` types, `parseBlockRow`,
-  and the domain-shape projection (`blockJsonObjectSql` / `BLOCK_DOMAIN_COLUMNS`).
-  Mirror for `user_updated_by` if chosen.
-- `src/data/internals/clientSchema.ts`: add the column to `BLOCK_UPLOAD_COLUMNS`
-  so it round-trips on upload (and is in the column-narrow PATCH diff).
-- Codecs (`src/data/api/codecs.ts`) + `src/data/api` `BlockData` if the public API
-  surface exposes it.
+### 3. Client schema / codecs / local migration
+
+- **Local SQLite migration for existing devices [r2]:** `blocks` and
+  `blocks_synced` are `CREATE TABLE IF NOT EXISTS` (`blockSchema.ts:66-83`,
+  run from `repoProvider.ts`) — adding the column to `BLOCK_STORAGE_COLUMNS`
+  does NOT add it to existing DBs, but it immediately appears in every
+  generated statement (`INSERT_SQL`, the observer's `UPSERT_BLOCK_SQL`, the
+  raw-table put) → every existing device fails with "no such column" at first
+  write/sync. Fresh-DB tests won't catch it. Reuse the existing pattern:
+  `ensureWorkspaceE2eeColumns` (`src/data/workspaceSchema.ts:74-83`,
+  `PRAGMA table_info` + `ALTER TABLE ADD COLUMN`), called from the same
+  bootstrap site — apply to BOTH tables, then a one-shot local backfill
+  `user_updated_at = updated_at` (a `client_schema_state` marker if needed,
+  though an idempotent `UPDATE ... WHERE user_updated_at IS NULL` self-gates).
+- **Local column is nullable** (`user_updated_at INTEGER`, no NOT NULL);
+  `parseBlockRow` falls back: `userUpdatedAt: row.user_updated_at ??
+  row.updated_at`. This absorbs old-rules downloads (step 2) and pre-migration
+  `row_events` snapshots (step 4).
+- Add the column to `BLOCK_STORAGE_COLUMNS` (`src/data/blockSchema.ts:37`),
+  `BlockRow`/`BlockData`, **`BLOCK_SNAPSHOT_JSON_FIELDS`** + 
+  `buildBlockSnapshotJsonSql`/`parseBlockSnapshotJson` (`blockSchema.ts:130-163`),
+  `blockToRowParams` (`blockSchema.ts:195`), and `blockJsonObjectSql` in
+  **clientSchema.ts** (`:351-366`, the row_events projection). (r1 named
+  `BLOCK_SYNCED_*`/`BLOCK_DOMAIN_COLUMNS` — those identifiers don't exist;
+  `blocks_synced` shares `BLOCK_STORAGE_COLUMNS`.)
+- `src/data/internals/clientSchema.ts`: add to `BLOCK_UPLOAD_COLUMNS` so the
+  column rides PUTs and the column-narrow PATCH diff.
+- Codecs / public `BlockData` surface (`src/data/api`).
 
 ### 4. TxEngine — the field split
 
 `src/data/internals/txEngine.ts`:
 
-- `metadataPatch(id, skipMetadata)` currently returns `{}` when `skipMetadata`.
-  New semantics:
-  - **Always** bump `updated_at` (row-version) and `updated_by` (writer) — even
-    for skipMetadata writes. (Reconsider `updated_by` per Q2.)
-  - Only bump `user_updated_at` (+ `user_updated_by`) when **NOT** `skipMetadata`.
-  - So skipMetadata stops meaning "freeze everything" and starts meaning "this is
-    a system/bookkeeping write: advance the row-version, don't touch user-edit
-    fields."
-- `buildNewBlockRow`: set `user_updated_at = now()` (display) on normal creates.
-  For `systemMint` speculative defaults, set **`updated_at = 0`** (row-version
-  "nothing real yet") and `user_updated_at = now()` (so recency/display is sane).
-  This is what retires the shadow discriminator — see step 6.
-- The existing insert `skipMetadata` path (`ts = 0, createdBy = ''`) — reconcile
-  with the new split; bookkeeping inserts are rare, confirm callers.
+- `metadataPatch(id, skipMetadata)` new semantics:
+  - **Always** advance `updated_at`, and make it locally monotonic
+    (invariant I3): `max(this.ctx.now(), before.updatedAt + 1)` — every call
+    site has `before` in scope. Without this, the server ratcheting ahead of a
+    slow device clock makes a fresh local edit stamp *below* the row's current
+    stamp, which under the new gate turns the next staging delivery into a
+    disk revert and trips `BlockEditor`'s `lastAdoptedUpdatedAt` ratchet.
+  - Bump `user_updated_at` + `updated_by` only when **NOT** `skipMetadata`
+    (Q2 option A: `updated_by` is a user-pair field; the gate no longer reads
+    it).
+  - **[r2] Mint-sentinel hold:** for ids in `systemMintedIds` (the existing
+    same-tx inheritance set, `txEngine.ts:220-228` / `authorFor`), keep
+    `updated_at` at **0** for same-tx shaping writes. Every mint is
+    create + same-tx `setProperty`/`update` shaping (stateBlocks, kernelPage,
+    daily-note seats, shortcuts...), and the compactor fuses PUT+PATCH into one
+    create — without the hold, the uploaded mint carries `updated_at = now` and
+    the sentinel never exists. This repurposes the machinery that today
+    inherits the `system:` author.
+- `buildNewBlockRow`: normal creates set `updated_at = user_updated_at = now`.
+  `systemMint` creates set **`updated_at = 0`**, `user_updated_at = now`,
+  `updated_by = userId` (real user — no more `system:` stamping). **[r2] The
+  `systemMint` opt is RETAINED** (r1 listed it for deletion while step 4
+  depended on it — contradiction): it's now the "stamp 0" selector. Mint sites
+  (`stateBlocks.ts` etc.) are unchanged — they already pass `systemMint: true`;
+  stamps are set only in `buildNewBlockRow`, not at mint sites.
+- **`applyRaw` (undo/redo, `txEngine.ts:622-692`) [r2]:** stamps only
+  `updated_at`/`updated_by` today; it must also set `user_updated_at = now`
+  (undo IS a user action), and its hand-written UPDATE column lists must gain
+  the column. Undo of **pre-migration** `row_events` carries
+  `userUpdatedAt: undefined` — fall back to the snapshot's `updatedAt`.
+- **Every hand-written UPDATE column list** gains `user_updated_at`:
+  `txEngine.ts:322` (delete), `:347` (restore), `:376` (update), `:426` (move),
+  `:452` (setProperty), `:641`/`:677` (applyRaw).
+- **Roam import** sets `updatedAt` directly from Roam edit-time
+  (`plan.ts:277,539`, `import.ts:264`): set `user_updated_at` from the Roam
+  edit-time (that's the display meaning) and let `updated_at` mirror it —
+  creates don't participate in the monotonic ratchet, any later edit bumps past
+  it.
 
-### 5. Display/sort consumer audit
+### 5. Display/sort consumer repointing [r2 — r1's list was wrong in both directions]
 
-Repoint everything that reads `updatedAt` for **display/recency/sort** to
-`userUpdatedAt`; leave everything that reads it for **gating/ordering/version**.
-Bounded list to check (from grep): `src/plugins/daily-notes/spreadBlockDates.ts`,
-`src/utils/copy.ts`, `src/utils/selection.ts`, `src/plugins/geo/query.ts`,
-`src/data/blockCache.ts` (fingerprint/dedup — keep on `updated_at`),
-`src/hooks/block.ts`, `src/extensions/*`. Grep `updatedAt`/`updated_at` and
-classify each use. The cache `applyIfNewer`/gate stays on `updated_at`.
+**Move to `userUpdatedAt`** (display/recency semantics; with "always bump", a
+rename's workspace-wide `references_json` reindex would otherwise flood these
+with hundreds of untouched blocks):
+- `src/data/internals/kernelQueries.ts:267` (FTS picker `ORDER BY updated_at DESC`),
+  `:278` (`SELECT_RECENT_BLOCKS_SQL`), `:374` (fuzzy-rank input)
+- `src/utils/fuzzyRank.ts:150-227` (recency boost)
+- `src/plugins/find-replace/dataExtension.ts:90`
+- `linkTargetAutocomplete.ts:180`
+- `src/plugins/backlinks/`… `grouped-backlinks/query.ts:229,265`
+- `propertyPanel/model.ts:252` ("Last changed" — would show 1970 for a
+  0-stamped mint if left on `updated_at`)
+- `recents/RecentsPageBlockRenderer.tsx:82`, `UpdateIndicator.tsx:28,36`,
+  `BlockProperties.tsx:60,117`
 
-### 6. Reconcile gate simplification
+**Must STAY on `updatedAt`** (version semantics — blind repointing breaks them):
+- `BlockEditor.tsx:74-80,136-155` — the `lastAdoptedUpdatedAt` stale-write
+  ratchet
+- `src/hooks/block.ts:226-242` — `BlockContentRevision`
+- `blockCache.ts` fingerprint/dedup and `applyIfNewer`
+- the observer/gate, upload triggers, anything in `src/sync/`
 
-`src/sync/observer/reconcile.ts` + `materialize.ts` + `observer.ts`:
+(r1 listed `utils/copy.ts`, `utils/selection.ts`, `geo/query.ts`,
+`spreadBlockDates.ts` — none of these read `updatedAt` at all.)
 
-- With server-monotonic `updated_at` and `updated_at = 0` shadows, you can
-  **delete**: `ReconcileMode` (`strict`/`healing`), `isOwnSystemMint`,
-  `LocalRowState.isOwnSystemMint`, the `serverWins`/strictly-newer provenance
-  branch, `healWorkspace` + `Repo.scheduleReconcileRescan`'s healing mode, and
-  `systemAuthor`/`isSystemAuthor` usage in the mint path (`api/user.ts`,
-  `stateBlocks.ts`, `TxInsertOpts.systemMint`).
-- The gate reduces to:
+No code asserts `updated_at >= created_at` (Q1: verified, comments only) — the
+0 sentinel is safe at the storage layer.
+
+### 6. Reconcile gate simplification + cache layer
+
+`src/sync/observer/reconcile.ts` + `materialize.ts` + `observer.ts` +
+`invalidate.ts` + `blockCache.ts`:
+
+- The gate becomes:
   ```
-  if defer            -> defer
-  if hasPendingUpload -> skip-stale            // un-uploaded local edit wins
-  if localUpdatedAt === stagingUpdatedAt -> skip-stale   // equal ⟺ identical content (now provable)
-  else                -> apply                 // server row is newer-or-shadow-heal
+  if defer                                  -> defer
+  if hasPendingUpload                       -> skip-stale  // un-uploaded local edit wins
+  if local != null && local === staging
+                   && local !== 0           -> skip-stale  // equal nonzero ⟺ identical content (I1)
+  else                                      -> apply       // newer server truth, or 0-stamp yield (I2)
   ```
-  Note `localUpdatedAt > stagingUpdatedAt` (the old strict-protect case) now
-  **applies the server row** — correct, because a genuinely-newer local edit is
-  either pending (caught above) or its echo will re-assert it (PowerSync
-  write-checkpoint). The only cost is the transient post-ack/pre-echo replay
-  flicker, which self-heals.
-- **Keep `429fd4b2`'s equal-stamp skip** — but its justification upgrades from
-  "stale in-flight read defense" to "equal server stamp ⟺ identical content
-  (monotonic +1 guarantees it); same-ms LOCAL optimistic writes still collide, so
-  the skip still earns its place." Update the comment.
-- **The QuickFind-freeze canary** (`src/data/internals/invalidation.test.ts:645`,
-  "LWW-rejected sync delivery does not invalidate handles"): re-derive what it
-  should assert under the new gate. The freeze came from an older delivery waking
-  handles to re-read SQL. Under the new gate that older delivery now *applies*
-  (server-wins) — so the test's premise changes. Either (a) prove the apply is
-  immediately corrected by the echo within the same settle and handles converge,
-  or (b) if a real flicker risk remains, gate the cache invalidation (not the disk
-  apply) on `applyIfNewer` so the UI doesn't wake on the transient. Do NOT delete
-  the canary without a replacement assertion.
+  **[r2] The stamp-0 exemption is required, not optional.** Without it, two
+  devices that both mint the same deterministic id sit at 0 === 0 → equal-stamp
+  skip → the insert-or-skip loser **never converges** to the server's
+  `created_at`/`created_by`/`user_updated_at` — and not even to content, if an
+  app update changed the default template between the mints. r1's "equal ⟺
+  identical content (now provable)" claim is false at exactly the stamp it
+  introduced; with the exemption it holds for all stamps the invariant covers
+  (> 0).
+- **Delete:** `ReconcileMode` (`strict`/`healing`), `LocalRowState.isOwnSystemMint`,
+  the provenance branch, `healWorkspace` + the healing path of
+  `Repo.scheduleReconcileRescan`. The strictly-newer-local protection is gone:
+  a genuinely-newer local edit is either pending (caught above) or acked — and
+  an acked edit's echo re-asserts it (PowerSync write-checkpoint), so the only
+  cost is a transient revert in rescan paths (`drainWorkspace`) during the
+  ack-to-echo window. Steady-state queue-driven drains can't even hit it (the
+  pre-edit staging row was already consumed; the next delivery for that id IS
+  the echo).
+- **Retain [r2]:** `systemAuthor`/`isSystemAuthor` (`api/user.ts`) — historical
+  rows keep `system:<uid>` in `updated_by` forever (the recovery touch bumps
+  stamps, not authors), and two display consumers are load-bearing:
+  `globalState.ts:108` (render "System") and `UpdateIndicator.tsx:27` (suppress
+  the badge). New-style mints stamp the real user, so the indicator needs the
+  new pristine signal too: suppress when `updated_at === 0` **or**
+  `isSystemAuthor(updatedBy)`.
+- **Cache layer [r2 — r1 had no plan here]:** keep `applyFromSync` (the
+  before-matching force heal, `blockCache.ts:206-219`) and make the
+  `forceHeal` parameter of `applySyncInvalidation` unconditional (it was
+  `gateMode === 'strict'`, a mode that no longer exists). Rationale — "cache
+  follows disk": every row the disk gate applies force-heals the live cache
+  when the cache matches the pre-write row. This (a) heals shadows in-session
+  (server row > 0 also passes plain `applyIfNewer`, so the force path is
+  belt-and-suspenders there), (b) lets the rare rescan-window replay revert
+  flicker through and converge on the echo, and (c) correctly rolls back a
+  **permanently-rejected** edit (quarantined in `ps_crud_rejected`, no echo
+  ever coming): without the force path, disk converges to the server while the
+  cache pins the rejected edit's newer stamp and every hydrate
+  (`repo.ts:706,1114` `applyIfNewer 'hydrate'`) rejects the disk row until
+  reload. Showing a rejected edit forever is a lie; the sync-status plugin is
+  the surface for "this change couldn't sync."
+- Comment updates: `429fd4b2`'s equal-stamp rationale (now "equal nonzero ⟺
+  identical server content; same-ms local optimistic writes still collide"),
+  and `materialize.ts:54-58`'s "a row that reaches this write always differs"
+  (still true — stamp differs at minimum — but re-derive it).
+- **QuickFind-freeze canary** (`src/data/internals/invalidation.test.ts:645`):
+  its premise ("LWW-rejected delivery does not invalidate handles") changes —
+  the old strictly-newer rejection now applies. Replace with: (a) a rescan
+  during the ack-to-echo window may transiently apply the older row but the
+  echo converges disk+cache within the same settle, and (b) no repeated
+  handle-wake loop (the freeze signature). Do NOT delete it without these.
 
-### 7. Recovery (client side, optional)
+### 7. Recovery
 
-The server `updated_at + 1` touch (step 1) is the primary recovery and needs no
-client code. If you want a client-only recovery that doesn't depend on the server
-touch (e.g. for a client that already consumed the `blocks_synced_changes` entry),
-reuse the existing `drainWorkspace` direct-rescan (`observer.ts:272`) — it re-reads
-`blocks_synced` directly and, under the simplified gate, re-applies divergent rows.
-A marker-gated one-shot like the retired `scheduleReconcileRescan` is the pattern.
+**Discovery (server-side, primary) [r2]:** the stale rows are enumerable from
+`blocks_history` — content changed without a stamp change:
 
-**Discovery query (read-only, for measuring blast radius before/after):** diff
-`blocks_synced` vs `blocks` on content columns where `blocks.updated_at >=
-blocks_synced.updated_at` (the rows the old gate rejected). Run on a device to
-quantify; not required for the fix.
+```sql
+SELECT DISTINCT block_id FROM blocks_history
+WHERE op = 'U'
+  AND NOT (changed_columns @> ARRAY['updated_at'])
+  AND changed_columns && ARRAY['content','properties_json','references_json',
+                               'parent_id','order_key','deleted'];
+```
+
+Caveat: history exists since 2026-05-22; if Layout-B-era staleness predates it,
+fall back to the full touch. The client-side diff (`blocks_synced` vs `blocks`
+on content columns where the local stamp is ≥ staging) remains useful as a
+per-device before/after measurement.
+
+**Recovery touch (scoped):** `UPDATE blocks SET updated_at = updated_at + 1
+WHERE id IN (<discovered ids>)` — bracketed by the same
+`DISABLE TRIGGER blocks_record_history_trg` as the backfill. The trigger floor
+preserves the +1 (no content change → no extra bump). Every touched row
+re-replicates as strictly-newer → every client applies → converged.
+
+**Why scoped, not all-rows [r2]:** a full touch re-replicates the entire
+dataset and the client cost is real — full re-download into staging, full
+re-materialization through the derived-index triggers (FTS/alias/types), and
+one `row_events` row per block with no pruning (`clientSchema.ts:61` —
+"retention is a future opt-in"); on the 320k-block workspace that already
+froze a client once, that's a doubled `row_events` table and hours of drain
+churn. Scope first; full touch only as the fallback.
+
+**Pre-checks before the touch [r2]:**
+- every device's `ps_crud` drained (the rollout already requires this), and
+- `SELECT count(*) FROM ps_crud_rejected` is zero (or triaged) per device —
+  a quarantined-rejected edit is content-newer locally but NOT pending, so the
+  touch makes the server overwrite it everywhere; the only surviving copy is
+  the quarantine envelope. That clobber is the *correct* end-state for a
+  permanently-rejected write, but it must be a decision, not a surprise.
+
+### Rollout sequence (strict order) [r2]
+
+1. **Supabase migration** (column nullable + trigger COALESCE/floor/bump + RPC
+   column + backfill-with-trigger-disabled). Old clients keep working: their
+   PUTs get `user_updated_at` populated by the trigger; their PATCHes never
+   carry the column (server value survives); their literal `updated_at` patches
+   get floored, never regressed.
+2. **PowerSync sync-rules deploy** (`yarn gen:sync-config` + `powersync` skill).
+   Must follow the migration (rules reference the column) and precede the
+   client bundle. Note the redeploy itself re-processes buckets (full
+   re-download) — it does NOT substitute for the touch (stamps unchanged →
+   gates still skip).
+3. **Drain each device** (`ps_crud` empty; check `ps_crud_rejected` while
+   there), then **ship the client bundle**.
+4. **Recovery touch** (scoped; pre-checks above).
 
 ---
 
-## Open questions for the implementer to settle (don't block on me)
+## Open questions for the implementer (much smaller than r1)
 
-**Q1 — `updated_at = 0` sentinel vs `created_at`.** No DB CHECK enforces
-`updated_at >= created_at` (verified — it's only a soft code assumption), so a
-`0` row-version is safe at the storage layer. Confirm no code path divides-by or
-asserts on `updated_at >= created_at`; if any do, they're display code → should be
-on `user_updated_at` anyway (step 5).
+**Q-A — NOT NULL tightening:** ship nullable + trigger-population forever, or
+add a later migration tightening to NOT NULL once the fleet is upgraded?
+Either is sound; nullable-forever is less ceremony, NOT NULL documents the
+invariant in the schema. Implementer's call.
 
-**Q2 — `updated_by` coherence.** If `updated_at` bumps on skipMetadata writes but
-`updated_by` stays frozen, `(updated_at, updated_by)` is incoherent ("vN by U" for
-a write U didn't author). Two clean options:
-  - **(A)** Treat `updated_by` as a *user* field (freeze it with `user_updated_at`
-    on skipMetadata; add no new column). Simplest; "who last touched the row at the
-    storage level" is lost but we don't query it. The gate no longer reads
-    `updated_by` after step 6, so nothing depends on it being the row-version
-    author.
-  - **(B)** Add `user_updated_by`, let `updated_by` track the actual writer
-    (bookkeeping included). More honest, one more synced column.
-  Recommend **(A)** unless you find a consumer that needs storage-level authorship.
+**Q-B — `user_updated_by`:** Q2 resolved as option A (`updated_by` frozen with
+`user_updated_at` on skipMetadata; no new author column; the gate no longer
+reads authorship). Revisit only if a consumer of storage-level "who wrote this
+row last, including bookkeeping" turns up — none known.
 
-**Q3 — rollout coordination.** Fleet is 2 users / 5 devices with the documented
-drain-then-swap playbook (`field-level-sync-merge.md` §Rollout). Sequence: deploy
-migration (invisible to old clients — old clients send literal `updated_at`
-patches, server bump still applies, no regression) → drain each device's `ps_crud`
-→ ship client bundle → run the recovery touch. Confirm old-client literal patches
-during the mixed-version window behave (they will: the server bump is
-client-agnostic).
-
-**Q4 — does the monotonic bump interact with `blocks_history`?** The history
-trigger (`20260522062437_add_blocks_history.sql`) records per-column diffs and
-skips no-op UPDATEs — a `+1` updated_at bump on a content change is part of the
-same UPDATE, so it's recorded once, fine. Verify the recovery touch
-(`updated_at + 1` on *every* row) doesn't flood history with N spurious rows — if
-it does, either suppress history for that one maintenance UPDATE or accept it
-(2-user fleet, bounded).
+**Q-C — pre-history staleness:** if the discovery query comes back suspiciously
+small, decide whether Layout-B cutover predates `blocks_history` (2026-05-22)
+for the affected workspaces and the full touch is needed after all.
 
 ---
 
 ## Code map
 
-- `src/sync/observer/reconcile.ts` — `decideStagingRow` (gate to simplify).
+- `src/sync/observer/reconcile.ts` — `decideStagingRow` (simplify + stamp-0 exemption).
 - `src/sync/observer/materialize.ts` — `LocalRowState` build, Phase 1/2 gate calls.
-- `src/sync/observer/observer.ts` — `drainWorkspace`/`healWorkspace` (drop healing).
-- `src/data/internals/txEngine.ts` — `metadataPatch`, `buildNewBlockRow` (the split).
-- `src/data/internals/clientSchema.ts` — `BLOCK_UPLOAD_COLUMNS`, upload triggers.
-- `src/data/blockSchema.ts` — column list, types, `parseBlockRow`, domain projection.
-- `src/data/api/user.ts` — `systemAuthor`/`isSystemAuthor` (retire from mint path).
-- `src/data/stateBlocks.ts` — speculative mint sites (switch to `updated_at = 0`).
-- `src/data/repo.ts` — `scheduleReconcileRescan` (drop healing variant), `:1747`.
+- `src/sync/observer/observer.ts` — drop `healWorkspace`/gateMode; `applyOutcome` forceHeal.
+- `src/sync/observer/invalidate.ts` — `applySyncInvalidation` (forceHeal unconditional).
+- `src/data/blockCache.ts` — `applyIfNewer`, `applyFromSync` (retained, see step 6).
+- `src/data/internals/txEngine.ts` — `metadataPatch`, `buildNewBlockRow`,
+  `applyRaw`, `systemMintedIds`, all hand-written UPDATE column lists.
+- `src/data/internals/clientSchema.ts` — `BLOCK_UPLOAD_COLUMNS`, upload triggers,
+  `blockJsonObjectSql` (row_events projection).
+- `src/data/blockSchema.ts` — `BLOCK_STORAGE_COLUMNS`, `parseBlockRow` (fallback),
+  `BLOCK_SNAPSHOT_JSON_FIELDS`, `blockToRowParams`, raw-table defs.
+- `src/data/workspaceSchema.ts:74-83` — `ensureWorkspaceE2eeColumns`, the local
+  ALTER-TABLE pattern to copy.
+- `src/data/api/user.ts` — `systemAuthor`/`isSystemAuthor` (RETAINED; mint-path
+  author stamping retired).
+- `src/data/stateBlocks.ts` — mint sites (unchanged; stamps live in
+  `buildNewBlockRow`).
+- `src/data/repo.ts` — `scheduleReconcileRescan` (healing variant gone), `:1747`.
+- `src/services/powersync.ts` — `applyBlockCreates` (insert-or-skip),
+  `applyBlockPatchesRpc`, `compactBlockCrudEntries`, `uploadErrorClassifier`.
 - `supabase/migrations/20260510222352_consolidated_initial.sql:168` — clamp trigger.
-- `supabase/migrations/20260527180103_add_apply_block_patches_rpc.sql:63` — RPC UPDATE.
-- `docs/deterministic-id-shadow-handoff.md` — why `system:<userId>` existed (now retired).
-- `docs/field-level-sync-merge.md` — the on-hold doc that flagged the refs subset.
-- `src/data/internals/invalidation.test.ts:645` — the QuickFind-freeze canary.
+- `supabase/migrations/20260527180103_add_apply_block_patches_rpc.sql:55-67` — RPC UPDATE.
+- `supabase/migrations/20260522062437_add_blocks_history.sql:167-170` — history trigger.
+- `docs/deterministic-id-shadow-handoff.md` — why `system:<userId>` existed.
+- `docs/field-level-sync-merge.md` — on-hold doc; clamp-bypass GUC cross-ref.
+- `src/data/internals/invalidation.test.ts:645` — the canary (replace per step 6).
 
 ## Verification
 
-`yarn run check`. Plus: new pgTAP for the monotonic bump; client tests for the
-field split (`metadataPatch` skipMetadata advances `updated_at` not
-`user_updated_at`; shadow mint at `updated_at = 0` heals); a two-client/conflict
-test that a skipMetadata refs write on A lands on B; updated reconcile tests
-(delete the mode/provenance cases, add the "older-stamp server row applies" case);
-the canary replacement.
+`yarn run check`. Plus: pgTAP for floor/bump/COALESCE/RPC-passthrough (step 1,
+incl. the e2ee fresh-nonce caveat); client tests for the split (`metadataPatch`
+monotonic + skipMetadata advances `updated_at` not `user_updated_at`; mint-tx
+sentinel hold survives same-tx shaping + compaction; stamp-0 row yields to a
+0-stamped server row); a two-client test that a skipMetadata refs write on A
+lands on B; updated reconcile tests (delete mode/provenance cases; add
+older-stamp-applies and stamp-0-exemption cases); the canary replacement pair;
+local ALTER-TABLE migration test against a pre-split DB fixture.
