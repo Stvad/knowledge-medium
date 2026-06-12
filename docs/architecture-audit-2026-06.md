@@ -38,6 +38,11 @@ untyped event bus grew beside the typed mechanisms.
   Compact, never silently drop — name the recovery path in the migration.
 - **Payoff:** roughly halves local write volume/storage growth per edit (the known
   262MB/304k-row pathology) and shrinks write-lock hold time per commit.
+- **Owner correction (2026-06-12):** `row_events` is the deliberate client-side
+  history for *all* workspaces — it stays. The facts above stand, but the proposal is
+  rescoped to eventual storage optimization + retention that preserves full
+  reconstructability (e.g. derive `before_json` from the prior event's `after_json`).
+  Tracked in issue #132 (with #75).
 
 ### A2. Per-keystroke interaction state is synced, uploaded, and server-history-logged — three docs claim it isn't
 *(state lens · novel)*
@@ -64,6 +69,11 @@ untyped event bus grew beside the typed mechanisms.
   replication; fixes the privacy leak; reconciles three contradictory docs.
 - **Risk:** blocked on DeviceLocal existing; each property needs an explicit
   sync/no-sync decision (cross-device visit-state restore changes behavior).
+- **Owner correction (2026-06-12):** syncing UI state through ordinary block rows is
+  a deliberate, affirmed decision — device-local ephemeral state was removed on
+  purpose; the contradicting docs are stale, not evidence of drift. Rescoped to:
+  fix the stale docs now; icebox the upload/history policy until workspaces are
+  actually shared. Tracked in issue #133.
 
 ---
 
