@@ -1,6 +1,6 @@
 import { Shuffle } from 'lucide-react'
 import type { Block } from '@/data/block'
-import type { FacetRuntime } from '@/extensions/facet.js'
+import type { FacetRuntime } from '@/facets/facet.js'
 import { defineBlocksAction } from '@/shortcuts/utils.js'
 import { showError, showSuccess } from '@/utils/toast.js'
 import { openDialog } from '@/utils/dialogs.js'

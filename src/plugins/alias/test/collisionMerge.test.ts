@@ -7,7 +7,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { Repo } from '@/data/repo'
 import { aliasesProp } from '@/data/internals/coreProperties'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { aliasDataExtension } from '../dataExtension.ts'
 import { ALIAS_COLLISION_MERGE_MUTATOR } from '../collisionMerge.ts'
 

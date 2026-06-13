@@ -2,7 +2,7 @@ import {
   actionTransformsFacet,
   actionsFacet,
 } from '@/extensions/core.js'
-import type { FacetRuntime } from '@/extensions/facet.js'
+import type { FacetRuntime } from '@/facets/facet.js'
 import type {
   ActionConfig,
   ActionTransform,

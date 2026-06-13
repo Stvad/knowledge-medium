@@ -1,7 +1,7 @@
 import {act, renderHook, waitFor} from '@testing-library/react'
 import {beforeEach, describe, expect, it, vi} from 'vitest'
-import type {ToggleNode} from '@/extensions/discoverToggleTree.js'
-import {systemToggle} from '@/extensions/togglable.js'
+import type {ToggleNode} from '@/facets/discoverToggleTree.js'
+import {systemToggle} from '@/facets/togglable.js'
 import {useToggleTree} from '../useToggleTree.ts'
 
 const mockState = vi.hoisted(() => ({
@@ -42,7 +42,7 @@ vi.mock('@/extensions/dynamicExtensions.js', () => ({
   dynamicExtensionsExtension: (args: unknown) => mockState.dynamicExtensionsExtension(args),
 }))
 
-vi.mock('@/extensions/discoverToggleTree.js', () => ({
+vi.mock('@/facets/discoverToggleTree.js', () => ({
   discoverToggleTree: (tree: unknown, context: unknown) =>
     mockState.discoverToggleTree(tree, context),
 }))

@@ -14,7 +14,7 @@
  */
 import { useSyncExternalStore } from 'react'
 import { appMountsFacet } from './core.ts'
-import type { AppExtension } from './facet.ts'
+import type { AppExtension } from '@/facets/facet.js'
 import {
   getDialogQueue,
   subscribeDialogs,

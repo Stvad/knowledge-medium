@@ -11,7 +11,7 @@ import {
 } from '@/utils/selection.js'
 import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy.js'
 import { actionsFacet } from '@/extensions/core.js'
-import { AppExtension } from '@/extensions/facet.js'
+import { AppExtension } from '@/facets/facet.js'
 import { pasteFromClipboard } from '@/utils/paste.js'
 import {
   bindBlockActionContext,

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { defineFacet, resolveFacetRuntime, resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { defineFacet, resolveFacetRuntime, resolveFacetRuntimeSync } from '@/facets/facet.js'
 
 describe('facet runtime', () => {
   it('combines nested and async contributions in precedence order', async () => {

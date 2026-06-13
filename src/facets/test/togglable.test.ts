@@ -1,29 +1,26 @@
 /**
- * Unit tests for the togglable primitives.
+ * Unit tests for the togglable kernel primitives.
  *
- * The primitives are pure data — no React, no PowerSync. Tests target:
- *   - factory invariants (system vs user-extension asymmetry)
+ * The primitives are pure data — no React, no PowerSync, no `@/data`.
+ * Tests target:
+ *   - factory invariants (system vs user asymmetry)
  *   - boundary marker survives standard array operations
  *   - isEnabled / applyToggle behaviour, especially around the
  *     `defaultEnabled ?? true` convention
+ *
+ * The block-decode wrappers (`userExtensionToggle(block)` etc.) live in
+ * `@/extensions/extensionToggles.ts` and are tested there.
  */
 import {describe, expect, it} from 'vitest'
-import {aliasesProp} from '@/data/internals/coreProperties.js'
-import {makeBlockData} from '@/data/test/factories.js'
-import {
-  extensionDescriptionProp,
-  extensionNameProp,
-} from '@/data/properties.js'
 import {
   applyToggle,
   getBoundary,
   isEnabled,
   systemToggle,
-  userExtensionShellToggle,
-  userExtensionToggle,
+  userToggle,
   type Overrides,
   type Togglable,
-} from '@/extensions/togglable.js'
+} from '@/facets/togglable.js'
 
 const emptyOverrides: Overrides = new Map()
 
@@ -64,69 +61,22 @@ describe('systemToggle', () => {
   })
 })
 
-describe('userExtensionToggle', () => {
-  it('forces id to block.id and starts disabled until explicitly enabled', () => {
-    const block = makeBlockData({id: 'block-123', workspaceId: 'ws'})
-    const handle = userExtensionToggle(block)
+describe('userToggle', () => {
+  it('forces user-extension invariants and exposes a working `of`', () => {
+    const handle = userToggle({id: 'block-123', name: 'My Extension'})
     expect(handle.id).toBe('block-123')
+    expect(handle.name).toBe('My Extension')
     expect(handle.defaultEnabled).toBe(false)
     expect(handle.essential).toBe(false)
     expect(handle.kind).toBe('user')
+
+    const wrapped = handle.of([])
+    expect(getBoundary(wrapped)).toBe(handle)
   })
 
-  it('uses extension metadata properties for display name and description', () => {
-    const block = makeBlockData({
-      id: 'block-meta',
-      workspaceId: 'ws',
-      properties: {
-        [extensionNameProp.name]: extensionNameProp.codec.encode('Property Name'),
-        [extensionDescriptionProp.name]: extensionDescriptionProp.codec.encode('Property description'),
-      },
-    })
-    const handle = userExtensionToggle(block)
-    expect(handle.name).toBe('Property Name')
-    expect(handle.description).toBe('Property description')
-  })
-
-  it('uses the first alias as the display name when present', () => {
-    const block = makeBlockData({
-      id: 'block-aliased',
-      workspaceId: 'ws',
-      properties: {
-        [aliasesProp.name]: aliasesProp.codec.encode(['My Extension', 'Alt name']),
-      },
-    })
-    const handle = userExtensionToggle(block)
-    expect(handle.name).toBe('My Extension')
-  })
-
-  it('prefers the extension name property over aliases', () => {
-    const block = makeBlockData({
-      id: 'block-name-wins',
-      workspaceId: 'ws',
-      properties: {
-        [extensionNameProp.name]: extensionNameProp.codec.encode('Extension property'),
-        [aliasesProp.name]: aliasesProp.codec.encode(['Alias fallback']),
-      },
-    })
-    const handle = userExtensionToggle(block)
-    expect(handle.name).toBe('Extension property')
-  })
-
-  it('falls back to a block-id snippet when no name metadata exists', () => {
-    const block = makeBlockData({id: 'abcdef1234567890', workspaceId: 'ws'})
-    const handle = userExtensionToggle(block)
-    expect(handle.name).toBe('Extension abcdef12')
-  })
-})
-
-describe('userExtensionShellToggle', () => {
-  it('is the same shape as userExtensionToggle without compiling code', () => {
-    const block = makeBlockData({id: 'block-shell', workspaceId: 'ws'})
-    const shell = userExtensionShellToggle(block)
-    expect(shell.id).toBe('block-shell')
-    expect(shell.defaultEnabled).toBe(false)
-    expect(shell.name).toBe('Extension block-sh')
+  it('carries an optional description through unchanged', () => {
+    const handle = userToggle({id: 'b', name: 'N', description: 'D'})
+    expect(handle.description).toBe('D')
   })
 })
 

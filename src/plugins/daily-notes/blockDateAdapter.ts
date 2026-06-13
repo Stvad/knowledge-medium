@@ -18,7 +18,7 @@
  * date-reference adapter on blocks that satisfy both.
  */
 import type { Block } from '@/data/block'
-import { defineFacet, type FacetRuntime } from '@/extensions/facet.js'
+import { defineFacet, type FacetRuntime } from '@/facets/facet.js'
 
 export interface BlockDateAdapter {
   /** Diagnostic id, also distinguishes adapters in tests. */

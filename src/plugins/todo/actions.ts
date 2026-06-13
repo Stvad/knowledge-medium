@@ -1,5 +1,5 @@
 import { actionsFacet } from '@/extensions/core.js'
-import type { AppExtension } from '@/extensions/facet.js'
+import type { AppExtension } from '@/facets/facet.js'
 import type { Block } from '@/data/block'
 import { ChangeScope } from '@/data/api'
 import { getBlockTypes } from '@/data/properties.js'

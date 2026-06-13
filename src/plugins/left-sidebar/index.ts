@@ -5,8 +5,8 @@ import {
   type AppMountContribution,
   type HeaderItemContribution,
 } from '@/extensions/core.js'
-import type { AppExtension } from '@/extensions/facet.js'
-import { systemToggle } from '@/extensions/togglable.js'
+import type { AppExtension } from '@/facets/facet.js'
+import { systemToggle } from '@/facets/togglable.js'
 import { LeftSidebar, LeftSidebarCoreSection, LeftSidebarShortcutsSection } from './LeftSidebar.tsx'
 import { LeftSidebarHeaderItem } from './HeaderItem.tsx'
 import { leftSidebarSectionsFacet, type LeftSidebarSectionContribution } from './facet.ts'

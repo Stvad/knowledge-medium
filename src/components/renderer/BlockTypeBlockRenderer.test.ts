@@ -8,7 +8,7 @@ import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { blockTypeLabelProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
-import { resolveFacetRuntimeSync } from '@/extensions/facet'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { writeBlockTypeLabel } from './BlockTypeBlockRenderer'
 
 describe('writeBlockTypeLabel', () => {

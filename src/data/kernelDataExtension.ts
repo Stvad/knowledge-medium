@@ -44,8 +44,8 @@ import { KERNEL_QUERIES } from './internals/kernelQueries'
 import { kernelInvalidationRule } from './internals/kernelInvalidation'
 import { KERNEL_PROPERTY_SCHEMAS } from '@/data/properties'
 import { KERNEL_TYPE_CONTRIBUTIONS } from '@/data/blockTypes'
-import type { AppExtension } from '@/extensions/facet'
-import { systemToggle } from '@/extensions/togglable'
+import type { AppExtension } from '@/facets/facet'
+import { systemToggle } from '@/facets/togglable'
 
 export const kernelDataExtension: AppExtension = systemToggle({
   id: 'system:kernel-data',

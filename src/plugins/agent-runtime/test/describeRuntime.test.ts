@@ -7,7 +7,7 @@ import {
   getApiSurface,
   pingRuntime,
 } from '../describeRuntime.ts'
-import { defineFacet, resolveFacetRuntime } from '@/extensions/facet.js'
+import { defineFacet, resolveFacetRuntime } from '@/facets/facet.js'
 // Pre-warm `@/extensions/api` so the dynamic import inside
 // `getApiSurface()` resolves from cache. Under full-suite parallel
 // loads, the cold transform of this barrel + its transitive deps can

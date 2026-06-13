@@ -20,7 +20,7 @@ import {
   extensionsOverridesProp,
 } from '@/plugins/extensions-settings/config.js'
 import {writeOverridesCache} from '@/extensions/overridesCache.js'
-import type {Overrides} from '@/extensions/togglable.js'
+import type {Overrides} from '@/facets/togglable.js'
 
 /** Build a stub block whose `peekProperty(extensionsOverridesProp)`
  *  returns the supplied value (or throws). Other properties return

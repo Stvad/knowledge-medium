@@ -1,6 +1,6 @@
 import { actionsFacet, appEffectsFacet } from '@/extensions/core.js'
-import type { AppExtension } from '@/extensions/facet.js'
-import { systemToggle } from '@/extensions/togglable.js'
+import type { AppExtension } from '@/facets/facet.js'
+import { systemToggle } from '@/facets/togglable.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { themeStyleSyncEffect } from './effect.ts'
 import { toggleTheme } from './theme.ts'

@@ -4,12 +4,10 @@ import type { AbstractPowerSyncDatabase } from '@powersync/common'
 import { Repo } from '../data/repo'
 import { BlockCache } from '@/data/blockCache'
 import { useIsLocalOnly, useUser } from '@/components/Login'
-import { ensurePowerSyncReady, getPowerSyncDb } from '@/data/repoProvider'
-import { createSyncResolver } from '@/sync/keys/resolver.js'
-import { getWorkspaceKeyStore } from '@/sync/keys/keyStore.js'
+import { ensurePowerSyncReady, getPowerSyncDb, syncObserverDepsFor } from '@/data/repoProvider'
 import { User } from '@/types.js'
 import { memoize } from 'lodash'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
 import { surfaceProcessorRejectionFor } from '@/utils/processorRejectionToast.js'
 
@@ -24,18 +22,15 @@ const initRepo = memoize(
     // before the observer/gate read them below.
     await ensurePowerSyncReady(user.id, useRemoteSync)
     const db = getPowerSyncDb(user.id)
-    // §6 mode/key resolver — shared store + pins drive both the observer
-    // (decrypt/copy/defer) and (via the connector) encrypt-on-upload.
-    const resolver = createSyncResolver(() => user.id, getWorkspaceKeyStore())
     const cache = new BlockCache()
+    // §6 mode/key resolver is built once in repoProvider and shared with the
+    // upload connector; the observer deps (decrypt/copy/defer + key lookup)
+    // are drawn from it here.
     const repo = new Repo({
       db,
       cache,
       user: {id: user.id, name: user.name},
-      syncObserverDeps: {
-        getMaterializability: resolver.getMaterializability,
-        getCek: resolver.getCek,
-      },
+      syncObserverDeps: syncObserverDepsFor(user.id),
     })
     repo.setFacetRuntime(resolveFacetRuntimeSync(staticDataExtensions, {
       repo,

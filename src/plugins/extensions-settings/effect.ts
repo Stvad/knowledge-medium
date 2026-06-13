@@ -18,8 +18,8 @@ import {
   readOverridesCache,
   writeOverridesCache,
 } from '@/extensions/overridesCache.js'
-import {refreshAppRuntime} from '@/extensions/runtimeEvents.js'
-import type {Overrides} from '@/extensions/togglable.js'
+import {refreshAppRuntime} from '@/facets/runtimeEvents.js'
+import type {Overrides} from '@/facets/togglable.js'
 import {
   extensionsOverridesProp,
   extensionsPrefsType,

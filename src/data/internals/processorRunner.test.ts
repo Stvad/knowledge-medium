@@ -30,7 +30,7 @@ import {
   type AnyPostCommitProcessor,
   defineProperty,
 } from '@/data/api'
-import { resolveFacetRuntimeSync } from '@/extensions/facet'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '../repo'

@@ -54,9 +54,9 @@ import {
 import { copySelectedBlocksToClipboard } from '@/utils/copy.js'
 import { pasteFromClipboard } from '@/utils/paste.js'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.js'
-import { AppExtension } from '@/extensions/facet.js'
-import { refreshAppRuntime } from '@/extensions/runtimeEvents.js'
-import { systemToggle } from '@/extensions/togglable.js'
+import { AppExtension } from '@/facets/facet.js'
+import { refreshAppRuntime } from '@/facets/runtimeEvents.js'
+import { systemToggle } from '@/facets/togglable.js'
 import { getLayoutSessionBlock, getUserPrefsBlock } from '@/data/stateBlocks.js'
 import { getLayoutSessionId } from '@/utils/layoutSessionId.js'
 import {

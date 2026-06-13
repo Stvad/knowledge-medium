@@ -15,7 +15,7 @@ import {
   shortcutSurfaceActivationsFacet,
 } from '@/extensions/blockInteraction.js'
 import { editorAutocompleteExtension } from '@/extensions/editorAutocomplete.js'
-import { AppExtension } from '@/extensions/facet.js'
+import { AppExtension } from '@/facets/facet.js'
 import { actionsFacet } from '@/extensions/core.js'
 import { ActionContextTypes } from '@/shortcuts/types.js'
 import { dispatchPointerAction, type PointerGestureEvent } from '@/shortcuts/pointerAction.js'
@@ -24,7 +24,7 @@ import {
   toggleBlockSelectionAction,
 } from '@/extensions/blockSelectionAction.js'
 import { blockFocusShellDecorator } from '@/extensions/BlockFocusShellDecorator.js'
-import { systemToggle } from '@/extensions/togglable.js'
+import { systemToggle } from '@/facets/togglable.js'
 
 export const codeMirrorEditModeActivation: ShortcutActivationContribution = context => {
   if (context.surface !== 'codemirror' || !context.editorView) return null

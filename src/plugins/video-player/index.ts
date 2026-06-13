@@ -4,8 +4,8 @@ import {
 } from '@/extensions/blockInteraction.js'
 import { blockRenderersFacet } from '@/extensions/core.js'
 import { propertySchemasFacet } from '@/data/facets.js'
-import { AppExtension } from '@/extensions/facet.js'
-import { systemToggle } from '@/extensions/togglable.js'
+import { AppExtension } from '@/facets/facet.js'
+import { systemToggle } from '@/facets/togglable.js'
 import { markdownExtensionsFacet } from '@/markdown/extensions.js'
 import {
   videoPlayerActionsExtension,

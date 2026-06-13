@@ -5,15 +5,18 @@ import {
 import {
   AppExtension,
   FacetContribution,
-} from '@/extensions/facet.js'
+  isFacetContribution,
+} from '@/facets/facet.js'
 import {
   attachBoundary,
   getBoundary,
   isEnabled,
+  type Overrides,
+} from '@/facets/togglable.js'
+import {
   userExtensionShellToggle,
   userExtensionToggle,
-  type Overrides,
-} from '@/extensions/togglable.js'
+} from '@/extensions/extensionToggles.js'
 import { Repo } from '../data/repo'
 import { BlockData } from '@/types.js'
 
@@ -136,11 +139,6 @@ export const dynamicExtensionsExtension = (
 
   return collected
 }
-
-const isFacetContribution = (value: unknown): value is FacetContribution<unknown> =>
-  typeof value === 'object' &&
-  value !== null &&
-  (value as {type?: unknown}).type === 'facet-contribution'
 
 /**
  * Walks an AppExtension tree, validates shape, and force-prefixes every

@@ -22,8 +22,8 @@ import {
 } from '@/data/blockSchema'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { materializeStagingRows, type Materializability } from './materialize.js'
-import { encodeForWire, type GetCek } from '../transform.js'
-import { generateWorkspaceKeyBytes, importWorkspaceKey } from '../crypto/workspaceKey.js'
+import { encodeForWire, type GetCek } from '@/sync/transform.js'
+import { generateWorkspaceKeyBytes, importWorkspaceKey } from '@/sync/crypto/workspaceKey.js'
 import type { BlockData } from '@/data/api'
 import type { PowerSyncDb } from '@/data/internals/commitPipeline.js'
 

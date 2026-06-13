@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { blockHeaderFacet } from '@/extensions/blockInteraction.js'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import type { BlockResolveContext } from '@/extensions/blockInteraction.js'
 import { breadcrumbsPlugin, Breadcrumbs } from '../index.ts'
 

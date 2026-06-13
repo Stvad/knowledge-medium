@@ -7,7 +7,7 @@ import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams } from '@/data/blockSchema'
 import { Repo } from '@/data/repo'
 import type { Dependency } from '@/data/internals/handleStore'
 import { aliasesProp, typesProp } from '@/data/properties'
-import { resolveFacetRuntimeSync, type AppExtension } from '@/extensions/facet.js'
+import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet.js'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import {
   invalidationRulesFacet,

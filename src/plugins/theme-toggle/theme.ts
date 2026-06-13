@@ -13,7 +13,7 @@
   built-in light/dark.
 */
 
-import { defineFacet } from '@/extensions/facet.js'
+import { defineFacet } from '@/facets/facet.js'
 
 export interface ThemeDefinition {
   readonly id: string

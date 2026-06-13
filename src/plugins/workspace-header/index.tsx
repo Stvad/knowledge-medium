@@ -1,8 +1,8 @@
 import { PendingInvitations } from '@/components/workspace/PendingInvitations.js'
 import { WorkspaceSwitcher } from '@/components/workspace/WorkspaceSwitcher.js'
 import { headerItemsFacet, type HeaderItemContribution } from '@/extensions/core.js'
-import type { AppExtension } from '@/extensions/facet.js'
-import { systemToggle } from '@/extensions/togglable.js'
+import type { AppExtension } from '@/facets/facet.js'
+import { systemToggle } from '@/facets/togglable.js'
 import {
   leftSidebarSectionsFacet,
   type LeftSidebarSectionContribution,

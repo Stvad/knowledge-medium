@@ -20,7 +20,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { Repo } from '@/data/repo'
 import { aliasesProp } from '@/data/internals/coreProperties'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { referencesDataExtension } from '@/plugins/references/dataExtension.js'
 import { aliasDataExtension } from '../dataExtension.ts'

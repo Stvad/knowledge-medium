@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
-import { resolveFacetRuntimeSync } from '@/extensions/facet'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'

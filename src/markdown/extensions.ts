@@ -1,5 +1,5 @@
 import type { Block } from '../data/block'
-import { defineFacet, isFunction } from '@/extensions/facet.js'
+import { defineFacet, isFunction } from '@/facets/facet.js'
 import type { BlockContextType } from '@/types.js'
 import type { Components } from 'react-markdown'
 import type { PluggableList } from 'unified'

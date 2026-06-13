@@ -6,7 +6,7 @@ import { BlockCache } from '@/data/blockCache'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { resolveFacetRuntimeSync, type FacetRuntime } from '@/extensions/facet.js'
+import { resolveFacetRuntimeSync, type FacetRuntime } from '@/facets/facet.js'
 import {
   SRS_SM25_TYPE,
   srsNextReviewDateProp,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { defineFacet, resolveFacetRuntime } from '@/extensions/facet'
+import { defineFacet, resolveFacetRuntime } from '@/facets/facet'
 
 describe('FacetRuntime introspection', () => {
   it('facetIds() returns every id with at least one contribution', async () => {

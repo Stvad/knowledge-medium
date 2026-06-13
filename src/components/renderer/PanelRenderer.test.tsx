@@ -12,7 +12,7 @@ import {
   topLevelBlockIdProp,
 } from '@/data/properties'
 import { BlockContextProvider } from '@/context/block'
-import { resolveFacetRuntimeSync, type FacetRuntime } from '@/extensions/facet'
+import { resolveFacetRuntimeSync, type FacetRuntime } from '@/facets/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { PanelRenderer } from './PanelRenderer'
 import { BlockComponent } from '@/components/BlockComponent.js'

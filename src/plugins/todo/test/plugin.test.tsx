@@ -5,7 +5,7 @@ import {
   type BlockResolveContext,
 } from '@/extensions/blockInteraction.js'
 import { actionsFacet } from '@/extensions/core.js'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { SWIPE_RIGHT_BLOCK_ACTION_ID } from '@/plugins/swipe-quick-actions'
 import { ActionContextTypes } from '@/shortcuts/types.js'
 import type { BlockRenderer } from '@/types.js'

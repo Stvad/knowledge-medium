@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { actionsFacet, panelMountsFacet } from '@/extensions/core.js'
 import { continuousGestureRecognizersFacet } from '@/extensions/continuousGestures.js'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import {
   SwipeActionMenu,
   quickActionItemsFacet,

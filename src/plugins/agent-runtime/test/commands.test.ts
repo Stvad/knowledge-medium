@@ -7,7 +7,7 @@ import { aliasesProp, extensionDescriptionProp, extensionNameProp, typesProp } f
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions'
-import { resolveFacetRuntimeSync } from '@/extensions/facet'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { __setCompileImplForTest } from '@/extensions/compileExtensionModule'
 import { actionsFacet, appMountsFacet, blockRenderersFacet } from '@/extensions/core'
 import { ActionContextTypes } from '@/shortcuts/types'

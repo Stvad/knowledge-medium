@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { Fragment, createElement } from 'react'
 import type { Block } from '@/data/block'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import {
   isWikilinkDisplayParts,
   type WikilinkDisplayContext,

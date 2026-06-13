@@ -16,7 +16,7 @@
 
 import {useCallback} from 'react'
 import type {PropertyEditorProps} from '@/data/api'
-import {applyToggle, type Overrides, type Togglable} from '@/extensions/togglable.js'
+import {applyToggle, type Overrides, type Togglable} from '@/facets/togglable.js'
 import {ExtensionsSettings} from './ExtensionsSettings.tsx'
 import {useToggleTree} from './useToggleTree.ts'
 

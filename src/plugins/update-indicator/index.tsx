@@ -3,8 +3,8 @@ import {
   type BlockContentDecoratorContribution,
 } from '@/extensions/blockInteraction.js'
 import { appEffectsFacet } from '@/extensions/core.js'
-import { AppExtension } from '@/extensions/facet.js'
-import { systemToggle } from '@/extensions/togglable.js'
+import { AppExtension } from '@/facets/facet.js'
+import { systemToggle } from '@/facets/togglable.js'
 import { propertySchemasFacet } from '@/data/facets.js'
 import { pluginPrefsExtension } from '@/data/pluginStateExtensions.js'
 import { UpdateIndicator } from './UpdateIndicator.tsx'

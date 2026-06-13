@@ -34,7 +34,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { RefCallback, RefObject } from 'react'
-import { defineFacet, isFunction } from '@/extensions/facet.js'
+import { defineFacet, isFunction } from '@/facets/facet.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import type { BlockResolveContext } from '@/extensions/blockInteraction.js'
 import type { ActionTrigger, BaseShortcutDependencies } from '@/shortcuts/types.js'

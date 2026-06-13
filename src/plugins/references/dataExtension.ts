@@ -4,7 +4,7 @@ import {
   postCommitProcessorsFacet,
   sameTxProcessorsFacet,
 } from '@/data/facets.js'
-import type { AppExtension } from '@/extensions/facet.js'
+import type { AppExtension } from '@/facets/facet.js'
 import { referencesPostCommitProcessors } from './referencesProcessor.ts'
 import { renamePostCommitProcessors } from './renameProcessor.ts'
 import { referencesSameTxProcessors } from './mergeRetargetProcessor.ts'

@@ -16,7 +16,7 @@ import {
 } from '@/shortcuts/ActiveContexts.js'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.js'
 import { actionContextsFacet, actionTransformsFacet, actionsFacet } from '@/extensions/core.js'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import {
   ActionConfig,
   ActionContextConfig,

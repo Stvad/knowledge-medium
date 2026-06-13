@@ -7,7 +7,7 @@ import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { propertySchemasFacet } from '@/data/facets.js'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { moveSrsState } from '../moveSrsState.ts'
 import {

@@ -14,7 +14,7 @@ import {
 } from '@/data/properties'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
-import { resolveFacetRuntimeSync } from '@/extensions/facet'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {
   __resetLayoutSessionIdForTesting,
   getLayoutSessionId,
