@@ -56,8 +56,7 @@ import {
 } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { keyAtEnd } from './orderKey'
-import { aliasesProp } from './internals/coreProperties'
-import { addBlockTypeToProperties } from './properties'
+import { aliasesProp, addBlockTypeToProperties } from './properties'
 import { PAGE_TYPE } from './blockTypes'
 
 /** Layer 1 args. */

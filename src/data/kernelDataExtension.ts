@@ -8,7 +8,7 @@
  * `repo.query.<kernel>` working after that call.
  *
  * Property schemas (Phase 3 — chunk A): the kernel descriptors live
- * in `data/properties.ts` + `data/internals/coreProperties.ts` and are
+ * in `data/properties.ts` and are
  * exported as plain consts; this extension surfaces them through
  * `propertySchemasFacet` so non-React surfaces (the property panel's
  * schema lookup, future CLI / server-side audit) and plugin authors

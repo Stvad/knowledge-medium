@@ -27,7 +27,7 @@ import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { dismissToast, showCustom } from '@/utils/toast'
-import { aliasesProp } from '@/data/internals/coreProperties'
+import { aliasesProp } from '@/data/properties'
 import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
 import {

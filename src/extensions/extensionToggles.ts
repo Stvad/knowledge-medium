@@ -17,7 +17,7 @@
  */
 
 import type {BlockData} from '@/data/api'
-import {aliasesProp} from '@/data/internals/coreProperties.js'
+import {aliasesProp} from '@/data/properties'
 import {
   extensionDescriptionProp,
   extensionNameProp,

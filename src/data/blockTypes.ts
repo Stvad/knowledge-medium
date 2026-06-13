@@ -1,6 +1,6 @@
 import { defineBlockType, type TypeContribution } from '@/data/api'
-import { aliasesProp } from '@/data/internals/coreProperties'
 import {
+  aliasesProp,
   blockTypeDescriptionProp,
   blockTypeLabelProp,
   blockTypePropertiesProp,

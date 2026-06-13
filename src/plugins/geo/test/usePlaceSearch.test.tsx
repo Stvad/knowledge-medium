@@ -12,8 +12,7 @@
 
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { aliasesProp } from '@/data/internals/coreProperties'
-import { typesProp } from '@/data/properties'
+import { aliasesProp, typesProp } from '@/data/properties'
 import type { Repo } from '@/data/repo'
 import { PLACE_TYPE } from '../blockTypes'
 

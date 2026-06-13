@@ -26,8 +26,7 @@ import {
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '../repo'
-import { isCollapsedProp } from '@/data/properties'
-import { aliasesProp } from './coreProperties'
+import { aliasesProp, isCollapsedProp } from '@/data/properties'
 
 interface Harness {
   h: TestDb

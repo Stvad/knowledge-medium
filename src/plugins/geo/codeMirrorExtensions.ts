@@ -22,8 +22,7 @@ import type {
   CodeMirrorExtensionContribution,
 } from '@/extensions/editor.js'
 import { ChangeScope } from '@/data/api'
-import { typesProp } from '@/data/properties'
-import { aliasesProp } from '@/data/internals/coreProperties'
+import { aliasesProp, typesProp } from '@/data/properties'
 import { PLACE_TYPE } from './blockTypes'
 import {
   placeCompletionSource,

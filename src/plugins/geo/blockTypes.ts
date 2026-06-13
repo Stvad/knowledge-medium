@@ -10,7 +10,7 @@
  *  duplicated as a literal there to break the import cycle. */
 
 import { defineBlockType, type TypeContribution } from '@/data/api'
-import { aliasesProp } from '@/data/internals/coreProperties'
+import { aliasesProp } from '@/data/properties'
 import { PLACE_PROPERTY_SCHEMAS } from './properties'
 
 export const PLACE_TYPE = 'place'

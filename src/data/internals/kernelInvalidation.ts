@@ -90,7 +90,7 @@ export const kernelContentKey = (workspaceId: string): string => workspaceId
 const TYPES_PROPERTY_NAME = 'types'
 
 /** Property name that holds the alias list. Mirrors `aliasesProp.name`
- *  from `data/internals/coreProperties.ts`; duplicated for the same
+ *  from `data/properties.ts`; duplicated for the same
  *  reason as `TYPES_PROPERTY_NAME`. The kernel `block_aliases` trigger
  *  derives the index from this exact property key — keeping the rule
  *  in sync with the schema. */

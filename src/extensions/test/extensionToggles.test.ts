@@ -8,7 +8,7 @@
  * in `@/facets/test/togglable.test.ts`.
  */
 import {describe, expect, it} from 'vitest'
-import {aliasesProp} from '@/data/internals/coreProperties.js'
+import {aliasesProp} from '@/data/properties'
 import {makeBlockData} from '@/data/test/factories.js'
 import {
   extensionDescriptionProp,

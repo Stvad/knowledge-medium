@@ -9,8 +9,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Repo } from '@/data/repo'
-import { typesProp } from '@/data/properties'
-import { aliasesProp } from '@/data/internals/coreProperties'
+import { aliasesProp, typesProp } from '@/data/properties'
 import { PLACE_TYPE } from './blockTypes'
 import {
   GooglePlacesError,
