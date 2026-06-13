@@ -10,6 +10,8 @@ import {
 
 const mocks = vi.hoisted(() => ({
   localOnly: false,
+  updateAvailable: false,
+  reload: vi.fn(),
   queryCalls: [] as Array<{sql: string, params: unknown[], options: Record<string, unknown>}>,
   queryResponses: new Map<string, {data: Array<{count: number}>, error?: Error}>(),
   status: {
@@ -44,6 +46,11 @@ vi.mock('@/components/Login.js', () => ({
   useIsLocalOnly: () => mocks.localOnly,
 }))
 
+vi.mock('@/appUpdate.js', () => ({
+  useAppUpdateAvailable: () => mocks.updateAvailable,
+  appUpdate: {reload: () => mocks.reload()},
+}))
+
 vi.mock('../RejectionDialog.tsx', () => ({
   RejectionDialog: () => null,
 }))
@@ -71,6 +78,8 @@ const setDeviceOnline = (online: boolean) => {
 describe('SyncStatusHeaderItem', () => {
   beforeEach(() => {
     mocks.localOnly = false
+    mocks.updateAvailable = false
+    mocks.reload = vi.fn()
     mocks.queryCalls = []
     mocks.status = defaultStatus()
     setDeviceOnline(true)
@@ -289,5 +298,21 @@ describe('SyncStatusHeaderItem', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('surfaces an app-update prompt with a Reload action when a new build is ready', async () => {
+    mocks.updateAvailable = true
+
+    render(<SyncStatusHeaderItem/>)
+
+    // The header chip carries the dot, exposed to assistive tech via the label.
+    expect(screen.getByRole('button').getAttribute('aria-label'))
+      .toMatch(/update available/i)
+
+    fireEvent.pointerDown(screen.getByRole('button'))
+
+    expect(await screen.findByText('New version available')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Reload'}))
+    expect(mocks.reload).toHaveBeenCalledTimes(1)
   })
 })

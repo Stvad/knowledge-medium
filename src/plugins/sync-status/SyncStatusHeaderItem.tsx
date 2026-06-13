@@ -8,6 +8,7 @@ import {
   RefreshCw,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { appUpdate, useAppUpdateAvailable } from '@/appUpdate.js'
 import { appVersion } from '@/appVersion.js'
 import { useIsLocalOnly } from '@/components/Login.js'
 import { Button } from '@/components/ui/button.js'
@@ -256,6 +257,7 @@ function SyncStatusHeaderContent({
 }: SyncStatusHeaderContentProps) {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
+  const updateAvailable = useAppUpdateAvailable()
   const deviceOnline = useIsDeviceOnline()
   const dataFlow = status.dataFlowStatus
   // Decide whether a sync error is worth showing. When the *device* is
@@ -296,13 +298,19 @@ function SyncStatusHeaderContent({
           <button
             type="button"
             className={cn(
-              'flex h-7 w-7 shrink-0 items-center justify-center rounded-md border outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring sm:h-8 sm:w-8',
+              'relative flex h-7 w-7 shrink-0 items-center justify-center rounded-md border outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring sm:h-8 sm:w-8',
               toneClass[view.tone],
             )}
-            aria-label={view.title}
-            title={view.title}
+            aria-label={updateAvailable ? `${view.title} — update available` : view.title}
+            title={updateAvailable ? `${view.title} — update available` : view.title}
           >
             <Icon className={cn('h-4 w-4', view.spinning && 'animate-spin')}/>
+            {updateAvailable && (
+              <span
+                aria-hidden
+                className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-primary ring-2 ring-background"
+              />
+            )}
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-64 p-3">
@@ -348,6 +356,21 @@ function SyncStatusHeaderContent({
                 <AppVersionValue/>
               </div>
             </div>
+            {updateAvailable && (
+              <div className="border-t pt-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-xs font-medium">New version available</div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs"
+                    onClick={() => appUpdate.reload()}
+                  >
+                    Reload
+                  </Button>
+                </div>
+              </div>
+            )}
             {rejectedCount > 0 && (
               <div className="border-t pt-2">
                 <div className="flex items-center justify-between gap-2">

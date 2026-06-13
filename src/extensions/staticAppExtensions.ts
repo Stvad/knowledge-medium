@@ -2,6 +2,7 @@ import type { Repo } from '@/data/repo'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { defaultRenderersExtension } from '@/extensions/defaultRenderers.js'
 import { toastAppMountExtension } from '@/extensions/toastAppMount.js'
+import { appUpdatePromptExtension } from '@/extensions/appUpdateMount.js'
 import { defaultEditorInteractionExtension } from '@/extensions/defaultEditorInteractions.js'
 import {
   defaultActionContextsExtension,
@@ -67,6 +68,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   kernelValuePresetsExtension,
   defaultRenderersExtension,
   toastAppMountExtension,
+  appUpdatePromptExtension,
   // The dialog mount (DialogHost reading the openDialog queue) is no
   // longer a top-level toggle — it's pulled in by every dialog-using
   // plugin (block-tagging, daily-notes) inside its own AppExtension
