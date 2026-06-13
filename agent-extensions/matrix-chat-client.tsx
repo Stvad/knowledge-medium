@@ -29,11 +29,17 @@ const POLL_ERROR_DELAY_MS = 5_000
 
 // secret — lives only in localStorage, never in a synced block or toast output
 const TOKEN_KEY = 'knowledge-medium:matrix:token:v1'
-// per-client long-poll cursor — device/server specific, must NOT sync, so
-// it stays in localStorage rather than the (synced) prefs block.
-const NEXT_BATCH_PREFIX = 'knowledge-medium:matrix:next-batch:v1'
+// per-client long-poll cursor — device/server specific, must NOT sync, so it
+// stays in localStorage. Key + JSON shape are kept byte-identical to the
+// pre-refactor `.js` so an upgrading client resumes from its existing /sync
+// position with no gap and no migration.
+const NEXT_BATCH_PREFIX = 'knowledge-medium:matrix-messages:state:v1'
 // one-time migration marker (per workspace) — see migrateEventNamespace.
 const MIGRATION_FLAG_PREFIX = 'knowledge-medium:matrix:migrated:event-ns:v1'
+// pre-refactor config blob (homeserver/room/autoStart/token in one localStorage
+// JSON) + a per-device flag for the one-time carry-over (see migrateLegacyConfig).
+const LEGACY_CONFIG_KEY = 'knowledge-medium:matrix-messages:config:v1'
+const LEGACY_CONFIG_FLAG = 'knowledge-medium:matrix:legacy-config-migrated:v1'
 
 const OPEN_SETUP_EVENT = 'matrix:setup:open'
 const RESTART_EVENT = 'matrix:ingest:restart'
@@ -166,19 +172,27 @@ const setStatus = async (repo: any, status: string): Promise<void> => {
 // ---------------------------------------------------------------------------
 // long-poll cursor (localStorage)
 
-const nextBatchKey = (config: MatrixConfig): string =>
+const nextBatchKey = (config: Pick<MatrixConfig, 'baseUrl' | 'roomId'>): string =>
   `${NEXT_BATCH_PREFIX}:${normalizeBaseUrl(config.baseUrl)}:${config.roomId}`
 
-const loadNextBatch = (config: MatrixConfig): string | null =>
-  window.localStorage.getItem(nextBatchKey(config))
+// `{nextBatch, savedAt}` JSON, matching the pre-refactor `.js` byte-for-byte so
+// an upgrading client's existing cursor is read transparently.
+const loadNextBatch = (config: MatrixConfig): string | null => {
+  const raw = window.localStorage.getItem(nextBatchKey(config))
+  if (!raw) return null
+  try {
+    const state = JSON.parse(raw)
+    return typeof state?.nextBatch === 'string' ? state.nextBatch : null
+  } catch {
+    return null
+  }
+}
 
 const saveNextBatch = (config: MatrixConfig, nextBatch: string) =>
-  window.localStorage.setItem(nextBatchKey(config), nextBatch)
+  window.localStorage.setItem(nextBatchKey(config), JSON.stringify({nextBatch, savedAt: Date.now()}))
 
 const clearNextBatch = (config: Pick<MatrixConfig, 'baseUrl' | 'roomId'>) =>
-  window.localStorage.removeItem(
-    `${NEXT_BATCH_PREFIX}:${normalizeBaseUrl(config.baseUrl)}:${config.roomId}`,
-  )
+  window.localStorage.removeItem(nextBatchKey(config))
 
 // ---------------------------------------------------------------------------
 // matrix sync
@@ -584,6 +598,46 @@ const migrateEventNamespace = async (repo: any): Promise<void> => {
 }
 
 // ---------------------------------------------------------------------------
+// one-time carry-over from the pre-refactor `.js`, which kept homeserver /
+// room / autoStart / token together in a single localStorage JSON blob. The
+// token can't move into the now-synced prefs block, so it gets its own
+// localStorage key (shape change → migration); the rest seeds the prefs block.
+// Per-device (the source is localStorage), idempotent via a flag, and it never
+// clobbers a token or config the user has already set on this device/workspace.
+
+const migrateLegacyConfig = async (repo: any): Promise<void> => {
+  if (window.localStorage.getItem(LEGACY_CONFIG_FLAG)) return
+
+  const raw = window.localStorage.getItem(LEGACY_CONFIG_KEY)
+  if (raw) {
+    let legacy: any = null
+    try { legacy = JSON.parse(raw) } catch { legacy = null }
+    if (legacy && typeof legacy === 'object') {
+      if (typeof legacy.accessToken === 'string' && legacy.accessToken && !loadToken()) {
+        saveToken(legacy.accessToken)
+      }
+      // Seed the prefs block only when this workspace was never configured
+      // (empty roomId), so a fresh config on this workspace is never stomped.
+      const prefs = await prefsBlock(repo)
+      if (prefs && !prefs.get(roomIdProp)) {
+        if (typeof legacy.baseUrl === 'string' && legacy.baseUrl) {
+          await prefs.set(homeserverProp, normalizeBaseUrl(legacy.baseUrl))
+        }
+        if (typeof legacy.roomId === 'string' && legacy.roomId) {
+          await prefs.set(roomIdProp, legacy.roomId)
+        }
+        if (typeof legacy.autoStart === 'boolean') {
+          await prefs.set(autoStartProp, legacy.autoStart)
+        }
+        if (legacy.roomId && loadToken()) await prefs.set(connectedHintProp, true)
+      }
+    }
+  }
+
+  window.localStorage.setItem(LEGACY_CONFIG_FLAG, new Date().toISOString())
+}
+
+// ---------------------------------------------------------------------------
 // poll loop
 
 const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSignal, matrixClient: any): Promise<void> => {
@@ -664,6 +718,11 @@ const matrixIngestEffect = {
     window.addEventListener(RESTART_EVENT, onRestart)
 
     void (async () => {
+      try {
+        await migrateLegacyConfig(repo)
+      } catch (error) {
+        console.error('[matrix-messages] legacy-config migration', error)
+      }
       try {
         await migrateEventNamespace(repo)
       } catch (error) {
