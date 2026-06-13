@@ -1126,6 +1126,31 @@ const withTriggerRecreate = (statements: readonly string[]): string[] =>
     return name ? [`DROP TRIGGER IF EXISTS ${name}`, stmt] : [stmt]
   })
 
+/** Run `fn` with `triggerName` temporarily dropped, then recreate it from
+ *  `createSql` (its canonical definition) — even if `fn` throws. For a bulk
+ *  maintenance write that must NOT fan out through an unconditional per-row
+ *  side-effect trigger (e.g. a column backfill that would otherwise write one
+ *  `row_events` row per block — hundreds of thousands of them). SQLite has no
+ *  `DISABLE TRIGGER`, so drop+recreate is the equivalent; pass the same
+ *  `CREATE` constant the bootstrap installs so the recreated trigger can't
+ *  drift. This is the client analog of the server backfill's `DISABLE TRIGGER`
+ *  bracketing, and the same drop-then-recreate move {@link withTriggerRecreate}
+ *  already does to every trigger on boot. Bootstrap-only: there is no
+ *  write-serving window in which the trigger is absent. */
+const withTriggerSuspended = async (
+  db: {execute: (sql: string) => Promise<unknown>},
+  triggerName: string,
+  createSql: string,
+  fn: () => Promise<void>,
+): Promise<void> => {
+  await db.execute(`DROP TRIGGER IF EXISTS ${triggerName}`)
+  try {
+    await fn()
+  } finally {
+    await db.execute(createSql)
+  }
+}
+
 export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = withTriggerRecreate([
   // Tables
   CREATE_TX_CONTEXT_TABLE_SQL,
@@ -1247,6 +1272,56 @@ export const backfillBlocksFtsIfEmpty = async (
   await db.execute(BACKFILL_BLOCKS_FTS_ROWIDS_SQL)
   await db.execute(BACKFILL_BLOCKS_FTS_SQL)
   await db.execute(RECORD_BLOCKS_FTS_BACKFILL_DONE_SQL)
+}
+
+/**
+ * Idempotent local-schema migration for the `user_updated_at` split.
+ * `blocks` / `blocks_synced` are created with CREATE TABLE IF NOT EXISTS, so
+ * adding the column to `BLOCK_STORAGE_COLUMNS` does NOT add it to an existing
+ * device's tables — yet it immediately appears in every generated statement
+ * (INSERT_SQL, the observer's upsert, the raw-table put), so an un-migrated
+ * device would fail "no such column" on the first write/sync. PRAGMA
+ * table_info + ALTER TABLE ADD COLUMN on BOTH tables, guarded so a fresh
+ * install (column already present from CREATE) doesn't throw "duplicate column
+ * name".
+ *
+ * When the column is newly added, backfill `blocks` once so the stored value
+ * is fully populated (no lingering NULLs — `parseBlockRow` falls back to
+ * `updated_at` on read, but we keep the column honest). The backfill is
+ * bracketed by `withTriggerSuspended`: the only trigger that fires on a
+ * `user_updated_at`-only UPDATE is `blocks_row_event_update` (AFTER UPDATE ON
+ * blocks, no column scope), and a full-table backfill through it would write
+ * one `row_events` row per block. The FTS/alias/type triggers are column-scoped
+ * (content/properties_json/deleted/workspace_id) and the upload trigger is
+ * source-gated, so neither fires here. `blocks_synced` gets the column (the
+ * raw-table put binds it) but no backfill — it's a passive sync landing zone
+ * overwritten by deliveries.
+ */
+export const ensureBlockUserUpdatedAtColumn = async (db: {
+  execute: (sql: string) => Promise<unknown>
+  getAll: <T>(sql: string) => Promise<T[]>
+}): Promise<void> => {
+  let backfillBlocks = false
+  for (const table of ['blocks', 'blocks_synced'] as const) {
+    const columns = await db.getAll<{name: string}>(`PRAGMA table_info(${table})`)
+    if (!columns.some(c => c.name === 'user_updated_at')) {
+      await db.execute(`ALTER TABLE ${table} ADD COLUMN user_updated_at INTEGER`)
+      if (table === 'blocks') backfillBlocks = true
+    }
+  }
+  // Backfill only right after the ALTER — every existing `blocks` row is NULL
+  // then. On later boots the column already exists, so we skip the backfill
+  // (and its full-table scan) entirely.
+  if (backfillBlocks) {
+    await withTriggerSuspended(
+      db,
+      'blocks_row_event_update',
+      CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL,
+      async () => {
+        await db.execute('UPDATE blocks SET user_updated_at = updated_at')
+      },
+    )
+  }
 }
 
 /** Row count `sqlite_stat1` recorded for `blocks` at the last ANALYZE, or
