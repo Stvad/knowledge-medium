@@ -1,28 +1,55 @@
 /* Knowledge Medium service worker.
  *
- * Strategy summary:
- *   - HTML navigations  : network-first, fallback to cached shell.
- *   - Same-origin assets: stale-while-revalidate. The Vite preserveModules
- *                         build emits modules at unhashed URLs, but the
- *                         cache namespace below is stamped with a per-build
- *                         id, so every deploy starts from an empty runtime
- *                         cache and the stale-vs-fresh skew window closes
- *                         on activation rather than spanning sessions.
- *   - esm.sh imports    : cache-first (URLs include version + integrity, so
- *                         they're effectively immutable).
- *   - Everything else   : passes through to the network (Supabase, PowerSync,
- *                         agent-runtime relay, etc. must not be cached).
+ * Versioning model — each deploy is an immutable "generation":
+ *   - BUILD_ID (injected per build) namespaces this generation's caches:
+ *     km-shell-<id> (HTML shell + icons) and km-assets-<id> (JS/CSS/fonts).
+ *   - Same-origin app assets are served CACHE-FIRST with no revalidation.
+ *     The Vite preserveModules build emits modules at UNHASHED, stable URLs
+ *     (so plugins can import them through the import map), which means a
+ *     URL's *bytes* differ between deploys. Pinning each generation to its
+ *     own cache and never overwriting an entry in place is what keeps a
+ *     generation internally consistent — a page only ever sees the single
+ *     build it booted with, even across many small lazy-loaded modules.
+ *   - We deliberately do NOT call clients.claim(). A freshly installed
+ *     worker self-skipWaiting()s so it becomes the ACTIVE worker (and thus
+ *     controls the NEXT load — so one reload, the user's own or our update
+ *     prompt's, lands fully on the new build). But an already-open page
+ *     keeps its existing controller, and therefore its generation, until it
+ *     reloads. That is what removes mid-session version skew: an old tab
+ *     that lazy-imports a chunk after a deploy gets *its* generation's
+ *     chunk from its own cache, not the just-deployed one grafted onto its
+ *     already-loaded (old) modules.
+ *   - On activate we retain the last KEEP_GENERATIONS generations (current +
+ *     previous, tracked by an install-order ledger) so a tab still on the
+ *     previous build has a consistent cache to read from. Older generations
+ *     are garbage-collected.
+ *   - esm.sh imports: cache-first in a single shared, un-namespaced cache —
+ *     those URLs carry version + integrity, so they're immutable across
+ *     generations and need not be re-fetched on every deploy.
+ *   - HTML navigations: network-first, falling back to the cached shell.
+ *   - Everything else (Supabase, PowerSync, agent relay): straight to the
+ *     network, never cached.
  *
- * BUILD_ID is replaced by scripts/inject-sw-build-id.mjs after `vite build`.
- * In dev the placeholder is harmless because the SW isn't registered there.
+ * BUILD_ID / PRECACHE_ASSETS are replaced by scripts/inject-sw-build-id.mjs
+ * after `vite build`. In dev the placeholders are harmless (the SW isn't
+ * registered there).
  */
 
 const CACHE_PREFIX = 'km-'
 const BUILD_ID = '__BUILD_ID__'
 const SHELL_CACHE = `${CACHE_PREFIX}shell-${BUILD_ID}`
-const RUNTIME_CACHE = `${CACHE_PREFIX}runtime-${BUILD_ID}`
-const VENDOR_CACHE = `${CACHE_PREFIX}vendor-${BUILD_ID}`
-const ALL_CACHES = new Set([SHELL_CACHE, RUNTIME_CACHE, VENDOR_CACHE])
+const ASSET_CACHE = `${CACHE_PREFIX}assets-${BUILD_ID}`
+const VENDOR_CACHE = `${CACHE_PREFIX}vendor`
+const META_CACHE = `${CACHE_PREFIX}meta`
+
+// Keep the current build plus the immediately-previous one, so a tab held
+// open across a single deploy stays pinned to a cache that still exists.
+// (Two deploys while one tab stays open is rare, and that tab is being
+// nudged to reload by the update prompt the whole time.)
+const KEEP_GENERATIONS = 2
+
+// Caches that are never generation-GC'd.
+const PERSISTENT_CACHES = new Set([VENDOR_CACHE, META_CACHE])
 
 // The SW lives at <base>/sw.js, so its scope and registration URL share the
 // app's base path. Resolve everything relative to the registration URL.
@@ -48,30 +75,66 @@ const PRECACHE_ASSETS = JSON.parse('__PRECACHE_ASSETS__')
 
 const VENDOR_HOSTS = new Set(['esm.sh'])
 
+// --- generation ledger ------------------------------------------------------
+// An install-ordered list of BUILD_IDs (newest last), stored as a JSON
+// Response under a synthetic key in META_CACHE. Lets `activate` GC every
+// generation except the most recent KEEP_GENERATIONS without needing the
+// build ids to be sortable (they're git shas).
+const LEDGER_KEY = new URL('./__km_generations__', scopeURL).toString()
+
+const readLedger = async () => {
+  try {
+    const cache = await caches.open(META_CACHE)
+    const res = await cache.match(LEDGER_KEY)
+    if (!res) return []
+    const ids = await res.json()
+    return Array.isArray(ids) ? ids : []
+  } catch {
+    return []
+  }
+}
+
+const writeLedger = async (ids) => {
+  const cache = await caches.open(META_CACHE)
+  await cache.put(
+    LEDGER_KEY,
+    new Response(JSON.stringify(ids), {headers: {'content-type': 'application/json'}}),
+  )
+}
+
+const recordGeneration = async (id) => {
+  const ids = (await readLedger()).filter((x) => x !== id)
+  ids.push(id)
+  await writeLedger(ids)
+}
+
 self.addEventListener('install', (event) => {
   event.waitUntil(
     (async () => {
-      const [shell, runtime] = await Promise.all([
+      await recordGeneration(BUILD_ID)
+      const [shell, assets] = await Promise.all([
         caches.open(SHELL_CACHE),
-        caches.open(RUNTIME_CACHE),
+        caches.open(ASSET_CACHE),
       ])
       // Shell entries use { cache: 'reload' } so an SW update always
-      // pulls fresh HTML/icons from the network. The bulk asset list
-      // uses { cache: 'default' } so the install satisfies from the
-      // browser's HTTP cache (the page itself populated it moments ago)
-      // — copying ~10MB from HTTP cache into Cache Storage costs almost
-      // nothing on the network and gives us full offline boot coverage.
-      // Per-URL failures are swallowed so one 404 can't strand install.
+      // pulls fresh HTML/icons from the network. The first-paint asset
+      // list uses { cache: 'default' } so the install satisfies from the
+      // browser's HTTP cache (the page itself populated it moments ago) —
+      // copying it into Cache Storage costs almost nothing and gives this
+      // generation full offline-boot coverage. Per-URL failures are
+      // swallowed so one 404 can't strand install.
       const fetchInto = (cache, url, mode) =>
         fetch(new Request(url, {cache: mode}))
           .then((res) => (res && res.ok ? cache.put(url, res) : null))
           .catch(() => null)
       await Promise.all([
         ...SHELL_URLS.map((u) => fetchInto(shell, u, 'reload')),
-        ...PRECACHE_ASSETS.map((u) => fetchInto(runtime, u, 'default')),
+        ...PRECACHE_ASSETS.map((u) => fetchInto(assets, u, 'default')),
       ])
     })(),
   )
+  // Become active immediately so the NEXT load is served by this build.
+  // We do NOT claim — open pages keep their generation until they reload.
   self.skipWaiting()
 })
 
@@ -82,15 +145,29 @@ self.addEventListener('message', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     (async () => {
+      const ledger = await readLedger()
+      const keepIds = new Set(ledger.slice(-KEEP_GENERATIONS))
+      if (ledger.length > keepIds.size) await writeLedger([...keepIds])
+
+      // Always retain THIS generation's caches, independent of the ledger —
+      // a stale or unreadable ledger must never delete the cache the running
+      // build is about to serve from.
+      const keepCaches = new Set([...PERSISTENT_CACHES, SHELL_CACHE, ASSET_CACHE])
+      for (const id of keepIds) {
+        keepCaches.add(`${CACHE_PREFIX}shell-${id}`)
+        keepCaches.add(`${CACHE_PREFIX}assets-${id}`)
+      }
       // Only touch caches we own — caches.keys() lists every cache on the
       // origin, including ones from other apps or features hosted here.
       const keys = await caches.keys()
       await Promise.all(
         keys
-          .filter((k) => k.startsWith(CACHE_PREFIX) && !ALL_CACHES.has(k))
+          .filter((k) => k.startsWith(CACHE_PREFIX) && !keepCaches.has(k))
           .map((k) => caches.delete(k)),
       )
-      await self.clients.claim()
+      // NB: intentionally no clients.claim() — see the file header. Taking
+      // over already-open pages is exactly what would let a new chunk land
+      // in an old page mid-session.
     })(),
   )
 })
@@ -103,12 +180,21 @@ const isSameOrigin = (url) => url.origin === self.location.origin
 
 const isVendor = (url) => VENDOR_HOSTS.has(url.hostname)
 
-// Network-first for the SPA shell. We always read and write under a
-// single canonical key so the many distinct navigation URLs (deep links,
-// query-strings, hash routes) all share one cached HTML entry instead of
-// each carving out its own duplicate.
-const shellNetworkFirst = async (request, cacheName, shellURL) => {
-  const cache = await caches.open(cacheName)
+// Static build assets we serve cache-first within the generation. Match by
+// request.destination (script/style/worker/font/image cover module imports,
+// modulepreload, stylesheets, the wasm-sqlite worker and fonts) with an
+// extension fallback for anything a browser leaves as an empty destination.
+const ASSET_EXTENSION = /\.(?:js|mjs|css|wasm|woff2?|ttf|otf|png|svg|jpe?g|webp|gif|ico)$/
+const isCacheableAsset = (request, url) =>
+  isSameOrigin(url) &&
+  (['script', 'style', 'worker', 'font', 'image'].includes(request.destination) ||
+    ASSET_EXTENSION.test(url.pathname))
+
+// Network-first for the SPA shell. We always read and write under a single
+// canonical key so the many distinct navigation URLs (deep links,
+// query-strings, hash routes) all share one cached HTML entry.
+const shellNetworkFirst = async (request, shellURL) => {
+  const cache = await caches.open(SHELL_CACHE)
   try {
     const fresh = await fetch(request)
     if (fresh && fresh.ok) cache.put(shellURL, fresh.clone()).catch(() => {})
@@ -120,33 +206,37 @@ const shellNetworkFirst = async (request, cacheName, shellURL) => {
   }
 }
 
-// Read across every km- cache so an entry placed in the shell cache by the
-// install precache is still found when a later request would normally
-// only check the runtime cache. Writes still go to the strategy's own
-// cache to keep namespacing meaningful.
-const staleWhileRevalidate = async (request, cacheName) => {
-  const cached = await caches.match(request)
-  const networkPromise = fetch(request)
-    .then(async (res) => {
-      if (res && res.ok) {
-        const cache = await caches.open(cacheName)
-        cache.put(request, res.clone()).catch(() => {})
-      }
-      return res
-    })
-    .catch(() => null)
-  return cached || (await networkPromise) || Response.error()
+// Cache-first within THIS generation's caches, no revalidation. The
+// generation's assets are immutable, so a hit is always correct and a miss
+// (a lazy chunk not seen yet this session) is fetched once and stored so the
+// page keeps reading the one build it booted with. We check the shell cache
+// too (icons/manifest land there at install) — both belong to this
+// generation, so there's no cross-version skew.
+const assetCacheFirst = async (request) => {
+  const assets = await caches.open(ASSET_CACHE)
+  const cached =
+    (await assets.match(request)) || (await (await caches.open(SHELL_CACHE)).match(request))
+  if (cached) return cached
+  try {
+    const fresh = await fetch(request)
+    if (fresh && fresh.ok) assets.put(request, fresh.clone()).catch(() => {})
+    return fresh
+  } catch {
+    return Response.error()
+  }
 }
 
 const cacheFirst = async (request, cacheName) => {
-  const cached = await caches.match(request)
+  const cache = await caches.open(cacheName)
+  const cached = await cache.match(request)
   if (cached) return cached
-  const fresh = await fetch(request)
-  if (fresh && fresh.ok) {
-    const cache = await caches.open(cacheName)
-    cache.put(request, fresh.clone()).catch(() => {})
+  try {
+    const fresh = await fetch(request)
+    if (fresh && fresh.ok) cache.put(request, fresh.clone()).catch(() => {})
+    return fresh
+  } catch {
+    return Response.error()
   }
-  return fresh
 }
 
 self.addEventListener('fetch', (event) => {
@@ -157,12 +247,12 @@ self.addEventListener('fetch', (event) => {
 
   if (isNavigationRequest(request) && isSameOrigin(url)) {
     const shellURL = new URL('./index.html', scopeURL).toString()
-    event.respondWith(shellNetworkFirst(request, SHELL_CACHE, shellURL))
+    event.respondWith(shellNetworkFirst(request, shellURL))
     return
   }
 
-  if (isSameOrigin(url)) {
-    event.respondWith(staleWhileRevalidate(request, RUNTIME_CACHE))
+  if (isCacheableAsset(request, url)) {
+    event.respondWith(assetCacheFirst(request))
     return
   }
 
@@ -170,6 +260,6 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(cacheFirst(request, VENDOR_CACHE))
     return
   }
-  // Default: don't intercept — let the browser handle it.
+  // Default: don't intercept — let the browser handle it. This includes
+  // other same-origin GETs like version.json, which must stay fresh.
 })
-
