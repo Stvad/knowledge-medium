@@ -25,9 +25,6 @@
 import { z } from 'zod'
 import type { BlockData, Schema } from '@/data/api'
 import { defineQuery } from '@/data/api'
-import type { BlockRow } from '@/data/blockSchema'
-import { SUBTREE_SQL } from '@/data/internals/treeQueries'
-import { SELECT_BLOCK_BY_ID_SQL } from '@/data/internals/kernelQueries'
 import { typesProp } from '@/data/properties'
 import { PLACE_TYPE } from './blockTypes'
 import {
@@ -58,9 +55,6 @@ export interface MapPin {
 const pinArraySchema: Schema<MapPin[]> = {
   parse: (input) => input as MapPin[],
 }
-
-const asBlockRows = (rows: ReadonlyArray<BlockRow>): ReadonlyArray<Record<string, unknown>> =>
-  rows as unknown as ReadonlyArray<Record<string, unknown>>
 
 const isPlace = (block: BlockData): boolean => {
   const raw = block.properties[typesProp.name]
@@ -105,30 +99,24 @@ export const placesUnderBlockQuery = defineQuery<{rootBlockId: string}, MapPin[]
     ctx.depend({kind: 'row', id: rootBlockId})
     ctx.depend({kind: 'parent-edge', parentId: rootBlockId})
 
-    const rows = await ctx.db.getAll<BlockRow & {depth: number}>(SUBTREE_SQL, [rootBlockId])
-    // declareRowDeps:false — the loop below declares an explicit row
-    // dep for every subtree block (the dep declaration is right next
-    // to the per-block work that depends on its content/properties/
-    // references). Letting hydrateBlocks add row deps too would just
-    // duplicate them.
-    const blocks = ctx.hydrateBlocks(asBlockRows(rows), {declareRowDeps: false})
+    // deps:'none' — the loop below declares an explicit row dep for every
+    // subtree block (right next to the per-block work that depends on its
+    // content/properties/references), so core.subtree's own row/parent-edge
+    // deps must not fold in on top.
+    const blocks = await ctx.run('core.subtree', {id: rootBlockId}, {deps: 'none'})
 
     // Cache resolved Places so a hundred notes pointing at the same
     // Place hit SQL once.
     const placeCache = new Map<string, BlockData | null>()
     const loadPlace = async (id: string): Promise<BlockData | null> => {
       if (placeCache.has(id)) return placeCache.get(id) ?? null
+      // Explicit row dep so the query re-resolves when a referenced Place
+      // moves / changes coords. The Block facade reads the same committed
+      // snapshot (null for missing / soft-deleted) and primes the cache.
       ctx.depend({kind: 'row', id})
-      const row = await ctx.db.getOptional<BlockRow>(SELECT_BLOCK_BY_ID_SQL, [id])
-      if (!row) {
-        placeCache.set(id, null)
-        return null
-      }
-      // Explicit row dep above already covers this id; skip the
-      // duplicate hydrateBlocks contribution.
-      const [hydrated] = ctx.hydrateBlocks(asBlockRows([row]), {declareRowDeps: false})
-      placeCache.set(id, hydrated ?? null)
-      return hydrated ?? null
+      const place = await ctx.repo.block(id).load()
+      placeCache.set(id, place)
+      return place
     }
 
     const pins: MapPin[] = []
