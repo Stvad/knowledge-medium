@@ -419,7 +419,7 @@ const toRoamBlock = (block: BlockDef, path: number[]): any => ({
 })
 
 const withPromotedMatrixProperties = (blocks: BlockDef[], bubbled = new Set<string>(), path: number[] = []): BlockDef[] =>
-  blocks.map((block, index) => {
+  blocks.flatMap((block, index) => {
     const blockPath = [...path, index]
     const children = Array.isArray(block.children) ? block.children : []
     const promotion = computePromotedFromChildren(
@@ -431,11 +431,20 @@ const withPromotedMatrixProperties = (blocks: BlockDef[], bubbled = new Set<stri
     for (const uid of promotion.bubbled) bubbled.add(uid)
 
     const promotedChildren = withPromotedMatrixProperties(children, bubbled, blockPath)
-    return {
+    const next: BlockDef = {
       ...block,
       properties: mergeProperties(block.properties, promotion.promoted),
       children: promotedChildren.length ? promotedChildren : undefined,
     }
+
+    // Subtractive promotion: drop a node whose own `key::value` was hoisted into
+    // its parent's props AND whose whole subtree was consumed — the value lives
+    // on as the derived prop. The anchor (root) is never bubbled, so it always
+    // survives; a consumed attr that still has non-attr children is kept so they
+    // aren't orphaned. (Diverges from the Roam importer, which preserves attr
+    // blocks for fidelity; chat ingest wants the literal bullet gone.)
+    if (bubbled.has(blockPathUid(blockPath)) && !next.children) return []
+    return [next]
   })
 
 const nestTopLevelBlocksUnderFirst = (blocks: BlockDef[]): BlockDef[] => {
