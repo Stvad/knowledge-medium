@@ -9,12 +9,14 @@ import { appUpdate } from '@/appUpdate.js'
  *
  * Update behaviour (see also src/appUpdate.ts):
  *  - When a new SW reaches `installed` while an old one still controls the
- *    page, we `SKIP_WAITING` it so it ACTIVATES in the background. We do
- *    NOT reload the page. The point is that the *next* load — whether the
- *    user clicks the Reload prompt or just reloads the tab on their own —
- *    is served by the new build in a single reload, instead of the new SW
- *    sitting "waiting" until every tab closes (which is why a plain reload
- *    used to keep serving the old build).
+ *    page, we flag the update. The SW self-`skipWaiting()`s in its own
+ *    install handler (public/sw.js), so it activates in the background on
+ *    its own — the `SKIP_WAITING` postMessage below is only a fallback for
+ *    a worker that somehow didn't. We do NOT reload the page. The point is
+ *    that the *next* load — whether the user clicks the Reload prompt or
+ *    just reloads the tab on their own — is served by the new build in a
+ *    single reload, instead of the new SW sitting "waiting" until every tab
+ *    closes (which is why a plain reload used to keep serving the old build).
  *  - We then flag `appUpdate.markAvailable()` so the toast + sync-status
  *    chip can offer a deliberate "Reload" without surprising the user.
  *  - Long-lived PWA tabs may never navigate, so the browser's implicit
@@ -48,8 +50,9 @@ export const registerServiceWorker = (): void => {
       const onInstalled = (worker: ServiceWorker | null) => {
         if (!worker || worker.state !== 'installed') return
         if (!navigator.serviceWorker.controller) return
-        // Activate it now (background) so the next reload is served fresh,
-        // but leave the reload itself to the user.
+        // The SW self-skipWaiting()s on install, so it's already activating
+        // in the background; this postMessage is just a fallback. Either way
+        // the next reload is served fresh — we leave the reload to the user.
         worker.postMessage('SKIP_WAITING')
         appUpdate.markAvailable()
       }

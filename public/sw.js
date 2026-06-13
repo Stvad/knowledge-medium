@@ -42,11 +42,14 @@ const ASSET_CACHE = `${CACHE_PREFIX}assets-${BUILD_ID}`
 const VENDOR_CACHE = `${CACHE_PREFIX}vendor`
 const META_CACHE = `${CACHE_PREFIX}meta`
 
-// Keep the current build plus the immediately-previous one, so a tab held
-// open across a single deploy stays pinned to a cache that still exists.
-// (Two deploys while one tab stays open is rare, and that tab is being
-// nudged to reload by the update prompt the whole time.)
-const KEEP_GENERATIONS = 2
+// Keep the current build plus the two previous ones, so a tab held open
+// across up to two deploys stays pinned to a cache that still exists. Each
+// retained generation is roughly one full asset cache (~15-17MB), so this
+// is a storage-for-resilience trade — it does NOT scale with fleet size,
+// only with how many deploys a single tab can span before it reloads.
+// Beyond the window the stale tab degrades to live bytes (possible skew),
+// and it's been nudged to reload by the update prompt the whole time.
+const KEEP_GENERATIONS = 3
 
 // Caches that are never generation-GC'd.
 const PERSISTENT_CACHES = new Set([VENDOR_CACHE, META_CACHE])
