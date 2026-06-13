@@ -31,10 +31,9 @@
  */
 
 // `Materializability` is sync-seam vocabulary shared with the §6 resolver;
-// it lives in the data-free `@/sync/transform` layer (re-exported below for
-// the observer's existing callers).
+// it lives in the data-free `@/sync/transform` layer. `materialize.ts`
+// re-exports it for the observer's callers; reconcile only consumes it.
 import type { Materializability } from '@/sync/transform.js'
-export type { Materializability } from '@/sync/transform.js'
 
 /** Local state for the block id a staging row targets. */
 export interface LocalRowState {
