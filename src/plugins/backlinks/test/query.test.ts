@@ -26,7 +26,7 @@ import {
   TYPED_BLOCKS_STRUCTURE_CHANNEL,
   typedBlocksReferenceKey,
   typedBlocksStructureKey,
-} from '@/data/internals/kernelInvalidation.js'
+} from '@/data/invalidation'
 import {
   BACKLINKS_FOR_BLOCK_QUERY,
   backlinksForBlockQuery,

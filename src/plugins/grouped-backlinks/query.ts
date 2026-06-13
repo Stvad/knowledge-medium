@@ -21,7 +21,7 @@ import {
   typedBlocksPropertyKey,
   typedBlocksRefsOfKey,
   typedBlocksStructureKey,
-} from '@/data/internals/kernelInvalidation.js'
+} from '@/data/invalidation'
 import { typesProp } from '@/data/properties.js'
 import { typesFacet } from '@/data/facets.js'
 import {

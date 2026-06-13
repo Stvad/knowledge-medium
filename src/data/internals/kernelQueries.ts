@@ -53,7 +53,7 @@ import {
   typedBlocksReferenceKey,
   typedBlocksStructureKey,
   typedBlocksTypeKey,
-} from './kernelInvalidation'
+} from '@/data/invalidation.js'
 
 export const SELECT_BLOCK_BY_ID_SQL = `
   SELECT ${SELECT_BLOCK_COLUMNS_SQL}

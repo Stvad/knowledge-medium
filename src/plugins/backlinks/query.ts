@@ -8,7 +8,7 @@ import { resolveTypedBlockIds } from '@/data/internals/kernelQueries.js'
 import {
   TYPED_BLOCKS_STRUCTURE_CHANNEL,
   typedBlocksStructureKey,
-} from '@/data/internals/kernelInvalidation.js'
+} from '@/data/invalidation'
 
 export const BACKLINKS_FOR_BLOCK_QUERY = 'backlinks.forBlock'
 

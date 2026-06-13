@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { ChangeSnapshot } from '@/data/invalidation'
 
+import { emitKernelInvalidations } from './kernelInvalidation'
 import {
   KERNEL_ALIASES_CHANNEL,
   KERNEL_CONTENT_CHANNEL,
@@ -11,7 +12,6 @@ import {
   TYPED_BLOCKS_REFERENCE_CHANNEL,
   TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL,
   TYPED_BLOCKS_TYPE_CHANNEL,
-  emitKernelInvalidations,
   kernelAliasesKey,
   kernelContentKey,
   typedBlocksLiveKey,
@@ -19,7 +19,7 @@ import {
   typedBlocksReferenceFieldKey,
   typedBlocksReferenceKey,
   typedBlocksTypeKey,
-} from './kernelInvalidation'
+} from '@/data/invalidation'
 
 const WS = 'ws-1'
 

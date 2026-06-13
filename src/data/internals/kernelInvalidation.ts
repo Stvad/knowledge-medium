@@ -48,41 +48,30 @@
  */
 
 import type { ChangeSnapshot, InvalidationRule } from '@/data/invalidation.js'
-
-export const TYPED_BLOCKS_LIVE_CHANNEL = 'typedBlocks.live'
-export const TYPED_BLOCKS_TYPE_CHANNEL = 'typedBlocks.type'
-export const TYPED_BLOCKS_PROPERTY_CHANNEL = 'typedBlocks.property'
-export const TYPED_BLOCKS_REFERENCE_CHANNEL = 'typedBlocks.reference'
-export const TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL = 'typedBlocks.referenceField'
-export const TYPED_BLOCKS_STRUCTURE_CHANNEL = 'typedBlocks.structure'
-export const TYPED_BLOCKS_REFS_OF_CHANNEL = 'typedBlocks.refsOf'
-export const TYPED_BLOCKS_LABEL_CHANNEL = 'typedBlocks.label'
-export const KERNEL_ALIASES_CHANNEL = 'kernel.aliases'
-export const KERNEL_CONTENT_CHANNEL = 'kernel.content'
+import {
+  KERNEL_ALIASES_CHANNEL,
+  KERNEL_CONTENT_CHANNEL,
+  TYPED_BLOCKS_LABEL_CHANNEL,
+  TYPED_BLOCKS_LIVE_CHANNEL,
+  TYPED_BLOCKS_PROPERTY_CHANNEL,
+  TYPED_BLOCKS_REFERENCE_CHANNEL,
+  TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL,
+  TYPED_BLOCKS_REFS_OF_CHANNEL,
+  TYPED_BLOCKS_STRUCTURE_CHANNEL,
+  TYPED_BLOCKS_TYPE_CHANNEL,
+  kernelAliasesKey,
+  kernelContentKey,
+  typedBlocksLabelKey,
+  typedBlocksLiveKey,
+  typedBlocksPropertyKey,
+  typedBlocksReferenceFieldKey,
+  typedBlocksReferenceKey,
+  typedBlocksRefsOfKey,
+  typedBlocksStructureKey,
+  typedBlocksTypeKey,
+} from '@/data/invalidation.js'
 
 const SEP = '\u0000'
-
-export const typedBlocksLiveKey = (workspaceId: string): string => workspaceId
-export const typedBlocksTypeKey = (workspaceId: string, type: string): string =>
-  `${workspaceId}${SEP}${type}`
-export const typedBlocksPropertyKey = (workspaceId: string, name: string): string =>
-  `${workspaceId}${SEP}${name}`
-export const typedBlocksReferenceKey = (workspaceId: string, targetId: string): string =>
-  `${workspaceId}${SEP}${targetId}`
-export const typedBlocksReferenceFieldKey = (
-  workspaceId: string,
-  targetId: string,
-  sourceField: string,
-): string => `${workspaceId}${SEP}${targetId}${SEP}${sourceField}`
-export const typedBlocksStructureKey = (workspaceId: string, blockId: string): string =>
-  `${workspaceId}${SEP}${blockId}`
-export const typedBlocksRefsOfKey = (workspaceId: string, blockId: string): string =>
-  `${workspaceId}${SEP}${blockId}`
-export const typedBlocksLabelKey = (workspaceId: string, blockId: string): string =>
-  `${workspaceId}${SEP}${blockId}`
-
-export const kernelAliasesKey = (workspaceId: string): string => workspaceId
-export const kernelContentKey = (workspaceId: string): string => workspaceId
 
 /** Property name that holds the type list. Mirrors `typesProp.name` from
  *  `data/properties.ts`; duplicated here so this module stays free of the
