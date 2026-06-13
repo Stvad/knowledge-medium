@@ -124,29 +124,26 @@ const formatLastSyncedAt = (date: Date | undefined): string => {
 }
 
 // The build the client is running. `display` is the committer-date version
-// (e.g. "2026.06.13-1216"); the short SHA links to the exact commit. A local
-// `dev` build (no `define` applied) collapses to a plain "dev".
+// (e.g. "2026.06.13-1216"); the short SHA links to the exact commit. Rendered
+// as quiet metadata — muted, no underline — with just a subtle hover tint to
+// hint it's clickable. A local `dev` build (no `define` applied) collapses to
+// a plain "dev".
 function AppVersionValue() {
   const {display, sha, commitUrl} = appVersion
-  if (sha === 'dev') return <span>{display}</span>
-  const inner = (
-    <>
-      {display}
-      <span className="text-muted-foreground"> · {sha}</span>
-    </>
-  )
-  return commitUrl ? (
+  const text = sha === 'dev' ? display : `${display} · ${sha}`
+  if (sha === 'dev' || !commitUrl) {
+    return <span className="text-muted-foreground">{text}</span>
+  }
+  return (
     <a
       href={commitUrl}
       target="_blank"
       rel="noreferrer"
-      className="underline-offset-2 hover:underline"
+      className="text-muted-foreground transition-colors hover:text-foreground"
       title={`Commit ${sha}`}
     >
-      {inner}
+      {text}
     </a>
-  ) : (
-    <span title={`Commit ${sha}`}>{inner}</span>
   )
 }
 
