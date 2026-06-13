@@ -1,6 +1,6 @@
 import type { Repo } from '@/data/repo'
 import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.js'
-import { runAnalyzeNow } from '@/data/internals/clientSchema.js'
+import { runAnalyzeNow } from '@/data/maintenance'
 import { showProgress } from '@/utils/toast.js'
 import { DatabaseZap } from 'lucide-react'
 
