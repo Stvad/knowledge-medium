@@ -29,6 +29,7 @@ import type {
   Mutator,
   MutatorRegistry,
   Query,
+  QueryCtx,
   QueryRegistry,
   ResolvedTypedBlockQuery,
   RepoTxOptions,
@@ -2349,6 +2350,48 @@ export class Repo {
     this.mutators = new Map(mutators.map(m => [m.name, m]))
   }
 
+  /** Build the `QueryCtx` handed to a query's `resolve`. `resolveCtx` is
+   *  the dependency sink: a handle's `ResolveContext` for a top-level
+   *  query, or a no-op sink for a `deps:'none'` sub-query — which drops
+   *  both `depend` and the row deps `hydrateBlocks` would declare, since
+   *  both route through the same sink. `ctx.run` composes another
+   *  registered query inline against that sink, so a composed query's
+   *  deps fold onto the owning handle. */
+  private makeQueryCtx(resolveCtx: ResolveContext): QueryCtx {
+    return {
+      db: this.db,
+      repo: this,
+      hydrateBlocks: (rows, opts) => this.hydrateRows(
+        rows as unknown as ReadonlyArray<BlockRow>,
+        {ctx: resolveCtx, declareRowDeps: opts?.declareRowDeps ?? true},
+      ),
+      depend: (dep) => resolveCtx.depend(dep),
+      run: ((name: string, args: unknown, opts?: {deps?: 'inherit' | 'none'}) =>
+        this.runSubquery(name, args, resolveCtx, opts?.deps ?? 'inherit')) as QueryCtx['run'],
+    }
+  }
+
+  /** Inline resolution for `QueryCtx.run`. Resolves the query by name
+   *  (literal, then `core.${name}`), validates args, and runs its
+   *  resolver with a `QueryCtx` whose deps route to `parentCtx`
+   *  (`inherit`) or to a no-op sink (`none`). No handle is created — the
+   *  sub-query is a reusable resolver, not its own cache/invalidation
+   *  unit. The result is NOT `resultSchema`-parsed here: it feeds the
+   *  calling resolver, whose own `resultSchema.parse` guards the
+   *  published value. */
+  private async runSubquery(
+    name: string,
+    args: unknown,
+    parentCtx: ResolveContext,
+    deps: 'inherit' | 'none',
+  ): Promise<unknown> {
+    const q = this.queries.get(name) ?? this.queries.get(`core.${name}`)
+    if (!q) throw new QueryNotRegisteredError(name)
+    const sink: ResolveContext = deps === 'none' ? {depend: () => {}} : parentCtx
+    const validated = q.argsSchema.parse(args) as never
+    return q.resolve(validated, this.makeQueryCtx(sink))
+  }
+
   /** Build the dispatcher closure for a query name. Same resolution
    *  order as `dispatchMutator`: literal name first, then
    *  `'core.${name}'`. The returned closure validates args via the
@@ -2384,15 +2427,7 @@ export class Repo {
           // path's wall-clock cost.
           const t0 = performance.now()
           try {
-            const raw = await q.resolve(validated, {
-              db: this.db,
-              repo: this,
-              hydrateBlocks: (rows, opts) => this.hydrateRows(
-                rows as unknown as ReadonlyArray<BlockRow>,
-                {ctx, declareRowDeps: opts?.declareRowDeps ?? true},
-              ),
-              depend: (dep) => ctx.depend(dep),
-            })
+            const raw = await q.resolve(validated, this.makeQueryCtx(ctx))
             // Result-schema parse at the boundary — symmetry with argsSchema
             // and the documented contract (Query.resultSchema is required).
             // For loose kernel schemas (`z.array(z.unknown())`) this is a

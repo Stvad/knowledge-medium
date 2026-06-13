@@ -58,7 +58,35 @@ export interface QueryCtx {
   ): BlockData[]
   /** Declare a dependency; engine uses these to invalidate this handle. */
   depend(dep: Dependency): void
+  /** Run another registered query *inline, in this resolver's dependency
+   *  scope*. No separate handle is created — the sub-query is just a
+   *  reusable resolver, and the calling handle stays the unit of caching
+   *  + invalidation. Compose `core.*` queries (or any registered query)
+   *  instead of re-deriving their SQL.
+   *
+   *  `opts.deps` controls how the sub-query's declared deps land:
+   *   - `'inherit'` (default): the sub-query's `depend` calls and its
+   *     `hydrateBlocks` row deps accumulate on *this* handle. The safe
+   *     direction — over-declaring only over-invalidates.
+   *   - `'none'`: run it for the data only and declare *no* deps; the
+   *     caller then declares its own (narrower) dep set. Use when you
+   *     know your true sensitivity is narrower than the generic query's.
+   *     Under-declaring leaves the handle stale, so opt in deliberately. */
+  run<K extends keyof QueryRegistry>(
+    name: K,
+    args: QueryArgsOf<QueryRegistry[K]>,
+    opts?: {deps?: 'inherit' | 'none'},
+  ): Promise<QueryResultOf<QueryRegistry[K]>>
 }
+
+/** Extract the args / result types of a registered query type (the values
+ *  stored in `QueryRegistry`). `any` in the unused slot sidesteps the
+ *  contravariance that would otherwise block the `infer` match — same
+ *  rationale as `AnyQuery`. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type QueryArgsOf<Q> = Q extends Query<infer A, any> ? A : never
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type QueryResultOf<Q> = Q extends Query<any, infer R> ? R : never
 
 export interface Query<Args, Result> {
   readonly name: string
