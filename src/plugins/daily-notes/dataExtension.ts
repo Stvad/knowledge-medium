@@ -4,7 +4,7 @@ import {
   typesFacet,
   workspaceBackfillsFacet,
 } from '@/data/facets'
-import type { AppExtension } from '@/extensions/facet.js'
+import type { AppExtension } from '@/facets/facet.js'
 import { dailyNoteDateBackfill } from './backfill.ts'
 import { dailyNotesLocalSchema } from './localSchema.ts'
 import { DAILY_NOTE_TYPE, dailyNoteDateProp, dailyNoteType } from './schema.ts'

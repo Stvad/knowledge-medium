@@ -2,8 +2,8 @@ import {
   blockContentRendererFacet,
 } from '@/extensions/blockInteraction.js'
 import { actionsFacet } from '@/extensions/core.js'
-import { AppExtension } from '@/extensions/facet.js'
-import { systemToggle } from '@/extensions/togglable.js'
+import { AppExtension } from '@/facets/facet.js'
+import { systemToggle } from '@/facets/togglable.js'
 import { blockEditingContentRenderer } from './interactions.tsx'
 import { enterBlockEditModeOnClickAction } from './clickToEditAction.ts'
 

@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
 import { codeMirrorExtensionsFacet } from '@/extensions/editor.js'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { markdownExtensionsFacet } from '@/markdown/extensions.js'
 import {
   invalidationRulesFacet,

@@ -3,7 +3,7 @@ import {
   actionsFacet,
   actionContextsFacet,
 } from '@/extensions/core.js'
-import type { AppExtension } from '@/extensions/facet.js'
+import type { AppExtension } from '@/facets/facet.js'
 import {
   shortcutSurfaceActivationsFacet,
   type ShortcutActivationContribution,

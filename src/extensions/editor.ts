@@ -1,7 +1,7 @@
 import type { Extension as CodeMirrorExtension } from '@codemirror/state'
 import type { Block } from '@/data/block.js'
 import type { Repo } from '@/data/repo.js'
-import { defineFacet, isFunction } from './facet.ts'
+import { defineFacet, isFunction } from '@/facets/facet.js'
 
 export interface CodeMirrorExtensionContext {
   repo: Repo

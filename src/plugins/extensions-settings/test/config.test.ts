@@ -9,7 +9,7 @@
 import {describe, expect, it} from 'vitest'
 import {CodecError} from '@/data/api'
 import {overridesCodec} from '@/plugins/extensions-settings/config.js'
-import type {Overrides} from '@/extensions/togglable.js'
+import type {Overrides} from '@/facets/togglable.js'
 
 // The codec id (`overridesCodec.type`) and the prefs block-type id/label are
 // source literals — restating them here can't catch a regression the way the

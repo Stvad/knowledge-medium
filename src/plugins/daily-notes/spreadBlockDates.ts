@@ -12,7 +12,7 @@
  * but not `updated`.
  */
 import type { Block } from '@/data/block'
-import type { FacetRuntime } from '@/extensions/facet.js'
+import type { FacetRuntime } from '@/facets/facet.js'
 import { addDaysIso, todayIso } from './dailyNotes.ts'
 import { pickBlockDateAdapter } from './blockDateAdapter.ts'
 

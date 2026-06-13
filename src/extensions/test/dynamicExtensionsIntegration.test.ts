@@ -9,8 +9,8 @@ import {
   defineFacet,
   resolveFacetRuntime,
   type AppExtension,
-} from '@/extensions/facet'
-import type { Overrides } from '@/extensions/togglable'
+} from '@/facets/facet'
+import type { Overrides } from '@/facets/togglable'
 import type { Repo } from '../../data/repo'
 import type { BlockData } from '@/data/api'
 

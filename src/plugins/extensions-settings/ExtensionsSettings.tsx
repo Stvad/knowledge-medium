@@ -20,8 +20,8 @@
 import {Fragment, useMemo} from 'react'
 import {Checkbox} from '@/components/ui/checkbox.js'
 import {Label} from '@/components/ui/label.js'
-import type {ToggleNode} from '@/extensions/discoverToggleTree.js'
-import {isEnabled, type Overrides, type Togglable} from '@/extensions/togglable.js'
+import type {ToggleNode} from '@/facets/discoverToggleTree.js'
+import {isEnabled, type Overrides, type Togglable} from '@/facets/togglable.js'
 import {buildAppHash} from '@/utils/routing.js'
 
 /** Stable-sort the tree so essentials surface first within each level,

@@ -18,7 +18,7 @@
  */
 
 import {clientLocalSettings, type ClientLocalSettings} from '@/utils/ClientLocalSettings.js'
-import type {Overrides} from '@/extensions/togglable.js'
+import type {Overrides} from '@/facets/togglable.js'
 
 const CACHE_KEY_PREFIX = 'extensions.overrides'
 

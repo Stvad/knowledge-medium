@@ -5,7 +5,7 @@ import {
   BlockInteractionContext,
   shortcutSurfaceActivationsFacet,
 } from '@/extensions/blockInteraction.js'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import {
   ActionContextTypes,
   type ActionConfig,

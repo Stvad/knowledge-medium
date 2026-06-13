@@ -3,7 +3,7 @@ import {
   queriesFacet,
 } from '@/data/facets.js'
 import { pluginPrefsExtension } from '@/data/pluginStateExtensions.js'
-import type { AppExtension } from '@/extensions/facet.js'
+import type { AppExtension } from '@/facets/facet.js'
 import { backlinksForBlockQuery } from './query.ts'
 import { backlinksFilterProp } from './filterProperty.ts'
 import { backlinksPrefsType, dailyNoteBacklinksDefaultsProp } from './dailyNoteDefaults.ts'

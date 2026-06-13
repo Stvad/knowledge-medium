@@ -3,7 +3,7 @@ import {
   KEYBINDING_OVERRIDE_USER_SOURCE,
   keybindingOverridesFacet,
 } from '@/shortcuts/keybindingOverrides.js'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { keybindingOverridesProp } from '../config.ts'
 import {
   pushOverridesToRuntime,

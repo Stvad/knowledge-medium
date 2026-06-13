@@ -1,5 +1,5 @@
 import type { BlockResolveContext } from '@/extensions/blockInteraction.js'
-import { defineVariantFacet, type Variant } from '@/extensions/variantFacet.js'
+import { defineVariantFacet, type Variant } from '@/facets/variantFacet.js'
 import type { ComponentType, ReactNode } from 'react'
 import type { BlockRendererProps } from '@/types.js'
 

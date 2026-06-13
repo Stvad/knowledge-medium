@@ -8,7 +8,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { Repo } from '@/data/repo'
 import type { Block } from '@/data/block'
 import { actionContextsFacet, actionTransformsFacet, actionsFacet } from '@/extensions/core'
-import { resolveFacetRuntimeSync, type AppExtension, type FacetRuntime } from '@/extensions/facet'
+import { resolveFacetRuntimeSync, type AppExtension, type FacetRuntime } from '@/facets/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
 import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler'

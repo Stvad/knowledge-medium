@@ -4,8 +4,8 @@ import {
   type PanelMountContribution,
 } from '@/extensions/core.js'
 import { continuousGestureRecognizersFacet } from '@/extensions/continuousGestures.js'
-import type { AppExtension } from '@/extensions/facet.js'
-import { systemToggle } from '@/extensions/togglable.js'
+import type { AppExtension } from '@/facets/facet.js'
+import { systemToggle } from '@/facets/togglable.js'
 import { SwipeActionMenu } from './SwipeActionMenu.tsx'
 import {
   DEFAULT_QUICK_ACTION_ITEMS,

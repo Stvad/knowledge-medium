@@ -2,7 +2,7 @@ import { BlockRendererProps } from '../types'
 import { rendererProp } from '@/data/properties.js'
 import { usePropertyValue, useData } from '@/hooks/block.js'
 import { blockRenderersFacet } from '@/extensions/core.js'
-import { refreshAppRuntime } from '@/extensions/runtimeEvents.js'
+import { refreshAppRuntime } from '@/facets/runtimeEvents.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 
 export { defaultRegistry } from '@/extensions/defaultRenderers.js'

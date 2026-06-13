@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resolveFacetRuntimeSync } from '@/extensions/facet'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { aliasesProp } from '@/data/internals/coreProperties'
 import { propertySchemasFacet, typesFacet } from '@/data/facets'
 import { MAP_TYPE, PLACE_TYPE } from '../blockTypes'

@@ -18,7 +18,7 @@ import {dynamicExtensionsExtension} from '@/extensions/dynamicExtensions.js'
 import {
   discoverToggleTree,
   type ToggleNode,
-} from '@/extensions/discoverToggleTree.js'
+} from '@/facets/discoverToggleTree.js'
 import {useAppRuntime} from '@/extensions/runtimeContext.js'
 import {staticAppExtensions} from '@/extensions/staticAppExtensions.js'
 import {useOverrides} from '@/extensions/useOverrides.js'

@@ -11,9 +11,9 @@ import {
   resolveFacetRuntime,
   type AppExtension,
   type FacetContribution,
-} from '@/extensions/facet'
-import { getBoundary } from '@/extensions/togglable'
-import type { Overrides } from '@/extensions/togglable'
+} from '@/facets/facet'
+import { getBoundary } from '@/facets/togglable'
+import type { Overrides } from '@/facets/togglable'
 import type { Repo } from '../../data/repo'
 import type { BlockData } from '@/data/api'
 
@@ -244,7 +244,7 @@ describe('dynamicExtensionsExtension — provenance', () => {
       })
       // resolveAppRuntime (not resolveFacetRuntime) is what production
       // uses — it's the one that recurses into `enables`.
-      const {resolveAppRuntime} = await import('@/extensions/resolveAppRuntime.js')
+      const {resolveAppRuntime} = await import('@/facets/resolveAppRuntime.js')
       const runtime = await resolveAppRuntime([ext], {overrides: enableBlocks(blocks)})
 
       const sources = runtime.contributions(labelsFacet).map(c => c.source)

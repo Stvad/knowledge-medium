@@ -14,7 +14,7 @@
  */
 import type {AppEffect} from '@/extensions/core.js'
 import {getPluginPrefsBlock} from '@/data/stateBlocks.js'
-import type {FacetRuntime} from '@/extensions/facet.js'
+import type {FacetRuntime} from '@/facets/facet.js'
 import type {PropertySchema} from '@/data/api'
 import {
   KEYBINDING_OVERRIDE_USER_SOURCE,

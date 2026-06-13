@@ -8,9 +8,9 @@
  * for a user already hitting query freezes.
  */
 import type { Repo } from '@/data/repo'
-import type { AppExtension } from '@/extensions/facet.js'
+import type { AppExtension } from '@/facets/facet.js'
 import { actionsFacet } from '@/extensions/core.js'
-import { systemToggle } from '@/extensions/togglable.js'
+import { systemToggle } from '@/facets/togglable.js'
 import { rebuildQueryStatsAction } from './action.ts'
 
 export const dbMaintenancePlugin = ({repo}: {repo: Repo}): AppExtension =>

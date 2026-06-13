@@ -3,11 +3,11 @@ import type ReactDOM from 'react-dom'
 import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
 import type { BlockData } from '@/data/api'
-import type { FacetRuntime } from '@/extensions/facet.js'
+import type { FacetRuntime } from '@/facets/facet.js'
 import type { blockRenderersFacet } from '@/extensions/core.js'
 import type { ActionConfig } from '@/shortcuts/types.js'
 import type { BlockProperties } from '@/types.js'
-import type { refreshAppRuntime } from '@/extensions/runtimeEvents.js'
+import type { refreshAppRuntime } from '@/facets/runtimeEvents.js'
 
 export type SqlMode = 'all' | 'get' | 'optional' | 'execute'
 export type BlockPosition = 'first' | 'last' | number

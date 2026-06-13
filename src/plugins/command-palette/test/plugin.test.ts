@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
 import { ActionContextTypes } from '@/shortcuts/types.js'
 import {

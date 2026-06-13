@@ -16,8 +16,8 @@
  */
 import { Toaster } from 'sonner'
 import { appMountsFacet } from './core.ts'
-import type { AppExtension } from './facet.ts'
-import { systemToggle } from './togglable.ts'
+import type { AppExtension } from '@/facets/facet.js'
+import { systemToggle } from '@/facets/togglable.js'
 
 export const ToastAppMount = () => (
   <Toaster position="top-center" richColors closeButton />

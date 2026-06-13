@@ -6,7 +6,7 @@ import {
   blockContentRendererFacet,
   BlockInteractionContext,
 } from '@/extensions/blockInteraction.js'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import type { ActionTrigger, BlockPointerDependencies } from '@/shortcuts/types.js'
 import { blockEditingContentRenderer } from '../interactions.tsx'
 import { enterBlockEditModeOnClickAction } from '../clickToEditAction.ts'

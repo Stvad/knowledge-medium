@@ -9,8 +9,8 @@
 
 import { propertyEditorOverridesFacet } from '@/data/facets'
 import { blockContentDecoratorsFacet } from '@/extensions/blockInteraction.js'
-import type { AppExtension } from '@/extensions/facet'
-import { systemToggle } from '@/extensions/togglable'
+import type { AppExtension } from '@/facets/facet'
+import { systemToggle } from '@/facets/togglable'
 import { referencesPlugin } from '@/plugins/references'
 import { geoDataExtension } from './dataExtension'
 import { geoContentDecoratorContribution } from './geoContentDecorator'

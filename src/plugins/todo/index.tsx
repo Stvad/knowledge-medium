@@ -7,8 +7,8 @@ import {
   type BlockContentDecorator,
   type BlockContentDecoratorContribution,
 } from '@/extensions/blockInteraction.js'
-import type { AppExtension } from '@/extensions/facet.js'
-import { systemToggle } from '@/extensions/togglable.js'
+import type { AppExtension } from '@/facets/facet.js'
+import { systemToggle } from '@/facets/togglable.js'
 import { usePropertyValue } from '@/hooks/block.js'
 import type { BlockRenderer, BlockRendererProps } from '@/types.js'
 import { todoActionsExtension } from './actions.ts'

@@ -30,15 +30,10 @@
  *     returns. This is the ps_crud / updated_at gate the doc calls out.
  */
 
-/** How a workspace's rows should be materialized into `blocks`. */
-export type Materializability =
-  /** e2ee with the WK loaded — decrypt the content columns. */
-  | 'decrypt'
-  /** plaintext workspace — copy the row through unchanged (no key). */
-  | 'copy'
-  /** e2ee without WK (locked / key-required) or encryption-uncertain —
-   *  can't turn into plaintext yet; leave staged. */
-  | 'defer'
+// `Materializability` is sync-seam vocabulary shared with the §6 resolver;
+// it lives in the data-free `@/sync/transform` layer. `materialize.ts`
+// re-exports it for the observer's callers; reconcile only consumes it.
+import type { Materializability } from '@/sync/transform.js'
 
 /** Local state for the block id a staging row targets. */
 export interface LocalRowState {

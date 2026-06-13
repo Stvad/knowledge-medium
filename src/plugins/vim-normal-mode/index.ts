@@ -2,8 +2,8 @@ import {
   shortcutSurfaceActivationsFacet,
 } from '@/extensions/blockInteraction.js'
 import { actionsFacet, actionTransformsFacet } from '@/extensions/core.js'
-import { AppExtension } from '@/extensions/facet.js'
-import { systemToggle } from '@/extensions/togglable.js'
+import { AppExtension } from '@/facets/facet.js'
+import { systemToggle } from '@/facets/togglable.js'
 import { Repo } from '../../data/repo'
 import { vimNormalModeActionsExtension } from './actions.ts'
 import {

@@ -6,7 +6,7 @@ import {
   type Schema,
 } from '@/data/api'
 import { mutatorsFacet, queriesFacet } from '@/data/facets.js'
-import type { AppExtension } from '@/extensions/facet.js'
+import type { AppExtension } from '@/facets/facet.js'
 import {
   KERNEL_CONTENT_CHANNEL,
   kernelContentKey,

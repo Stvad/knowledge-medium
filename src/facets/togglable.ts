@@ -1,6 +1,15 @@
 /**
  * Togglable primitives — the runtime enable/disable surface.
  *
+ * Part of the zero-data facet kernel (`src/facets/`): this file depends
+ * only on `facet.ts` and imports nothing from `@/data`. Building a
+ * toggle from an extension *block* means reading block properties to
+ * resolve a display name — that decode lives one layer up, in
+ * `@/extensions/extensionToggles.ts`, which resolves the labels and
+ * passes plain strings into `userToggle` here. Keeping the block-decode
+ * out of the kernel is what lets `@/data` import these primitives
+ * without a data↔facets cycle.
+ *
  * The shipping shapes match docs/plugin-runtime-toggle/design.ts. The
  * design file is a typechecked sketch (`yarn tsc --noEmit -p
  * docs/tsconfig.json`); this file is the real implementation. Anything
@@ -16,22 +25,17 @@
  *     registry of handles.
  *
  *   - Two factories, deliberately not one:
- *       systemToggle({...})        — full surface
- *       userExtensionToggle(block) — id locked to block.id,
- *                                    defaultEnabled forced to false
+ *       systemToggle({...})    — full surface, app-supplied metadata
+ *       userToggle({id, name}) — id + display metadata supplied by the
+ *                                caller; defaultEnabled forced to false
  *     The asymmetry is type-enforced: user extensions are loaded by
  *     compiling a module, which we *skip* unless an override is `true`,
- *     so display metadata must come from block properties that can be
- *     read without compiling executable code.
+ *     so display metadata must be resolvable without compiling
+ *     executable code. The `@/extensions/extensionToggles.ts` wrappers
+ *     produce that metadata from block properties.
  */
 
-import type {AppExtension} from '@/extensions/facet.js'
-import type {BlockData} from '@/data/api'
-import {aliasesProp} from '@/data/internals/coreProperties.js'
-import {
-  extensionDescriptionProp,
-  extensionNameProp,
-} from '@/data/properties.js'
+import type {AppExtension} from '@/facets/facet.js'
 
 // ──────────────────────────────────────────────────────────────────────
 // Handle + boundary marker
@@ -50,7 +54,7 @@ export interface Togglable {
   readonly description?: string
   readonly essential?: boolean
   /** undefined ≡ true. Honoured for built-in extensions; forced false for
-   *  user extensions (see `userExtensionToggle`). */
+   *  user extensions (see `userToggle`). */
   readonly defaultEnabled?: boolean
   readonly kind: TogglableKind
   of(ext: AppExtension): AppExtension
@@ -117,72 +121,36 @@ export function systemToggle(opts: SystemToggleOptions): Togglable {
   return handle
 }
 
-/** Resolve a display name from block-level data only — no module
- *  compilation. Used as the disabled-shell name AND as the fallback
- *  for enabled extension boundaries. */
-function blockStringProperty(
-  block: BlockData,
-  schema: typeof extensionNameProp | typeof extensionDescriptionProp,
-): string | undefined {
-  const encoded = block.properties[schema.name]
-  if (encoded === undefined) return undefined
-  try {
-    const value = schema.codec.decode(encoded).trim()
-    return value.length > 0 ? value : undefined
-  } catch {
-    return undefined
-  }
+/** Display metadata for a user toggle. The caller (today,
+ *  `@/extensions/extensionToggles.ts`) resolves these from extension
+ *  block properties — without compiling the block — and passes them in,
+ *  so this kernel stays free of any `@/data` dependency. */
+export interface UserToggleOptions {
+  /** Locked to the extension block id by the caller. */
+  id: string
+  /** Pre-resolved display name (already falls back to alias / id snippet
+   *  upstream). */
+  name: string
+  /** Pre-resolved description, if the block carries one. */
+  description?: string
 }
 
-function blockOnlyName(block: BlockData): string {
-  const extensionName = blockStringProperty(block, extensionNameProp)
-  if (extensionName) return extensionName
-
-  const firstAlias = extensionAliasValues(block).find(alias => alias.trim().length > 0)
-  if (firstAlias) return firstAlias
-
-  // Settings UI renders this string as a link to the block.
-  return `Extension ${block.id.slice(0, 8)}`
-}
-
-/** Every label that identifies this extension block: the explicit
- *  `extension:name` plus any aliases. The agent bridge uses this to
- *  resolve `enable-extension <label>` / `uninstall-extension <label>`
- *  to a block; the settings UI uses `blockOnlyName` (above) for
- *  display. Same input, different projection. */
-export function extensionAliasValues(block: BlockData): string[] {
-  const aliases = (() => {
-    const encoded = block.properties[aliasesProp.name]
-    if (encoded === undefined) return [] as string[]
-    try {
-      return aliasesProp.codec.decode(encoded)
-    } catch {
-      return [] as string[]
-    }
-  })()
-  const extensionName = blockStringProperty(block, extensionNameProp)
-  return extensionName ? [...aliases, extensionName] : aliases
-}
-
-export function userExtensionToggle(
-  block: BlockData,
-): Togglable {
+/** User-extension toggle: `essential` and `kind` are fixed, and
+ *  `defaultEnabled` is forced to `false` so an extension's module code
+ *  never runs until an explicit `true` override opts it in. Unlike
+ *  `systemToggle`, the display metadata is supplied by the caller rather
+ *  than read here — see `UserToggleOptions`. */
+export function userToggle(opts: UserToggleOptions): Togglable {
   const handle: Togglable = {
-    id: block.id,
-    name: blockOnlyName(block),
-    description: blockStringProperty(block, extensionDescriptionProp),
+    id: opts.id,
+    name: opts.name,
+    description: opts.description,
     essential: false,
     defaultEnabled: false,
     kind: 'user',
     of: (ext) => markBoundary(handle, ext),
   }
   return handle
-}
-
-/** Disabled-shell variant. Same factory: all metadata is block-local,
- *  so no module compilation is needed. */
-export function userExtensionShellToggle(block: BlockData): Togglable {
-  return userExtensionToggle(block)
 }
 
 // ──────────────────────────────────────────────────────────────────────
