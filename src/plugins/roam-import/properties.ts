@@ -3,6 +3,7 @@ import {
   parseReferences,
   type ParsedReference,
 } from '@/plugins/references/referenceParser.js'
+import { rewriteRoamHashtags } from './content.js'
 import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.js'
 import { parseLiteralDailyPageTitle } from '@/utils/relativeDate.js'
 
@@ -290,7 +291,7 @@ export const collectAliasesFromRoamSemanticRefListValue = (
   }
   if (typeof value !== 'string') return []
 
-  const trimmed = value.trim()
+  const trimmed = rewriteSemanticRefListValue(value)
   if (!trimmed) return []
 
   const tokens = parsePageTokenList(trimmed)
@@ -304,6 +305,20 @@ export const collectAliasesFromRoamSemanticRefListValue = (
     return isConservativePlainAlias(trimmed) ? [trimmed] : []
   }
   return looksSerializedJson(trimmed) ? [] : [trimmed]
+}
+
+// Roam attribute values can use bare `#tag` syntax (`isa:: #CFAR
+// #Coaching`). Rewrite to `[[tag]]` wikilinks before alias extraction so
+// each tag becomes its own page ref — otherwise the whole hashtag string
+// was captured as one literal page title (`#CFAR #Coaching`). Quoted-list
+// and serialized-JSON values keep their `#`, since a `#` there isn't a
+// Roam tag.
+const rewriteSemanticRefListValue = (value: string): string => {
+  const trimmed = value.trim()
+  if (!trimmed.includes('#')) return trimmed
+  if (trimmed.startsWith('"') || trimmed.startsWith("'")) return trimmed
+  if (looksSerializedJson(trimmed)) return trimmed
+  return rewriteRoamHashtags(trimmed)
 }
 
 export const collectAliasesFromRoamSemanticRefListProperties = (
@@ -327,7 +342,7 @@ const collectReferencedAliasesFromRoamSemanticRefListValue = (
   }
   if (typeof value !== 'string') return []
 
-  const trimmed = value.trim()
+  const trimmed = rewriteSemanticRefListValue(value)
   if (!trimmed) return []
 
   const tokens = parsePageTokenList(trimmed)
