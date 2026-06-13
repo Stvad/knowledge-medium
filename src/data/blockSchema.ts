@@ -106,33 +106,6 @@ export const CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL = `
   WHERE deleted = 0
 `
 
-/**
- * Idempotent local-schema migration for the `user_updated_at` split.
- * `blocks` / `blocks_synced` are created with CREATE TABLE IF NOT EXISTS, so
- * adding the column to `BLOCK_STORAGE_COLUMNS` does NOT add it to an existing
- * device's tables — yet it immediately appears in every generated statement
- * (INSERT_SQL, the observer's upsert, the raw-table put), so an un-migrated
- * device would fail "no such column" on the first write/sync. Mirrors
- * `ensureWorkspaceE2eeColumns`: PRAGMA table_info + ALTER TABLE ADD COLUMN,
- * guarded so a fresh install (column already present from CREATE) doesn't
- * throw "duplicate column name". Applies to BOTH tables. The one-shot backfill
- * mirrors `updated_at` into the app-visible `blocks` table; `parseBlockRow`
- * falls back to `updated_at` regardless, and `blocks_synced` is overwritten by
- * sync deliveries, so only `blocks` needs the stored value.
- */
-export const ensureBlockUserUpdatedAtColumn = async (db: {
-  execute: (sql: string) => Promise<unknown>
-  getAll: <T>(sql: string) => Promise<T[]>
-}): Promise<void> => {
-  for (const table of ['blocks', 'blocks_synced'] as const) {
-    const columns = await db.getAll<{ name: string }>(`PRAGMA table_info(${table})`)
-    if (!columns.some((c) => c.name === 'user_updated_at')) {
-      await db.execute(`ALTER TABLE ${table} ADD COLUMN user_updated_at INTEGER`)
-    }
-  }
-  await db.execute('UPDATE blocks SET user_updated_at = updated_at WHERE user_updated_at IS NULL')
-}
-
 const powerSyncParamForColumn = (columnName: BlockColumnName): PendingStatementParameter =>
   columnName === 'id' ? 'Id' : {Column: columnName}
 

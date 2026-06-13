@@ -47,6 +47,7 @@ import {
   analyzeIsWarranted,
   backfillBlockAliasesIfEmpty,
   backfillBlocksFtsIfEmpty,
+  ensureBlockUserUpdatedAtColumn,
   getBlocksStatEstimate,
   runAnalyzeIfStale,
   runAnalyzeNow,
@@ -1138,5 +1139,69 @@ describe('block_types side-index triggers', () => {
     expect(types()).toHaveLength(2)
     h.deleteBlock('b1')
     expect(types()).toEqual([])
+  })
+})
+
+// Table-aware db stand-in: PRAGMA table_info(<t>) returns the columns declared
+// for <t>, and every executed statement is recorded in order.
+const fakeMigrationDb = (columnsByTable: Record<string, string[]>) => {
+  const executed: string[] = []
+  return {
+    executed,
+    execute: async (sql: string) => { executed.push(sql) },
+    getAll: async <T,>(sql: string): Promise<T[]> => {
+      const table = sql.match(/table_info\((\w+)\)/)?.[1] ?? ''
+      return (columnsByTable[table] ?? []).map((name) => ({name})) as unknown as T[]
+    },
+  }
+}
+
+describe('ensureBlockUserUpdatedAtColumn — local migration', () => {
+  it('adds the column to BOTH tables and backfills blocks with the audit trigger suspended', async () => {
+    const db = fakeMigrationDb({
+      blocks: ['id', 'updated_at'],
+      blocks_synced: ['id', 'updated_at'],
+    })
+    await ensureBlockUserUpdatedAtColumn(db)
+    const e = db.executed
+
+    expect(e.filter(s => s.includes('ADD COLUMN user_updated_at'))).toHaveLength(2)
+    expect(e.some(s => s.includes('ALTER TABLE blocks ADD COLUMN user_updated_at'))).toBe(true)
+    expect(e.some(s => s.includes('ALTER TABLE blocks_synced ADD COLUMN user_updated_at'))).toBe(true)
+
+    // The backfill is bracketed: drop the unconditional row_event trigger, run
+    // the UPDATE trigger-free, then recreate it — so it never writes one
+    // row_events row per block (the burst this fix exists to prevent).
+    const dropAt = e.findIndex(s => /DROP TRIGGER IF EXISTS blocks_row_event_update/.test(s))
+    const updateAt = e.findIndex(s => /UPDATE blocks SET user_updated_at = updated_at/.test(s))
+    const recreateAt = e.findIndex(s => /CREATE TRIGGER IF NOT EXISTS\s+blocks_row_event_update/.test(s))
+    expect(dropAt).toBeGreaterThanOrEqual(0)
+    expect(dropAt).toBeLessThan(updateAt)     // dropped before the backfill UPDATE
+    expect(updateAt).toBeLessThan(recreateAt) // recreated after it
+  })
+
+  it('does NOT backfill or touch the trigger when the column already exists (fresh install / steady state)', async () => {
+    const db = fakeMigrationDb({
+      blocks: ['id', 'updated_at', 'user_updated_at'],
+      blocks_synced: ['id', 'updated_at', 'user_updated_at'],
+    })
+    await ensureBlockUserUpdatedAtColumn(db)
+    expect(db.executed.some(s => s.includes('ADD COLUMN'))).toBe(false)
+    expect(db.executed.some(s => /UPDATE blocks SET user_updated_at/.test(s))).toBe(false)
+    expect(db.executed.some(s => /blocks_row_event_update/.test(s))).toBe(false)
+  })
+
+  it('adds only blocks_synced (no backfill) when only it is missing the column', async () => {
+    const db = fakeMigrationDb({
+      blocks: ['id', 'updated_at', 'user_updated_at'],
+      blocks_synced: ['id', 'updated_at'],
+    })
+    await ensureBlockUserUpdatedAtColumn(db)
+    const alters = db.executed.filter(s => s.includes('ADD COLUMN'))
+    expect(alters).toHaveLength(1)
+    expect(alters[0]).toContain('ALTER TABLE blocks_synced')
+    // blocks already had the column → no backfill, trigger untouched.
+    expect(db.executed.some(s => /UPDATE blocks SET user_updated_at/.test(s))).toBe(false)
+    expect(db.executed.some(s => /blocks_row_event_update/.test(s))).toBe(false)
   })
 })

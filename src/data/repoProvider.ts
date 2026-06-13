@@ -43,7 +43,6 @@ import {
   CREATE_BLOCKS_SYNCED_TABLE_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
-  ensureBlockUserUpdatedAtColumn,
 } from '@/data/blockSchema'
 import {
   CREATE_WORKSPACES_TABLE_SQL,
@@ -58,6 +57,7 @@ import {
   backfillBlockAliasesIfEmpty,
   backfillBlocksFtsIfEmpty,
   backfillBlockTypesIfEmpty,
+  ensureBlockUserUpdatedAtColumn,
   runAnalyzeIfStale,
 } from '@/data/internals/clientSchema'
 import { scheduleIdle } from '@/utils/scheduleIdle.js'
