@@ -16,7 +16,7 @@ import type {
   FacetResolveContext,
 } from '@/extensions/facet'
 import type {BlockData} from '@/data/api/blockData'
-import {aliasesProp} from '@/data/internals/coreProperties'
+import {aliasesProp} from '@/data/properties'
 import {
   extensionDescriptionProp,
   extensionNameProp,

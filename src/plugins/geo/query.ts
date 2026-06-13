@@ -96,14 +96,15 @@ export const placesUnderBlockQuery = defineQuery<{rootBlockId: string}, MapPin[]
   resultSchema: pinArraySchema,
   resolve: async ({rootBlockId}, ctx) => {
     if (!rootBlockId) return []
-    ctx.depend({kind: 'row', id: rootBlockId})
-    ctx.depend({kind: 'parent-edge', parentId: rootBlockId})
 
-    // deps:'none' — the loop below declares an explicit row dep for every
-    // subtree block (right next to the per-block work that depends on its
-    // content/properties/references), so core.subtree's own row/parent-edge
-    // deps must not fold in on top.
-    const blocks = await ctx.run('core.subtree', {id: rootBlockId}, {deps: 'none'})
+    // inherit (default): core.subtree folds its row + parent-edge deps for
+    // the root and every descendant onto this handle — exactly the set geo
+    // needs, so it re-resolves when a descendant's content / properties /
+    // references change or the tree structure shifts. (core.subtree declares
+    // the root's row + parent-edge deps before its SQL, so a missing-root
+    // subtree still reacts when the root appears.) Places referenced from
+    // *outside* the subtree get their own row dep in loadPlace below.
+    const blocks = await ctx.run('core.subtree', {id: rootBlockId})
 
     // Cache resolved Places so a hundred notes pointing at the same
     // Place hit SQL once.
@@ -121,12 +122,6 @@ export const placesUnderBlockQuery = defineQuery<{rootBlockId: string}, MapPin[]
 
     const pins: MapPin[] = []
     for (const block of blocks) {
-      ctx.depend({kind: 'parent-edge', parentId: block.id})
-      // Row dep so the query re-resolves when any descendant's
-      // content / properties / references change — adding `[[Dandelion]]`
-      // to a body, removing a `location` prop, etc.
-      ctx.depend({kind: 'row', id: block.id})
-
       if (isPlace(block)) {
         const pin = pinFromPlace(block, block)
         if (pin) pins.push(pin)
