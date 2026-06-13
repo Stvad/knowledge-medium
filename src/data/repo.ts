@@ -2259,17 +2259,24 @@ export class Repo {
    *  handle-store keys for those queries so subsequent dispatch
    *  produces fresh `LoaderHandle`s bound to the new resolvers. */
   private swapQueries(newQueries: Map<string, AnyQuery>): void {
+    const bumped: string[] = []
     for (const [name, newQ] of newQueries) {
       if (this.queries.get(name) !== newQ) {
         this.queryGenerations.set(name, (this.queryGenerations.get(name) ?? 0) + 1)
+        bumped.push(name)
       }
     }
     for (const oldName of this.queries.keys()) {
       if (!newQueries.has(oldName)) {
         this.queryGenerations.set(oldName, (this.queryGenerations.get(oldName) ?? 0) + 1)
+        bumped.push(oldName)
       }
     }
     this.queries = newQueries
+    // Re-resolve handles that composed a swapped query via `ctx.run`
+    // (they declared a `{kind:'query', name}` dep). Direct-dispatch
+    // handles already refresh via their generation-keyed slot.
+    if (bumped.length > 0) this.handleStore.invalidate({queries: bumped})
   }
 
   /** Wait until the post-commit processor framework has nothing
@@ -2387,9 +2394,21 @@ export class Repo {
   ): Promise<unknown> {
     const q = this.queries.get(name) ?? this.queries.get(`core.${name}`)
     if (!q) throw new QueryNotRegisteredError(name)
+    // The caller's handle depends on this query's identity so that
+    // swapping *only* the composed query (its generation bumps in
+    // `swapQueries`) re-resolves the caller — matching the freshness a
+    // direct `repo.query.X` lookup gets from its generation-keyed handle.
+    // Declared on `parentCtx` (not the possibly-suppressed `sink`) so it
+    // lands even under `deps:'none'`: identity is structural, not a data dep.
+    parentCtx.depend({kind: 'query', name: q.name})
     const sink: ResolveContext = deps === 'none' ? {depend: () => {}} : parentCtx
     const validated = q.argsSchema.parse(args) as never
-    return q.resolve(validated, this.makeQueryCtx(sink))
+    const raw = await q.resolve(validated, this.makeQueryCtx(sink))
+    // Parse through the callee's resultSchema so a composed query honors
+    // the same `Query<Args, Result>` contract as a direct dispatch — the
+    // caller may consume the value before its own (possibly pass-through)
+    // resultSchema runs.
+    return q.resultSchema.parse(raw)
   }
 
   /** Build the dispatcher closure for a query name. Same resolution

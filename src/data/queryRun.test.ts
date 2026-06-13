@@ -16,12 +16,19 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
-import { ChangeScope, defineQuery } from '@/data/api'
+import { ChangeScope, defineQuery, type Query } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { queriesFacet } from '@/data/facets'
 import { Repo } from '@/data/repo'
+
+// Typed name for the composed helper the swap test exercises.
+declare module '@/data/api' {
+  interface QueryRegistry {
+    'plugin:composedHelper': Query<{tag: string}, string>
+  }
+}
 
 const WS = 'ws-1'
 
@@ -128,6 +135,37 @@ describe('QueryCtx.run', () => {
       // Exactly one re-resolve (the tracer). If the gc edit had folded a
       // dep, this would be 3.
       expect(resolves).toBe(2)
+    } finally {
+      unsub()
+    }
+  })
+
+  it('re-resolves a composed caller when only the helper query is swapped', async () => {
+    const makeHelper = (marker: string) =>
+      defineQuery<{tag: string}, string>({
+        name: 'plugin:composedHelper',
+        argsSchema: z.object({tag: z.string()}),
+        resultSchema: z.string(),
+        resolve: async ({tag}) => `${marker}:${tag}`,
+      })
+    // Same instance across both swaps — only the helper changes, so the
+    // outer handle's own generation never bumps. Without the {kind:'query'}
+    // dep it would keep serving the v1 result.
+    const outer = defineQuery<{tag: string}, string>({
+      name: 'plugin:composedOuter',
+      argsSchema: z.object({tag: z.string()}),
+      resultSchema: z.string(),
+      resolve: async ({tag}, ctx) => ctx.run('plugin:composedHelper', {tag}),
+    })
+
+    repo.__setQueriesForTesting([makeHelper('v1'), outer])
+    const handle = repo.query['plugin:composedOuter']({tag: 'a'})
+    expect(await handle.load()).toBe('v1:a')
+
+    const unsub = handle.subscribe(() => {})
+    try {
+      repo.__setQueriesForTesting([makeHelper('v2'), outer])
+      await vi.waitFor(() => expect(handle.peek()).toBe('v2:a'))
     } finally {
       unsub()
     }
