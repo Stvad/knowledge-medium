@@ -46,6 +46,7 @@ const richBlock = (overrides: Partial<BlockData> = {}): BlockData => ({
   references: [{ id: 'target-1', alias: 'Target', sourceField: 'body' }],
   createdAt: 1700000000000,
   updatedAt: 1700000000000,
+  userUpdatedAt: 1700000000000,
   createdBy: 'user-1',
   updatedBy: 'user-1',
   deleted: false,
@@ -96,7 +97,7 @@ const stageAndMaterialize = async (db: TestDb['db'], b: BlockData) => {
   return materializeStagingRows(
     db,
     { upserted: [b.id], removed: [] },
-    { getMaterializability: constMat('copy'), getCek: noKey, currentUserId: 'user-1' },
+    { getMaterializability: constMat('copy'), getCek: noKey },
   )
 }
 
@@ -153,7 +154,7 @@ describe('cutover parity — plaintext block: observer path vs a direct blocks w
     const out = await materializeStagingRows(
       obs.db,
       { upserted: [], removed: [block.id] },
-      { getMaterializability: constMat('copy'), getCek: noKey, currentUserId: 'user-1' },
+      { getMaterializability: constMat('copy'), getCek: noKey },
     )
     expect(out.deleted).toEqual([block.id])
 

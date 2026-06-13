@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { isSystemAuthor } from '@/data/api'
 import { Block } from '../../data/block'
 import { useInFocus, usePluginPrefsProperty, useUserPage } from '@/data/globalState'
 import { useUpdateMetadata } from '@/hooks/block.js'
@@ -20,12 +19,13 @@ export const UpdateIndicator = ({block}: { block: Block }) => {
 
   if (!updateInfo) return null
 
-  // A pristine deterministic-id mint is authored `system:<self>` until the
-  // first real edit. That is not "another user" — don't raise the indicator
-  // for it (and `system:<self> !== self` would otherwise read as one).
+  // A pristine deterministic-id mint (row-version `updated_at === 0`, never
+  // user-edited) is not "another user's edit" — don't raise the indicator for
+  // it, even when it arrived via sync authored by another user id. Freshness
+  // and the timestamp are the user-facing `userUpdatedAt`, not the row-version.
   const updatedByOtherUser = updateInfo.updatedBy !== block.repo.user.id
-    && !isSystemAuthor(updateInfo.updatedBy)
-    && updateInfo.updatedAt > (previousLoadTime ?? 0)
+    && updateInfo.updatedAt !== 0
+    && updateInfo.userUpdatedAt > (previousLoadTime ?? 0)
   const shouldShowUpdateIndicator = updatedByOtherUser && !seen
 
   if (!shouldShowUpdateIndicator) return null
@@ -33,7 +33,7 @@ export const UpdateIndicator = ({block}: { block: Block }) => {
   return (
     <div
       className="absolute right-1 top-1 h-2 w-2 rounded-full bg-blue-400"
-      title={`Updated by ${updatedByName} on ${new Date(updateInfo.updatedAt).toLocaleString()}`}
+      title={`Updated by ${updatedByName} on ${new Date(updateInfo.userUpdatedAt).toLocaleString()}`}
     />
   )
 }

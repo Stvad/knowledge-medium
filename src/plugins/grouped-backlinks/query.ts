@@ -226,7 +226,7 @@ export const SELECT_GROUPED_BACKLINK_CANDIDATES_SQL = `
   FROM group_context_refs cr
   JOIN blocks group_block ON group_block.id = cr.context_id
   WHERE group_block.deleted = 0
-  ORDER BY cr.source_id, group_block.updated_at DESC, group_block.id
+  ORDER BY cr.source_id, coalesce(group_block.user_updated_at, group_block.updated_at) DESC, group_block.id
 `
 
 export const SELECT_GROUPED_BACKLINK_FIELD_CANDIDATES_SQL = `
@@ -262,7 +262,7 @@ export const SELECT_GROUPED_BACKLINK_ATTRIBUTE_CANDIDATES_SQL = `
     AND refs.source_field = ?
     AND refs.target_id != ?
     AND group_block.deleted = 0
-  ORDER BY refs.source_id, group_block.updated_at DESC, group_block.id
+  ORDER BY refs.source_id, coalesce(group_block.user_updated_at, group_block.updated_at) DESC, group_block.id
 `
 
 /** Type enrichment. For each distinct context block C the main query

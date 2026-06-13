@@ -144,8 +144,14 @@ New migration under `supabase/migrations/` (use the `supabase` skill).
 - **Extend `blocks_clamp_updated_at`**
   (`20260510222352_consolidated_initial.sql:168`):
   - INSERT and UPDATE: existing future-clamp on `updated_at`/`created_at` stays
-    first. Then `NEW.user_updated_at := COALESCE(NEW.user_updated_at,
-    NEW.updated_at)` — populates old-client writes and pre-split rows.
+    first. Then `NEW.user_updated_at := least(COALESCE(NEW.user_updated_at,
+    NEW.updated_at), server_now_ms)` — populates old-client writes and pre-split
+    rows (fallback to the already-clamped `updated_at`) AND future-clamps a
+    present value from a fast-clock client, so display/recency consumers reading
+    `user_updated_at` can't be pinned at the top of recents or show a future
+    "last edited" (matches the pre-split behavior, where display read the
+    future-clamped `updated_at`). `user_updated_at` is display-only, never a
+    version, so clamping it down is always safe.
   - UPDATE only, **after** the future-clamp: **unconditional floor**
     `NEW.updated_at := greatest(NEW.updated_at, OLD.updated_at)`; **plus**, when
     any content column changed (`parent_id, order_key, content, properties_json,
@@ -453,7 +459,25 @@ ALTER TABLE public.blocks ENABLE TRIGGER blocks_clamp_updated_at_trg;
 floor `greatest(NEW.updated_at, OLD.updated_at)` pins `updated_at` back to `OLD`
 and the `= 0` never lands. (The one place we deliberately push a stamp *down*;
 every other path is forbidden from doing so, which is why the trigger must be
-off.) **`user_updated_at` is set in the same SET list, before zeroing [r3 Codex
+off.)
+
+**Pre-check before this UPDATE — the e2ee-ciphertext trigger stays ENABLED**
+(`blocks_require_ciphertext_for_e2ee_trg`, `20260529120000`), and we want it to:
+this UPDATE touches only `updated_at`/`updated_by`/`user_updated_at` (never
+content), so for an e2ee row it re-validates the *existing* envelope and passes
+— **unless** some historical `system:` row in an e2ee workspace holds *plaintext*
+content (possible only if a deterministic-id mint landed before that trigger
+existed), in which case the UPDATE raises `23514` and aborts. Before running the
+bulk UPDATE, count such rows and triage them (re-seal or exclude):
+```sql
+SELECT count(*) FROM blocks b
+  JOIN workspaces w ON w.id = b.workspace_id
+ WHERE b.updated_by LIKE 'system:%'
+   AND w.encryption_mode = 'e2ee'
+   AND b.content NOT LIKE 'enc:v1:%';
+```
+Expected zero on this fleet (mints are plaintext-workspace bootstrap rows), but
+confirm rather than assume — a nonzero count would abort the cleanup mid-way. **`user_updated_at` is set in the same SET list, before zeroing [r3 Codex
 P2]** — so display/sort consumers that move to `user_updated_at` show the real
 last-edit time, not the 0 sentinel; the step-1 backfill's `WHERE
 user_updated_at IS NULL` then no-ops for these rows regardless of order. Safe
@@ -465,6 +489,17 @@ subsumes shadow recovery for these rows. Audit history
 `isSystemAuthor` display shim (step 6) covers time-travel over those rows.
 
 ### Rollout sequence (strict order) [r2]
+
+> **Owner guidance (post-review):** the fleet is small and coordinatable
+> (≈2 users / 5 devices). These phases keep their **relative order** (it's a
+> correctness ordering, not a coexistence requirement), but they can run
+> back-to-back in a **single coordinated maintenance window** — drain every
+> device first, then migration → rules → bundle → recovery in one sitting. So
+> the mixed-version window is minutes, and we deliberately do NOT invest in
+> graceful long-lived old/new coexistence or in eliminating transient
+> mixed-window artifacts (see below). Simple NULL-tolerant conveniences
+> (nullable column + `?? updated_at` fallback) stay; elaborate staggering does
+> not.
 
 1. **Supabase migration** (column nullable + trigger COALESCE/floor/bump + RPC
    column + backfill-with-trigger-disabled). Old clients keep working: their
@@ -499,35 +534,45 @@ server, an old-client *user edit* (content+, `updated_at`+, `user_updated_at`
 absent) is indistinguishable from a new-client *skipMetadata* write (content+,
 `updated_at`+, `user_updated_at` absent) — and `updated_by` is not a reliable
 discriminator because consecutive edits by the same author don't change it. No
-trigger-only rule separates them. Two honest mitigations, implementer's choice:
-  - **(a) Accept it.** Bounded to the mixed-version window (minutes–hours per the
-    drain-then-swap playbook, 2 users / 5 devices), display-only, self-corrects
-    on the next new-client edit. Recommended — the cost is trivial at this fleet
-    size.
-  - **(b) Defer the display repoint.** Ship the new bundle still reading
-    `updated_at` for display, flip to `user_updated_at` in a *second* bundle once
-    the fleet is fully upgraded. Eliminates the artifact entirely, at the cost of
-    a two-phase client ship (and during the window, new-client bookkeeping writes
-    would float blocks in recency instead — the symmetric trade). Only worth it
-    if "last edited" precision during the window matters.
+trigger-only rule separates them.
+
+**Decision (owner guidance): (a) accept it.** Bounded to the mixed-version
+window (minutes per the drain-then-deploy playbook, in one coordinated
+maintenance window at this fleet size), display-only, self-corrects on the next
+new-client edit. This is also what Codex re-flagged as P2 on the migration — the
+behavior is understood and accepted, not a defect to fix. The cost is trivial
+and the artifact disappears the moment the authoring device upgrades.
+
+The alternative — **(b) defer the display repoint** to a *second* client bundle
+so display only flips to `user_updated_at` once the fleet is fully upgraded —
+would eliminate the artifact entirely but costs a two-phase client ship (and
+during the window, new-client bookkeeping writes would float blocks in recency
+instead — the symmetric trade). **Not pursued:** at this fleet size it's
+exactly the kind of mixed-version complexity the owner guidance says to skip.
 
 ---
 
 ## Open questions for the implementer (much smaller than r1)
 
-**Q-A — NOT NULL tightening:** ship nullable + trigger-population forever, or
-add a later migration tightening to NOT NULL once the fleet is upgraded?
-Either is sound; nullable-forever is less ceremony, NOT NULL documents the
-invariant in the schema. Implementer's call.
+**Q-A — NOT NULL tightening: RESOLVED → nullable forever.** Owner guidance
+(small coordinatable fleet) + the fact that a later NOT NULL migration is pure
+ceremony settle it: keep the nullable column + the `?? updated_at` read fallback
+(a simple convenience, not migration complexity). Note also that NOT NULL on the
+*client* SQLite raw-table path would be actively more fragile — an old-rules
+download would bind NULL and wedge sync — so nullable is the robust choice, not
+just the lazy one. No tightening migration.
 
 **Q-B — `user_updated_by`:** Q2 resolved as option A (`updated_by` frozen with
 `user_updated_at` on skipMetadata; no new author column; the gate no longer
 reads authorship). Revisit only if a consumer of storage-level "who wrote this
 row last, including bookkeeping" turns up — none known.
 
-**Q-C — pre-history staleness:** if the discovery query comes back suspiciously
-small, decide whether Layout-B cutover predates `blocks_history` (2026-05-22)
-for the affected workspaces and the full touch is needed after all.
+**Q-C — pre-history staleness: RESOLVED → full touch is fine.** If the scoped
+discovery query (from `blocks_history`) comes back suspiciously small because
+Layout-B staleness predates `blocks_history` (2026-05-22), just do the full
+touch. The scoped variant is a data-volume optimization for the 320k-block
+workspace, not a correctness requirement; at this fleet size, falling back to
+the full touch (with the same pre-checks) is acceptable and simpler.
 
 ---
 

@@ -57,7 +57,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
         id: data.id,
         content: data.content,
         properties: data.properties,
-        updatedAt: data.updatedAt,
+        userUpdatedAt: data.userUpdatedAt,
         updatedBy: data.updatedBy,
       }
       : undefined,
@@ -114,7 +114,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   const model = useMemo(() => blockData
     ? buildPropertyPanelModel({
       blockId: blockData.id,
-      updatedAt: blockData.updatedAt,
+      updatedAt: blockData.userUpdatedAt,
       updatedBy: updatedByUser.name,
       updatedByBlockId: updatedByUser.blockId,
       properties,

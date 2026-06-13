@@ -346,20 +346,76 @@ describe('tx.update (data-fields-only)', () => {
     expect(env.cache.getSnapshot('upd-noop')!.updatedAt).toBe(beforeUpdatedAt)
   })
 
-  it('bumps updatedAt + updatedBy unless skipMetadata', async () => {
+  it('always advances updatedAt; userUpdatedAt + updatedBy bump only on a real edit', async () => {
     const id = await env.repo.tx(
       tx => tx.create({workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
       {scope: ChangeScope.BlockDefault},
     )
-    const tsAfterCreate = env.cache.getSnapshot(id)!.updatedAt
+    const created = env.cache.getSnapshot(id)!
     env.tick()  // advance virtual clock
     await env.repo.tx(tx => tx.update(id, {content: 'x'}), {scope: ChangeScope.BlockDefault})
-    expect(env.cache.getSnapshot(id)!.updatedAt).toBeGreaterThan(tsAfterCreate)
+    const afterEdit = env.cache.getSnapshot(id)!
+    // A real edit advances both the row-version and the display stamp.
+    expect(afterEdit.updatedAt).toBeGreaterThan(created.updatedAt)
+    expect(afterEdit.userUpdatedAt).toBeGreaterThan(created.userUpdatedAt)
 
-    const beforeBookkeeping = env.cache.getSnapshot(id)!.updatedAt
     env.tick()
     await env.repo.tx(tx => tx.update(id, {references: [{id: 'ref', alias: 'a'}]}, {skipMetadata: true}), {scope: ChangeScope.References})
-    expect(env.cache.getSnapshot(id)!.updatedAt).toBe(beforeBookkeeping)
+    const afterBookkeeping = env.cache.getSnapshot(id)!
+    // A {skipMetadata} bookkeeping write STILL advances the row-version (so
+    // peers hydrate the change — this is the staleness fix) but leaves the
+    // user-facing display stamp frozen.
+    expect(afterBookkeeping.updatedAt).toBeGreaterThan(afterEdit.updatedAt)
+    expect(afterBookkeeping.userUpdatedAt).toBe(afterEdit.userUpdatedAt)
+  })
+
+  it('a {skipMetadata} write uploads a PATCH carrying the bumped updated_at, not user_updated_at', async () => {
+    // The headline staleness fix, at the upload boundary. A bookkeeping refs
+    // write (alias/backlink reindex) advances the row-version but freezes the
+    // display stamp. The column-narrow PATCH must carry the bumped `updated_at`
+    // — so a peer's reconcile gate sees a newer version and applies the change
+    // (pre-fix it froze updated_at and the peer skip-staled it forever) — and
+    // must NOT carry `user_updated_at` (display stays put).
+    const id = await env.repo.tx(
+      tx => tx.create({workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'x'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    env.tick()
+    await env.repo.tx(
+      tx => tx.update(id, {references: [{id: 'ref', alias: 'a'}]}, {skipMetadata: true}),
+      {scope: ChangeScope.References},
+    )
+    const patch = (await env.psCrud())
+      .map(r => JSON.parse(r.data) as {op: string; id: string; data: Record<string, unknown>})
+      .find(e => e.op === 'PATCH' && e.id === id)
+    expect(patch).toBeDefined()
+    expect(patch!.data).toHaveProperty('updated_at')          // peers see a newer version
+    expect(patch!.data).toHaveProperty('references_json')     // the bookkeeping content
+    expect(patch!.data).not.toHaveProperty('user_updated_at') // display frozen
+  })
+
+  it('keeps updated_at locally monotonic when the row-version is ahead of the local clock (I3)', async () => {
+    // A slow-clock device whose now() trails a server-ratcheted stamp must not
+    // regress the row-version: metadataPatch stamps max(now, before.updatedAt+1),
+    // not now(). Without the max(), a fresh edit would stamp BELOW the row's
+    // current version and the gate would turn the next delivery into a disk
+    // revert. (This guard is invisible to tests with a strictly-increasing
+    // clock — hence the explicit raw ratchet below.)
+    const id = await env.repo.tx(
+      tx => tx.create({workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'x'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    // Simulate the server ratcheting the row-version far ahead of this device's
+    // clock. Raw write (no repo.tx) → no upload trigger; the SQLite table has no
+    // clamp (that's server-side), so this lands verbatim.
+    const ratcheted = env.tick() + 1_000_000
+    await env.h.db.execute('UPDATE blocks SET updated_at = ? WHERE id = ?', [ratcheted, id])
+
+    await env.repo.tx(tx => tx.update(id, {content: 'edited'}), {scope: ChangeScope.BlockDefault})
+
+    const snap = env.cache.getSnapshot(id)!
+    expect(snap.updatedAt).toBe(ratcheted + 1)                 // floored to before+1, not now()
+    expect(snap.userUpdatedAt).toBeLessThan(snap.updatedAt)    // display stamp is plain now()
   })
 })
 

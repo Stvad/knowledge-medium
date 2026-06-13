@@ -87,7 +87,7 @@ const SELECT_CONTENT_CANDIDATES_SQL = `
       (? != 0 AND instr(content, ?) > 0)
       OR (? = 0 AND instr(LOWER(content), LOWER(?)) > 0)
     )
-  ORDER BY updated_at DESC, id ASC
+  ORDER BY coalesce(user_updated_at, updated_at) DESC, id ASC
   LIMIT ?
 `
 

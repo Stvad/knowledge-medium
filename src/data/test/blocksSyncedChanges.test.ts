@@ -26,7 +26,7 @@ import type { BlockData } from '@/data/api'
 
 const data = (o: Partial<BlockData> = {}): BlockData => ({
   id: 'b1', workspaceId: 'ws1', parentId: null, orderKey: 'a0', content: 'v1',
-  properties: {}, references: [], createdAt: 1, updatedAt: 1, createdBy: 'u',
+  properties: {}, references: [], createdAt: 1, updatedAt: 1, userUpdatedAt: 1, createdBy: 'u',
   updatedBy: 'u', deleted: false, ...o,
 })
 

@@ -79,7 +79,7 @@ function RecentRow({data, now}: RecentRowProps) {
           />
         </div>
         <span className="shrink-0 pt-1 text-xs text-muted-foreground tabular-nums">
-          {formatRelative(data.updatedAt, now)}
+          {formatRelative(data.userUpdatedAt, now)}
         </span>
       </div>
     </LazyViewportMount>

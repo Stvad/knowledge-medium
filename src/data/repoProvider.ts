@@ -43,6 +43,7 @@ import {
   CREATE_BLOCKS_SYNCED_TABLE_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
+  ensureBlockUserUpdatedAtColumn,
 } from '@/data/blockSchema'
 import {
   CREATE_WORKSPACES_TABLE_SQL,
@@ -125,12 +126,10 @@ const resolverForUser = (userId: string): SyncResolver => {
 
 /** Observer deps for the Repo's `syncObserverDeps` parameter, drawn from
  *  the same per-user resolver the upload connector uses — so download
- *  (decrypt/copy/defer) and upload (encrypt) share one §6 policy source.
- *  `currentUserId` is injected by the Repo in `startSyncObserver`, so it's
- *  omitted here. */
+ *  (decrypt/copy/defer) and upload (encrypt) share one §6 policy source. */
 export const syncObserverDepsFor = (
   userId: string,
-): Omit<MaterializeDeps, 'currentUserId'> => {
+): MaterializeDeps => {
   const resolver = resolverForUser(userId)
   return {
     getMaterializability: resolver.getMaterializability,
@@ -302,6 +301,11 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   await powerSyncDb.execute(CREATE_BLOCKS_SYNCED_TABLE_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
+  // Idempotent local migration: add `user_updated_at` to an existing
+  // `blocks` / `blocks_synced` on upgrading devices (CREATE TABLE IF NOT
+  // EXISTS above is a no-op when the table already exists) + one-shot
+  // backfill. See hydration-staleness-fix-handoff.md step 3.
+  await ensureBlockUserUpdatedAtColumn(powerSyncDb)
 
   // ── workspaces + workspace_members ──
   await powerSyncDb.execute(CREATE_WORKSPACES_TABLE_SQL)

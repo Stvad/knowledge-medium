@@ -33,11 +33,9 @@ import {
   type BlockRow,
 } from '@/data/blockSchema.js'
 import type { BlockData } from '@/data/api'
-import { systemAuthor } from '@/data/api'
 import type { PowerSyncDb } from '@/data/internals/commitPipeline.js'
 import {
   decideStagingRow,
-  type ReconcileMode,
 } from './reconcile.js'
 import {
   decodeFromWire,
@@ -94,12 +92,6 @@ export interface MaterializeDeps {
   readonly getMaterializability: GetMaterializability
   /** Workspace-key lookup, threaded to {@link decodeFromWire} for decrypt. */
   readonly getCek: GetCek
-  /** The current client's user id. The gate compares a local row's
-   *  `updated_by` against `systemAuthor(currentUserId)` to recognize THIS
-   *  client's own pristine speculative default (which yields to the server).
-   *  A `system:other` row that arrived via sync is already server truth and
-   *  must not be treated as a local mint, hence the exact-current-user match. */
-  readonly currentUserId: string
 }
 
 /** The staging-table delta to process: ids whose staging row changed, and ids
@@ -177,29 +169,28 @@ const readStagingRows = async (
   return out
 }
 
-/** The local gate inputs for one id: the `blocks` row's `updated_at` (the LWW
- *  stamp) and `updated_by` (the provenance discriminator). */
+/** The local gate input for one id: the `blocks` row's `updated_at`
+ *  (the row-version the gate compares). */
 interface LocalGateRow {
   readonly updatedAt: number
-  readonly updatedBy: string
 }
 
 /** Local gate inputs for the `ids` the app already has a `blocks` row for,
  *  keyed by id. Chunked so the IN-clause never exceeds SQLite's bound-parameter
  *  limit. Absent ids = no local row. This is the Phase-1 slim read (id +
- *  updated_at + updated_by) — Phase 2 re-derives the same fields from the full
- *  before-rows it already loads. */
+ *  updated_at) — Phase 2 re-derives the same field from the full before-rows
+ *  it already loads. */
 const readLocalGateRows = async (
   db: RowsReader, ids: readonly string[], chunkSize: number,
 ): Promise<Map<string, LocalGateRow>> => {
   const out = new Map<string, LocalGateRow>()
   for (let i = 0; i < ids.length; i += chunkSize) {
     const chunk = ids.slice(i, i + chunkSize)
-    const rows = await db.getAll<{ id: string; updated_at: number; updated_by: string }>(
-      `SELECT id, updated_at, updated_by FROM blocks WHERE id IN (${buildInClause(chunk.length)})`,
+    const rows = await db.getAll<{ id: string; updated_at: number }>(
+      `SELECT id, updated_at FROM blocks WHERE id IN (${buildInClause(chunk.length)})`,
       chunk,
     )
-    for (const row of rows) out.set(row.id, { updatedAt: row.updated_at, updatedBy: row.updated_by })
+    for (const row of rows) out.set(row.id, { updatedAt: row.updated_at })
   }
   return out
 }
@@ -250,11 +241,6 @@ const readExistingStagingIds = async (
 /** Tunables (batch sizing). Defaults are production values; tests override. */
 export interface MaterializeOptions {
   readonly readChunkSize?: number
-  /** Which conflict rule the gate applies (default `strict`). The one-time
-   *  recovery rescan passes `healing` so pre-provenance shadows — stamped with
-   *  the real user, so `strict` would protect them — still yield to the
-   *  server. See {@link ReconcileMode}. */
-  readonly gateMode?: ReconcileMode
 }
 
 /**
@@ -280,11 +266,6 @@ export const materializeStagingRows = async (
 ): Promise<MaterializeOutcome> => {
   const { getMaterializability, getCek } = deps
   const readChunkSize = options.readChunkSize ?? STAGING_READ_CHUNK
-  const gateMode = options.gateMode ?? 'strict'
-  // This client's own system author. A local row whose `updated_by` equals it
-  // is a pristine speculative default we minted ourselves (yields to the
-  // server); `system:<otherUser>` and real-user authors do not match.
-  const ownSystemAuthor = systemAuthor(deps.currentUserId)
   const deferred: string[] = []
   const skippedStale: string[] = []
   const quarantined: string[] = []
@@ -321,8 +302,7 @@ export const materializeStagingRows = async (
     const action = decideStagingRow(materializability, row.updated_at, {
       localUpdatedAt: localRow?.updatedAt ?? null,
       hasPendingUpload: pendingUploadIds.has(row.id),
-      isOwnSystemMint: localRow?.updatedBy === ownSystemAuthor,
-    }, gateMode)
+    })
     if (action.kind !== 'apply') {
       // Skip-stale BEFORE decrypt: a stale ciphertext never gets decoded.
       skippedStale.push(row.id)
@@ -380,8 +360,7 @@ export const materializeStagingRows = async (
       const action = decideStagingRow(materializability, stagingUpdatedAt, {
         localUpdatedAt: beforeRow?.updated_at ?? null,
         hasPendingUpload: pendingNow.has(plaintext.id),
-        isOwnSystemMint: beforeRow?.updated_by === ownSystemAuthor,
-      }, gateMode)
+      })
       if (action.kind === 'apply') {
         await tx.execute(UPSERT_BLOCK_SQL, blockRowParams(plaintext))
         applied.push(plaintext.id)

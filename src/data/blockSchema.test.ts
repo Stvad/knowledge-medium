@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   BLOCK_STORAGE_COLUMNS,
   blockToRowParams,
+  ensureBlockUserUpdatedAtColumn,
   parseBlockRow,
   type BlockRow,
 } from './blockSchema'
@@ -17,6 +18,7 @@ const fixture: BlockData = {
   references: [{id: 'ref-1', alias: 'Inbox'}],
   createdAt: 1700000000000,
   updatedAt: 1700000005000,
+  userUpdatedAt: 1700000005000,
   createdBy: 'user-1',
   updatedBy: 'user-2',
   deleted: false,
@@ -73,7 +75,7 @@ describe('blockToRowParams / parseBlockRow round-trip', () => {
   it('encodes deleted=true as 1 and decodes back to boolean true', () => {
     const tombstone: BlockData = {...fixture, deleted: true}
     const params = blockToRowParams(tombstone)
-    expect(params[11]).toBe(1)
+    expect(params[12]).toBe(1)
     expect(parseBlockRow(rowFromParams(params)).deleted).toBe(true)
   })
 
@@ -108,5 +110,67 @@ describe('blockToRowParams / parseBlockRow round-trip', () => {
     const decoded = parseBlockRow(row)
     expect(decoded.properties).toEqual({})
     expect(decoded.references).toEqual([])
+  })
+
+  it('userUpdatedAt falls back to updated_at when the column is NULL (old-rules / pre-split row)', () => {
+    const row: BlockRow = {
+      ...rowFromParams(blockToRowParams(fixture)),
+      user_updated_at: null,
+    }
+    expect(parseBlockRow(row).userUpdatedAt).toBe(fixture.updatedAt)
+  })
+})
+
+/** Table-aware db stand-in: PRAGMA table_info(<t>) returns the columns
+ *  declared for <t>, and every executed statement is recorded. */
+const fakeMigrationDb = (columnsByTable: Record<string, string[]>) => {
+  const executed: string[] = []
+  return {
+    executed,
+    execute: async (sql: string) => { executed.push(sql) },
+    getAll: async <T>(sql: string): Promise<T[]> => {
+      const table = sql.match(/table_info\((\w+)\)/)?.[1] ?? ''
+      return (columnsByTable[table] ?? []).map((name) => ({ name })) as unknown as T[]
+    },
+  }
+}
+
+const altersIn = (executed: string[]) => executed.filter((s) => s.includes('ADD COLUMN'))
+const ranBackfill = (executed: string[]) =>
+  executed.some((s) => /UPDATE blocks SET user_updated_at = updated_at WHERE user_updated_at IS NULL/.test(s))
+
+describe('ensureBlockUserUpdatedAtColumn — local migration', () => {
+  it('adds user_updated_at to BOTH blocks and blocks_synced on a pre-split device, then backfills', async () => {
+    const db = fakeMigrationDb({
+      blocks: ['id', 'updated_at'],
+      blocks_synced: ['id', 'updated_at'],
+    })
+    await ensureBlockUserUpdatedAtColumn(db)
+    const alters = altersIn(db.executed)
+    expect(alters).toHaveLength(2)
+    expect(alters[0]).toContain('ALTER TABLE blocks ADD COLUMN user_updated_at')
+    expect(alters[1]).toContain('ALTER TABLE blocks_synced ADD COLUMN user_updated_at')
+    expect(ranBackfill(db.executed)).toBe(true)
+  })
+
+  it('is ALTER-free on a fresh install (column already present) but still self-gates the backfill', async () => {
+    const db = fakeMigrationDb({
+      blocks: ['id', 'updated_at', 'user_updated_at'],
+      blocks_synced: ['id', 'updated_at', 'user_updated_at'],
+    })
+    await ensureBlockUserUpdatedAtColumn(db)
+    expect(altersIn(db.executed)).toHaveLength(0)
+    expect(ranBackfill(db.executed)).toBe(true) // idempotent: WHERE user_updated_at IS NULL no-ops
+  })
+
+  it('adds only the table that is missing the column', async () => {
+    const db = fakeMigrationDb({
+      blocks: ['id', 'updated_at', 'user_updated_at'],
+      blocks_synced: ['id', 'updated_at'],
+    })
+    await ensureBlockUserUpdatedAtColumn(db)
+    const alters = altersIn(db.executed)
+    expect(alters).toHaveLength(1)
+    expect(alters[0]).toContain('ALTER TABLE blocks_synced')
   })
 })

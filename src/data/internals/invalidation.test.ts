@@ -433,6 +433,7 @@ describe('sync observer: sync-applied invalidation', () => {
       references: o.references ?? [],
       createdAt: 0,
       updatedAt: o.updatedAt ?? 0,
+      userUpdatedAt: o.updatedAt ?? 0,
       createdBy: 'remote',
       updatedBy: 'remote',
       deleted: o.deleted ?? false,
@@ -642,25 +643,20 @@ describe('sync observer: sync-applied invalidation', () => {
   // reprocessing across restarts, coalescing re-deliveries — is pinned in
   // observer.test.ts. Local writes never enter the queue, covered above.)
 
-  it('LWW-rejected sync delivery does not invalidate handles', async () => {
-    // Scenario: PowerSync upload-window replay. A local write has
-    // already advanced the cache (and SQL) for block A. Sync then
-    // delivers an older `updated_at` for A — typically the server-side
-    // state-at-time-T before the local write was uploaded. The cache's
-    // LWW gate rejects it. The SQL row briefly flickers to the older
-    // state before PowerSync reconverges, but the cache (and any
-    // consumers reading via it) never observed the flicker.
-    //
-    // The invalidation pipeline must NOT propagate the flicker. If it
-    // did, every cache-rejected sync row would wake handles to re-read
-    // SQL, which is exactly the freeze pattern observed in QuickFind
-    // (`core.searchByContent` getting kicked off mid-load by replay
-    // bursts).
+  it('ack-to-echo replay applies transiently then the echo converges, with no freeze loop', async () => {
+    // QuickFind-freeze canary, post-split. A local write to A is acked (not
+    // pending). The old strict gate REJECTED a strictly-newer-local replay
+    // outright; the server-monotonic gate instead APPLIES it (a transient
+    // revert) and relies on the echo — the server's authoritative row, whose
+    // stamp is floored >= local — to re-assert the truth. This pins:
+    //   (a) the replay applies transiently, and the echo converges disk + cache
+    //       within the same settle, and
+    //   (b) no repeated handle-wake loop (the freeze signature: cache-rejected
+    //       sync rows kicking handles to re-read SQL in a burst).
     await create('A', {parentId: null, orderKey: 'a0', content: 'local-new'})
-    await markUploaded() // A is fully synced; the stale write loses on LWW, not pending
+    await markUploaded() // acked; not pending
+    const localStamp = env.cache.getSnapshot('A')!.updatedAt
 
-    // Track a handle with a per-row dep on A. After the initial load
-    // it should only fire again for real changes to A.
     let v = 0
     const handle = env.repo.handleStore.getOrCreate('test:row-dep-A', () =>
       new LoaderHandle<number>({
@@ -679,24 +675,27 @@ describe('sync observer: sync-applied invalidation', () => {
     env.repo.startSyncObserver({throttleMs: 0})
     await env.repo.flushSyncObserver()
 
-    const invalidationsBefore = env.repo.handleStore.metrics.snapshot().invalidations
-
-    // Sync replays an OLDER `updated_at` (=1) than the local create's wall
-    // clock, so the materialize LWW gate (local.updated_at >= staging ⇒
-    // skip-stale) drops it before it ever reaches `blocks`.
+    // 1) Stale in-flight replay (older stamp) — now applied transiently.
     await syncApply({id: 'A', parentId: null, orderKey: 'a0', content: 'server-stale', updatedAt: 1})
+    await env.repo.flushSyncObserver()
+    await Promise.resolve()
+    expect(env.cache.getSnapshot('A')?.content).toBe('server-stale') // transient revert
 
+    // 2) The echo: server's authoritative row, stamp floored >= local. Converges.
+    await syncApply({id: 'A', parentId: null, orderKey: 'a0', content: 'local-new', updatedAt: localStamp + 1})
     await env.repo.flushSyncObserver()
     await Promise.resolve()
     await Promise.resolve()
+    expect(env.cache.getSnapshot('A')?.content).toBe('local-new') // converged, not stuck stale
 
-    // Skip-stale ⇒ no `blocks` write, no snapshot, no invalidation: neither
-    // kernel.content nor the per-row dep on A is woken.
-    expect(env.repo.handleStore.metrics.snapshot().invalidations)
-      .toBe(invalidationsBefore)
-    expect(fired).toEqual([1])
-    // Cache retained the local-new state (the stale write never landed).
-    expect(env.cache.getSnapshot('A')?.content).toBe('local-new')
+    // (b) No freeze: with no new deliveries, a further drain wakes nothing —
+    // the handle is settled, not looping.
+    const invalidationsBefore = env.repo.handleStore.metrics.snapshot().invalidations
+    const firedBefore = fired.length
+    await env.repo.flushSyncObserver()
+    await Promise.resolve()
+    expect(env.repo.handleStore.metrics.snapshot().invalidations).toBe(invalidationsBefore)
+    expect(fired.length).toBe(firedBefore)
   })
 
 })

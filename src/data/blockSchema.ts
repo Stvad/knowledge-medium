@@ -15,6 +15,9 @@ export interface BlockRow {
   references_json: string
   created_at: number
   updated_at: number
+  // Nullable: old-client downloads / old sync-rules windows and pre-split
+  // rows arrive without it; `parseBlockRow` falls back to `updated_at`.
+  user_updated_at: number | null
   created_by: string
   updated_by: string
   // SQLite has no native boolean — stored as INTEGER 0/1 and the wa-sqlite
@@ -44,6 +47,11 @@ export const BLOCK_STORAGE_COLUMNS = [
   {name: 'references_json', definition: "references_json TEXT NOT NULL DEFAULT '[]'"},
   {name: 'created_at', definition: 'created_at INTEGER NOT NULL'},
   {name: 'updated_at', definition: 'updated_at INTEGER NOT NULL'},
+  // Nullable (no NOT NULL): an old sync-rules window or pre-split row binds
+  // NULL here rather than failing the raw-table put; `parseBlockRow` falls
+  // back to `updated_at`. Mirrors the server column added in
+  // 20260612000000_add_user_updated_at_monotonic_clamp.sql.
+  {name: 'user_updated_at', definition: 'user_updated_at INTEGER'},
   {name: 'created_by', definition: 'created_by TEXT NOT NULL'},
   {name: 'updated_by', definition: 'updated_by TEXT NOT NULL'},
   {name: 'deleted', definition: 'deleted INTEGER NOT NULL DEFAULT 0'},
@@ -98,6 +106,33 @@ export const CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL = `
   WHERE deleted = 0
 `
 
+/**
+ * Idempotent local-schema migration for the `user_updated_at` split.
+ * `blocks` / `blocks_synced` are created with CREATE TABLE IF NOT EXISTS, so
+ * adding the column to `BLOCK_STORAGE_COLUMNS` does NOT add it to an existing
+ * device's tables — yet it immediately appears in every generated statement
+ * (INSERT_SQL, the observer's upsert, the raw-table put), so an un-migrated
+ * device would fail "no such column" on the first write/sync. Mirrors
+ * `ensureWorkspaceE2eeColumns`: PRAGMA table_info + ALTER TABLE ADD COLUMN,
+ * guarded so a fresh install (column already present from CREATE) doesn't
+ * throw "duplicate column name". Applies to BOTH tables. The one-shot backfill
+ * mirrors `updated_at` into the app-visible `blocks` table; `parseBlockRow`
+ * falls back to `updated_at` regardless, and `blocks_synced` is overwritten by
+ * sync deliveries, so only `blocks` needs the stored value.
+ */
+export const ensureBlockUserUpdatedAtColumn = async (db: {
+  execute: (sql: string) => Promise<unknown>
+  getAll: <T>(sql: string) => Promise<T[]>
+}): Promise<void> => {
+  for (const table of ['blocks', 'blocks_synced'] as const) {
+    const columns = await db.getAll<{ name: string }>(`PRAGMA table_info(${table})`)
+    if (!columns.some((c) => c.name === 'user_updated_at')) {
+      await db.execute(`ALTER TABLE ${table} ADD COLUMN user_updated_at INTEGER`)
+    }
+  }
+  await db.execute('UPDATE blocks SET user_updated_at = updated_at WHERE user_updated_at IS NULL')
+}
+
 const powerSyncParamForColumn = (columnName: BlockColumnName): PendingStatementParameter =>
   columnName === 'id' ? 'Id' : {Column: columnName}
 
@@ -137,6 +172,7 @@ const BLOCK_SNAPSHOT_JSON_FIELDS = [
   {key: 'references', sqlExpression: rowRef => `json(${rowRef}.references_json)`},
   {key: 'createdAt', sqlExpression: rowRef => `${rowRef}.created_at`},
   {key: 'updatedAt', sqlExpression: rowRef => `${rowRef}.updated_at`},
+  {key: 'userUpdatedAt', sqlExpression: rowRef => `coalesce(${rowRef}.user_updated_at, ${rowRef}.updated_at)`},
   {key: 'createdBy', sqlExpression: rowRef => `${rowRef}.created_by`},
   {key: 'updatedBy', sqlExpression: rowRef => `${rowRef}.updated_by`},
   {key: 'deleted', sqlExpression: rowRef => `json(CASE WHEN ${rowRef}.deleted THEN 'true' ELSE 'false' END)`},
@@ -172,6 +208,9 @@ export const parseBlockRow = (row: BlockRow): BlockData => ({
   references: safeJsonParse<BlockReference[]>(row.references_json, []),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
+  // Fallback absorbs old-rules downloads and pre-migration row_events
+  // snapshots that carry no user_updated_at.
+  userUpdatedAt: row.user_updated_at ?? row.updated_at,
   createdBy: row.created_by,
   updatedBy: row.updated_by,
   deleted: Boolean(row.deleted),
@@ -187,6 +226,7 @@ type BlockRowParams = [
   referencesJson: string,
   createdAt: number,
   updatedAt: number,
+  userUpdatedAt: number,
   createdBy: string,
   updatedBy: string,
   deleted: 0 | 1,
@@ -202,6 +242,7 @@ export const blockToRowParams = (blockData: BlockData): BlockRowParams => [
   JSON.stringify(blockData.references ?? []),
   blockData.createdAt,
   blockData.updatedAt,
+  blockData.userUpdatedAt,
   blockData.createdBy,
   blockData.updatedBy,
   blockData.deleted ? 1 : 0,

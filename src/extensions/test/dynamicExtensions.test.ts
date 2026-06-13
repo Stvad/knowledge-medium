@@ -35,6 +35,7 @@ const blockData = (overrides: Partial<BlockData>): BlockData => ({
   references: overrides.references ?? [],
   createdAt: overrides.createdAt ?? 0,
   updatedAt: overrides.updatedAt ?? 0,
+  userUpdatedAt: overrides.userUpdatedAt ?? 0,
   createdBy: overrides.createdBy ?? 'user-1',
   updatedBy: overrides.updatedBy ?? 'user-1',
   deleted: overrides.deleted ?? false,

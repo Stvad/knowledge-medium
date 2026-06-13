@@ -537,6 +537,10 @@ const composeBlockData = (args: ComposeArgs): BlockData => {
     references: blockRefs,
     createdAt,
     updatedAt,
+    // Roam edit-time IS the display meaning; `updated_at` mirrors it. A
+    // create doesn't participate in the monotonic ratchet, and any later
+    // edit bumps the row-version past it.
+    userUpdatedAt: updatedAt,
     createdBy: ctx.options.currentUserId,
     updatedBy: ctx.options.currentUserId,
     deleted: false,

@@ -593,7 +593,7 @@ describe('repo.subscribeBlocks', () => {
     await env.h.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToRowParams({
       id: 'remote-todo', workspaceId: WS, parentId: null, orderKey: 'a0',
       content: '', properties: {[typesProp.name]: ['todo']}, references: [],
-      createdAt: 0, updatedAt: 0, createdBy: 'remote', updatedBy: 'remote', deleted: false,
+      createdAt: 0, updatedAt: 0, userUpdatedAt: 0, createdBy: 'remote', updatedBy: 'remote', deleted: false,
     }))
 
     await env.repo.flushSyncObserver()
