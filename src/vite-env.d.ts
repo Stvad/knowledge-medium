@@ -11,3 +11,7 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv
 }
+
+// Injected by Vite's `define` (vite.config.ts → resolveAppVersion). Read
+// through src/appVersion.ts, which guards the not-defined case.
+declare const __APP_VERSION__: import('./appVersion.ts').AppVersion

@@ -1,4 +1,4 @@
-import {defineConfig} from 'vite'
+import {defineConfig, type Plugin} from 'vite'
 import path from "path"
 import react, {reactCompilerPreset} from '@vitejs/plugin-react'
 import babel from '@rolldown/plugin-babel'
@@ -6,6 +6,7 @@ import externalize from "vite-plugin-externalize-dependencies";
 import wasm from "vite-plugin-wasm"
 import {reactImportMapProductionPlugin} from './vite-plugins/reactImportMapMode'
 import {unifySrcJsUrlsPlugin} from './vite-plugins/unifySrcJsUrls'
+import {resolveAppVersion} from './scripts/app-version'
 // import noBundlePlugin from 'vite-plugin-no-bundle';
 
 type RollupLogLike = {
@@ -29,9 +30,16 @@ const isDashjsCommonjsVariableWarning = (log: RollupLogLike) => {
 export default defineConfig(({command}) => {
     const isDev = command === 'serve';
     const base = process.env.APP_BASE_PATH?.trim() || '/';
+    const appVersion = resolveAppVersion();
 
     return ({
         base,
+        // Baked into the bundle as a literal so the client can show which
+        // build it's running (see src/appVersion.ts). The same object is
+        // emitted as dist/version.json below for the deploy-time update check.
+        define: {
+            __APP_VERSION__: JSON.stringify(appVersion),
+        },
         plugins: [
             react(),
             babel({presets: [reactCompilerPreset()]}),
@@ -63,6 +71,21 @@ export default defineConfig(({command}) => {
             // See vite-plugins/unifySrcJsUrls.ts for the full rationale.
             // Tests in vite-plugins/test/unifySrcJsUrls.test.ts.
             isDev && unifySrcJsUrlsPlugin(),
+            {
+                // Publish the build version at <base>/version.json so a
+                // future client-side update check can compare its baked-in
+                // __APP_VERSION__ against the deployed one without a SW
+                // round-trip. Build-only; dev reads the define directly.
+                name: 'emit-version-json',
+                apply: 'build',
+                generateBundle() {
+                    this.emitFile({
+                        type: 'asset',
+                        fileName: 'version.json',
+                        source: JSON.stringify(appVersion, null, 2),
+                    });
+                },
+            } satisfies Plugin,
         ].filter(Boolean),
         resolve: {
             alias: {
