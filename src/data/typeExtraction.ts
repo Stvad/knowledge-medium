@@ -42,7 +42,7 @@ import {
   propertyNameProp,
 } from '@/data/properties'
 import type { Repo } from '@/data/repo'
-import { createChild } from '@/data/internals/kernelMutators'
+import { createChild } from '@/data/mutators'
 import { typesPageBlockId } from '@/data/typesPage'
 
 // ──── Error classes ─────────────────────────────────────────────────

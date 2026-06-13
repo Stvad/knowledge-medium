@@ -17,7 +17,7 @@
 import type { Block } from '../data/block'
 import { ChangeScope } from '@/data/api'
 import { EXTENSION_TYPE } from '@/data/blockTypes'
-import { createChild } from '@/data/internals/kernelMutators'
+import { createChild } from '@/data/mutators'
 import {
   extensionDescriptionProp,
   extensionNameProp,

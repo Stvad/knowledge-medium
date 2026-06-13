@@ -25,7 +25,7 @@ import {
 } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { Repo } from '../repo'
+import { Repo } from './repo'
 import { aliasesProp, isCollapsedProp } from '@/data/properties'
 
 interface Harness {
@@ -192,7 +192,7 @@ describe('core.setProperty', () => {
       tx => tx.create({id: 'p3', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
       {scope: ChangeScope.BlockDefault},
     )
-    const ro = await import('../repo').then(m => new m.Repo({
+    const ro = await import('./repo').then(m => new m.Repo({
       db: env.h.db,
       cache: env.cache,
       user: {id: 'user-1', name: 'Test'},

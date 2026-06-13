@@ -5,8 +5,8 @@ import {
   type BlockData,
 } from '@/data/api'
 import { aliasesProp } from '@/data/properties'
-import { mergeBlocksInTx } from '@/data/internals/blockMerge'
-import { mergeProperties } from '@/data/internals/mergeProperties'
+import { mergeBlocksInTx } from '@/data/blockMerge'
+import { mergeProperties } from '@/data/mergeProperties'
 
 export const ALIAS_COLLISION_MERGE_MUTATOR = 'alias.mergeCollision'
 

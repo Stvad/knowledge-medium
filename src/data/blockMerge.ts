@@ -4,7 +4,7 @@ import {
   type BlockMergeAliasRewrite,
   type Tx,
 } from '@/data/api'
-import { keysBetween } from '../orderKey'
+import { keysBetween } from './orderKey'
 import { mergeProperties } from './mergeProperties'
 
 export type ContentStrategy = 'concat' | 'keepTarget' | { separator: string }

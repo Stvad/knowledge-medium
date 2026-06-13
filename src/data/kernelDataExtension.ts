@@ -37,7 +37,7 @@ import {
   sameTxProcessorsFacet,
   typesFacet,
 } from './facets'
-import { KERNEL_MUTATORS } from './internals/kernelMutators'
+import { KERNEL_MUTATORS } from './mutators'
 import { KERNEL_PROCESSORS } from './internals/kernelProcessors'
 import { KERNEL_SAME_TX_PROCESSORS } from './internals/normalizeReferencesProcessor'
 import { KERNEL_QUERIES } from './internals/kernelQueries'
