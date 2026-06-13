@@ -144,8 +144,14 @@ New migration under `supabase/migrations/` (use the `supabase` skill).
 - **Extend `blocks_clamp_updated_at`**
   (`20260510222352_consolidated_initial.sql:168`):
   - INSERT and UPDATE: existing future-clamp on `updated_at`/`created_at` stays
-    first. Then `NEW.user_updated_at := COALESCE(NEW.user_updated_at,
-    NEW.updated_at)` — populates old-client writes and pre-split rows.
+    first. Then `NEW.user_updated_at := least(COALESCE(NEW.user_updated_at,
+    NEW.updated_at), server_now_ms)` — populates old-client writes and pre-split
+    rows (fallback to the already-clamped `updated_at`) AND future-clamps a
+    present value from a fast-clock client, so display/recency consumers reading
+    `user_updated_at` can't be pinned at the top of recents or show a future
+    "last edited" (matches the pre-split behavior, where display read the
+    future-clamped `updated_at`). `user_updated_at` is display-only, never a
+    version, so clamping it down is always safe.
   - UPDATE only, **after** the future-clamp: **unconditional floor**
     `NEW.updated_at := greatest(NEW.updated_at, OLD.updated_at)`; **plus**, when
     any content column changed (`parent_id, order_key, content, properties_json,

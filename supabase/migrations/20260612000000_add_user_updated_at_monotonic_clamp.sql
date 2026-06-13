@@ -40,10 +40,14 @@ begin
     NEW.created_at := server_now_ms;
   end if;
 
-  -- Populate the user-facing stamp for writes that don't carry it: old
-  -- clients (PUT/PATCH without the column) and pre-split rows. Only fills
-  -- when absent, so a new client's explicit value is never overwritten.
-  NEW.user_updated_at := coalesce(NEW.user_updated_at, NEW.updated_at);
+  -- Populate AND future-clamp the user-facing stamp. Old clients (PUT/PATCH
+  -- without the column) and pre-split rows fall back to NEW.updated_at (already
+  -- clamped above). A present value from a fast-clock client is clamped to
+  -- server-now so it can't pin a block at the top of recents or display a
+  -- future "last edited" — matching the pre-split behavior, where display read
+  -- the future-clamped updated_at. (user_updated_at is display-only — never a
+  -- version — so clamping it down is always safe.)
+  NEW.user_updated_at := least(coalesce(NEW.user_updated_at, NEW.updated_at), server_now_ms);
 
   if TG_OP = 'UPDATE' then
     -- Unconditional floor: the row-version can never regress, immune to

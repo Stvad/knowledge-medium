@@ -10,7 +10,7 @@ BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
 SET LOCAL search_path TO public, extensions;
 
-SELECT plan(16);
+SELECT plan(17);
 
 CREATE TEMP TABLE clamp_test_ctx AS
 SELECT
@@ -64,7 +64,7 @@ SELECT is(
 );
 
 -------------------------------------------------------------------------
--- 2. INSERT WITH explicit user_updated_at → preserved (COALESCE no-op).
+-- 2. INSERT WITH an explicit PAST user_updated_at → preserved (least() no-op).
 -------------------------------------------------------------------------
 INSERT INTO public.blocks (
   id, workspace_id, parent_id, order_key, content,
@@ -77,7 +77,27 @@ FROM clamp_test_ctx;
 SELECT is(
   (SELECT user_updated_at FROM public.blocks WHERE id = 'ins-uua'),
   (SELECT then_ms - 5000 FROM clamp_test_ctx),
-  'INSERT with explicit user_updated_at: preserved'
+  'INSERT with an explicit past user_updated_at: preserved'
+);
+
+-------------------------------------------------------------------------
+-- 2b. A fast-clock client's FUTURE user_updated_at is clamped to ~server now
+--     (else it would pin the block at the top of recents / show a future
+--     "last edited" — the display regression Codex flagged).
+-------------------------------------------------------------------------
+INSERT INTO public.blocks (
+  id, workspace_id, parent_id, order_key, content,
+  properties_json, created_at, updated_at, user_updated_at, created_by, updated_by
+)
+SELECT 'ins-uua-future', workspace_id, NULL, 'k', 'c',
+       '{}', then_ms, then_ms, now_ms + 3600000, user_id, user_id
+FROM clamp_test_ctx;
+
+SELECT cmp_ok(
+  (SELECT user_updated_at FROM public.blocks WHERE id = 'ins-uua-future'),
+  '<=',
+  (extract(epoch from now()) * 1000)::bigint + 1000,
+  'future user_updated_at is clamped down to ~server now'
 );
 
 -------------------------------------------------------------------------
@@ -200,7 +220,9 @@ SELECT cmp_ok(
 );
 
 -------------------------------------------------------------------------
--- 9. RPC apply_block_patches carries user_updated_at through.
+-- 9. RPC apply_block_patches carries user_updated_at through. A distinct PAST
+--    value (1700000000000 ≈ 2023, ≠ the seed's then_ms) proves the closed
+--    column list wrote it AND survives the future-clamp (it's not in the future).
 -------------------------------------------------------------------------
 DO $$
 DECLARE v_id text := pg_temp.seed_block('orig');
@@ -208,13 +230,13 @@ BEGIN PERFORM set_config('clamp.t9_id', v_id, true); END $$;
 
 SELECT lives_ok(
   format($q$SELECT public.apply_block_patches(jsonb_build_array(
-    jsonb_build_object('id', %L, 'content', 'rpc-edit', 'user_updated_at', 9999999999999::bigint)
+    jsonb_build_object('id', %L, 'content', 'rpc-edit', 'user_updated_at', 1700000000000::bigint)
   ))$q$, current_setting('clamp.t9_id')),
   'RPC patch with user_updated_at does not raise'
 );
 SELECT is(
   (SELECT user_updated_at FROM public.blocks WHERE id = current_setting('clamp.t9_id')),
-  9999999999999::bigint,
+  1700000000000::bigint,
   'RPC patch writes user_updated_at through the closed column list'
 );
 
