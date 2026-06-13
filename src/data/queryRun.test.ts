@@ -27,6 +27,7 @@ import { Repo } from '@/data/repo'
 declare module '@/data/api' {
   interface QueryRegistry {
     'plugin:composedHelper': Query<{tag: string}, string>
+    'plugin:composedNested': Query<{tag: string}, string>
   }
 }
 
@@ -165,6 +166,46 @@ describe('QueryCtx.run', () => {
     const unsub = handle.subscribe(() => {})
     try {
       repo.__setQueriesForTesting([makeHelper('v2'), outer])
+      await vi.waitFor(() => expect(handle.peek()).toBe('v2:a'))
+    } finally {
+      unsub()
+    }
+  })
+
+  it('propagates a nested query-identity dep through deps:none', async () => {
+    // outer --(deps:'none')--> helper --(inherit)--> nested.
+    // Swapping only the deepest query must still re-resolve outer: the
+    // {kind:'query'} identity dep is structural and routes to the owning
+    // handle even though helper ran with data deps suppressed.
+    const makeNested = (marker: string) =>
+      defineQuery<{tag: string}, string>({
+        name: 'plugin:composedNested',
+        argsSchema: z.object({tag: z.string()}),
+        resultSchema: z.string(),
+        resolve: async ({tag}) => `${marker}:${tag}`,
+      })
+    const helper = defineQuery<{tag: string}, string>({
+      name: 'plugin:composedHelper',
+      argsSchema: z.object({tag: z.string()}),
+      resultSchema: z.string(),
+      resolve: async ({tag}, ctx) => ctx.run('plugin:composedNested', {tag}),
+    })
+    const outer = defineQuery<{tag: string}, string>({
+      name: 'plugin:composedOuter',
+      argsSchema: z.object({tag: z.string()}),
+      resultSchema: z.string(),
+      resolve: async ({tag}, ctx) =>
+        ctx.run('plugin:composedHelper', {tag}, {deps: 'none'}),
+    })
+
+    repo.__setQueriesForTesting([makeNested('v1'), helper, outer])
+    const handle = repo.query['plugin:composedOuter']({tag: 'a'})
+    expect(await handle.load()).toBe('v1:a')
+
+    const unsub = handle.subscribe(() => {})
+    try {
+      // Only the deepest (nested) query instance changes.
+      repo.__setQueriesForTesting([makeNested('v2'), helper, outer])
       await vi.waitFor(() => expect(handle.peek()).toBe('v2:a'))
     } finally {
       unsub()

@@ -75,7 +75,15 @@ export interface QueryCtx {
    *   - `'none'`: run it for the data only and declare *no* deps; the
    *     caller then declares its own (narrower) dep set. Use when you
    *     know your true sensitivity is narrower than the generic query's.
-   *     Under-declaring leaves the handle stale, so opt in deliberately. */
+   *     Under-declaring leaves the handle stale, so opt in deliberately.
+   *
+   *  Typing footgun: because `run` resolves over `keyof QueryRegistry`, a
+   *  query that BOTH returns its `ctx.run(...)` result directly AND
+   *  augments `QueryRegistry` with `typeof itself` creates a circular
+   *  inference (`QueryRegistry` → `typeof thisQuery` → its initializer →
+   *  `ctx.run`). Give such a query an explicit `Query<Args, Result>` const
+   *  type annotation to break the loop (see `backlinksForBlockQuery`).
+   *  Queries that return a locally-built value are unaffected. */
   run<K extends keyof QueryRegistry>(
     name: K,
     args: QueryArgsOf<QueryRegistry[K]>,

@@ -216,6 +216,12 @@ const KERNEL_PROPERTY_SCHEMA_MAP = new Map(KERNEL_PROPERTY_SCHEMAS.map(s => [s.n
  *  diagnostic dumps right after page load don't lose entries. */
 const TX_LOG_CAPACITY = 64
 
+/** Max `ctx.run` composition depth before we assume a cycle (a query
+ *  composing itself, directly or transitively). Composition chains are
+ *  shallow in practice; this just turns a stack overflow into a clear
+ *  diagnostic. */
+const MAX_QUERY_COMPOSITION_DEPTH = 32
+
 type RefCodecKind = 'ref' | 'refList' | undefined
 
 const refCodecKind = (schema: AnyPropertySchema | undefined): RefCodecKind => {
@@ -2357,57 +2363,66 @@ export class Repo {
     this.mutators = new Map(mutators.map(m => [m.name, m]))
   }
 
-  /** Build the `QueryCtx` handed to a query's `resolve`. `resolveCtx` is
-   *  the dependency sink: a handle's `ResolveContext` for a top-level
-   *  query, or a no-op sink for a `deps:'none'` sub-query — which drops
-   *  both `depend` and the row deps `hydrateBlocks` would declare, since
-   *  both route through the same sink. `ctx.run` composes another
-   *  registered query inline against that sink, so a composed query's
-   *  deps fold onto the owning handle. */
-  private makeQueryCtx(resolveCtx: ResolveContext): QueryCtx {
+  /** Build the `QueryCtx` handed to a query's `resolve`. Two sinks:
+   *
+   *  - `dataSink` takes `depend` + the row deps `hydrateBlocks` declares
+   *    (both route through it, so a no-op `dataSink` is how `deps:'none'`
+   *    suppresses *data* deps in one move).
+   *  - `identitySink` takes only `{kind:'query'}` deps from `ctx.run`, and
+   *    is always the real owning handle — so the "this handle composed
+   *    query X" relationship survives `deps:'none'` (and any nesting under
+   *    it). Identity is structural, not data, and drives swap invalidation.
+   *
+   *  For a top-level query both are the handle's `ResolveContext`. */
+  private makeQueryCtx(
+    dataSink: ResolveContext,
+    identitySink: ResolveContext,
+    depth: number,
+  ): QueryCtx {
     return {
       db: this.db,
       repo: this,
       hydrateBlocks: (rows, opts) => this.hydrateRows(
         rows as unknown as ReadonlyArray<BlockRow>,
-        {ctx: resolveCtx, declareRowDeps: opts?.declareRowDeps ?? true},
+        {ctx: dataSink, declareRowDeps: opts?.declareRowDeps ?? true},
       ),
-      depend: (dep) => resolveCtx.depend(dep),
+      depend: (dep) => dataSink.depend(dep),
       run: ((name: string, args: unknown, opts?: {deps?: 'inherit' | 'none'}) =>
-        this.runSubquery(name, args, resolveCtx, opts?.deps ?? 'inherit')) as QueryCtx['run'],
+        this.runSubquery(name, args, dataSink, identitySink, opts?.deps ?? 'inherit', depth)) as QueryCtx['run'],
     }
   }
 
   /** Inline resolution for `QueryCtx.run`. Resolves the query by name
    *  (literal, then `core.${name}`), validates args, and runs its
-   *  resolver with a `QueryCtx` whose deps route to `parentCtx`
-   *  (`inherit`) or to a no-op sink (`none`). No handle is created — the
-   *  sub-query is a reusable resolver, not its own cache/invalidation
-   *  unit. The result is NOT `resultSchema`-parsed here: it feeds the
-   *  calling resolver, whose own `resultSchema.parse` guards the
-   *  published value. */
+   *  resolver with a `QueryCtx` whose *data* deps route to `parentDataSink`
+   *  (`inherit`) or a no-op sink (`none`), while the structural
+   *  `{kind:'query'}` identity dep always lands on `identitySink` (the real
+   *  owning handle) — so swapping a composed query, at any nesting depth,
+   *  re-resolves the caller. No handle is created — the sub-query is a
+   *  reusable resolver, not its own cache/invalidation unit. Result is
+   *  parsed through the callee `resultSchema` so a composed query honors
+   *  the same `Query<Args, Result>` contract as a direct dispatch. */
   private async runSubquery(
     name: string,
     args: unknown,
-    parentCtx: ResolveContext,
+    parentDataSink: ResolveContext,
+    identitySink: ResolveContext,
     deps: 'inherit' | 'none',
+    parentDepth: number,
   ): Promise<unknown> {
+    const depth = parentDepth + 1
+    if (depth > MAX_QUERY_COMPOSITION_DEPTH) {
+      throw new Error(
+        `QueryCtx.run: composition depth exceeded ${MAX_QUERY_COMPOSITION_DEPTH} ` +
+        `resolving '${name}' (likely a query composition cycle)`,
+      )
+    }
     const q = this.queries.get(name) ?? this.queries.get(`core.${name}`)
     if (!q) throw new QueryNotRegisteredError(name)
-    // The caller's handle depends on this query's identity so that
-    // swapping *only* the composed query (its generation bumps in
-    // `swapQueries`) re-resolves the caller — matching the freshness a
-    // direct `repo.query.X` lookup gets from its generation-keyed handle.
-    // Declared on `parentCtx` (not the possibly-suppressed `sink`) so it
-    // lands even under `deps:'none'`: identity is structural, not a data dep.
-    parentCtx.depend({kind: 'query', name: q.name})
-    const sink: ResolveContext = deps === 'none' ? {depend: () => {}} : parentCtx
+    identitySink.depend({kind: 'query', name: q.name})
+    const childDataSink: ResolveContext = deps === 'none' ? {depend: () => {}} : parentDataSink
     const validated = q.argsSchema.parse(args) as never
-    const raw = await q.resolve(validated, this.makeQueryCtx(sink))
-    // Parse through the callee's resultSchema so a composed query honors
-    // the same `Query<Args, Result>` contract as a direct dispatch — the
-    // caller may consume the value before its own (possibly pass-through)
-    // resultSchema runs.
+    const raw = await q.resolve(validated, this.makeQueryCtx(childDataSink, identitySink, depth))
     return q.resultSchema.parse(raw)
   }
 
@@ -2446,7 +2461,7 @@ export class Repo {
           // path's wall-clock cost.
           const t0 = performance.now()
           try {
-            const raw = await q.resolve(validated, this.makeQueryCtx(ctx))
+            const raw = await q.resolve(validated, this.makeQueryCtx(ctx, ctx, 0))
             // Result-schema parse at the boundary — symmetry with argsSchema
             // and the documented contract (Query.resultSchema is required).
             // For loose kernel schemas (`z.array(z.unknown())`) this is a
