@@ -1,9 +1,20 @@
 # Cleanup plan: junk `#tag` pages from the `isa::` hashtag bug
 
-Status: **proposal — not executed.** Code fix already shipped in
+Status: **executed on `ff-vlad-dev` (2026-06-13).** Code fix shipped in
 `fa347605` (`fix(roam-import): rewrite #tags in isa:: values before alias
-extraction`). This doc covers cleaning up the 91 junk pages that the bug
+extraction`). This doc covered cleaning up the 91 junk pages that the bug
 already created in the `ff-vlad-dev` graph.
+
+**Result:** 91 junk pages tombstoned, 122 `roam:isa` arrays repointed to
+existing pages (0 new pages needed — all targets resolved via
+`aliasLookup`), 2 UI-state rows cleaned. Post-run verification: 0 junk
+pages remain, 0 blocks with a dangling `isa`, 0 UI dangling; the one
+user-authored block `3cd128fe` left untouched (its `((…))` ref to the
+deleted `#capitalism …` page dangles by design). Spot-checks (Gradle →
+`build tool, Kotlin, Java, JVM, DSL`; HPMOR → `book, favorite,
+rationality, fiction, inspiration`) all resolve to live pages. Migration
+ran via `repo.query.aliasLookup` + `updateBlock` (merge) +
+`repo.block(id).delete()`, chunked, idempotent.
 
 ## What happened
 
@@ -32,18 +43,18 @@ mechanism.
 
 ## Target resolution (important)
 
-The junk page ids are `uuidv5(`${ws}:${title}:0`, ALIAS_NS)` (verified).
-But the **correct** target pages (`CFAR`, `Python`, …) do *not* use that
-formula — they're real imported Roam pages with a different id scheme.
-Most already exist (`CFAR`, `Coaching`, `Python`, `Ukraine`,
-`economics`, `rationality`, `Beeminder`, `capitalism`,
-`science-fiction`, `to/try` all found; `Roam` does **not** exist yet).
+Resolve each split alias with the **canonical runtime resolver**
+`repo.query.aliasLookup({workspaceId, alias}).load()` — the exact lookup
+a fresh `[[alias]]` reference uses (matches page title *and* `alias`
+array, regardless of `types`). Do **not** use a naive `content = alias`
++ `types:["page"]` SQL filter: it misses pages with empty `types`
+(`Roam`, `Facebook`) and alias-array hits (`seedling` → "writing idea",
+`Exobrain` → "Exomind").
 
-So the migration must **resolve each split alias by querying the live
-graph** (page where `content = alias` or `aliases` contains `alias`,
-within the workspace), and only create a new alias seat when none
-exists. Do **not** assume `computeAliasSeatId(alias)` equals the target
-— it won't for real pages.
+Measured: all **112** distinct split aliases resolve to an existing page
+— **0 seats need creating**, and none resolve back to a junk page. The
+typo aliases (`Pocker`, `epistomology`, `medecine`) already exist as
+their own pages, so they just get linked, not created.
 
 ## Split mapping
 
@@ -70,9 +81,10 @@ and sync all stay consistent. Scope every write to workspace
 1. **Collect** all pages where `content LIKE '#%'` and type `page` in the
    workspace → the junk set `J`.
 2. **Split** each `j ∈ J` into its tag aliases (mapping above).
-3. **Resolve** each split alias to a target page id: existing page by
-   `content`/`aliases` lookup, else create an alias seat (the same path a
-   correct import would use). Record created pages.
+3. **Resolve** each split alias to a target page id via
+   `repo.query.aliasLookup`. (Measured: all resolve; no seats to create.
+   If a future run finds an unresolved alias, mint a seat the way import
+   does — `resolveAliasSeatId` + page type.)
 4. **Repoint referrers**: for every block whose ref-list property
    (`roam:isa`, and generically any `roam:*` ref-list / `page_alias`)
    array contains `j.id`, replace `j.id` with `j`'s resolved target ids,
@@ -82,11 +94,13 @@ and sync all stay consistent. Scope every write to workspace
    `focusedBlockLocation` — 3 rows): drop `j.id`; if an open panel/focus
    points at a junk page, repoint to its first target or clear. Low
    stakes.
-6. **Content wikilink** (the 1 user-authored block): **skip by default**.
-   Only rewrite `[[#capitalism …]]` → `[[capitalism]] [[critique]]
-   [[coordination]] [[civilization]]` if you confirm (see decisions).
+6. **Content wikilink** (the 1 user-authored block `3cd128fe`):
+   **leave the block untouched.** Its `[[#capitalism …]]` link is the
+   user's own note recording the bug; after the page is deleted it
+   becomes a deliberate dangling reference. Do not rewrite its content.
 7. **Delete** each `j` via `repo.delete` (tombstone — recoverable,
-   history preserved, syncs as a normal delete).
+   history preserved, syncs as a normal delete). All 91 are deleted,
+   including `#capitalism …`.
 
 **Dry-run first**: the script's default mode emits the full change-set
 (per-referrer before/after, pages to create, pages to delete) to a
@@ -98,18 +112,16 @@ page is a no-op, and resolved targets are stable. Tombstoned pages can be
 restored if anything looks wrong. Run it during a coordinated window with
 other clients drained (small fleet) to avoid mid-flight reprojection.
 
-## Decisions needed before executing
+## Decisions — resolved
 
-1. **The one user-authored `[[#capitalism #critique #coordination
-   #civilization]]` link** — rewrite into four page links, or leave the
-   literal page intact (the user's note suggests it may be an
-   intentional "aliases file" page)? Default: **leave it** (and therefore
-   keep that one junk page, since it has a real content backlink).
-2. **Typo targets** (`Pocker`, `epistomology`, `medecine`) — create
-   faithfully as-is (default, recommended) or skip/merge to the correct
-   spelling?
+1. **The user-authored `[[#capitalism …]]` block (`3cd128fe`)** — delete
+   the page along with all the others; **leave the block untouched** (its
+   link dangles intentionally as the user's record of the bug).
+2. **Typo targets** (`Pocker`, `epistomology`, `medecine`) — keep
+   faithfully as-is (they already exist as their own pages; link, don't
+   "fix").
 3. **`#CFAR #Beeminder creator`** → `[CFAR, Beeminder]`, dropping
-   `creator` — confirm acceptable.
+   `creator` — confirmed.
 
 ## Appendix: full split mapping
 
