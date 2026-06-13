@@ -196,6 +196,43 @@ describe('importRoam', () => {
     expect(leaf?.content).toBe('leaf with [[wcs/plan]]')
   })
 
+  it('carries Roam create-time → created_at and edit-time → user_updated_at, leaving updated_at engine-owned', async () => {
+    // Roam stamps deliberately far older than the harness `now` (timeCursor
+    // ≥ 1.7e12) so a sourced value is unmistakable vs an engine-stamped one.
+    const tsExport: RoamExport = [{
+      title: 'timestamped page',
+      uid: 'tsPage',
+      'create-time': 1_000_000_000_000, // 2001
+      'edit-time': 1_100_000_000_000, // 2004
+      children: [{
+        string: 'a child',
+        uid: 'tsChild',
+        'create-time': 1_200_000_000_000, // 2008
+        'edit-time': 1_300_000_000_000, // 2011
+      }],
+    }]
+
+    await importRoam(tsExport, env.repo, {workspaceId: WORKSPACE, currentUserId: USER_ID})
+
+    const readStamps = (id: string) => env.h.db.getOptional<{
+      created_at: number
+      updated_at: number
+      user_updated_at: number
+    }>('SELECT created_at, updated_at, user_updated_at FROM blocks WHERE id = ?', [id])
+
+    const child = await readStamps(roamBlockId(WORKSPACE, 'tsChild'))
+    expect(child?.created_at).toBe(1_200_000_000_000)
+    expect(child?.user_updated_at).toBe(1_300_000_000_000)
+    // Row-version is the engine's monotonic `now`, NEVER the sourced edit-time:
+    // a 2011 row-version would regress the server-monotonic sync gate.
+    expect(child?.updated_at).toBeGreaterThan(1_600_000_000_000)
+
+    const page = await readStamps(roamBlockId(WORKSPACE, 'tsPage'))
+    expect(page?.created_at).toBe(1_000_000_000_000)
+    expect(page?.user_updated_at).toBe(1_100_000_000_000)
+    expect(page?.updated_at).toBeGreaterThan(1_600_000_000_000)
+  })
+
   it('preserves Roam source-only fields as namespaced properties', async () => {
     const sourceFieldExport: RoamExport = [{
       title: 'source fields',

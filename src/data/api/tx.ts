@@ -29,6 +29,17 @@ export interface TxWriteOpts {
  *  `skipMetadata` (a system mint is not a metadata-skipping bookkeeping write). */
 export interface TxInsertOpts extends TxWriteOpts {
   systemMint?: boolean
+  /** Import/restore path: stamp `created_at` (origin) + `user_updated_at`
+   *  (display "last edited") from a trusted external source — e.g. Roam
+   *  `create-time` / `edit-time` — instead of `now()`. The row-version
+   *  `updated_at` is NEVER sourced: it stays the engine's monotonic sync
+   *  discriminator (born at `now`, or `0` under `systemMint`), so a
+   *  historical value can surface in display/recency without regressing the
+   *  server-enforced sync gate. `created_by` / `updated_by` stay the real
+   *  acting user (external author ids don't map to our user ids). Ignored
+   *  alongside `skipMetadata` (a 0-sentinel bookkeeping insert carries no
+   *  source provenance). */
+  sourceTimestamps?: {createdAt: number; userUpdatedAt: number}
 }
 
 /** Tx metadata exposed to mutators / processor `apply` bodies.

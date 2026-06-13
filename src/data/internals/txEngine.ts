@@ -781,7 +781,12 @@ export class TxImpl implements Tx {
     // `skipMetadata` bookkeeping create are born at the `0` pristine sentinel so
     // the reconcile gate lets the server win; a normal create starts at `now`.
     const updatedAt = opts?.skipMetadata || opts?.systemMint ? 0 : now
-    const createdAt = opts?.skipMetadata ? 0 : now
+    // `sourceTimestamps` (import/restore) stamps the origin + display fields
+    // from a trusted external source while leaving `updated_at` engine-owned
+    // above. Suppressed under `skipMetadata` — a 0-sentinel bookkeeping insert
+    // has no source provenance.
+    const source = opts?.skipMetadata ? undefined : opts?.sourceTimestamps
+    const createdAt = opts?.skipMetadata ? 0 : source?.createdAt ?? now
     const createdBy = opts?.skipMetadata ? '' : userId
     // `updated_by` is a plain user-pair field — the real user even for a
     // systemMint (no more `system:` prefix; the gate reads `updated_at === 0`).
@@ -800,8 +805,9 @@ export class TxImpl implements Tx {
       createdAt,
       updatedAt,
       // Display "last edited" = creation moment for every create, including the
-      // `0`-versioned pristine/bookkeeping rows (so they never show 1970).
-      userUpdatedAt: now,
+      // `0`-versioned pristine/bookkeeping rows (so they never show 1970) —
+      // unless an import/restore sourced it from the original edit-time.
+      userUpdatedAt: source?.userUpdatedAt ?? now,
       createdBy,
       updatedBy,
       deleted: false,

@@ -1301,10 +1301,19 @@ const applyMappedTypesInTx = async (
  */
 const upsertImportedBlock = async (
   tx: Tx,
-  data: NewBlockData & {id: string; content: string},
+  data: NewBlockData & {id: string; content: string; createdAt?: number; userUpdatedAt?: number},
   propertyMergeOptions: ImportPropertyMergeOptions = {},
 ) => {
   const references = normalizeReferences(data.references ?? [])
+  // Carry the planner's Roam create-time/edit-time onto the inserted row.
+  // `created_at` is the origin; `user_updated_at` is the display "last
+  // edited". The row-version `updated_at` stays engine-owned (a fresh
+  // monotonic stamp) — see TxInsertOpts.sourceTimestamps. Only the INSERT
+  // branch sources them; an existing-row hit is left to the timestamp
+  // backfill so a re-import never clobbers a real local edit.
+  const sourceTimestamps = data.createdAt !== undefined && data.userUpdatedAt !== undefined
+    ? {createdAt: data.createdAt, userUpdatedAt: data.userUpdatedAt}
+    : undefined
   try {
     const result = await tx.createOrGet({
       id: data.id,
@@ -1314,7 +1323,7 @@ const upsertImportedBlock = async (
       content: data.content,
       properties: data.properties,
       references,
-    })
+    }, {sourceTimestamps})
     if (result.inserted) return
     const existing = await tx.get(data.id)
     if (!existing) throw new Error(`upsertImportedBlock: existing block ${data.id} not found`)
@@ -1395,9 +1404,9 @@ const applyPromotedAttributes = async (
 }
 
 const withPageAliases = (
-  data: NewBlockData & {id: string; content: string},
+  data: BlockData,
   aliases: readonly string[],
-): NewBlockData & {id: string; content: string} => ({
+): BlockData => ({
   ...data,
   properties: addBlockTypeToProperties({
     ...(data.properties ?? {}),

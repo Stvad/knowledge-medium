@@ -537,9 +537,11 @@ const composeBlockData = (args: ComposeArgs): BlockData => {
     references: blockRefs,
     createdAt,
     updatedAt,
-    // Roam edit-time IS the display meaning; `updated_at` mirrors it. A
-    // create doesn't participate in the monotonic ratchet, and any later
-    // edit bumps the row-version past it.
+    // Roam edit-time IS the display "last edited" meaning → `user_updated_at`.
+    // `updated_at` (the field above) is the engine-owned monotonic row-version;
+    // the importer carries `createdAt` + `userUpdatedAt` onto the row via
+    // `sourceTimestamps` and lets the engine stamp a fresh `updated_at`, so the
+    // value here is not what lands in storage. See upsertImportedBlock.
     userUpdatedAt: updatedAt,
     createdBy: ctx.options.currentUserId,
     updatedBy: ctx.options.currentUserId,
