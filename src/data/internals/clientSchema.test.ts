@@ -1205,3 +1205,22 @@ describe('ensureBlockUserUpdatedAtColumn — local migration', () => {
     expect(db.executed.some(s => /blocks_row_event_update/.test(s))).toBe(false)
   })
 })
+
+describe('blocks_synced_changes enqueue-collapse', () => {
+  it('serves the collapse delete from an index, not a full table scan', () => {
+    // The blocks_synced_changes_insert trigger runs
+    // `DELETE ... WHERE id = NEW.id AND op = 'delete'` on EVERY staging insert.
+    // Without an index that scans the whole pending queue, turning a bulk apply
+    // (the queue fills within one PowerSync apply tx before the observer drains)
+    // into O(n^2). Pin the load-bearing invariant — the lookup is index-backed —
+    // so dropping the index, or the trigger predicate drifting off it, fails
+    // loudly instead of silently regressing large syncs.
+    const plan = (h.db
+      .prepare("EXPLAIN QUERY PLAN DELETE FROM blocks_synced_changes WHERE id = ? AND op = 'delete'")
+      .all('b1') as Array<{ detail: string }>)
+      .map(r => r.detail)
+      .join(' | ')
+    expect(plan).toContain('USING INDEX')
+    expect(plan).not.toContain('SCAN')
+  })
+})

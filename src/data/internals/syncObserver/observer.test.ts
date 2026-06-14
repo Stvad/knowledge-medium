@@ -348,13 +348,12 @@ describe('blocksSyncedObserver — robustness', () => {
     expect(errors.every(e => e instanceof Error && e.message === 'boom')).toBe(true)
   })
 
-  it('keeps a locally-edited block when a re-delivery\'s delete/upsert straddle a window boundary', async () => {
-    // `put` is INSERT OR REPLACE, so re-delivering an existing staged row
-    // enqueues a delete (the replace's implicit delete) THEN an upsert. With a
-    // small drain window the pair can split across windows: the delete lands
-    // alone in one window, the upsert in the next. A lone delete must NOT drop a
-    // block the user has an unsent local edit for — the trailing upsert is then
-    // skip-staled by the pending gate, so the row would vanish entirely.
+  it('keeps a locally-edited block when the server re-delivers it (collapse → single upsert, skip-staled)', async () => {
+    // `put` is INSERT OR REPLACE, so re-delivering an existing staged row fires
+    // DELETE then INSERT. The blocks_synced_changes_insert trigger collapses
+    // that to a single 'upsert' at enqueue, which the drain then skip-stales
+    // against the user's pending local edit (newer local stamp + pending
+    // upload). The unsent edit must survive the re-delivery.
     await put(data({ content: 'server v1', updatedAt: 1 }))
     const { observer } = start({ getMaterializability: constMat('copy'), drainChunkSize: 1 })
     await observer.flush()
@@ -369,13 +368,34 @@ describe('blocksSyncedObserver — robustness', () => {
       ['b1'],
     )
 
-    // Server re-delivers b1 → enqueues delete@N then upsert@N+1; chunk size 1
-    // puts them in separate windows.
+    // Server re-delivers b1 → REPLACE → collapsed to a single 'upsert'.
     await put(data({ content: 'server v2', updatedAt: 2 }))
     await observer.flush()
 
-    // The local edit survives, and the queue still fully drains.
+    // The local edit survives (skip-staled), and the queue still fully drains.
     expect(await blocks()).toEqual([{ id: 'b1', content: 'local edit' }])
+    expect(await queueLen()).toBe(0)
+  })
+
+  it('skip-if-staged: a lone delete whose staging row still exists does not drop the block (defense-in-depth)', async () => {
+    // The enqueue-collapse means a REPLACE nets a single 'upsert', so a lone
+    // 'delete' with the staging row still present no longer arises from the
+    // normal trigger path. The materialize guard (readExistingStagingIds) stays
+    // as defense-in-depth: if such a 'delete' ever reaches the drain, the
+    // still-present staging row proves the row is alive (a REPLACE artifact, not
+    // a stream-exit), so the block must survive.
+    await put(data({ content: 'server v1', updatedAt: 1 }))
+    const { observer } = start({ getMaterializability: constMat('copy') })
+    await observer.flush()
+    expect(await blocks()).toEqual([{ id: 'b1', content: 'server v1' }])
+
+    // The staging row for b1 is still present. Manually enqueue a lone 'delete'
+    // (the artifact the collapse would normally absorb) to exercise the guard.
+    await env.db.execute("INSERT INTO blocks_synced_changes (id, op) VALUES ('b1', 'delete')")
+    await observer.flush()
+
+    // The block survives because its staging row still exists; queue drains.
+    expect(await blocks()).toEqual([{ id: 'b1', content: 'server v1' }])
     expect(await queueLen()).toBe(0)
   })
 

@@ -294,14 +294,23 @@ export const CREATE_PS_CRUD_REJECTED_TX_ID_INDEX_SQL = `
 // Coalescing still happens, in JS at drain time (latest op per id wins), so a
 // hot row is materialized once per batch, not once per delivery.
 //
-//   - INSERT trigger → 'upsert'. The raw put is `INSERT OR REPLACE`, so a
-//     re-delivery of an existing id fires DELETE then INSERT, appending a
-//     'delete' then a higher-seq 'upsert' that wins the dedup. (No UPDATE
-//     trigger: PowerSync never issues a bare UPDATE against the raw table.)
+//   - INSERT trigger → 'upsert'. The raw put is `INSERT OR REPLACE`, and
+//     PowerSync applies a *changed* synced row as this REPLACE (a DELETE then
+//     an INSERT), never a bare UPDATE. Left alone, every changed block would
+//     enqueue BOTH a 'delete' (the replace's implicit DELETE) and an 'upsert' —
+//     two rows for one logical upsert, inflating the pending count ~2× and
+//     wasting drain windows on no-op delete passes. So the INSERT trigger
+//     COLLAPSES at enqueue: it drops a pending same-id 'delete' before appending
+//     its 'upsert', netting a single 'upsert' per REPLACE. This is safe because
+//     the REPLACE's delete-then-insert is one atomic statement and the drain
+//     reads the queue only after the apply tx commits — it never sees a partial
+//     (delete-without-insert) REPLACE. (No UPDATE trigger: PowerSync never
+//     issues a bare UPDATE against the raw table.)
 //   - DELETE trigger → 'delete'. A real stream-exit (membership revoke /
-//     workspace delete) appends a higher-seq 'delete' that supersedes an
-//     un-drained 'upsert', and is captured DURABLY so a removal that lands
-//     while the observer is down is still drained on next startup.
+//     workspace delete) has no following INSERT, so its 'delete' survives the
+//     collapse and supersedes an un-drained 'upsert'; it is captured DURABLY so
+//     a removal that lands while the observer is down is still drained on next
+//     startup.
 //
 // No source-gating: these are not upload triggers, so they fire on both sync
 // and (the rare) local writes to the staging table. blocks_synced itself
@@ -316,10 +325,28 @@ export const CREATE_BLOCKS_SYNCED_CHANGES_TABLE_SQL = `
   )
 `
 
+/** Indexes the enqueue-collapse lookup in `blocks_synced_changes_insert`
+ *  (`DELETE … WHERE id = NEW.id AND op = 'delete'`). The table is otherwise
+ *  keyed only by the autoincrement `seq`, so without this index that per-insert
+ *  delete would SCAN the entire pending queue on every staging insert — even a
+ *  brand-new id with no matching 'delete'. During a bulk sync/backfill the queue
+ *  grows (within one PowerSync apply tx) far faster than the observer drains, so
+ *  an unindexed scan turns the apply into O(n²) — the exact large-download case
+ *  this queue exists to keep cheap (the ~310K-row backfill that motivated the
+ *  collapse). With the index the lookup is an O(log n) seek, including the common
+ *  no-match insert. The drain still reads/deletes by `seq` (PK), so this index
+ *  only serves the collapse delete; its maintenance cost on queue insert + the
+ *  drain's `DELETE … WHERE seq <= ?` is O(log n) per row. */
+export const CREATE_BLOCKS_SYNCED_CHANGES_ID_OP_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_blocks_synced_changes_id_op
+  ON blocks_synced_changes (id, op)
+`
+
 export const CREATE_BLOCKS_SYNCED_CHANGES_INSERT_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS blocks_synced_changes_insert
   AFTER INSERT ON blocks_synced
   BEGIN
+    DELETE FROM blocks_synced_changes WHERE id = NEW.id AND op = 'delete';
     INSERT INTO blocks_synced_changes (id, op) VALUES (NEW.id, 'upsert');
   END
 `
@@ -1174,6 +1201,7 @@ export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = withTriggerRecreate([
   CREATE_PS_CRUD_REJECTED_REJECTED_AT_INDEX_SQL,
   CREATE_PS_CRUD_REJECTED_TX_ID_INDEX_SQL,
   CREATE_BLOCKS_SYNCED_CHANGES_TABLE_SQL,
+  CREATE_BLOCKS_SYNCED_CHANGES_ID_OP_INDEX_SQL,
   DROP_BLOCKS_WORKSPACE_TYPE_INDEX_SQL,
   // 3 row_events audit/history triggers
   CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL,

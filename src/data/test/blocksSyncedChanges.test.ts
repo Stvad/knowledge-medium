@@ -12,11 +12,14 @@
  *      sync-apply runs against the raw table (`BLOCKS_SYNCED_RAW_TABLE`) — the
  *      same mechanism the existing `row_events` triggers rely on for the live
  *      `blocks` table.
- *   2. It's an APPEND-ONLY log keyed by a monotonic `seq` (so the observer can
- *      drain race- and failure-safely with a watermark). Coalescing is a
- *      drain-time concern, not a storage one: the effective state of an id is
- *      its highest-seq op, so a re-delivery (`INSERT OR REPLACE` =
- *      DELETE+INSERT) appends 'delete' then a higher-seq 'upsert' that wins.
+ *   2. It's a seq-keyed log drained race- and failure-safely with a watermark.
+ *      It's append-only except for one targeted collapse: the insert trigger
+ *      drops a pending same-id 'delete' before appending its 'upsert', so a
+ *      re-delivery (`INSERT OR REPLACE` = DELETE+INSERT — how PowerSync applies
+ *      every *changed* synced row) nets a single 'upsert' instead of a redundant
+ *      delete+upsert pair (the ~2× pending-count inflation fix). The effective
+ *      state of an id is still its highest-seq op; drain-time coalescing (latest
+ *      op per id) handles the rest.
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
@@ -64,21 +67,34 @@ describe('blocks_synced_changes capture queue', () => {
     expect(await latestOps()).toEqual([{ id: 'b1', op: 'delete' }])
   })
 
-  it('appends rather than coalescing in-table; a re-delivery leaves the latest op = upsert', async () => {
+  it('collapses a REPLACE re-delivery to a single upsert (drops the pending delete at enqueue)', async () => {
     await put(data({ id: 'b1', content: 'v1' }))
     await drain() // observer processed the first delivery
     // Re-deliver the SAME id (existing staging row). The raw put is INSERT OR
-    // REPLACE, which fires DELETE then INSERT — appending a 'delete' then a
-    // higher-seq 'upsert'. The log keeps BOTH rows (append-only); the drain's
-    // latest-op-per-id is 'upsert', never a stranded 'delete'.
+    // REPLACE, which fires DELETE then INSERT. The insert trigger drops the
+    // pending same-id 'delete' before appending its 'upsert', so the REPLACE
+    // nets a SINGLE 'upsert' row — not a delete+upsert pair. PowerSync applies
+    // every changed synced row as a REPLACE, so without the collapse each one
+    // would enqueue two rows (the ~2× pending-count inflation this fix removes).
     await put(data({ id: 'b1', content: 'v2' }))
-    expect(await rowCount()).toBe(2)
+    expect(await rowCount()).toBe(1)
     expect(await latestOps()).toEqual([{ id: 'b1', op: 'upsert' }])
   })
 
-  it('lets a later delete supersede an un-drained upsert for the same id', async () => {
+  it('collapses an un-drained delete-then-reinsert to a single upsert (final state present)', async () => {
+    await put(data({ id: 'b1' })) // upsert
+    await del('b1') // delete enqueued; observer never drained it
+    // The row comes back (a separate re-insert, not a REPLACE — the staging row
+    // is gone). The insert trigger still drops the pending 'delete' before
+    // appending its 'upsert', so the queue converges to 'upsert' (final staging
+    // state is present), which is what the materialize would converge to anyway.
     await put(data({ id: 'b1' }))
-    await del('b1') // observer never got to drain the upsert
+    expect(await latestOps()).toEqual([{ id: 'b1', op: 'upsert' }])
+  })
+
+  it('lets a genuine later delete (no following insert) supersede an un-drained upsert', async () => {
+    await put(data({ id: 'b1' }))
+    await del('b1') // observer never got to drain the upsert; no re-insert follows
     expect(await latestOps()).toEqual([{ id: 'b1', op: 'delete' }])
   })
 
