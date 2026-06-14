@@ -93,12 +93,32 @@ export async function exportRawSqliteDb(repo: Repo): Promise<RawSqliteDbBlobExpo
 
   const root = await navigator.storage.getDirectory()
   const sourceHandle = await root.getFileHandle(dbFilename)
-  const snapshotHandle = await root.getFileHandle(snapshotName, {create: true})
+  const sourceFile = await sourceHandle.getFile()
 
-  await withPowerSyncReadLock(repo, async () => {
-    const sourceFile = await sourceHandle.getFile()
-    await pipeBlobToFileHandle(sourceFile, snapshotHandle)
-  })
+  // This fallback path writes a full second copy of the .db into OPFS (a stable
+  // snapshot we can keep reading after the read lock is released). On a large DB
+  // that easily exceeds the origin storage quota. Fail fast with the actual
+  // sizes instead of letting a bare QuotaExceededError surface from deep inside
+  // the stream pipe — that's the failure seen exporting a multi-GB DB in
+  // Firefox, which has no showSaveFilePicker and so always lands here.
+  const freeBytes = await estimateFreeOpfsBytes()
+  if (freeBytes !== undefined && freeBytes < sourceFile.size) {
+    throw new Error(insufficientOpfsSpaceMessage(sourceFile.size, freeBytes))
+  }
+
+  const snapshotHandle = await root.getFileHandle(snapshotName, {create: true})
+  try {
+    await withPowerSyncReadLock(repo, async () => {
+      await pipeBlobToFileHandle(sourceFile, snapshotHandle)
+    })
+  } catch (err) {
+    // Drop the empty/partial snapshot so repeated failures don't accumulate.
+    await removeEntryIfExists(root, snapshotName)
+    if (err instanceof DOMException && err.name === 'QuotaExceededError') {
+      throw new Error(insufficientOpfsSpaceMessage(sourceFile.size, await estimateFreeOpfsBytes()), {cause: err})
+    }
+    throw err
+  }
 
   const blob = await snapshotHandle.getFile()
   return {
@@ -106,6 +126,33 @@ export async function exportRawSqliteDb(repo: Repo): Promise<RawSqliteDbBlobExpo
     filename,
     cleanup: () => removeEntryIfExists(root, snapshotName),
   }
+}
+
+const BYTES_PER_MIB = 1024 * 1024
+
+const estimateFreeOpfsBytes = async (): Promise<number | undefined> => {
+  if (typeof navigator.storage?.estimate !== 'function') return undefined
+  const {quota, usage} = await navigator.storage.estimate()
+  if (typeof quota !== 'number' || typeof usage !== 'number') return undefined
+  return Math.max(0, quota - usage)
+}
+
+const insufficientOpfsSpaceMessage = (
+  requiredBytes: number,
+  freeBytes: number | undefined,
+): string => {
+  const toMiB = (bytes: number) => (bytes / BYTES_PER_MIB).toFixed(1)
+  const haveClause = freeBytes === undefined ? '' : ` but only ${toMiB(freeBytes)} MiB is available`
+  // Only suggest a different browser when the direct-to-file picker is the
+  // thing this environment is missing; on Chromium it would have been used.
+  const pickerHint = typeof (globalThis as WindowWithSaveFilePicker).showSaveFilePicker === 'function'
+    ? ''
+    : ' Or open the app in a Chromium-based browser, which exports straight to a file without this temporary copy.'
+  return (
+    `Not enough browser storage to export the SQLite database: the export first copies ` +
+    `it into browser storage (OPFS), which needs ${toMiB(requiredBytes)} MiB of free space` +
+    `${haveClause}. Free up storage for this site and try again.${pickerHint}`
+  )
 }
 
 export function downloadBlob(
