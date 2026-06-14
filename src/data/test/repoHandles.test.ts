@@ -71,8 +71,7 @@ const depIds = (deps: readonly Dependency[], kind: Dependency['kind']) =>
       if (d.kind === 'parent-edge') return d.parentId
       if (d.kind === 'workspace') return d.workspaceId
       if (d.kind === 'plugin') return `${d.channel}:${d.key}`
-      if (d.kind === 'table') return d.table
-      return d.name
+      return d.table
     })
     .sort()
 

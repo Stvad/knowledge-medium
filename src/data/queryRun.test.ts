@@ -141,7 +141,7 @@ describe('QueryCtx.run', () => {
     }
   })
 
-  it('re-resolves a composed caller when only the helper query is swapped', async () => {
+  it('snapshots a helper swap: the old handle keeps its version; a fresh lookup gets the new one', async () => {
     const makeHelper = (marker: string) =>
       defineQuery<{tag: string}, string>({
         name: 'plugin:composedHelper',
@@ -149,9 +149,10 @@ describe('QueryCtx.run', () => {
         resultSchema: z.string(),
         resolve: async ({tag}) => `${marker}:${tag}`,
       })
-    // Same instance across both swaps — only the helper changes, so the
-    // outer handle's own generation never bumps. Without the {kind:'query'}
-    // dep it would keep serving the v1 result.
+    // Same outer instance across both swaps — only the helper changes, so
+    // the outer's generation never bumps on its own account. The
+    // composition graph bumps it because it composes the swapped helper, so
+    // a *fresh* lookup re-keys to the new snapshot.
     const outer = defineQuery<{tag: string}, string>({
       name: 'plugin:composedOuter',
       argsSchema: z.object({tag: z.string()}),
@@ -160,23 +161,31 @@ describe('QueryCtx.run', () => {
     })
 
     repo.__setQueriesForTesting([makeHelper('v1'), outer])
-    const handle = repo.query['plugin:composedOuter']({tag: 'a'})
-    expect(await handle.load()).toBe('v1:a')
+    const v1Handle = repo.query['plugin:composedOuter']({tag: 'a'})
+    expect(await v1Handle.load()).toBe('v1:a')
 
-    const unsub = handle.subscribe(() => {})
+    const unsub = v1Handle.subscribe(() => {})
     try {
       repo.__setQueriesForTesting([makeHelper('v2'), outer])
-      await vi.waitFor(() => expect(handle.peek()).toBe('v2:a'))
+      // The already-subscribed handle is a consistent snapshot — it keeps
+      // serving v1 and is NOT live-migrated to the new helper.
+      expect(v1Handle.peek()).toBe('v1:a')
+      // A fresh lookup re-keys (the outer's generation bumped because it
+      // composes the swapped helper) → a new handle over the new snapshot.
+      const v2Handle = repo.query['plugin:composedOuter']({tag: 'a'})
+      expect(v2Handle).not.toBe(v1Handle)
+      expect(await v2Handle.load()).toBe('v2:a')
     } finally {
       unsub()
     }
   })
 
-  it('propagates a nested query-identity dep through deps:none', async () => {
+  it('snapshots transitively through deps:none: swapping the deepest query re-keys the root', async () => {
     // outer --(deps:'none')--> helper --(inherit)--> nested.
-    // Swapping only the deepest query must still re-resolve outer: the
-    // {kind:'query'} identity dep is structural and routes to the owning
-    // handle even though helper ran with data deps suppressed.
+    // The child→root composition edge is recorded regardless of the deps
+    // mode, so swapping only the deepest query bumps the root's generation
+    // and a fresh lookup gets the fully-new snapshot, while the old handle
+    // keeps its captured one.
     const makeNested = (marker: string) =>
       defineQuery<{tag: string}, string>({
         name: 'plugin:composedNested',
@@ -199,14 +208,17 @@ describe('QueryCtx.run', () => {
     })
 
     repo.__setQueriesForTesting([makeNested('v1'), helper, outer])
-    const handle = repo.query['plugin:composedOuter']({tag: 'a'})
-    expect(await handle.load()).toBe('v1:a')
+    const v1Handle = repo.query['plugin:composedOuter']({tag: 'a'})
+    expect(await v1Handle.load()).toBe('v1:a')
 
-    const unsub = handle.subscribe(() => {})
+    const unsub = v1Handle.subscribe(() => {})
     try {
       // Only the deepest (nested) query instance changes.
       repo.__setQueriesForTesting([makeNested('v2'), helper, outer])
-      await vi.waitFor(() => expect(handle.peek()).toBe('v2:a'))
+      expect(v1Handle.peek()).toBe('v1:a')
+      const v2Handle = repo.query['plugin:composedOuter']({tag: 'a'})
+      expect(v2Handle).not.toBe(v1Handle)
+      expect(await v2Handle.load()).toBe('v2:a')
     } finally {
       unsub()
     }

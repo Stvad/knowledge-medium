@@ -53,10 +53,6 @@ export interface ChangeNotification {
   parentIds?: ReadonlySet<string> | readonly string[]
   workspaceIds?: ReadonlySet<string> | readonly string[]
   tables?: ReadonlySet<string> | readonly string[]
-  /** Composed-query swaps — names whose registered implementation
-   *  changed (generation bumped). Handles that composed them via
-   *  `ctx.run` declare matching `{kind:'query', name}` deps. */
-  queries?: ReadonlySet<string> | readonly string[]
   /** Plugin-owned channel/key invalidations. Handles declare matching
    *  `{kind:'plugin', channel, key}` deps. */
   plugin?: PluginInvalidationMap
@@ -329,7 +325,6 @@ export class HandleStore {
       (!change.parentIds || sizeOf(change.parentIds) === 0) &&
       (!change.workspaceIds || sizeOf(change.workspaceIds) === 0) &&
       (!change.tables || sizeOf(change.tables) === 0) &&
-      (!change.queries || sizeOf(change.queries) === 0) &&
       pluginInvalidationSize(change.plugin) === 0
     ) {
       return
@@ -898,7 +893,6 @@ const depKey = (dep: Dependency): string => {
     case 'workspace': return `ws\x00${dep.workspaceId}`
     case 'table': return `tbl\x00${dep.table}`
     case 'plugin': return `p\x00${dep.channel}\x00${dep.key}`
-    case 'query': return `q\x00${dep.name}`
   }
 }
 
@@ -916,8 +910,6 @@ const matchesDep = (dep: Dependency, change: ChangeNotification): boolean => {
       const keys = change.plugin?.get(dep.channel)
       return keys ? has(keys, dep.key) : false
     }
-    case 'query':
-      return change.queries ? has(change.queries, dep.name) : false
   }
 }
 

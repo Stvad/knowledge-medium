@@ -21,10 +21,6 @@ export type Dependency =
   | { kind: 'workspace'; workspaceId: string }
   | { kind: 'table'; table: string }
   | { kind: 'plugin'; channel: string; key: string }
-  /** A composed query: declared by `QueryCtx.run` so the calling handle
-   *  re-resolves when the composed query's implementation is swapped
-   *  (its generation bumps), not only when a data dep fires. */
-  | { kind: 'query'; name: string }
 
 /** Read-only SQL surface available to a query resolver. Sees committed
  *  state at resolve time. Intentionally narrower than `PowerSyncDatabase`
