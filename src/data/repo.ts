@@ -29,6 +29,7 @@ import type {
   Mutator,
   MutatorRegistry,
   Query,
+  QueryCtx,
   QueryRegistry,
   ResolvedTypedBlockQuery,
   RepoTxOptions,
@@ -52,7 +53,7 @@ import {
 import { runTx, type PowerSyncDb } from './internals/commitPipeline'
 import type { BlockCache } from '@/data/blockCache'
 import { buildQualifiedBlockColumnsSql, parseBlockRow, type BlockRow } from '@/data/blockSchema'
-import { KERNEL_MUTATORS } from './internals/kernelMutators'
+import { KERNEL_MUTATORS } from './mutators'
 import { KERNEL_PROCESSORS } from './internals/kernelProcessors'
 import { KERNEL_SAME_TX_PROCESSORS } from './internals/normalizeReferencesProcessor'
 import { KERNEL_QUERIES } from './internals/kernelQueries'
@@ -214,6 +215,12 @@ const KERNEL_PROPERTY_SCHEMA_MAP = new Map(KERNEL_PROPERTY_SCHEMAS.map(s => [s.n
  *  Sized to comfortably cover a cold-start window (a few dozen txs) so
  *  diagnostic dumps right after page load don't lose entries. */
 const TX_LOG_CAPACITY = 64
+
+/** Max `ctx.run` composition depth before we assume a cycle (a query
+ *  composing itself, directly or transitively). Composition chains are
+ *  shallow in practice; this just turns a stack overflow into a clear
+ *  diagnostic. */
+const MAX_QUERY_COMPOSITION_DEPTH = 32
 
 type RefCodecKind = 'ref' | 'refList' | undefined
 
@@ -581,17 +588,40 @@ export class Repo {
    *  every step; `setRuntimeContributions` runs only the steps whose
    *  inputs include the changed facet. */
   private readonly rebuildSteps: readonly RebuildStep[] = []
-  /** Per-query-name generation counter. Bumped by `setFacetRuntime`
-   *  (and `__setQueriesForTesting`) whenever a name's registered Query
-   *  instance changes — including when a name is added or removed. The
-   *  generation is folded into the query handle-store key so cached
-   *  handles that closed over the OLD resolver no longer collide with
-   *  fresh lookups, which produce a new LoaderHandle bound to the NEW
-   *  resolver. Old handles GC after their subscribers detach (the
-   *  HandleStore's normal ref-count path). Reviewer P2: prevents
-   *  same-name plugin updates from continuing to dispatch through the
-   *  pre-swap resolver / argsSchema. */
-  private queryGenerations: Map<string, number> = new Map()
+  /** Global query-registry epoch. Bumped by `swapQueries` (via
+   *  `setFacetRuntime` / `__setQueriesForTesting`) when an existing query is
+   *  REPLACED or REMOVED — NOT for a purely-additive swap (see
+   *  `swapQueries`). The epoch is folded into EVERY query handle-store key,
+   *  so a bump re-keys all queries at once:
+   *
+   *   - A handle, once obtained, is immutable: it stays at its epoch's key,
+   *     keeps its captured registry snapshot, and keeps serving that
+   *     version (a data-driven re-resolve re-runs against the SAME snapshot
+   *     — see `dispatchQuery` / `runSubquery`, which pin the outer resolver
+   *     and every `ctx.run` helper to the registry captured at creation).
+   *   - Re-obtaining a handle (the next `repo.query` lookup, e.g. a remount
+   *     or re-render) computes the new-epoch key → a fresh handle over the
+   *     current registry → the new version.
+   *
+   *  Why one epoch instead of a per-name / composition-graph scheme on a
+   *  replace/remove: a composed query's set of helpers is only known by
+   *  RUNNING it, so any surgical "re-key just the affected queries" approach
+   *  silently misses unobserved compositions — idle handles, first-load
+   *  races, and data-conditional branches — and hands a fresh lookup
+   *  pre-swap code. Re-keying everything is correct by construction.
+   *
+   *  Cost: a swap never re-resolves a LIVE handle in place; the cost of a
+   *  bump is that the next render re-looks-up → fresh handle + cold resolve
+   *  for every query, even unaffected ones. To keep that off the hot path we
+   *  do NOT bump on additive swaps — and for an all-plugins-enabled user the
+   *  cold-start `base→next` swap IS additive (adds dynamic-plugin queries
+   *  while kernel/static instances stay identical), so the visible tree's
+   *  already-loaded kernel queries (subtree/children/...) keep their handles.
+   *  The over-resolve happens on a genuine replace/remove (plugin
+   *  reload/disable) — rare and defensible — AND, today, once at cold start
+   *  for users who've DISABLED a data-extension plugin (the bootstrap→base
+   *  REMOVE; see the init-layer limitation note on `swapQueries`). */
+  private queryEpoch = 0
   private readonly processorRunner: ProcessorRunner
   /** Per-scope undo / redo stacks (spec §10 step 7, §17 line 2228).
    *  `repo.tx` records every undoable commit here; `repo.undo` /
@@ -2252,23 +2282,66 @@ export class Repo {
     ]
   }
 
-  /** Replace the query registry, bumping the per-name generation
-   *  counter for every name whose registered Query instance changed
-   *  (including newly-added and removed names). This invalidates the
-   *  handle-store keys for those queries so subsequent dispatch
-   *  produces fresh `LoaderHandle`s bound to the new resolvers. */
+  /** Replace the query registry and bump the global `queryEpoch` only when
+   *  an existing query was REPLACED or REMOVED — never for a purely
+   *  additive swap (new names only). A bump re-keys every query, so the
+   *  next lookup of any query gets a fresh handle over the new registry;
+   *  existing handles stay at the old epoch and keep serving their captured
+   *  snapshot (see `queryEpoch`).
+   *
+   *  Why additive swaps don't bump: a new query name cannot invalidate any
+   *  EXISTING handle's snapshot — every query a live handle captured is
+   *  still present and identical, so its result can't have changed and a
+   *  fresh lookup of an existing query is safe to reuse the cached handle.
+   *  This is the common reload shape (`AppRuntimeProvider`'s base→next swap
+   *  adds dynamic-plugin queries while kernel/static instances stay the
+   *  same), so it keeps cold start from needlessly re-resolving the visible
+   *  tree's unchanged kernel queries.
+   *
+   *  A replace/remove CAN change a composed result, and we can't tell which
+   *  callers compose the changed query (composition is only known by
+   *  running a resolver — a per-name scheme misses unobserved compositions
+   *  and serves pre-swap code), so we re-key everything via the epoch.
+   *
+   *  Shadowing add: an added bare name `X` whose `core.X` already exists is
+   *  NOT additive-safe — it flips what an existing bare `ctx.run('X')`
+   *  resolves to (fallback `core.X` → exact `X`; see `runSubquery` /
+   *  `dispatchQuery`). The "captured queries are identical" argument is
+   *  about object identity, not name→query RESOLUTION, so we count it as
+   *  mutating. (Nothing composes bare names today — all `ctx.run` callers
+   *  use fully-qualified names — but the guard keeps the invariant sound.)
+   *
+   *  Corner: a pre-existing query that conditionally composes a NEWLY-ADDED
+   *  (non-shadowing) name won't see it on a fresh lookup until a later
+   *  replace/remove bump. That's a stable→dynamic dependency (an
+   *  anti-pattern) and it fails loud (`QueryNotRegisteredError` against the
+   *  captured registry), never silently stale.
+   *
+   *  Known limitation (separate, init-layer): cold start is only storm-free
+   *  when all data-extension plugins are enabled. The bootstrap swap
+   *  (`initRepo`, toggle-BLIND) registers every plugin's data queries; the
+   *  base swap (`AppRuntimeProvider`, toggle-AWARE) prunes disabled ones —
+   *  a REMOVE → bump → the visible tree re-resolves once. Fixing that needs
+   *  bootstrap to know the workspace overrides, which it can't yet. */
   private swapQueries(newQueries: Map<string, AnyQuery>): void {
+    let mutated = false
     for (const [name, newQ] of newQueries) {
-      if (this.queries.get(name) !== newQ) {
-        this.queryGenerations.set(name, (this.queryGenerations.get(name) ?? 0) + 1)
+      const old = this.queries.get(name)
+      if (old !== undefined) {
+        if (old !== newQ) { mutated = true; break } // REPLACE
+      } else if (!name.startsWith('core.') && newQueries.has(`core.${name}`)) {
+        mutated = true; break // shadowing ADD (see doc above)
       }
+      // plain ADD (no shadow) is additive-safe → no bump.
     }
-    for (const oldName of this.queries.keys()) {
-      if (!newQueries.has(oldName)) {
-        this.queryGenerations.set(oldName, (this.queryGenerations.get(oldName) ?? 0) + 1)
+    // A REMOVED name (present before, gone now).
+    if (!mutated) {
+      for (const oldName of this.queries.keys()) {
+        if (!newQueries.has(oldName)) { mutated = true; break }
       }
     }
     this.queries = newQueries
+    if (mutated) this.queryEpoch++
   }
 
   /** Wait until the post-commit processor framework has nothing
@@ -2349,6 +2422,75 @@ export class Repo {
     this.mutators = new Map(mutators.map(m => [m.name, m]))
   }
 
+  /** Build the `QueryCtx` handed to a query's `resolve`.
+   *
+   *  - `dataSink` takes `depend` + the row deps `hydrateBlocks` declares
+   *    (both route through it, so a no-op `dataSink` is how `deps:'none'`
+   *    suppresses *data* deps in one move).
+   *  - `registry` is the query-registry snapshot this resolve is pinned to.
+   *    `ctx.run` resolves composed queries from it — NOT `this.queries` —
+   *    so an outer query and every query it composes always come from one
+   *    consistent version, and a data-driven re-resolve of an existing
+   *    handle re-runs against the SAME version even after a later swap
+   *    replaced `this.queries`.
+   *
+   *  For a top-level query `dataSink` is the handle's `ResolveContext` and
+   *  `registry` is the snapshot captured at lookup. */
+  private makeQueryCtx(
+    dataSink: ResolveContext,
+    registry: ReadonlyMap<string, AnyQuery>,
+    depth: number,
+  ): QueryCtx {
+    return {
+      db: this.db,
+      repo: this,
+      hydrateBlocks: (rows, opts) => this.hydrateRows(
+        rows as unknown as ReadonlyArray<BlockRow>,
+        {ctx: dataSink, declareRowDeps: opts?.declareRowDeps ?? true},
+      ),
+      depend: (dep) => dataSink.depend(dep),
+      run: ((name: string, args: unknown, opts?: {deps?: 'inherit' | 'none'}) =>
+        this.runSubquery(
+          name, args, dataSink, registry, opts?.deps ?? 'inherit', depth,
+        )) as QueryCtx['run'],
+    }
+  }
+
+  /** Inline resolution for `QueryCtx.run`. Resolves the query by name
+   *  (literal, then `core.${name}`) FROM THE PINNED `registry` SNAPSHOT —
+   *  not `this.queries` — so an outer query and everything it composes
+   *  resolve at one consistent version even if `this.queries` is later
+   *  swapped. Validates args, then runs the resolver with a `QueryCtx`
+   *  whose *data* deps route to `parentDataSink` (`inherit`) or a no-op
+   *  sink (`none`). No handle is created — the sub-query is a reusable
+   *  resolver, not its own cache/invalidation unit. Result is parsed
+   *  through the callee `resultSchema` so a composed query honors the same
+   *  `Query<Args, Result>` contract as a direct dispatch. */
+  private async runSubquery(
+    name: string,
+    args: unknown,
+    parentDataSink: ResolveContext,
+    registry: ReadonlyMap<string, AnyQuery>,
+    deps: 'inherit' | 'none',
+    parentDepth: number,
+  ): Promise<unknown> {
+    const depth = parentDepth + 1
+    if (depth > MAX_QUERY_COMPOSITION_DEPTH) {
+      throw new Error(
+        `QueryCtx.run: composition depth exceeded ${MAX_QUERY_COMPOSITION_DEPTH} ` +
+        `resolving '${name}' (likely a query composition cycle)`,
+      )
+    }
+    const q = registry.get(name) ?? registry.get(`core.${name}`)
+    if (!q) throw new QueryNotRegisteredError(name)
+    const childDataSink: ResolveContext = deps === 'none' ? {depend: () => {}} : parentDataSink
+    const validated = q.argsSchema.parse(args) as never
+    const raw = await q.resolve(
+      validated, this.makeQueryCtx(childDataSink, registry, depth),
+    )
+    return q.resultSchema.parse(raw)
+  }
+
   /** Build the dispatcher closure for a query name. Same resolution
    *  order as `dispatchMutator`: literal name first, then
    *  `'core.${name}'`. The returned closure validates args via the
@@ -2359,19 +2501,26 @@ export class Repo {
    *  `hydrateBlocks`. */
   private dispatchQuery(name: string): (args: unknown) => LoaderHandle<unknown> {
     return (args: unknown) => {
-      const q = this.queries.get(name) ?? this.queries.get(`core.${name}`)
+      // Capture the registry snapshot for this handle. The loader (and
+      // every `ctx.run` beneath it) resolves against THIS map, so the
+      // handle stays pinned to a consistent query-version snapshot even
+      // after a later swap replaces `this.queries`. getOrCreate only runs
+      // the factory on first create, so an existing handle keeps the
+      // registry captured at ITS creation — re-keying via the bumped epoch
+      // is what binds the next lookup to a new snapshot.
+      const registry = this.queries
+      const q = registry.get(name) ?? registry.get(`core.${name}`)
       if (!q) throw new QueryNotRegisteredError(name)
       const validated = q.argsSchema.parse(args) as never
       // Use the registry-stored full name in the key so the bare-name
       // shortcut (`repo.query.subtree`) and the literal full-name access
       // (`repo.query['core.subtree']`) hit the same handle slot.
       const fullName = q.name
-      const gen = this.queryGenerations.get(fullName) ?? 0
-      // Folding the per-name generation into the key means a swap
-      // (setFacetRuntime replacing this query's instance) produces a
-      // distinct handle slot — old handles GC after subscribers
-      // detach; new lookups bind to the new resolver.
-      const key = handleKey(`query:${fullName}@${gen}`, validated)
+      // Folding the global epoch into the key means any registry swap
+      // produces a distinct handle slot for the NEXT lookup of every
+      // query — old handles keep serving their captured snapshot and GC
+      // once subscribers detach; fresh lookups bind to the new registry.
+      const key = handleKey(`query:${fullName}@${this.queryEpoch}`, validated)
       return this.handleStore.getOrCreate(key, () => new LoaderHandle({
         store: this.handleStore,
         key,
@@ -2384,15 +2533,7 @@ export class Repo {
           // path's wall-clock cost.
           const t0 = performance.now()
           try {
-            const raw = await q.resolve(validated, {
-              db: this.db,
-              repo: this,
-              hydrateBlocks: (rows, opts) => this.hydrateRows(
-                rows as unknown as ReadonlyArray<BlockRow>,
-                {ctx, declareRowDeps: opts?.declareRowDeps ?? true},
-              ),
-              depend: (dep) => ctx.depend(dep),
-            })
+            const raw = await q.resolve(validated, this.makeQueryCtx(ctx, registry, 0))
             // Result-schema parse at the boundary — symmetry with argsSchema
             // and the documented contract (Query.resultSchema is required).
             // For loose kernel schemas (`z.array(z.unknown())`) this is a

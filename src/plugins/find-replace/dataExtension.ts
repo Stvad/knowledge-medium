@@ -10,7 +10,7 @@ import type { AppExtension } from '@/facets/facet.js'
 import {
   KERNEL_CONTENT_CHANNEL,
   kernelContentKey,
-} from '@/data/internals/kernelInvalidation.js'
+} from '@/data/invalidation'
 import {
   DEFAULT_FIND_REPLACE_OPTIONS,
   buildContentSearchMatch,

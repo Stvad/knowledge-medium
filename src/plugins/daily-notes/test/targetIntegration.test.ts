@@ -16,8 +16,7 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import { aliasesProp } from '@/data/internals/coreProperties'
-import { typesProp } from '@/data/properties'
+import { aliasesProp, typesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { BlockCache } from '@/data/blockCache'
 import { kernelDataExtension } from '@/data/kernelDataExtension'

@@ -6,7 +6,7 @@ import {
   type PropertySchema,
   type TypeContribution,
 } from '@/data/api'
-import { aliasesProp } from '@/data/internals/coreProperties'
+import { aliasesProp } from '@/data/properties'
 
 export const DAILY_NOTE_TYPE = 'daily-note'
 

@@ -332,6 +332,22 @@ describe('LoaderHandle GC', () => {
     sched.flush(100)
     expect(store.size()).toBe(0)
   })
+
+  it('collects an idle (never-retained) handle after gcTimeMs', () => {
+    const sched = manualScheduler()
+    const store = new HandleStore({ gcTimeMs: 100, schedule: sched.schedule })
+    stores.push(store)
+    const { loader } = collectingLoader('v')
+    // Created via getOrCreate but never loaded or subscribed — the only
+    // window an epoch swap can orphan (its key is unreachable afterwards).
+    store.getOrCreate('q', () =>
+      new LoaderHandle<string>({ store, key: 'q', loader }),
+    )
+    expect(store.size()).toBe(1)
+    expect(sched.pending()).toBe(1) // GC scheduled at creation
+    sched.flush(100)
+    expect(store.size()).toBe(0) // collected — no retain ever happened
+  })
 })
 
 describe('Dependencies + invalidate()', () => {

@@ -46,7 +46,7 @@ import {
   type ProcessorCtx,
   type Tx,
 } from '@/data/api'
-import { aliasesProp } from '@/data/internals/coreProperties'
+import { aliasesProp } from '@/data/properties'
 import {
   parseReferences,
   renderAliasedBlockref,

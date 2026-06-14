@@ -41,7 +41,7 @@ import {
   type SameTxCtx,
   type SameTxEvent,
 } from '@/data/api'
-import { aliasesProp } from '@/data/internals/coreProperties'
+import { aliasesProp } from '@/data/properties'
 
 export const ALIAS_SYNC_PROCESSOR = 'alias.sync'
 

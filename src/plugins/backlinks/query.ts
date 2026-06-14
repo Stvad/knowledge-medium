@@ -2,13 +2,13 @@ import { z } from 'zod'
 import {
   defineQuery,
   type BlockPredicate,
+  type Query,
   type Schema,
 } from '@/data/api'
-import { resolveTypedBlockIds } from '@/data/internals/kernelQueries.js'
 import {
   TYPED_BLOCKS_STRUCTURE_CHANNEL,
   typedBlocksStructureKey,
-} from '@/data/internals/kernelInvalidation.js'
+} from '@/data/invalidation'
 
 export const BACKLINKS_FOR_BLOCK_QUERY = 'backlinks.forBlock'
 
@@ -101,7 +101,14 @@ export const hasBacklinksFilter = (filter: BacklinksFilter | undefined): boolean
  *  Self-reference (the target block referencing itself) is filtered
  *  out post-fetch — it's a one-line check, not worth a special SQL
  *  predicate. */
-export const backlinksForBlockQuery = defineQuery<
+// Explicit const type so `typeof backlinksForBlockQuery` (it augments
+// QueryRegistry below) is knowable without inferring this initializer —
+// otherwise the `ctx.run` call here resolves QueryRegistry, which loops
+// back through this query's own type.
+export const backlinksForBlockQuery: Query<
+  {workspaceId: string; id: string; filter?: BacklinksFilter},
+  string[]
+> = defineQuery<
   {workspaceId: string; id: string; filter?: BacklinksFilter},
   string[]
 >({
@@ -123,13 +130,13 @@ export const backlinksForBlockQuery = defineQuery<
       key: typedBlocksStructureKey(workspaceId, id),
     })
     const normalized = normalizeBacklinksFilter(filter)
-    const ids = await resolveTypedBlockIds({
+    const ids = await ctx.run('core.typedBlockIds', {
       workspaceId,
       referencedBy: {id},
       match: normalized.include,
       exclude: normalized.exclude,
       order: 'created-desc',
-    }, ctx)
+    })
     return ids.filter(sourceId => sourceId !== id)
   },
 })

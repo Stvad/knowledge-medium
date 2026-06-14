@@ -122,7 +122,7 @@ const PROMOTE_SCRIPT = `
 const PROMOS = ${JSON.stringify(promotionsManifest)}
 const props = await import('/src/plugins/geo/properties.ts')
 const types = await import('/src/plugins/geo/blockTypes.ts')
-const coreProps = await import('/src/data/internals/coreProperties.ts')
+const coreProps = await import('/src/data/properties.ts')
 const api = await import('/src/data/api/index.ts')
 
 const {PLACE_TYPE} = types
@@ -220,7 +220,7 @@ const FREETEXT_SCRIPT = `
 const FT = ${JSON.stringify(freetext)}
 const props = await import('/src/plugins/geo/properties.ts')
 const types = await import('/src/plugins/geo/blockTypes.ts')
-const coreProps = await import('/src/data/internals/coreProperties.ts')
+const coreProps = await import('/src/data/properties.ts')
 const api = await import('/src/data/api/index.ts')
 const cof = await import('/src/plugins/geo/createOrFindPlace.ts')
 

@@ -27,8 +27,7 @@ import {
   ChangeScope,
   DeterministicIdCrossWorkspaceError,
 } from '@/data/api'
-import { aliasesProp } from '@/data/internals/coreProperties'
-import { typesProp } from '@/data/properties'
+import { aliasesProp, typesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'

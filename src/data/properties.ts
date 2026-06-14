@@ -17,7 +17,6 @@
  */
 import type { Block } from './block'
 import type { BlockData, ChangedRow } from '@/data/api'
-import { aliasesProp } from '@/data/internals/coreProperties'
 import {
   ChangeScope,
   codecs,
@@ -232,12 +231,19 @@ export const userIdProp = defineProperty<string>('user:id', {
   changeScope: ChangeScope.BlockDefault,
 })
 
-/** Re-export of the canonical alias schema (defined under
- *  `@/data/internals/coreProperties.ts` so the kernel parseReferences
- *  processor can reference it without circling back through this
- *  module). Kept here so call-site migrations can import every
- *  descriptor from a single path. */
-export { aliasesProp }
+/** Alias list stored on alias-target / daily-note blocks (§7). The
+ *  encoded shape in `properties_json` is `string[]`; the codec is the
+ *  list-of-strings combinator.
+ *
+ *  This is the schema `parseReferences` writes when a tx inserts a
+ *  target block (e.g. `[[Inbox]]` produces a target with
+ *  `aliases: ['Inbox']`), and the same schema alias-lookup queries
+ *  consult to resolve `[[alias]]` to a target id. */
+export const aliasesProp: PropertySchema<string[]> = defineProperty<string[]>('alias', {
+  codec: codecs.list(codecs.string),
+  defaultValue: [],
+  changeScope: ChangeScope.BlockDefault,
+})
 
 // ──── Helpers ────
 

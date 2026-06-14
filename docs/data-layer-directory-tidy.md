@@ -4,6 +4,18 @@
 once `HandleStore` + handle factories + invalidation engine exist and the full
 import graph is visible.
 
+> **Update (2026-06, issue #139 audit):** The "genuine internals" list below
+> predates the #139 directory audit's C1 decision, which promotes internals
+> whose surface is already consumed by plugins to public `@/data/*` homes
+> *before* adding any boundary lint. Several entries have since moved out of
+> `internals/` and are no longer permanent internals: `coreProperties` →
+> `@/data/properties` (`aliasesProp`); kernel mutator / block-merge helpers →
+> `@/data/{mutators,blockMerge,mergeProperties}`; invalidation channel ids +
+> key builders → `@/data/invalidation`; the `ANALYZE` entrypoints →
+> `@/data/maintenance` (the `clientSchema` impl stays internal behind the
+> facade). Treat the C1 direction as authoritative where it conflicts with the
+> category-1 list.
+
 ## Why this is needed
 
 Two distinct things ended up under `src/data/internals/` during Phase 1, which

@@ -15,7 +15,7 @@ import {
   merge as mergeMutator,
   setContent as setContentMutator,
   createChild as createChildMutator,
-} from '@/data/internals/kernelMutators'
+} from '@/data/mutators'
 import { ChangeScope } from '@/data/api'
 import {
   nextVisibleBlock,

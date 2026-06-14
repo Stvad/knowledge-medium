@@ -506,6 +506,19 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     this.key = args.key
     this.loader = args.loader
     this.equality = args.equality ?? isEqual
+    // A handle is inserted into the store by `getOrCreate` BEFORE anything
+    // retains it. `release()` (the only other GC scheduler) is never reached
+    // for a handle that is never loaded/subscribed, so without this an idle
+    // handle would live forever — e.g. an abandoned React concurrent-render
+    // lookup whose subscribe effect never commits, or a query handle left
+    // orphaned at an old key by a registry-epoch bump. Schedule the normal
+    // gcTimeMs sweep now; the first `retain()` (load/subscribe) cancels it.
+    // (Skip for gcTimeMs<=0: that's the synchronous-dispose test config, and
+    // disposing here would race `getOrCreate`'s not-yet-inserted entry.)
+    const gcMs = this.store.getGcTimeMs()
+    if (gcMs > 0) {
+      this.cancelGc = this.store.getScheduler()(() => this.dispose(), gcMs)
+    }
   }
 
   // ──── Handle<T> surface ────

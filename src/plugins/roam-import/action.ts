@@ -7,7 +7,7 @@ import { parseAppHash } from '@/utils/routing.js'
 import { importRoam } from './import.ts'
 import { showProgress } from '@/utils/toast.js'
 import { scheduleIdle } from '@/utils/scheduleIdle.js'
-import { runAnalyzeIfStale } from '@/data/internals/clientSchema.js'
+import { runAnalyzeIfStale } from '@/data/maintenance'
 import type { RoamExport } from './types.ts'
 
 export const importRoamAction = ({repo}: {repo: Repo}): ActionConfig => ({

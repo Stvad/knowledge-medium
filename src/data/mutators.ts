@@ -26,7 +26,7 @@ import {
   type Tx,
 } from '@/data/api'
 import { BlockNotFoundError } from '@/data/api'
-import { keyAtEnd, keyAtStart, keyBetween, keysBetween } from '../orderKey'
+import { keyAtEnd, keyAtStart, keyBetween, keysBetween } from './orderKey'
 import { isCollapsedProp } from '@/data/properties'
 import {
   mergeBlocksInTx,

@@ -58,8 +58,8 @@ import {
   backfillBlocksFtsIfEmpty,
   backfillBlockTypesIfEmpty,
   ensureBlockUserUpdatedAtColumn,
-  runAnalyzeIfStale,
 } from '@/data/internals/clientSchema'
+import { runAnalyzeIfStale } from '@/data/maintenance'
 import { scheduleIdle } from '@/utils/scheduleIdle.js'
 import {
   applyLocalSchemaContributions,
