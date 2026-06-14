@@ -2282,6 +2282,20 @@ export class Repo {
     // Re-resolve handles that composed a swapped query via `ctx.run`
     // (they declared a `{kind:'query', name}` dep). Direct-dispatch
     // handles already refresh via their generation-keyed slot.
+    //
+    // Known limitation (existing subscribers are not live-migrated): a
+    // handle's loader closes over the `Query` object captured at lookup
+    // time, while `ctx.run` resolves helpers by name (always current). So
+    // if a swap replaces BOTH an outer query and a helper it composes, an
+    // *already-subscribed* old-generation outer handle re-runs old outer
+    // code against the new helper (mixed versions), not the new outer code.
+    // Subscribers pick up new outer code on their next `repo.query` lookup
+    // (which keys to the new generation). In practice swaps come from
+    // extension reload, which remounts UI subscribers via fresh lookups, so
+    // this only reaches long-lived imperative subscribers that survive a
+    // reload. Truly migrating an outer query's existing subscribers is a
+    // separate handle-lifecycle change (resolve-by-name loaders +
+    // per-handle self-deps) intentionally left out of this change.
     if (bumped.length > 0) this.handleStore.invalidate({queries: bumped})
   }
 
