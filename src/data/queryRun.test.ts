@@ -367,7 +367,30 @@ describe('QueryCtx.run', () => {
     expect(repo.query['plugin:composedOuter']({tag: 'a'})).toBe(h1)
   })
 
-  it('a swap re-keys even an unrelated query (global-epoch blast radius)', () => {
+  it('an additive swap (new name only) does NOT re-key existing queries', () => {
+    const a = defineQuery<{tag: string}, string>({
+      name: 'plugin:composedHelper',
+      argsSchema: z.object({tag: z.string()}),
+      resultSchema: z.string(),
+      resolve: async ({tag}) => `a:${tag}`,
+    })
+    const b = defineQuery<{tag: string}, string>({
+      name: 'plugin:composedNested',
+      argsSchema: z.object({tag: z.string()}),
+      resultSchema: z.string(),
+      resolve: async ({tag}) => `b:${tag}`,
+    })
+    repo.__setQueriesForTesting([a])
+    const aHandle = repo.query['plugin:composedHelper']({tag: 'x'})
+    // Purely additive: `a`'s instance is untouched, only a new name appears.
+    // It cannot invalidate `a`'s snapshot, so the epoch must NOT bump and
+    // `a`'s handle survives — this is the cold-start base→next shape that
+    // must not re-resolve the visible tree's unchanged kernel queries.
+    repo.__setQueriesForTesting([a, b])
+    expect(repo.query['plugin:composedHelper']({tag: 'x'})).toBe(aHandle)
+  })
+
+  it('a mutating swap (replace/remove) re-keys even an unrelated query', () => {
     const a = defineQuery<{tag: string}, string>({
       name: 'plugin:composedHelper',
       argsSchema: z.object({tag: z.string()}),
@@ -383,11 +406,11 @@ describe('QueryCtx.run', () => {
       })
     repo.__setQueriesForTesting([a, makeB('b1')])
     const aHandle = repo.query['plugin:composedHelper']({tag: 'x'})
-    // Swap only B; A is untouched and composes nothing — yet A re-keys too,
-    // because the epoch is global. This pins the deliberate correctness-
-    // over-precision tradeoff: a same-handle result here would mean someone
-    // reintroduced a per-name scheme (which under-invalidates composed
-    // queries — see the idle/conditional cases above).
+    // REPLACE B's instance; A is untouched and composes nothing — yet A
+    // re-keys too, because a replace bumps the global epoch. This pins the
+    // deliberate correctness-over-precision tradeoff: a same-handle result
+    // here would mean someone reintroduced a per-name scheme (which
+    // under-invalidates composed queries — see the idle/conditional cases).
     repo.__setQueriesForTesting([a, makeB('b2')])
     expect(repo.query['plugin:composedHelper']({tag: 'x'})).not.toBe(aHandle)
   })

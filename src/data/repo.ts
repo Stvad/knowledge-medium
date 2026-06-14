@@ -589,10 +589,10 @@ export class Repo {
    *  inputs include the changed facet. */
   private readonly rebuildSteps: readonly RebuildStep[] = []
   /** Global query-registry epoch. Bumped by `swapQueries` (via
-   *  `setFacetRuntime` / `__setQueriesForTesting`) whenever the registry
-   *  actually changes — any query instance replaced, added, or removed.
-   *  The epoch is folded into EVERY query handle-store key, so a bump
-   *  re-keys all queries at once:
+   *  `setFacetRuntime` / `__setQueriesForTesting`) when an existing query is
+   *  REPLACED or REMOVED — NOT for a purely-additive swap (see
+   *  `swapQueries`). The epoch is folded into EVERY query handle-store key,
+   *  so a bump re-keys all queries at once:
    *
    *   - A handle, once obtained, is immutable: it stays at its epoch's key,
    *     keeps its captured registry snapshot, and keeps serving that
@@ -603,26 +603,23 @@ export class Repo {
    *     or re-render) computes the new-epoch key → a fresh handle over the
    *     current registry → the new version.
    *
-   *  Why one epoch instead of a per-name / composition-graph scheme: a
-   *  composed query's set of helpers is only known by RUNNING it, so any
-   *  surgical "re-key just the affected queries" approach silently misses
-   *  unobserved compositions — idle handles, first-load races, and
-   *  data-conditional branches — and hands a fresh lookup pre-swap code. A
-   *  single epoch is correct by construction.
+   *  Why one epoch instead of a per-name / composition-graph scheme on a
+   *  replace/remove: a composed query's set of helpers is only known by
+   *  RUNNING it, so any surgical "re-key just the affected queries" approach
+   *  silently misses unobserved compositions — idle handles, first-load
+   *  races, and data-conditional branches — and hands a fresh lookup
+   *  pre-swap code. Re-keying everything is correct by construction.
    *
-   *  Cost (be honest): a swap never re-resolves a LIVE handle in place, but
-   *  it re-keys EVERY query, so the next render that re-looks-up a query
-   *  gets a fresh handle + a cold resolve — even for queries the swap did
-   *  not affect. This is borne mid-mount, not only on remount:
-   *  `AppRuntimeProvider` calls `setFacetRuntime` 2-3x during cold start
-   *  (bootstrap -> static -> +dynamic plugins) and the dynamic swap also
-   *  changes the runtime context, re-rendering every mounted block. So an
-   *  additive plugin load re-resolves the visible tree's already-loaded
-   *  kernel queries (subtree/children/...) once. We accept this: swaps are
-   *  rare and those resolves are cheap next to a reload; the one expensive
-   *  read (plugin backlinks) composes via `ctx.run`, so it is added by that
-   *  same swap and first-resolves regardless. A precise per-name scheme is
-   *  not a safe alternative — it under-invalidates composed queries. */
+   *  Cost: a swap never re-resolves a LIVE handle in place; the cost of a
+   *  bump is that the next render re-looks-up → fresh handle + cold resolve
+   *  for every query, even unaffected ones. To keep that off the hot path we
+   *  do NOT bump on additive swaps — and the dominant reload shape IS
+   *  additive: `AppRuntimeProvider`'s base→next cold-start swap adds
+   *  dynamic-plugin queries while kernel/static instances stay identical, so
+   *  the visible tree's already-loaded kernel queries (subtree/children/...)
+   *  keep their handles and don't re-resolve. The over-resolve only happens
+   *  on a genuine replace/remove (plugin reload/disable), which is rare and
+   *  where re-resolving is defensible. */
   private queryEpoch = 0
   private readonly processorRunner: ProcessorRunner
   /** Per-scope undo / redo stacks (spec §10 step 7, §17 line 2228).
@@ -2284,27 +2281,48 @@ export class Repo {
     ]
   }
 
-  /** Replace the query registry and, if it actually changed, bump the
-   *  global `queryEpoch` so the next lookup of any query re-keys to a fresh
-   *  handle over the new registry. Existing handles stay at the old epoch
-   *  and keep serving their captured snapshot (see `queryEpoch`). We bump a
-   *  single epoch rather than re-keying surgically per query: composition
-   *  is only known by running a resolver, so any per-name scheme misses
-   *  unobserved compositions and serves pre-swap code to a fresh lookup. */
+  /** Replace the query registry and bump the global `queryEpoch` only when
+   *  an existing query was REPLACED or REMOVED — never for a purely
+   *  additive swap (new names only). A bump re-keys every query, so the
+   *  next lookup of any query gets a fresh handle over the new registry;
+   *  existing handles stay at the old epoch and keep serving their captured
+   *  snapshot (see `queryEpoch`).
+   *
+   *  Why additive swaps don't bump: a new query name cannot invalidate any
+   *  EXISTING handle's snapshot — every query a live handle captured is
+   *  still present and identical, so its result can't have changed and a
+   *  fresh lookup of an existing query is safe to reuse the cached handle.
+   *  This is the common reload shape (`AppRuntimeProvider`'s base→next swap
+   *  adds dynamic-plugin queries while kernel/static instances stay the
+   *  same), so it keeps cold start from needlessly re-resolving the visible
+   *  tree's unchanged kernel queries.
+   *
+   *  A replace/remove CAN change a composed result, and we can't tell which
+   *  callers compose the changed query (composition is only known by
+   *  running a resolver — a per-name scheme misses unobserved compositions
+   *  and serves pre-swap code), so we re-key everything via the epoch.
+   *
+   *  Corner: a pre-existing query that conditionally composes a NEWLY-ADDED
+   *  query won't see it on a fresh lookup until a later replace/remove bump.
+   *  That's a stable→dynamic dependency (an anti-pattern) and it fails loud
+   *  (`QueryNotRegisteredError` against the captured registry), never
+   *  silently stale. */
   private swapQueries(newQueries: Map<string, AnyQuery>): void {
-    // Skip the epoch bump for a no-op rebuild (same instances) so cached
-    // handles survive a `setFacetRuntime` that didn't touch the registry.
-    let changed = false
+    let mutated = false
+    // A REPLACED instance (name present before with a different Query).
+    // An ADD (old === undefined) is deliberately not counted.
     for (const [name, newQ] of newQueries) {
-      if (this.queries.get(name) !== newQ) { changed = true; break }
+      const old = this.queries.get(name)
+      if (old !== undefined && old !== newQ) { mutated = true; break }
     }
-    if (!changed) {
+    // A REMOVED name (present before, gone now).
+    if (!mutated) {
       for (const oldName of this.queries.keys()) {
-        if (!newQueries.has(oldName)) { changed = true; break }
+        if (!newQueries.has(oldName)) { mutated = true; break }
       }
     }
     this.queries = newQueries
-    if (changed) this.queryEpoch++
+    if (mutated) this.queryEpoch++
   }
 
   /** Wait until the post-commit processor framework has nothing
