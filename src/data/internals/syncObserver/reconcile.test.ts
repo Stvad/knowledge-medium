@@ -48,14 +48,15 @@ describe('decideStagingRow — local-edit reconciliation', () => {
     expect(action).toEqual({ kind: 'skip-stale' })
   })
 
-  it('applies the server row over a strictly-newer NON-pending local row', () => {
-    // No more strictly-newer protection: with server-enforced monotonicity, a
-    // genuinely-newer local edit is either pending (caught above) or acked, and
-    // its echo (server stamp >= local) re-asserts it. A strictly-older delivery
-    // here is an in-flight replay; applying it is a transient revert that the
-    // echo converges. The only deliberate hold is the equal-nonzero guard below.
+  it('skips a strictly-newer NON-pending nonzero local row (no clobber / no flash)', () => {
+    // Server-enforced monotonicity makes an older-stamped delivery a stale
+    // in-flight replay (the server floors+bumps on content change, so it can't
+    // hand back an older stamp for newer content). Protect the local row: keep
+    // the acked edit on disk and off the UI; the real echo (stamp >= local)
+    // re-asserts it through the normal queue. New shadows can't form (0-stamped
+    // mints) and legacy ones were swept, so this strands nothing.
     const action = decideStagingRow('copy', 100, local(200))
-    expect(action).toEqual({ kind: 'apply', decrypt: false })
+    expect(action).toEqual({ kind: 'skip-stale' })
   })
 
   it('applies when the staging row is newer than the local row', () => {

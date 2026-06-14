@@ -333,14 +333,6 @@ const resolveInitialLayout = async (
   // daily-note:date backfill silently never synced.
   repo.scheduleWorkspaceBackfills(workspaceId)
 
-  // One-time post-upgrade recovery for the deterministic-id shadow: clients that
-  // skip-staled the server's authoritative row under the old reconcile gate
-  // consumed its change-queue entry, so a normal startup never re-evaluates it.
-  // Re-scan the workspace's staged rows once (marker-gated, deferred) so those
-  // shadows heal on disk; visible on the next reload (the live cache LWW still
-  // holds the default this session).
-  repo.scheduleReconcileRescan(workspaceId)
-
   // Freshly inserted personal workspace: install the starter tutorial
   // as its own parent-less page. The [[Tutorial]] bullet on today's
   // daily note (added below) makes it discoverable from the landing

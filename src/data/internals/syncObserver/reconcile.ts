@@ -24,10 +24,12 @@
  *     materializable (copy-through, no key) — "no WK" is NOT the defer
  *     test, or plaintext rows would strand in staging forever.
  *
- *   - SKIP_STALE: the workspace IS materializable, but a pending local
- *     edit is newer than this staging snapshot. Applying would clobber an
- *     unsynced local edit; instead let the upload echo reconcile when it
- *     returns. This is the ps_crud / updated_at gate the doc calls out.
+ *   - SKIP_STALE: the workspace IS materializable, but the local row wins —
+ *     it has a pending upload, or a nonzero `updated_at` at-or-above this
+ *     staging snapshot's (a stale/equal-stamp delivery under server-enforced
+ *     monotonicity). Applying would clobber an authoritative local row on disk
+ *     and flash the UI; instead let the upload echo / a strictly-newer server
+ *     row reconcile. This is the ps_crud / updated_at gate the doc calls out.
  */
 
 // `Materializability` is sync-seam vocabulary shared with the §6 resolver;
@@ -87,37 +89,37 @@ export const decideStagingRow = (
   }
   if (
     local.localUpdatedAt !== null &&
-    local.localUpdatedAt === stagingUpdatedAt &&
+    local.localUpdatedAt >= stagingUpdatedAt &&
     local.localUpdatedAt !== 0
   ) {
-    // EQUAL NONZERO stamps ⟺ identical content (invariant I1): the server
-    // floor+bump strictly advances the stamp on any content change, so two
-    // rows can share a nonzero stamp only if neither changed content. The one
-    // deliberate skip — a stale in-flight server read carrying different
-    // content under the same ms-stamp would otherwise clobber a local edit on
-    // disk and resurface after reload (the in-memory cache gate can't guard the
-    // persistent write). See commit 429fd4b2.
+    // NEWER-OR-EQUAL nonzero local row wins. Under server-enforced updated_at
+    // monotonicity (an unconditional floor + a +1 bump on any content change),
+    // the server can never hand back a stamp <= a nonzero local one for newer
+    // content — so a staging stamp at-or-below a nonzero local stamp is, by
+    // definition, a stale delivery, and the local row is authoritative:
+    //   - strictly-newer (local > staging): an acked local edit facing a stale
+    //     in-flight replay, or a value already materialized from a newer server
+    //     delivery. Protecting it keeps the edit on disk AND off the UI — no
+    //     transient revert, no stale-echo flash; the real echo (stamp >= local)
+    //     re-asserts it through the normal queue.
+    //   - equal nonzero (local == staging): identical content by invariant I1;
+    //     the one guard against an equal-ms stale read carrying DIFFERENT
+    //     content clobbering a local edit on disk and resurfacing on reload
+    //     (the in-memory cache gate can't guard the persistent write — 429fd4b2).
     //
-    // The `!== 0` exemption (invariant I2) is required, not cosmetic: two
-    // devices that minted the same deterministic id both sit at 0; without the
-    // exemption the insert-or-skip loser would equal-stamp-skip forever and
-    // never converge to the server's created_at/created_by/user_updated_at (or
-    // even content, if the default template changed between the mints). A
-    // 0-stamped local row always yields.
+    // The `!== 0` exemption (invariant I2) is load-bearing: a 0-stamped pristine
+    // local default ALWAYS yields to the server (falls through to apply) — the
+    // deterministic-id heal and the cross-device convergence path (two devices
+    // minting the same id both sit at 0). This protection is safe to hold now
+    // that new shadows can't form (mints are 0-stamped via the systemMint
+    // 0-hold) and the legacy nonzero-shadow population was reconciled by the
+    // recovery rollout before it shipped — so protecting nonzero local rows
+    // strands nothing. (This is the protection e7fc79b2 had to relax back when
+    // speculative defaults were minted with a real `now` stamp.)
     return { kind: 'skip-stale' }
   }
 
-  // Otherwise apply: the server row is newer truth, or this is a 0-stamped
-  // pristine default yielding to the server. Strictly-newer-local protection
-  // is intentionally gone — a genuinely-newer local edit is either pending
-  // (caught above) or already acked, and an acked edit's echo (server stamp
-  // >= local via the floor+bump) re-asserts it. The only cost is a transient
-  // revert in rescan paths (drainWorkspace) during the ack-to-echo window;
-  // steady-state queue-driven drains can't hit it (the next delivery for the
-  // id IS the echo). That disk transient stays OFF the UI: the cache write is
-  // LWW (`applySyncInvalidation` → `applyIfNewer`), which rejects the older
-  // value, so the row self-heals on the echo without a visible flash. (A
-  // permanently-rejected edit rolls back on the next reload, when the cache
-  // rehydrates from the server-healed disk.)
+  // Otherwise apply: the server row is strictly newer (real new truth), or a
+  // 0-stamped pristine default yielding to the server.
   return { kind: 'apply', decrypt: materializability === 'decrypt' }
 }

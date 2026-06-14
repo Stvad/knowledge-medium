@@ -1108,23 +1108,6 @@ export const RECORD_WORKSPACE_BACKFILL_MARKER_SQL = `
   VALUES (?, strftime('%s', 'now') * 1000)
 `
 
-/** One-time post-upgrade marker: this client has re-scanned a workspace's
- *  staged `blocks_synced` rows under the relaxed reconcile gate, to heal
- *  deterministic-id shadows the old gate skip-staled (and whose change-queue
- *  entry it then consumed, so a normal queue-driven drain never re-evaluates
- *  them). Keyed `reconcile_rescan_v1:<workspaceId>` — once per workspace per
- *  client. */
-export const RECONCILE_RESCAN_MARKER_PREFIX = 'reconcile_rescan_v1:'
-
-export const SELECT_RECONCILE_RESCAN_MARKER_SQL = `
-  SELECT key FROM client_schema_state WHERE key = ?
-`
-
-export const RECORD_RECONCILE_RESCAN_MARKER_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES (?, strftime('%s', 'now') * 1000)
-`
-
 // ============================================================================
 // Bulk-apply ordered list. Run after `blocks` exists (PowerSync's schema
 // initialization creates it). Idempotent (`IF NOT EXISTS`).

@@ -102,9 +102,6 @@ import {
   RECORD_WORKSPACE_BACKFILL_MARKER_SQL,
   WORKSPACE_BACKFILL_MARKER_PREFIX,
   SELECT_WORKSPACE_BACKFILL_MARKERS_SQL,
-  RECONCILE_RESCAN_MARKER_PREFIX,
-  SELECT_RECONCILE_RESCAN_MARKER_SQL,
-  RECORD_RECONCILE_RESCAN_MARKER_SQL,
 } from './internals/clientSchema'
 import { UndoManager, type UndoEntry } from './internals/undoManager'
 import { CallbackSet } from '@/utils/callbackSet'
@@ -687,9 +684,6 @@ export class Repo {
    *  drained by `awaitWorkspaceBackfills()` for deterministic test quiescence,
    *  mirroring `pendingReprojections`. */
   private readonly pendingWorkspaceBackfills = new Set<Promise<void>>()
-  /** In-flight one-time reconcile-rescan runs — drained by
-   *  `awaitReconcileRescans()`, same pattern. */
-  private readonly pendingReconcileRescans = new Set<Promise<void>>()
   /** Slowest writeTransaction observed since the last reset, by
    *  description (`opts.description` passed to `repo.tx`). Updated only
    *  when a tx exceeds the previous high-water mark, so the field is
@@ -1941,70 +1935,6 @@ export class Repo {
       [`${WORKSPACE_BACKFILL_MARKER_PREFIX}${suffix}`],
     )
     this.workspaceBackfillMarkers?.add(suffix)
-  }
-
-  /**
-   * One-time post-upgrade recovery for the deterministic-id shadow bug. A client
-   * that skip-staled the server's authoritative row under an *old* reconcile
-   * gate consumed its `blocks_synced_changes` entry, so a normal queue-driven
-   * drain never re-evaluates it — the shadow persists across reloads. This
-   * re-runs the materialization for the workspace via `drainSyncWorkspace`,
-   * which re-reads `blocks_synced` DIRECTLY (bypassing the consumed queue) and
-   * re-applies the gate, un-shadowing the server's value on disk.
-   *
-   * No special mode is needed anymore: with server-enforced `updated_at`
-   * monotonicity, the sole gate already lets the server win on any
-   * non-equal-non-pending row, and a 0-stamped pristine shadow yields via the
-   * stamp-0 exemption. (This replaced the old `healing`-mode rescan, which
-   * existed because the legacy strict gate would PROTECT a real-user-stamped
-   * shadow as if it were an edit.) The pending + equal-nonzero-stamp guards
-   * still hold, so an unsent edit is never lost.
-   *
-   * Marker-gated to run at most once per (workspace, client); deferred off the
-   * open path; windowed + resumable and idempotent (a settled workspace
-   * re-scans to no-ops). A 0-stamped pristine shadow heals in the live cache
-   * too (the LWW accept, since the server row out-stamps 0); a legacy nonzero
-   * shadow heals on disk now and in the cache on the next reload.
-   *
-   * Call after the access gate (a locked/unverified workspace must not be
-   * re-materialized here — its own gate-resolution path runs drainWorkspace).
-   */
-  scheduleReconcileRescan(workspaceId: string): void {
-    if (!workspaceId) return
-    const run = () => {
-      const p = this.runReconcileRescan(workspaceId)
-        .finally(() => { this.pendingReconcileRescans.delete(p) })
-      this.pendingReconcileRescans.add(p)
-    }
-    const idle = (globalThis as {requestIdleCallback?: (cb: () => void, opts?: {timeout: number}) => void}).requestIdleCallback
-    if (typeof idle === 'function') {
-      idle(run, {timeout: 2000})
-    } else {
-      setTimeout(run, 0)
-    }
-  }
-
-  private async runReconcileRescan(workspaceId: string): Promise<void> {
-    const key = `${RECONCILE_RESCAN_MARKER_PREFIX}${workspaceId}`
-    const done = await this.db.getOptional<{key: string}>(SELECT_RECONCILE_RESCAN_MARKER_SQL, [key])
-    if (done) return
-    try {
-      await this.drainSyncWorkspace(workspaceId)
-      // Marker only after a clean pass — a thrown/interrupted re-scan leaves it
-      // unset so the next open retries (drainSyncWorkspace is resumable + idempotent).
-      await this.db.execute(RECORD_RECONCILE_RESCAN_MARKER_SQL, [key])
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err)
-      console.error(`[reconcileRescan] workspace ${workspaceId} failed (will retry next open): ${reason}`)
-    }
-  }
-
-  /** Test helper — drains reconcile-rescans whose deferral timer has fired.
-   *  Mirror of `awaitWorkspaceBackfills`. */
-  async awaitReconcileRescans(): Promise<void> {
-    while (this.pendingReconcileRescans.size > 0) {
-      await Promise.all([...this.pendingReconcileRescans])
-    }
   }
 
   private async _addTypeInTx(
