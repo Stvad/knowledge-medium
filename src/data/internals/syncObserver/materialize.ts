@@ -377,13 +377,18 @@ export const materializeStagingRows = async (
     const removedBeforeById = await readBlocksByIds(tx, change.removed, readChunkSize)
     // A 'delete' whose staging row still exists is an INSERT OR REPLACE
     // re-delivery artifact, not a stream-exit: SQLite's REPLACE fires the
-    // staging delete trigger then the insert trigger, enqueuing delete-then-
-    // upsert for one row. Drained in seq windows, that pair can split so the
-    // delete arrives alone here. Deleting the local row then would be wrong —
-    // the trailing upsert is gated (skip-stale on a pending local edit / newer
-    // local stamp), so the block would vanish and an unsent edit be lost. Only
-    // hard-delete ids whose staging row is truly gone; the upsert (this window
-    // or a later one) reconciles the rest through the gate.
+    // staging delete trigger then the insert trigger, which would enqueue
+    // delete-then-upsert for one row. The `blocks_synced_changes_insert` trigger
+    // now collapses that pair at enqueue (it drops a pending same-id 'delete'
+    // before appending its 'upsert'), so a REPLACE nets a single 'upsert' and a
+    // lone 'delete' with a still-present staging row should not normally reach
+    // here. This guard stays as defense-in-depth: if such a 'delete' ever
+    // arrives, deleting the local row would be wrong — its still-present staging
+    // row proves the row is alive, and any trailing upsert is gated (skip-stale
+    // on a pending local edit / newer local stamp), so the block would vanish
+    // and an unsent edit be lost. Only hard-delete ids whose staging row is
+    // truly gone; the upsert (this window or a later one) reconciles the rest
+    // through the gate.
     const removedStillStaged = await readExistingStagingIds(tx, change.removed, readChunkSize)
     for (const id of change.removed) {
       if (removedStillStaged.has(id)) continue
