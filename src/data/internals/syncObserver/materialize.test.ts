@@ -284,8 +284,8 @@ describe('materializeStagingRows — batched gate (mixed outcomes, chunked)', ()
 
     // apply: strictly-newer staging snapshot, no local row.
     await stageRow(blockData({ id: 'apply', content: 'fresh', updatedAt: 300 }))
-    // apply: a strictly-newer NONZERO local row yields to the older server row
-    // (no strictly-newer protection — the echo converges).
+    // skip: a strictly-newer NONZERO local row is protected from the older
+    // delivery (a stale in-flight replay; the echo re-asserts the local value).
     await seedLocalBlock(blockData({
       id: 'newer', content: 'local newer', updatedAt: 500,
     }))
@@ -305,10 +305,10 @@ describe('materializeStagingRows — batched gate (mixed outcomes, chunked)', ()
       { readChunkSize: 2 }, // 3 ids → 2 read chunks, so the bulk maps span a boundary
     )
 
-    expect([...out.applied].sort()).toEqual(['apply', 'newer'])
-    expect(out.skippedStale).toEqual(['pending'])
+    expect([...out.applied].sort()).toEqual(['apply'])
+    expect([...out.skippedStale].sort()).toEqual(['newer', 'pending'])
     const byId = Object.fromEntries((await allBlocks()).map(b => [b.id, b.content]))
-    expect(byId).toEqual({ apply: 'fresh', newer: 'stale server', pending: 'local pending' })
+    expect(byId).toEqual({ apply: 'fresh', newer: 'local newer', pending: 'local pending' })
   })
 })
 
@@ -331,12 +331,12 @@ describe('materializeStagingRows — stamp-0 sentinel (deterministic-id shadow)'
     expect((await allBlocks())[0]!.content).toBe('real synced config')
   })
 
-  it('applies the server row over a strictly-newer NONZERO local row (echo converges)', async () => {
-    // No more strictly-newer protection. A nonzero local row strictly newer than
-    // an in-flight older delivery is either pending (guarded) or acked; this
-    // non-pending one is an acked edit facing a stale replay. The gate applies
-    // the older server row — a transient revert the upload echo (server stamp >=
-    // local, via the floor+bump) converges. Pre-split this was "protected".
+  it('protects a strictly-newer NONZERO local row from a stale older delivery', async () => {
+    // A nonzero local row strictly newer than an in-flight older delivery is
+    // authoritative under server monotonicity (the older stamp can't carry newer
+    // content). The gate skip-stales the delivery — keeping the acked edit on
+    // disk and off the UI; the real echo (stamp >= local) re-asserts it. The
+    // 0-stamped sentinel (not this protection) is what heals a real shadow.
     await seedLocalBlock(blockData({ content: 'my edit', updatedAt: 500 }))
     await stageRow(blockData({ content: 'stale server', updatedAt: 200 }))
 
@@ -346,8 +346,9 @@ describe('materializeStagingRows — stamp-0 sentinel (deterministic-id shadow)'
       { getMaterializability: constMat('copy'), getCek: noKey },
     )
 
-    expect(out.applied).toEqual(['b1'])
-    expect((await allBlocks())[0]!.content).toBe('stale server')
+    expect(out.applied).toEqual([])
+    expect(out.skippedStale).toEqual(['b1'])
+    expect((await allBlocks())[0]!.content).toBe('my edit')
   })
 })
 
