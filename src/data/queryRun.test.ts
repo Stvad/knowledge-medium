@@ -390,7 +390,7 @@ describe('QueryCtx.run', () => {
     expect(repo.query['plugin:composedHelper']({tag: 'x'})).toBe(aHandle)
   })
 
-  it('a mutating swap (replace/remove) re-keys even an unrelated query', () => {
+  it('a REPLACE swap re-keys even an unrelated query', () => {
     const a = defineQuery<{tag: string}, string>({
       name: 'plugin:composedHelper',
       argsSchema: z.object({tag: z.string()}),
@@ -413,5 +413,57 @@ describe('QueryCtx.run', () => {
     // under-invalidates composed queries — see the idle/conditional cases).
     repo.__setQueriesForTesting([a, makeB('b2')])
     expect(repo.query['plugin:composedHelper']({tag: 'x'})).not.toBe(aHandle)
+  })
+
+  it('a REMOVE swap re-keys even an unrelated query', () => {
+    const a = defineQuery<{tag: string}, string>({
+      name: 'plugin:composedHelper',
+      argsSchema: z.object({tag: z.string()}),
+      resultSchema: z.string(),
+      resolve: async ({tag}) => `a:${tag}`,
+    })
+    const b = defineQuery<{tag: string}, string>({
+      name: 'plugin:composedNested',
+      argsSchema: z.object({tag: z.string()}),
+      resultSchema: z.string(),
+      resolve: async ({tag}) => `b:${tag}`,
+    })
+    repo.__setQueriesForTesting([a, b])
+    const aHandle = repo.query['plugin:composedHelper']({tag: 'x'})
+    // REMOVE b; a is untouched — but a removal bumps the epoch (a caller may
+    // have composed the removed query and must reflect it), so a re-keys.
+    // This is the bootstrap→base disabled-plugin shape.
+    repo.__setQueriesForTesting([a])
+    expect(repo.query['plugin:composedHelper']({tag: 'x'})).not.toBe(aHandle)
+  })
+
+  it('a shadowing add (bare name over an existing core.) counts as mutating', () => {
+    // Adding exact `foo` flips what a bare `ctx.run('foo')` resolves to
+    // (fallback `core.foo` → exact `foo`), so it must bump even though it's
+    // technically an "add". Observed via an unrelated query re-keying.
+    const coreFoo = defineQuery<{tag: string}, string>({
+      name: 'core.foo',
+      argsSchema: z.object({tag: z.string()}),
+      resultSchema: z.string(),
+      resolve: async ({tag}) => `core:${tag}`,
+    })
+    const other = defineQuery<{tag: string}, string>({
+      name: 'plugin:composedHelper',
+      argsSchema: z.object({tag: z.string()}),
+      resultSchema: z.string(),
+      resolve: async ({tag}) => `other:${tag}`,
+    })
+    repo.__setQueriesForTesting([coreFoo, other])
+    const h = repo.query['plugin:composedHelper']({tag: 'x'})
+    const exactFoo = defineQuery<{tag: string}, string>({
+      name: 'foo',
+      argsSchema: z.object({tag: z.string()}),
+      resultSchema: z.string(),
+      resolve: async ({tag}) => `exact:${tag}`,
+    })
+    // Sanity: a plain (non-shadowing) add would NOT re-key (additive). Here
+    // `foo` shadows `core.foo`, so it must.
+    repo.__setQueriesForTesting([coreFoo, other, exactFoo])
+    expect(repo.query['plugin:composedHelper']({tag: 'x'})).not.toBe(h)
   })
 })

@@ -613,13 +613,14 @@ export class Repo {
    *  Cost: a swap never re-resolves a LIVE handle in place; the cost of a
    *  bump is that the next render re-looks-up → fresh handle + cold resolve
    *  for every query, even unaffected ones. To keep that off the hot path we
-   *  do NOT bump on additive swaps — and the dominant reload shape IS
-   *  additive: `AppRuntimeProvider`'s base→next cold-start swap adds
-   *  dynamic-plugin queries while kernel/static instances stay identical, so
-   *  the visible tree's already-loaded kernel queries (subtree/children/...)
-   *  keep their handles and don't re-resolve. The over-resolve only happens
-   *  on a genuine replace/remove (plugin reload/disable), which is rare and
-   *  where re-resolving is defensible. */
+   *  do NOT bump on additive swaps — and for an all-plugins-enabled user the
+   *  cold-start `base→next` swap IS additive (adds dynamic-plugin queries
+   *  while kernel/static instances stay identical), so the visible tree's
+   *  already-loaded kernel queries (subtree/children/...) keep their handles.
+   *  The over-resolve happens on a genuine replace/remove (plugin
+   *  reload/disable) — rare and defensible — AND, today, once at cold start
+   *  for users who've DISABLED a data-extension plugin (the bootstrap→base
+   *  REMOVE; see the init-layer limitation note on `swapQueries`). */
   private queryEpoch = 0
   private readonly processorRunner: ProcessorRunner
   /** Per-scope undo / redo stacks (spec §10 step 7, §17 line 2228).
@@ -2302,18 +2303,36 @@ export class Repo {
    *  running a resolver — a per-name scheme misses unobserved compositions
    *  and serves pre-swap code), so we re-key everything via the epoch.
    *
+   *  Shadowing add: an added bare name `X` whose `core.X` already exists is
+   *  NOT additive-safe — it flips what an existing bare `ctx.run('X')`
+   *  resolves to (fallback `core.X` → exact `X`; see `runSubquery` /
+   *  `dispatchQuery`). The "captured queries are identical" argument is
+   *  about object identity, not name→query RESOLUTION, so we count it as
+   *  mutating. (Nothing composes bare names today — all `ctx.run` callers
+   *  use fully-qualified names — but the guard keeps the invariant sound.)
+   *
    *  Corner: a pre-existing query that conditionally composes a NEWLY-ADDED
-   *  query won't see it on a fresh lookup until a later replace/remove bump.
-   *  That's a stable→dynamic dependency (an anti-pattern) and it fails loud
-   *  (`QueryNotRegisteredError` against the captured registry), never
-   *  silently stale. */
+   *  (non-shadowing) name won't see it on a fresh lookup until a later
+   *  replace/remove bump. That's a stable→dynamic dependency (an
+   *  anti-pattern) and it fails loud (`QueryNotRegisteredError` against the
+   *  captured registry), never silently stale.
+   *
+   *  Known limitation (separate, init-layer): cold start is only storm-free
+   *  when all data-extension plugins are enabled. The bootstrap swap
+   *  (`initRepo`, toggle-BLIND) registers every plugin's data queries; the
+   *  base swap (`AppRuntimeProvider`, toggle-AWARE) prunes disabled ones —
+   *  a REMOVE → bump → the visible tree re-resolves once. Fixing that needs
+   *  bootstrap to know the workspace overrides, which it can't yet. */
   private swapQueries(newQueries: Map<string, AnyQuery>): void {
     let mutated = false
-    // A REPLACED instance (name present before with a different Query).
-    // An ADD (old === undefined) is deliberately not counted.
     for (const [name, newQ] of newQueries) {
       const old = this.queries.get(name)
-      if (old !== undefined && old !== newQ) { mutated = true; break }
+      if (old !== undefined) {
+        if (old !== newQ) { mutated = true; break } // REPLACE
+      } else if (!name.startsWith('core.') && newQueries.has(`core.${name}`)) {
+        mutated = true; break // shadowing ADD (see doc above)
+      }
+      // plain ADD (no shadow) is additive-safe → no bump.
     }
     // A REMOVED name (present before, gone now).
     if (!mutated) {
