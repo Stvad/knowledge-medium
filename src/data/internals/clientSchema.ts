@@ -325,6 +325,23 @@ export const CREATE_BLOCKS_SYNCED_CHANGES_TABLE_SQL = `
   )
 `
 
+/** Indexes the enqueue-collapse lookup in `blocks_synced_changes_insert`
+ *  (`DELETE … WHERE id = NEW.id AND op = 'delete'`). The table is otherwise
+ *  keyed only by the autoincrement `seq`, so without this index that per-insert
+ *  delete would SCAN the entire pending queue on every staging insert — even a
+ *  brand-new id with no matching 'delete'. During a bulk sync/backfill the queue
+ *  grows (within one PowerSync apply tx) far faster than the observer drains, so
+ *  an unindexed scan turns the apply into O(n²) — the exact large-download case
+ *  this queue exists to keep cheap (the ~310K-row backfill that motivated the
+ *  collapse). With the index the lookup is an O(log n) seek, including the common
+ *  no-match insert. The drain still reads/deletes by `seq` (PK), so this index
+ *  only serves the collapse delete; its maintenance cost on queue insert + the
+ *  drain's `DELETE … WHERE seq <= ?` is O(log n) per row. */
+export const CREATE_BLOCKS_SYNCED_CHANGES_ID_OP_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_blocks_synced_changes_id_op
+  ON blocks_synced_changes (id, op)
+`
+
 export const CREATE_BLOCKS_SYNCED_CHANGES_INSERT_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS blocks_synced_changes_insert
   AFTER INSERT ON blocks_synced
@@ -1184,6 +1201,7 @@ export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = withTriggerRecreate([
   CREATE_PS_CRUD_REJECTED_REJECTED_AT_INDEX_SQL,
   CREATE_PS_CRUD_REJECTED_TX_ID_INDEX_SQL,
   CREATE_BLOCKS_SYNCED_CHANGES_TABLE_SQL,
+  CREATE_BLOCKS_SYNCED_CHANGES_ID_OP_INDEX_SQL,
   DROP_BLOCKS_WORKSPACE_TYPE_INDEX_SQL,
   // 3 row_events audit/history triggers
   CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL,
