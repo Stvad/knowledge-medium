@@ -345,4 +345,50 @@ describe('QueryCtx.run', () => {
       unsub()
     }
   })
+
+  it('a no-op swap (same instances) does not bump the epoch — handle slot survives', () => {
+    const helper = defineQuery<{tag: string}, string>({
+      name: 'plugin:composedHelper',
+      argsSchema: z.object({tag: z.string()}),
+      resultSchema: z.string(),
+      resolve: async ({tag}) => `v:${tag}`,
+    })
+    const outer = defineQuery<{tag: string}, string>({
+      name: 'plugin:composedOuter',
+      argsSchema: z.object({tag: z.string()}),
+      resultSchema: z.string(),
+      resolve: async ({tag}, ctx) => ctx.run('plugin:composedHelper', {tag}),
+    })
+    repo.__setQueriesForTesting([helper, outer])
+    const h1 = repo.query['plugin:composedOuter']({tag: 'a'})
+    // Re-install the SAME instances → registry unchanged → no epoch bump,
+    // so a cached handle survives a setFacetRuntime that didn't touch it.
+    repo.__setQueriesForTesting([helper, outer])
+    expect(repo.query['plugin:composedOuter']({tag: 'a'})).toBe(h1)
+  })
+
+  it('a swap re-keys even an unrelated query (global-epoch blast radius)', () => {
+    const a = defineQuery<{tag: string}, string>({
+      name: 'plugin:composedHelper',
+      argsSchema: z.object({tag: z.string()}),
+      resultSchema: z.string(),
+      resolve: async ({tag}) => `a:${tag}`,
+    })
+    const makeB = (marker: string) =>
+      defineQuery<{tag: string}, string>({
+        name: 'plugin:composedNested',
+        argsSchema: z.object({tag: z.string()}),
+        resultSchema: z.string(),
+        resolve: async ({tag}) => `${marker}:${tag}`,
+      })
+    repo.__setQueriesForTesting([a, makeB('b1')])
+    const aHandle = repo.query['plugin:composedHelper']({tag: 'x'})
+    // Swap only B; A is untouched and composes nothing — yet A re-keys too,
+    // because the epoch is global. This pins the deliberate correctness-
+    // over-precision tradeoff: a same-handle result here would mean someone
+    // reintroduced a per-name scheme (which under-invalidates composed
+    // queries — see the idle/conditional cases above).
+    repo.__setQueriesForTesting([a, makeB('b2')])
+    expect(repo.query['plugin:composedHelper']({tag: 'x'})).not.toBe(aHandle)
+  })
 })

@@ -608,10 +608,21 @@ export class Repo {
    *  surgical "re-key just the affected queries" approach silently misses
    *  unobserved compositions — idle handles, first-load races, and
    *  data-conditional branches — and hands a fresh lookup pre-swap code. A
-   *  single epoch is correct by construction. It is also cheap under the
-   *  immutable-handle rule: a swap never re-resolves a live handle (they're
-   *  frozen at their epoch); the only cost is that re-obtaining an
-   *  unaffected query resolves fresh, which a reload's remount does anyway. */
+   *  single epoch is correct by construction.
+   *
+   *  Cost (be honest): a swap never re-resolves a LIVE handle in place, but
+   *  it re-keys EVERY query, so the next render that re-looks-up a query
+   *  gets a fresh handle + a cold resolve — even for queries the swap did
+   *  not affect. This is borne mid-mount, not only on remount:
+   *  `AppRuntimeProvider` calls `setFacetRuntime` 2-3x during cold start
+   *  (bootstrap -> static -> +dynamic plugins) and the dynamic swap also
+   *  changes the runtime context, re-rendering every mounted block. So an
+   *  additive plugin load re-resolves the visible tree's already-loaded
+   *  kernel queries (subtree/children/...) once. We accept this: swaps are
+   *  rare and those resolves are cheap next to a reload; the one expensive
+   *  read (plugin backlinks) composes via `ctx.run`, so it is added by that
+   *  same swap and first-resolves regardless. A precise per-name scheme is
+   *  not a safe alternative — it under-invalidates composed queries. */
   private queryEpoch = 0
   private readonly processorRunner: ProcessorRunner
   /** Per-scope undo / redo stacks (spec §10 step 7, §17 line 2228).
