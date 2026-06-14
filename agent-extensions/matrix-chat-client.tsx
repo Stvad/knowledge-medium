@@ -694,9 +694,31 @@ const migrateLegacyConfig = async (repo: any): Promise<void> => {
 // ---------------------------------------------------------------------------
 // poll loop
 
+// Transient failures clear on the next poll, so they should stay out of the
+// user's face — log them, reflect them in the (quiet) status hint, but don't
+// toast. This covers network blips (fetch rejects with a TypeError; matrix-js-
+// sdk may rewrap it as a ConnectionError) and server-side conditions that the
+// long-poll naturally rides out (429 rate-limit, 5xx). Actionable errors — a
+// bad/expired token, a malformed request — fall through to the loud path.
+const RETRYABLE_MESSAGE_RE = /failed to fetch|fetch failed|network ?error|load failed/i
+
+const isRetryableError = (error: unknown): boolean => {
+  if (error instanceof TypeError) return true
+  const name = (error as {name?: unknown})?.name
+  if (name === 'ConnectionError' || name === 'AbortError') return true
+  const status = (error as {httpStatus?: unknown})?.httpStatus
+  if (typeof status === 'number') return status === 429 || status >= 500
+  const message = error instanceof Error ? error.message : String(error)
+  return RETRYABLE_MESSAGE_RE.test(message)
+}
+
 const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSignal, matrixClient: any): Promise<void> => {
   let nextBatch = loadNextBatch(config)
-  let erroredOnce = false
+  // `toasted` gates the one-per-streak toast (loud, actionable errors only);
+  // `degraded` tracks whether the status hint is currently non-running so a
+  // recovered poll clears it — regardless of which kind of error set it.
+  let toasted = false
+  let degraded = false
   await setStatus(repo, 'running')
 
   while (!signal.aborted) {
@@ -714,20 +736,27 @@ const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSignal, ma
         nextBatch = newBatch
         saveNextBatch(config, newBatch)
       }
-      if (erroredOnce) {
-        erroredOnce = false
+      if (degraded) {
+        degraded = false
+        toasted = false
         await setStatus(repo, 'running')
       }
     } catch (error) {
       if (signal.aborted) return
       const message = error instanceof Error ? error.message : String(error)
-      console.error('[matrix-messages]', error)
-      // Surface the error once per failure streak — a long-poll can fail
-      // every few seconds and we don't want to bury the user in toasts.
-      if (!erroredOnce) {
-        erroredOnce = true
+      degraded = true
+      if (isRetryableError(error)) {
+        console.warn('[matrix-messages] transient poll error (will retry):', message)
+        await setStatus(repo, `retrying: ${message}`)
+      } else {
+        console.error('[matrix-messages]', error)
         await setStatus(repo, `error: ${message}`)
-        showError(`Matrix ingest error: ${message}`)
+        // One toast per failure streak — a long-poll can fail every few
+        // seconds and we don't want to bury the user in toasts.
+        if (!toasted) {
+          toasted = true
+          showError(`Matrix ingest error: ${message}`)
+        }
       }
       await sleep(POLL_ERROR_DELAY_MS, signal).catch(() => undefined)
     }
