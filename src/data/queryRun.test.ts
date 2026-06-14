@@ -149,10 +149,9 @@ describe('QueryCtx.run', () => {
         resultSchema: z.string(),
         resolve: async ({tag}) => `${marker}:${tag}`,
       })
-    // Same outer instance across both swaps — only the helper changes, so
-    // the outer's generation never bumps on its own account. The
-    // composition graph bumps it because it composes the swapped helper, so
-    // a *fresh* lookup re-keys to the new snapshot.
+    // Same outer instance across both swaps — only the helper changes. The
+    // swap bumps the global epoch, so a *fresh* lookup re-keys to a new
+    // handle over the new registry while the held handle keeps its snapshot.
     const outer = defineQuery<{tag: string}, string>({
       name: 'plugin:composedOuter',
       argsSchema: z.object({tag: z.string()}),
@@ -170,8 +169,8 @@ describe('QueryCtx.run', () => {
       // The already-subscribed handle is a consistent snapshot — it keeps
       // serving v1 and is NOT live-migrated to the new helper.
       expect(v1Handle.peek()).toBe('v1:a')
-      // A fresh lookup re-keys (the outer's generation bumped because it
-      // composes the swapped helper) → a new handle over the new snapshot.
+      // A fresh lookup re-keys (the swap bumped the global epoch) → a new
+      // handle over the new snapshot.
       const v2Handle = repo.query['plugin:composedOuter']({tag: 'a'})
       expect(v2Handle).not.toBe(v1Handle)
       expect(await v2Handle.load()).toBe('v2:a')
@@ -181,11 +180,9 @@ describe('QueryCtx.run', () => {
   })
 
   it('snapshots transitively through deps:none: swapping the deepest query re-keys the root', async () => {
-    // outer --(deps:'none')--> helper --(inherit)--> nested.
-    // The child→root composition edge is recorded regardless of the deps
-    // mode, so swapping only the deepest query bumps the root's generation
-    // and a fresh lookup gets the fully-new snapshot, while the old handle
-    // keeps its captured one.
+    // outer --(deps:'none')--> helper --(inherit)--> nested. A swap bumps
+    // the global epoch, so a fresh lookup re-keys to the fully-new snapshot
+    // regardless of the deps mode, while the held handle keeps its old one.
     const makeNested = (marker: string) =>
       defineQuery<{tag: string}, string>({
         name: 'plugin:composedNested',
@@ -219,6 +216,131 @@ describe('QueryCtx.run', () => {
       const v2Handle = repo.query['plugin:composedOuter']({tag: 'a'})
       expect(v2Handle).not.toBe(v1Handle)
       expect(await v2Handle.load()).toBe('v2:a')
+    } finally {
+      unsub()
+    }
+  })
+
+  it('a never-loaded (idle) handle does not leak its pre-swap snapshot to a fresh lookup', async () => {
+    // The old composition-graph scheme recorded edges only during resolve,
+    // so a handle created but never loaded before a helper swap left the
+    // outer's key un-bumped and a fresh lookup reused the stale handle. The
+    // global epoch re-keys regardless of whether the handle ever ran.
+    const makeHelper = (marker: string) =>
+      defineQuery<{tag: string}, string>({
+        name: 'plugin:composedHelper',
+        argsSchema: z.object({tag: z.string()}),
+        resultSchema: z.string(),
+        resolve: async ({tag}) => `${marker}:${tag}`,
+      })
+    const outer = defineQuery<{tag: string}, string>({
+      name: 'plugin:composedOuter',
+      argsSchema: z.object({tag: z.string()}),
+      resultSchema: z.string(),
+      resolve: async ({tag}, ctx) => ctx.run('plugin:composedHelper', {tag}),
+    })
+
+    repo.__setQueriesForTesting([makeHelper('v1'), outer])
+    // Create the handle but never load or subscribe it.
+    const idle = repo.query['plugin:composedOuter']({tag: 'a'})
+
+    repo.__setQueriesForTesting([makeHelper('v2'), outer])
+    const fresh = repo.query['plugin:composedOuter']({tag: 'a'})
+    expect(fresh).not.toBe(idle)
+    expect(await fresh.load()).toBe('v2:a')
+  })
+
+  it('swapping BOTH an outer and its helper yields a consistent new snapshot (no version mixing)', async () => {
+    const makeHelper = (marker: string) =>
+      defineQuery<{tag: string}, string>({
+        name: 'plugin:composedHelper',
+        argsSchema: z.object({tag: z.string()}),
+        resultSchema: z.string(),
+        resolve: async ({tag}) => `${marker}:${tag}`,
+      })
+    const makeOuter = (marker: string) =>
+      defineQuery<{tag: string}, string>({
+        name: 'plugin:composedOuter',
+        argsSchema: z.object({tag: z.string()}),
+        resultSchema: z.string(),
+        resolve: async ({tag}, ctx) =>
+          `${marker}(${await ctx.run('plugin:composedHelper', {tag})})`,
+      })
+
+    repo.__setQueriesForTesting([makeHelper('h1'), makeOuter('o1')])
+    const v1Handle = repo.query['plugin:composedOuter']({tag: 'a'})
+    expect(await v1Handle.load()).toBe('o1(h1:a)')
+
+    const unsub = v1Handle.subscribe(() => {})
+    try {
+      repo.__setQueriesForTesting([makeHelper('h2'), makeOuter('o2')])
+      // Held handle keeps its fully-old snapshot — never o1(h2:a) / o2(h1:a).
+      expect(v1Handle.peek()).toBe('o1(h1:a)')
+      // Fresh lookup is fully-new and consistent.
+      const v2Handle = repo.query['plugin:composedOuter']({tag: 'a'})
+      expect(v2Handle).not.toBe(v1Handle)
+      expect(await v2Handle.load()).toBe('o2(h2:a)')
+    } finally {
+      unsub()
+    }
+  })
+
+  it('a fresh lookup sees a swapped branch the handle never composed before the swap', async () => {
+    // condRoot composes branch A or branch B depending on block x. It
+    // resolves A first (B is never observed), then B is swapped while x
+    // still selects A. After x flips to B, a fresh lookup must see the NEW
+    // B — a graph that only recorded observed edges would miss this.
+    const branchA = defineQuery<{tag: string}, string>({
+      name: 'plugin:composedHelper',
+      argsSchema: z.object({tag: z.string()}),
+      resultSchema: z.string(),
+      resolve: async ({tag}) => `A:${tag}`,
+    })
+    const makeBranchB = (marker: string) =>
+      defineQuery<{tag: string}, string>({
+        name: 'plugin:composedNested',
+        argsSchema: z.object({tag: z.string()}),
+        resultSchema: z.string(),
+        resolve: async ({tag}) => `${marker}:${tag}`,
+      })
+    const condRoot = defineQuery<{tag: string}, string>({
+      name: 'plugin:composedOuter',
+      argsSchema: z.object({tag: z.string()}),
+      resultSchema: z.string(),
+      resolve: async ({tag}, ctx) => {
+        const [x] = await ctx.run('core.subtree', {id: 'x'})
+        return x?.content === 'b'
+          ? ctx.run('plugin:composedNested', {tag})
+          : ctx.run('plugin:composedHelper', {tag})
+      },
+    })
+    // Use setFacetRuntime (not __setQueriesForTesting) so `core.subtree` is
+    // available; only branch B's instance changes between installs.
+    const install = (branchB: Query<{tag: string}, string>) =>
+      repo.setFacetRuntime(resolveFacetRuntimeSync([
+        kernelDataExtension,
+        queriesFacet.of(branchA, {source: 'plugin'}),
+        queriesFacet.of(branchB, {source: 'plugin'}),
+        queriesFacet.of(condRoot, {source: 'plugin'}),
+      ]))
+
+    install(makeBranchB('B1'))
+    await create('x', 'a', null)
+    const v1Handle = repo.query['plugin:composedOuter']({tag: 't'})
+    expect(await v1Handle.load()).toBe('A:t')
+
+    const unsub = v1Handle.subscribe(() => {})
+    try {
+      // Swap only branch B (never composed yet), then steer x to branch B.
+      install(makeBranchB('B2'))
+      await setContent('x', 'b')
+      // Held handle re-resolves on the data change but against ITS captured
+      // registry → intentionally the old B1 (immutable-handle rule).
+      await vi.waitFor(() => expect(v1Handle.peek()).toBe('B1:t'))
+      // A fresh lookup re-keys to the new epoch → the swapped B2.
+      const fresh = repo.query['plugin:composedOuter']({tag: 't'})
+      expect(fresh).not.toBe(v1Handle)
+      expect(await fresh.load()).toBe('B2:t')
     } finally {
       unsub()
     }
