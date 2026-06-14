@@ -143,11 +143,14 @@ const insufficientOpfsSpaceMessage = (
 ): string => {
   const toMiB = (bytes: number) => (bytes / BYTES_PER_MIB).toFixed(1)
   const haveClause = freeBytes === undefined ? '' : ` but only ${toMiB(freeBytes)} MiB is available`
-  // Only suggest a different browser when the direct-to-file picker is the
+  // Only mention a different browser when the direct-to-file picker is the
   // thing this environment is missing; on Chromium it would have been used.
+  // Each browser keeps its own separate OPFS database, so exporting from
+  // another browser would export that browser's data — freeing space here is
+  // the only way to export *this* browser's database.
   const pickerHint = typeof (globalThis as WindowWithSaveFilePicker).showSaveFilePicker === 'function'
     ? ''
-    : ' Or open the app in a Chromium-based browser, which exports straight to a file without this temporary copy.'
+    : ' (A Chromium-based browser can export without this temporary copy, but it keeps its own separate local database and would not include anything that exists only in this browser, such as unsynced changes or local history.)'
   return (
     `Not enough browser storage to export the SQLite database: the export first copies ` +
     `it into browser storage (OPFS), which needs ${toMiB(requiredBytes)} MiB of free space` +
