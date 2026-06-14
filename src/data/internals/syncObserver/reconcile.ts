@@ -114,7 +114,10 @@ export const decideStagingRow = (
   // >= local via the floor+bump) re-asserts it. The only cost is a transient
   // revert in rescan paths (drainWorkspace) during the ack-to-echo window;
   // steady-state queue-driven drains can't hit it (the next delivery for the
-  // id IS the echo). A permanently-rejected edit is rolled back by the cache's
-  // unconditional force-heal instead of pinned forever.
+  // id IS the echo). That disk transient stays OFF the UI: the cache write is
+  // LWW (`applySyncInvalidation` → `applyIfNewer`), which rejects the older
+  // value, so the row self-heals on the echo without a visible flash. (A
+  // permanently-rejected edit rolls back on the next reload, when the cache
+  // rehydrates from the server-healed disk.)
   return { kind: 'apply', decrypt: materializability === 'decrypt' }
 }

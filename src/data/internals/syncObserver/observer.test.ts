@@ -140,16 +140,16 @@ describe('blocksSyncedObserver — server overrides a non-pending local row (dis
     // Disk: the server value replaced the pristine default via the stamp-0
     // exemption.
     expect(await blocks()).toEqual([{ id: 'b1', content: 'real synced config' }])
-    // Cache (in-session): applyFromSync force-applies the server row because the
-    // cache still matched the pre-write disk row — the LIVE heal, no reload.
+    // Cache (in-session): plain LWW accepts the server row because it out-stamps
+    // the 0 sentinel — the LIVE heal, no reload, no force-heal needed.
     expect(cache.getSnapshot('b1')).toMatchObject({ content: 'real synced config' })
   })
 
-  it('also overwrites a strictly-newer NON-pending local row (replay transient, echo converges)', async () => {
-    // No more strictly-newer protection. A nonzero local row strictly newer than
+  it('also overwrites a strictly-newer NON-pending local row ON DISK (replay transient, echo converges)', async () => {
+    // No strictly-newer DISK protection. A nonzero local row strictly newer than
     // an older delivery, with no pending upload, is an acked edit facing a stale
-    // in-flight replay. The gate applies the older server row — a transient
-    // revert the upload echo (server stamp >= local via the floor+bump)
+    // in-flight replay. The gate applies the older server row on disk — a
+    // transient revert the upload echo (server stamp >= local via the floor+bump)
     // converges. A genuinely-unsent edit would be pending and is still guarded.
     const localEdit = data({ content: 'my edit', updatedAt: 9000 })
     await seedLocalBlock(localEdit)
@@ -159,6 +159,25 @@ describe('blocksSyncedObserver — server overrides a non-pending local row (dis
     await observer.flush()
 
     expect(await blocks()).toEqual([{ id: 'b1', content: 'stale server' }])
+  })
+
+  it('does NOT surface that disk transient in the live cache (no stale-echo flash)', async () => {
+    // Same replay as above, but with the real edit live in the cache (the UI is
+    // showing it). The disk gate still transiently reverts, but the cache write
+    // is LWW: it rejects the older server row, so the cache keeps the edit and no
+    // handle is woken — no new→old→new flash. The echo re-converges disk; a
+    // reload would rehydrate from the (by-then healed) disk.
+    const localEdit = data({ content: 'my edit', updatedAt: 9000 })
+    await seedLocalBlock(localEdit)
+    const { observer, cache } = start({ getMaterializability: constMat('copy') })
+    cache.setSnapshot(localEdit)
+
+    await put(data({ content: 'stale server', updatedAt: 3000 }))
+    await observer.flush()
+
+    // Disk took the transient revert; the live cache did not.
+    expect(await blocks()).toEqual([{ id: 'b1', content: 'stale server' }])
+    expect(cache.getSnapshot('b1')).toMatchObject({ content: 'my edit' })
   })
 })
 

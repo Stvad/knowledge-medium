@@ -162,7 +162,7 @@ export const startBlocksSyncedObserver = (
   }
 
   /** Post-materialization side effects shared by every drain path: invalidate
-   *  cache + handles (force-healing the live cache so it follows disk — see
+   *  cache + handles (writing the cache via the LWW gate — see
    *  `applySyncInvalidation`), then run cycle detection. */
   const applyOutcome = async (
     outcome: MaterializeOutcome,

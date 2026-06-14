@@ -643,14 +643,16 @@ describe('sync observer: sync-applied invalidation', () => {
   // reprocessing across restarts, coalescing re-deliveries — is pinned in
   // observer.test.ts. Local writes never enter the queue, covered above.)
 
-  it('ack-to-echo replay applies transiently then the echo converges, with no freeze loop', async () => {
-    // QuickFind-freeze canary, post-split. A local write to A is acked (not
-    // pending). The old strict gate REJECTED a strictly-newer-local replay
-    // outright; the server-monotonic gate instead APPLIES it (a transient
-    // revert) and relies on the echo — the server's authoritative row, whose
-    // stamp is floored >= local — to re-assert the truth. This pins:
-    //   (a) the replay applies transiently, and the echo converges disk + cache
-    //       within the same settle, and
+  it('ack-to-echo replay reverts disk transiently but the cache masks it (no flash), then converges with no freeze loop', async () => {
+    // QuickFind-freeze / stale-echo canary, post-split. A local write to A is
+    // acked (not pending). The server-monotonic DISK gate APPLIES a strictly-
+    // newer-local replay (a transient disk revert) and relies on the echo — the
+    // server's authoritative row, stamp floored >= local — to re-assert truth.
+    // The CACHE write is LWW, so it REJECTS the older replay: the transient
+    // stays on disk and never surfaces as a new→old→new UI flash. This pins:
+    //   (a) the replay reverts disk transiently while the cache keeps the local
+    //       value, and the echo converges disk + cache within the same settle,
+    //       and
     //   (b) no repeated handle-wake loop (the freeze signature: cache-rejected
     //       sync rows kicking handles to re-read SQL in a burst).
     await create('A', {parentId: null, orderKey: 'a0', content: 'local-new'})
@@ -675,11 +677,14 @@ describe('sync observer: sync-applied invalidation', () => {
     env.repo.startSyncObserver({throttleMs: 0})
     await env.repo.flushSyncObserver()
 
-    // 1) Stale in-flight replay (older stamp) — now applied transiently.
+    // 1) Stale in-flight replay (older stamp). Disk reverts transiently; the
+    // cache LWW rejects it, so the user-visible value never flashes to stale.
     await syncApply({id: 'A', parentId: null, orderKey: 'a0', content: 'server-stale', updatedAt: 1})
     await env.repo.flushSyncObserver()
     await Promise.resolve()
-    expect(env.cache.getSnapshot('A')?.content).toBe('server-stale') // transient revert
+    const diskRow = await env.h.db.getAll<{content: string}>('SELECT content FROM blocks WHERE id = ?', ['A'])
+    expect(diskRow[0]?.content).toBe('server-stale') // transient revert on disk
+    expect(env.cache.getSnapshot('A')?.content).toBe('local-new') // cache masks it — no flash
 
     // 2) The echo: server's authoritative row, stamp floored >= local. Converges.
     await syncApply({id: 'A', parentId: null, orderKey: 'a0', content: 'local-new', updatedAt: localStamp + 1})

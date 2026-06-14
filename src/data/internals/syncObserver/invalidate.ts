@@ -11,15 +11,23 @@
  *
  * One gate, not two: `materializeStagingRows` already consulted `ps_crud` /
  * `updated_at` to decide what to write to disk, so `snapshots` only contains
- * rows that won that gate. The cache write here is `applyFromSync(after,
- * before)`: it takes the observer's row when the cache still matches the
- * pre-write disk row (`before`) — healing the deterministic-id shadow LIVE even
- * when `after` is older-stamped — and otherwise falls back to the in-memory LWW
- * so a newer local edit is never clobbered. A row the cache rejects produced no
- * user-visible change, so (as in the old tail) it contributes no invalidation,
- * avoiding the re-read flicker that waking handles to stale SQL would cause.
- * Replay deliveries are already skip-staled at the disk gate, so they never
- * reach this force path.
+ * rows that won that gate. The cache write here is `applyIfNewer(after,
+ * 'sync')` — the in-memory LWW. It heals a 0-stamped pristine default LIVE for
+ * free (any real server value out-stamps 0), while REJECTING an older-stamped
+ * delivery over a newer local cache value.
+ *
+ * That reject is load-bearing: the disk gate is server-monotonic but
+ * INDISCRIMINATE toward a strictly-newer local row (it applies an older server
+ * row over a just-acked-not-yet-echoed real edit during a rescan's ack→echo
+ * window — a transient disk revert the echo converges). Force-applying that
+ * onto the cache would surface it as a new→old→new UI flash. Keeping the cache
+ * LWW masks the transient: disk self-heals on the echo, and the rare legacy
+ * NONZERO shadow heals on disk now + in the cache on the next reload. This is
+ * the invariant commit cd8f87a9 established (force-heal only when the disk gate
+ * protected real edits) — the gate is uniformly indiscriminate, so the cache is
+ * uniformly LWW. A row the cache rejects produced no user-visible change, so it
+ * contributes no invalidation, avoiding the re-read flicker that waking handles
+ * to stale SQL would cause.
  */
 
 import type { BlockCache } from '@/data/blockCache.js'
@@ -37,11 +45,11 @@ export interface SyncInvalidationTarget {
 }
 
 /** The cache surface the observer writes through. */
-export type SyncCache = Pick<BlockCache, 'applyFromSync' | 'markMissing'>
+export type SyncCache = Pick<BlockCache, 'applyIfNewer' | 'markMissing'>
 
 /**
  * Reflect a materialization pass's `snapshots` into the cache and notify
- * handles. Updates each row's cache snapshot (`applyFromSync` for an apply,
+ * handles. Updates each row's cache snapshot (`applyIfNewer` for an apply,
  * `markMissing` for a removal) and, for the rows the cache accepted, emits one
  * `ChangeNotification` (rowIds / parentIds / workspaceIds / plugin).
  *
@@ -64,15 +72,13 @@ export const applySyncInvalidation = (
     // invalidate its parent-edge deps. Mirrors the fast path's post-commit
     // cache walk (commitPipeline step 6) and the retired tail's delete branch.
     //
-    // Force-heal unconditionally (cache follows disk): take the observer's row
-    // whenever the cache still matches the pre-write disk row (`before`) — even
-    // an older-stamped server row — and fall back to the in-memory LWW
-    // otherwise so a newer local edit is never clobbered. Disk-gate replay
-    // deliveries are already skip-staled, so they don't reach here; a
-    // permanently-rejected edit (no echo ever coming) is correctly rolled back
-    // to server truth here instead of pinned in the cache forever.
+    // Apply branch is the in-memory LWW: heal a 0-stamped pristine default live
+    // (server out-stamps 0) but reject an older delivery over a newer local
+    // cache value, so a rescan's transient disk revert (ack→echo window) never
+    // surfaces as a UI flash. `before` is unused now — the gate's decision is
+    // already encoded in the disk write; the cache only guards re-read flicker.
     const changed = snap.after
-      ? cache.applyFromSync(snap.after, snap.before)
+      ? cache.applyIfNewer(snap.after, 'sync')
       : cache.markMissing(id)
     if (changed) accepted.set(id, snap)
   }

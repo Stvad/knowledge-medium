@@ -75,8 +75,7 @@ describe('applySyncInvalidation', () => {
     cache.applyIfNewer(block({ content: 'newer', updatedAt: 5000 }), 'sync')
     const handle = target()
 
-    // `before: null` ⇒ applyFromSync can't force; it falls back to LWW, which
-    // rejects the older delivery.
+    // The in-memory LWW rejects the older delivery.
     const stale = block({ content: 'older', updatedAt: 2000 })
     const out = applySyncInvalidation(cache, handle, snapshots({ b1: { before: null, after: stale } }))
 
@@ -86,19 +85,18 @@ describe('applySyncInvalidation', () => {
     expect(handle.calls).toHaveLength(0)
   })
 
-  it('heals the cache LIVE: an older server row replaces a default the cache still matches', () => {
-    // The deterministic-id shadow heal in-session. The cache holds the stale
-    // default; the observer applied the older server row to disk and passes the
-    // default as `before`. applyFromSync force-applies, and because the cache
-    // changed, the row's handles are invalidated so the UI re-reads.
+  it('heals a 0-stamped pristine default LIVE (server out-stamps the 0 sentinel)', () => {
+    // The deterministic-id shadow heal in-session, post 0-sentinel. The cache
+    // holds a 0-stamped pristine default; the real server value out-stamps 0, so
+    // plain LWW accepts it — no force-heal needed — and wakes the row's handles.
     const cache = new BlockCache()
-    const staleDefault = block({ content: 'default', updatedAt: 9000 })
-    cache.applyIfNewer(staleDefault, 'sync')
+    const pristineDefault = block({ content: 'default', updatedAt: 0 })
+    cache.applyIfNewer(pristineDefault, 'sync')
     const handle = target()
 
     const serverValue = block({ content: 'real synced config', updatedAt: 3000 })
     const out = applySyncInvalidation(
-      cache, handle, snapshots({ b1: { before: staleDefault, after: serverValue } }),
+      cache, handle, snapshots({ b1: { before: pristineDefault, after: serverValue } }),
     )
 
     expect(cache.getSnapshot('b1')).toMatchObject({ content: 'real synced config' })
@@ -107,25 +105,26 @@ describe('applySyncInvalidation', () => {
     expect(handle.calls).toHaveLength(1)
   })
 
-  it('force-heals unconditionally: a permanently-rejected edit rolls back to server truth', () => {
-    // No more forceHeal=false path. A local edit that was permanently rejected
-    // (quarantined, no echo ever coming) leaves the cache pinning the rejected
-    // newer stamp; the observer applied server truth to disk and passes the
-    // rejected edit as `before`. applyFromSync force-applies the (older) server
-    // row so the cache converges instead of lying forever.
+  it('does NOT clobber a newer local cache value with an older server delivery (no stale-echo flash)', () => {
+    // The flash regression. A real edit (nonzero stamp) is in the cache; a rescan
+    // re-reads a stale pre-echo staging row and the disk gate transiently applies
+    // it (no strictly-newer disk protection), passing the edit as `before`. The
+    // cache LWW must REJECT the older `after` so the UI never flashes new→old→new;
+    // disk self-heals on the echo. (A permanently-rejected edit likewise stays
+    // until reload, when the cache rehydrates from the server-healed disk.)
     const cache = new BlockCache()
-    const rejectedEdit = block({ content: 'rejected local edit', updatedAt: 9000 })
-    cache.applyIfNewer(rejectedEdit, 'sync')
+    const localEdit = block({ content: 'my edit', updatedAt: 9000 })
+    cache.applyIfNewer(localEdit, 'sync')
     const handle = target()
 
-    const serverValue = block({ content: 'server truth', updatedAt: 3000 })
+    const staleServer = block({ content: 'stale server', updatedAt: 3000 })
     const out = applySyncInvalidation(
-      cache, handle, snapshots({ b1: { before: rejectedEdit, after: serverValue } }),
+      cache, handle, snapshots({ b1: { before: localEdit, after: staleServer } }),
     )
 
-    expect(cache.getSnapshot('b1')).toMatchObject({ content: 'server truth' })
-    expect(out).not.toBeNull()
-    expect(handle.calls).toHaveLength(1)
+    expect(cache.getSnapshot('b1')).toMatchObject({ content: 'my edit' })
+    expect(out).toBeNull()
+    expect(handle.calls).toHaveLength(0)
   })
 
   it('evicts on removal and invalidates the row + its prior parent', () => {

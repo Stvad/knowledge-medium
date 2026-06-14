@@ -1962,8 +1962,9 @@ export class Repo {
    *
    * Marker-gated to run at most once per (workspace, client); deferred off the
    * open path; windowed + resumable and idempotent (a settled workspace
-   * re-scans to no-ops). The live cache rehydrates from the healed disk via the
-   * observer's force-heal (and on next reload).
+   * re-scans to no-ops). A 0-stamped pristine shadow heals in the live cache
+   * too (the LWW accept, since the server row out-stamps 0); a legacy nonzero
+   * shadow heals on disk now and in the cache on the next reload.
    *
    * Call after the access gate (a locked/unverified workspace must not be
    * re-materialized here — its own gate-resolution path runs drainWorkspace).
