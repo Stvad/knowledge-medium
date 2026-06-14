@@ -1,11 +1,12 @@
 import {
   actionsFacet, ActionContextTypes, appEffectsFacet, appMountsFacet,
   ChangeScope, codecs, defineBlockType, defineProperty, definePropertyEditorOverride,
-  getPluginPrefsBlock, propertyEditorOverridesFacet, propertySchemasFacet,
+  getPluginPrefsBlock, pluginBlockId, propertyEditorOverridesFacet, propertySchemasFacet,
   showError, showInfo, showSuccess, showPropertiesProp, typesFacet, useRepo,
   type PropertyEditorProps,
 } from '@/extensions/api.js'
 import { keyAtEnd, keysBetween } from '@/data/orderKey.js'
+import { createOrRestoreTargetBlock } from '@/data/targets.js'
 import { addBlockTypeToProperties } from '@/data/properties.js'
 import { dailyNoteBlockId, getOrCreateDailyNote, todayIso } from '@/plugins/daily-notes/index.js'
 import { computePromotedFromChildren } from '@/plugins/roam-import/plan.js'
@@ -26,6 +27,13 @@ const source = 'matrix-chat-client'
 const MATRIX_MESSAGE_TYPE = 'matrix-message'
 const TAG_BLOCK_CONTENT = '[[matrix-messages]]'
 const POLL_ERROR_DELAY_MS = 5_000
+
+// Stable namespace for deterministic block ids. Derived ids (the per-day tag
+// block and every node of a message tree) are a uuidv5 of the workspace + a
+// plugin-internal key under this namespace, so two devices that independently
+// ingest the same matrix event compute the *same* ids and PowerSync merges
+// their writes instead of duplicating the message. Picked once; never change.
+const MATRIX_NS = '9839e327-a96a-4974-acb1-128fc44878b8'
 
 // secret — lives only in localStorage, never in a synced block or toast output
 const TOKEN_KEY = 'knowledge-medium:matrix:token:v1'
@@ -466,12 +474,21 @@ const createBlocksFromEvent = (event: any, matrixClient: any): BlockDef[] => {
 // ---------------------------------------------------------------------------
 // write the message into today's daily note
 
+// Deterministic id for a node of a message tree, keyed by the matrix event id
+// and the node's index path within that message. `[0]` is the message root
+// (the single elected-first block under the day's tag block); `[0, 1]` is its
+// second child, and so on. Same event + same path → same id on every device.
+const messageNodeId = (workspaceId: string, eventId: string, path: number[]): string =>
+  pluginBlockId(workspaceId, MATRIX_NS, `event:${eventId}:${path.join('.')}`)
+
 const createBlockTree = async (
   tx: any,
   workspaceId: string,
   parentId: string,
   blockDefinitions: BlockDef[],
+  eventId: string,
   rootProperties?: Record<string, unknown>,
+  path: number[] = [],
 ): Promise<void> => {
   if (!blockDefinitions.length) return
 
@@ -483,16 +500,19 @@ const createBlockTree = async (
   )
 
   for (const [index, block] of blockDefinitions.entries()) {
-    const merged = mergeProperties(index === 0 ? rootProperties : undefined, block.properties)
+    const nodePath = [...path, index]
+    const isMessageRoot = path.length === 0 && index === 0
+    const merged = mergeProperties(isMessageRoot ? rootProperties : undefined, block.properties)
     // The message root is marked as a `matrix-message` block so its event
     // metadata renders under that type in the property panel. addBlockType…
     // re-encodes `types` through the list codec — going through our own
     // mergeProperties would collapse a single-element list back to a scalar.
-    const properties = index === 0
+    const properties = isMessageRoot
       ? addBlockTypeToProperties(merged ?? {}, MATRIX_MESSAGE_TYPE)
       : merged
 
     const id = await tx.create({
+      id: messageNodeId(workspaceId, eventId, nodePath),
       workspaceId,
       parentId,
       orderKey: orderKeys[index],
@@ -501,9 +521,35 @@ const createBlockTree = async (
     })
 
     if (Array.isArray(block.children) && block.children.length) {
-      await createBlockTree(tx, workspaceId, id, block.children)
+      await createBlockTree(tx, workspaceId, id, block.children, eventId, undefined, nodePath)
     }
   }
+}
+
+// Find this day's `[[matrix-messages]]` container, or create it. The id is
+// deterministic per (workspace, date) so two devices ingesting on the same day
+// converge on one container instead of creating two. We still prefer an
+// existing block found by content scan — that reuses a container made by an
+// older (random-id) build, or one already synced in from another device,
+// rather than orphaning its messages under a fresh deterministic id.
+const ensureMatrixTagBlock = async (
+  tx: any,
+  workspaceId: string,
+  dailyId: string,
+  iso: string,
+): Promise<string> => {
+  const dailyChildren = await tx.childrenOf(dailyId, workspaceId)
+  const existing = dailyChildren.find((child: any) => child.content.trim() === TAG_BLOCK_CONTENT)
+  if (existing) return existing.id
+
+  const {id} = await createOrRestoreTargetBlock(tx, {
+    id: pluginBlockId(workspaceId, MATRIX_NS, `tag:${iso}`),
+    workspaceId,
+    parentId: dailyId,
+    orderKey: keyAtEnd(dailyChildren.at(-1)?.orderKey ?? null),
+    freshContent: TAG_BLOCK_CONTENT,
+  })
+  return id
 }
 
 const appendMatrixMessage = async (repo: any, config: MatrixConfig, event: any, matrixClient: any): Promise<void> => {
@@ -518,30 +564,29 @@ const appendMatrixMessage = async (repo: any, config: MatrixConfig, event: any, 
   const dailyId = dailyNoteBlockId(workspaceId, iso)
 
   await repo.tx(async (tx: any) => {
-    const dailyChildren = await tx.childrenOf(dailyId, workspaceId)
-    let tagBlock = dailyChildren.find((child: any) => child.content.trim() === TAG_BLOCK_CONTENT)
-    let tagBlockId = tagBlock?.id
+    const tagBlockId = await ensureMatrixTagBlock(tx, workspaceId, dailyId, iso)
 
-    if (!tagBlockId) {
-      tagBlockId = await tx.create({
-        workspaceId,
-        parentId: dailyId,
-        orderKey: keyAtEnd(dailyChildren.at(-1)?.orderKey ?? null),
-        content: TAG_BLOCK_CONTENT,
-      })
-    }
+    // Idempotency + cross-device de-duplication. The message root carries a
+    // deterministic id derived from the (workspace, matrix event id). A row
+    // already at that id — live OR tombstoned — means this event was already
+    // ingested (here or, post-sync, on another device) or deliberately
+    // deleted, so leave it be. Creation is atomic, so a present root implies
+    // the whole tree is present; absence implies none of its nodes exist.
+    const rootId = messageNodeId(workspaceId, eventId, [0])
+    if (await tx.get(rootId)) return
 
+    // Legacy guard: messages ingested before deterministic ids carry random
+    // ids but the same `matrix-event:id` property. This event would have
+    // landed under the same day's tag block, so a match there means skip.
     const messageChildren = await tx.childrenOf(tagBlockId, workspaceId)
-    const alreadyPosted = messageChildren.some((child: any) =>
-      child.properties?.[eventIdProp.name] === eventId,
-    )
-    if (alreadyPosted) return
+    if (messageChildren.some((child: any) => child.properties?.[eventIdProp.name] === eventId)) return
 
     await createBlockTree(
       tx,
       workspaceId,
       tagBlockId,
       createBlocksFromEvent(event, matrixClient),
+      eventId,
       {
         [eventIdProp.name]: eventId,
         [eventRoomProp.name]: config.roomId,
