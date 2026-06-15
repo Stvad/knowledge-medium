@@ -48,7 +48,7 @@ export default tseslint.config(
       'block/no-direct-types-prop-writes': ['error', {
         allowIn: [
           'src/data/properties.ts',
-          'src/data/repo.ts',
+          'src/data/typeTagger.ts',
         ],
       }],
     },
