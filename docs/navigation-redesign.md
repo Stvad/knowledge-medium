@@ -2,6 +2,8 @@
 
 Captures the design discussion from the navigation refactor up through step 3 (state preservation). This document is the working spec for step 4 and the post-step-4 extensibility roadmap. Written 2026-05-08.
 
+> **Correction (2026-06-15):** an earlier draft assumed `ChangeScope.UiState` writes stay device-local and out of PowerSync. They don't — UiState writes upload and sync through the normal queue like any other scope; the scope only opts out of the undo stack, not out of sync. Syncing UI state through ordinary block rows is a deliberate, affirmed decision: device-local ephemeral state was removed on purpose in favor of one uniform storage substrate, so focus/scroll/layout restore across devices. The inline notes below have been corrected to say "not undoable" rather than "not synced."
+
 ## Where we are now (committed up through 078e426)
 
 - **Step 1 (cf397f0)**: `navigate()` primitive — single entry point for "go to a block" / "open in new panel". Replaces scattered `writeAppHash` + `dispatchEvent('open-panel')` call sites.
@@ -10,7 +12,7 @@ Captures the design discussion from the navigation refactor up through step 3 (s
 
 ## Step 4 goal
 
-Make the URL a first-class projection of panel layout: open/close/reorder operations show up in the URL, browser back operates over panel layout, links share their layout. **Substrate stays in the workspace DB** — panel rows already use `ChangeScope.UiState` (not synced, not undoable). The URL is a bidirectional projection of those rows, not a replacement substrate.
+Make the URL a first-class projection of panel layout: open/close/reorder operations show up in the URL, browser back operates over panel layout, links share their layout. **Substrate stays in the workspace DB** — panel rows already use `ChangeScope.UiState` (synced, but not undoable). The URL is a bidirectional projection of those rows, not a replacement substrate.
 
 This honors Riffle's prelude (one reactive store; scope-as-metadata) while still getting URL-as-address-bar for the things that genuinely need it (browser interop, sharing, deep-linking).
 
@@ -18,7 +20,7 @@ This honors Riffle's prelude (one reactive store; scope-as-metadata) while still
 
 ### Substrate: workspace DB rows, UiState scope
 
-Panel rows stay in the workspace DB. UiState scope already gives "don't sync across devices, don't enter undo stack." Components keep using existing reactive hooks (`usePropertyValue`, `useChildren`, etc.) — no parallel store.
+Panel rows stay in the workspace DB. UiState scope already gives "don't enter undo stack" (it still syncs, like any scope). Components keep using existing reactive hooks (`usePropertyValue`, `useChildren`, etc.) — no parallel store.
 
 The only deviation we considered (a fresh in-memory `panelLayoutStore`) was redundant with what UiState scope already provides, and would have fragmented the substrate for no win.
 
@@ -324,7 +326,7 @@ Callers don't talk to the projection directly — they write panel rows. The pro
   - On `visibilitychange` to hidden: flush pending write.
   - On mount + `topLevelBlockId` change: read `scrollTopProp` from row and apply to scrollRef in a post-layout effect (same pattern as the existing `consumeRestore`).
 - Existing in-memory snapshotter / restore queue stays — it's still the right substrate for *intra-session* per-panel back/forward, where we don't want every nav writing to DB.
-- Tests: scroll persists across reload; doesn't sync across devices (UiState); doesn't pollute another layout session's row.
+- Tests: scroll persists across reload; stays out of the undo stack (UiState, not undoable); doesn't pollute another layout session's row.
 
 ### 4e. Cleanup
 
@@ -349,9 +351,9 @@ The current navigation code grew before facet was the dominant idiom; once step 
 - No back-compat for the old `#wsId/blockId?panels=...` shape we never shipped. Old `#wsId/blockId` is a special case of the new shape, so it parses fine.
 - Per-panel back/forward block history surviving reload: not in step 4. Punt to a follow-up — promoting `panelHistory` stacks to UiState rows is straightforward but adds row churn we don't need yet.
 - Persistent named layouts: not in step 4. A future feature; URL would carry an opaque layout id (`#wsId/L7`) and the structure would live in a saved-layouts store. Coexists with the inline grammar — opt-in only when the user explicitly names a layout.
-- Cross-device sync of any panel layout: explicitly NOT a goal. UiState scope keeps panel rows out of PowerSync.
+- Per-device panel layout: not separately scoped. UiState rows sync through PowerSync like any block row, so panel layout (and focus/scroll restore) is shared across a user's devices by design — see the correction note at the top.
 - GC of orphan layout-session subtrees: not in step 4. Add a heartbeat-based sweep if/when this becomes a real issue (one cascading delete per stale layout session).
 
 ## Relation to Riffle's prelude
 
-The previous draft of this plan introduced a parallel in-memory `panelLayoutStore`. That deviated from Riffle's substrate-uniformity principle for no real gain — `ChangeScope.UiState` already provides the "ephemeral, not synced, not undoable" scope Riffle's essay describes as the right way to handle this kind of state. The current plan stays inside the existing reactive substrate; URL and `sessionStorage` are projections, not separate state authorities.
+The previous draft of this plan introduced a parallel in-memory `panelLayoutStore`. That deviated from Riffle's substrate-uniformity principle for no real gain — `ChangeScope.UiState` already provides a dedicated, not-undoable scope for this kind of state (it still syncs through the normal substrate — see the correction note at the top). The current plan stays inside the existing reactive substrate; URL and `sessionStorage` are projections, not separate state authorities.

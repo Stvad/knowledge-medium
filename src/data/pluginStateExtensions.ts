@@ -53,7 +53,8 @@ export const pluginPrefsExtension = (
 ]
 
 /** Same as `pluginPrefsExtension`, for sub-blocks under the root
- *  ui-state subtree (device-local, scoped via ChangeScope.UiState). */
+ *  ui-state subtree (scoped via ChangeScope.UiState — non-undoable but
+ *  still synced). */
 export const pluginUIStateExtension = (
   type: TypeContribution,
   source: string,

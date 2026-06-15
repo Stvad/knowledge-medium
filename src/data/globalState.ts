@@ -151,8 +151,10 @@ export const usePluginPrefsProperty = <T>(
 
 /** Resolve the per-plugin ui-state sub-block for a given type
  *  contribution. The mirror of `usePluginPrefsBlock` for persistent
- *  per-device state — the block lives under the root ui-state subtree
- *  and never enters the upload queue. */
+ *  ui-state — the block lives under the root ui-state subtree. Like all
+ *  `ChangeScope.UiState` writes it is non-undoable but still uploads and
+ *  syncs through the normal queue, so the state is restored across
+ *  devices (a deliberate uniform-substrate decision). */
 export function usePluginUIStateBlock(type: TypeContribution): Block {
   const repo = useRepo()
   const user = useUser()
@@ -171,9 +173,9 @@ export function usePluginUIStateChildBlock(type: TypeContribution, key: string):
 
 /** Read/write a ui-state property on the plugin's own ui-state
  *  sub-block. The schema must declare `changeScope: ChangeScope.UiState`
- *  so writes route into the device-local ui-state subtree (and stay
- *  undo-segregated from document edits). They still upload through the
- *  normal queue. */
+ *  so writes route into the ui-state subtree (and stay undo-segregated
+ *  from document edits). They still upload and sync through the normal
+ *  queue. */
 export const usePluginUIStateProperty = <T>(
   type: TypeContribution,
   schema: PropertySchema<T>,
