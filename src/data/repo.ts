@@ -41,7 +41,6 @@ import type {
   User,
 } from '@/data/api'
 import {
-  BlockNotFoundForTypeError,
   ChangeScope,
   MutatorNotRegisteredError,
   ParentDeletedError,
@@ -106,6 +105,12 @@ import {
   SELECT_RECONCILE_RESCAN_MARKER_SQL,
   RECORD_RECONCILE_RESCAN_MARKER_SQL,
 } from './internals/clientSchema'
+import { PendingIdleJobs, MarkerStore } from './internals/idleMarkerJobs'
+import {
+  parseAliasCollisionError,
+  parseParentDeletedError,
+  type ParsedAliasCollision,
+} from './internals/raiseProtocol'
 import { UndoManager, type UndoEntry } from './internals/undoManager'
 import { CallbackSet } from '@/utils/callbackSet'
 import type { TxImpl } from './internals/txEngine'
@@ -115,12 +120,13 @@ import {
   SELECT_BLOCK_BY_ID_SQL,
 } from './internals/kernelQueries'
 import type { InvalidationRule } from './invalidation'
-import { KERNEL_PROPERTY_SCHEMAS, getBlockTypes, typesProp } from './properties'
+import { KERNEL_PROPERTY_SCHEMAS } from './properties'
 import { KERNEL_TYPE_CONTRIBUTIONS } from './blockTypes'
 import { propertiesPageBlockId } from './propertiesPage'
 import { typesPageBlockId } from './typesPage'
 import { UserSchemasService } from './userSchemasService'
 import { UserTypesService } from './userTypesService'
+import { TypeTagger } from './typeTagger'
 
 /** Convert a `Mutator<Args, Result>` into the `repo.mutate` dispatcher
  *  signature `(args: Args) => Promise<Result>`. Used to project
@@ -405,104 +411,6 @@ export type SyncObserverOptions = Pick<
   'onCycleDetected' | 'throttleMs' | 'onError'
 >
 
-/** Structured payload of the `block_aliases_workspace_alias_unique`
- *  trigger's RAISE message. See `clientSchema.ts` for the SQL that
- *  builds it. The trigger encodes everything it cheaply can (the SQL
- *  RAISE context has NEW.* but no committed table reads) so the JS
- *  side only does a single PK-style lookup for the rest. */
-interface ParsedAliasCollision {
-  workspaceId: string
-  alias: string
-  /** The block that the user tried to make claim the alias — the
-   *  attempting row. */
-  attemptedBlockId: string
-}
-
-const ALIAS_COLLISION_RAISE_PREFIX = 'alias_collision'
-const PARENT_DELETED_RAISE_PREFIX = 'parent_deleted'
-// ASCII unit-separator delimits the (hex-encoded) fields. Field
-// contents are hex so the separator is guaranteed-distinct from
-// any field byte — earlier comments asserted the codec rejected
-// control chars, but `codecs.string` only checks typeof; the
-// encoding can't rely on that. The trigger uses `char(31)` for
-// the same delimiter and `hex(NEW.<col>)` for each field.
-const ALIAS_COLLISION_FIELD_SEP = '\x1f'
-
-/** Decode SQLite's `hex()` output (uppercase hex of the UTF-8 bytes)
- *  back to the original string. Empty input decodes to `''`. */
-const decodeHexUtf8 = (hex: string): string => {
-  const bytes = new Uint8Array(hex.length / 2)
-  for (let i = 0; i < hex.length; i += 2) {
-    bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16)
-  }
-  return new TextDecoder().decode(bytes)
-}
-
-/** Recognise the trigger-raised parent-deleted error from
- *  `blocks_parent_not_deleted_check_{insert,update}`. The payload is
- *  the bare parent id — block ids are UUIDs or deterministic ids
- *  (hex + `:` / `-`), so the unit separator never appears in them
- *  and the hex encoding the alias parser needs isn't required here.
- *  Returns the parsed id on match, `null` otherwise. */
-const parseParentDeletedError = (err: unknown): {parentId: string} | null => {
-  if (err === null || typeof err !== 'object') return null
-  const msg = (err as {message?: unknown}).message
-  if (typeof msg !== 'string') return null
-  const needle = `${PARENT_DELETED_RAISE_PREFIX}${ALIAS_COLLISION_FIELD_SEP}`
-  const idx = msg.indexOf(needle)
-  if (idx === -1) return null
-  const tail = msg.slice(idx + needle.length)
-  // SQLite wrappers may append context text after the payload, so
-  // split on the unit separator and take the first part. Block ids
-  // never contain `\x1f`, so the first part is the id verbatim.
-  const parentId = tail.split(ALIAS_COLLISION_FIELD_SEP)[0]
-  if (parentId.length === 0) return null
-  return {parentId}
-}
-
-/** Recognise the trigger-raised alias-collision error inside whatever
- *  wrapping SQLite + better-sqlite3 + PowerSync layer it on. Returns
- *  parsed fields when matched, `null` otherwise (the caller falls
- *  back to its existing error handling). The three field values are
- *  hex-encoded in the RAISE message so the unit-separator can be
- *  used as a delimiter regardless of what bytes the alias text
- *  contains. */
-const parseAliasCollisionError = (err: unknown): ParsedAliasCollision | null => {
-  if (err === null || typeof err !== 'object') return null
-  const msg = (err as {message?: unknown}).message
-  if (typeof msg !== 'string') return null
-  const needle = `${ALIAS_COLLISION_RAISE_PREFIX}${ALIAS_COLLISION_FIELD_SEP}`
-  const idx = msg.indexOf(needle)
-  if (idx === -1) return null
-  const tail = msg.slice(idx + needle.length)
-  // tail = `<HEX(workspaceId)>\x1f<HEX(alias)>\x1f<HEX(attemptedBlockId)>`
-  // possibly followed by SQLite wrapper text. The hex alphabet is
-  // [0-9A-F], so any byte from the wrapper that ISN'T hex (typically
-  // it starts with a quote or a colon) terminates the third field.
-  // Splitting on the separator yields three hex-only parts whose
-  // tail may carry wrapper garbage on the third field — we
-  // hex-decode each, stopping at the first non-hex character on the
-  // last field to avoid eating any wrapper suffix.
-  const parts = tail.split(ALIAS_COLLISION_FIELD_SEP)
-  if (parts.length < 3) return null
-  const trimToHex = (s: string): string => {
-    const m = s.match(/^[0-9A-Fa-f]*/)
-    const hex = m === null ? '' : m[0]
-    // hex() emits pairs of nibbles; if a wrapper byte landed on an
-    // odd boundary somehow, drop the trailing half-pair.
-    return hex.length % 2 === 0 ? hex : hex.slice(0, -1)
-  }
-  try {
-    return {
-      workspaceId: decodeHexUtf8(trimToHex(parts[0])),
-      alias: decodeHexUtf8(trimToHex(parts[1])),
-      attemptedBlockId: decodeHexUtf8(trimToHex(parts[2])),
-    }
-  } catch {
-    return null
-  }
-}
-
 export class Repo {
   readonly db: PowerSyncDb
   readonly cache: BlockCache
@@ -623,6 +531,9 @@ export class Repo {
    *  REMOVE; see the init-layer limitation note on `swapQueries`). */
   private queryEpoch = 0
   private readonly processorRunner: ProcessorRunner
+  /** Type-tagging engine (audit D1(b)) — backs the `addType` /
+   *  `removeType` / `toggleType` / `setBlockTypes` delegating methods. */
+  private readonly typeTagger: TypeTagger
   /** Per-scope undo / redo stacks (spec §10 step 7, §17 line 2228).
    *  `repo.tx` records every undoable commit here; `repo.undo` /
    *  `repo.redo` pop entries and replay them via `TxImpl.applyRaw`. */
@@ -661,35 +572,35 @@ export class Repo {
     skippedByMarker: 0,
   }
   /** Lazy in-memory mirror of the per-name reprojection markers in
-   *  `client_schema_state` (rows keyed `reproject_ref:<name>`). `null`
-   *  until the first reprojection call hydrates it via a single
+   *  `client_schema_state` (rows keyed `reproject_ref:<workspaceId>:<name>`).
+   *  Loaded on first reprojection call via a single
    *  `SELECT key … LIKE 'reproject_ref:%'` round-trip; afterwards
-   *  `reprojectRefTypedProperties` skips ref-typed names already in
-   *  this set without further SQL. Tests / migrations that wipe the
-   *  table can call `__resetReprojectionMarkerCache` to force a reload. */
-  private reprojectionMarkers: Set<string> | null = null
-  /** In-flight reprojection runs whose deferral timer has already
-   *  fired. `scheduleReprojection` is fire-and-forget (the cold-start
-   *  path must not block on it), so this set is the only handle on
-   *  those promises; `awaitReprojections()` drains it for deterministic
-   *  test quiescence and to keep a stray reprojection from writing into
-   *  the next test on a shared DB. Entries remove themselves on settle. */
-  private readonly pendingReprojections = new Set<Promise<void>>()
+   *  `reprojectRefTypedProperties` skips ref-typed names already marked
+   *  without further SQL. Constructed in the constructor (needs `this.db`).
+   *  Tests / migrations that wipe the table call
+   *  `__resetReprojectionMarkerCache` to force a reload. */
+  private readonly reprojectionMarkers: MarkerStore
+  /** In-flight reprojection runs whose deferral timer has already fired.
+   *  `scheduleReprojection` is fire-and-forget (the cold-start path must
+   *  not block on it); `awaitReprojections()` drains this for
+   *  deterministic test quiescence and to keep a stray reprojection from
+   *  writing into the next test on a shared DB. */
+  private readonly reprojectionJobs = new PendingIdleJobs()
   /** Registered workspace backfills (`workspaceBackfillsFacet` snapshot,
    *  refreshed by the `workspaceBackfills` rebuild step). Run once per
    *  workspace by `scheduleWorkspaceBackfills`. */
   private _workspaceBackfills: readonly WorkspaceBackfill[] = []
   /** Lazy in-memory mirror of the workspace-backfill completion markers in
    *  `client_schema_state` (rows keyed `workspace_backfill:<ws>:<id>`), same
-   *  pattern as `reprojectionMarkers`. `null` until first load. */
-  private workspaceBackfillMarkers: Set<string> | null = null
+   *  pattern as `reprojectionMarkers`. Constructed in the constructor. */
+  private readonly workspaceBackfillMarkers: MarkerStore
   /** In-flight workspace-backfill runs whose deferral timer has fired —
    *  drained by `awaitWorkspaceBackfills()` for deterministic test quiescence,
-   *  mirroring `pendingReprojections`. */
-  private readonly pendingWorkspaceBackfills = new Set<Promise<void>>()
+   *  mirroring `reprojectionJobs`. */
+  private readonly workspaceBackfillJobs = new PendingIdleJobs()
   /** In-flight one-time reconcile-rescan runs — drained by
    *  `awaitReconcileRescans()`, same pattern. */
-  private readonly pendingReconcileRescans = new Set<Promise<void>>()
+  private readonly reconcileRescanJobs = new PendingIdleJobs()
   /** Slowest writeTransaction observed since the last reset, by
    *  description (`opts.description` passed to `repo.tx`). Updated only
    *  when a tx exceeds the previous high-water mark, so the field is
@@ -839,6 +750,21 @@ export class Repo {
     // route through it). The wrapper has the same shape, so existing
     // type contracts hold.
     this.db = wrapDbWithMetrics(opts.db, this.dbMetrics) as PowerSyncDb
+    // Marker stores need the wrapped `this.db`, so they're built here
+    // rather than as field initializers (which run before the body).
+    this.reprojectionMarkers = new MarkerStore(
+      this.db,
+      REPROJECT_REF_MARKER_PREFIX,
+      SELECT_REPROJECT_REF_MARKERS_SQL,
+      RECORD_REPROJECT_REF_MARKER_SQL,
+      CLEAR_REPROJECT_REF_MARKER_SQL,
+    )
+    this.workspaceBackfillMarkers = new MarkerStore(
+      this.db,
+      WORKSPACE_BACKFILL_MARKER_PREFIX,
+      SELECT_WORKSPACE_BACKFILL_MARKERS_SQL,
+      RECORD_WORKSPACE_BACKFILL_MARKER_SQL,
+    )
     this.syncObserverDeps = opts.syncObserverDeps
     this.cache = opts.cache
     this.user = opts.user
@@ -883,6 +809,9 @@ export class Repo {
     // here.
     this.processorRunner = new ProcessorRunner(this, this.db)
     this.undoManager = new UndoManager()
+    // Type-tagging engine (audit D1(b)). Repo keeps spec-pinned
+    // delegating methods over this single instance.
+    this.typeTagger = new TypeTagger(this)
     // Build the rebuild step list. Each step declares the facets it
     // reads via `inputs`; the constructor wires per-facet change
     // listeners so a runtime-bucket update only re-runs the steps
@@ -1673,7 +1602,7 @@ export class Repo {
       // materialization is grow-only and the observer never deletes a
       // still-staged block (see materialize.ts), so a schema only disappears on
       // a genuine change.
-      const markers = await this.loadReprojectionMarkers()
+      const markers = await this.reprojectionMarkers.load()
       const namesToScan: string[] = []
       let skippedByMarker = 0
       for (const name of propertyNames) {
@@ -1774,9 +1703,9 @@ export class Repo {
         const schema = latestRefProjectionSchema(propertySchemas, liveSchemas, name)
         const kind = refCodecKind(schema)
         if (kind === undefined) {
-          await this.clearReprojectionMarker(workspaceId, name)
+          await this.reprojectionMarkers.clear(reprojectionMarkerKey(workspaceId, name))
         } else {
-          await this.setReprojectionMarker(workspaceId, name)
+          await this.reprojectionMarkers.set(reprojectionMarkerKey(workspaceId, name))
         }
       }
     } catch (err) {
@@ -1814,52 +1743,16 @@ export class Repo {
     // there's nothing to backfill yet — skip.
     const workspaceId = this._activeWorkspaceId
     if (!workspaceId) return
-    const run = () => {
-      const p = this.reprojectRefTypedProperties(names, schemas, workspaceId)
-        .finally(() => { this.pendingReprojections.delete(p) })
-      this.pendingReprojections.add(p)
-    }
-    const idle = (globalThis as {requestIdleCallback?: (cb: () => void, opts?: {timeout: number}) => void}).requestIdleCallback
-    if (typeof idle === 'function') {
-      idle(run, {timeout: 2000})
-    } else {
-      setTimeout(run, 0)
-    }
-  }
-
-  /** Lazy load the marker set on first call, then keep it in-memory. One SQL
-   *  round-trip per Repo lifetime. Entries are stored as the key *suffix*
-   *  (everything after `reproject_ref:`), i.e. `<workspaceId>:<name>` — see
-   *  `reprojectionMarkerKey`. Legacy un-namespaced markers (just `<name>`,
-   *  written before reprojection was workspace-scoped) load as inert entries
-   *  that never match the workspace-qualified lookup; each workspace simply
-   *  re-scans once on next open (a no-op write thanks to the diff guard). */
-  private async loadReprojectionMarkers(): Promise<Set<string>> {
-    if (this.reprojectionMarkers !== null) return this.reprojectionMarkers
-    const rows = await this.db.getAll<{key: string}>(SELECT_REPROJECT_REF_MARKERS_SQL)
-    const set = new Set<string>()
-    for (const r of rows) set.add(r.key.slice(REPROJECT_REF_MARKER_PREFIX.length))
-    this.reprojectionMarkers = set
-    return set
-  }
-
-  private async setReprojectionMarker(workspaceId: string, name: string): Promise<void> {
-    const suffix = reprojectionMarkerKey(workspaceId, name)
-    await this.db.execute(RECORD_REPROJECT_REF_MARKER_SQL, [`${REPROJECT_REF_MARKER_PREFIX}${suffix}`])
-    this.reprojectionMarkers?.add(suffix)
-  }
-
-  private async clearReprojectionMarker(workspaceId: string, name: string): Promise<void> {
-    const suffix = reprojectionMarkerKey(workspaceId, name)
-    await this.db.execute(CLEAR_REPROJECT_REF_MARKER_SQL, [`${REPROJECT_REF_MARKER_PREFIX}${suffix}`])
-    this.reprojectionMarkers?.delete(suffix)
+    this.reprojectionJobs.schedule(() =>
+      this.reprojectRefTypedProperties(names, schemas, workspaceId),
+    )
   }
 
   /** Test escape hatch — drop the in-memory marker mirror so the next
    *  reprojection re-reads from `client_schema_state`. Used by tests
    *  that mutate the table out-of-band to simulate cross-session state. */
   __resetReprojectionMarkerCache(): void {
-    this.reprojectionMarkers = null
+    this.reprojectionMarkers.reset()
   }
 
   /**
@@ -1880,24 +1773,16 @@ export class Repo {
   scheduleWorkspaceBackfills(workspaceId: string): void {
     if (this.isReadOnly || !workspaceId || this._workspaceBackfills.length === 0) return
     const backfills = this._workspaceBackfills
-    const run = () => {
-      const p = this.runWorkspaceBackfills(workspaceId, backfills)
-        .finally(() => { this.pendingWorkspaceBackfills.delete(p) })
-      this.pendingWorkspaceBackfills.add(p)
-    }
-    const idle = (globalThis as {requestIdleCallback?: (cb: () => void, opts?: {timeout: number}) => void}).requestIdleCallback
-    if (typeof idle === 'function') {
-      idle(run, {timeout: 2000})
-    } else {
-      setTimeout(run, 0)
-    }
+    this.workspaceBackfillJobs.schedule(() =>
+      this.runWorkspaceBackfills(workspaceId, backfills),
+    )
   }
 
   private async runWorkspaceBackfills(
     workspaceId: string,
     backfills: readonly WorkspaceBackfill[],
   ): Promise<void> {
-    const markers = await this.loadWorkspaceBackfillMarkers()
+    const markers = await this.workspaceBackfillMarkers.load()
     for (const backfill of backfills) {
       // A role flip to read-only during the deferral window must stop further
       // writes — re-check per backfill (the loop can span several txs).
@@ -1915,7 +1800,7 @@ export class Repo {
         // Record the marker only after a clean run — a thrown backfill leaves
         // it unset so the next open retries (backfills are written idempotent
         // via a per-row recheck, so a retry is cheap).
-        await this.setWorkspaceBackfillMarker(workspaceId, backfill.id)
+        await this.workspaceBackfillMarkers.set(workspaceBackfillMarkerKey(workspaceId, backfill.id))
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err)
         console.error(
@@ -1923,24 +1808,6 @@ export class Repo {
         )
       }
     }
-  }
-
-  private async loadWorkspaceBackfillMarkers(): Promise<Set<string>> {
-    if (this.workspaceBackfillMarkers !== null) return this.workspaceBackfillMarkers
-    const rows = await this.db.getAll<{key: string}>(SELECT_WORKSPACE_BACKFILL_MARKERS_SQL)
-    const set = new Set<string>()
-    for (const r of rows) set.add(r.key.slice(WORKSPACE_BACKFILL_MARKER_PREFIX.length))
-    this.workspaceBackfillMarkers = set
-    return set
-  }
-
-  private async setWorkspaceBackfillMarker(workspaceId: string, id: string): Promise<void> {
-    const suffix = workspaceBackfillMarkerKey(workspaceId, id)
-    await this.db.execute(
-      RECORD_WORKSPACE_BACKFILL_MARKER_SQL,
-      [`${WORKSPACE_BACKFILL_MARKER_PREFIX}${suffix}`],
-    )
-    this.workspaceBackfillMarkers?.add(suffix)
   }
 
   /**
@@ -1971,17 +1838,7 @@ export class Repo {
    */
   scheduleReconcileRescan(workspaceId: string): void {
     if (!workspaceId) return
-    const run = () => {
-      const p = this.runReconcileRescan(workspaceId)
-        .finally(() => { this.pendingReconcileRescans.delete(p) })
-      this.pendingReconcileRescans.add(p)
-    }
-    const idle = (globalThis as {requestIdleCallback?: (cb: () => void, opts?: {timeout: number}) => void}).requestIdleCallback
-    if (typeof idle === 'function') {
-      idle(run, {timeout: 2000})
-    } else {
-      setTimeout(run, 0)
-    }
+    this.reconcileRescanJobs.schedule(() => this.runReconcileRescan(workspaceId))
   }
 
   private async runReconcileRescan(workspaceId: string): Promise<void> {
@@ -2002,80 +1859,7 @@ export class Repo {
   /** Test helper — drains reconcile-rescans whose deferral timer has fired.
    *  Mirror of `awaitWorkspaceBackfills`. */
   async awaitReconcileRescans(): Promise<void> {
-    while (this.pendingReconcileRescans.size > 0) {
-      await Promise.all([...this.pendingReconcileRescans])
-    }
-  }
-
-  private async _addTypeInTx(
-    tx: Tx,
-    types: ReadonlyMap<string, TypeContribution>,
-    propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
-    blockId: string,
-    typeId: string,
-    initialValues: Readonly<Record<string, unknown>>,
-    /** When true (the default, used by `addType` / `addTypeInTx`), throw
-     *  `BlockNotFoundForTypeError` if the target block is missing or
-     *  tombstoned. Lenient callers (`addTypeInTxLenient`) pass `false`
-     *  to preserve the legacy silent-no-op behavior for sync-apply /
-     *  processor paths that may legitimately race a concurrent delete. */
-    strict: boolean,
-  ): Promise<void> {
-    const contribution = types.get(typeId)
-    if (contribution === undefined) {
-      throw new Error(
-        `[addType] type id ${JSON.stringify(typeId)} is not registered. ` +
-        'Register a TypeContribution through typesFacet before calling addType.',
-      )
-    }
-    const block = await tx.get(blockId)
-    if (!block) {
-      if (strict) throw new BlockNotFoundForTypeError(blockId, typeId, 'missing')
-      return
-    }
-    if (block.deleted) {
-      if (strict) throw new BlockNotFoundForTypeError(blockId, typeId, 'tombstoned')
-      return
-    }
-
-    const current = getBlockTypes(block)
-    const wasNew = !current.includes(typeId)
-    const next: Record<string, unknown> = {...block.properties}
-    let propsChanged = false
-
-    if (wasNew) {
-      next[typesProp.name] = typesProp.codec.encode([...current, typeId])
-      propsChanged = true
-    }
-
-    for (const [name, value] of Object.entries(initialValues)) {
-      if (next[name] !== undefined) continue
-      const schema = propertySchemas.get(name)
-      if (schema === undefined) {
-        throw new Error(
-          `[addType] initialValues[${JSON.stringify(name)}] has no registered PropertySchema ` +
-          'in the merged registry.',
-        )
-      }
-      next[name] = schema.codec.encode(value)
-      propsChanged = true
-    }
-
-    if (propsChanged) {
-      await tx.update(blockId, {properties: next})
-    }
-  }
-
-  private async _removeTypeInTx(tx: Tx, blockId: string, typeId: string): Promise<void> {
-    const block = await tx.get(blockId)
-    if (!block) return
-    const current = getBlockTypes(block)
-    if (!current.includes(typeId)) return
-    const next = {
-      ...block.properties,
-      [typesProp.name]: typesProp.codec.encode(current.filter(t => t !== typeId)),
-    }
-    await tx.update(blockId, {properties: next})
+    await this.reconcileRescanJobs.drain()
   }
 
   /** Strict: throws `BlockNotFoundForTypeError` if `blockId` is missing
@@ -2083,16 +1867,13 @@ export class Repo {
    *  depends on the tag actually landing (orchestration / fan-out
    *  paths). For the lenient variant that silently no-ops on a missing
    *  block, see `addTypeInTxLenient` and (in-tx) the dedicated lenient
-   *  entry points. */
+   *  entry points. Delegates to `TypeTagger` (audit D1(b)). */
   async addType(
     blockId: string,
     typeId: string,
     initialValues: Readonly<Record<string, unknown>> = {},
   ): Promise<void> {
-    const {types, propertySchemas} = this.snapshotTypeRegistries()
-    await this.tx(async tx => {
-      await this._addTypeInTx(tx, types, propertySchemas, blockId, typeId, initialValues, true)
-    }, {scope: ChangeScope.BlockDefault, description: `addType ${typeId}`})
+    await this.typeTagger.addType(blockId, typeId, initialValues)
   }
 
   /** Strict in-tx variant. Throws `BlockNotFoundForTypeError` if the
@@ -2106,9 +1887,7 @@ export class Repo {
     initialValues: Readonly<Record<string, unknown>> = {},
     snapshot?: TypeRegistrySnapshot,
   ): Promise<void> {
-    const types = snapshot?.types ?? this._types
-    const propertySchemas = snapshot?.propertySchemas ?? this._propertySchemas
-    await this._addTypeInTx(tx, types, propertySchemas, blockId, typeId, initialValues, true)
+    await this.typeTagger.addTypeInTx(tx, blockId, typeId, initialValues, snapshot)
   }
 
   /** Lenient in-tx variant — silently no-ops if the target block is
@@ -2124,75 +1903,23 @@ export class Repo {
     initialValues: Readonly<Record<string, unknown>> = {},
     snapshot?: TypeRegistrySnapshot,
   ): Promise<void> {
-    const types = snapshot?.types ?? this._types
-    const propertySchemas = snapshot?.propertySchemas ?? this._propertySchemas
-    await this._addTypeInTx(tx, types, propertySchemas, blockId, typeId, initialValues, false)
+    await this.typeTagger.addTypeInTxLenient(tx, blockId, typeId, initialValues, snapshot)
   }
 
   async removeType(blockId: string, typeId: string): Promise<void> {
-    await this.tx(async tx => {
-      await this._removeTypeInTx(tx, blockId, typeId)
-    }, {scope: ChangeScope.BlockDefault, description: `removeType ${typeId}`})
+    await this.typeTagger.removeType(blockId, typeId)
   }
 
   async removeTypeInTx(tx: Tx, blockId: string, typeId: string): Promise<void> {
-    await this._removeTypeInTx(tx, blockId, typeId)
+    await this.typeTagger.removeTypeInTx(tx, blockId, typeId)
   }
 
   async toggleType(blockId: string, typeId: string): Promise<void> {
-    const {types, propertySchemas} = this.snapshotTypeRegistries()
-    await this.tx(async tx => {
-      const block = await tx.get(blockId)
-      // toggleType pre-checks the block existence itself; if it's
-      // missing or tombstoned here, the no-op is intentional (this is a
-      // UI/UX entry point, not orchestration). Pass strict=false to
-      // `_addTypeInTx` so the pre-check stays the single source of
-      // truth for the missing-block branch.
-      if (!block || block.deleted) return
-      if (getBlockTypes(block).includes(typeId)) {
-        await this._removeTypeInTx(tx, blockId, typeId)
-      } else {
-        await this._addTypeInTx(tx, types, propertySchemas, blockId, typeId, {}, false)
-      }
-    }, {scope: ChangeScope.BlockDefault, description: `toggleType ${typeId}`})
+    await this.typeTagger.toggleType(blockId, typeId)
   }
 
   async setBlockTypes(blockId: string, typeIds: readonly string[]): Promise<void> {
-    const desiredOrder = Array.from(new Set(typeIds))
-    const {types, propertySchemas} = this.snapshotTypeRegistries()
-    await this.tx(async tx => {
-      const block = await tx.get(blockId)
-      // Pre-check matches toggleType's contract — silently no-op on a
-      // missing/tombstoned target (UI-driven path); pass strict=false
-      // to the inner add so the pre-check remains authoritative.
-      if (!block || block.deleted) return
-
-      const current = getBlockTypes(block)
-      const want = new Set(desiredOrder)
-      for (const typeId of current) {
-        if (!want.has(typeId)) await this._removeTypeInTx(tx, blockId, typeId)
-      }
-
-      const currentSet = new Set(current)
-      for (const typeId of desiredOrder) {
-        if (currentSet.has(typeId)) continue
-        await this._addTypeInTx(tx, types, propertySchemas, blockId, typeId, {}, false)
-      }
-
-      const after = await tx.get(blockId)
-      if (!after) return
-      const stored = getBlockTypes(after)
-      const alreadyOrdered =
-        stored.length === desiredOrder.length &&
-        stored.every((typeId, index) => typeId === desiredOrder[index])
-      if (alreadyOrdered) return
-      await tx.update(blockId, {
-        properties: {
-          ...after.properties,
-          [typesProp.name]: typesProp.codec.encode(desiredOrder),
-        },
-      })
-    }, {scope: ChangeScope.BlockDefault, description: 'setBlockTypes'})
+    await this.typeTagger.setBlockTypes(blockId, typeIds)
   }
 
   /** Constructor-time rebuild step factory. Each step closes over
@@ -2363,18 +2090,14 @@ export class Repo {
    *  still drained. Reprojection runs never schedule further
    *  reprojections, so this terminates. */
   async awaitReprojections(): Promise<void> {
-    while (this.pendingReprojections.size > 0) {
-      await Promise.all([...this.pendingReprojections])
-    }
+    await this.reprojectionJobs.drain()
   }
 
   /** Wait until every workspace backfill whose deferral timer has already
    *  fired has finished. Mirror of `awaitReprojections` — does NOT advance
    *  timers; fake-timer callers must advance the clock first. */
   async awaitWorkspaceBackfills(): Promise<void> {
-    while (this.pendingWorkspaceBackfills.size > 0) {
-      await Promise.all([...this.pendingWorkspaceBackfills])
-    }
+    await this.workspaceBackfillJobs.drain()
   }
 
   /** Test-only escape hatch retained for stage-level tests that wire

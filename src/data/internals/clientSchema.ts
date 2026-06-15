@@ -12,6 +12,12 @@
  *      }
  */
 
+import {
+  ALIAS_COLLISION_RAISE_PREFIX,
+  PARENT_DELETED_RAISE_PREFIX,
+  RAISE_FIELD_SEP_SQL,
+} from './raiseProtocol'
+
 // ============================================================================
 // Tables
 // ============================================================================
@@ -681,7 +687,7 @@ export const CREATE_BLOCKS_PARENT_NOT_DELETED_INSERT_TRIGGER_SQL = `
     AND (SELECT source FROM tx_context WHERE id = 1) IS NOT NULL
   BEGIN
     SELECT RAISE(ABORT,
-      'parent_deleted' || char(31) || NEW.parent_id
+      '${PARENT_DELETED_RAISE_PREFIX}' || ${RAISE_FIELD_SEP_SQL} || NEW.parent_id
     )
     WHERE EXISTS (
       SELECT 1 FROM blocks
@@ -699,7 +705,7 @@ export const CREATE_BLOCKS_PARENT_NOT_DELETED_UPDATE_TRIGGER_SQL = `
     AND (SELECT source FROM tx_context WHERE id = 1) IS NOT NULL
   BEGIN
     SELECT RAISE(ABORT,
-      'parent_deleted' || char(31) || NEW.parent_id
+      '${PARENT_DELETED_RAISE_PREFIX}' || ${RAISE_FIELD_SEP_SQL} || NEW.parent_id
     )
     WHERE EXISTS (
       SELECT 1 FROM blocks
@@ -819,9 +825,9 @@ export const CREATE_BLOCK_ALIASES_WORKSPACE_UNIQUE_TRIGGER_SQL = `
     AND NEW.alias != ''
   BEGIN
     SELECT RAISE(ABORT,
-      'alias_collision' || char(31) ||
-      hex(NEW.workspace_id) || char(31) ||
-      hex(NEW.alias) || char(31) ||
+      '${ALIAS_COLLISION_RAISE_PREFIX}' || ${RAISE_FIELD_SEP_SQL} ||
+      hex(NEW.workspace_id) || ${RAISE_FIELD_SEP_SQL} ||
+      hex(NEW.alias) || ${RAISE_FIELD_SEP_SQL} ||
       hex(NEW.block_id)
     )
     WHERE EXISTS (
