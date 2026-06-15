@@ -2,7 +2,12 @@
 
 Captures the design discussion from the navigation refactor up through step 3 (state preservation). This document is the working spec for step 4 and the post-step-4 extensibility roadmap. Written 2026-05-08.
 
-> **Correction (2026-06-15):** an earlier draft assumed `ChangeScope.UiState` writes stay device-local and out of PowerSync. They don't — UiState writes upload and sync through the normal queue like any other scope; the scope only opts out of the undo stack, not out of sync. Syncing UI state through ordinary block rows is a deliberate, affirmed decision: device-local ephemeral state was removed on purpose in favor of one uniform storage substrate, so focus/scroll/layout restore across devices. The inline notes below have been corrected to say "not undoable" rather than "not synced."
+> **Correction (2026-06-15):** an earlier draft described `ChangeScope.UiState` panel rows as "not synced." That conflates two layers:
+>
+> - **Scope / transport:** `ChangeScope.UiState` does *not* keep writes out of the upload queue. UiState rows upload and sync through PowerSync like any block row; the scope only opts them out of the *undo stack*, not out of sync. (Plugin ui-state blocks under the root ui-state subtree are keyed only by workspace + user, so they genuinely restore across devices — see `getPluginUIStateBlock`.)
+> - **Panel layout specifically:** panel rows live under `ui-state/layout-sessions/{layoutSessionId}`, and `layoutSessionId` is a *device-local* random id (per-tab `sessionStorage` / per-install `localStorage`, see `layoutSessionId.ts`). A second device generates a different layout-session subtree, so it never reads the first device's panel rows. Panel layout / focus / scroll are therefore effectively per-device — not because the rows are excluded from sync, but because the session key that addresses them is device-local. Restore happens on reload / PWA relaunch (same key), not across devices.
+>
+> The inline notes below have been corrected accordingly: UiState rows sync (so "not synced" was wrong), but panel layout stays per-device by virtue of the device-local layout-session key, not by opting out of the upload queue.
 
 ## Where we are now (committed up through 078e426)
 
@@ -12,7 +17,7 @@ Captures the design discussion from the navigation refactor up through step 3 (s
 
 ## Step 4 goal
 
-Make the URL a first-class projection of panel layout: open/close/reorder operations show up in the URL, browser back operates over panel layout, links share their layout. **Substrate stays in the workspace DB** — panel rows already use `ChangeScope.UiState` (synced, but not undoable). The URL is a bidirectional projection of those rows, not a replacement substrate.
+Make the URL a first-class projection of panel layout: open/close/reorder operations show up in the URL, browser back operates over panel layout, links share their layout. **Substrate stays in the workspace DB** — panel rows already use `ChangeScope.UiState` (rows sync, but are addressed per-device via the layout-session key; not undoable — see the correction note above). The URL is a bidirectional projection of those rows, not a replacement substrate.
 
 This honors Riffle's prelude (one reactive store; scope-as-metadata) while still getting URL-as-address-bar for the things that genuinely need it (browser interop, sharing, deep-linking).
 
@@ -351,7 +356,7 @@ The current navigation code grew before facet was the dominant idiom; once step 
 - No back-compat for the old `#wsId/blockId?panels=...` shape we never shipped. Old `#wsId/blockId` is a special case of the new shape, so it parses fine.
 - Per-panel back/forward block history surviving reload: not in step 4. Punt to a follow-up — promoting `panelHistory` stacks to UiState rows is straightforward but adds row churn we don't need yet.
 - Persistent named layouts: not in step 4. A future feature; URL would carry an opaque layout id (`#wsId/L7`) and the structure would live in a saved-layouts store. Coexists with the inline grammar — opt-in only when the user explicitly names a layout.
-- Per-device panel layout: not separately scoped. UiState rows sync through PowerSync like any block row, so panel layout (and focus/scroll restore) is shared across a user's devices by design — see the correction note at the top.
+- Cross-device sync of panel layout: not a goal, and not what happens. The rows upload (UiState doesn't opt out of sync), but panel layout is addressed by a device-local `layoutSessionId`, so each device builds its own layout-session subtree and restores only its own layout (on reload / PWA relaunch). See the correction note at the top.
 - GC of orphan layout-session subtrees: not in step 4. Add a heartbeat-based sweep if/when this becomes a real issue (one cascading delete per stale layout session).
 
 ## Relation to Riffle's prelude
