@@ -17,9 +17,6 @@ import { surfaceProcessorRejectionFor } from '@/utils/processorRejectionToast.js
 // correctly keeps the contract honest.
 const initRepo = memoize(
   async (user: User, useRemoteSync: boolean): Promise<Repo> => {
-    // ensurePowerSyncReady runs the §6 rollout pin-seed between db.init() and
-    // db.connect(), so pins are settled (from pre-connect on-disk rows only)
-    // before the observer/gate read them below.
     await ensurePowerSyncReady(user.id, useRemoteSync)
     const db = getPowerSyncDb(user.id)
     const cache = new BlockCache()

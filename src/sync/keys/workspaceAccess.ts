@@ -17,9 +17,11 @@
  *                                  offer paste-WK OR confirm-plaintext)
  *
  * Trusting server 'e2ee' can only make the client stricter (a key prompt);
- * distrusting server 'none' is what defeats a downgrade lie. NOTE: this is safe
- * only once the rollout pin-seed has run (so pre-existing plaintext workspaces
- * are pinned, not treated as unpinned-server-none and quarantined).
+ * distrusting server 'none' is what defeats a downgrade lie. With no
+ * server-trusting rollout seed anymore, EVERY unpinned workspace takes this gate
+ * on first encounter (quarantine for server 'none', key-required for server
+ * 'e2ee'); confirming plaintext on the quarantine gate pins it, so the prompt is
+ * one-time per (device, workspace).
  */
 
 import type { ModePin } from './modePin.js'

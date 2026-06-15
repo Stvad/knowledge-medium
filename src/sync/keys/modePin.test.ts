@@ -1,11 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import {
-  arePinsSeeded,
-  confirmPlaintextForSession,
-  getModePin,
-  seedModePinsOnce,
-  setModePin,
-} from './modePin.js'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { confirmPlaintextForSession, getModePin, setModePin } from './modePin.js'
 
 const USER = 'user-1'
 const WS_A = 'ws-A'
@@ -52,39 +46,7 @@ describe('mode pin', () => {
   })
 })
 
-describe('rollout pin seed', () => {
-  it('seeds unpinned memberships from the server mode, once', () => {
-    const written = seedModePinsOnce(USER, [{ workspaceId: WS_A, serverMode: 'plaintext' }])
-    expect(written).toBe(1)
-    expect(getModePin(USER, WS_A)).toBe('plaintext')
-    expect(arePinsSeeded(USER)).toBe(true)
-  })
-
-  it('never re-fires once seeded for this user (post-wipe safety)', () => {
-    seedModePinsOnce(USER, [{ workspaceId: WS_A, serverMode: 'plaintext' }])
-    // Simulate a later attempt (e.g. after a wipe recreated the DB): the
-    // marker survives in localStorage, so the seed must not run again.
-    const written = seedModePinsOnce(USER, [{ workspaceId: WS_B, serverMode: 'plaintext' }])
-    expect(written).toBe(0)
-    expect(getModePin(USER, WS_B)).toBeNull()
-  })
-
-  it('does not overwrite an existing pin', () => {
-    setModePin(USER, WS_A, 'e2ee')
-    seedModePinsOnce(USER, [{ workspaceId: WS_A, serverMode: 'plaintext' }])
-    expect(getModePin(USER, WS_A)).toBe('e2ee')
-  })
-
-  it('still seeds a second user in the same browser profile (per-user marker)', () => {
-    // localStorage is shared across accounts in a profile; user-1 seeding
-    // must NOT block user-2's rollout seed (the bug a global marker caused).
-    seedModePinsOnce(USER, [{ workspaceId: WS_A, serverMode: 'plaintext' }])
-    expect(arePinsSeeded('user-2')).toBe(false)
-    const written = seedModePinsOnce('user-2', [{ workspaceId: WS_A, serverMode: 'plaintext' }])
-    expect(written).toBe(1)
-    expect(getModePin('user-2', WS_A)).toBe('plaintext')
-  })
-
+describe('session plaintext fallback', () => {
   it('session plaintext confirmation makes getModePin report plaintext (no persisted pin)', () => {
     // Degraded-storage fallback: a unique id so the in-memory set doesn't leak
     // into other tests (it isn't cleared by localStorage.clear()).
@@ -99,29 +61,5 @@ describe('rollout pin seed', () => {
     setModePin(USER, ws, 'e2ee')
     confirmPlaintextForSession(USER, ws)
     expect(getModePin(USER, ws)).toBe('e2ee')
-  })
-
-  it('seals BEFORE pinning: a pin write that fails mid-seed still leaves the device sealed', () => {
-    // Seal-first invariant: if the marker were written LAST, a pin-write failure
-    // would leave the device unsealed and a later boot would re-seed — re-trusting
-    // the server flag for memberships synced in the meantime (a downgrade vector).
-    // Fail the pin write but allow the seal-marker write.
-    const realSetItem = Storage.prototype.setItem
-    const spy = vi
-      .spyOn(Storage.prototype, 'setItem')
-      .mockImplementation(function (this: Storage, key: string, value: string) {
-        if (key.startsWith('kmp-e2ee-mode:')) throw new Error('quota exceeded')
-        realSetItem.call(this, key, value)
-      })
-    try {
-      expect(() =>
-        seedModePinsOnce(USER, [{ workspaceId: WS_A, serverMode: 'plaintext' }]),
-      ).toThrow()
-      // Sealed despite the pin failure → a later seed is a no-op (no re-trust).
-      expect(arePinsSeeded(USER)).toBe(true)
-    } finally {
-      spy.mockRestore()
-    }
-    expect(seedModePinsOnce(USER, [{ workspaceId: WS_A, serverMode: 'plaintext' }])).toBe(0)
   })
 })
