@@ -450,27 +450,6 @@ export class Repo {
    *  Cleared when `setFacetRuntime` swaps to a fresh runtime — old
    *  listeners would fire against stale rebuild closures otherwise. */
   private runtimeFacetUnsubs: Array<() => void> = []
-  /** Repo-owned runtime contribution buckets. Persisted across
-   *  `setFacetRuntime` swaps and replayed onto the fresh runtime so
-   *  user-data schemas (et al.) survive the dynamic-extension reload.
-   *  Without this, the user-data bucket would live only on whichever
-   *  FacetRuntime was current at `setRuntimeContributions` time and
-   *  evaporate on the next `setFacetRuntime`.
-   *
-   *  NOTE for agent-side introspection: this is a *replay cache*, NOT
-   *  a general "what's registered" map. It only holds dynamic
-   *  contributions added via `setRuntimeContributions` (user-data
-   *  schemas, etc.), so it looks sparse compared to the full
-   *  registry. The full registry lives on the FacetRuntime
-   *  (`facetRuntime.facetIds()` / `contributionsById(id)`), and the
-   *  agent-facing surface is `yarn agent describe-runtime`. Inner
-   *  keys here are arbitrary source-id strings chosen by the caller
-   *  of `setRuntimeContributions`. */
-  private readonly runtimeContributionBuckets = new Map<string, Map<string, readonly unknown[]>>()
-  /** Per-facet refs needed to replay buckets onto a fresh runtime —
-   *  setRuntimeContributions takes a `Facet` reference (not a string
-   *  id), so we cache it the first time the caller passes one. */
-  private readonly runtimeContributionFacets = new Map<string, Facet<unknown, unknown>>()
   /** Listeners for property-schema map changes (full rebuild OR
    *  runtime-bucket update). Used by `usePropertySchemas` to drive
    *  React reruns. */
@@ -1416,20 +1395,16 @@ export class Repo {
     // implicitly drops them; this list just clears our tracking.
     for (const dispose of this.runtimeFacetUnsubs) dispose()
     this.runtimeFacetUnsubs = []
-    this.runtime = runtime
 
-    // Replay any persisted runtime contribution buckets onto the fresh
-    // runtime so user-data schemas survive the swap. Doing this before
-    // running rebuild steps means the steps see the merged view on
-    // first read (no flicker through a state where user-data is
-    // missing and then re-added).
-    for (const [facetId, bucketsBySource] of this.runtimeContributionBuckets) {
-      const facet = this.runtimeContributionFacets.get(facetId)
-      if (!facet) continue
-      for (const [sourceId, contributions] of bucketsBySource) {
-        runtime.setRuntimeContributions(facet, sourceId, contributions)
-      }
-    }
+    // Replay the outgoing runtime's per-source runtime contributions
+    // (user-data schemas, etc.) onto the fresh runtime so they survive
+    // the swap. The runtime owns this now (`withContributionsFrom`) — no
+    // Repo-side mirror. Done before reassigning `this.runtime` (so we
+    // still hold the previous one) and before running rebuild steps, so
+    // the steps see the merged view on first read (no flicker through a
+    // state where user-data is missing and then re-added).
+    runtime.withContributionsFrom(this.runtime)
+    this.runtime = runtime
 
     // Run every rebuild step on the fresh runtime.
     for (const step of this.rebuildSteps) step.run(runtime)
@@ -1466,24 +1441,10 @@ export class Repo {
     if (!this.runtime) {
       throw new Error('[Repo.setRuntimeContributions] called before setFacetRuntime')
     }
-    // Persist the bucket on Repo so it survives `setFacetRuntime`
-    // swaps. We also cache the facet reference (the runtime's
-    // setRuntimeContributions takes a Facet, not just an id).
-    this.runtimeContributionFacets.set(facet.id, facet as Facet<unknown, unknown>)
-    let bucketsBySource = this.runtimeContributionBuckets.get(facet.id)
-    if (contributions.length === 0) {
-      bucketsBySource?.delete(sourceId)
-      if (bucketsBySource && bucketsBySource.size === 0) {
-        this.runtimeContributionBuckets.delete(facet.id)
-        this.runtimeContributionFacets.delete(facet.id)
-      }
-    } else {
-      if (!bucketsBySource) {
-        bucketsBySource = new Map<string, readonly unknown[]>()
-        this.runtimeContributionBuckets.set(facet.id, bucketsBySource)
-      }
-      bucketsBySource.set(sourceId, contributions as readonly unknown[])
-    }
+    // The bucket lives on the runtime, which carries it forward to each
+    // fresh runtime via `withContributionsFrom` on the next swap — so
+    // Repo no longer mirrors it (audit B1). The `onFacetChange` listener
+    // wired in `setFacetRuntime` re-runs the affected rebuild steps.
     this.runtime.setRuntimeContributions(facet, sourceId, contributions)
   }
 

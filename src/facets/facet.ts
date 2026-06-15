@@ -188,6 +188,31 @@ export class FacetRuntime {
     this.notifyFacetListeners(facet.id)
   }
 
+  /** Seed this runtime's per-source runtime-contribution buckets from
+   *  `prev` — the runtime being replaced in an atomic swap. Static
+   *  contributions already arrive by re-resolving the extension tree;
+   *  the runtime buckets added imperatively via `setRuntimeContributions`
+   *  (user-data property schemas / types, etc.) only live on whichever
+   *  runtime was current when they were set, so a fresh runtime must
+   *  inherit them or they'd evaporate on every swap. Owning the replay
+   *  here is what lets `Repo` drop its parallel bucket mirror (audit B1).
+   *
+   *  Buckets are copied verbatim (each `FacetContribution` already
+   *  carries its facet ref + source id). Does not notify listeners — the
+   *  caller runs immediately after a swap and rebuilds everything; the
+   *  per-facet cache entries are invalidated so the next `read` recombines. */
+  withContributionsFrom(prev: FacetRuntime | null): void {
+    if (!prev) return
+    for (const [facetId, bySource] of prev.runtimeContributionsByFacet) {
+      const copy = new Map<RuntimeSourceId, FacetContribution<unknown>[]>()
+      for (const [sourceId, contributions] of bySource) {
+        copy.set(sourceId, [...contributions])
+      }
+      this.runtimeContributionsByFacet.set(facetId, copy)
+      this.cache.delete(facetId)
+    }
+  }
+
   /** Subscribe to changes for one facet. Fires after every
    *  setRuntimeContributions call that targets this facet. Static
    *  extension contributions don't fire this — they only change when

@@ -1,4 +1,5 @@
-import { ReactNode, useEffect, useMemo, useState } from 'react'
+import { ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import type { Repo } from '@/data/repo.js'
 import { useRepo } from '@/context/repo.js'
 import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions.js'
 import {
@@ -12,7 +13,7 @@ import {
 } from '@/facets/resolveAppRuntime.js'
 import {useOverrides} from '@/extensions/useOverrides.js'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.js'
-import { appEffectsFacet, appMountsFacet, type AppEffectCleanup } from '@/extensions/core.js'
+import { appEffectsFacet, appMountsFacet, type AppEffect, type AppEffectCleanup } from '@/extensions/core.js'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts.js'
 import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler.js'
 import { staticAppExtensions } from '@/extensions/staticAppExtensions.js'
@@ -21,6 +22,30 @@ import {
   ExtensionLoadErrorStore,
 } from '@/extensions/extensionLoadErrors.js'
 import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.js'
+
+/** A live app effect: its definition object, the cleanup once `start`
+ *  resolves (null until then / if none), and a `stopped` flag so an
+ *  async cleanup that resolves after teardown still runs exactly once. */
+interface RunningAppEffect {
+  effect: AppEffect
+  cleanup: AppEffectCleanup | null
+  stopped: boolean
+}
+
+/** Run an app effect's cleanup, isolating sync + async failures so one
+ *  bad cleanup can't abort the rest of a teardown. */
+const runAppEffectCleanup = (cleanup: AppEffectCleanup, effectId: string): void => {
+  try {
+    const result = cleanup()
+    if (result instanceof Promise) {
+      result.catch(error => {
+        console.error(`App effect cleanup failed for ${effectId}`, error)
+      })
+    }
+  } catch (error) {
+    console.error(`App effect cleanup failed for ${effectId}`, error)
+  }
+}
 
 export function AppRuntimeProvider({
   children,
@@ -125,42 +150,51 @@ export function AppRuntimeProvider({
     }
   }, [baseExtensions, errorStore, overrides, repo, runtimeContext, safeMode, workspaceId])
 
+  // App-effect lifecycle, reconciled by effect id (audit B1). A runtime
+  // swap REPLACES every facet registry, but most swaps (an extension
+  // toggle, the dynamic-load follow-up) leave the bulk of
+  // `appEffectsFacet`'s contributions byte-identical. Tearing down and
+  // restarting ALL effects on every swap needlessly drops every plugin's
+  // subscriptions; instead we diff the desired effects against the
+  // running set and touch only what changed. A change to a ctx input
+  // (workspace switch, repo swap, safeMode toggle) still restarts
+  // everything — those effects captured the old ctx.
+  const runningEffectsRef = useRef<Map<string, RunningAppEffect>>(new Map())
+  const prevEffectCtxRef = useRef<{repo: Repo; workspaceId: string; safeMode: boolean} | null>(null)
+
   useEffect(() => {
-    if (!workspaceId) return
+    const running = runningEffectsRef.current
 
-    let disposed = false
-    const cleanups: Array<{effectId: string; cleanup: AppEffectCleanup}> = []
-    const effects = runtime.read(appEffectsFacet)
-
-    const runCleanup = (cleanup: AppEffectCleanup, effectId: string) => {
-      try {
-        const result = cleanup()
-        if (result instanceof Promise) {
-          result.catch(error => {
-            console.error(`App effect cleanup failed for ${effectId}`, error)
-          })
-        }
-      } catch (error) {
-        console.error(`App effect cleanup failed for ${effectId}`, error)
-      }
+    const stopEntry = (id: string, entry: RunningAppEffect): void => {
+      entry.stopped = true
+      if (entry.cleanup) runAppEffectCleanup(entry.cleanup, id)
+      running.delete(id)
     }
 
-    for (const effect of effects) {
-      try {
-        const result = effect.start({
-          repo,
-          runtime,
-          workspaceId,
-          safeMode,
-        })
+    // No active workspace: stop everything and reset the ctx baseline so
+    // the next workspace starts from a clean slate. (Shouldn't happen —
+    // getInitialBlock sets activeWorkspaceId before any render.)
+    if (!workspaceId) {
+      for (const [id, entry] of [...running].reverse()) stopEntry(id, entry)
+      prevEffectCtxRef.current = null
+      return
+    }
 
+    const ctx = {repo, runtime, workspaceId, safeMode}
+
+    const startEffect = (effect: AppEffect): void => {
+      const entry: RunningAppEffect = {effect, cleanup: null, stopped: false}
+      running.set(effect.id, entry)
+      try {
+        const result = effect.start(ctx)
         Promise.resolve(result).then(cleanup => {
           if (typeof cleanup !== 'function') return
-          if (disposed) {
-            runCleanup(cleanup, effect.id)
+          // Stopped (or replaced) before start resolved → clean up now.
+          if (entry.stopped || running.get(effect.id) !== entry) {
+            runAppEffectCleanup(cleanup, effect.id)
             return
           }
-          cleanups.push({effectId: effect.id, cleanup})
+          entry.cleanup = cleanup
         }).catch(error => {
           console.error(`App effect failed to start for ${effect.id}`, error)
         })
@@ -169,14 +203,46 @@ export function AppRuntimeProvider({
       }
     }
 
-    return () => {
-      disposed = true
-      for (const {effectId, cleanup} of cleanups.toReversed()) {
-        runCleanup(cleanup, effectId)
-      }
-      cleanups.length = 0
+    // A ctx-input change must restart every effect; a pure runtime swap
+    // gets the by-id diff below.
+    const prev = prevEffectCtxRef.current
+    const ctxChanged = !prev
+      || prev.repo !== repo
+      || prev.workspaceId !== workspaceId
+      || prev.safeMode !== safeMode
+    prevEffectCtxRef.current = {repo, workspaceId, safeMode}
+    if (ctxChanged) {
+      for (const [id, entry] of [...running].reverse()) stopEntry(id, entry)
+    }
+
+    const desired = new Map<string, AppEffect>()
+    for (const effect of runtime.read(appEffectsFacet)) desired.set(effect.id, effect)
+
+    // Stop effects that are gone, or whose definition object changed
+    // (same id, different contribution ⇒ restart with the new one).
+    for (const [id, entry] of [...running]) {
+      const want = desired.get(id)
+      if (!want || want !== entry.effect) stopEntry(id, entry)
+    }
+    // Start everything desired that isn't already running (new, replaced,
+    // or just torn down by the ctx-change reset).
+    for (const [id, effect] of desired) {
+      if (!running.has(id)) startEffect(effect)
     }
   }, [repo, runtime, safeMode, workspaceId])
+
+  // True-unmount teardown only — per-swap reconciliation is handled
+  // above, so this must NOT fire on every runtime change (empty deps).
+  useEffect(() => {
+    const running = runningEffectsRef.current
+    return () => {
+      for (const [id, entry] of [...running].reverse()) {
+        entry.stopped = true
+        if (entry.cleanup) runAppEffectCleanup(entry.cleanup, id)
+      }
+      running.clear()
+    }
+  }, [])
 
   // Reactive bridge between user-defined property-schema blocks and
   // propertySchemasFacet's user-data bucket (Phase 3b). The service
