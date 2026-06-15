@@ -25,7 +25,6 @@ import type {
   AnyQuery,
   AnyValuePreset,
   BlockData,
-  BlockReference,
   Mutator,
   MutatorRegistry,
   Query,
@@ -46,9 +45,12 @@ import {
   ParentDeletedError,
   ProcessorRejection,
   QueryNotRegisteredError,
-  isRefCodec,
-  isRefListCodec,
 } from '@/data/api'
+import {
+  latestRefProjectionSchema,
+  projectedRefsForField,
+  refCodecKind,
+} from './internals/refProjection'
 import { runTx, type PowerSyncDb } from './internals/commitPipeline'
 import type { BlockCache } from '@/data/blockCache'
 import { buildQualifiedBlockColumnsSql, parseBlockRow, type BlockRow } from '@/data/blockSchema'
@@ -58,16 +60,6 @@ import { KERNEL_SAME_TX_PROCESSORS } from './internals/normalizeReferencesProces
 import { KERNEL_QUERIES } from './internals/kernelQueries'
 import { kernelInvalidationRule } from './internals/kernelInvalidation'
 import {
-  invalidationRulesFacet,
-  mutatorsFacet,
-  postCommitProcessorsFacet,
-  sameTxProcessorsFacet,
-  propertyEditorOverridesFacet,
-  propertySchemasFacet,
-  queriesFacet,
-  typesFacet,
-  valuePresetsFacet,
-  workspaceBackfillsFacet,
   type WorkspaceBackfill,
   type WorkspaceBackfillContext,
 } from './facets'
@@ -127,6 +119,7 @@ import { typesPageBlockId } from './typesPage'
 import { UserSchemasService } from './userSchemasService'
 import { UserTypesService } from './userTypesService'
 import { TypeTagger } from './typeTagger'
+import { FacetBridge } from './facetBridge'
 
 /** Convert a `Mutator<Args, Result>` into the `repo.mutate` dispatcher
  *  signature `(args: Args) => Promise<Result>`. Used to project
@@ -184,36 +177,6 @@ type KnownQueryDispatch = {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type QueryProxy = KnownQueryDispatch & { [name: string]: (args: any) => LoaderHandle<any> }
 
-const mergeLiftedSchemas = (
-  directSchemas: ReadonlyMap<string, AnyPropertySchema>,
-  types: ReadonlyMap<string, TypeContribution>,
-): ReadonlyMap<string, AnyPropertySchema> => {
-  const merged = new Map<string, AnyPropertySchema>()
-  for (const type of types.values()) {
-    for (const schema of type.properties ?? []) {
-      const existing = merged.get(schema.name)
-      if (existing !== undefined && existing !== schema) {
-        console.warn(
-          `[schema-lift] type "${type.id}" registers schema "${schema.name}" ` +
-          'that conflicts with an earlier type-lifted registration; last-wins per facet convention',
-        )
-      }
-      merged.set(schema.name, schema)
-    }
-  }
-  for (const [name, schema] of directSchemas) {
-    const existing = merged.get(name)
-    if (existing !== undefined && existing !== schema) {
-      console.warn(
-        `[schema-lift] direct propertySchemasFacet registration "${name}" ` +
-        'replaces an earlier type-lifted registration; last-wins per facet convention',
-      )
-    }
-    merged.set(name, schema)
-  }
-  return merged
-}
-
 const KERNEL_TYPES = new Map(KERNEL_TYPE_CONTRIBUTIONS.map(t => [t.id, t]))
 const KERNEL_PROPERTY_SCHEMA_MAP = new Map(KERNEL_PROPERTY_SCHEMAS.map(s => [s.name, s]))
 
@@ -228,91 +191,6 @@ const TX_LOG_CAPACITY = 64
  *  diagnostic. */
 const MAX_QUERY_COMPOSITION_DEPTH = 32
 
-type RefCodecKind = 'ref' | 'refList' | undefined
-
-const refCodecKind = (schema: AnyPropertySchema | undefined): RefCodecKind => {
-  if (schema === undefined) return undefined
-  if (isRefCodec(schema.codec)) return 'ref'
-  if (isRefListCodec(schema.codec)) return 'refList'
-  return undefined
-}
-
-const changedRefSchemaNames = (
-  before: ReadonlyMap<string, AnyPropertySchema>,
-  after: ReadonlyMap<string, AnyPropertySchema>,
-): string[] => {
-  const names = new Set([...before.keys(), ...after.keys()])
-  return Array.from(names)
-    .filter(name => refCodecKind(before.get(name)) !== refCodecKind(after.get(name)))
-    .sort()
-}
-
-const appendRefProjection = (
-  refs: BlockReference[],
-  seen: Set<string>,
-  sourceField: string,
-  id: string,
-): void => {
-  const targetId = id.trim()
-  if (!targetId) return
-  const key = `${sourceField}\u0000${targetId}`
-  if (seen.has(key)) return
-  seen.add(key)
-  refs.push({id: targetId, alias: targetId, sourceField})
-}
-
-const projectedRefsForField = (
-  block: BlockData,
-  schema: AnyPropertySchema | undefined,
-  sourceField: string,
-): BlockReference[] => {
-  if (schema === undefined || !(sourceField in block.properties)) return []
-  const encodedValue = block.properties[sourceField]
-  const refs: BlockReference[] = []
-  const seen = new Set<string>()
-  if (isRefCodec(schema.codec)) {
-    try {
-      appendRefProjection(refs, seen, sourceField, schema.codec.decode(encodedValue))
-    } catch {
-      return []
-    }
-    return refs
-  }
-  if (isRefListCodec(schema.codec)) {
-    try {
-      for (const id of schema.codec.decode(encodedValue)) {
-        appendRefProjection(refs, seen, sourceField, id)
-      }
-    } catch {
-      return []
-    }
-  }
-  return refs
-}
-
-/** Reprojection scans can outlive a later schema swap. Keep the
- *  scheduled schema when its ref-ness still matches the live registry;
- *  otherwise project against the live registry so an old scan cannot
- *  re-add refs for a field that is no longer ref-typed (redefined to a
- *  non-ref codec, or deleted ⇒ absent ⇒ refs stripped).
- *
- *  The caller passes a *workspace-correct* `currentSchemas`: the live registry
- *  only while still on the scan's workspace, else the scheduled snapshot (see
- *  `liveSchemas` in `reprojectRefTypedProperties`). So "absent in current" here
- *  always means a real same-workspace removal, never a cross-workspace bleed or
- *  a mid-load gap. */
-const latestRefProjectionSchema = (
-  scheduledSchemas: ReadonlyMap<string, AnyPropertySchema>,
-  currentSchemas: ReadonlyMap<string, AnyPropertySchema>,
-  name: string,
-): AnyPropertySchema | undefined => {
-  const scheduledSchema = scheduledSchemas.get(name)
-  const currentSchema = currentSchemas.get(name)
-  return refCodecKind(scheduledSchema) === refCodecKind(currentSchema)
-    ? scheduledSchema
-    : currentSchema
-}
-
 /** Suffix (the part after the `reproject_ref:` prefix) of a per-workspace
  *  reprojection marker. Reprojection is workspace-scoped, so each workspace
  *  records its own "already backfilled name X" marker. Workspace ids are UUIDs
@@ -326,17 +204,6 @@ const reprojectionMarkerKey = (workspaceId: string, name: string): string =>
  *  shape/rationale as `reprojectionMarkerKey`. */
 const workspaceBackfillMarkerKey = (workspaceId: string, id: string): string =>
   `${workspaceId}:${id}`
-
-/** A named rebuild step. Declares which facets it reads via `inputs`
- *  so the runtime contribution path can run only the steps whose
- *  inputs changed. Outputs are written to Repo private fields by the
- *  `run` callback's side effect; we don't return them so the
- *  framework stays minimal. */
-interface RebuildStep {
-  readonly id: string
-  readonly inputs: readonly Facet<unknown, unknown>[]
-  readonly run: (runtime: FacetRuntime) => void
-}
 
 export interface RepoOptions {
   db: PowerSyncDb
@@ -441,40 +308,17 @@ export class Repo {
   private _propertyEditorOverrides: ReadonlyMap<string, AnyPropertyEditorOverride> = new Map()
   private _valuePresets: ReadonlyMap<string, AnyValuePreset> = new Map()
   private invalidationRules: readonly InvalidationRule[] = []
-  /** Currently-installed FacetRuntime, retained so
-   *  `setRuntimeContributions` can mutate runtime contribution buckets
-   *  without going through a fresh runtime resolution. Null until the
-   *  first setFacetRuntime call. */
-  private runtime: FacetRuntime | null = null
-  /** Per-facet listener disposers from `onFacetChange` registrations.
-   *  Cleared when `setFacetRuntime` swaps to a fresh runtime — old
-   *  listeners would fire against stale rebuild closures otherwise. */
-  private runtimeFacetUnsubs: Array<() => void> = []
-  /** Listeners for property-schema map changes (full rebuild OR
-   *  runtime-bucket update). Used by `usePropertySchemas` to drive
-   *  React reruns. */
-  private readonly propertySchemasListeners = new CallbackSet<[]>('Repo.propertySchemas')
-  /** Listeners for `_types` map changes (full rebuild OR runtime-bucket
-   *  update on `typesFacet`). Symmetric to propertySchemasListeners.
-   *  Used by `createTypeBlock`'s commit→registration handoff to bridge
-   *  two txs without polling: once UserTypesService's subscription
-   *  publishes a new type contribution, the rebuild step re-reads
-   *  typesFacet, this listener fires, and the bridge wait resolves. */
-  private readonly typesListeners = new CallbackSet<[]>('Repo.types')
-  /** Listeners for property-editor-override map changes. */
-  private readonly propertyEditorOverridesListeners = new CallbackSet<[]>('Repo.propertyEditorOverrides')
-  /** Listeners for value-preset map changes. */
-  private readonly valuePresetsListeners = new CallbackSet<[]>('Repo.valuePresets')
+  /** Facet→registry bridge (audit D1(c)) — owns the installed
+   *  FacetRuntime, the rebuild steps, the per-facet change subscriptions,
+   *  and the React-facing schema/type/override/preset change channels.
+   *  Constructed in the constructor (the rebuild steps write back into
+   *  this Repo's registries through a callback target). */
+  private readonly facetBridge: FacetBridge
   /** Listeners for user-surfaceable errors thrown from inside a
    *  `repo.tx` — currently `ProcessorRejection` from same-tx
    *  processors. Subscribers are responsible for the UI side
    *  (toast routing); the data layer stays UI-agnostic. */
   private readonly userErrorListeners = new CallbackSet<[ProcessorRejection]>('Repo.userErrors')
-  /** Rebuild step descriptors. Defined once per Repo at construction;
-   *  each step declares which facets it reads. `setFacetRuntime` runs
-   *  every step; `setRuntimeContributions` runs only the steps whose
-   *  inputs include the changed facet. */
-  private readonly rebuildSteps: readonly RebuildStep[] = []
   /** Global query-registry epoch. Bumped by `swapQueries` (via
    *  `setFacetRuntime` / `__setQueriesForTesting`) when an existing query is
    *  REPLACED or REMOVED — NOT for a purely-additive swap (see
@@ -791,11 +635,26 @@ export class Repo {
     // Type-tagging engine (audit D1(b)). Repo keeps spec-pinned
     // delegating methods over this single instance.
     this.typeTagger = new TypeTagger(this)
-    // Build the rebuild step list. Each step declares the facets it
-    // reads via `inputs`; the constructor wires per-facet change
-    // listeners so a runtime-bucket update only re-runs the steps
-    // whose inputs changed (per user-defined-properties §3).
-    this.rebuildSteps = this._makeRebuildSteps()
+    // Facet→registry bridge (audit D1(c)). The rebuild steps write their
+    // results back into this Repo's registries through these closures;
+    // the bridge owns the runtime, the steps, the per-facet change
+    // subscriptions, and the React change channels.
+    this.facetBridge = new FacetBridge({
+      getPropertySchemas: () => this._propertySchemas,
+      applyMutators: (mutators) => { this.mutators = mutators },
+      applyProcessors: (processors) => { this.processors = processors },
+      applySameTxProcessors: (processors) => { this.sameTxProcessors = processors },
+      applyInvalidationRules: (rules) => { this.invalidationRules = rules },
+      applyWorkspaceBackfills: (backfills) => { this._workspaceBackfills = backfills },
+      applyTypesAndSchemas: (types, propertySchemas) => {
+        this._types = types
+        this._propertySchemas = propertySchemas
+      },
+      applyPropertyEditorOverrides: (overrides) => { this._propertyEditorOverrides = overrides },
+      applyValuePresets: (presets) => { this._valuePresets = presets },
+      applyQueries: (queries) => { this.swapQueries(queries) },
+      scheduleReprojection: (names, schemas) => { this.scheduleReprojection(names, schemas) },
+    })
     // Bind dispatchMutator to `this` so the Proxy's get trap doesn't
     // need to alias `this` to a local. Each name lookup returns a
     // fresh dispatcher closure; that's fine, the underlying registry
@@ -1373,79 +1232,36 @@ export class Repo {
     return row?.count ?? 0
   }
 
-  /** Update the data-layer registries from a FacetRuntime. Spec §8.
-   *  Decomposes into named rebuild steps (per user-defined-properties
-   *  §3); the same step set runs for full-runtime swaps and for the
-   *  per-facet `setRuntimeContributions` change path. Kernel mutators
-   *  must be present in the runtime if the caller wants them — pass
-   *  them in via the static-facet bundle the kernel ships. */
   /** Read-only handle on the currently-installed FacetRuntime. Used by
    *  non-React callers that need to consult facets at action-handler
    *  time (e.g. `pickBlockDateAdapter` from a multi-select handler
    *  where `useAppRuntime()` isn't available). Returns null before the
-   *  first `setFacetRuntime` call. */
+   *  first `setFacetRuntime` call. Delegates to `FacetBridge` (D1(c)). */
   get facetRuntime(): FacetRuntime | null {
-    return this.runtime
+    return this.facetBridge.facetRuntime
   }
 
+  /** Update the data-layer registries from a FacetRuntime (spec §8) via
+   *  the facet bridge. The bridge decomposes the swap into named rebuild
+   *  steps that write back into this Repo's registries, preserving the
+   *  replay → rebuild → listeners ordering. Kernel mutators must be
+   *  present in the runtime if the caller wants them — pass them in via
+   *  the static-facet bundle the kernel ships. */
   setFacetRuntime(runtime: FacetRuntime): void {
-    // Drop any per-facet change subscriptions on the previous runtime —
-    // we're about to rewire to a fresh one. Subscriptions live on the
-    // FacetRuntime instance, not on Repo, so swapping runtimes
-    // implicitly drops them; this list just clears our tracking.
-    for (const dispose of this.runtimeFacetUnsubs) dispose()
-    this.runtimeFacetUnsubs = []
-
-    // Replay the outgoing runtime's per-source runtime contributions
-    // (user-data schemas, etc.) onto the fresh runtime so they survive
-    // the swap. The runtime owns this now (`withContributionsFrom`) — no
-    // Repo-side mirror. Done before reassigning `this.runtime` (so we
-    // still hold the previous one) and before running rebuild steps, so
-    // the steps see the merged view on first read (no flicker through a
-    // state where user-data is missing and then re-added).
-    runtime.withContributionsFrom(this.runtime)
-    this.runtime = runtime
-
-    // Run every rebuild step on the fresh runtime.
-    for (const step of this.rebuildSteps) step.run(runtime)
-
-    // Wire per-facet change notifications: when a runtime-contribution
-    // bucket on `facet` changes, re-run only the steps that read it.
-    const stepsByFacetId = new Map<string, RebuildStep[]>()
-    for (const step of this.rebuildSteps) {
-      for (const input of step.inputs) {
-        const list = stepsByFacetId.get(input.id) ?? []
-        list.push(step)
-        stepsByFacetId.set(input.id, list)
-      }
-    }
-    for (const [facetId, steps] of stepsByFacetId) {
-      const unsub = runtime.onFacetChange(facetId, () => {
-        for (const step of steps) step.run(runtime)
-      })
-      this.runtimeFacetUnsubs.push(unsub)
-    }
+    this.facetBridge.setFacetRuntime(runtime)
   }
 
   /** Replace the runtime contribution bucket for `facet` keyed by
-   *  `sourceId`. Triggers a re-run of every rebuild step whose
-   *  declared inputs include this facet, plus per-facet listener
-   *  fan-out for React subscribers (e.g. usePropertySchemas).
-   *  No-op if no FacetRuntime has been installed yet — callers must
-   *  setFacetRuntime first. */
+   *  `sourceId`. Triggers a re-run of every rebuild step whose declared
+   *  inputs include this facet, plus per-facet listener fan-out for React
+   *  subscribers (e.g. usePropertySchemas). Throws if no FacetRuntime has
+   *  been installed yet — callers must setFacetRuntime first. */
   setRuntimeContributions<Input>(
     facet: Facet<Input, unknown>,
     sourceId: string,
     contributions: readonly Input[],
   ): void {
-    if (!this.runtime) {
-      throw new Error('[Repo.setRuntimeContributions] called before setFacetRuntime')
-    }
-    // The bucket lives on the runtime, which carries it forward to each
-    // fresh runtime via `withContributionsFrom` on the next swap — so
-    // Repo no longer mirrors it (audit B1). The `onFacetChange` listener
-    // wired in `setFacetRuntime` re-runs the affected rebuild steps.
-    this.runtime.setRuntimeContributions(facet, sourceId, contributions)
+    this.facetBridge.setRuntimeContributions(facet, sourceId, contributions)
   }
 
   /** Subscribe to changes on `_propertySchemas`. Fires when
@@ -1454,7 +1270,7 @@ export class Repo {
    *  user-data bucket. Used by `usePropertySchemas` so React rerenders
    *  on user-schema add/edit/remove without a runtime swap. */
   onPropertySchemasChange(listener: () => void): () => void {
-    return this.propertySchemasListeners.add(listener)
+    return this.facetBridge.onPropertySchemasChange(listener)
   }
 
   /** Subscribe to changes on `_types`. Fires whenever the rebuild step
@@ -1465,7 +1281,7 @@ export class Repo {
    *  to publish a freshly-committed type-definition block) recheck
    *  `repo.types` inside the listener; spurious firings are tolerated. */
   onTypesChange(listener: () => void): () => void {
-    return this.typesListeners.add(listener)
+    return this.facetBridge.onTypesChange(listener)
   }
 
   /** Subscribe to changes on the merged `propertyEditorOverrides` map
@@ -1473,12 +1289,12 @@ export class Repo {
    *  but exposed as a Repo-level event so future runtime-contribution
    *  paths layer on without changing the consumer surface). */
   onPropertyEditorOverridesChange(listener: () => void): () => void {
-    return this.propertyEditorOverridesListeners.add(listener)
+    return this.facetBridge.onPropertyEditorOverridesChange(listener)
   }
 
   /** Subscribe to changes on the value-preset map. */
   onValuePresetsChange(listener: () => void): () => void {
-    return this.valuePresetsListeners.add(listener)
+    return this.facetBridge.onValuePresetsChange(listener)
   }
 
   /** Subscribe to user-surfaceable errors thrown from `repo.tx`
@@ -1881,94 +1697,6 @@ export class Repo {
 
   async setBlockTypes(blockId: string, typeIds: readonly string[]): Promise<void> {
     await this.typeTagger.setBlockTypes(blockId, typeIds)
-  }
-
-  /** Constructor-time rebuild step factory. Each step closes over
-   *  `this`; runs at full setFacetRuntime AND when its inputs' runtime
-   *  contributions change. Order matters: types runs before
-   *  propertySchemas (the merge folds in type-lifted schemas);
-   *  propertySchemas runs before query swap if a future step ever
-   *  needs it. */
-  private _makeRebuildSteps(): readonly RebuildStep[] {
-    return [
-      {
-        id: 'mutators',
-        inputs: [mutatorsFacet as Facet<unknown, unknown>],
-        run: (rt) => { this.mutators = new Map(rt.read(mutatorsFacet)) },
-      },
-      {
-        id: 'processors',
-        inputs: [postCommitProcessorsFacet as Facet<unknown, unknown>],
-        run: (rt) => { this.processors = new Map(rt.read(postCommitProcessorsFacet)) },
-      },
-      {
-        id: 'sameTxProcessors',
-        inputs: [sameTxProcessorsFacet as Facet<unknown, unknown>],
-        run: (rt) => { this.sameTxProcessors = new Map(rt.read(sameTxProcessorsFacet)) },
-      },
-      {
-        id: 'invalidationRules',
-        inputs: [invalidationRulesFacet as Facet<unknown, unknown>],
-        run: (rt) => { this.invalidationRules = rt.read(invalidationRulesFacet) },
-      },
-      {
-        id: 'workspaceBackfills',
-        inputs: [workspaceBackfillsFacet as Facet<unknown, unknown>],
-        run: (rt) => { this._workspaceBackfills = rt.read(workspaceBackfillsFacet) },
-      },
-      {
-        // Reads typesFacet AND propertySchemasFacet — both inputs feed
-        // mergeLiftedSchemas, so a change to either re-runs the merge.
-        id: 'propertySchemas',
-        inputs: [
-          typesFacet as Facet<unknown, unknown>,
-          propertySchemasFacet as Facet<unknown, unknown>,
-        ],
-        run: (rt) => {
-          const previousPropertySchemas = this._propertySchemas
-          this._types = rt.read(typesFacet)
-          this._propertySchemas = mergeLiftedSchemas(
-            rt.read(propertySchemasFacet),
-            this._types,
-          )
-          const refSchemaChanges = changedRefSchemaNames(previousPropertySchemas, this._propertySchemas)
-          if (refSchemaChanges.length > 0) {
-            this.scheduleReprojection(refSchemaChanges, this._propertySchemas)
-          }
-          // Notify React subscribers (usePropertySchemas) so panels
-          // re-render against the new merged map.
-          this.propertySchemasListeners.notify()
-          // Notify types subscribers (createTypeBlock's commit→
-          // registration bridge, future useTypes-style hooks). Fires
-          // unconditionally — same
-          // convention as propertySchemasListeners: "the step that owns
-          // this map ran" not "this map changed." Spurious firings are
-          // tolerated by consumers.
-          this.typesListeners.notify()
-        },
-      },
-      {
-        id: 'propertyEditorOverrides',
-        inputs: [propertyEditorOverridesFacet as Facet<unknown, unknown>],
-        run: (rt) => {
-          this._propertyEditorOverrides = rt.read(propertyEditorOverridesFacet)
-          this.propertyEditorOverridesListeners.notify()
-        },
-      },
-      {
-        id: 'valuePresets',
-        inputs: [valuePresetsFacet as Facet<unknown, unknown>],
-        run: (rt) => {
-          this._valuePresets = rt.read(valuePresetsFacet)
-          this.valuePresetsListeners.notify()
-        },
-      },
-      {
-        id: 'queries',
-        inputs: [queriesFacet as Facet<unknown, unknown>],
-        run: (rt) => { this.swapQueries(new Map(rt.read(queriesFacet))) },
-      },
-    ]
   }
 
   /** Replace the query registry and bump the global `queryEpoch` only when
