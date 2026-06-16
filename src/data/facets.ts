@@ -8,7 +8,7 @@
  * machinery comes online.
  */
 
-import { defineFacet } from '@/facets/facet'
+import { defineFacet, keyedMapFacet } from '@/facets/facet'
 import type {
   AnyMutator,
   AnyPostCommitProcessor,
@@ -115,132 +115,27 @@ const isInvalidationRule = (value: unknown): value is InvalidationRule =>
  *  Args/Result types share the registry slot via `AnyMutator` (variance
  *  escape); call-site dispatch (`repo.mutate.X`, `tx.run(m, args)`)
  *  recovers precise types via the `MutatorRegistry` augmentation. */
-export const mutatorsFacet = defineFacet<AnyMutator, ReadonlyMap<string, AnyMutator>>({
-  id: 'data.mutators',
-  combine: (values) => {
-    const out = new Map<string, AnyMutator>()
-    for (const m of values) {
-      if (out.has(m.name)) {
-        console.warn(
-          `[mutatorsFacet] duplicate registration for "${m.name}"; last-wins per facet convention`,
-        )
-      }
-      out.set(m.name, m)
-    }
-    return out
-  },
-  empty: () => new Map(),
-})
+export const mutatorsFacet = keyedMapFacet<AnyMutator>('data.mutators', m => m.name)
 
 /** Future facets — declared empty for now so plugin authors can
  *  reference them at compile time without runtime breakage when no
  *  contributions exist. Wired up in stages 1.5+. */
 
-export const queriesFacet = defineFacet<AnyQuery, ReadonlyMap<string, AnyQuery>>({
-  id: 'data.queries',
-  combine: (values) => {
-    const out = new Map<string, AnyQuery>()
-    for (const q of values) {
-      if (out.has(q.name)) {
-        console.warn(
-          `[queriesFacet] duplicate registration for "${q.name}"; last-wins per facet convention`,
-        )
-      }
-      out.set(q.name, q)
-    }
-    return out
-  },
-  empty: () => new Map(),
-})
+export const queriesFacet = keyedMapFacet<AnyQuery>('data.queries', q => q.name)
 
-export const propertySchemasFacet = defineFacet<AnyPropertySchema, ReadonlyMap<string, AnyPropertySchema>>({
-  id: 'data.propertySchemas',
-  combine: (values) => {
-    const out = new Map<string, AnyPropertySchema>()
-    for (const s of values) {
-      if (out.has(s.name)) {
-        console.warn(
-          `[propertySchemasFacet] duplicate registration for "${s.name}"; last-wins per facet convention`,
-        )
-      }
-      out.set(s.name, s)
-    }
-    return out
-  },
-  empty: () => new Map(),
-})
+export const propertySchemasFacet = keyedMapFacet<AnyPropertySchema>('data.propertySchemas', s => s.name)
 
-export const typesFacet = defineFacet<TypeContribution, ReadonlyMap<string, TypeContribution>>({
-  id: 'data.types',
-  combine: (values) => {
-    const out = new Map<string, TypeContribution>()
-    for (const t of values) {
-      if (out.has(t.id)) {
-        console.warn(
-          `[typesFacet] duplicate registration for "${t.id}"; last-wins per facet convention`,
-        )
-      }
-      out.set(t.id, t)
-    }
-    return out
-  },
-  empty: () => new Map(),
-})
+export const typesFacet = keyedMapFacet<TypeContribution>('data.types', t => t.id)
 
-export const propertyEditorOverridesFacet = defineFacet<AnyPropertyEditorOverride, ReadonlyMap<string, AnyPropertyEditorOverride>>({
-  id: 'data.property-editor-overrides',
-  combine: (values) => {
-    const out = new Map<string, AnyPropertyEditorOverride>()
-    for (const c of values) {
-      if (out.has(c.name)) {
-        console.warn(
-          `[propertyEditorOverridesFacet] duplicate registration for "${c.name}"; last-wins per facet convention`,
-        )
-      }
-      out.set(c.name, c)
-    }
-    return out
-  },
-  empty: () => new Map(),
-})
+export const propertyEditorOverridesFacet = keyedMapFacet<AnyPropertyEditorOverride>('data.property-editor-overrides', c => c.name)
 
 /** Open-vocabulary preset registry. Keyed by preset id (matches the
  *  codec `type` for codecs built by the preset). Last-wins on
  *  collision, per facet convention. Plugins register through
  *  `valuePresetsFacet.of(preset, {source: 'plugin'})`. */
-export const valuePresetsFacet = defineFacet<AnyValuePreset, ReadonlyMap<string, AnyValuePreset>>({
-  id: 'data.valuePresets',
-  combine: (values) => {
-    const out = new Map<string, AnyValuePreset>()
-    for (const p of values) {
-      if (out.has(p.id)) {
-        console.warn(
-          `[valuePresetsFacet] duplicate registration for "${p.id}"; last-wins per facet convention`,
-        )
-      }
-      out.set(p.id, p)
-    }
-    return out
-  },
-  empty: () => new Map(),
-})
+export const valuePresetsFacet = keyedMapFacet<AnyValuePreset>('data.valuePresets', p => p.id)
 
-export const postCommitProcessorsFacet = defineFacet<AnyPostCommitProcessor, ReadonlyMap<string, AnyPostCommitProcessor>>({
-  id: 'data.postCommitProcessors',
-  combine: (values) => {
-    const out = new Map<string, AnyPostCommitProcessor>()
-    for (const p of values) {
-      if (out.has(p.name)) {
-        console.warn(
-          `[postCommitProcessorsFacet] duplicate registration for "${p.name}"; last-wins per facet convention`,
-        )
-      }
-      out.set(p.name, p)
-    }
-    return out
-  },
-  empty: () => new Map(),
-})
+export const postCommitProcessorsFacet = keyedMapFacet<AnyPostCommitProcessor>('data.postCommitProcessors', p => p.name)
 
 // Sibling to `postCommitProcessorsFacet`. Same-tx processors run
 // inside the user's writeTransaction; the commit pipeline iterates
@@ -253,22 +148,7 @@ export const postCommitProcessorsFacet = defineFacet<AnyPostCommitProcessor, Rea
 // pipeline placement — keeping them separate makes "where does this
 // run" a typed reference rather than a string match, and forces a
 // deliberate refactor on the rare cases that need to flip modes.
-export const sameTxProcessorsFacet = defineFacet<AnySameTxProcessor, ReadonlyMap<string, AnySameTxProcessor>>({
-  id: 'data.sameTxProcessors',
-  combine: (values) => {
-    const out = new Map<string, AnySameTxProcessor>()
-    for (const p of values) {
-      if (out.has(p.name)) {
-        console.warn(
-          `[sameTxProcessorsFacet] duplicate registration for "${p.name}"; last-wins per facet convention`,
-        )
-      }
-      out.set(p.name, p)
-    }
-    return out
-  },
-  empty: () => new Map(),
-})
+export const sameTxProcessorsFacet = keyedMapFacet<AnySameTxProcessor>('data.sameTxProcessors', p => p.name)
 
 export const localSchemaFacet = defineFacet<LocalSchemaContribution, readonly LocalSchemaContribution[]>({
   id: 'data.localSchema',
@@ -299,22 +179,7 @@ export interface RefTargetFilterDefault {
   readonly property: string
 }
 
-export const refTargetFilterDefaultsFacet = defineFacet<RefTargetFilterDefault, ReadonlyMap<string, RefTargetFilterDefault>>({
-  id: 'data.refTargetFilterDefaults',
-  combine: (values) => {
-    const out = new Map<string, RefTargetFilterDefault>()
-    for (const d of values) {
-      if (out.has(d.targetType)) {
-        console.warn(
-          `[refTargetFilterDefaultsFacet] duplicate registration for "${d.targetType}"; last-wins per facet convention`,
-        )
-      }
-      out.set(d.targetType, d)
-    }
-    return out
-  },
-  empty: () => new Map(),
-})
+export const refTargetFilterDefaultsFacet = keyedMapFacet<RefTargetFilterDefault>('data.refTargetFilterDefaults', d => d.targetType)
 
 export const invalidationRulesFacet = defineFacet<InvalidationRule, readonly InvalidationRule[]>({
   id: 'data.invalidationRules',
