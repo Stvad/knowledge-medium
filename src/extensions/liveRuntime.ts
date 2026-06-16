@@ -51,9 +51,11 @@ interface RememberedBucket {
 }
 
 /** A `FacetRuntime` facade effects capture so they survive runtime swaps.
- *  It owns no contribution state of its own (the empty `super` storage is
- *  never read — every public method is overridden to delegate to
- *  `current`); it just forwards to whichever runtime is installed and
+ *  It owns no contribution state of its own — the inherited `super`
+ *  storage is never read because every public method is overridden:
+ *  reads/writes/subscriptions delegate to `current`, and
+ *  `adoptDurableContributionsFrom` throws (the handle is never a swap
+ *  target). It just forwards to whichever runtime is installed and
  *  re-points the effect's subscriptions / transient buckets when that
  *  runtime swaps. */
 export class LiveRuntimeHandle extends FacetRuntime {
@@ -85,6 +87,18 @@ export class LiveRuntimeHandle extends FacetRuntime {
 
   override facetIds(): string[] {
     return this.current.facetIds()
+  }
+
+  /** Unsupported on the handle: it is a stable wrapper effects hold, never
+   *  a runtime a swap installs, so it is never the *target* of a durable
+   *  adoption. Overridden to fail loud rather than silently write into the
+   *  dead inherited `super` storage that the delegating reads never
+   *  consult (which would lose the durable data with no error). */
+  override adoptDurableContributionsFrom(): void {
+    throw new Error(
+      '[LiveRuntimeHandle] adoptDurableContributionsFrom is not supported — ' +
+      'the handle is a stable wrapper, never a swap target',
+    )
   }
 
   override onFacetChange(facetId: string, listener: () => void): () => void {
@@ -239,6 +253,9 @@ export class EffectReconciler {
       this.capturedCtx.workspaceId !== workspaceId ||
       this.capturedCtx.safeMode !== safeMode
 
+    const effects = runtime.read(appEffectsFacet)
+    const nextIds = new Set(effects.map(effect => effect.id))
+
     if (ctxChanged) {
       // Effects captured the previous repo/workspace/safeMode — restart
       // them all against a clean handle.
@@ -246,20 +263,20 @@ export class EffectReconciler {
       this.liveRuntime = new LiveRuntimeHandle(runtime)
       this.capturedCtx = { repo, workspaceId, safeMode }
     } else {
+      // Stop removed effects BEFORE re-pointing the handle: a removed
+      // transient owner's cleanup clears its bucket from the outgoing
+      // runtime + the handle, so `setCurrent` replays only the survivors
+      // onto the fresh runtime (no stale replay-then-clear window).
+      for (const [id, entry] of this.started) {
+        if (!nextIds.has(id)) {
+          stopEffect(entry)
+          this.started.delete(id)
+        }
+      }
       this.liveRuntime!.setCurrent(runtime)
     }
 
     const live = this.liveRuntime!
-    const effects = runtime.read(appEffectsFacet)
-    const nextIds = new Set(effects.map(effect => effect.id))
-
-    for (const [id, entry] of this.started) {
-      if (!nextIds.has(id)) {
-        stopEffect(entry)
-        this.started.delete(id)
-      }
-    }
-
     for (const effect of effects) {
       if (this.started.has(effect.id)) continue
       this.started.set(
@@ -277,7 +294,10 @@ export class EffectReconciler {
   }
 
   private stopAll(): void {
-    for (const entry of this.started.values()) stopEffect(entry)
+    // Tear down in reverse start order (LIFO), matching the previous
+    // provider's `cleanups.toReversed()` so any incidental ordering
+    // relationship between independent effects is preserved.
+    for (const entry of [...this.started.values()].reverse()) stopEffect(entry)
     this.started.clear()
   }
 }
