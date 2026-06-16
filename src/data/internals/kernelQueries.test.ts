@@ -107,9 +107,11 @@ const asBlockOrNull = (v: BlockData | null | undefined): BlockData | null => v ?
  * and mid-load coalescing. So a zero delta across a write proves it matched no
  * handle. `fired.length` can't prove that: an erroneous invalidation that
  * re-resolves to an equal value (or coalesces with a later control write) is
- * deduped and never reaches a subscriber. These tests run with
- * `registerKernelProcessors: false`, so there's no async processor path to
- * invalidate later — the synchronous count is complete the moment `tx` resolves.
+ * deduped and never reaches a subscriber. The synchronous count is complete the
+ * moment `tx` resolves because these tests issue only local `repo.tx` writes to
+ * `blocks`: the post-commit processor registry is empty (`registerKernelProcessors:
+ * false`) AND the default sync observer only reacts to `blocks_synced` writes, so
+ * neither re-invalidates a tick later.
  */
 const invalidations = () => env.repo.handleStore.metrics.loaderInvalidations
 
@@ -741,7 +743,10 @@ describe('invalidation', () => {
       // Content-only edit on c1 — bumps rowIds in the tx fast path but
       // the lean childIds dep set has no row entry, so the list must not
       // re-project.
+      const inv0 = invalidations()
       await env.repo.tx(tx => tx.update('c1', {content: 'edited'}), {scope: ChangeScope.BlockDefault})
+      // Sound negative proof — the content edit invalidated no handle (pre-dedup).
+      expect(invalidations()).toBe(inv0)
       // Tracer-bullet: adding a real child DOES invalidate (parent-edge).
       // Wait for that single emission; a content-edit re-projection would
       // surface as an extra one. (Replaces a 10 ms sleep that raced the
@@ -822,11 +827,14 @@ describe('invalidation', () => {
     const fired: string[][] = []
     const unsub = handle.subscribe(v => { fired.push(asBlocks(v as BlockData[]).map(b => b.id)) })
     try {
+      const inv0 = invalidations()
       await env.repo.tx(async tx => {
         const block = env.repo.block('panel')
         await block.load()
         await tx.update('panel', {properties: {focusedBlockLocation: {blockId: 'something', renderScopeId: 'scope:something'}}})
       }, {scope: ChangeScope.UiState})
+      // Sound negative proof — the UiState write invalidated no handle (pre-dedup).
+      expect(invalidations()).toBe(inv0)
       // Tracer-bullet: a new matching note DOES invalidate the type channel.
       // Wait for that single emission; a UiState-triggered re-resolve would
       // surface as an extra one. (Replaces a 30 ms "give it a chance to
@@ -848,10 +856,13 @@ describe('invalidation', () => {
     const fired: string[][] = []
     const unsub = handle.subscribe(v => { fired.push(asBlocks(v as BlockData[]).map(b => b.id)) })
     try {
+      const inv0 = invalidations()
       await env.repo.tx(
         tx => tx.update('plain', {content: 'edited'}),
         {scope: ChangeScope.BlockDefault},
       )
+      // Sound negative proof — the unrelated content edit invalidated no handle.
+      expect(invalidations()).toBe(inv0)
       // Tracer-bullet: a new note DOES invalidate. Wait for that single
       // emission; had the non-matching content edit leaked 'plain' into the
       // result, it would surface as an earlier (wrong-valued) emission.
@@ -1269,7 +1280,7 @@ describe('invalidation', () => {
         tx => tx.move('a', {parentId: 'p2', orderKey: 'a0'}),
         {scope: ChangeScope.BlockDefault},
       )
-      // Sound negative proof — the parent move matched neither handle (pre-dedup).
+      // Sound negative proof — the parent move invalidated no handle (pre-dedup).
       expect(invalidations()).toBe(inv0)
 
       // Control-write fence (liveness): a new block matching both queries DOES fire
@@ -1307,7 +1318,7 @@ describe('invalidation', () => {
         tx => tx.update('a', {properties: {renderer: 'markdown'}}),
         {scope: ChangeScope.BlockDefault},
       )
-      // Sound negative proof — the property edit matched neither handle (pre-dedup).
+      // Sound negative proof — the property edit invalidated no handle (pre-dedup).
       expect(invalidations()).toBe(inv0)
 
       // Control-write fence (liveness): a new block matching both queries DOES fire
