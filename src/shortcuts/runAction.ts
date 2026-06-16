@@ -4,6 +4,8 @@ import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import {
   useActiveContextsDispatch,
   useActiveContextsState,
+  type ActiveContextsDispatch,
+  type ActiveContextsMap,
 } from '@/shortcuts/ActiveContexts.js'
 import {
   ActionTrigger,
@@ -11,8 +13,55 @@ import {
   type ActionContextType,
   type BaseShortcutDependencies,
 } from '@/shortcuts/types.js'
+import type { FacetRuntime } from '@/facets/facet.js'
 import { getActiveActionById, getEffectiveActions } from './effectiveActions.ts'
 import { resolveDeps } from './resolve.ts'
+
+/** Inputs needed to resolve and run an action by id, independent of
+ *  whether they come from live React hooks or from <HotkeyReconciler/>'s
+ *  refs. */
+export interface RunByIdContext {
+  runtime: FacetRuntime
+  active: ActiveContextsMap
+  contextConfigsByType: ReadonlyMap<ActionContextType, ActionContextConfig>
+  dispatch: ActiveContextsDispatch
+}
+
+/**
+ * Shared by-id dispatch body behind both the React `useRunAction` hook and
+ * the module-level `runActionById` dispatcher <HotkeyReconciler/> installs.
+ * Resolves the active action, validates its context is live, runs the
+ * handler, and coerces away the sync not-handled sentinel (imperative
+ * callers have no candidate list to fall through to). The two call sites
+ * differ only in whether `ctx` is built from hook values or reconciler
+ * refs — keeping the body here stops them from drifting.
+ */
+export function dispatchActiveActionById(
+  ctx: RunByIdContext,
+  actionId: string,
+  trigger: ActionTrigger,
+): void | Promise<void> {
+  const {runtime, active, contextConfigsByType, dispatch} = ctx
+  const action = getActiveActionById(
+    getEffectiveActions(runtime),
+    {active, contextConfigsByType},
+    actionId,
+  )
+  if (!action) {
+    throw new Error(`[runActionById] Active action with ID "${actionId}" not found.`)
+  }
+  const deps = resolveDeps(action, active, contextConfigsByType)
+  if (!deps) throw new Error(`[runActionById] Context "${action.context}" is not active.`)
+  const result = action.handler(deps, trigger, dispatch)
+  return result === false ? undefined : result
+}
+
+/** Build the `(type → config)` lookup the by-id dispatch path needs from a
+ *  resolved runtime's `actionContextsFacet` contributions. */
+export const contextConfigsByTypeFrom = (
+  runtime: FacetRuntime,
+): Map<ActionContextType, ActionContextConfig> =>
+  new Map(runtime.read(actionContextsFacet).map(c => [c.type, c]))
 
 export type RunActionByIdFn = (
   actionId: string,
@@ -94,26 +143,12 @@ export function useRunAction(): RunActionByIdFn {
   const dispatch = useActiveContextsDispatch()
 
   return useCallback<RunActionByIdFn>(
-    (actionId, trigger) => {
-      const contextConfigsByType = new Map<ActionContextType, ActionContextConfig>(
-        runtime.read(actionContextsFacet).map(c => [c.type, c]),
-      )
-      const action = getActiveActionById(
-        getEffectiveActions(runtime),
-        {active, contextConfigsByType},
+    (actionId, trigger) =>
+      dispatchActiveActionById(
+        {runtime, active, contextConfigsByType: contextConfigsByTypeFrom(runtime), dispatch},
         actionId,
-      )
-      if (!action) {
-        throw new Error(`[useRunAction] Active action with ID "${actionId}" not found.`)
-      }
-      const deps = resolveDeps(action, active, contextConfigsByType)
-      if (!deps) throw new Error(`[useRunAction] Context "${action.context}" is not active.`)
-      // The not-handled sentinel (sync `false`) only drives the coordinator's
-      // candidate fall-through; imperative callers have no next candidate, so
-      // coerce it away to keep the `void | Promise<void>` contract.
-      const result = action.handler(deps, trigger, dispatch)
-      return result === false ? undefined : result
-    },
+        trigger,
+      ),
     [runtime, active, dispatch],
   )
 }

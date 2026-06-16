@@ -12,10 +12,9 @@ import {
   useActiveContextsState,
   ActiveContextsMap,
 } from '@/shortcuts/ActiveContexts.js'
-import { setRunActionDispatcher, setActionWithDepsDispatcher } from '@/shortcuts/runAction.js'
+import { dispatchActiveActionById, setRunActionDispatcher, setActionWithDepsDispatcher } from '@/shortcuts/runAction.js'
 import {
   actionRuntimeKey,
-  getActiveActionById,
   getEffectiveActions,
 } from './effectiveActions.ts'
 import { keybindingOverridesFacet } from './keybindingOverrides.ts'
@@ -185,22 +184,18 @@ export function HotkeyReconciler(): null {
   // Install the module-level runActionById dispatcher. Reads refs so it's
   // always current. Torn down on unmount so stray callers fail loudly.
   useEffect(() => {
-    setRunActionDispatcher((actionId: string, trigger: ActionTrigger) => {
-      const action = getActiveActionById(
-        getEffectiveActions(runtime),
-        {active: activeRef.current, contextConfigsByType: contextConfigsByTypeRef.current},
+    setRunActionDispatcher((actionId: string, trigger: ActionTrigger) =>
+      dispatchActiveActionById(
+        {
+          runtime,
+          active: activeRef.current,
+          contextConfigsByType: contextConfigsByTypeRef.current,
+          dispatch: dispatchRef.current,
+        },
         actionId,
-      )
-      if (!action) {
-        throw new Error(`[HotkeyReconciler] Active action with ID "${actionId}" not found.`)
-      }
-      const deps = resolveDeps(action, activeRef.current, contextConfigsByTypeRef.current)
-      if (!deps) throw new Error(`[HotkeyReconciler] Context "${action.context}" is not active.`)
-      // Imperative invocation has no candidate list to fall through to, so the
-      // not-handled sentinel is meaningless here — coerce it to undefined.
-      const result = action.handler(deps, trigger, dispatchRef.current)
-      return result === false ? undefined : result
-    })
+        trigger,
+      ),
+    )
     return () => setRunActionDispatcher(null)
   }, [runtime])
 
