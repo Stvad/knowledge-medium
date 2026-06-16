@@ -133,7 +133,7 @@ describe('setFacetRuntime + mutatorsFacet', () => {
   })
 
   it('setFacetRuntime replaces the registry — kernel mutators are not implicitly retained', async () => {
-    // We started with so the registry begins empty.
+    // We started with installKernelRuntime: false, so the registry begins empty.
     // After setFacetRuntime with only a plugin mutator, kernel calls fail.
     let observed = false
     const plugin = defineMutator<{id: string}, void>({

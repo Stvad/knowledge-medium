@@ -131,6 +131,12 @@ export type RuntimeSourceId = string
 
 type FacetChangeListener = () => void
 
+/** NOTE: `LiveRuntimeHandle` (src/extensions/liveRuntime.ts) subclasses
+ *  this and overrides EVERY public method to delegate to a swappable
+ *  `current` runtime — its inherited storage is intentionally dead. A new
+ *  public method added here that the handle doesn't override would
+ *  silently serve that empty inherited state for effect callers (no type
+ *  error). Add the override there too. */
 export class FacetRuntime {
   // Both maps are keyed by `facet.id` (a string), NOT by the Facet
   // object — so `.get(actionsFacet)` from outside this class will
