@@ -135,7 +135,15 @@ export function AppRuntimeProvider({
   const effectReconciler = useMemo(() => new EffectReconciler(), [])
 
   useEffect(() => {
-    if (!workspaceId) return
+    if (!workspaceId) {
+      // Workspace cleared while still mounted: tear down running effects
+      // so their subscriptions / intervals / window hooks don't stay
+      // bound to the stale workspace. The previous single-effect
+      // lifecycle did this implicitly via its deps cleanup; the split
+      // reconcile/dispose effects otherwise only dispose on unmount.
+      effectReconciler.dispose()
+      return
+    }
     effectReconciler.reconcile(repo, runtime, workspaceId, safeMode)
   }, [effectReconciler, repo, runtime, safeMode, workspaceId])
 
