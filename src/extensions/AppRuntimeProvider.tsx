@@ -12,7 +12,8 @@ import {
 } from '@/facets/resolveAppRuntime.js'
 import {useOverrides} from '@/extensions/useOverrides.js'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.js'
-import { appEffectsFacet, appMountsFacet, type AppEffectCleanup } from '@/extensions/core.js'
+import { appMountsFacet } from '@/extensions/core.js'
+import { EffectReconciler } from '@/extensions/liveRuntime.js'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts.js'
 import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler.js'
 import { staticAppExtensions } from '@/extensions/staticAppExtensions.js'
@@ -125,58 +126,23 @@ export function AppRuntimeProvider({
     }
   }, [baseExtensions, errorStore, overrides, repo, runtimeContext, safeMode, workspaceId])
 
+  // App-effect lifecycle (audit B1(4)). The reconciler keeps unchanged
+  // effects running across a runtime swap (re-pointing them at the fresh
+  // runtime via a LiveRuntimeHandle) and starts/stops only the diff, so
+  // toggling one extension no longer restarts every plugin's effect /
+  // subscriptions. It restarts everything only when repo / workspaceId /
+  // safeMode change (values effects capture directly).
+  const effectReconciler = useMemo(() => new EffectReconciler(), [])
+
   useEffect(() => {
     if (!workspaceId) return
+    effectReconciler.reconcile(repo, runtime, workspaceId, safeMode)
+  }, [effectReconciler, repo, runtime, safeMode, workspaceId])
 
-    let disposed = false
-    const cleanups: Array<{effectId: string; cleanup: AppEffectCleanup}> = []
-    const effects = runtime.read(appEffectsFacet)
-
-    const runCleanup = (cleanup: AppEffectCleanup, effectId: string) => {
-      try {
-        const result = cleanup()
-        if (result instanceof Promise) {
-          result.catch(error => {
-            console.error(`App effect cleanup failed for ${effectId}`, error)
-          })
-        }
-      } catch (error) {
-        console.error(`App effect cleanup failed for ${effectId}`, error)
-      }
-    }
-
-    for (const effect of effects) {
-      try {
-        const result = effect.start({
-          repo,
-          runtime,
-          workspaceId,
-          safeMode,
-        })
-
-        Promise.resolve(result).then(cleanup => {
-          if (typeof cleanup !== 'function') return
-          if (disposed) {
-            runCleanup(cleanup, effect.id)
-            return
-          }
-          cleanups.push({effectId: effect.id, cleanup})
-        }).catch(error => {
-          console.error(`App effect failed to start for ${effect.id}`, error)
-        })
-      } catch (error) {
-        console.error(`App effect failed to start for ${effect.id}`, error)
-      }
-    }
-
-    return () => {
-      disposed = true
-      for (const {effectId, cleanup} of cleanups.toReversed()) {
-        runCleanup(cleanup, effectId)
-      }
-      cleanups.length = 0
-    }
-  }, [repo, runtime, safeMode, workspaceId])
+  // Provider unmount: stop every running effect. Kept separate from the
+  // reconcile effect above so a deps change re-runs reconciliation
+  // (the diff) rather than tearing every effect down.
+  useEffect(() => () => effectReconciler.dispose(), [effectReconciler])
 
   // Reactive bridge between user-defined property-schema blocks and
   // propertySchemasFacet's user-data bucket (Phase 3b). The service
