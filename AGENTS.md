@@ -12,3 +12,6 @@ testing:
 - don't add tests that just re-state the code (like testing what is our default shortcut binding is. this just duplicates the shortcut string for no benefit)
 - share one DB per test file: open with `createTestDb()` once in module scope / `beforeAll`, reset with `resetTestDb()` in `beforeEach`. Don't call `createTestDb()` per test.
 - don't `await new Promise(r => setTimeout(r, N))` to wait on a DB/subscription/BroadcastChannel round-trip — it's slow and flaky. Poll the outcome with `vi.waitFor`. For a "does NOT invalidate/fire" assertion, use a control-write fence: after the no-op write, make a write that DOES change the result, `vi.waitFor` that single emission, then assert the emission count (e.g. `fired.length` is exactly the fence count). Channels are FIFO, so the fence proves the no-op produced nothing. (see `src/data/internals/kernelQueries.test.ts`)
+
+cloud / remote sessions (Claude Code on the web):
+- when running in a cloud/remote execution environment, open a pull request as soon as the branch has its first commit — don't wait to be asked — then subscribe to the PR's activity so review comments and CI failures come back into the session and can be addressed. (This standing authorization applies only to cloud sessions; local runs still default to not opening a PR unless asked.)
