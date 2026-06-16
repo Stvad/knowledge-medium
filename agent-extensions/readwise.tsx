@@ -1431,7 +1431,7 @@ const ReadwiseSetupDialog = () => {
           />
         </div>
         <DialogFooter>
-          <Button variant='ghost' onClick={() => setOpen(false)} disabled={saving}>Cancel</Button>
+          <Button variant='ghost' onClick={() => setSetupOpen(false)} disabled={saving}>Cancel</Button>
           <Button onClick={save} disabled={!token || saving}>
             {saving ? 'Validating…' : 'Save'}
           </Button>

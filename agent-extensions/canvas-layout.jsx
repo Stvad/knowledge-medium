@@ -17,6 +17,10 @@ import {
   useMemo,
 } from 'react'
 
+// Canvas mode is a deliberately device-local layout preference (canvas on a
+// wide desktop, plain layout on a phone), so it lives in localStorage rather
+// than a synced prefs block.
+// lint-ok: config-in-localstorage (device-local canvas toggle, must not sync)
 const CANVAS_STORAGE_KEY = 'canvas-layout:enabled'
 
 const readPersistedMode = () => {
