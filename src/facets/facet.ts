@@ -102,7 +102,6 @@ export function defineFacet<Input, Output = readonly Input[]>({
 export function keyedMapFacet<Input>(
   id: string,
   keyOf: (value: Input) => string,
-  validate?: (value: unknown) => value is Input,
 ): Facet<Input, ReadonlyMap<string, Input>> {
   return defineFacet<Input, ReadonlyMap<string, Input>>({
     id,
@@ -120,7 +119,6 @@ export function keyedMapFacet<Input>(
       return out
     },
     empty: () => new Map(),
-    validate,
   })
 }
 

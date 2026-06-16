@@ -7,10 +7,13 @@
     "types": ["node"]
   },
   "include": ["scripts"],
-  // scripts/bench/* predates the Layout B sync redesign (it raw-maps `blocks`
-  // instead of `blocks_synced` and drives the removed row-events tail), so it
-  // no longer compiles or runs against the current data layer. Excluded until
-  // the bench harness is resurrected against `createTestDb`'s Layout B setup;
-  // everything else under scripts/ is now part of the `tsc -b` gate.
+  // scripts/bench/* is quarantined dead code: it predates the Layout B sync
+  // redesign (raw-maps `blocks` instead of `blocks_synced`, drives the removed
+  // row-events tail, imports the relocated `@/data/internals/repo`) so it
+  // neither compiles nor runs against the current data layer. Its `bench` npm
+  // script has been removed so there's no live entry point to broken code;
+  // it's kept (not deleted) only as a base for a future harness resurrection
+  // against `createTestDb`'s Layout B setup. Everything else under scripts/ is
+  // part of the `tsc -b` gate.
   "exclude": ["scripts/bench"]
 }

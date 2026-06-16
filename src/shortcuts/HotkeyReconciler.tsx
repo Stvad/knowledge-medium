@@ -5,14 +5,13 @@ import {
   parseKeybinding,
   type KeybindingPress,
 } from 'tinykeys'
-import { actionContextsFacet } from '@/extensions/core.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import {
   useActiveContextsDispatch,
   useActiveContextsState,
   ActiveContextsMap,
 } from '@/shortcuts/ActiveContexts.js'
-import { dispatchActiveActionById, setRunActionDispatcher, setActionWithDepsDispatcher } from '@/shortcuts/runAction.js'
+import { contextConfigsByTypeFrom, dispatchActiveActionById, setRunActionDispatcher, setActionWithDepsDispatcher } from '@/shortcuts/runAction.js'
 import {
   actionRuntimeKey,
   getEffectiveActions,
@@ -163,10 +162,9 @@ export function HotkeyReconciler(): null {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [runtime, overridesGeneration],
   )
-  const contextConfigs = useMemo(() => runtime.read(actionContextsFacet), [runtime])
   const contextConfigsByType = useMemo<ReadonlyMap<ActionContextType, ActionContextConfig>>(
-    () => new Map(contextConfigs.map(c => [c.type, c])),
-    [contextConfigs],
+    () => contextConfigsByTypeFrom(runtime),
+    [runtime],
   )
 
   // Refs so handler closures always see the latest state without rebinding.
