@@ -34,7 +34,8 @@ import { showError, showInfo } from '@/utils/toast.js'
 import { useActionContextActivations } from '@/shortcuts/useActionContext.js'
 import { useBlockOpener } from '@/utils/navigation.js'
 import { PromotableBreadcrumbList, usePromotableBreadcrumb } from '@/plugins/breadcrumbs'
-import { openReschedulePicker } from '@/plugins/daily-notes'
+import { ReschedulePicker } from '@/plugins/daily-notes'
+import { openDialog } from '@/utils/dialogs.js'
 import {
   SRS_SM25_TYPE,
   formatIntervalDays,
@@ -378,11 +379,15 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
   // skipping it (the user took no action, so neither should we).
   const reschedule = useCallback(() => {
     if (!currentId) return
-    openReschedulePicker({
-      blockId: currentId,
-      workspaceId,
-      onComplete: ({rescheduled}) => { if (rescheduled) advance() },
-    })
+    void (async () => {
+      const result = await openDialog(ReschedulePicker, {
+        blockId: currentId,
+        workspaceId,
+      })
+      // Advance only on a committed reschedule; cancel / Escape /
+      // outside-tap resolves to null and leaves the card in place.
+      if (result?.rescheduled) advance()
+    })()
   }, [currentId, workspaceId, advance])
 
   const changeDeck = useCallback(() => {

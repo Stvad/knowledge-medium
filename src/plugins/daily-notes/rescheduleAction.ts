@@ -13,8 +13,9 @@ import {
   type BlockShortcutDependencies,
 } from '@/shortcuts/types.js'
 import type { QuickActionItem } from '@/plugins/swipe-quick-actions/actions.js'
+import { openDialog } from '@/utils/dialogs.js'
 import { referenceDateAdapter } from './referenceDateAdapter.ts'
-import { openReschedulePicker } from './rescheduleEvents.ts'
+import { ReschedulePicker } from './ReschedulePicker.tsx'
 
 export const RESCHEDULE_BLOCK_DATE_ACTION_ID = 'block.date.reschedule'
 
@@ -27,7 +28,7 @@ export const rescheduleBlockDateAction: ActionConfig<typeof ActionContextTypes.N
   handler: async ({block}: BlockShortcutDependencies) => {
     const data = block.peek() ?? await block.load()
     if (!data) return
-    openReschedulePicker({
+    void openDialog(ReschedulePicker, {
       blockId: block.id,
       workspaceId: data.workspaceId,
     })

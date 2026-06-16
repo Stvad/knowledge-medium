@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import type { User } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -9,8 +9,8 @@ import {
   __resetLayoutSessionIdForTesting,
 } from '@/utils/layoutSessionId'
 import {
+  leftSidebarToggle,
   openLeftSidebarAction,
-  openLeftSidebarEvent,
 } from '../index.ts'
 
 const WS = 'ws-1'
@@ -48,19 +48,18 @@ beforeEach(async () => {
 
 afterEach(async () => {
   env.repo.stopSyncObserver()
+  leftSidebarToggle.close()
 })
 
 describe('left sidebar actions', () => {
   it('opens the sidebar through the global action', () => {
-    const listener = vi.fn()
-    window.addEventListener(openLeftSidebarEvent, listener)
+    expect(leftSidebarToggle.isOpen()).toBe(false)
 
     openLeftSidebarAction.handler(
       {uiStateBlock: {} as never},
       new CustomEvent('test'),
     )
 
-    expect(listener).toHaveBeenCalledTimes(1)
-    window.removeEventListener(openLeftSidebarEvent, listener)
+    expect(leftSidebarToggle.isOpen()).toBe(true)
   })
 })

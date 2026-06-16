@@ -2,8 +2,7 @@
 
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
-import { ReschedulePicker } from '../ReschedulePicker.tsx'
-import { openReschedulePicker } from '../rescheduleEvents.ts'
+import { ReschedulePicker, type ReschedulePickerProps } from '../ReschedulePicker.tsx'
 
 const mocks = vi.hoisted(() => {
   const block = {id: 'block-1'}
@@ -62,6 +61,17 @@ const mockDialogSize = (width: number, height: number) => {
   })
 }
 
+/** Render the sheet as `openDialog` would — with props + finalize
+ *  callbacks. Returns the spies so tests can assert resolve/cancel. */
+const renderPicker = (props: Partial<ReschedulePickerProps> = {}) => {
+  const resolve = vi.fn()
+  const cancel = vi.fn()
+  render(
+    <ReschedulePicker blockId="block-1" workspaceId="ws-1" resolve={resolve} cancel={cancel} {...props} />,
+  )
+  return {resolve, cancel}
+}
+
 describe('ReschedulePicker', () => {
   beforeAll(() => {
     vi.useFakeTimers({toFake: ['Date']})
@@ -89,21 +99,15 @@ describe('ReschedulePicker', () => {
     setViewport(1280, viewportHeight)
     mockDialogSize(448, dialogHeight)
 
-    render(<ReschedulePicker/>)
-
-    await act(async () => {
-      openReschedulePicker({
-        blockId: 'block-1',
-        workspaceId: 'ws-1',
-        anchorRect: {
-          bottom: 780,
-          height: 20,
-          left: 600,
-          right: 620,
-          top: anchorTop,
-          width: 20,
-        },
-      })
+    renderPicker({
+      anchorRect: {
+        bottom: 780,
+        height: 20,
+        left: 600,
+        right: 620,
+        top: anchorTop,
+        width: 20,
+      },
     })
 
     const dialog = await screen.findByRole('dialog', {
@@ -120,108 +124,27 @@ describe('ReschedulePicker', () => {
     expect(top + dialogHeight).toBeLessThanOrEqual(viewportHeight)
   })
 
-  it('reports rescheduled: true to onComplete once a date is committed', async () => {
-    render(<ReschedulePicker/>)
-    const onComplete = vi.fn()
-
-    await act(async () => {
-      openReschedulePicker({blockId: 'block-1', workspaceId: 'ws-1', onComplete})
-    })
+  it('resolves with rescheduled: true once a date is committed', async () => {
+    const {resolve} = renderPicker()
 
     const todayChip = await screen.findByRole('button', {hidden: true, name: 'Today'})
     await act(async () => {
       todayChip.click()
     })
 
-    await waitFor(() => expect(onComplete).toHaveBeenCalledWith({rescheduled: true}))
+    await waitFor(() => expect(resolve).toHaveBeenCalledWith({rescheduled: true}))
     expect(mocks.adapter.setIso).toHaveBeenCalledTimes(1)
   })
 
-  it('reports rescheduled: false to onComplete when dismissed without committing', async () => {
-    render(<ReschedulePicker/>)
-    const onComplete = vi.fn()
+  it('cancels when dismissed without committing', async () => {
+    const {cancel} = renderPicker()
 
+    const cancelButton = await screen.findByRole('button', {hidden: true, name: 'Cancel'})
     await act(async () => {
-      openReschedulePicker({blockId: 'block-1', workspaceId: 'ws-1', onComplete})
+      cancelButton.click()
     })
 
-    const cancel = await screen.findByRole('button', {hidden: true, name: 'Cancel'})
-    await act(async () => {
-      cancel.click()
-    })
-
-    expect(onComplete).toHaveBeenCalledWith({rescheduled: false})
+    expect(cancel).toHaveBeenCalled()
     expect(mocks.adapter.setIso).not.toHaveBeenCalled()
-  })
-
-  it('reports the real outcome when dismissed while the write is still in flight', async () => {
-    // Hold the write open so we can dismiss the sheet mid-commit, then
-    // resolve it — the committed date must still be reported as success.
-    let resolveWrite: (ok: boolean) => void = () => {}
-    mocks.adapter.setIso.mockImplementationOnce(
-      () => new Promise<boolean>(resolve => { resolveWrite = resolve }),
-    )
-
-    render(<ReschedulePicker/>)
-    const onComplete = vi.fn()
-
-    await act(async () => {
-      openReschedulePicker({blockId: 'block-1', workspaceId: 'ws-1', onComplete})
-    })
-
-    const todayChip = await screen.findByRole('button', {hidden: true, name: 'Today'})
-    await act(async () => {
-      todayChip.click()
-    })
-
-    // Dismiss before the write resolves — must NOT report a premature
-    // cancel that would drop the in-flight success.
-    const cancel = await screen.findByRole('button', {hidden: true, name: 'Cancel'})
-    await act(async () => {
-      cancel.click()
-    })
-    expect(onComplete).not.toHaveBeenCalled()
-
-    await act(async () => {
-      resolveWrite(true)
-    })
-
-    await waitFor(() => expect(onComplete).toHaveBeenCalledWith({rescheduled: true}))
-    expect(onComplete).toHaveBeenCalledTimes(1)
-  })
-
-  it('reports the original commit even if the picker is reopened before a slow write resolves', async () => {
-    let resolveWrite: (ok: boolean) => void = () => {}
-    mocks.adapter.setIso.mockImplementationOnce(
-      () => new Promise<boolean>(resolve => { resolveWrite = resolve }),
-    )
-
-    render(<ReschedulePicker/>)
-    const onCompleteA = vi.fn()
-    const onCompleteB = vi.fn()
-
-    await act(async () => {
-      openReschedulePicker({blockId: 'block-1', workspaceId: 'ws-1', onComplete: onCompleteA})
-    })
-    const todayChip = await screen.findByRole('button', {hidden: true, name: 'Today'})
-    await act(async () => {
-      todayChip.click()
-    })
-
-    // Reopen for a fresh session before the first write resolves: the
-    // earlier opener must still receive its committed outcome (not a
-    // premature cancel) and the new opener must not.
-    await act(async () => {
-      openReschedulePicker({blockId: 'block-1', workspaceId: 'ws-1', onComplete: onCompleteB})
-    })
-    expect(onCompleteA).not.toHaveBeenCalled()
-
-    await act(async () => {
-      resolveWrite(true)
-    })
-
-    await waitFor(() => expect(onCompleteA).toHaveBeenCalledWith({rescheduled: true}))
-    expect(onCompleteA).toHaveBeenCalledTimes(1)
-    expect(onCompleteB).not.toHaveBeenCalled()
   })
 })

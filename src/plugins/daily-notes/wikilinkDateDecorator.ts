@@ -21,11 +21,12 @@ import type {
   WikilinkDisplayDecorator,
   WikilinkDisplayParts,
 } from '@/plugins/references/markdown/wikilinks/wikilinkDecorator.js'
+import { openDialog } from '@/utils/dialogs.js'
 import { hasAnyBlockDateAdapter } from './blockDateAdapter.ts'
 import {
-  openReschedulePicker,
+  ReschedulePicker,
   type ReschedulePickerAnchorRect,
-} from './rescheduleEvents.ts'
+} from './ReschedulePicker.tsx'
 
 const formatWeekday = (date: Date): string =>
   date.toLocaleDateString('en-US', {weekday: 'short'})
@@ -49,7 +50,7 @@ const rescheduleButton = ({
   if (!sourceBlock) return null
 
   const open = (element: HTMLElement): void => {
-    openReschedulePicker({
+    void openDialog(ReschedulePicker, {
       blockId: sourceBlock.id,
       workspaceId,
       anchorRect: rectFor(element),

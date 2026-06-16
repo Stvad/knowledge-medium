@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { Fragment, createElement } from 'react'
 import type { Block } from '@/data/block'
@@ -13,11 +13,13 @@ import {
   blockDateAdapterFacet,
   type BlockDateAdapter,
 } from '../blockDateAdapter.ts'
-import {
-  openReschedulePickerEvent,
-  type OpenReschedulePickerEventDetail,
-} from '../rescheduleEvents.ts'
 import { dailyDateWikilinkDecorator } from '../wikilinkDateDecorator.ts'
+
+vi.mock('@/utils/dialogs.js', () => ({ openDialog: vi.fn() }))
+
+import { openDialog } from '@/utils/dialogs.js'
+
+const openDialogMock = vi.mocked(openDialog)
 
 const sourceBlock = {id: 'source-block'} as Block
 
@@ -41,6 +43,7 @@ const ctx = (alias: string, overrides: Partial<WikilinkDisplayContext> = {}): Wi
 
 afterEach(() => {
   cleanup()
+  openDialogMock.mockClear()
 })
 
 describe('dailyDateWikilinkDecorator', () => {
@@ -84,17 +87,13 @@ describe('dailyDateWikilinkDecorator', () => {
     if (!isWikilinkDisplayParts(decorated)) return
     expect(decorated.content).toBe('Sun, 2026-04-26')
 
-    const opened: OpenReschedulePickerEventDetail[] = []
-    window.addEventListener(openReschedulePickerEvent, event => {
-      opened.push((event as CustomEvent<OpenReschedulePickerEventDetail>).detail)
-    }, {once: true})
-
     render(createElement(Fragment, null, decorated.before))
     fireEvent.click(screen.getByRole('button', {name: 'Reschedule date'}))
 
-    expect(opened).toEqual([expect.objectContaining({
+    expect(openDialogMock).toHaveBeenCalledTimes(1)
+    expect(openDialogMock.mock.calls[0][1]).toEqual(expect.objectContaining({
       blockId: 'source-block',
       workspaceId: 'ws',
-    })])
+    }))
   })
 })

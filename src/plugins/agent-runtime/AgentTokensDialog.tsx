@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -10,27 +10,23 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { useRepo } from '@/context/repo.js'
+import type { DialogContextProps } from '@/utils/dialogs.js'
 import {
   agentTokenStore,
   notifyAgentTokensChanged,
 } from './tokens.ts'
 import type { AgentToken } from './tokens.ts'
 
-export const openAgentTokensDialogEvent = 'agent-runtime-bridge:open-tokens-dialog'
+export type AgentTokensDialogMode = 'manage' | 'pair-cli'
 
-type AgentTokensDialogMode = 'manage' | 'pair-cli'
-
-interface AgentTokensDialogProps {
-  open: boolean
-  onOpenChange: (open: boolean) => void
+export interface AgentTokensDialogProps {
   mode?: AgentTokensDialogMode
 }
 
 export function AgentTokensDialog({
-  open,
-  onOpenChange,
   mode = 'manage',
-}: AgentTokensDialogProps) {
+  cancel,
+}: DialogContextProps<void> & AgentTokensDialogProps) {
   const repo = useRepo()
   const userId = repo.user.id
   const workspaceId = repo.activeWorkspaceId
@@ -38,7 +34,7 @@ export function AgentTokensDialog({
   const pairing = mode === 'pair-cli'
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open onOpenChange={next => { if (!next) cancel() }}>
       <DialogContent className="max-h-[calc(100vh-2rem)] w-[calc(100vw-2rem)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{pairing ? 'Pair agent CLI' : 'Agent runtime tokens'}</DialogTitle>
@@ -217,21 +213,4 @@ function AgentTokensDialogBody({
       </div>
     </>
   )
-}
-
-export function AgentTokensDialogMount() {
-  const [open, setOpen] = useState(false)
-  const [mode, setMode] = useState<AgentTokensDialogMode>('manage')
-
-  useEffect(() => {
-    const handler = (event: Event) => {
-      const detail = (event as CustomEvent<{mode?: AgentTokensDialogMode}>).detail
-      setMode(detail?.mode === 'pair-cli' ? 'pair-cli' : 'manage')
-      setOpen(true)
-    }
-    window.addEventListener(openAgentTokensDialogEvent, handler)
-    return () => window.removeEventListener(openAgentTokensDialogEvent, handler)
-  }, [])
-
-  return <AgentTokensDialog open={open} onOpenChange={setOpen} mode={mode}/>
 }

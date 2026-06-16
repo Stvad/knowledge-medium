@@ -14,7 +14,7 @@ import {
   isVideoPlayerFocusActive,
   requestCurrentTime,
   requestVideoPlayerFocus,
-} from './events.ts'
+} from './registry.ts'
 import { enterVideoNotesView, focusVideoNote } from './notes.ts'
 import { videoPlayerViewProp } from './view.ts'
 
@@ -109,7 +109,7 @@ const insertVideoTimestamp: ActionConfig = {
   handler: async (deps) => {
     if (!isVideoPlayerShortcutDependencies(deps)) return
 
-    const currentTime = requestCurrentTime(deps.videoBlock.id)
+    const currentTime = requestCurrentTime(deps.videoBlock.id, deps.renderScopeId)
     if (currentTime === undefined) return
 
     const timestamp = `${formatVideoTimestamp(currentTime)} `
@@ -163,7 +163,7 @@ const toggleVideoFocus: ActionConfig = {
   handler: async (deps) => {
     if (!isVideoPlayerShortcutDependencies(deps)) return
 
-    if (isVideoPlayerFocusActive(deps.videoBlock.id)) {
+    if (isVideoPlayerFocusActive(deps.videoBlock.id, deps.renderScopeId)) {
       const preferredNoteId = deps.block.id === deps.videoBlock.id ? undefined : deps.block.id
       await focusVideoNote(
         deps.videoBlock,
@@ -174,7 +174,7 @@ const toggleVideoFocus: ActionConfig = {
       return
     }
 
-    requestVideoPlayerFocus(deps.videoBlock.id)
+    requestVideoPlayerFocus(deps.videoBlock.id, deps.renderScopeId)
   },
   defaultBinding: {
     keys: '$mod+Shift+Space',

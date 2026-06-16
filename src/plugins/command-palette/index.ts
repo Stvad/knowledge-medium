@@ -17,7 +17,7 @@ import {
 } from '@/plugins/swipe-quick-actions'
 import { CommandPaletteHeaderItem } from './HeaderItem.tsx'
 import { CommandPalette } from './CommandPalette.tsx'
-import { toggleCommandPaletteEvent } from './events.ts'
+import { commandPaletteToggle } from './toggleStore.ts'
 import {
   COMMAND_PALETTE_ACTION_ID,
   COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,
@@ -26,7 +26,6 @@ import {
 
 export { CommandPaletteHeaderItem } from './HeaderItem.tsx'
 export { CommandPalette } from './CommandPalette.tsx'
-export { toggleCommandPaletteEvent } from './events.ts'
 export {
   COMMAND_PALETTE_ACTION_ID,
   COMMAND_PALETTE_CONTEXT,
@@ -45,7 +44,7 @@ export const commandPaletteAction: ActionConfig<typeof ActionContextTypes.GLOBAL
   context: ActionContextTypes.GLOBAL,
   icon: Command,
   handler: () => {
-    window.dispatchEvent(new CustomEvent(toggleCommandPaletteEvent))
+    commandPaletteToggle.toggle()
   },
   defaultBinding: {
     keys: '$mod+k',
@@ -68,7 +67,7 @@ export const commandPaletteForBlockAction: ActionConfig<typeof ActionContextType
   icon: Command,
   handler: async ({block, uiStateBlock, renderScopeId}) => {
     await focusBlock(uiStateBlock, block.id, {renderScopeId})
-    window.dispatchEvent(new CustomEvent(toggleCommandPaletteEvent))
+    commandPaletteToggle.toggle()
   },
 }
 

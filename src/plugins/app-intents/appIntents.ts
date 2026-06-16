@@ -12,9 +12,10 @@
  * block on today's daily note (the share-target variant pre-fills
  * it with the shared payload); we delegate to
  * `appendTodayDailyBlockInStack` so the UX matches Ctrl+Shift+N
- * exactly. `open-picker` and `quick-find` just fire the same global
- * events the matching keyboard actions / header buttons do, so the
- * launcher entry points are 1:1 with the in-app affordances.
+ * exactly. `open-picker` and `quick-find` run the same registered
+ * actions the keyboard / header affordances do, by id via
+ * `runActionById` — no cross-plugin event names — so the launcher
+ * entry points are 1:1 with the in-app affordances.
  *
  * The dispatcher runs once per page load (module-level `consumed`
  * flag), fired by `appIntentsBootstrapEffect` once the workspace's
@@ -32,13 +33,29 @@ import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
 import {
   appendTodayDailyBlockInStack,
-  openDailyNotePicker,
+  OPEN_DAILY_NOTE_PICKER_ACTION_ID,
 } from '@/plugins/daily-notes'
-import { toggleQuickFindEvent } from '@/plugins/quick-find'
+import { QUICK_FIND_ACTION_ID } from '@/plugins/quick-find'
+import { runActionById } from '@/shortcuts/runAction.js'
 
 const INTENT_PARAMS = ['intent', 'title', 'text', 'url'] as const
 
 let consumed = false
+
+/** Run a global action by id for a UI-only intent. The matching plugin
+ *  may be disabled — then the action isn't registered and
+ *  `runActionById` throws — so swallow + log: a launcher entry for a
+ *  disabled feature should be a no-op, not a crash. */
+const runAppIntentAction = (actionId: string): void => {
+  try {
+    const result = runActionById(actionId, new CustomEvent('app-intent'))
+    void Promise.resolve(result).catch(error => {
+      console.error(`[app-intents] action ${actionId} failed`, error)
+    })
+  } catch (error) {
+    console.error(`[app-intents] action ${actionId} unavailable`, error)
+  }
+}
 
 /** Test-only: reset the module-level "already handled this load" flag. */
 export const __resetAppIntentForTesting = (): void => {
@@ -118,12 +135,12 @@ export const consumeAppIntent = async (
   // matching app mounts listen for. No data to lose, so we strip
   // the URL params unconditionally.
   if (isOpenPicker) {
-    openDailyNotePicker()
+    runAppIntentAction(OPEN_DAILY_NOTE_PICKER_ACTION_ID)
     stripIntentParams()
     return
   }
   if (isQuickFind) {
-    window.dispatchEvent(new CustomEvent(toggleQuickFindEvent))
+    runAppIntentAction(QUICK_FIND_ACTION_ID)
     stripIntentParams()
     return
   }

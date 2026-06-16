@@ -16,7 +16,8 @@ import {
   ActionContextTypes,
   type BlockShortcutDependencies,
 } from '@/shortcuts/types.js'
-import { openMergePicker } from './events.ts'
+import { openDialog } from '@/utils/dialogs.js'
+import { MergePicker } from './MergePicker.tsx'
 
 export const MERGE_INTO_ACTION_ID = 'merge_blocks.merge_into'
 
@@ -28,7 +29,7 @@ export const mergeIntoAction: ActionConfig<typeof ActionContextTypes.NORMAL_MODE
   handler: async ({block}: BlockShortcutDependencies) => {
     const data = block.peek() ?? await block.load()
     if (!data) return
-    openMergePicker({
+    void openDialog(MergePicker, {
       sourceBlockId: block.id,
       workspaceId: data.workspaceId,
     })
