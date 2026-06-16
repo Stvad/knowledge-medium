@@ -122,7 +122,6 @@ beforeEach(async () => {
     // alongside core; setFacetRuntime below replaces the registry with
     // the merged kernel + plugin runtime (the same shape
     // AppRuntimeProvider produces).
-    registerKernelProcessors: false,
   })
   // Seed a row so setProperty has a target.
   await repo.tx(

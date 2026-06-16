@@ -49,7 +49,6 @@ const setup = async (): Promise<Harness> => {
     // links (`[[Tutorial]]`, `[[Tutorial (no vim)]]`) which would
     // otherwise create alias-target side effects we'd then have to
     // count around. Tests focus on what seedTutorial writes.
-    registerKernelProcessors: false,
   })
   return { h, repo }
 }

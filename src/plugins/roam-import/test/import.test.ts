@@ -80,7 +80,6 @@ const setup = async (): Promise<Harness> => {
     // The importer pre-populates references[] explicitly; running
     // parseReferences on top would re-parse content + clobber. The
     // importer also calls processors itself for alias resolution.
-    registerKernelProcessors: false,
   })
   repo.setActiveWorkspaceId(WORKSPACE)
   repo.setFacetRuntime(resolveFacetRuntimeSync([

@@ -31,7 +31,6 @@ const setup = async (): Promise<Harness> => {
     db: h.db,
     cache: new BlockCache(),
     user: {id: 'user-1'},
-    registerKernelProcessors: false,
   })
   repo.setActiveWorkspaceId(WS)
   // Install a runtime that registers the synthetic marker type alongside

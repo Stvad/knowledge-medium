@@ -51,7 +51,6 @@ const setup = async (): Promise<Harness> => {
     newId: () => `gen-${++idCursor}`,
     // Keep the processor registry empty; these query tests seed
     // `references` directly and should not depend on plugin processors.
-    registerKernelProcessors: false,
   })
   return {h, cache, repo}
 }

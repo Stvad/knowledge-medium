@@ -49,7 +49,6 @@ const setup = async (): Promise<Harness> => {
     // Disable kernel processors so parseReferences doesn't fire and
     // add its own tx entries during these tests — keeps the audited
     // stack predictable.
-    registerKernelProcessors: false,
   })
   return {h, repo}
 }

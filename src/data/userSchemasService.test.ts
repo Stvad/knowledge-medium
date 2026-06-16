@@ -37,7 +37,6 @@ const setup = async (extraPresets: readonly AnyValuePreset[] = []): Promise<Harn
     user: {id: 'user-1'},
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
-    registerKernelProcessors: false,
     startSyncObserver: false,
   })
   repo.setActiveWorkspaceId(WS)

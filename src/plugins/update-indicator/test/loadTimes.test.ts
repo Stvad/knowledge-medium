@@ -29,7 +29,6 @@ const makeRepo = (h: TestDb): Repo => {
     cache: new BlockCache(),
     user: USER,
     newTxSeq: () => ++txSeq,
-    registerKernelProcessors: false,
   })
   repo.setActiveWorkspaceId(WS)
   return repo

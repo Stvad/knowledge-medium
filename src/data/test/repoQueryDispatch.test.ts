@@ -48,11 +48,9 @@ beforeEach(() => {
     cache,
     user: {id: 'user-1'},
     // Empty registries — chunk A test surface is the dispatcher itself,
-    // not any registered query. Kernel mutators / processors stay off
-    // for the same reason.
-    registerKernelMutators: false,
-    registerKernelProcessors: false,
-    registerKernelQueries: false,
+    // not any registered query. Skip the kernel-runtime install so the
+    // registries start empty.
+    installKernelRuntime: false,
   })
 })
 

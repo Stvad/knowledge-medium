@@ -106,7 +106,6 @@ describe('moveSrsState', () => {
       cache: new BlockCache(),
       user: {id: 'user-1'},
       newTxSeq: () => ++txSeq,
-      registerKernelProcessors: false,
       startSyncObserver: false,
     })
     const runtime = resolveFacetRuntimeSync([

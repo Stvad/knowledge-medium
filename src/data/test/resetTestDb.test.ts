@@ -20,7 +20,6 @@ describe('resetTestDb', () => {
       db: h.db,
       cache: new BlockCache(),
       user: {id: 'u1'},
-      registerKernelProcessors: false,
       startSyncObserver: false,
     })
     repo.setActiveWorkspaceId(WS)

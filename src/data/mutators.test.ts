@@ -57,7 +57,6 @@ const setup = async (): Promise<Harness> => {
     // command_events). Kernel processors firing add follow-up txs
     // that aren't under test here; integration coverage lives in the
     // backlinks plugin processor tests.
-    registerKernelProcessors: false,
   })
   return {
     h,

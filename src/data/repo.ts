@@ -16,6 +16,7 @@
 
 import { v4 as uuidv4 } from 'uuid'
 import type { FacetRuntime, Facet } from '@/facets/facet'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 import type {
   AnyMutator,
   AnyPostCommitProcessor,
@@ -54,11 +55,7 @@ import {
 import { runTx, type PowerSyncDb } from './internals/commitPipeline'
 import type { BlockCache } from '@/data/blockCache'
 import { buildQualifiedBlockColumnsSql, parseBlockRow, type BlockRow } from '@/data/blockSchema'
-import { KERNEL_MUTATORS } from './mutators'
-import { KERNEL_PROCESSORS } from './internals/kernelProcessors'
-import { KERNEL_SAME_TX_PROCESSORS } from './internals/normalizeReferencesProcessor'
-import { KERNEL_QUERIES } from './internals/kernelQueries'
-import { kernelInvalidationRule } from './internals/kernelInvalidation'
+import { kernelDataExtension } from './kernelDataExtension'
 import {
   type WorkspaceBackfill,
   type WorkspaceBackfillContext,
@@ -225,34 +222,16 @@ export interface RepoOptions {
    *  never collide with anything from a prior run. Tests can inject a
    *  deterministic counter. */
   newTxSeq?: () => number
-  /** When true (default), kernel mutators are registered at
-   *  construction time so `repo.mutate.indent({...})` works
-   *  immediately. Set false when a test wants to populate the registry
-   *  explicitly (or when `setFacetRuntime` is the only registration
-   *  path). */
-  registerKernelMutators?: boolean
-  /** When true (default), kernel post-commit processors are registered
-   *  at construction time. The kernel set is currently empty; plugin
-   *  processors arrive through `setFacetRuntime`. Kept as a test/tooling
-   *  switch for any future core-only processors. */
-  registerKernelProcessors?: boolean
-  /** When true (default), kernel same-tx processors are registered at
-   *  construction time. Today that's `core.normalizeReferences`. Set
-   *  false in tests that need to exercise the engine without
-   *  reference normalization (e.g. asserting raw-shape round-trip). */
-  registerKernelSameTxProcessors?: boolean
-  /** When true (default), kernel queries are registered at construction
-   *  time so `repo.query.subtree({id})` etc. work immediately without a
-   *  `setFacetRuntime` call. Set false when a test wants to populate
-   *  the query registry explicitly. Mirrors `registerKernelMutators` /
-   *  `registerKernelProcessors`. */
-  registerKernelQueries?: boolean
-  /** When true (default), the kernel `kernelInvalidationRule` is
-   *  registered at construction time so `core.byType` / `core.typedBlocks`
-   *  / alias / content queries fire correctly without a `setFacetRuntime`
-   *  call. Tests that want to populate the invalidation-rules registry
-   *  explicitly can disable this. */
-  registerKernelInvalidationRules?: boolean
+  /** When false, skip the construction-time kernel-runtime install so
+   *  the Repo starts with empty registries. Default true: the
+   *  constructor installs a kernel-only `FacetRuntime`
+   *  (`kernelDataExtension`) so `repo.mutate.<kernel>` /
+   *  `repo.query.<kernel>` work immediately through the same facet path
+   *  a later `setFacetRuntime` uses — no separate per-facet registration
+   *  flags. Callers that want to control the registry explicitly either
+   *  pass `false` and call `setFacetRuntime` themselves, or just call
+   *  `setFacetRuntime` (it REPLACES the kernel install). */
+  installKernelRuntime?: boolean
   /** When true (default), the Layout B sync observer is started at
    *  construction time so sync-applied writes — staged into `blocks_synced`
    *  — materialize into the app-visible `blocks` table and invalidate
@@ -605,26 +584,10 @@ export class Repo {
       let seq = Date.now()
       this.newTxSeq = () => ++seq
     }
-    // Register kernel contributions by default. setFacetRuntime
-    // overrides with the merged kernel + plugin registry once a
-    // runtime is supplied; callers can pass `registerKernel*` flags as
-    // `false` to start empty for that facet (used by tests + tooling
-    // that want explicit registration semantics).
-    if (opts.registerKernelMutators ?? true) {
-      this.registerMutators(KERNEL_MUTATORS)
-    }
-    if (opts.registerKernelProcessors ?? true) {
-      for (const p of KERNEL_PROCESSORS) this.processors.set(p.name, p)
-    }
-    if (opts.registerKernelSameTxProcessors ?? true) {
-      for (const p of KERNEL_SAME_TX_PROCESSORS) this.sameTxProcessors.set(p.name, p)
-    }
-    if (opts.registerKernelQueries ?? true) {
-      for (const q of KERNEL_QUERIES) this.queries.set(q.name, q)
-    }
-    if (opts.registerKernelInvalidationRules ?? true) {
-      this.invalidationRules = [kernelInvalidationRule]
-    }
+    // Kernel contributions are installed via the facet runtime at the
+    // end of this constructor (see `installKernelRuntime` below) — one
+    // registration path shared with `setFacetRuntime`, no per-facet
+    // flags and no dual kernel registration (audit B1(1)).
     // Initialize the processor runner. The runner needs a Repo
     // reference for opening processor txs; passing `this` is safe
     // because runner methods only use it post-construction (during
@@ -679,6 +642,18 @@ export class Repo {
         return dispatchQ(prop)
       },
     }) as QueryProxy
+    // Install the kernel-only FacetRuntime so the kernel mutators,
+    // queries, same-tx processors, invalidation rule, property schemas,
+    // and type contributions are live before any `setFacetRuntime` swap
+    // (audit B1(1)). This is the SAME path a later swap takes — it
+    // REPLACES this install with the merged kernel + plugin registry —
+    // so there is exactly one kernel registration path. Reprojection
+    // scheduling is gated on an active workspace (none yet at
+    // construction), so this does no DB work. Tests/tooling that need
+    // empty registries pass `installKernelRuntime: false`.
+    if (opts.installKernelRuntime ?? true) {
+      this.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension]))
+    }
     // Start the Layout B sync observer by default (design doc §9.2).
     // Tests that want deterministic timing pass startSyncObserver: false
     // and call repo.startSyncObserver() + flushSyncObserver() themselves
@@ -1883,16 +1858,10 @@ export class Repo {
     }
   }
 
-  /** Internal: register an array of mutators into the registry by name.
-   *  Used by the constructor's `registerKernel: true` path. */
-  private registerMutators(mutators: ReadonlyArray<AnyMutator>): void {
-    for (const m of mutators) this.mutators.set(m.name, m)
-  }
-
   /** Test-only escape hatch retained for stage 1.3 carryover tests
    *  that wired specific mutator sets without a FacetRuntime. New
-   *  tests should prefer `setFacetRuntime` or the
-   *  `registerKernel: false` constructor flag plus `setFacetRuntime`. */
+   *  tests should prefer `setFacetRuntime` (or `installKernelRuntime:
+   *  false` plus `setFacetRuntime`). */
   __setMutatorsForTesting(mutators: ReadonlyArray<AnyMutator>): void {
     this.mutators = new Map(mutators.map(m => [m.name, m]))
   }

@@ -45,9 +45,8 @@ beforeEach(async () => {
     user: {id: 'user-1'},
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
-    registerKernelMutators: false,
-    registerKernelProcessors: false,
-    registerKernelQueries: false,
+    // Start empty so setFacetRuntime is the only registration path.
+    installKernelRuntime: false,
   })
 })
 

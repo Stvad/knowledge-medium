@@ -58,7 +58,6 @@ const setup = async (): Promise<Harness> => {
     db: h.db,
     cache,
     user: USER,
-    registerKernelProcessors: false,
   })
   repo.setActiveWorkspaceId(WS)
   return {h, repo}

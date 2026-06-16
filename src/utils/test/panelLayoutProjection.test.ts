@@ -40,7 +40,6 @@ const setup = async (): Promise<Harness> => {
     db: h.db,
     cache: new BlockCache(),
     user: USER,
-    registerKernelProcessors: false,
   })
   repo.setActiveWorkspaceId(WS)
   const uiState = await getUIStateBlock(repo, WS, USER, {})

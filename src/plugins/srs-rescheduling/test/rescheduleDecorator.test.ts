@@ -52,7 +52,6 @@ beforeEach(async () => {
   h = sharedDb
   repo = new Repo({
     db: h.db, cache: new BlockCache(), user: {id: 'user-1'},
-    registerKernelProcessors: false,
   })
 })
 

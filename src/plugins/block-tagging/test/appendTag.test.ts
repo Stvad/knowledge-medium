@@ -68,7 +68,6 @@ describe('appendTagToBlocks', () => {
       db: h.db,
       cache: new BlockCache(),
       user: {id: 'user-1'},
-      registerKernelProcessors: false,
     })
     repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension]))
   })

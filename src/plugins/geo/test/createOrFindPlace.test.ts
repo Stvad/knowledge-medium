@@ -44,7 +44,6 @@ const setup = async (): Promise<Harness> => {
     db: h.db,
     cache: new BlockCache(),
     user: {id: 'user-1'},
-    registerKernelProcessors: false,
   })
   repo.setActiveWorkspaceId(WS)
   repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension, geoDataExtension]))
