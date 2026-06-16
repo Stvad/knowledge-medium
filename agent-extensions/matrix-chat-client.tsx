@@ -17,7 +17,7 @@ import {
 import { Button } from '@/components/ui/button.js'
 import { Input } from '@/components/ui/input.js'
 import { Label } from '@/components/ui/label.js'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import * as matrixSdk from 'https://esm.sh/matrix-js-sdk@38.0.0?bundle'
 
 // ---------------------------------------------------------------------------
@@ -49,7 +49,22 @@ const MIGRATION_FLAG_PREFIX = 'knowledge-medium:matrix:migrated:event-ns:v1'
 const LEGACY_CONFIG_KEY = 'knowledge-medium:matrix-messages:config:v1'
 const LEGACY_CONFIG_FLAG = 'knowledge-medium:matrix:legacy-config-migrated:v1'
 
-const OPEN_SETUP_EVENT = 'matrix:setup:open'
+// Setup-dialog visibility — a typed module store, NOT a window CustomEvent.
+// The connect action / header button flip it; the mounted dialog reads it
+// with useSyncExternalStore (the mechanism the app's own DialogHost uses).
+let setupOpen = false
+const setupListeners = new Set<() => void>()
+const setSetupOpen = (next: boolean) => {
+  setupOpen = next
+  setupListeners.forEach((notify) => notify())
+}
+const subscribeSetupOpen = (notify: () => void) => {
+  setupListeners.add(notify)
+  return () => setupListeners.delete(notify)
+}
+
+// Genuine broadcast: wakes the running ingest effect to restart (not a
+// dialog/toggle), so it stays a window CustomEvent.
 const RESTART_EVENT = 'matrix:ingest:restart'
 
 // ---------------------------------------------------------------------------
@@ -830,29 +845,30 @@ const requestRestart = () => window.dispatchEvent(new CustomEvent(RESTART_EVENT)
 
 const MatrixSetupDialog = () => {
   const repo = useRepo()
-  const [open, setOpen] = useState(false)
+  const open = useSyncExternalStore(subscribeSetupOpen, () => setupOpen)
   const [homeserver, setHomeserver] = useState('https://matrix.org')
   const [roomId, setRoomId] = useState('')
   const [token, setToken] = useState('')
   const [saving, setSaving] = useState(false)
 
+  // Load current prefs into the form each time the dialog opens.
   useEffect(() => {
-    const onOpen = async () => {
-      setToken('')
+    if (!open) return
+    setToken('')
+    let cancelled = false
+    void (async () => {
       try {
         const prefs = await prefsBlock(repo)
-        if (prefs) {
+        if (!cancelled && prefs) {
           setHomeserver(prefs.get(homeserverProp) || 'https://matrix.org')
           setRoomId(prefs.get(roomIdProp) || '')
         }
       } catch {
         // fall back to defaults
       }
-      setOpen(true)
-    }
-    window.addEventListener(OPEN_SETUP_EVENT, onOpen)
-    return () => window.removeEventListener(OPEN_SETUP_EVENT, onOpen)
-  }, [repo])
+    })()
+    return () => { cancelled = true }
+  }, [open, repo])
 
   const save = async () => {
     setSaving(true)
@@ -874,14 +890,14 @@ const MatrixSetupDialog = () => {
       if (token) saveToken(token)
       requestRestart()
       showSuccess('Matrix connected.')
-      setOpen(false)
+      setSetupOpen(false)
     } finally {
       setSaving(false)
     }
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={setSetupOpen}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Connect Matrix</DialogTitle>
@@ -924,7 +940,7 @@ const MatrixSetupDialog = () => {
           </div>
         </div>
         <DialogFooter>
-          <Button variant='ghost' onClick={() => setOpen(false)} disabled={saving}>Cancel</Button>
+          <Button variant='ghost' onClick={() => setSetupOpen(false)} disabled={saving}>Cancel</Button>
           <Button onClick={save} disabled={!roomId || saving}>
             {saving ? 'Saving…' : 'Save'}
           </Button>
@@ -960,7 +976,7 @@ const ConnectedEditor = ({value, onChange}: PropertyEditorProps<boolean>) => {
         : (
           <Button
             size='sm'
-            onClick={() => window.dispatchEvent(new CustomEvent(OPEN_SETUP_EVENT))}
+            onClick={() => setSetupOpen(true)}
           >Connect…</Button>
           )}
       <Button
@@ -1021,7 +1037,7 @@ const connectAction = {
   id: 'matrix.connect',
   description: 'Matrix: connect / change token',
   context: ActionContextTypes.GLOBAL,
-  handler: () => { window.dispatchEvent(new CustomEvent(OPEN_SETUP_EVENT)) },
+  handler: () => { setSetupOpen(true) },
 }
 
 const startAction = {

@@ -38,14 +38,28 @@ import { navigate, useOpenBlock } from '@/utils/navigation.js'
 import { buildAppHash } from '@/utils/routing.js'
 import { useHandle } from '@/hooks/block.js'
 import type { BlockData, BlockRenderer, BlockRendererProps } from '@/types.js'
-import { useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useState, useSyncExternalStore, type CSSProperties } from 'react'
 
 // ---------------------------------------------------------------------------
 // constants
 
 const READWISE_NS = '45fb169f-ffac-458b-b2a7-6cec87d2d7ee'
 const TOKEN_KEY = 'knowledge-medium:readwise:token:v1'
-const OPEN_SETUP_EVENT = 'readwise:setup:open'
+
+// Setup-dialog visibility — a typed module store, NOT a window CustomEvent.
+// The connect action / header button / "Connect" toast flip it directly;
+// the mounted dialog reads it with useSyncExternalStore (the same mechanism
+// the app's own DialogHost uses).
+let setupOpen = false
+const setupListeners = new Set<() => void>()
+const setSetupOpen = (next: boolean) => {
+  setupOpen = next
+  setupListeners.forEach((notify) => notify())
+}
+const subscribeSetupOpen = (notify: () => void) => {
+  setupListeners.add(notify)
+  return () => setupListeners.delete(notify)
+}
 const READWISE_API = 'https://readwise.io/api/v2'
 const READWISE_LIBRARY_TYPE = 'readwise-library'
 const READWISE_DOCUMENT_TYPE = 'readwise-document'
@@ -1302,7 +1316,7 @@ const runSync = async (repo: any, { silent = false } = {}) => {
   if (!token) {
     if (!silent) {
       showError('Connect Readwise first', {
-        action: { label: 'Connect', onClick: () => window.dispatchEvent(new CustomEvent(OPEN_SETUP_EVENT)) },
+        action: { label: 'Connect', onClick: () => setSetupOpen(true) },
       })
     }
     return
@@ -1360,18 +1374,14 @@ const runSync = async (repo: any, { silent = false } = {}) => {
 
 const ReadwiseSetupDialog = () => {
   const repo = useRepo()
-  const [open, setOpen] = useState(false)
+  const open = useSyncExternalStore(subscribeSetupOpen, () => setupOpen)
   const [token, setToken] = useState('')
   const [saving, setSaving] = useState(false)
 
+  // Clear any stale token entry each time the dialog opens.
   useEffect(() => {
-    const onOpen = () => {
-      setToken('')
-      setOpen(true)
-    }
-    window.addEventListener(OPEN_SETUP_EVENT, onOpen)
-    return () => window.removeEventListener(OPEN_SETUP_EVENT, onOpen)
-  }, [])
+    if (open) setToken('')
+  }, [open])
 
   const save = async () => {
     setSaving(true)
@@ -1389,14 +1399,14 @@ const ReadwiseSetupDialog = () => {
         await prefs.set(connectedHintProp, true)
       }
       showSuccess('Readwise connected.')
-      setOpen(false)
+      setSetupOpen(false)
     } finally {
       setSaving(false)
     }
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={setSetupOpen}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Connect Readwise</DialogTitle>
@@ -1479,7 +1489,7 @@ const ConnectedEditor = ({ value, onChange, block }: PropertyEditorProps<boolean
         : (
           <Button
             size='sm'
-            onClick={() => window.dispatchEvent(new CustomEvent(OPEN_SETUP_EVENT))}
+            onClick={() => setSetupOpen(true)}
           >Connect…</Button>
           )}
       <Button
@@ -1528,7 +1538,7 @@ const connectAction = {
   id: 'readwise.connect',
   description: 'Readwise: connect / change token',
   context: ActionContextTypes.GLOBAL,
-  handler: () => window.dispatchEvent(new CustomEvent(OPEN_SETUP_EVENT)),
+  handler: () => setSetupOpen(true),
 }
 
 // ---------------------------------------------------------------------------
