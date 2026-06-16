@@ -14,7 +14,6 @@ import { leftSidebarActions } from './actions.ts'
 
 export { LeftSidebar } from './LeftSidebar.tsx'
 export { LeftSidebarHeaderItem } from './HeaderItem.tsx'
-export { leftSidebarToggle } from './toggleStore.ts'
 export {
   leftSidebarSectionsFacet,
   type LeftSidebarSectionContribution,

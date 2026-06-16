@@ -64,9 +64,14 @@ const STRING_LITERAL_RE = /^\s*['"]([^'"]+)['"]\s*$/
 // intent apart from a genuine broadcast.
 const DIALOG_EVENT_DISPATCH_RE =
   /window\s*\.\s*dispatchEvent\s*\(\s*new\s+CustomEvent\s*(?:<[^>]*>)?\s*\(\s*([^,)]+)/
-// The event-name token reads like opening/toggling a dialog rather
-// than a genuine broadcast (e.g. `...:data-synced` won't match).
-const DIALOG_INTENT_RE = /open|toggle|show|dialog|picker|prompt|modal|close/i
+// The event-name token reads like opening/toggling a dialog rather than
+// a genuine broadcast. Deliberately favors low false positives over total
+// recall: bare `show`/`close` are excluded (too common in non-dialog
+// names like `show-toast` / `close-connection`), and names with no verb
+// or surface noun (`...:settings`, `...:configure`, `...:data-synced`)
+// are intentionally not caught — the goal is to flag the obvious
+// `open-`/`toggle-`/`*-dialog` mistakes, not every possible opener.
+const DIALOG_INTENT_RE = /open|toggle|dialog|picker|prompt|modal/i
 
 const rules: LintRule[] = [
   {
@@ -119,7 +124,7 @@ const rules: LintRule[] = [
     rule: 'dialog-via-window-event',
     catalogPattern: 'settings-dialog',
     message:
-      'Opening or toggling a dialog by dispatching a `window` CustomEvent (and listening for it with `window.addEventListener` inside the component) reimplements the typed dialog channel over an untyped string bus. For a one-shot prompt, `openDialog(Component, props)` returns a promise that resolves with the user\'s choice. For a persistent toggle surface, drive visibility from a module store read via `useSyncExternalStore` (the same mechanism the app\'s own DialogHost uses) and trigger it from an action — run it by id with `runActionById`. Reserve `window` CustomEvents for genuine broadcast.',
+      'Opening or toggling a dialog by dispatching a `window` CustomEvent (and listening for it with `window.addEventListener` inside the component) reimplements the typed dialog channel over an untyped string bus. For a one-shot prompt, `openDialog(Component, props)` returns a promise that resolves with the user\'s choice. For a persistent toggle surface, drive visibility from a module store read via `useSyncExternalStore` (the same mechanism the app\'s own DialogHost uses) and flip it directly from your action\'s handler. Reserve `window` CustomEvents for genuine broadcast.',
     testLine(line) {
       // Flag a CustomEvent dispatch whose event name (literal or
       // identifier) reads like a dialog open/toggle intent. Genuine

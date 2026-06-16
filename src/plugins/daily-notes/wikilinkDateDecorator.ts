@@ -45,14 +45,12 @@ const rectFor = (element: HTMLElement): ReschedulePickerAnchorRect => {
 
 const rescheduleButton = ({
   sourceBlock,
-  workspaceId,
-}: Pick<WikilinkDisplayContext, 'sourceBlock' | 'workspaceId'>) => {
+}: Pick<WikilinkDisplayContext, 'sourceBlock'>) => {
   if (!sourceBlock) return null
 
   const open = (element: HTMLElement): void => {
     void openDialog(ReschedulePicker, {
       blockId: sourceBlock.id,
-      workspaceId,
       anchorRect: rectFor(element),
     })
   }
@@ -89,7 +87,6 @@ export const dailyDateWikilinkDecorator: WikilinkDisplayDecorator = {
     alias,
     runtime,
     sourceBlock,
-    workspaceId,
   }: WikilinkDisplayContext): string | WikilinkDisplayParts | null => {
     const parsed = parseLiteralDailyPageTitle(alias)
     if (!parsed) return null
@@ -98,7 +95,7 @@ export const dailyDateWikilinkDecorator: WikilinkDisplayDecorator = {
       return content
     }
     return {
-      before: rescheduleButton({sourceBlock, workspaceId}),
+      before: rescheduleButton({sourceBlock}),
       content,
     }
   },

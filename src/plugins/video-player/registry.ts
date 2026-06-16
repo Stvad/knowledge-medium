@@ -65,7 +65,12 @@ const resolveVideoPlayer = (
   }
   // No render scope given, or no player in that scope — fall back to any
   // registered instance (single-panel is the common case, and a
-  // scopeless caller has no better target).
+  // scopeless caller has no better target). NOTE: this single-handle
+  // resolution intentionally replaces the old broadcast-to-all-copies +
+  // OR-combine behavior. For the focus toggle that's *more* correct — it
+  // acts on the player in the caller's own panel, not "any panel's" — at
+  // the cost that, with the same video open in two panels AND a caller
+  // whose scope matches neither, we pick an arbitrary instance.
   return byScope.values().next().value
 }
 

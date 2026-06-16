@@ -25,6 +25,7 @@ export const restartAgentRuntimeBridgeAction: ActionConfig<typeof ActionContextT
   // Genuine broadcast to the running bridge effect (not a dialog/mount):
   // the poll loop listens for this to wake and re-register.
   handler: () => {
+    // eslint-disable-next-line no-restricted-syntax -- genuine broadcast: wakes the running bridge poll loop
     window.dispatchEvent(new CustomEvent(agentRuntimeBridgeRestartEvent))
   },
 }

@@ -93,7 +93,6 @@ describe('dailyDateWikilinkDecorator', () => {
     expect(openDialogMock).toHaveBeenCalledTimes(1)
     expect(openDialogMock.mock.calls[0][1]).toEqual(expect.objectContaining({
       blockId: 'source-block',
-      workspaceId: 'ws',
     }))
   })
 })

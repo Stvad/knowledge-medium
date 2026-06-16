@@ -21,6 +21,7 @@ export const requestPropertyCreate = (args: {
   pendingCreateRequests.set(args.blockId, detail)
 
   if (typeof window !== 'undefined') {
+    // eslint-disable-next-line no-restricted-syntax -- genuine broadcast: per-block create request consumed by whichever property row is mounted (with a pendingCreateRequests fallback), not a singleton dialog/toggle
     window.dispatchEvent(new CustomEvent(PROPERTY_CREATE_REQUEST_EVENT, {detail}))
   }
 

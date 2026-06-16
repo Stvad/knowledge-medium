@@ -380,15 +380,12 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
   const reschedule = useCallback(() => {
     if (!currentId) return
     void (async () => {
-      const result = await openDialog(ReschedulePicker, {
-        blockId: currentId,
-        workspaceId,
-      })
+      const result = await openDialog(ReschedulePicker, {blockId: currentId})
       // Advance only on a committed reschedule; cancel / Escape /
       // outside-tap resolves to null and leaves the card in place.
       if (result?.rescheduled) advance()
     })()
-  }, [currentId, workspaceId, advance])
+  }, [currentId, advance])
 
   const changeDeck = useCallback(() => {
     void deck.set(reviewDeckStartedProp, false)

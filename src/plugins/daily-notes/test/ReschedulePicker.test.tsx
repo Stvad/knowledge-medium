@@ -67,7 +67,7 @@ const renderPicker = (props: Partial<ReschedulePickerProps> = {}) => {
   const resolve = vi.fn()
   const cancel = vi.fn()
   render(
-    <ReschedulePicker blockId="block-1" workspaceId="ws-1" resolve={resolve} cancel={cancel} {...props} />,
+    <ReschedulePicker blockId="block-1" resolve={resolve} cancel={cancel} {...props} />,
   )
   return {resolve, cancel}
 }

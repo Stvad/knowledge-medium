@@ -18,3 +18,9 @@ testing:
 
 cloud / remote sessions (Claude Code on the web):
 - when running in a cloud/remote execution environment, open a pull request as soon as the branch has its first commit — don't wait to be asked — then subscribe to the PR's activity so review comments and CI failures come back into the session and can be addressed. (This standing authorization applies only to cloud sessions; local runs still default to not opening a PR unless asked.)
+
+ui event channels (audit B3 — do not reintroduce the untyped window.CustomEvent UI bus):
+- dialogs / pickers / one-shot prompts: `openDialog(Component, props)` from `@/utils/dialogs` (returns a promise; the component takes `resolve`/`cancel` via `DialogContextProps`). The plugin must pull in `dialogAppMountExtension` so DialogHost is mounted.
+- toggle/open surfaces (palette, sidebar, search overlays): a module store from `createToggleStore` (`@/utils/toggleStore`) read with `useSyncExternalStore`; the action/header flips it directly. Cross-plugin or external callers trigger it via `runActionById(ACTION_ID)`, never by importing the store or an event name.
+- request/response between components: a typed module registry of imperative handles (see `video-player/registry.ts`), not `respond()` callbacks in event detail.
+- `window.dispatchEvent(new CustomEvent(...))` is reserved for GENUINE broadcast and is blocked in non-test `src/` by a `no-restricted-syntax` ESLint error — opt in per-site with `// eslint-disable-next-line no-restricted-syntax -- genuine broadcast: <why>`.

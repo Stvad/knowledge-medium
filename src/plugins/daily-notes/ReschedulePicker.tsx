@@ -46,10 +46,6 @@ export interface ReschedulePickerResult {
 
 export interface ReschedulePickerProps {
   blockId: string
-  /** Workspace the block lives in. Passed explicitly (rather than read
-   *  from app state) so a panel showing a different workspace can still
-   *  reschedule its own block. */
-  workspaceId: string
   anchorRect?: ReschedulePickerAnchorRect
 }
 

@@ -1,6 +1,11 @@
 import type { AppEffectCleanup } from '@/extensions/core.js'
 import { openDialog } from '@/utils/dialogs.js'
 import { agentTokenStore, agentTokensChangedEvent } from './tokens.ts'
+// Pairing via the hash URL surfaces the tokens dialog. We open it
+// imperatively rather than over a CustomEvent (audit B3). This pulls a
+// UI component into the transport module, but it's bundle-safe: nothing
+// in the agent-cli/server package imports bridge.ts, so React never
+// reaches the node bundle.
 import { AgentTokensDialog, type AgentTokensDialogProps } from './AgentTokensDialog.tsx'
 import { createAgentRuntimeContext, executeCommand } from './commands.ts'
 import { serializeError, serializeValue } from './serialization.ts'

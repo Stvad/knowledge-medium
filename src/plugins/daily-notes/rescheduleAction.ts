@@ -28,10 +28,7 @@ export const rescheduleBlockDateAction: ActionConfig<typeof ActionContextTypes.N
   handler: async ({block}: BlockShortcutDependencies) => {
     const data = block.peek() ?? await block.load()
     if (!data) return
-    void openDialog(ReschedulePicker, {
-      blockId: block.id,
-      workspaceId: data.workspaceId,
-    })
+    void openDialog(ReschedulePicker, {blockId: block.id})
   },
 }
 

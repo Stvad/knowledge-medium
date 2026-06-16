@@ -183,6 +183,10 @@ export function MergePicker({
     : []
 
   return (
+    // Unlike the other openDialog dialogs (which render with a bare
+    // `open`), this one gates visibility on `session` — the async
+    // source-block load that decides page-vs-block search — so the
+    // CommandDialog doesn't flash before `sourceIsPage` is known.
     <CommandDialog
       open={session !== null}
       onOpenChange={isOpen => { if (!isOpen) cancel() }}

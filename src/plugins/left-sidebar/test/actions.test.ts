@@ -8,10 +8,8 @@ import { Repo } from '@/data/repo'
 import {
   __resetLayoutSessionIdForTesting,
 } from '@/utils/layoutSessionId'
-import {
-  leftSidebarToggle,
-  openLeftSidebarAction,
-} from '../index.ts'
+import { openLeftSidebarAction } from '../index.ts'
+import { leftSidebarToggle } from '../toggleStore.ts'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1', name: 'Alice'}
