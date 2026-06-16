@@ -543,11 +543,11 @@ describe('repo.load', () => {
   })
 
   it('concurrent load(id) + load(id, {children: true}) both hydrate fully', async () => {
-    // Regression for a prior bug: `dedupLoad(id, ...)` keyed only by id
-    // could merge the two calls into one promise driven by whichever
-    // started first. The plain loader didn't fetch children, so the
+    // Regression for a prior bug: an id-only in-flight load cache could
+    // merge the two calls into one promise driven by whichever started
+    // first. The plain loader didn't fetch children, so the
     // children-requesting caller's expectation was silently dropped.
-    // The fix is to NOT use the id-keyed dedupLoad path in repo.load
+    // The fix is that repo.load does NOT dedup concurrent loads at all
     // (each call does its own work; cache.setSnapshot is idempotent).
     const [r1, r2] = await Promise.all([
       env.repo.load('p'),

@@ -870,13 +870,15 @@ export class Repo {
    *  use `repo.query.children({id}).load()` if you want a
    *  handle-cached child-rows list with structural invalidation.
    *
-   *  Concurrency note: this method does NOT use `BlockCache.dedupLoad`.
-   *  That helper keys by id only, which silently merged a plain
-   *  `repo.load(id)` with a concurrent `repo.load(id, {children: true})`
-   *  — the second caller would see the plain promise resolve and miss
-   *  the children. Inlining the load costs at most one extra row read
-   *  per concurrent caller; the cache's `setSnapshot` is
-   *  fingerprint-deduplicated so listeners don't fire twice. */
+   *  Concurrency note: this method does NOT dedup concurrent loads. An
+   *  id-only in-flight cache would silently merge a plain `repo.load(id)`
+   *  with a concurrent `repo.load(id, {children: true})` — the second
+   *  caller would see the plain promise resolve and miss the children.
+   *  Load-dedup that matters for Suspense lives one layer up, at the
+   *  `Block` facade (`block.load()`, keyed by Block identity). Inlining
+   *  here costs at most one extra row read per concurrent caller; the
+   *  cache's `setSnapshot` is fingerprint-deduplicated so listeners
+   *  don't fire twice. */
   async load(
     id: string,
     opts?: { children?: boolean; ancestors?: boolean; descendants?: boolean | number },
