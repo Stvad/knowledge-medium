@@ -10,3 +10,5 @@ secret handling:
 
 testing:
 - don't add tests that just re-state the code (like testing what is our default shortcut binding is. this just duplicates the shortcut string for no benefit)
+- share one DB per test file: open with `createTestDb()` once in module scope / `beforeAll`, reset with `resetTestDb()` in `beforeEach`. Don't call `createTestDb()` per test.
+- don't `await new Promise(r => setTimeout(r, N))` to wait on a DB/subscription/BroadcastChannel round-trip — it's slow and flaky. Poll the outcome with `vi.waitFor`. For a "does NOT invalidate/fire" assertion, use a control-write fence: after the no-op write, make a write that DOES change the result, `vi.waitFor` that single emission, then assert the emission count (e.g. `fired.length` is exactly the fence count). Channels are FIFO, so the fence proves the no-op produced nothing. (see `src/data/internals/kernelQueries.test.ts`)

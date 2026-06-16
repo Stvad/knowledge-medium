@@ -242,20 +242,26 @@ describe('cross-tab wipe-reload signal (§6)', () => {
     const reloads: string[] = []
     const off = onWipeReload(USER, () => reloads.push('reloaded'))
 
-    // A wipe in another tab for a DIFFERENT user must not reload this one.
+    // A wipe for a DIFFERENT user must not reload this one; a wipe for THIS
+    // user must. BroadcastChannel preserves post order, so fencing on the
+    // matching signal proves the earlier non-matching one was delivered and
+    // ignored — no fixed sleep needed.
     broadcastWipeReload('someone-else')
-    await new Promise(r => setTimeout(r, 10))
-    expect(reloads).toEqual([])
-
-    // A wipe for THIS user does.
     broadcastWipeReload(USER)
-    await new Promise(r => setTimeout(r, 10))
-    expect(reloads).toEqual(['reloaded'])
+    await vi.waitFor(() => expect(reloads).toEqual(['reloaded']))
 
-    // After unsubscribe, no further reloads.
+    // After unsubscribe, no further reloads. Fence on a fresh witness: the
+    // same broadcast the unsubscribed listener must ignore fires the witness,
+    // so once the witness has seen it the original has had its turn too.
     off()
-    broadcastWipeReload(USER)
-    await new Promise(r => setTimeout(r, 10))
-    expect(reloads).toEqual(['reloaded'])
+    const witness: string[] = []
+    const offWitness = onWipeReload(USER, () => witness.push('seen'))
+    try {
+      broadcastWipeReload(USER)
+      await vi.waitFor(() => expect(witness).toEqual(['seen']))
+      expect(reloads).toEqual(['reloaded'])
+    } finally {
+      offWitness()
+    }
   })
 })

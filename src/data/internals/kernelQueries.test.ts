@@ -937,8 +937,18 @@ describe('invalidation', () => {
         tx => tx.update('panel', {properties: {focusedBlockLocation: {blockId: 'x', renderScopeId: 'scope:x'}}}),
         {scope: ChangeScope.UiState},
       )
-      await new Promise(r => setTimeout(r, 30))
-      expect(fired.length).toBe(0)
+
+      // Control-write fence: a property write that DOES enter the result
+      // proves the UiState write above fired nothing — the fence is the
+      // sole emission. (Replaces a 30 ms sleep that raced the reader pool.)
+      await env.repo.tx(
+        tx => tx.update('a', {properties: {renderer: 'markdown'}}),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await vi.waitFor(() => {
+        expect(asBlocks(handle.peek()).map(b => b.id)).toEqual(['a'])
+      })
+      expect(fired.length).toBe(1)
     } finally {
       unsub()
     }
@@ -993,9 +1003,15 @@ describe('invalidation', () => {
         tx => tx.update('src', {content: 'edited but still references target'}),
         {scope: ChangeScope.BlockDefault},
       )
-      await new Promise(r => setTimeout(r, 30))
-      expect(fired).toEqual([])
-      expect(asIds(handle.peek())).toEqual(['src'])
+
+      // Control-write fence: a new source referencing `target` DOES enter
+      // the result; the content edit above must not have fired, so the
+      // create is the sole emission. (Replaces a 30 ms sleep.)
+      await create({id: 'src2', references: [{id: 'target', alias: 'target'}]})
+      await vi.waitFor(() => {
+        expect([...asIds(handle.peek())].sort()).toEqual(['src', 'src2'])
+      })
+      expect(fired.length).toBe(1)
     } finally {
       unsub()
     }
@@ -1044,6 +1060,7 @@ describe('invalidation', () => {
       id: 'parent',
       references: [{id: 'project', alias: 'Project'}],
     })
+    await create({id: 'plain-parent'})
     await create({
       id: 'src',
       parentId: 'parent',
@@ -1063,9 +1080,18 @@ describe('invalidation', () => {
         tx => tx.update('parent', {content: 'renamed parent, refs unchanged'}),
         {scope: ChangeScope.BlockDefault},
       )
-      await new Promise(r => setTimeout(r, 30))
-      expect(fired).toEqual([])
-      expect(asIds(handle.peek())).toEqual(['src'])
+
+      // Control-write fence: moving `src` out from under the matching
+      // ancestor DOES empty the result; the ancestor content edit above
+      // must not have fired. (Replaces a 30 ms sleep.)
+      await env.repo.tx(
+        tx => tx.move('src', {parentId: 'plain-parent', orderKey: 'a0'}),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await vi.waitFor(() => {
+        expect(asIds(handle.peek())).toEqual([])
+      })
+      expect(fired.length).toBe(1)
     } finally {
       unsub()
     }
@@ -1091,8 +1117,15 @@ describe('invalidation', () => {
       // Create an unrelated block (no `note` type). With the previous
       // unconditional live dep, this fired the handle for nothing.
       await create({id: 'unrelated'})
-      await new Promise(r => setTimeout(r, 30))
-      expect(fired.length).toBe(0)
+
+      // Control-write fence: a new `note` block DOES enter the result;
+      // the unrelated non-note create above must not have fired.
+      // (Replaces a 30 ms sleep.)
+      await create({id: 'b', type: 'note'})
+      await vi.waitFor(() => {
+        expect(asBlocks(handle.peek()).map(b => b.id).sort()).toEqual(['a', 'b'])
+      })
+      expect(fired.length).toBe(1)
     } finally {
       unsub()
     }
@@ -1136,8 +1169,17 @@ describe('invalidation', () => {
         tx => tx.update('panel', {properties: {focusedBlockLocation: {blockId: 'x', renderScopeId: 'scope:x'}}}),
         {scope: ChangeScope.UiState},
       )
-      await new Promise(r => setTimeout(r, 30))
-      expect(fired.length).toBe(0)
+
+      // Control-write fence: a content edit that enters the result DOES
+      // fire; the UiState write above must not have. (Replaces a 30 ms sleep.)
+      await env.repo.tx(
+        tx => tx.update('panel', {content: 'hello world'}),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await vi.waitFor(() => {
+        expect(asBlocks(handle.peek()).map(b => b.id).sort()).toEqual(['a', 'panel'])
+      })
+      expect(fired.length).toBe(1)
     } finally {
       unsub()
     }
@@ -1158,14 +1200,15 @@ describe('invalidation', () => {
         tx => tx.update('panel', {properties: {focusedBlockLocation: {blockId: 'x', renderScopeId: 'scope:x'}}}),
         {scope: ChangeScope.UiState},
       )
-      await new Promise(r => setTimeout(r, 30))
-      expect(fired.length).toBe(0)
 
-      // A new non-empty block must wake it (live-set membership).
+      // Control-write fence: a new non-empty block DOES wake it (live-set
+      // membership); the UiState write above must not have fired, so the
+      // create is the sole emission. (Replaces a 30 ms sleep.)
       await create({id: 'b', content: 'bb'})
       await vi.waitFor(() => {
         expect(asBlocks(handle.peek()).map(b => b.id).sort()).toEqual(['a', 'b'])
       })
+      expect(fired.length).toBe(1)
     } finally {
       unsub()
     }
@@ -1194,8 +1237,16 @@ describe('invalidation', () => {
         tx => tx.move('a', {parentId: 'p2', orderKey: 'a0'}),
         {scope: ChangeScope.BlockDefault},
       )
-      await new Promise(r => setTimeout(r, 30))
-      expect(fired).toEqual([])
+
+      // Control-write fence: a new block matching both queries DOES fire
+      // each handle once; the parent move above must not have fired.
+      // (Replaces a 30 ms sleep.)
+      await create({id: 'c', content: 'hello again'})
+      await vi.waitFor(() => {
+        expect(fired).toContain('search')
+        expect(fired).toContain('recent')
+      })
+      expect(fired.length).toBe(2)
     } finally {
       u1(); u2()
     }
@@ -1221,8 +1272,16 @@ describe('invalidation', () => {
         tx => tx.update('a', {properties: {renderer: 'markdown'}}),
         {scope: ChangeScope.BlockDefault},
       )
-      await new Promise(r => setTimeout(r, 30))
-      expect(fired).toEqual([])
+
+      // Control-write fence: a new block matching both queries DOES fire
+      // each handle once; the non-content property edit above must not
+      // have. (Replaces a 30 ms sleep.)
+      await create({id: 'c', content: 'hello again'})
+      await vi.waitFor(() => {
+        expect(fired).toContain('search')
+        expect(fired).toContain('recent')
+      })
+      expect(fired.length).toBe(2)
     } finally {
       u1(); u2()
     }
@@ -1267,8 +1326,18 @@ describe('invalidation', () => {
         tx => tx.update('panel', {properties: {focusedBlockLocation: {blockId: 'x', renderScopeId: 'scope:x'}}}),
         {scope: ChangeScope.UiState},
       )
-      await new Promise(r => setTimeout(r, 30))
-      expect(fired.length).toBe(0)
+
+      // Control-write fence: clearing `a`'s alias DOES change the lookup
+      // result; the UiState write above must not have fired. (Replaces a
+      // 30 ms sleep.)
+      await env.repo.tx(
+        tx => tx.update('a', {properties: {[aliasesProp.name]: aliasesProp.codec.encode([])}}),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await vi.waitFor(() => {
+        expect(asBlockOrNull(handle.peek())).toBeNull()
+      })
+      expect(fired.length).toBe(1)
     } finally {
       unsub()
     }
@@ -1335,8 +1404,15 @@ describe('invalidation', () => {
         tx => tx.update('b', {properties: {renderer: 'markdown'}}),
         {scope: ChangeScope.BlockDefault},
       )
-      await new Promise(r => setTimeout(r, 30))
-      expect(fired.length).toBe(0)
+
+      // Control-write fence: a new aliased block DOES enter aliasMatches;
+      // the non-alias property edit above must not have fired. (Replaces a
+      // 30 ms sleep.)
+      await create({id: 'c', aliases: ['farewell']})
+      await vi.waitFor(() => {
+        expect(handle.peek()?.map(r => r.alias).sort()).toEqual(['farewell', 'greeting'])
+      })
+      expect(fired.length).toBe(1)
     } finally {
       unsub()
     }
