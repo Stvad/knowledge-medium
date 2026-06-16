@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.scripts.tsbuildinfo",
+    // scripts run under Node (vite-node / tsx), so they need the Node globals
+    // and `node:*` modules that the browser-oriented app config omits.
+    "types": ["node"]
+  },
+  "include": ["scripts"],
+  // scripts/bench/* predates the Layout B sync redesign (it raw-maps `blocks`
+  // instead of `blocks_synced` and drives the removed row-events tail), so it
+  // no longer compiles or runs against the current data layer. Excluded until
+  // the bench harness is resurrected against `createTestDb`'s Layout B setup;
+  // everything else under scripts/ is now part of the `tsc -b` gate.
+  "exclude": ["scripts/bench"]
+}
