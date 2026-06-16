@@ -51,6 +51,34 @@ For dev databases that already exist, also add an `ALTER TABLE … ADD COLUMN` b
 - For new non-null columns, always specify a `default` so existing rows backfill cleanly.
 - Wrap in `begin; … commit;`.
 
+## Creating tables on the hosted DB — RLS is non-negotiable
+
+**Every table in the `public` schema is exposed via PostgREST, and Supabase grants `anon` + `authenticated` full CRUD on public tables by default.** `CREATE TABLE` / `CREATE TABLE AS` do **not** enable RLS, so a freshly-created public table is **immediately world-readable and -writable with the anon key** (which ships in the client bundle) until you lock it down. This bit us once: an ad-hoc `blocks_ts_backup_*` snapshot (block ids + timestamps) sat in `public` with no RLS.
+
+This applies to **ad-hoc / backup / snapshot / staging tables created via `db query` or `psql`**, not just app tables in migrations. Whenever you create a table on the hosted project:
+
+```sql
+begin;
+create table public.my_helper as select ...;          -- or create table public.my_helper (...)
+alter table public.my_helper enable row level security; -- RLS on, NO policy = default-deny to anon/authenticated
+revoke all on public.my_helper from anon, authenticated; -- defense-in-depth; harmless if RLS is on
+commit;
+```
+
+- A table that **no client should ever touch** (backups, staging) wants exactly this: RLS on, **no policy** (denies anon/authenticated entirely), grants revoked. The owning `postgres` role and `service_role` still bypass RLS for server-side work.
+- For client-facing data, RLS on **plus** the appropriate policies — never RLS-off.
+- Alternative for pure internal helpers: create them in a schema PostgREST doesn't expose (not in the project's exposed-schemas list) instead of `public`.
+
+After any ad-hoc table creation or schema change on the hosted DB, **verify nothing is left exposed** — this should return zero rows:
+
+```sql
+select c.relname
+from pg_class c join pg_namespace n on n.oid = c.relnamespace
+where n.nspname = 'public' and c.relkind = 'r' and not c.relrowsecurity;
+```
+
+(This is the same check Supabase's Security Advisor runs. To attribute past access to such a table, group `pg_stat_statements` by `userid` → role: any `anon`/`authenticated` rows referencing the table mean external API access actually happened.)
+
 ## Don't push/deploy to remote without explicit user approval
 
 `supabase db push` and `npx powersync@latest deploy` both mutate shared state. Author the change locally, validate, and then **stop**. Wait for the user to say "push it" / "deploy it" for that specific run — pre-authorization for one push doesn't extend to the next.

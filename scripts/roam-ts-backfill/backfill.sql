@@ -41,6 +41,10 @@ SELECT (SELECT count(*) FROM roam_ts_map) AS map_rows,
 -- ---------------------------------------------------------------------------
 -- 1. Recovery snapshot (rollback path). Captures CURRENT values of every row
 --    we are about to touch, BEFORE the UPDATE.
+--    Lock it down immediately: a bare CREATE TABLE in `public` is exposed via
+--    PostgREST with anon/authenticated full CRUD by default and no RLS. Enable
+--    RLS (no policy = default-deny to anon/authenticated; postgres still works)
+--    and revoke the anon/authenticated grants. See the supabase skill.
 -- ---------------------------------------------------------------------------
 DROP TABLE IF EXISTS blocks_ts_backup_20260613;
 CREATE TABLE blocks_ts_backup_20260613 AS
@@ -49,6 +53,8 @@ FROM public.blocks b
 JOIN roam_ts_map m ON m.id = b.id
 WHERE b.workspace_id = 'ef43b424-80ba-4967-b587-a4c32efd8071'
   AND b.deleted = false;
+ALTER TABLE blocks_ts_backup_20260613 ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON blocks_ts_backup_20260613 FROM anon, authenticated;
 
 -- ---------------------------------------------------------------------------
 -- 2. The backfill. One transaction. Disable ONLY the history trigger (so we
