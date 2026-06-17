@@ -109,6 +109,22 @@ describe('EffectReconciler', () => {
     expect(cleanup).not.toHaveBeenCalled()
   })
 
+  it('restarts an effect whose contribution object changed (same id, new start)', () => {
+    const oldCleanup = vi.fn()
+    const oldStart = vi.fn(() => oldCleanup)
+    const newStart = vi.fn()
+    const r = new EffectReconciler()
+
+    r.reconcile(repo, runtimeWith([{ id: 'e', start: oldStart }]), 'ws', false)
+    // Same id, different contribution object (e.g. a live-edited plugin
+    // recompiled to a new module): tear the old impl down and start the new.
+    r.reconcile(repo, runtimeWith([{ id: 'e', start: newStart }]), 'ws', false)
+
+    expect(oldStart).toHaveBeenCalledTimes(1)
+    expect(oldCleanup).toHaveBeenCalledTimes(1) // old impl torn down
+    expect(newStart).toHaveBeenCalledTimes(1) // new impl started
+  })
+
   it('starts added and stops removed effects on a runtime-only swap', () => {
     const keptStart = vi.fn()
     const removedCleanup = vi.fn()

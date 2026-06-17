@@ -178,6 +178,10 @@ export class LiveRuntimeHandle extends FacetRuntime {
 
 interface StartedEffect {
   readonly id: string
+  /** The contribution object this entry was started from. A later
+   *  reconcile compares by reference to detect a code change (same id,
+   *  new `start`) vs. the same effect re-resolved. */
+  readonly effect: AppEffect
   stopped: boolean
   cleanup?: AppEffectCleanup
 }
@@ -196,7 +200,7 @@ const runCleanup = (cleanup: AppEffectCleanup, effectId: string): void => {
 }
 
 const startEffect = (effect: AppEffect, context: AppEffectContext): StartedEffect => {
-  const entry: StartedEffect = { id: effect.id, stopped: false }
+  const entry: StartedEffect = { id: effect.id, effect, stopped: false }
   try {
     const result = effect.start(context)
     // Capture a synchronous cleanup immediately so a same-tick stop
@@ -254,7 +258,11 @@ export class EffectReconciler {
       this.capturedCtx.safeMode !== safeMode
 
     const effects = runtime.read(appEffectsFacet)
-    const nextIds = new Set(effects.map(effect => effect.id))
+    // First contribution wins per id (matches the start loop below).
+    const nextById = new Map<string, AppEffect>()
+    for (const effect of effects) {
+      if (!nextById.has(effect.id)) nextById.set(effect.id, effect)
+    }
 
     if (ctxChanged) {
       // Effects captured the previous repo/workspace/safeMode — restart
@@ -263,12 +271,18 @@ export class EffectReconciler {
       this.liveRuntime = new LiveRuntimeHandle(runtime)
       this.capturedCtx = { repo, workspaceId, safeMode }
     } else {
-      // Stop removed effects BEFORE re-pointing the handle: a removed
-      // transient owner's cleanup clears its bucket from the outgoing
-      // runtime + the handle, so `setCurrent` replays only the survivors
-      // onto the fresh runtime (no stale replay-then-clear window).
+      // Stop removed AND code-changed effects BEFORE re-pointing the
+      // handle. Removed = id no longer present; code-changed = same id
+      // but a different contribution object (e.g. a live-edited dynamic
+      // extension recompiled to a fresh module — the compile cache hands
+      // back a new reference only when the source changed, a stable one
+      // otherwise, so an unchanged effect keeps running). Stopping first
+      // lets the start loop launch the new implementation, and the
+      // cleanup clears any transient bucket before `setCurrent` replays
+      // the survivors onto the fresh runtime (no stale replay-then-clear).
       for (const [id, entry] of this.started) {
-        if (!nextIds.has(id)) {
+        const next = nextById.get(id)
+        if (next === undefined || next !== entry.effect) {
           stopEffect(entry)
           this.started.delete(id)
         }
