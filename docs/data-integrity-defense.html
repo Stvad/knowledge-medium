@@ -1,0 +1,487 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Data-Integrity Defense-in-Depth — knowledge-medium</title>
+<style>
+  :root {
+    --bg: #fbfbfa;
+    --surface: #ffffff;
+    --surface-2: #f4f5f7;
+    --ink: #1f2328;
+    --ink-soft: #57606a;
+    --ink-faint: #8b949e;
+    --border: #e3e6ea;
+    --border-strong: #d0d7de;
+    --accent: #2f6fdb;
+    --accent-soft: #e8f0fe;
+    --green: #1a7f37;
+    --green-soft: #e6f4ea;
+    --amber: #9a6700;
+    --amber-soft: #fdf2d6;
+    --red: #cf222e;
+    --red-soft: #ffebe9;
+    --violet: #6639ba;
+    --violet-soft: #efeafb;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --surface: #161b22; --surface-2: #1c2230;
+      --ink: #e6edf3; --ink-soft: #9da7b3; --ink-faint: #6e7681;
+      --border: #2a313c; --border-strong: #3a424e;
+      --accent: #6ea8fe; --accent-soft: #16243d;
+      --green: #4ac26b; --green-soft: #11271a;
+      --amber: #d4a72c; --amber-soft: #2b2410;
+      --red: #ff7b72; --red-soft: #2d1517;
+      --violet: #b083f0; --violet-soft: #20183a;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: var(--sans); font-size: 16px; line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 0 24px 120px; }
+  header.hero {
+    padding: 56px 24px 40px; border-bottom: 1px solid var(--border);
+    background:
+      radial-gradient(1200px 240px at 15% -10%, var(--accent-soft), transparent 60%),
+      var(--surface);
+  }
+  header.hero .inner { max-width: 960px; margin: 0 auto; }
+  .eyebrow { font-size: 12.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--accent); font-weight: 700; }
+  h1 { font-size: 38px; line-height: 1.12; margin: 10px 0 6px; letter-spacing: -0.02em; }
+  .subtitle { font-size: 18px; color: var(--ink-soft); margin: 0 0 18px; max-width: 70ch; }
+  .badges { display: flex; flex-wrap: wrap; gap: 8px; }
+  .badge { font-size: 12.5px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--ink-soft); }
+  .badge.green { color: var(--green); background: var(--green-soft); border-color: transparent; }
+
+  nav.toc {
+    position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(8px); border-bottom: 1px solid var(--border);
+    margin: 0 -24px 8px; padding: 10px 24px;
+  }
+  nav.toc ol { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 0 auto; padding: 0; max-width: 960px; font-size: 13.5px; }
+  nav.toc a { color: var(--ink-soft); text-decoration: none; }
+  nav.toc a:hover { color: var(--accent); }
+
+  h2 { font-size: 25px; margin: 52px 0 6px; letter-spacing: -0.01em; padding-top: 8px; }
+  h2 .num { color: var(--ink-faint); font-weight: 600; margin-right: 10px; }
+  h3 { font-size: 18px; margin: 30px 0 4px; }
+  p { margin: 12px 0; }
+  a { color: var(--accent); }
+  code { font-family: var(--mono); font-size: 0.86em; background: var(--surface-2); border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px; }
+  strong { font-weight: 680; }
+
+  .callout { border: 1px solid var(--border); border-left: 4px solid var(--accent); background: var(--surface); border-radius: 10px; padding: 14px 18px; margin: 20px 0; }
+  .callout.tldr { border-left-color: var(--green); background: var(--green-soft); }
+  .callout.decision { border-left-color: var(--violet); background: var(--violet-soft); }
+  .callout h4 { margin: 0 0 6px; font-size: 14px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-soft); }
+  .callout.tldr h4 { color: var(--green); }
+  .callout.decision h4 { color: var(--violet); }
+
+  figure { margin: 28px 0; }
+  figure svg { width: 100%; height: auto; display: block; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
+  figcaption { font-size: 13px; color: var(--ink-faint); margin-top: 8px; text-align: center; }
+
+  table { width: 100%; border-collapse: collapse; margin: 18px 0; font-size: 14.5px; }
+  th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--border); }
+  thead th { background: var(--surface-2); border-bottom: 1px solid var(--border-strong); font-size: 12.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-soft); }
+  tbody tr:hover { background: var(--surface-2); }
+  td code { white-space: nowrap; }
+
+  .tag { display: inline-block; font-size: 11.5px; font-weight: 700; padding: 1px 7px; border-radius: 5px; line-height: 1.7; }
+  .tag.A { background: var(--red-soft); color: var(--red); }
+  .tag.B { background: var(--violet-soft); color: var(--violet); }
+  .tag.C { background: var(--amber-soft); color: var(--amber); }
+  .tag.D { background: var(--accent-soft); color: var(--accent); }
+  .tag.E { background: var(--surface-2); color: var(--ink-soft); border: 1px solid var(--border-strong); }
+  .pill { display: inline-block; font-size: 11.5px; font-weight: 700; padding: 1px 8px; border-radius: 999px; }
+  .pill.done { background: var(--green-soft); color: var(--green); }
+  .pill.new { background: var(--accent-soft); color: var(--accent); }
+  .pill.partial { background: var(--amber-soft); color: var(--amber); }
+  .p0 { color: var(--red); font-weight: 800; }
+  .p1 { color: var(--amber); font-weight: 800; }
+  .p2 { color: var(--accent); font-weight: 800; }
+  .p3 { color: var(--ink-faint); font-weight: 800; }
+
+  .footnote { color: var(--ink-faint); font-size: 13px; }
+  hr.sep { border: 0; border-top: 1px solid var(--border); margin: 40px 0; }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="inner">
+    <div class="eyebrow">Design · knowledge-medium</div>
+    <h1>Data-Integrity Defense-in-Depth</h1>
+    <p class="subtitle">An observability + guardrail system that would have caught the 2026-06 incident cluster within hours — not the week each one actually hid for.</p>
+    <div class="badges">
+      <span class="badge">Design + initial implementation</span>
+      <span class="badge">2026-06-16</span>
+      <span class="badge green">Scope: small fleet · ≈2 users / 5 devices</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+<nav class="toc">
+  <ol>
+    <li><a href="#scope">0 · Scope</a></li>
+    <li><a href="#classes">1 · Failure classes</a></li>
+    <li><a href="#invariants">2 · Invariants</a></li>
+    <li><a href="#layers">3 · The layers</a></li>
+    <li><a href="#slo">4 · SLO</a></li>
+    <li><a href="#roadmap">5 · Roadmap</a></li>
+    <li><a href="#decisions">6 · Open decisions</a></li>
+    <li><a href="#implemented">7 · This change</a></li>
+  </ol>
+</nav>
+
+<div class="callout tldr">
+  <h4>The one thing to take away</h4>
+  <p style="margin:0">The individual bugs are <strong>already fixed</strong> (<code>c2df661e</code>, <code>21494fdb</code>, <code>979ca0fd</code>, <code>4e4037fd</code>, plus the matrix content-ref case). What we lacked — and what every incident exposed — is <strong>early detection</strong>: each corruption sat invisible until a human noticed "fewer backlinks." This document defines the layered detection/prevention/recovery system that closes that gap, sized for a small coordinatable fleet, and a prioritized roadmap. Read-only detection is the priority; write/recovery tooling is authored but approval-gated.</p>
+</div>
+
+<h2 id="scope"><span class="num">0</span>Scope — what this is and isn't</h2>
+<p>knowledge-medium runs on a <strong>small, coordinatable fleet</strong> (≈2 users / 5 devices). The defense is sized for that: cheap read-only detection a human can act on, not auto-healing infrastructure or mixed-version-window machinery. We do <strong>not</strong> gold-plate for scale.</p>
+<p>The single most valuable property the incidents revealed we lack is <strong>early detection</strong>. So detection leads; recovery/write tooling is authored but approval-gated (standing rule: no execution against shared infra without an explicit ask).</p>
+
+<h2 id="classes"><span class="num">1</span>Failure classes</h2>
+<p>The week produced six incidents. They collapse into <strong>five recurring failure classes</strong> — naming them is the point, because each needs its own defense and any future bug will be a new instance of one of them.</p>
+
+<figure>
+<svg viewBox="0 0 960 430" role="img" aria-label="Data path showing where each failure class strikes">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+    <style>
+      .box{fill:var(--surface-2);stroke:var(--border-strong);stroke-width:1.5;rx:10;}
+      .lbl{fill:var(--ink);font:600 14px var(--sans);}
+      .sub{fill:var(--ink-soft);font:400 11.5px var(--sans);}
+      .flow{stroke:var(--ink-faint);stroke-width:2;fill:none;color:var(--ink-faint);}
+      .mk{font:800 13px var(--sans);}
+      .mkt{font:600 11.5px var(--sans);fill:var(--ink-soft);}
+      .bann{fill:none;stroke:var(--red);stroke-width:1.5;stroke-dasharray:6 5;rx:12;}
+    </style>
+  </defs>
+
+  <!-- Row 1: client write → derivation → queue → server -->
+  <rect class="box" x="24"  y="56" width="172" height="62" rx="10"/>
+  <text class="lbl" x="110" y="82" text-anchor="middle">Client A · blocks</text>
+  <text class="sub" x="110" y="100" text-anchor="middle">local app state</text>
+
+  <rect class="box" x="248" y="56" width="172" height="62" rx="10"/>
+  <text class="lbl" x="334" y="82" text-anchor="middle">Derivation</text>
+  <text class="sub" x="334" y="100" text-anchor="middle">references_json projection</text>
+
+  <rect class="box" x="472" y="56" width="172" height="62" rx="10"/>
+  <text class="lbl" x="558" y="82" text-anchor="middle">ps_crud</text>
+  <text class="sub" x="558" y="100" text-anchor="middle">upload queue</text>
+
+  <rect class="box" x="724" y="56" width="200" height="62" rx="10"/>
+  <text class="lbl" x="824" y="82" text-anchor="middle">Supabase</text>
+  <text class="sub" x="824" y="100" text-anchor="middle">blocks + blocks_history</text>
+
+  <line class="flow" x1="196" y1="87" x2="246" y2="87" marker-end="url(#arrow)"/>
+  <line class="flow" x1="420" y1="87" x2="470" y2="87" marker-end="url(#arrow)"/>
+  <line class="flow" x1="644" y1="87" x2="722" y2="87" marker-end="url(#arrow)"/>
+
+  <!-- down connector -->
+  <path class="flow" d="M824,118 L824,150 L824,168" marker-end="url(#arrow)"/>
+
+  <!-- Row 2: server copy → gate → client B -->
+  <rect class="box" x="724" y="170" width="200" height="62" rx="10"/>
+  <text class="lbl" x="824" y="196" text-anchor="middle">blocks_synced</text>
+  <text class="sub" x="824" y="214" text-anchor="middle">server copy (per client)</text>
+
+  <rect class="box" x="472" y="170" width="172" height="62" rx="10"/>
+  <text class="lbl" x="558" y="196" text-anchor="middle">reconcile gate</text>
+  <text class="sub" x="558" y="214" text-anchor="middle">updated_at LWW</text>
+
+  <rect class="box" x="248" y="170" width="172" height="62" rx="10"/>
+  <text class="lbl" x="334" y="196" text-anchor="middle">Client B · blocks</text>
+  <text class="sub" x="334" y="214" text-anchor="middle">other devices</text>
+
+  <line class="flow" x1="724" y1="201" x2="646" y2="201" marker-end="url(#arrow)"/>
+  <line class="flow" x1="472" y1="201" x2="422" y2="201" marker-end="url(#arrow)"/>
+
+  <!-- Failure-class markers -->
+  <circle cx="334" cy="48" r="11" fill="var(--red-soft)" stroke="var(--red)"/>
+  <text class="mk" x="334" y="52" text-anchor="middle" fill="var(--red)">A</text>
+  <text class="mkt" x="334" y="34" text-anchor="middle">stale / absent inputs</text>
+
+  <circle cx="450" cy="135" r="11" fill="var(--amber-soft)" stroke="var(--amber)"/>
+  <text class="mk" x="450" y="139" text-anchor="middle" fill="var(--amber)">C</text>
+  <text class="mkt" x="450" y="153" text-anchor="middle">no-op write → never queues → stranded local</text>
+
+  <circle cx="824" cy="138" r="11" fill="var(--accent-soft)" stroke="var(--accent)"/>
+  <text class="mk" x="824" y="142" text-anchor="middle" fill="var(--accent)">D</text>
+  <text class="mkt" x="824" y="156" text-anchor="middle">bulk "make-X-win" re-publishes bad data to all</text>
+
+  <circle cx="558" cy="248" r="11" fill="var(--violet-soft)" stroke="var(--violet)"/>
+  <text class="mk" x="558" y="252" text-anchor="middle" fill="var(--violet)">B</text>
+  <text class="mkt" x="558" y="268" text-anchor="middle">references-only patch wins the column independent of its content</text>
+
+  <!-- E banner -->
+  <rect class="bann" x="24" y="300" width="900" height="64" rx="12"/>
+  <text x="44" y="328" class="mk" fill="var(--red)">E</text>
+  <text class="lbl" x="70" y="326">No detector watched any of this.</text>
+  <text class="sub" x="70" y="346">Every class above sat undetected for ~a week until a human noticed the symptom. Detection is the gap this design closes.</text>
+
+  <!-- legend -->
+  <text class="sub" x="24" y="398">A derivation · B per-column desync · C stranded local · D bulk-op propagation · E no detection</text>
+</svg>
+<figcaption>Figure 1 — The sync data path, with each failure class pinned to where it strikes.</figcaption>
+</figure>
+
+<table>
+  <thead><tr><th>#</th><th>Failure class</th><th>Incidents</th><th>Mechanism</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><span class="tag A">A</span></td>
+      <td>Derivation on <strong>stale or absent inputs</strong></td>
+      <td>next-review-date strip (#1); 06-08 cross-workspace strip (#2); matrix content-ref (#6)</td>
+      <td>A processor/reprojection computed derived data (<code>references_json</code>) from inputs that were transiently wrong — a schema toggled off, a sibling workspace's blocks, or stale content from a sync-lagged client — and treated the result as authoritative.</td>
+    </tr>
+    <tr>
+      <td><span class="tag B">B</span></td>
+      <td><strong>Per-column patches desyncing</strong> derived data from its source</td>
+      <td>matrix content-ref (#6)</td>
+      <td>A references-only write (a partial/per-column patch) won the <code>references_json</code> column independently of the content it was derived from — derived column and source version drifted apart.</td>
+    </tr>
+    <tr>
+      <td><span class="tag C">C</span></td>
+      <td><strong>Stranded local-only state</strong> that never reconciles</td>
+      <td>daily-note:date never-uploaded values (#3); 3 SRS cards healthy-local/stale-server (#5)</td>
+      <td>Local <code>blocks</code> is correct but never reaches <code>blocks_synced</code> (no-op write produced no <code>ps_crud</code>; equal-<code>updated_at</code> standoff; skipMetadata-no-bump). A scan from the <em>healthy</em> client can't see it.</td>
+    </tr>
+    <tr>
+      <td><span class="tag D">D</span></td>
+      <td><strong>Bulk/recovery operations propagating bad data</strong></td>
+      <td>06-14 <code>updated_at +1</code> recovery touch (#4)</td>
+      <td>A "make the correct copy win" bulk timestamp bump assumed the server copy was correct. It wasn't — it had the 06-09 strip — so the bump <strong>re-published the corruption fleet-wide</strong>, clobbering good local copies.</td>
+    </tr>
+    <tr>
+      <td><span class="tag E">E</span></td>
+      <td><strong>No early detection</strong></td>
+      <td>all of them</td>
+      <td>No invariant check, no anomaly alarm, no divergence scan ran on a cadence. The symptom surfaced a week later, by eye.</td>
+    </tr>
+  </tbody>
+</table>
+<p class="footnote">Every layer below cites the classes it defends, so coverage is auditable.</p>
+
+<h2 id="invariants"><span class="num">2</span>Invariants — the contract</h2>
+<p>The properties that must always hold. Each is cheaply checkable; the layers in §3 are just <em>where</em> and <em>when</em> we check them.</p>
+<table>
+  <thead><tr><th>Inv</th><th>Statement</th><th>Where it breaks</th><th>Cheap check</th></tr></thead>
+  <tbody>
+    <tr><td><strong>R1</strong></td><td><code>references_json</code> = deterministic projection of (content links + ref-typed property values) under the current schema.</td><td>Processor/reprojection on stale/absent inputs <span class="tag A">A</span></td><td>Recompute via <code>projectPropertyReferences</code> + content parse; diff vs stored.</td></tr>
+    <tr><td><strong>R2</strong></td><td><code>block_references</code> index = faithful 1:1 expansion of <code>references_json</code> (one row per <code>(source,target,alias,source_field)</code>). 2026-06-16 audit confirmed a perfect mirror (223,231 = 223,231).</td><td>Trigger skipped, malformed JSON, raw writes bypassing triggers.</td><td>SQL full-outer-diff of <code>json_each(references_json)</code> vs <code>block_references</code>. No app internals.</td></tr>
+    <tr><td><strong>R3</strong></td><td>A <strong>content</strong> ref (empty <code>sourceField</code>) exists iff content has the corresponding <code>[[..]]</code>/<code>((..))</code>/<code>#[[..]]</code>.</td><td>Stale-content reprojection <span class="tag A">A</span><span class="tag B">B</span></td><td>Re-parse content; compare content-refs. (Alias resolution makes full recompute costly — roadmap.)</td></tr>
+    <tr><td><strong>R4</strong></td><td>A <strong>property</strong> ref (<code>sourceField=name</code>) exists iff property <code>name</code> currently holds that target under a ref/refList codec.</td><td>Schema-absence strip (#1/#2); value/schema desync.</td><td>Per ref-typed prop: <code>projectedRefsForField</code> vs stored. The exact next-review-date detector.</td></tr>
+    <tr><td><strong>R5</strong></td><td><code>updated_at</code> monotonic per row (advances on every content change incl. <code>skipMetadata</code>; never backward).</td><td>Pre-fix skipMetadata-no-bump (now fixed); server clamp regression.</td><td>Server clamp trigger + pgTAP. At rest: <code>blocks_history</code> events where <code>after.updated_at ≤ before.updated_at</code>.</td></tr>
+    <tr><td><strong>R6</strong></td><td>No <strong>permanent</strong> <code>blocks</code> vs <code>blocks_synced</code> divergence: transient differences only while a <code>ps_crud</code> upload is pending; otherwise converge within the SLO.</td><td>Stranded local <span class="tag C">C</span>; server-clobbers-newer-local; equal-stamp standoff.</td><td>SQL join <code>blocks</code> ⋈ <code>blocks_synced</code>, excluding ids with a pending <code>ps_crud</code> entry.</td></tr>
+    <tr><td><strong>R7</strong></td><td>Refs don't point at hard-deleted targets beyond a small benign set (dangling refs to deleted/merged pages are a faithful index of user content).</td><td>Page deletes/merges; never a <em>growth</em> trend.</td><td>SQL <code>block_references</code> left-join <code>blocks</code> on <code>target_id</code>. Baseline ≈14 (0.006%); alarm on growth.</td></tr>
+    <tr><td><strong>R8</strong></td><td>Equal <strong>nonzero</strong> <code>updated_at</code> ⟹ identical content (gate invariant I1, <code>reconcile.ts:88</code>).</td><td>Stale in-flight server read under same ms-stamp; bulk bump touching divergent rows <span class="tag C">C</span><span class="tag D">D</span></td><td>SQL <code>blocks</code> ⋈ <code>blocks_synced</code> where <code>updated_at</code> equal &amp; nonzero &amp; content differs.</td></tr>
+  </tbody>
+</table>
+
+<h2 id="layers"><span class="num">3</span>The layers — defense in depth</h2>
+<p>Seven concerns across six layers, ordered from the <strong>point of derivation</strong> (catch the instant corruption is introduced) outward to <strong>fleet-wide at rest</strong> (last-resort catch). The earlier a layer catches, the cheaper the blast radius.</p>
+
+<figure>
+<svg viewBox="0 0 960 470" role="img" aria-label="Defense-in-depth layers from earliest to last-resort catch">
+  <defs>
+    <marker id="arr2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="var(--ink-faint)"/>
+    </marker>
+    <style>
+      .band{stroke:var(--border-strong);stroke-width:1.5;}
+      .ltitle{font:700 15px var(--sans);fill:var(--ink);}
+      .ldesc{font:400 12px var(--sans);fill:var(--ink-soft);}
+      .chip{font:700 10.5px var(--sans);}
+      .axis{font:700 11px var(--sans);fill:var(--ink-faint);}
+    </style>
+  </defs>
+
+  <!-- axis -->
+  <line x1="28" y1="40" x2="28" y2="430" stroke="var(--ink-faint)" stroke-width="1.5" marker-end="url(#arr2)"/>
+  <text class="axis" x="20" y="40" transform="rotate(-90 20,40)" text-anchor="end">catch earliest · cheapest</text>
+  <text class="axis" x="20" y="430" transform="rotate(-90 20,430)" text-anchor="start">last resort · widest blast</text>
+
+  <!-- bands -->
+  <!-- L1 -->
+  <rect class="band" x="48" y="40" width="884" height="58" rx="9" fill="var(--green-soft)"/>
+  <text class="ltitle" x="66" y="64">L1 · Prevention guardrails</text>
+  <text class="ldesc" x="66" y="84">codified principles in processor / reprojection / gate — compile &amp; PR time</text>
+  <text class="chip" x="840" y="64" text-anchor="end" fill="var(--red)">defends A · B</text>
+  <text class="chip" x="840" y="84" text-anchor="end" fill="var(--green)">mostly done</text>
+
+  <!-- L2 -->
+  <rect class="band" x="48" y="106" width="884" height="58" rx="9" fill="var(--green-soft)"/>
+  <text class="ltitle" x="66" y="130">L2 · Write / processor-time assertions</text>
+  <text class="ldesc" x="66" y="150">cheap invariant checks at the point of derivation — dev hard / prod soft-log</text>
+  <text class="chip" x="840" y="130" text-anchor="end" fill="var(--red)">defends A · B</text>
+  <text class="chip" x="840" y="150" text-anchor="end" fill="var(--accent)">new</text>
+
+  <!-- L3 -->
+  <rect class="band" x="48" y="172" width="884" height="58" rx="9" fill="var(--accent-soft)"/>
+  <text class="ltitle" x="66" y="196">L3 · Client background consistency check</text>
+  <text class="ldesc" x="66" y="216">agent-bridge eval (→ optional built-in self-audit) — idle / on-demand</text>
+  <text class="chip" x="840" y="196" text-anchor="end" fill="var(--red)">defends A · B · E</text>
+  <text class="chip" x="840" y="216" text-anchor="end" fill="var(--green)">implemented (eval)</text>
+
+  <!-- L4 -->
+  <rect class="band" x="48" y="238" width="884" height="58" rx="9" fill="var(--accent-soft)"/>
+  <text class="ltitle" x="66" y="262">L4 · Client ↔ server divergence detection</text>
+  <text class="ldesc" x="66" y="282">blocks vs blocks_synced, ps_crud-aware — drives off both views, not one client</text>
+  <text class="chip" x="840" y="262" text-anchor="end" fill="var(--amber)">defends C · E</text>
+  <text class="chip" x="840" y="282" text-anchor="end" fill="var(--green)">implemented (eval)</text>
+
+  <!-- L5 -->
+  <rect class="band" x="48" y="304" width="884" height="58" rx="9" fill="var(--surface-2)"/>
+  <text class="ltitle" x="66" y="328">L5 · Server-side anomaly detection</text>
+  <text class="ldesc" x="66" y="348">blocks_history detectors on the existing hourly probe — fleet-wide, catches mobile</text>
+  <text class="chip" x="840" y="328" text-anchor="end" fill="var(--accent)">defends A · C · D · E</text>
+  <text class="chip" x="840" y="348" text-anchor="end" fill="var(--green)">implemented (probe)</text>
+
+  <!-- L6 -->
+  <rect class="band" x="48" y="370" width="884" height="58" rx="9" fill="var(--surface-2)"/>
+  <text class="ltitle" x="66" y="394">L6 · Recovery tooling</text>
+  <text class="ldesc" x="66" y="414">idempotent dry-run-first harness off the converged view — on-incident, gated</text>
+  <text class="chip" x="840" y="394" text-anchor="end" fill="var(--accent)">defends D</text>
+  <text class="chip" x="840" y="414" text-anchor="end" fill="var(--amber)">patterns exist</text>
+</svg>
+<figcaption>Figure 2 — Six layers. Inner layers catch corruption as it's introduced; outer layers are the at-rest safety net.</figcaption>
+</figure>
+
+<h3>L1 — Prevention guardrails (codify what we learned)</h3>
+<p>These principles are now law; the job is to keep them from regressing.</p>
+<ol>
+  <li><strong>A property-derived ref is tied to its VALUE, not its schema.</strong> Schema changes only ever ADD projections; removal is value-driven (<code>21494fdb</code>). Reprojection is <strong>add-only</strong> (<code>repo.ts:1485</code>) and never strips. Schema absence ⇒ <strong>retain</strong> the ref (<code>referencesProcessor.ts:181</code>), unless this write changed that field's own value.</li>
+  <li><strong>Reprojection is workspace-scoped</strong> (post <code>24971b31</code>) — never touches sibling workspaces.</li>
+  <li><strong>Bulk timestamp bumps are forbidden as a "make-X-win" tool</strong> unless the data forced to win is independently verified correct (incident #4). Recovery drives off the converged/server view and re-verifies — see L6.</li>
+</ol>
+<div class="callout">
+  <h4>Gap to close — class B</h4>
+  <p style="margin:0">Per-column patch consistency. A references-only write can still win the <code>references_json</code> column independently of the content version it was derived from. The gate is whole-row LWW on <code>updated_at</code> (<code>reconcile.ts:88</code>) — it doesn't know a given <code>references_json</code> was computed from <em>stale</em> content. This is the matrix incident's root and is <strong>not structurally prevented yet</strong> — see Decision D1.</p>
+</div>
+
+<h3>L2 — Write / processor-time assertions</h3>
+<p>Cheap invariant checks <strong>at the point of derivation</strong>, so inconsistency is caught the instant it's introduced. Dev = hard throw; prod = soft <code>log</code> + metric counter (never block a user write in prod).</p>
+<ul>
+  <li>References processor write phase: recompute references from the <em>same</em> <code>source</code> snapshot used for the write and assert equality (catches a plan built from a stale read). <em>R1/R3</em></li>
+  <li><code>decideStagingRow</code>/apply: flag a references-only apply whose content column differs from the version the refs imply — derived/source desync. <em>R3 · B · Decision D1</em></li>
+  <li>Reprojection: assert add-only (no prior key missing from the next set). Turns a future "I made it strip again" into a dev-time failure. <em>R1/R4 · A</em></li>
+</ul>
+<p>Small and high-leverage but they touch hot/sync-gate paths, so they ship behind a dev flag first, prod metric second. <span class="pill new">roadmap P2</span></p>
+
+<h3>L3 — Client background consistency check</h3>
+<p>A periodic/idle self-audit, implemented now as a committed read-only agent-bridge eval (<code>scripts/data-integrity/consistency-check.eval.js</code>). The ad-hoc checks used during this week's investigation, as a maintained suite — all read-only:</p>
+<ol>
+  <li><strong>R2 mirror</strong> — <code>references_json</code> ↔ <code>block_references</code>, both directions (pure SQL).</li>
+  <li><strong>R7 dangling</strong> — refs whose target is missing/deleted, split content vs property (reports baseline; for trend not absolute).</li>
+  <li><strong>R4 property-ref projection</strong> — for every ref-typed property in <code>repo.propertySchemas</code>, recompute via <code>projectPropertyReferences</code> and diff vs stored. The generic next-review-date detector (covers all ~83 ref props). Degrades gracefully if schemas can't resolve.</li>
+  <li><strong>R1/R3 content-link coarse check</strong> — heuristic flag for blocks whose content has link syntax but zero content-refs. Informational (escaping/code-blocks cause benign hits).</li>
+</ol>
+<p>Promotion path: the same logic can become a built-in idle self-audit (mirror <code>runAnalyzeIfDue</code>) emitting a metric + optional UI health indicator. Deferred until the eval proves low-noise.</p>
+
+<h3>L4 — Client ↔ server divergence detection</h3>
+<p>The lesson of incidents #3 and #5: <strong>per-client scans miss divergence.</strong> Detection must compare <code>blocks</code> against <code>blocks_synced</code>, <code>ps_crud</code>-aware. Same eval; categories:</p>
+<ul>
+  <li><strong>Stranded local-only</strong> — <code>blocks</code> row, no <code>blocks_synced</code> row, no pending <code>ps_crud</code> (will never upload). <em>R6 · C</em></li>
+  <li><strong>Equal-stamp standoff</strong> — both exist, <code>updated_at</code> equal &amp; nonzero, content differs (violates R8; neither side yields). <em>R8 · C/D</em></li>
+  <li><strong>Local-richer-than-server</strong> — <code>blocks</code> newer, no pending <code>ps_crud</code> (at-risk local data that won't sync). <em>R6 · C</em></li>
+  <li><strong>Server-ahead-undrained</strong> — <code>blocks_synced</code> newer &amp; differs, nothing queued. Normally transient; persistent ⇒ a Layout-B drain problem. <em>R6</em></li>
+</ul>
+<p><code>ps_crud</code> membership read via <code>SELECT json_extract(data,'$.id') FROM ps_crud WHERE json_extract(data,'$.type')='blocks'</code>.</p>
+
+<h3>L5 — Server-side anomaly detection (extend the hourly probe)</h3>
+<p><code>blocks_history</code> is the forensic backbone: append-only, with <code>op</code>/<code>semantic_op</code>/<code>changed_columns</code>/<code>actor</code>/<code>event_time</code>/<code>before_diff</code>/<code>after_diff</code>. The existing hourly probe (<code>scripts/supabase-health.mjs</code>, cron <code>:17</code>) already holds a privileged pooler connection. We <strong>extend it</strong> with <code>runDataIntegrityChecks()</code> over a 90-minute window (overlaps the hourly cadence so no gap):</p>
+<table>
+  <thead><tr><th>Detector</th><th>Signature</th><th>Incident</th></tr></thead>
+  <tbody>
+    <tr><td>Mass references-only strip</td><td><code>U</code> events, <code>changed_columns ⊆ {references_json, updated_at, user_updated_at}</code>, ref set emptied/shrunk, grouped by actor+workspace.</td><td>#1 (06-09)</td></tr>
+    <tr><td>Mass property-key removal</td><td><code>U</code> events with <code>properties_json</code> changed and key-count dropped.</td><td>#1 family</td></tr>
+    <tr><td>Mass deletions</td><td><code>D</code> + <code>soft_delete</code> count per actor in window.</td><td>guardrail</td></tr>
+    <tr><td>Bulk <code>updated_at</code>-only bump</td><td><code>changed_columns = {updated_at}</code> (± <code>user_updated_at</code>) in bulk — the recovery-touch shape. <strong>Any bulk occurrence warns</strong>: per #4 a bulk bump always deserves a human glance.</td><td>#4 (06-14)</td></tr>
+    <tr><td>At-rest property-ref inconsistency</td><td>Curated high-value props (<code>next-review-date</code>): value present in <code>properties_json</code> but ref absent in <code>references_json</code> (the proven detection query).</td><td>#1</td></tr>
+  </tbody>
+</table>
+<div class="callout">
+  <h4>Alerting posture — Decision D2</h4>
+  <p style="margin:0">The probe's failure channel is GitHub-Actions-failure email; only <code>result.failures</code> exits non-zero. Data-integrity detectors are <strong>warn-by-default</strong> (visible in the JSON snapshot, no email) so an untuned detector can't spam on first deploy — <strong>except</strong> the mass references-only strip catastrophe, which hard-fails above a conservative threshold (the now-add-only reprojection should never strip, so a large count is unambiguously wrong). Set <code>DATA_INTEGRITY_STRICT=1</code> to promote all warns to fails once thresholds are baselined.</p>
+</div>
+
+<h3>L6 — Recovery tooling</h3>
+<p>Turn the ad-hoc bridge evals into a maintained, idempotent, <strong>dry-run-first</strong> harness. The pattern already exists and is good (<code>scripts/daily-note-date-recovery/recover.eval.js</code>): default dry-run returns a report; <code>--data-json '{"apply":true}'</code> writes through <code>repo.tx</code> (so rows upload and the fleet converges); in-tx recheck makes re-runs safe. Rules learned:</p>
+<ul>
+  <li><strong>Drive off the converged/server view</strong>, or write from the client where the row is <em>actually</em> stale (a byte-identical write on the healthy client produces no <code>ps_crud</code> — the #5 trap).</li>
+  <li><strong>Verify convergence after</strong> (re-run the detector; confirm <code>ps_crud</code> drained).</li>
+  <li><strong>Never blind-bump <code>updated_at</code></strong> to force unverified data to win (incident #4).</li>
+</ul>
+<p>These are conventions + the existing harness, not a new framework. A shared <code>scripts/data-integrity/</code> README is the cheap win. <span class="pill partial">P1</span></p>
+
+<h2 id="slo"><span class="num">4</span>Convergence SLO</h2>
+<p>A row is "diverged" if <code>blocks</code> ≠ <code>blocks_synced</code> with <strong>no</strong> pending <code>ps_crud</code>. Target: <strong>a row diverged &gt; 30 minutes is an anomaly.</strong> An online client drains a staging batch in seconds; 30 min covers an offline/backgrounded device's next foreground. This SLO is what L4 (client) and L5 (server, indirectly) alarm against. For the small fleet it's a human-actionable signal, not an auto-remediation trigger.</p>
+
+<h2 id="roadmap"><span class="num">5</span>Roadmap — prioritized by value / cost</h2>
+<p>Highest value / lowest cost first. "Cost" includes risk to hot/sync paths.</p>
+<table>
+  <thead><tr><th>P</th><th>Item</th><th>Value</th><th>Cost</th><th>Defends</th><th>Status</th></tr></thead>
+  <tbody>
+    <tr><td class="p0">P0</td><td>Client consistency-check eval (L3+L4)</td><td>High — exact week's-checks, repeatable</td><td>Low — read-only eval</td><td>A·B·C·E</td><td><span class="pill done">done</span></td></tr>
+    <tr><td class="p0">P0</td><td>Server anomaly detector in probe (L5)</td><td>High — fleet-wide, catches mobile</td><td>Low — read-only SQL on existing cron</td><td>A·C·D·E</td><td><span class="pill done">done</span></td></tr>
+    <tr><td class="p1">P1</td><td>Baseline + tune L5 thresholds, then <code>DATA_INTEGRITY_STRICT</code></td><td>High — turns warns into real alerts</td><td>Low — one baseline read</td><td>A·C·D</td><td>after a few cron runs</td></tr>
+    <tr><td class="p1">P1</td><td><code>scripts/data-integrity/</code> README codifying recovery rules (L6)</td><td>Med — prevents recurrence of #4</td><td>Low</td><td>D</td><td>next</td></tr>
+    <tr><td class="p2">P2</td><td>Reprojection add-only + processor basis dev assertions (L2)</td><td>High — catches class A at introduction</td><td>Med — hot path, dev-flag first</td><td>A</td><td>designed</td></tr>
+    <tr><td class="p2">P2</td><td>Promote consistency check to built-in idle self-audit + metric (L3)</td><td>Med — no manual run</td><td>Med — new scheduled task</td><td>A·B·E</td><td>after eval proven</td></tr>
+    <tr><td class="p3">P3</td><td>Per-column / derived-vs-source desync guard at the gate (L2)</td><td>High — only structural fix for class B</td><td>High — sync-gate semantics (D1)</td><td>B</td><td>needs D1</td></tr>
+    <tr><td class="p3">P3</td><td>Full content-ref recompute (alias-resolving) in consistency check (R3)</td><td>Med</td><td>Med — alias seat resolution cost</td><td>A·B</td><td>roadmap</td></tr>
+  </tbody>
+</table>
+
+<h2 id="decisions"><span class="num">6</span>Open design decisions — need you</h2>
+
+<div class="callout decision">
+  <h4>D1 · Per-column patch / derived-vs-source desync at the sync gate (class B, the matrix incident)</h4>
+  <p>Today the gate is whole-row LWW on <code>updated_at</code>; a references-only patch from a sync-lagged client can win the <code>references_json</code> column carrying refs derived from <em>stale</em> content, independent of the content no-clobber. Options:</p>
+  <ul>
+    <li><strong>(a) Tie derived columns to a content version</strong> — stamp <code>references_json</code> writes with the <code>updated_at</code> of the content they were derived from; reject a references apply whose basis is older than local content. Strongest, but adds a column/semantic to the gate.</li>
+    <li><strong>(b) Re-derive on apply</strong> — when applying a references-only staging row, re-run projection locally instead of trusting incoming refs. Moves derivation to the consumer; cost on the sync path.</li>
+    <li><strong>(c) Accept + detect</strong> — leave the gate, rely on L3/L5 to catch desync after the fact. Cheapest; matches the small-fleet posture.</li>
+  </ul>
+  <p style="margin-bottom:0"><strong>Recommendation: (c) for now</strong>, revisit (a) if L5 shows recurrence. This touches sync-gate semantics — flagging for explicit sign-off before any gate change.</p>
+</div>
+
+<div class="callout decision">
+  <h4>D2 · L5 alerting posture</h4>
+  <p style="margin-bottom:0">Warn-by-default with one catastrophe hard-fail, promotable via <code>DATA_INTEGRITY_STRICT</code> (see §3 L5). Confirm this matches how you want the email channel used, and whether data-integrity checks should share the infra-probe's failure channel or get a separate one. <strong>Recommendation: share it</strong> — one cron, one channel, small fleet.</p>
+</div>
+
+<div class="callout decision">
+  <h4>D3 · Built-in self-audit vs eval-only (L3)</h4>
+  <p style="margin-bottom:0">A built-in idle self-audit means a scheduled task + metric in the app bundle. <strong>Recommendation: stay eval-only</strong> until the eval proves low-noise across a couple of weeks, then promote.</p>
+</div>
+
+<h2 id="implemented"><span class="num">7</span>What this change implements</h2>
+<ul>
+  <li>This document.</li>
+  <li><code>scripts/data-integrity/consistency-check.eval.js</code> — read-only client consistency + divergence suite (L3+L4), dry-run only (no apply path; pure detection).</li>
+  <li><code>scripts/data-integrity/README.md</code> — how to run it + recovery conventions (L6).</li>
+  <li><code>scripts/supabase-health.mjs</code> — <code>runDataIntegrityChecks()</code> extension (L5), warn-biased, <code>DATA_INTEGRITY_STRICT</code> opt-in for hard-fail.</li>
+</ul>
+<p>Nothing here writes to shared infra. The server detector runs read-only SELECTs on the next scheduled cron; the client eval requires a connected bridge client and writes nothing.</p>
+<p class="footnote" style="margin-top:28px">The implementation (eval + probe extension) is authored and held in a git stash pending review of this design. It is intentionally not committed alongside this doc.</p>
+
+</div>
+</body>
+</html>
