@@ -266,6 +266,36 @@ describe('UserSchemasService.getSchemaForBlockId', () => {
   })
 })
 
+describe('UserSchemasService workspace switch', () => {
+  // Regression for the in-flight-write cross-workspace leak surfaced in the
+  // #90 adversarial review: addSchema pins the active workspace before its
+  // first await, so a schema whose create/tx is still in flight when the user
+  // switches workspaces (dispose → restart the projector on the new
+  // workspace) is NOT published into the new workspace's 'user-data' bucket.
+  // The projector's `disposed` flag alone can't catch this — the per-projector
+  // container is reused and re-armed across the switch.
+  it('does not leak an in-flight addSchema into a newly-switched workspace', async () => {
+    env = await setup()
+    // Kick off addSchema; its synchronous prologue pins the W1 workspace
+    // before the first await (createChild).
+    const pending = env.service.addSchema({name: 'leaky', presetId: 'url'})
+
+    // Mimic the production workspace switch that the React provider runs while
+    // the tx is in flight: dispose the projector (tears down the W1
+    // subscription + clears the bucket), activate W2, restart on W2.
+    env.service.dispose()
+    const W2 = 'ws-user-schemas-2'
+    env.repo.setActiveWorkspaceId(W2)
+    await getOrCreatePropertiesPage(env.repo, W2)
+    env.service.start()
+
+    await pending
+    // The W1 schema must not surface in W2's runtime view.
+    expect(env.repo.propertySchemas.get('leaky')).toBeUndefined()
+    expect(env.service.getSchemaBlockId('leaky')).toBeUndefined()
+  })
+})
+
 describe('Repo.setFacetRuntime — runtime contribution survival', () => {
   it('user-data schema bucket survives a runtime swap', async () => {
     env = await setup()

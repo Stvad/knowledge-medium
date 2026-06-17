@@ -19,12 +19,17 @@
  *      is a per-user singleton reused across workspace switches and
  *      `setFacetRuntime` carries durable buckets forward, so a stale
  *      bucket would leak into the next workspace until its first tick);
- *    - one `disposed` flag checked before every synchronous publish, so
- *      an in-flight async write (schemas' post-tx `appendUserSchema`)
- *      completing after teardown can't republish into the next
- *      workspace. This is the single shape for the in-flight-write
- *      hazard the two services used to guard two different ways
- *      (schemas via `latestBlocks=[]`, types via `subscriptionPrimed`).
+ *    - one `disposed` flag checked before every synchronous publish, so a
+ *      publish from a torn-down container (a queued subscription/secondary
+ *      callback, or a write landing during the dispose→restart gap) can't
+ *      reach the bucket. This unifies the in-flight-write guard the two
+ *      services expressed two different ways (schemas via `latestBlocks=[]`,
+ *      types via `subscriptionPrimed`). Note its LIMIT: the per-projector
+ *      container is reused across workspace switches and `start()` re-arms
+ *      `disposed`, so the flag alone does NOT stop an async write that
+ *      resolves *after* the next workspace has started. A synchronous write
+ *      path that can span a switch (schemas' `addSchema`) additionally pins
+ *      its workspace at the call site and skips the publish if it changed.
  *
  *  The per-projector specifics — the builder, the row form (raw
  *  `BlockData` vs hydrated `Block` facades), the secondary re-resolve
@@ -51,7 +56,9 @@ export interface ProjectorHandle<Contribution = unknown> {
   contributionForBlockId(blockId: string): Contribution | undefined
   /** Synchronously upsert one contribution and publish — the
    *  schemas `addSchema` path registers before the subscription tick.
-   *  No-op once disposed (the in-flight-write guard). */
+   *  No-op once the container is disposed (guards a publish from a
+   *  torn-down container; see the module header for the cross-workspace
+   *  limit this does NOT cover). */
   upsert(contribution: Contribution, blockId: string): void
 }
 
@@ -302,10 +309,21 @@ export class ProjectorRuntime {
   startAll(): Unsubscribe {
     const ordered = orderByDependencies(this.descriptors())
     const disposers: Unsubscribe[] = []
-    for (const descriptor of ordered) disposers.push(this.startById(descriptor.id))
-    return () => {
-      for (const dispose of disposers.reverse()) dispose()
+    const disposeStarted = (): void => {
+      for (let i = disposers.length - 1; i >= 0; i--) disposers[i]()
     }
+    for (const descriptor of ordered) {
+      try {
+        disposers.push(this.startById(descriptor.id))
+      } catch (err) {
+        // Roll back the projectors already started this call so a partial
+        // failure can't strand live subscriptions the caller never got a
+        // disposer for.
+        disposeStarted()
+        throw err
+      }
+    }
+    return disposeStarted
   }
 
   /** Deactivate + reset a projector (idempotent). The container is kept

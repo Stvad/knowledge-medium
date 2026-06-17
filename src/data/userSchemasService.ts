@@ -208,8 +208,9 @@ export class UserSchemasService {
       ? preset.configCodec.encode(parsedConfig as never)
       : {}
 
+    const workspaceId = this.repo.activeWorkspaceId
     const propertiesPageId = this.repo.propertiesPageId
-    if (!propertiesPageId) {
+    if (!workspaceId || !propertiesPageId) {
       throw new Error('[addSchema] no active workspace; properties page unavailable')
     }
 
@@ -229,10 +230,19 @@ export class UserSchemasService {
       await tx.setProperty(childId, presetConfigProp, persistConfig as Record<string, unknown>)
     }, {scope: ChangeScope.BlockDefault, description: `addSchema ${name}`})
 
-    // Register synchronously, before returning. The subscription will
-    // fire later (the block write triggers it) but arrives at an
+    // Register synchronously, before returning — but only if the workspace
+    // didn't change while the create/tx was in flight. The schema block is
+    // durably persisted under `workspaceId`'s Properties page; publishing it
+    // into the (workspace-agnostic) 'user-data' bucket after a switch would
+    // leak it into the new workspace. The projector's `disposed` guard can't
+    // catch this — the per-projector container is reused and re-armed across
+    // the switch — so the in-flight write is pinned to its workspace here.
+    // Skipping is safe: when `workspaceId` is active again, its subscription
+    // re-materialises the block. The subscription otherwise arrives at an
     // idempotent state.
-    this.appendUserSchema(newSchema, childId)
+    if (this.repo.activeWorkspaceId === workspaceId) {
+      this.appendUserSchema(newSchema, childId)
+    }
     return newSchema
   }
 }
