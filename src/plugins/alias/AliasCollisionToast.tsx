@@ -19,7 +19,7 @@ import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks.js'
 import { navigate } from '@/utils/navigation.js'
 import { dismissToast, showError } from '@/utils/toast.js'
 import type { Repo } from '@/data/repo'
-import { ALIAS_COLLISION_MERGE_MUTATOR } from '@/plugins/alias/collisionMerge'
+import { ALIAS_COLLISION_MERGE_MUTATOR } from './collisionMerge.ts'
 import { getLayoutSessionId } from '@/utils/layoutSessionId.js'
 import { retargetPanelBlockIds } from '@/utils/panelLayoutProjection.js'
 

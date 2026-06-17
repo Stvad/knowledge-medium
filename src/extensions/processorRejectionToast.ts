@@ -1,126 +1,86 @@
 /**
- * Routes `ProcessorRejection` from `repo.tx` to the toast layer.
+ * Generic routing of `ProcessorRejection` (thrown from `repo.tx` and
+ * surfaced via `repo.onUserError`) to the toast layer.
  *
- * Wired once at Repo bootstrap (`src/context/repo.tsx`) via
- * `repo.onUserError(surfaceProcessorRejectionFor(repo))`. The repo
- * curried into the factory gives the action-button click handler
- * what it needs (`navigate(repo, ...)`) without each call site
- * threading it through.
+ * Core stays ignorant of any specific rejection: a plugin that emits a
+ * `ProcessorRejection {code}` contributes a `rejectionToastFacet` entry
+ * for that code (see `@/plugins/alias/rejectionToast`), and the mount
+ * below dispatches each rejection to its registered handler — falling
+ * back to the raw message for codes nobody claimed. This inverts the
+ * old design, where this module imported plugin-specific toasts directly.
  *
- * Per-code formatting lives here so the data layer stays UI-agnostic
- * and we keep one grep target for "what does this error code look
- * like to the user."
- *
- * Lives in the app layer (`src/extensions`), not `src/utils`: it knows
- * about plugin-specific toasts (e.g. the alias plugin's collision
- * merge), so it depends on `@/plugins/*`. That dependency direction is
- * fine here — `staticAppExtensions.ts` already imports every plugin —
- * but would be an inverted edge from the leaf `utils` layer.
- *
- * Today's codes:
- *   - `alias.collision` → emitted by the alias.sync same-tx processor
- *     when a block tries to claim an alias already held by a
- *     different live block.
- *
- * Adding a code: extend the switch + `meta` typing inside this file.
- * Don't sprinkle toast calls in processor code — keep the routing
- * in one place so the codes stay greppable.
+ * The mount lives in the app runtime (not Repo bootstrap) because that's
+ * where the resolved facet is readable; toasts can't render before the
+ * runtime mounts anyway (the `<Toaster/>` mount has the same lifetime —
+ * see `toastAppMount.tsx`).
  */
-
-import { createElement } from 'react'
+import { useEffect } from 'react'
 import type { ProcessorRejection } from '@/data/api'
 import type { Repo } from '@/data/repo'
-import { AliasCollisionToast } from './AliasCollisionToast.tsx'
-import { showCustom, showError } from '@/utils/toast.ts'
+import { keyedMapFacet, type AppExtension } from '@/facets/facet.js'
+import { systemToggle } from '@/facets/togglable.js'
+import { appMountsFacet } from './core.ts'
+import { useRepo } from '@/context/repo.js'
+import { useAppRuntime } from '@/extensions/runtimeContext.js'
+import { showError } from '@/utils/toast.js'
 
-interface AliasCollisionMeta {
-  alias: string
-  conflictingBlockId: string
-  conflictingBlockTitle: string
-  workspaceId: string
-  attemptedOn: string
-  dropSourceAliases?: string[]
-  collisionOrigin?: string
+/** Plugin-contributed handler for the rejection `code` it emits. Owns the
+ *  whole user-facing presentation (copy, custom toast body, duration), so
+ *  core never learns a specific rejection's shape. */
+export interface RejectionToastContribution {
+  /** `ProcessorRejection.code` this handler surfaces. */
+  code: string
+  /** Show the toast for `error`. `repo` is supplied so action buttons
+   *  (navigate, merge, …) can dispatch without each handler capturing it. */
+  handle: (error: ProcessorRejection, repo: Repo) => void
 }
 
-const isStringArray = (value: unknown): value is string[] =>
-  Array.isArray(value) && value.every(item => typeof item === 'string')
+export const rejectionToastFacet = keyedMapFacet<RejectionToastContribution>(
+  'core.rejectionToasts',
+  c => c.code,
+)
 
-const isAliasCollisionMeta = (meta: unknown): meta is AliasCollisionMeta =>
-  meta !== null
-  && typeof meta === 'object'
-  && typeof (meta as AliasCollisionMeta).alias === 'string'
-  && typeof (meta as AliasCollisionMeta).conflictingBlockId === 'string'
-  && typeof (meta as AliasCollisionMeta).conflictingBlockTitle === 'string'
-  && typeof (meta as AliasCollisionMeta).workspaceId === 'string'
-  && typeof (meta as AliasCollisionMeta).attemptedOn === 'string'
-  && (
-    (meta as AliasCollisionMeta).dropSourceAliases === undefined
-    || isStringArray((meta as AliasCollisionMeta).dropSourceAliases)
-  )
-  && (
-    (meta as AliasCollisionMeta).collisionOrigin === undefined
-    || typeof (meta as AliasCollisionMeta).collisionOrigin === 'string'
-  )
-
-const truncate = (s: string, n: number): string =>
-  s.length <= n ? s : `${s.slice(0, n - 1)}…`
-
-export const surfaceProcessorRejectionFor = (repo: Repo) =>
-  (error: ProcessorRejection): void => {
-    switch (error.code) {
-      case 'alias.collision': {
-        if (!isAliasCollisionMeta(error.meta)) {
-          // Defensive: meta shape mismatch shouldn't happen since both
-          // ends are in this repo, but if it does we fall back to the
-          // raw message rather than crashing.
-          showError(error.message)
-          return
-        }
-        const {
-          alias,
-          attemptedOn,
-          conflictingBlockId,
-          conflictingBlockTitle,
-          workspaceId,
-          dropSourceAliases,
-          collisionOrigin,
-        } = error.meta
-        // Blank-title fallback: a block can legitimately claim an
-        // alias with empty content, in which case the title would be
-        // useless in the toast — fall back to showing the alias text.
-        const displayTitle = conflictingBlockTitle.trim() === ''
-          ? `"${alias}"`
-          : `"${truncate(conflictingBlockTitle, 60)}"`
-        // `collisionOrigin: 'create'` — the rejected block was created
-        // in the rolled-back tx, so it no longer exists and there is
-        // nothing to merge from. Don't offer a merge that would fail.
-        const offerMerge = collisionOrigin !== 'create'
-        const message = offerMerge
-          ? `Alias "${alias}" is already used by ${displayTitle}. Your edit was reverted — try a different name or merge with the existing page.`
-          : `Alias "${alias}" is already used by ${displayTitle}. Nothing was created — try a different name.`
-        showCustom(
-          id => createElement(AliasCollisionToast, {
-            toastId: id,
-            message,
-            alias,
-            attemptedOn,
-            conflictingBlockId,
-            conflictingBlockTitle,
-            workspaceId,
-            dropSourceAliases,
-            offerMerge,
-            repo,
-          }),
-          {duration: 12000},
-        )
-        return
-      }
-      default: {
-        // Unknown code — show the raw message. Better than swallowing
-        // silently; any new processor that throws ProcessorRejection
-        // surfaces SOMETHING until we add a tailored handler.
-        showError(error.message)
-      }
-    }
+/** Dispatch one rejection to the handler contributed for its `code`. An
+ *  unknown code falls back to the raw message — better than swallowing
+ *  silently; any new processor that throws `ProcessorRejection` surfaces
+ *  SOMETHING until a plugin contributes a tailored handler. Pure (no
+ *  React) so the routing contract is unit-testable. */
+export const routeProcessorRejection = (
+  error: ProcessorRejection,
+  repo: Repo,
+  contributions: ReadonlyMap<string, RejectionToastContribution>,
+): void => {
+  const contribution = contributions.get(error.code)
+  if (!contribution) {
+    showError(error.message)
+    return
   }
+  contribution.handle(error, repo)
+}
+
+/** Invisible app-mount that wires `repo.onUserError` to the contributed
+ *  handlers. Re-subscribes when the runtime swaps so a freshly
+ *  toggled-in plugin's handler is picked up. */
+const ProcessorRejectionToastMount = (): null => {
+  const repo = useRepo()
+  const runtime = useAppRuntime()
+  useEffect(
+    () => repo.onUserError(error =>
+      routeProcessorRejection(error, repo, runtime.read(rejectionToastFacet)),
+    ),
+    [repo, runtime],
+  )
+  return null
+}
+
+export const processorRejectionToastExtension: AppExtension = systemToggle({
+  id: 'system:processor-rejection-toast',
+  name: 'Transaction-error toasts',
+  description: 'Surfaces rejected transactions (e.g. alias collisions) as toasts. Disabling silently drops them.',
+  essential: true,
+}).of([
+  appMountsFacet.of(
+    {id: 'core.processor-rejection-toast', component: ProcessorRejectionToastMount},
+    {source: 'core'},
+  ),
+])
