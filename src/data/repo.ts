@@ -1398,11 +1398,15 @@ export class Repo {
       //    reasoned only about grow-only cold-start materialization and
       //    cross-workspace switches, never the toggle/safeMode re-resolve that
       //    removes a plugin's schema without deleting anything.)
-      //  - PRESENT but non-ref ⇒ SCAN. A real ref→non-ref redefine: its
-      //    now-stale derived refs are swept (the strip we *do* want).
-      // Genuinely deleting a ref-typed schema therefore no longer eagerly sweeps
-      // its backlinks; the references processor strips them on each affected
-      // block's next write — far cheaper than a mass silent delete.
+      //  - PRESENT but non-ref ⇒ scanned, but reprojection is ADD-ONLY (see the
+      //    per-block loop), so this is a no-op: there is nothing new to project.
+      //    A real ref→non-ref redefine's now-stale derived refs are swept lazily
+      //    by the references processor on each block's next write, not here.
+      // Reprojection therefore never strips derived refs. Removal is always
+      // value-driven (the per-block processor recomputes a field when its value
+      // changes) or an explicit delete — never a side-effect of a schema going
+      // absent or non-ref. Far cheaper than the mass silent delete that an
+      // eager strip risked.
       const markers = await this.reprojectionMarkers.load()
       const namesToScan: string[] = []
       let skippedByMarker = 0
@@ -1454,14 +1458,13 @@ export class Repo {
       // plugin-contributed ref schemas there's simply no legacy data,
       // and we should stamp them as "caught up" the first time.
 
-      const propertyNameSet = new Set(namesToScan)
-
       // Fresh live snapshot for the per-block projection — re-read here (after
       // the SELECT) rather than reusing `liveSchemasAtGate`, so a redefine that
       // landed while the scan was in flight is reconciled. Project against the
       // live registry only while still on the scan's workspace; after a
       // workspace switch fall back to the scheduled snapshot so the other
-      // workspace's schema set can't strip the captured workspace's refs.
+      // workspace's schema set can't decide ref-ness for the captured
+      // workspace's blocks.
       const liveSchemas = this._activeWorkspaceId === workspaceId
         ? this._propertySchemas
         : propertySchemas
@@ -1479,19 +1482,36 @@ export class Repo {
           for (const block of blocks) {
             const liveBlock = await tx.get(block.id)
             if (liveBlock === null || liveBlock.deleted) continue
-            const retainedRefs = liveBlock.references.filter(ref =>
-              !ref.sourceField || !propertyNameSet.has(ref.sourceField)
-            )
-            const addedRefs = namesToScan.flatMap(name =>
+            // Add-only: reprojection NEVER strips. Union newly-projected refs
+            // into the block's existing set, keeping everything already there.
+            // Reprojection fires on a schema change while block *values* are
+            // static, so a still-ref field projects exactly its existing refs
+            // (no-op), a newly-ref field gains refs, and a now-non-ref / absent
+            // field keeps its existing refs (projection adds nothing). All
+            // removal is lazy — the per-block references processor recomputes a
+            // field on the next write to its value. That is why a schema going
+            // absent (plugin toggled off, ?safeMode) cannot delete derived data
+            // here, and a ref→non-ref redefine's stale refs are swept on the
+            // block's next write rather than eagerly here.
+            const projected = namesToScan.flatMap(name =>
               projectedRefsForField(
                 liveBlock,
                 latestRefProjectionSchema(propertySchemas, liveSchemas, name),
                 name,
               )
             )
-            const nextReferences = [...retainedRefs, ...addedRefs]
-            if (JSON.stringify(liveBlock.references) === JSON.stringify(nextReferences)) continue
-            await tx.update(liveBlock.id, {references: nextReferences}, {skipMetadata: true})
+            const existingKeys = new Set(
+              liveBlock.references.map(ref => `${ref.sourceField ?? ''}\u0000${ref.id}`),
+            )
+            const newRefs = projected.filter(
+              ref => !existingKeys.has(`${ref.sourceField ?? ''}\u0000${ref.id}`),
+            )
+            if (newRefs.length === 0) continue
+            await tx.update(
+              liveBlock.id,
+              {references: [...liveBlock.references, ...newRefs]},
+              {skipMetadata: true},
+            )
             blocksUpdated += 1
           }
         }, {

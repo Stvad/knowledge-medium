@@ -106,6 +106,7 @@ interface SourcePlan {
 const buildSourcePlan = async (
   ctx: ProcessorCtx,
   source: BlockData,
+  before: BlockData | null,
 ): Promise<SourcePlan> => {
   const aliasMarks = parseAliasMarks(source.content)
   const blockRefMarks = parseBlockRefs(source.content)
@@ -166,7 +167,27 @@ const buildSourcePlan = async (
   }
 
   const propertyRefs = projectPropertyReferences(source, ctx.propertySchemas)
-  const references: BlockReference[] = [...aliasRefs, ...dateRefs, ...blockRefs, ...propertyRefs]
+  // Retain derived refs whose property schema is currently ABSENT from the
+  // registry — the owning plugin is toggled off / not yet loaded. Absence means
+  // "can't re-derive", NOT "delete": the value still encodes the relationship,
+  // so keep the existing projection rather than dropping it. Dropping here is
+  // the per-block "drip" that, fleet-wide, complements the reprojection
+  // mass-strip (both silently deleted ~10k SRS `next-review-date` backlinks).
+  // The one exception is when THIS write changed that field's value: a retained
+  // ref would then contradict the new value, and we can't re-derive it without
+  // the schema, so drop it. A *present* schema (ref or non-ref) is already
+  // handled by projectPropertyReferences above — it re-derives, or correctly
+  // drops a redefined-to-non-ref field's stale refs.
+  const retainedAbsentRefs = source.references.filter(ref => {
+    if (!ref.sourceField) return false
+    if (ctx.propertySchemas.has(ref.sourceField)) return false
+    const afterValue = source.properties[ref.sourceField]
+    if (afterValue === undefined) return false
+    return JSON.stringify(before?.properties[ref.sourceField]) === JSON.stringify(afterValue)
+  })
+  const references: BlockReference[] = [
+    ...aliasRefs, ...dateRefs, ...blockRefs, ...propertyRefs, ...retainedAbsentRefs,
+  ]
   // tx.update normalises references on write, so `source.references`'s
   // JSON text — when written by any tx.* path — is already in canonical
   // form (sorted, deduped, omitted-empty-sourceField, no whitespace).
@@ -236,7 +257,7 @@ export const parseReferencesProcessor = definePostCommitProcessor({
       if (row.after === null) continue
       // Skip soft-deletes (after.deleted === true) — same reason.
       if (row.after.deleted) continue
-      plans.push(await buildSourcePlan(ctx, row.after))
+      plans.push(await buildSourcePlan(ctx, row.after, row.before))
     }
     if (!plans.some(planNeedsWrite)) return
 
