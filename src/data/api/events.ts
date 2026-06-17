@@ -37,8 +37,19 @@ export interface CoreBlockMergedEvent {
   aliasRewrites: readonly BlockMergeAliasRewrite[]
 }
 
+export const CORE_BLOCK_DELETED_EVENT = 'core.blockDeleted' as const
+
+export interface CoreBlockDeletedEvent {
+  workspaceId: string
+  /** The block that was soft-deleted. Soft-delete only flips `deleted`,
+   *  so the row still carries `content` — same-tx consumers read it back
+   *  via `tx.get` to inline into blocks that referenced it. */
+  blockId: string
+}
+
 declare module './sameTxProcessor' {
   interface SameTxEventRegistry {
     'core.blockMerged': CoreBlockMergedEvent
+    'core.blockDeleted': CoreBlockDeletedEvent
   }
 }

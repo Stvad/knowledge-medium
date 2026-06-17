@@ -16,6 +16,7 @@ import {
   rewriteBlockRefs,
   rewriteWikilinks,
 } from './referenceParser.ts'
+import { inlineDeletedBlockRefsProcessor } from './inlineDeletedBlockRefsProcessor.ts'
 
 export const RETARGET_MERGED_BLOCK_REFERENCES_PROCESSOR =
   'references.retargetMergedBlockReferences'
@@ -127,4 +128,5 @@ export const retargetMergedBlockReferencesProcessor = defineSameTxProcessor({
 
 export const referencesSameTxProcessors: ReadonlyArray<AnySameTxProcessor> = [
   retargetMergedBlockReferencesProcessor,
+  inlineDeletedBlockRefsProcessor,
 ]

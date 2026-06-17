@@ -18,6 +18,7 @@
 import { z } from 'zod'
 import {
   ChangeScope,
+  CORE_BLOCK_DELETED_EVENT,
   defineMutator,
   type AnyMutator,
   type BlockData,
@@ -182,7 +183,15 @@ export const setProperty = defineMutator<
 
 /** DFS walk via tx.childrenOf, calling tx.delete on each visited id.
  *  Iterative + explicit stack to avoid blowing the JS recursion limit
- *  on deep trees. */
+ *  on deep trees.
+ *
+ *  Each freshly soft-deleted block emits `CORE_BLOCK_DELETED_EVENT` so
+ *  same-tx consumers can react atomically with the delete — the
+ *  references plugin uses it to inline a deleted block's content into the
+ *  blocks that referenced it (`((id))`), keeping those referrers readable
+ *  instead of leaving dangling block-refs. Read the block before deleting
+ *  so we have its workspace and can skip already-tombstoned rows (whose
+ *  referrers were already inlined at first deletion). */
 const softDeleteSubtree = async (tx: Tx, rootId: string): Promise<void> => {
   const stack: string[] = [rootId]
   const seen = new Set<string>()
@@ -190,9 +199,16 @@ const softDeleteSubtree = async (tx: Tx, rootId: string): Promise<void> => {
     const id = stack.pop()!
     if (seen.has(id)) continue
     seen.add(id)
+    const block = await tx.get(id)
     const children = await tx.childrenOf(id)
     for (const c of children) stack.push(c.id)
     await tx.delete(id)
+    if (block !== null && !block.deleted) {
+      tx.emitEvent(CORE_BLOCK_DELETED_EVENT, {
+        workspaceId: block.workspaceId,
+        blockId: id,
+      })
+    }
   }
 }
 

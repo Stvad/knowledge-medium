@@ -11,7 +11,11 @@ import {
   renderAliasedBlockref,
   renderWikilink,
   rewriteWikilinks,
+  inlineBlockRefs,
 } from '../referenceParser'
+
+const UUID = '11111111-1111-4111-8111-111111111111'
+const OTHER_UUID = '22222222-2222-4222-8222-222222222222'
 
 describe('referenceParser', () => {
   describe('parseReferences', () => {
@@ -356,6 +360,45 @@ Another [[normal-ref]]
       expect(rewriteWikilinks('see [[Foo]] here', 'Foo', '$&$1[[Bar]]')).toBe(
         'see $&$1[[Bar]] here',
       )
+    })
+  })
+
+  describe('inlineBlockRefs', () => {
+    it('replaces a plain block-ref with the inline content', () => {
+      expect(inlineBlockRefs(`before ((${UUID})) after`, UUID, 'BODY')).toBe(
+        'before BODY after',
+      )
+    })
+
+    it('replaces an embed mark with the inline content', () => {
+      expect(inlineBlockRefs(`x !((${UUID})) y`, UUID, 'BODY')).toBe('x BODY y')
+    })
+
+    it('keeps an aliased mark\'s label instead of the content', () => {
+      expect(inlineBlockRefs(`see [label](((${UUID}))) ok`, UUID, 'BODY')).toBe(
+        'see label ok',
+      )
+    })
+
+    it('only rewrites marks for the target id', () => {
+      expect(
+        inlineBlockRefs(`((${UUID})) and ((${OTHER_UUID}))`, UUID, 'BODY'),
+      ).toBe(`BODY and ((${OTHER_UUID}))`)
+    })
+
+    it('matches the target id case-insensitively', () => {
+      expect(inlineBlockRefs(`((${UUID.toUpperCase()}))`, UUID, 'BODY')).toBe('BODY')
+    })
+
+    it('inserts the content literally (no String.replace $-interpolation)', () => {
+      expect(inlineBlockRefs(`a ((${UUID})) b`, UUID, '$& $1 text')).toBe(
+        'a $& $1 text b',
+      )
+    })
+
+    it('returns input unchanged when no mark targets the id', () => {
+      const content = `nothing ((${OTHER_UUID})) here`
+      expect(inlineBlockRefs(content, UUID, 'BODY')).toBe(content)
     })
   })
 })
