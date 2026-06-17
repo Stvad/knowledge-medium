@@ -176,6 +176,48 @@ describe('references.inlineDeletedBlockReferences', () => {
     expect(env.read('c')!.references).toEqual([{id: D, alias: D}])
   })
 
+  it('resolves nested refs between deleted blocks — no fresh dangling ref is created', async () => {
+    // P's own content references C; both are deleted together (subtree).
+    // The external referrer x must end up with C's content inlined too, NOT
+    // a literal `((C))` mark that post-commit parse would turn into a new
+    // dangling reference.
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: D, workspaceId: WS, parentId: null, orderKey: 'a0',
+        content: `parent refs ((${C}))`,
+      })
+      await tx.create({id: C, workspaceId: WS, parentId: D, orderKey: 'a0', content: 'child body'})
+      await tx.create({
+        id: 'x', workspaceId: WS, parentId: null, orderKey: 'a1',
+        content: `see ((${D}))`,
+        references: [{id: D, alias: D}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    await env.repo.mutate.delete({id: D})
+
+    expect(env.read('x')!.content).toBe('see parent refs child body')
+    expect(env.read('x')!.references).toEqual([])
+  })
+
+  it('inlines an empty deleted block to empty text (the ref resolves to nothing)', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: D, workspaceId: WS, parentId: null, orderKey: 'a0', content: ''})
+      await tx.create({
+        id: 's', workspaceId: WS, parentId: null, orderKey: 'a1',
+        content: `before ((${D})) after`,
+        references: [{id: D, alias: D}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    await env.repo.mutate.delete({id: D})
+
+    expect(env.read('s')!.content).toBe('before  after')
+    expect(env.read('s')!.references).toEqual([])
+  })
+
   it('inline rides on the delete\'s undo step — undo restores referrer and target together', async () => {
     await env.repo.tx(async tx => {
       await tx.create({id: D, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'BODY'})

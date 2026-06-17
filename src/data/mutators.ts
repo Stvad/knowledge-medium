@@ -181,7 +181,7 @@ export const setProperty = defineMutator<
 
 // ──── delete (subtree-aware soft-delete) ────
 
-/** DFS walk via tx.childrenOf, calling tx.delete on each visited id.
+/** DFS walk via tx.childrenOf, calling tx.delete on each visited block.
  *  Iterative + explicit stack to avoid blowing the JS recursion limit
  *  on deep trees.
  *
@@ -189,24 +189,31 @@ export const setProperty = defineMutator<
  *  same-tx consumers can react atomically with the delete — the
  *  references plugin uses it to inline a deleted block's content into the
  *  blocks that referenced it (`((id))`), keeping those referrers readable
- *  instead of leaving dangling block-refs. Read the block before deleting
- *  so we have its workspace and can skip already-tombstoned rows (whose
- *  referrers were already inlined at first deletion). */
+ *  instead of leaving dangling block-refs. We carry the `BlockData` from
+ *  `childrenOf` (and one `tx.get` for the root) so the walk doesn't pay an
+ *  extra per-node read just to recover `workspaceId`; the `!deleted` guard
+ *  only ever skips an already-tombstoned root (children come back live). */
 const softDeleteSubtree = async (tx: Tx, rootId: string): Promise<void> => {
-  const stack: string[] = [rootId]
+  const root = await tx.get(rootId)
+  // Preserve the primitive's contract for a missing root: let tx.delete
+  // surface BlockNotFoundError rather than silently no-op here.
+  if (root === null) {
+    await tx.delete(rootId)
+    return
+  }
+  const stack: BlockData[] = [root]
   const seen = new Set<string>()
   while (stack.length > 0) {
-    const id = stack.pop()!
-    if (seen.has(id)) continue
-    seen.add(id)
-    const block = await tx.get(id)
-    const children = await tx.childrenOf(id)
-    for (const c of children) stack.push(c.id)
-    await tx.delete(id)
-    if (block !== null && !block.deleted) {
+    const block = stack.pop()!
+    if (seen.has(block.id)) continue
+    seen.add(block.id)
+    const children = await tx.childrenOf(block.id)
+    for (const c of children) stack.push(c)
+    await tx.delete(block.id)
+    if (!block.deleted) {
       tx.emitEvent(CORE_BLOCK_DELETED_EVENT, {
         workspaceId: block.workspaceId,
-        blockId: id,
+        blockId: block.id,
       })
     }
   }
