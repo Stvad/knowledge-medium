@@ -15,7 +15,6 @@
  *     'sync' and 'hydrate' sources share the gate; the source label
  *     only routes per-bucket metric counters.
  *   - trackedIds: subscribed listener ids
- *   - dedupLoad: shares in-flight promise; restarts after resolve/reject
  *   - missing markers: markMissing notifies on first transition,
  *     clearMissing notifies, setSnapshot clears missing
  *
@@ -235,57 +234,6 @@ describe('BlockCache trackedIds', () => {
     cache.subscribe('b', () => {})
     unsubscribe()
     expect(cache.trackedIds()).toEqual(new Set(['b']))
-  })
-})
-
-describe('BlockCache dedupLoad', () => {
-  it('returns the same in-flight promise for concurrent callers', async () => {
-    const cache = new BlockCache()
-    let resolveLoader!: (value: BlockData | undefined) => void
-    const loader = vi.fn(() => new Promise<BlockData | undefined>((resolve) => {
-      resolveLoader = resolve
-    }))
-
-    const first = cache.dedupLoad('block-1', loader)
-    const second = cache.dedupLoad('block-1', loader)
-
-    expect(loader).toHaveBeenCalledTimes(1)
-    expect(first).toBe(second)
-
-    resolveLoader(snap())
-    await first
-  })
-
-  it('runs a fresh loader after the previous load resolves', async () => {
-    const cache = new BlockCache()
-    const loader = vi.fn(() => Promise.resolve(snap()))
-
-    await cache.dedupLoad('block-1', loader)
-    await cache.dedupLoad('block-1', loader)
-    expect(loader).toHaveBeenCalledTimes(2)
-  })
-
-  it('runs a fresh loader after the previous load rejects', async () => {
-    const cache = new BlockCache()
-    const failing = vi.fn(() => Promise.reject(new Error('boom')))
-    await expect(cache.dedupLoad('block-1', failing)).rejects.toThrow('boom')
-
-    const succeeding = vi.fn(() => Promise.resolve(snap()))
-    await cache.dedupLoad('block-1', succeeding)
-    expect(succeeding).toHaveBeenCalledTimes(1)
-  })
-
-  it('keeps loads for different ids independent', async () => {
-    const cache = new BlockCache()
-    const loaderA = vi.fn(() => Promise.resolve(snap({id: 'a'})))
-    const loaderB = vi.fn(() => Promise.resolve(snap({id: 'b'})))
-
-    await Promise.all([
-      cache.dedupLoad('a', loaderA),
-      cache.dedupLoad('b', loaderB),
-    ])
-    expect(loaderA).toHaveBeenCalledTimes(1)
-    expect(loaderB).toHaveBeenCalledTimes(1)
   })
 })
 

@@ -11,6 +11,12 @@
  * and we keep one grep target for "what does this error code look
  * like to the user."
  *
+ * Lives in the app layer (`src/extensions`), not `src/utils`: it knows
+ * about plugin-specific toasts (e.g. the alias plugin's collision
+ * merge), so it depends on `@/plugins/*`. That dependency direction is
+ * fine here — `staticAppExtensions.ts` already imports every plugin —
+ * but would be an inverted edge from the leaf `utils` layer.
+ *
  * Today's codes:
  *   - `alias.collision` → emitted by the alias.sync same-tx processor
  *     when a block tries to claim an alias already held by a
@@ -25,7 +31,7 @@ import { createElement } from 'react'
 import type { ProcessorRejection } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { AliasCollisionToast } from './AliasCollisionToast.tsx'
-import { showCustom, showError } from './toast.ts'
+import { showCustom, showError } from '@/utils/toast.ts'
 
 interface AliasCollisionMeta {
   alias: string

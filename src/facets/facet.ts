@@ -94,6 +94,34 @@ export function defineFacet<Input, Output = readonly Input[]>({
   return facet
 }
 
+/** Define a facet whose contributions fold into a `ReadonlyMap` keyed
+ *  by `keyOf`. Duplicate keys log a last-wins warning (tagged with the
+ *  facet id) and the later contribution wins — the §6 registry
+ *  convention shared by every data-layer registry facet (mutators,
+ *  queries, types, presets, …). See `src/data/facets.ts`. */
+export function keyedMapFacet<Input>(
+  id: string,
+  keyOf: (value: Input) => string,
+): Facet<Input, ReadonlyMap<string, Input>> {
+  return defineFacet<Input, ReadonlyMap<string, Input>>({
+    id,
+    combine: (values) => {
+      const out = new Map<string, Input>()
+      for (const value of values) {
+        const key = keyOf(value)
+        if (out.has(key)) {
+          console.warn(
+            `[${id}] duplicate registration for "${key}"; last-wins per facet convention`,
+          )
+        }
+        out.set(key, value)
+      }
+      return out
+    },
+    empty: () => new Map(),
+  })
+}
+
 /** Per-facet identifier for a runtime contribution bucket. Each
  *  subscription owner manages its own bucket; setRuntimeContributions
  *  replaces the bucket for that source id. Static contributions (from

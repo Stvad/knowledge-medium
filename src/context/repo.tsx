@@ -9,7 +9,7 @@ import { User } from '@/types.js'
 import { memoize } from 'lodash'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
-import { surfaceProcessorRejectionFor } from '@/utils/processorRejectionToast.js'
+import { surfaceProcessorRejectionFor } from '@/extensions/processorRejectionToast.js'
 
 // Memoize on (userId, useRemoteSync) so toggling local-only doesn't reuse a
 // previously-connected repo. In practice the toggle is followed by a reload

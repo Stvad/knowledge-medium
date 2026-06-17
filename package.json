@@ -28,8 +28,7 @@
     "check:db": "node scripts/check-db.mjs",
     "check": "node scripts/check.mjs",
     "agent:server": "node packages/agent-cli/dist/server.js",
-    "agent": "node packages/agent-cli/dist/cli.js",
-    "bench": "vite-node scripts/bench/index.ts"
+    "agent": "node packages/agent-cli/dist/cli.js"
   },
   "dependencies": {
     "@babel/standalone": "^7.29.2",

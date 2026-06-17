@@ -293,7 +293,7 @@ export const getUserBlock = memoize(
 
     return repo.block(id)
   },
-  (repo, workspaceId, user) => `${repoIdentity(repo)}:${workspaceId}:${user.id}`,
+  (repo, workspaceId, user) => instanceKey(repo, workspaceId, user.id),
 )
 
 export const getUserPrefsBlock = memoize(
@@ -301,7 +301,7 @@ export const getUserPrefsBlock = memoize(
     const userBlock = await getUserBlock(repo, workspaceId, user)
     return ensureUserPrefsChild(repo, userBlock)
   },
-  (repo, workspaceId, user) => `${repoIdentity(repo)}:${workspaceId}:${user.id}:__user_prefs__`,
+  (repo, workspaceId, user) => instanceKey(repo, workspaceId, user.id, '__user_prefs__'),
 )
 
 /** Per-plugin preferences sub-block under the root user-prefs block.
@@ -331,7 +331,7 @@ export const getPluginPrefsBlock = memoize(
     )
   },
   (repo, workspaceId, user, type) =>
-    `${repoIdentity(repo)}:${workspaceId}:${user.id}:plugin-prefs:${type.id}`,
+    instanceKey(repo, workspaceId, user.id, 'plugin-prefs', type.id),
 )
 
 /** Resolve the UI-state block scoped to the current panel context.
@@ -354,7 +354,7 @@ export const getUIStateBlock = memoize(
     return ensureUiChild(repo, userBlock, 'ui-state')
   },
   (repo, workspaceId, user, context) =>
-    `${repoIdentity(repo)}:${workspaceId}:${user.id}:${context.panelId ?? '__root__'}`,
+    instanceKey(repo, workspaceId, user.id, context.panelId ?? '__root__'),
 )
 
 const LAYOUT_SESSIONS_PATH_PART = 'layout-sessions'
@@ -363,7 +363,7 @@ export const getLayoutSessionBlock = memoize(
     const layoutSessionsBlock = await ensureUiChild(uiStateBlock.repo, uiStateBlock, LAYOUT_SESSIONS_PATH_PART)
     return ensureUiChild(uiStateBlock.repo, layoutSessionsBlock, layoutSessionId)
   },
-  (uiBlock, layoutSessionId) => `${repoIdentity(uiBlock.repo)}:${uiBlock.id}:${layoutSessionId}`,
+  (uiBlock, layoutSessionId) => instanceKey(uiBlock.repo, uiBlock.id, layoutSessionId),
 )
 
 /** Per-plugin ui-state sub-block under the root ui-state block. The
@@ -390,7 +390,7 @@ export const getPluginUIStateBlock = memoize(
     )
   },
   (repo, workspaceId, user, type) =>
-    `${repoIdentity(repo)}:${workspaceId}:${user.id}:plugin-ui-state:${type.id}`,
+    instanceKey(repo, workspaceId, user.id, 'plugin-ui-state', type.id),
 )
 
 /** A per-key child under a plugin's ui-state sub-block, so a plugin can
@@ -402,7 +402,7 @@ export const getPluginUIStateChild = memoize(
   async (pluginUIStateBlock: Block, key: string): Promise<Block> =>
     ensureUiChild(pluginUIStateBlock.repo, pluginUIStateBlock, key),
   (pluginUIStateBlock, key) =>
-    `${repoIdentity(pluginUIStateBlock.repo)}:${pluginUIStateBlock.id}:${key}`,
+    instanceKey(pluginUIStateBlock.repo, pluginUIStateBlock.id, key),
 )
 
 // ──── Selection-state helpers (pure operations on a Block) ────
@@ -420,4 +420,11 @@ export const resetBlockSelection = async (uiStateBlock: Block): Promise<void> =>
 }
 
 // ──── Internal: shorthand for instance-scoped memo keys ────
-const repoIdentity = (repo: Repo): number => repo.instanceId
+/** Build a memo key scoped to a Repo instance: the repo's `instanceId`
+ *  followed by the caller's discriminating parts, ':'-joined. Every
+ *  cache below shares this convention (a stale/unscoped key would hand a
+ *  `use()` consumer a promise from a disposed repo), so single-sourcing
+ *  it here keeps a new cache from silently picking a colliding or
+ *  unscoped key. */
+const instanceKey = (repo: Repo, ...parts: (string | number)[]): string =>
+  [repo.instanceId, ...parts].join(':')

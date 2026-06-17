@@ -94,7 +94,6 @@ export class BlockCacheMetrics {
 export class BlockCache {
   private readonly snapshots = new Map<string, BlockData>()
   private readonly listeners = new Map<string, CallbackSet<[]>>()
-  private readonly pendingLoads = new Map<string, Promise<BlockData | undefined>>()
   /** Confirmed-missing markers — ids the loader looked up and the row
    *  did not exist (or was soft-deleted). Lets the Block facade
    *  distinguish "not loaded yet" (peek → undefined) from "confirmed
@@ -211,20 +210,6 @@ export class BlockCache {
 
   trackedIds(): Set<string> {
     return new Set(this.listeners.keys())
-  }
-
-  dedupLoad(
-    id: string,
-    loader: () => Promise<BlockData | undefined>,
-  ): Promise<BlockData | undefined> {
-    const existing = this.pendingLoads.get(id)
-    if (existing) return existing
-
-    const promise = loader().finally(() => {
-      this.pendingLoads.delete(id)
-    })
-    this.pendingLoads.set(id, promise)
-    return promise
   }
 
   private notify(id: string): void {

@@ -46,9 +46,12 @@ export class Block implements Handle<BlockData | null> {
 
   /** Inflight `load()` promise — dedup'd at the Block level so Suspense
    *  paths can throw a stable promise across renders. Cleared once it
-   *  settles. The cache also has its own `dedupLoad` helper, but
-   *  `repo.load` deliberately doesn't use it (different `opts` would
-   *  silently merge); doing the dedup here keeps `read()` honest. */
+   *  settles. This is the single load-dedup mechanism: `repo.load` is a
+   *  raw option-shaped loader that deliberately does NOT dedup (an
+   *  id-only cache would silently merge a plain `repo.load(id)` with a
+   *  concurrent `repo.load(id, {children})`), so the dedup lives here at
+   *  the facade — one Block per id — where `read()`/`status()` also need
+   *  the inflight/error state anyway. */
   private inflight: Promise<BlockData | null> | null = null
 
   /** Counts overlapping `load()` calls in flight. Drives `status()`'s
