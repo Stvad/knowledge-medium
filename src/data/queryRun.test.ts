@@ -45,7 +45,6 @@ beforeEach(async () => {
     db: sharedDb.db,
     cache: new BlockCache(),
     user: {id: 'user-1'},
-    registerKernelProcessors: false,
   })
 })
 afterEach(() => { repo.stopSyncObserver() })

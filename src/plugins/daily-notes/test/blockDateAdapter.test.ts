@@ -65,7 +65,6 @@ const makeRepo = () =>
     db: sharedDb.db,
     cache: new BlockCache(),
     user: {id: 'user-1'},
-    registerKernelProcessors: false,
     startSyncObserver: false,
   })
 

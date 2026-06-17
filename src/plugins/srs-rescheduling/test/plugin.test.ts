@@ -81,7 +81,6 @@ describe('srsReschedulingPlugin', () => {
       db: sharedDb.db,
       cache: new BlockCache(),
       user: {id: 'user-1'},
-      registerKernelProcessors: false,
       startSyncObserver: false,
     })
     repo.setFacetRuntime(resolveFacetRuntimeSync([
@@ -381,7 +380,6 @@ describe('srsReschedulingPlugin', () => {
       cache: new BlockCache(),
       user: {id: 'user-1'},
       newTxSeq: () => ++txSeq,
-      registerKernelProcessors: false,
       startSyncObserver: false,
     })
     const runtime = resolveFacetRuntimeSync([
@@ -480,7 +478,6 @@ describe('srsReschedulingPlugin', () => {
         cache: new BlockCache(),
         user: {id: 'user-1'},
         newTxSeq: () => ++txSeq,
-        registerKernelProcessors: false,
         startSyncObserver: false,
       })
       const runtime = resolveFacetRuntimeSync([
@@ -619,7 +616,6 @@ describe('srsReschedulingPlugin', () => {
       user: {id: 'user-1'},
       now: () => ++now,
       newId: () => `generated-${++id}`,
-      registerKernelProcessors: false,
       startSyncObserver: false,
     })
     const runtime = resolveFacetRuntimeSync([

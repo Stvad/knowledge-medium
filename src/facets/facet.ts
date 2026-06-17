@@ -131,6 +131,12 @@ export type RuntimeSourceId = string
 
 type FacetChangeListener = () => void
 
+/** NOTE: `LiveRuntimeHandle` (src/extensions/liveRuntime.ts) subclasses
+ *  this and overrides EVERY public method to delegate to a swappable
+ *  `current` runtime — its inherited storage is intentionally dead. A new
+ *  public method added here that the handle doesn't override would
+ *  silently serve that empty inherited state for effect callers (no type
+ *  error). Add the override there too. */
 export class FacetRuntime {
   // Both maps are keyed by `facet.id` (a string), NOT by the Facet
   // object — so `.get(actionsFacet)` from outside this class will
@@ -144,6 +150,17 @@ export class FacetRuntime {
     string,
     Map<RuntimeSourceId, FacetContribution<unknown>[]>
   >()
+  /** Per-facet set of runtime source ids marked **durable** — i.e.
+   *  written with `{durable: true}`. Durable buckets are repo-owned
+   *  user data (user property schemas / types) that must survive a
+   *  `setFacetRuntime` swap; `adoptDurableContributionsFrom` copies only
+   *  these forward onto the fresh runtime. Transient buckets (effect-
+   *  owned outputs such as the theme apply-actions or keybinding
+   *  overrides) are NOT tracked here — their owning effect re-pushes
+   *  them on restart, so replaying them would strand stale entries when
+   *  the effect's plugin is toggled off (the bug that reverted the
+   *  literal `withContributionsFrom` in #152). */
+  private readonly durableRuntimeSources = new Map<string, Set<RuntimeSourceId>>()
   private readonly cache = new Map<string, unknown>()
   private readonly facetListeners = new Map<string, Set<FacetChangeListener>>()
 
@@ -190,11 +207,17 @@ export class FacetRuntime {
 
   /** Replace the runtime contributions bucket for this facet under
    *  `sourceId`. Empty `contributions` removes the bucket. Notifies
-   *  per-facet subscribers after the cache is invalidated. */
+   *  per-facet subscribers after the cache is invalidated.
+   *
+   *  `options.durable` (default false) marks the bucket as repo-owned
+   *  user data that must survive `setFacetRuntime` swaps — see
+   *  `adoptDurableContributionsFrom` / `durableRuntimeSources`. Effect-
+   *  owned (transient) writers omit it. */
   setRuntimeContributions<Input>(
     facet: Facet<Input, unknown>,
     sourceId: RuntimeSourceId,
     contributions: readonly Input[],
+    options?: { durable?: boolean },
   ): void {
     const wrapped = contributions.map(value => ({
       type: 'facet-contribution' as const,
@@ -208,12 +231,59 @@ export class FacetRuntime {
       existing.delete(sourceId)
       if (existing.size === 0) this.runtimeContributionsByFacet.delete(facet.id)
       else this.runtimeContributionsByFacet.set(facet.id, existing)
+      this.unmarkDurable(facet.id, sourceId)
     } else {
       existing.set(sourceId, wrapped)
       this.runtimeContributionsByFacet.set(facet.id, existing)
+      if (options?.durable) this.markDurable(facet.id, sourceId)
+      else this.unmarkDurable(facet.id, sourceId)
     }
     this.cache.delete(facet.id)
     this.notifyFacetListeners(facet.id)
+  }
+
+  private markDurable(facetId: string, sourceId: RuntimeSourceId): void {
+    const set = this.durableRuntimeSources.get(facetId) ?? new Set<RuntimeSourceId>()
+    set.add(sourceId)
+    this.durableRuntimeSources.set(facetId, set)
+  }
+
+  private unmarkDurable(facetId: string, sourceId: RuntimeSourceId): void {
+    const set = this.durableRuntimeSources.get(facetId)
+    if (!set) return
+    set.delete(sourceId)
+    if (set.size === 0) this.durableRuntimeSources.delete(facetId)
+  }
+
+  /** Copy the **durable** runtime-contribution buckets from `previous`
+   *  onto this (fresh) runtime, preserving their durability marks, so
+   *  repo-owned user data (user property schemas / types) survives a
+   *  `setFacetRuntime` swap without a separate Repo-side mirror. This is
+   *  the sound realization of B1(2) "make replay the runtime's job":
+   *  only durable buckets are carried forward, so transient effect-owned
+   *  buckets can't strand. Caches for the touched facets are
+   *  invalidated; no listeners fire (a fresh runtime has none yet — the
+   *  bridge runs its rebuild steps after this call).
+   *
+   *  Carry-forward is unconditional, so a writer that owns a workspace-scoped
+   *  durable bucket must clear it on teardown (see the ownership contract on
+   *  `Repo.setRuntimeContributions`) — otherwise its data is adopted into the
+   *  next workspace's runtime on the per-user Repo singleton. */
+  adoptDurableContributionsFrom(previous: FacetRuntime): void {
+    for (const [facetId, durableSources] of previous.durableRuntimeSources) {
+      const prevBuckets = previous.runtimeContributionsByFacet.get(facetId)
+      if (!prevBuckets) continue
+      for (const sourceId of durableSources) {
+        const bucket = prevBuckets.get(sourceId)
+        if (!bucket || bucket.length === 0) continue
+        const buckets = this.runtimeContributionsByFacet.get(facetId)
+          ?? new Map<RuntimeSourceId, FacetContribution<unknown>[]>()
+        buckets.set(sourceId, bucket)
+        this.runtimeContributionsByFacet.set(facetId, buckets)
+        this.markDurable(facetId, sourceId)
+        this.cache.delete(facetId)
+      }
+    }
   }
 
   /** Subscribe to changes for one facet. Fires after every

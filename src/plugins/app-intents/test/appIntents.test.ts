@@ -51,7 +51,6 @@ const setup = async (): Promise<Harness> => {
     cache: new BlockCache(),
     user: USER,
     newId: () => `gen-${++id}`,
-    registerKernelProcessors: false,
   })
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,

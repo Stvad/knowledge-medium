@@ -151,6 +151,21 @@ export class UserSchemasService {
     this.subscriptionDisposer = null
     this.presetsListenerDisposer?.()
     this.presetsListenerDisposer = null
+    // Drop in-memory state AND clear the user-data bucket so the previous
+    // workspace's user-defined property schemas don't remain visible between
+    // dispose and the next subscription tick on a workspace switch. The Repo
+    // is a per-user singleton (reused across workspace switches) and
+    // `setFacetRuntime` carries the durable user-data bucket forward via
+    // `adoptDurableContributionsFrom`, so a stale bucket would leak into the
+    // next workspace until its subscription's first rebuild. Mirrors
+    // UserTypesService.dispose — that workspace-switch-race hardening was
+    // applied to types but never back-ported here, the service it was copied
+    // from.
+    this.latestBlocks = []
+    this.contributions = []
+    this.nameToBlockId = new Map()
+    this.blockIdToSchema = new Map()
+    this.repo.setRuntimeContributions(propertySchemasFacet, USER_DATA_SOURCE_ID, [])
   }
 
   /** Validates a schema block against the current presets and returns

@@ -45,11 +45,6 @@ const setup = async (): Promise<Harness> => {
     user: { id: 'user-1' },
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
-    // Don't run parseReferences — the seeded outlines contain wiki
-    // links (`[[Tutorial]]`, `[[Tutorial (no vim)]]`) which would
-    // otherwise create alias-target side effects we'd then have to
-    // count around. Tests focus on what seedTutorial writes.
-    registerKernelProcessors: false,
   })
   return { h, repo }
 }

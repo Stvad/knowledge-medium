@@ -40,7 +40,6 @@ beforeEach(async () => {
     db: h.db,
     cache: new BlockCache(),
     user: {id: 'user-1'},
-    registerKernelProcessors: false,
   })
   runtime = resolveFacetRuntimeSync([
     kernelDataExtension,

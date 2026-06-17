@@ -40,7 +40,6 @@ const setup = async (): Promise<Harness> => {
     user: {id: 'user-1'},
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
-    registerKernelProcessors: false,
     // No live sync observer (the sanctioned deterministic-timing pattern).
     // This suite does explicit local writes + queries and never needs
     // materialization. With it on, a prior test's async observer write — whose

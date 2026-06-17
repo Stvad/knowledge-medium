@@ -26,7 +26,6 @@ const createRepo = (h: TestDb): Repo => {
     db: h.db,
     cache: new BlockCache(),
     user: USER,
-    registerKernelProcessors: false,
   })
   repo.setActiveWorkspaceId(WS)
   return repo

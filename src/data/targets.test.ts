@@ -59,7 +59,6 @@ const setup = async (): Promise<Harness> => {
     user: {id: 'user-1'},
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
-    registerKernelProcessors: false,
   })
   return {h, repo}
 }

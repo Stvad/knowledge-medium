@@ -44,8 +44,9 @@ const setup = async (): Promise<Harness> => {
     user: {id: 'user-1'},
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
-    registerKernelProcessors: false,
   })
+  // The constructor installs a kernel-only runtime; this swap REPLACES it
+  // with the kernel + references + alias registry these tests exercise.
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
     referencesDataExtension,

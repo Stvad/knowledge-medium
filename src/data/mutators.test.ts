@@ -54,10 +54,10 @@ const setup = async (): Promise<Harness> => {
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
     // Mutator tests assert on user-facing tx side-effects (cache,
-    // command_events). Kernel processors firing add follow-up txs
-    // that aren't under test here; integration coverage lives in the
+    // command_events) against the kernel-only runtime the constructor
+    // installs — no plugin post-commit processors are registered here, so
+    // no follow-up txs run. Plugin-processor integration lives in the
     // backlinks plugin processor tests.
-    registerKernelProcessors: false,
   })
   return {
     h,

@@ -20,7 +20,7 @@ afterAll(async () => { await sharedDb.cleanup() })
 
 beforeEach(async () => {
   await resetTestDb(sharedDb.db)
-  repo = new Repo({db: sharedDb.db, cache: new BlockCache(), user: USER, registerKernelProcessors: false})
+  repo = new Repo({db: sharedDb.db, cache: new BlockCache(), user: USER})
   repo.setActiveWorkspaceId(WS)
   await repo.tx(async tx => {
     await tx.create({id: 'panel', workspaceId: WS, parentId: null, orderKey: 'a0'})

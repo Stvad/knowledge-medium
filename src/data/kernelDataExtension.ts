@@ -1,28 +1,22 @@
 /**
- * Kernel data-layer AppExtension — wraps the kernel mutators, queries,
- * property schemas, and any core-only post-commit processors as facet
- * contributions so the FacetRuntime carries them. The Repo bootstraps
- * with kernel registries directly, but `repo.setFacetRuntime(runtime)`
- * REPLACES those registries, so the runtime's data facets must include
- * the kernel contributions to keep `repo.mutate.<kernel>` and
- * `repo.query.<kernel>` working after that call.
+ * Kernel data-layer AppExtension — the single source of the kernel
+ * mutators, queries, post-commit / same-tx processors, invalidation
+ * rule, property schemas, and type contributions, expressed as facet
+ * contributions. This is the ONLY kernel registration path (audit
+ * B1(1)): the Repo constructor installs it as a kernel-only
+ * `FacetRuntime` (`installKernelRuntime`, default true) so
+ * `repo.mutate.<kernel>` / `repo.query.<kernel>` work immediately, and
+ * every later `repo.setFacetRuntime(runtime)` REPLACES that install with
+ * the merged kernel + plugin registry — so this extension must be
+ * present in every runtime (it is, via `staticDataExtensions`) to keep
+ * the kernel dispatch surfaces working after a swap.
  *
- * Property schemas (Phase 3 — chunk A): the kernel descriptors live
- * in `data/properties.ts` and are
- * exported as plain consts; this extension surfaces them through
+ * Property schemas: the kernel descriptors live in `data/properties.ts`
+ * (plain consts); this extension surfaces them through
  * `propertySchemasFacet` so non-React surfaces (the property panel's
- * schema lookup, future CLI / server-side audit) and plugin authors
- * can resolve names through the same registry that plugin schemas
- * register into.
- *
- * Queries (Phase 4 — chunk B): KERNEL_QUERIES are facet-contributed
- * here so `repo.setFacetRuntime(runtime)` includes them alongside
- * plugin queries. Repo also registers them at construction time
- * (RepoOptions.registerKernelQueries, default true) so `repo.query.X`
- * works pre-Stage-1 in the same way `repo.mutate.X` does — the
- * setFacetRuntime call replaces the registry with the merged
- * kernel + plugin set, so the kernel queries must be in the runtime
- * to keep `repo.query.<kernel>` working after that call.
+ * schema lookup, future CLI / server-side audit) and plugin authors can
+ * resolve names through the same registry that plugin schemas register
+ * into.
  *
  * No facet sources beyond the data layer here — UI facets
  * (renderers, actions, contexts) live in their own extensions.

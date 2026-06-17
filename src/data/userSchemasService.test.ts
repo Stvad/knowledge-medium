@@ -37,7 +37,6 @@ const setup = async (extraPresets: readonly AnyValuePreset[] = []): Promise<Harn
     user: {id: 'user-1'},
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
-    registerKernelProcessors: false,
     startSyncObserver: false,
   })
   repo.setActiveWorkspaceId(WS)
@@ -316,5 +315,30 @@ describe('Repo.setFacetRuntime — runtime contribution survival', () => {
     ]))
     const schema = await addPromise
     expect(env.repo.propertySchemas.get('siteUrl')).toBe(schema)
+  })
+})
+
+describe('UserSchemasService workspace switch', () => {
+  // Regression: the Repo is a per-user singleton reused across workspace
+  // switches, and setFacetRuntime carries the durable user-data bucket
+  // forward (adoptDurableContributionsFrom). Before the fix, dispose() left
+  // the bucket in place, so the previous workspace's user-defined property
+  // schemas leaked into the next workspace until its subscription's first
+  // rebuild. Mirrors the hardening UserTypesService already had.
+  it('clears the user-data bucket on dispose so schemas do not leak into the next workspace', async () => {
+    env = await setup()
+    await env.service.addSchema({name: 'homepage', presetId: 'url'})
+    expect(env.repo.propertySchemas.get('homepage')?.codec.type).toBe('url')
+
+    // Workspace switch: dispose W1's service, switch the active workspace,
+    // bootstrap its properties page, restart. W1's schema must be gone.
+    env.service.dispose()
+    expect(env.repo.propertySchemas.get('homepage')).toBeUndefined()
+
+    const W2 = 'ws-user-schemas-2'
+    env.repo.setActiveWorkspaceId(W2)
+    await getOrCreatePropertiesPage(env.repo, W2)
+    env.service.start()
+    expect(env.repo.propertySchemas.get('homepage')).toBeUndefined()
   })
 })

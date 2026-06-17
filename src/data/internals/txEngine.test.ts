@@ -105,7 +105,6 @@ const setup = async (overrides?: {isReadOnly?: boolean}): Promise<Harness> => {
     // on content writes would add follow-up txs (parseReferences) the
     // engine assertions don't account for — keep the processor surface
     // empty and let the parseReferences integration tests cover it.
-    registerKernelProcessors: false,
   })
   // Register only the local test probe — afterCommit tests use it to
   // schedule explicit jobs. The rest of the engine tests don't call

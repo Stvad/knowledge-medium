@@ -62,7 +62,6 @@ const setup = async (
     user: {id: 'user-1'},
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
-    registerKernelProcessors: false,
   })
   // Reprojection is workspace-scoped: it only scans + marks the active
   // workspace. All fixtures here live in WS, so make it active or every
@@ -855,7 +854,6 @@ describe('parseReferences — schema-swap reprojection', () => {
       db: env.h.db,
       cache: cache2,
       user: {id: 'user-1'},
-      registerKernelProcessors: false,
     })
     repo2.setActiveWorkspaceId(WS)
     repo2.setFacetRuntime(runtimeWithReviewer())

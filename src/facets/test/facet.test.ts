@@ -169,3 +169,54 @@ describe('FacetRuntime runtime contributions', () => {
     }
   })
 })
+
+// adoptDurableContributionsFrom is how a `setFacetRuntime` swap carries
+// repo-owned user data (durable buckets) forward without a separate
+// mirror (B1(2)). The durable/transient split is load-bearing: copying
+// transient effect-owned buckets forward is exactly what stranded stale
+// contributions and got reverted in #152, so it's covered directly.
+describe('FacetRuntime.adoptDurableContributionsFrom', () => {
+  const labelsFacet = defineFacet<string, string>({
+    id: 'test.adopt-labels',
+    combine: values => values.join(','),
+    empty: () => '',
+  })
+
+  it('carries durable buckets onto the fresh runtime', () => {
+    const previous = resolveFacetRuntimeSync([])
+    previous.setRuntimeContributions(labelsFacet, 'user-data', ['schema'], { durable: true })
+
+    const next = resolveFacetRuntimeSync([labelsFacet.of('static')])
+    next.adoptDurableContributionsFrom(previous)
+    expect(next.read(labelsFacet)).toBe('static,schema')
+  })
+
+  it('does NOT carry transient (non-durable) buckets — they would strand', () => {
+    const previous = resolveFacetRuntimeSync([])
+    previous.setRuntimeContributions(labelsFacet, 'effect-output', ['transient'])
+
+    const next = resolveFacetRuntimeSync([labelsFacet.of('static')])
+    next.adoptDurableContributionsFrom(previous)
+    expect(next.read(labelsFacet)).toBe('static')
+  })
+
+  it('drops a durable bucket once cleared on the source runtime', () => {
+    const previous = resolveFacetRuntimeSync([])
+    previous.setRuntimeContributions(labelsFacet, 'user-data', ['schema'], { durable: true })
+    previous.setRuntimeContributions(labelsFacet, 'user-data', [], { durable: true })
+
+    const next = resolveFacetRuntimeSync([])
+    next.adoptDurableContributionsFrom(previous)
+    expect(next.read(labelsFacet)).toBe('')
+  })
+
+  it('stops treating a bucket as durable when re-set as transient', () => {
+    const previous = resolveFacetRuntimeSync([])
+    previous.setRuntimeContributions(labelsFacet, 'src', ['v'], { durable: true })
+    previous.setRuntimeContributions(labelsFacet, 'src', ['v'])
+
+    const next = resolveFacetRuntimeSync([])
+    next.adoptDurableContributionsFrom(previous)
+    expect(next.read(labelsFacet)).toBe('')
+  })
+})

@@ -46,7 +46,6 @@ beforeEach(async () => {
     user: {id: USER},
     now: () => ++now,
     newId: () => `generated-${++id}`,
-    registerKernelProcessors: false,
   })
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,

@@ -94,26 +94,6 @@ export class FacetBridge {
    *  Cleared when `setFacetRuntime` swaps to a fresh runtime — old
    *  listeners would fire against stale rebuild closures otherwise. */
   private runtimeFacetUnsubs: Array<() => void> = []
-  /** Durable runtime contribution buckets. Persisted across
-   *  `setFacetRuntime` swaps and replayed onto the fresh runtime so
-   *  user-data schemas (et al.) added via `setRuntimeContributions`
-   *  survive the dynamic-extension reload. Without this, a bucket would
-   *  live only on whichever FacetRuntime was current when it was set and
-   *  evaporate on the next swap.
-   *
-   *  Scope note: this mirrors only buckets written through *this* method
-   *  (durable owners — `UserSchemasService` / `UserTypesService`). App
-   *  effects that write directly to `runtime.setRuntimeContributions`
-   *  (e.g. the theme apply-actions / keybinding overrides) are NOT
-   *  mirrored here — they re-push on their own restart each swap, so
-   *  replaying them would strand stale contributions when their owning
-   *  plugin is toggled off. */
-  private readonly runtimeContributionBuckets = new Map<string, Map<string, readonly unknown[]>>()
-  /** Per-facet refs needed to replay buckets onto a fresh runtime —
-   *  `setRuntimeContributions` takes a `Facet` reference (not a string
-   *  id), so we cache it the first time the caller passes one. */
-  private readonly runtimeContributionFacets = new Map<string, Facet<unknown, unknown>>()
-
   /** Listeners for property-schema map changes (full rebuild OR
    *  runtime-bucket update). Used by `usePropertySchemas` to drive React
    *  reruns. */
@@ -153,20 +133,18 @@ export class FacetBridge {
     for (const dispose of this.runtimeFacetUnsubs) dispose()
     this.runtimeFacetUnsubs = []
 
+    const previous = this.runtime
     this.runtime = runtime
 
-    // Replay the persisted durable contribution buckets onto the fresh
-    // runtime so user-data schemas survive the swap. Doing this before
-    // running rebuild steps means the steps see the merged view on first
-    // read (no flicker through a state where user-data is missing and
-    // then re-added).
-    for (const [facetId, bucketsBySource] of this.runtimeContributionBuckets) {
-      const facet = this.runtimeContributionFacets.get(facetId)
-      if (!facet) continue
-      for (const [sourceId, contributions] of bucketsBySource) {
-        runtime.setRuntimeContributions(facet, sourceId, contributions)
-      }
-    }
+    // Carry the previous runtime's DURABLE runtime-contribution buckets
+    // (repo-owned user data — user property schemas / types) forward
+    // onto the fresh runtime. This is the runtime's own job now (B1(2)):
+    // the bridge no longer keeps a separate mirror. Only durable buckets
+    // are adopted, so transient effect-owned buckets can't strand.
+    // Doing this before running rebuild steps means the steps see the
+    // merged view on first read (no flicker through a state where
+    // user-data is missing and then re-added).
+    if (previous) runtime.adoptDurableContributionsFrom(previous)
 
     // Run every rebuild step on the fresh runtime.
     for (const step of this.rebuildSteps) step.run(runtime)
@@ -193,8 +171,10 @@ export class FacetBridge {
    *  `sourceId`. Triggers a re-run of every rebuild step whose declared
    *  inputs include this facet (via the `onFacetChange` listener wired in
    *  `setFacetRuntime`), plus per-facet listener fan-out for React
-   *  subscribers. The bucket is persisted here so it survives the next
-   *  `setFacetRuntime` swap. Throws if no runtime is installed. */
+   *  subscribers. Written as `{durable: true}` so the runtime carries the
+   *  bucket forward across the next `setFacetRuntime` swap
+   *  (`adoptDurableContributionsFrom`) — no separate bridge mirror.
+   *  Throws if no runtime is installed. */
   setRuntimeContributions<Input>(
     facet: Facet<Input, unknown>,
     sourceId: string,
@@ -203,25 +183,7 @@ export class FacetBridge {
     if (!this.runtime) {
       throw new Error('[FacetBridge.setRuntimeContributions] called before setFacetRuntime')
     }
-    // Persist the bucket so it survives `setFacetRuntime` swaps. We also
-    // cache the facet reference (the runtime's setRuntimeContributions
-    // takes a Facet, not just an id).
-    this.runtimeContributionFacets.set(facet.id, facet as Facet<unknown, unknown>)
-    let bucketsBySource = this.runtimeContributionBuckets.get(facet.id)
-    if (contributions.length === 0) {
-      bucketsBySource?.delete(sourceId)
-      if (bucketsBySource && bucketsBySource.size === 0) {
-        this.runtimeContributionBuckets.delete(facet.id)
-        this.runtimeContributionFacets.delete(facet.id)
-      }
-    } else {
-      if (!bucketsBySource) {
-        bucketsBySource = new Map<string, readonly unknown[]>()
-        this.runtimeContributionBuckets.set(facet.id, bucketsBySource)
-      }
-      bucketsBySource.set(sourceId, contributions as readonly unknown[])
-    }
-    this.runtime.setRuntimeContributions(facet, sourceId, contributions)
+    this.runtime.setRuntimeContributions(facet, sourceId, contributions, { durable: true })
   }
 
   onPropertySchemasChange(listener: () => void): () => void {

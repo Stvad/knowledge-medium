@@ -1220,9 +1220,10 @@ export const findExtensionBlocksQuery = defineQuery<{workspaceId: string}, Block
 
 // ──── Bundle ────
 
-/** All kernel queries — registered at construction time when
- *  `RepoOptions.registerKernelQueries` is true (default), and
- *  contributed to the FacetRuntime via `kernelDataExtension`. */
+/** All kernel queries — contributed to the FacetRuntime via
+ *  `kernelDataExtension`, which the Repo installs at construction
+ *  (`installKernelRuntime`, default true) and every `setFacetRuntime`
+ *  swap re-merges. */
 export const KERNEL_QUERIES: ReadonlyArray<AnyQuery> = [
   subtreeQuery,
   ancestorsQuery,

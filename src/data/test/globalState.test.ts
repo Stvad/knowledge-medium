@@ -77,7 +77,6 @@ const setup = async (types: readonly TypeContribution[] = []): Promise<Harness> 
     db: sharedDb.db,
     cache,
     user: USER,
-    registerKernelProcessors: false,
   })
   repo.setActiveWorkspaceId(WS)
   if (types.length > 0) {
@@ -195,7 +194,6 @@ describe('getUserPrefsBlock', () => {
       cache: new BlockCache(),
       user: USER,
       isReadOnly: true,
-      registerKernelProcessors: false,
     })
     repo.setActiveWorkspaceId(WS)
 
