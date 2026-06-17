@@ -2,14 +2,24 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEve
 import { createPortal } from 'react-dom'
 import { useRepo } from '@/context/repo.js'
 import { useBlockOpener } from '@/utils/navigation.js'
-import {
-  type DailyNotePickerAnchorRect,
-  type OpenDailyNotePickerEventDetail,
-  openDailyNotePickerEvent,
-} from './events.ts'
+import type { DialogContextProps } from '@/utils/dialogs.js'
 import { getOrCreateDailyNote } from './dailyNotes.ts'
 import { CalendarGrid } from './CalendarGrid.tsx'
 import { firstOfMonth, initialDateFromIso } from './calendar.ts'
+
+export interface DailyNotePickerAnchorRect {
+  bottom: number
+  height: number
+  left: number
+  right: number
+  top: number
+  width: number
+}
+
+export interface DailyNotePickerProps {
+  anchorRect?: DailyNotePickerAnchorRect
+  initialIso?: string
+}
 
 const PANEL_WIDTH = 352
 const PANEL_MARGIN = 8
@@ -34,43 +44,39 @@ const pickerPosition = (
   }
 }
 
-export function DailyNotePicker() {
+export function DailyNotePicker({
+  anchorRect,
+  initialIso,
+  resolve,
+  cancel,
+}: DialogContextProps<void> & DailyNotePickerProps) {
   const repo = useRepo()
   const openBlock = useBlockOpener({plainClick: 'navigator'})
   const panelRef = useRef<HTMLDivElement>(null)
-  const [open, setOpen] = useState(false)
-  const [anchorRect, setAnchorRect] = useState<DailyNotePickerAnchorRect | null>(null)
-  const [selectedIso, setSelectedIso] = useState<string | null>(null)
-  const [visibleMonth, setVisibleMonth] = useState(() => firstOfMonth(new Date()))
+  const [selectedIso, setSelectedIso] = useState<string | null>(initialIso ?? null)
+  const [visibleMonth, setVisibleMonth] = useState(
+    () => firstOfMonth(initialDateFromIso(initialIso)),
+  )
 
-  const position = useMemo(() => pickerPosition(anchorRect), [anchorRect])
+  const position = useMemo(() => pickerPosition(anchorRect ?? null), [anchorRect])
+
+  // Read the latest cancel through a ref so the focus/Escape effect
+  // (mount-once) doesn't depend on the DialogHost's per-render closure.
+  const cancelRef = useRef(cancel)
+  useEffect(() => {
+    cancelRef.current = cancel
+  })
 
   useEffect(() => {
-    const handleOpen = (event: Event) => {
-      const detail = (event as CustomEvent<OpenDailyNotePickerEventDetail>).detail ?? {}
-      const initialDate = initialDateFromIso(detail.initialIso)
-      setAnchorRect(detail.anchorRect ?? null)
-      setSelectedIso(detail.initialIso ?? null)
-      setVisibleMonth(firstOfMonth(initialDate))
-      setOpen(true)
-    }
-
-    window.addEventListener(openDailyNotePickerEvent, handleOpen)
-    return () => window.removeEventListener(openDailyNotePickerEvent, handleOpen)
-  }, [])
-
-  useEffect(() => {
-    if (!open) return
-
     panelRef.current?.focus()
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false)
+      if (event.key === 'Escape') cancelRef.current()
     }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [open])
+  }, [])
 
   const openDailyNote = async (iso: string, event: MouseEvent<HTMLButtonElement>) => {
     const workspaceId = repo.activeWorkspaceId
@@ -79,17 +85,15 @@ export function DailyNotePicker() {
     setSelectedIso(iso)
     const note = await getOrCreateDailyNote(repo, workspaceId, iso)
     openBlock(event, {blockId: note.id, workspaceId})
-    setOpen(false)
+    resolve()
   }
-
-  if (!open) return null
 
   return createPortal(
     <>
       <div
         className="fixed inset-0 z-40"
         aria-hidden="true"
-        onMouseDown={() => setOpen(false)}
+        onMouseDown={() => cancel()}
       />
       <div
         ref={panelRef}

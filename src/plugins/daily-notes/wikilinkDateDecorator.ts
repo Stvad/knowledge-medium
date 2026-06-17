@@ -21,11 +21,12 @@ import type {
   WikilinkDisplayDecorator,
   WikilinkDisplayParts,
 } from '@/plugins/references/markdown/wikilinks/wikilinkDecorator.js'
+import { openDialog } from '@/utils/dialogs.js'
 import { hasAnyBlockDateAdapter } from './blockDateAdapter.ts'
 import {
-  openReschedulePicker,
+  ReschedulePicker,
   type ReschedulePickerAnchorRect,
-} from './rescheduleEvents.ts'
+} from './ReschedulePicker.tsx'
 
 const formatWeekday = (date: Date): string =>
   date.toLocaleDateString('en-US', {weekday: 'short'})
@@ -44,14 +45,12 @@ const rectFor = (element: HTMLElement): ReschedulePickerAnchorRect => {
 
 const rescheduleButton = ({
   sourceBlock,
-  workspaceId,
-}: Pick<WikilinkDisplayContext, 'sourceBlock' | 'workspaceId'>) => {
+}: Pick<WikilinkDisplayContext, 'sourceBlock'>) => {
   if (!sourceBlock) return null
 
   const open = (element: HTMLElement): void => {
-    openReschedulePicker({
+    void openDialog(ReschedulePicker, {
       blockId: sourceBlock.id,
-      workspaceId,
       anchorRect: rectFor(element),
     })
   }
@@ -88,7 +87,6 @@ export const dailyDateWikilinkDecorator: WikilinkDisplayDecorator = {
     alias,
     runtime,
     sourceBlock,
-    workspaceId,
   }: WikilinkDisplayContext): string | WikilinkDisplayParts | null => {
     const parsed = parseLiteralDailyPageTitle(alias)
     if (!parsed) return null
@@ -97,7 +95,7 @@ export const dailyDateWikilinkDecorator: WikilinkDisplayDecorator = {
       return content
     }
     return {
-      before: rescheduleButton({sourceBlock, workspaceId}),
+      before: rescheduleButton({sourceBlock}),
       content,
     }
   },

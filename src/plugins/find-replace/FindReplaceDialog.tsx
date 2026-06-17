@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { Search } from 'lucide-react'
 import {
   Dialog,
@@ -20,7 +20,7 @@ import {
   FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
   FIND_REPLACE_SEARCH_CONTENT_QUERY,
 } from './dataExtension.ts'
-import { toggleFindReplaceEvent } from './events.ts'
+import { findReplaceToggle } from './toggleStore.ts'
 import type {
   ApplyContentReplaceResult,
   ContentSearchMatch,
@@ -50,7 +50,11 @@ const blockMatchCountLabel = (blockCount: number, matchCount: number): string =>
 
 export function FindReplaceDialog() {
   const repo = useRepo()
-  const [open, setOpen] = useState(false)
+  const open = useSyncExternalStore(
+    findReplaceToggle.subscribe,
+    findReplaceToggle.isOpen,
+    findReplaceToggle.isOpen,
+  )
   const [find, setFind] = useState('')
   const [replace, setReplace] = useState('')
   const [options, setOptions] = useState<FindReplaceOptions>(defaultOptions)
@@ -74,14 +78,6 @@ export function FindReplaceDialog() {
   )
   const totalMatchCount = matches.reduce((sum, match) => sum + match.matchCount, 0)
   const selectedReplacementCount = selectedItems.reduce((sum, match) => sum + match.matchCount, 0)
-
-  useEffect(() => {
-    const handleToggle = () => {
-      setOpen(prev => !prev)
-    }
-    window.addEventListener(toggleFindReplaceEvent, handleToggle)
-    return () => window.removeEventListener(toggleFindReplaceEvent, handleToggle)
-  }, [])
 
   useEffect(() => {
     if (!open) return
@@ -159,7 +155,7 @@ export function FindReplaceDialog() {
       setSelectedIds(new Set())
       setFind('')
       setReplace('')
-      setOpen(false)
+      findReplaceToggle.close()
     } catch (error) {
       showError(error instanceof Error ? error.message : 'Replace failed')
     } finally {
@@ -168,7 +164,7 @@ export function FindReplaceDialog() {
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={findReplaceToggle.set}>
       <DialogContent className="top-[12vh] max-h-[82vh] max-w-3xl translate-y-0 grid-rows-[auto_auto_minmax(0,1fr)_auto] gap-4 p-0">
         <DialogHeader className="px-5 pt-5">
           <DialogTitle className="flex items-center gap-2">
@@ -287,7 +283,7 @@ export function FindReplaceDialog() {
             <Button
               type="button"
               variant="outline"
-              onClick={() => setOpen(false)}
+              onClick={() => findReplaceToggle.close()}
             >
               Cancel
             </Button>

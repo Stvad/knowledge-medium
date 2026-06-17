@@ -1,4 +1,4 @@
-import { Suspense, use, useCallback, useEffect, useState, type MouseEvent } from 'react'
+import { Suspense, use, useCallback, useEffect, useSyncExternalStore, type MouseEvent } from 'react'
 import {
   ArrowLeft,
   ChevronRight,
@@ -19,11 +19,7 @@ import { getEffectiveActions } from '@/shortcuts/effectiveActions.js'
 import { CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID } from '@/shortcuts/defaultShortcuts.js'
 import { useRunAction } from '@/shortcuts/runAction.js'
 import type { ActionConfig, ActionIcon } from '@/shortcuts/types.js'
-import {
-  closeLeftSidebarEvent,
-  openLeftSidebarEvent,
-  toggleLeftSidebarEvent,
-} from './events.ts'
+import { leftSidebarToggle } from './toggleStore.ts'
 import {
   leftSidebarSectionsFacet,
   type LeftSidebarSectionContribution,
@@ -342,28 +338,20 @@ function SidebarSectionFallback() {
 export function LeftSidebar() {
   const runtime = useAppRuntime()
   const sections = runtime.read(leftSidebarSectionsFacet)
-  const [open, setOpen] = useState(false)
+  const open = useSyncExternalStore(
+    leftSidebarToggle.subscribe,
+    leftSidebarToggle.isOpen,
+    leftSidebarToggle.isOpen,
+  )
 
-  const closeSidebar = useCallback(() => setOpen(false), [])
+  const closeSidebar = leftSidebarToggle.close
 
   useEffect(() => {
-    const openSidebar = () => setOpen(true)
-    const close = () => setOpen(false)
-    const toggle = () => setOpen(value => !value)
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') close()
+      if (event.key === 'Escape') leftSidebarToggle.close()
     }
-
-    window.addEventListener(openLeftSidebarEvent, openSidebar)
-    window.addEventListener(closeLeftSidebarEvent, close)
-    window.addEventListener(toggleLeftSidebarEvent, toggle)
     window.addEventListener('keydown', handleKeyDown)
-    return () => {
-      window.removeEventListener(openLeftSidebarEvent, openSidebar)
-      window.removeEventListener(closeLeftSidebarEvent, close)
-      window.removeEventListener(toggleLeftSidebarEvent, toggle)
-      window.removeEventListener('keydown', handleKeyDown)
-    }
+    return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
 
   if (!open) return null

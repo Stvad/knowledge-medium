@@ -13,23 +13,41 @@
  * `srsNextReviewDateProp` while content-date blocks rewrite the inline
  * wikilink, all behind the same UI.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { cn } from '@/lib/utils.js'
 import { useAnchoredFloating } from '@/components/ui/anchored-floating.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { useRepo } from '@/context/repo.js'
 import { useIsMobile } from '@/utils/react.js'
+import type { DialogContextProps } from '@/utils/dialogs.js'
 import { addDaysIso, todayIso } from './dailyNotes.ts'
 import { pickBlockDateAdapter, type BlockDateAdapter } from './blockDateAdapter.ts'
 import { CalendarGrid } from './CalendarGrid.tsx'
 import { firstOfMonth, formatDayLabel, fromIso } from './calendar.ts'
-import {
-  openReschedulePickerEvent,
-  type ReschedulePickerAnchorRect,
-  type OpenReschedulePickerEventDetail,
-  type ReschedulePickerResult,
-} from './rescheduleEvents.ts'
+
+export interface ReschedulePickerAnchorRect {
+  bottom: number
+  height: number
+  left: number
+  right: number
+  top: number
+  width: number
+}
+
+/** Resolved by `openDialog(ReschedulePicker, …)`: `rescheduled` is true
+ *  only when the user committed a date and the write landed. The
+ *  promise resolves to `null` on cancel / Escape / outside-tap, so
+ *  callers (e.g. the SRS review session, which only advances on a real
+ *  reschedule) can tell the two apart. */
+export interface ReschedulePickerResult {
+  rescheduled: boolean
+}
+
+export interface ReschedulePickerProps {
+  blockId: string
+  anchorRect?: ReschedulePickerAnchorRect
+}
 
 const DESKTOP_PANEL_MARGIN = 8
 const DESKTOP_FALLBACK_POSITION: CSSProperties = {
@@ -77,137 +95,80 @@ const QUICK_CHIPS: readonly {label: string; offset: number}[] = [
 ]
 
 interface ActiveSession {
-  blockId: string
-  workspaceId: string
   adapter: BlockDateAdapter
   initialIso: string
 }
 
-const noop = () => {}
-
-export const ReschedulePicker = () => {
+export const ReschedulePicker = ({
+  blockId,
+  anchorRect,
+  resolve,
+  cancel,
+}: DialogContextProps<ReschedulePickerResult> & ReschedulePickerProps) => {
   const runtime = useAppRuntime()
   const repo = useRepo()
   const isMobile = useIsMobile()
   const [session, setSession] = useState<ActiveSession | null>(null)
-  const [anchorRect, setAnchorRect] = useState<ReschedulePickerAnchorRect | null>(null)
   const [visibleMonth, setVisibleMonth] = useState(() => firstOfMonth(new Date()))
   const [previewIso, setPreviewIso] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
   const stripRef = useRef<HTMLDivElement | null>(null)
   const stripDidScrollRef = useRef(false)
-  /** Monotonic request id — bumped on every open event. Async resolves
-   *  check it before writing state so two opens in quick succession
-   *  can't have the older `getCurrentIso` resolve last and replace
-   *  the newer session. Read+write in the event handler is safe;
-   *  React queues the setState that depends on it. */
-  const openRequestIdRef = useRef(0)
-  /** The current opener's completion callback. Held in a ref (not state)
-   *  so `finish` stays stable and so we can guarantee it fires exactly
-   *  once — we null it out the moment we report, and re-arm it on the
-   *  next open. */
-  const onCompleteRef = useRef<(result: ReschedulePickerResult) => void>(noop)
 
-  // Hide the sheet and reset per-session state. Does NOT report a result:
-  // callers report (or have already reported) explicitly. Bumping the
-  // request id marks any of this session's in-flight async resolves stale
-  // so they neither reopen nor re-tear-down the sheet.
-  const teardown = useCallback(() => {
-    openRequestIdRef.current += 1
-    setSession(null)
-    setAnchorRect(null)
-    setPreviewIso(null)
-    setPending(false)
-    stripDidScrollRef.current = false
-  }, [])
-
-  // Cancel / outside-tap / Escape: closed without the user committing a
-  // date here. Report the *current, uncommitted* opener as cancelled. If
-  // a commit already started, it took ownership of the report (nulling
-  // the ref), so this reports to a no-op and the in-flight write stays
-  // authoritative.
-  const dismiss = useCallback(() => {
-    const report = onCompleteRef.current
-    onCompleteRef.current = noop
-    report({rescheduled: false})
-    teardown()
-  }, [teardown])
-
+  // The finalize callbacks are fresh closures from the DialogHost each
+  // render; read them through a ref so the mount-once load effect can
+  // close the sheet without depending on (and re-running for) their
+  // identity.
+  const cancelRef = useRef(cancel)
   useEffect(() => {
-    const handleOpen = (event: Event) => {
-      const detail = (event as CustomEvent<OpenReschedulePickerEventDetail>).detail
-      if (!detail) return
-      const block = repo.block(detail.blockId)
-      const adapter = pickBlockDateAdapter(runtime, block)
-      if (!adapter) {
-        // The action's `isVisible` already filters this out — log so a
-        // misconfigured plugin (e.g. forgot to register the adapter) is
-        // still visible.
-        console.error(`[reschedule] no adapter handles block ${detail.blockId}`)
-        return
-      }
+    cancelRef.current = cancel
+  })
 
-      // A new open supersedes any still-open session: report the previous
-      // *uncommitted* opener as cancelled before we re-arm, so it isn't
-      // left waiting forever. A session whose commit already started has
-      // nulled the ref (it owns its own report), so a slow write in flight
-      // still reports its real outcome rather than this premature cancel.
-      onCompleteRef.current({rescheduled: false})
-      onCompleteRef.current = detail.onComplete ?? noop
-
-      const requestId = ++openRequestIdRef.current
-
-      void (async () => {
-        let resolvedIso: string | null
-        try {
-          resolvedIso = await adapter.getCurrentIso(block)
-        } catch (error) {
-          // Fire-and-forget would surface only as an unhandled
-          // rejection AND leave the picker hidden (session never set,
-          // user thinks the tap did nothing). Catch + log + fall back
-          // to "today" so the sheet opens; the user can still pick
-          // their date and the eventual `setIso` will either succeed
-          // or report its own error in commit.
-          console.error(`[reschedule] adapter ${adapter.id} read failed`, error)
-          resolvedIso = null
-        }
-        const initialIso = resolvedIso ?? todayIso()
-        // Drop the result if a newer open (or a dismiss) has bumped
-        // the counter — without this, two fast opens against blocks
-        // with different `getCurrentIso` latencies can land in the
-        // wrong order and the sheet ends up showing/committing for
-        // the wrong block.
-        if (openRequestIdRef.current !== requestId) return
-        const initialDate = fromIso(initialIso) ?? new Date()
-        // Clear any stranded `pending` from an earlier session whose
-        // commit hasn't resolved yet (its teardown now no-ops because
-        // the request id has moved on).
-        setPending(false)
-        setSession({
-          blockId: detail.blockId,
-          workspaceId: detail.workspaceId,
-          adapter,
-          initialIso,
-        })
-        setAnchorRect(detail.anchorRect ?? null)
-        setVisibleMonth(firstOfMonth(initialDate))
-        setPreviewIso(initialIso)
-        stripDidScrollRef.current = false
-      })()
+  // Resolve the adapter + current date once on mount. Each open is its
+  // own dialog instance, so there's no cross-session supersede
+  // bookkeeping — a stale async resolve is only guarded against this
+  // instance unmounting mid-flight.
+  useEffect(() => {
+    let cancelled = false
+    const block = repo.block(blockId)
+    const adapter = pickBlockDateAdapter(runtime, block)
+    if (!adapter) {
+      // The action's `isVisible` already filters this out — log so a
+      // misconfigured plugin (forgot to register the adapter) is still
+      // visible — and close the sheet.
+      console.error(`[reschedule] no adapter handles block ${blockId}`)
+      cancelRef.current()
+      return
     }
-
-    window.addEventListener(openReschedulePickerEvent, handleOpen)
-    return () => window.removeEventListener(openReschedulePickerEvent, handleOpen)
-  }, [repo, runtime])
+    void (async () => {
+      let resolvedIso: string | null
+      try {
+        resolvedIso = await adapter.getCurrentIso(block)
+      } catch (error) {
+        // Fall back to "today" so the sheet still opens; the user can
+        // pick a date and the eventual `setIso` succeeds or reports its
+        // own error in commit.
+        console.error(`[reschedule] adapter ${adapter.id} read failed`, error)
+        resolvedIso = null
+      }
+      if (cancelled) return
+      const initialIso = resolvedIso ?? todayIso()
+      const initialDate = fromIso(initialIso) ?? new Date()
+      setSession({adapter, initialIso})
+      setVisibleMonth(firstOfMonth(initialDate))
+      setPreviewIso(initialIso)
+    })()
+    return () => { cancelled = true }
+  }, [repo, runtime, blockId])
 
   useEffect(() => {
     if (!session) return
     const handleKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') dismiss()
+      if (event.key === 'Escape') cancelRef.current()
     }
     window.addEventListener('keydown', handleKey)
     return () => window.removeEventListener('keydown', handleKey)
-  }, [session, dismiss])
+  }, [session])
 
   const stripCells = useMemo(
     () => session ? buildStripCells(session.initialIso) : [],
@@ -215,7 +176,7 @@ export const ReschedulePicker = () => {
   )
   const desktopFloating = useAnchoredFloating({
     open: Boolean(session && !isMobile),
-    anchorRect,
+    anchorRect: anchorRect ?? null,
     gap: DESKTOP_PANEL_MARGIN,
     viewportMargin: DESKTOP_PANEL_MARGIN,
     fallbackStyle: DESKTOP_FALLBACK_POSITION,
@@ -240,22 +201,10 @@ export const ReschedulePicker = () => {
 
   const commit = async (iso: string) => {
     if (!session || pending) return
-    // Scope teardown to the open-request id that was current when we
-    // started the write. If the user dismisses and reopens (or opens for
-    // a different block) while `setIso` is in flight, the older promise
-    // would otherwise tear down the NEW sheet.
-    const committingFor = openRequestIdRef.current
-    // Take ownership of the completion report the instant the write
-    // starts: capture the opener's callback and clear the shared ref so
-    // neither a later dismiss nor a reopen can fire it prematurely with a
-    // cancel — or drop it. The write outcome reported below is then
-    // authoritative no matter what the user does to the sheet meanwhile.
-    const report = onCompleteRef.current
-    onCompleteRef.current = noop
     setPending(true)
     let wrote = false
     try {
-      const block = repo.block(session.blockId)
+      const block = repo.block(blockId)
       wrote = await session.adapter.setIso(block, iso)
       if (!wrote) {
         console.warn(`[reschedule] adapter ${session.adapter.id} refused write`)
@@ -263,7 +212,7 @@ export const ReschedulePicker = () => {
     } catch (error) {
       // Callers fire commit with `void commit(...)`, so a throw here
       // would surface only as an unhandled rejection while the sheet
-      // dismisses silently. Catch + log so the failure is at least
+      // closes silently. Catch + log so the failure is at least
       // visible to anyone with the console open. (No toast plumbing
       // in scope for the prototype.)
       console.error(`[reschedule] adapter ${session.adapter.id} threw on write`, error)
@@ -271,16 +220,8 @@ export const ReschedulePicker = () => {
     // Report `rescheduled` only when the date actually landed; a refused
     // or thrown write is, for the opener's purposes, the same as a cancel
     // (the SRS review session must not advance past a card it never
-    // moved). Report to the captured callback regardless of staleness —
-    // this opener committed, so it gets its real outcome even if a newer
-    // open has since taken over the sheet.
-    report({rescheduled: wrote})
-    if (openRequestIdRef.current !== committingFor) {
-      // A newer open happened between setPending(true) and now; it owns
-      // the visible sheet, so leave its state alone.
-      return
-    }
-    teardown()
+    // moved).
+    resolve({rescheduled: wrote})
   }
 
   const previewDate = previewIso ? fromIso(previewIso) : null
@@ -300,7 +241,7 @@ export const ReschedulePicker = () => {
       <div
         className="fixed inset-0 z-40 bg-black/30 backdrop-blur-[1px]"
         aria-hidden="true"
-        onClick={dismiss}
+        onClick={() => cancel()}
       />
       <div
         ref={isMobile ? undefined : desktopFloating.setFloatingElement}
@@ -417,7 +358,7 @@ export const ReschedulePicker = () => {
 
         <button
           type="button"
-          onClick={dismiss}
+          onClick={() => cancel()}
           className="mt-3 w-full rounded-md border bg-background py-2 text-sm font-medium text-foreground hover:bg-muted"
         >
           Cancel

@@ -16,6 +16,9 @@ interface TimestampComponentProps {
 export const videoPlayerMarkdownExtension: MarkdownExtension = ({blockContext}) => {
   const videoBlockId = blockContext.videoPlayerBlockId
   if (typeof videoBlockId !== 'string') return null
+  const renderScopeId = typeof blockContext.renderScopeId === 'string'
+    ? blockContext.renderScopeId
+    : undefined
 
   return {
     remarkPlugins: [remarkTimestamps],
@@ -24,7 +27,7 @@ export const videoPlayerMarkdownExtension: MarkdownExtension = ({blockContext}) 
         const hms = node?.properties?.hms
         if (typeof hms !== 'string') return null
 
-        return <VideoTimeStamp hms={hms} videoBlockId={videoBlockId}/>
+        return <VideoTimeStamp hms={hms} videoBlockId={videoBlockId} renderScopeId={renderScopeId}/>
       },
     } as unknown as Components,
   }

@@ -10,7 +10,6 @@ import {
 import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.js'
 import { PanelRenderer } from '@/components/renderer/PanelRenderer.js'
 import {
-  useEffect,
   useState,
   useSyncExternalStore,
   useRef,
@@ -18,8 +17,10 @@ import {
   useMemo,
 } from 'react'
 
-const CANVAS_TOGGLE_EVENT = 'canvas-layout:toggle'
-const CANVAS_SET_EVENT = 'canvas-layout:set'
+// Canvas mode is a deliberately device-local layout preference (canvas on a
+// wide desktop, plain layout on a phone), so it lives in localStorage rather
+// than a synced prefs block.
+// lint-ok: config-in-localstorage (device-local canvas toggle, must not sync)
 const CANVAS_STORAGE_KEY = 'canvas-layout:enabled'
 
 const readPersistedMode = () => {
@@ -34,6 +35,24 @@ const writePersistedMode = (v) => {
     localStorage.setItem(CANVAS_STORAGE_KEY, v ? 'true' : 'false')
   } catch (e) {}
 }
+
+// Canvas-mode visibility — a typed module store backed by localStorage,
+// NOT a window CustomEvent. The toggle/enable/disable actions and the
+// exit button flip it; the renderer reads it with useSyncExternalStore
+// (the same mechanism the app's own DialogHost uses).
+let canvasMode = readPersistedMode()
+const canvasListeners = new Set()
+const setCanvasMode = (next) => {
+  canvasMode = next
+  writePersistedMode(next)
+  canvasListeners.forEach((notify) => notify())
+}
+const toggleCanvasMode = () => setCanvasMode(!canvasMode)
+const subscribeCanvasMode = (notify) => {
+  canvasListeners.add(notify)
+  return () => canvasListeners.delete(notify)
+}
+const isCanvasMode = () => canvasMode
 
 const canvasXProp = defineProperty('canvasX', {
   codec: codecs.number,
@@ -282,12 +301,7 @@ const CanvasView = ({ block }) => {
         <span>canvas layout — {panelRows.length} panel(s)</span>
         <button
           type="button"
-          onClick={() => {
-            writePersistedMode(false)
-            window.dispatchEvent(
-              new CustomEvent(CANVAS_SET_EVENT, { detail: false }),
-            )
-          }}
+          onClick={() => setCanvasMode(false)}
           title="Exit canvas layout"
           aria-label="Exit canvas layout"
           style={{
@@ -326,27 +340,7 @@ const CanvasView = ({ block }) => {
 }
 
 const CanvasLayoutRenderer = ({ block }) => {
-  const [canvasMode, setCanvasMode] = useState(readPersistedMode)
-  useEffect(() => {
-    const onToggle = () => {
-      const next = !readPersistedMode()
-      writePersistedMode(next)
-      setCanvasMode(next)
-    }
-    const onSet = (e) => {
-      const next = !!e.detail
-      writePersistedMode(next)
-      setCanvasMode(next)
-    }
-    window.addEventListener(CANVAS_TOGGLE_EVENT, onToggle)
-    window.addEventListener(CANVAS_SET_EVENT, onSet)
-    // Resync in case mode changed while unmounted
-    setCanvasMode(readPersistedMode())
-    return () => {
-      window.removeEventListener(CANVAS_TOGGLE_EVENT, onToggle)
-      window.removeEventListener(CANVAS_SET_EVENT, onSet)
-    }
-  }, [block])
+  const canvasMode = useSyncExternalStore(subscribeCanvasMode, isCanvasMode, isCanvasMode)
 
   if (!canvasMode) {
     return <LayoutRenderer block={block} />
@@ -358,31 +352,21 @@ const toggleCanvasLayoutAction = {
   id: 'canvas-layout.toggle',
   description: 'Toggle canvas layout',
   context: ActionContextTypes.GLOBAL,
-  handler: () => {
-    const next = !readPersistedMode()
-    writePersistedMode(next)
-    window.dispatchEvent(new CustomEvent(CANVAS_SET_EVENT, { detail: next }))
-  },
+  handler: () => toggleCanvasMode(),
 }
 
 const enableCanvasLayoutAction = {
   id: 'canvas-layout.enable',
   description: 'Enable canvas layout',
   context: ActionContextTypes.GLOBAL,
-  handler: () => {
-    writePersistedMode(true)
-    window.dispatchEvent(new CustomEvent(CANVAS_SET_EVENT, { detail: true }))
-  },
+  handler: () => setCanvasMode(true),
 }
 
 const disableCanvasLayoutAction = {
   id: 'canvas-layout.disable',
   description: 'Disable canvas layout',
   context: ActionContextTypes.GLOBAL,
-  handler: () => {
-    writePersistedMode(false)
-    window.dispatchEvent(new CustomEvent(CANVAS_SET_EVENT, { detail: false }))
-  },
+  handler: () => setCanvasMode(false),
 }
 
 export default [

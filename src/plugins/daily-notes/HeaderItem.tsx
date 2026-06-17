@@ -2,7 +2,8 @@ import type { MouseEvent } from 'react'
 import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useRepo } from '@/context/repo.js'
 import { useRunAction } from '@/shortcuts/runAction.js'
-import { openDailyNotePicker } from './events.ts'
+import { openDialog } from '@/utils/dialogs.js'
+import { DailyNotePicker } from './DailyNotePicker.tsx'
 import {
   OPEN_NEXT_DAILY_NOTE_ACTION_ID,
   OPEN_PREVIOUS_DAILY_NOTE_ACTION_ID,
@@ -25,7 +26,7 @@ export function DailyNotePickerHeaderItem() {
     const initialIso = workspaceId
       ? (await resolveCurrentDailyNoteIso(repo, workspaceId)) ?? undefined
       : undefined
-    openDailyNotePicker({
+    void openDialog(DailyNotePicker, {
       anchorRect: {bottom, height, left, right, top, width},
       initialIso,
     })

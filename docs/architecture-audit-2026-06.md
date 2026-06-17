@@ -145,6 +145,23 @@ untyped event bus grew beside the typed mechanisms.
   via `runActionById`; keep CustomEvents only for genuine broadcast. Update
   `extensionLint` + authoring catalog in the same change; keep old listeners as a
   deprecation shim for user extensions in the wild.
+- **Resolved (2026-06-16, no deprecation shims):** all nine plugin `events.ts`
+  files deleted; channels are now —
+  - **Dialogs/pickers → `openDialog`:** extract-type (×2), merge-blocks,
+    daily-notes (`DailyNotePicker` + `ReschedulePicker`), agent-runtime tokens.
+  - **Toggle/open surfaces → `createToggleStore` (`useSyncExternalStore`) flipped
+    by the action/header; cross-plugin via `runActionById`:** command-palette,
+    find-replace, quick-find, left-sidebar. `app-intents`/PWA intents now call
+    `runActionById(...)` instead of importing another plugin's event name.
+  - **video-player RPC → typed per-`(renderScopeId, blockId)` handle registry.**
+  - **Genuine broadcasts kept as CustomEvents:** swipe-quick-actions DOM events,
+    `runtimeEvents.appRuntimeUpdate`, agent-runtime `agentTokensChanged` /
+    `agentRuntimeBridgeRestart`, `propertyNavigation` create-request.
+  - `extensionLint` inverted (`dialog-via-window-event` flags the bus, no longer
+    penalizes `useSyncExternalStore`); authoring catalog updated to match.
+  - **Regression guard:** an ESLint `no-restricted-syntax` *error* now blocks
+    `window.dispatchEvent(new CustomEvent(...))` in non-test `src/`; the genuine
+    broadcasts above carry an inline `eslint-disable` + justification.
 
 ---
 

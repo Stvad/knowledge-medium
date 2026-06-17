@@ -15,14 +15,6 @@ import { leftSidebarActions } from './actions.ts'
 export { LeftSidebar } from './LeftSidebar.tsx'
 export { LeftSidebarHeaderItem } from './HeaderItem.tsx'
 export {
-  closeLeftSidebar,
-  closeLeftSidebarEvent,
-  openLeftSidebar,
-  openLeftSidebarEvent,
-  toggleLeftSidebar,
-  toggleLeftSidebarEvent,
-} from './events.ts'
-export {
   leftSidebarSectionsFacet,
   type LeftSidebarSectionContribution,
   type LeftSidebarSectionProps,

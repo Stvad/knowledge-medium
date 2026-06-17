@@ -6,6 +6,7 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useSyncExternalStore,
   type ReactNode,
   type KeyboardEvent,
   type MouseEvent,
@@ -43,7 +44,7 @@ import {
   getUIStateBlock,
   requireWorkspaceId,
 } from '@/data/stateBlocks.js'
-import { toggleQuickFindEvent } from './events.ts'
+import { quickFindToggle } from './toggleStore.ts'
 import { pushRecentBlockId, quickFindUIStateType, recentBlockIdsProp } from './recents.ts'
 import {
   nextQuickFindSelection,
@@ -339,21 +340,17 @@ export function QuickFindList({
 }
 
 export function QuickFind() {
-  const [open, setOpen] = useState(false)
-
-  useEffect(() => {
-    const handleToggle = () => {
-      setOpen(prev => !prev)
-    }
-    window.addEventListener(toggleQuickFindEvent, handleToggle)
-    return () => window.removeEventListener(toggleQuickFindEvent, handleToggle)
-  }, [])
+  const open = useSyncExternalStore(
+    quickFindToggle.subscribe,
+    quickFindToggle.isOpen,
+    quickFindToggle.isOpen,
+  )
 
   if (!open) return null
 
   return (
     <Suspense fallback={null}>
-      <QuickFindResources open={open} onOpenChange={setOpen}/>
+      <QuickFindResources open={open} onOpenChange={quickFindToggle.set}/>
     </Suspense>
   )
 }

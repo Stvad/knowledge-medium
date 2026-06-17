@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useMemo, useSyncExternalStore } from 'react'
 import {
   CommandDialog,
   CommandInput,
@@ -13,7 +13,7 @@ import type { ActionConfig, ShortcutBinding, ActionContextType } from '@/shortcu
 import { Kbd } from '@/components/ui/kbd'
 import { formatChord } from '@/plugins/keybindings-settings/keyCapture.ts'
 import { groupBy } from 'lodash'
-import { toggleCommandPaletteEvent } from './events.ts'
+import { commandPaletteToggle } from './toggleStore.ts'
 import { COMMAND_PALETTE_CONTEXT } from './context.ts'
 import { useCommandPaletteActions } from './useCommandPaletteActions.ts'
 
@@ -27,19 +27,15 @@ const formatShortcutKeys = (bindings: readonly ShortcutBinding[]): string[] => {
 }
 
 export function CommandPalette() {
-  const [open, setOpen] = useState(false)
+  const open = useSyncExternalStore(
+    commandPaletteToggle.subscribe,
+    commandPaletteToggle.isOpen,
+    commandPaletteToggle.isOpen,
+  )
 
   const shortcutDependencies = useMemo(() => ({}), [])
 
   useActionContext(COMMAND_PALETTE_CONTEXT, shortcutDependencies, open)
-
-  useEffect(() => {
-    const handleToggle = () => {
-      setOpen((currentOpen) => !currentOpen)
-    }
-    window.addEventListener(toggleCommandPaletteEvent, handleToggle)
-    return () => window.removeEventListener(toggleCommandPaletteEvent, handleToggle)
-  }, [])
 
   const {actions, activeContexts, bindingsFor} = useCommandPaletteActions()
   const runAction = useRunAction()
@@ -59,14 +55,14 @@ export function CommandPalette() {
     } catch (error) {
       console.error(`[CommandPalette] Failed to execute action: ${actionId}`, error)
     } finally {
-      setOpen(false)
+      commandPaletteToggle.close()
     }
   }
 
   return (
     <CommandDialog
       open={open}
-      onOpenChange={setOpen}
+      onOpenChange={commandPaletteToggle.set}
       contentClassName="top-[12vh] translate-y-0"
     >
       <CommandInput placeholder="Type a command or search..."/>

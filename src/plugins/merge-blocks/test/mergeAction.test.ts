@@ -3,15 +3,20 @@
  * "Merge into…" action — the thin handler that opens the merge-target picker
  * over the focused block. The merge *strategy* is covered in strategy.test.ts;
  * this covers the handler's own logic: resolve the block's data (peek, else
- * load), bail if it has none, otherwise fire the open-picker event with the
- * source id + its workspace.
+ * load), bail if it has none, otherwise open the picker (via `openDialog`)
+ * with the source id + its workspace.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+vi.mock('@/utils/dialogs.js', () => ({ openDialog: vi.fn() }))
+
+import { openDialog } from '@/utils/dialogs.js'
 import { mergeIntoAction } from '../mergeAction.ts'
-import { openMergePickerEvent, type OpenMergePickerEventDetail } from '../events.ts'
 import type { BlockData } from '@/data/api'
 import type { BlockShortcutDependencies } from '@/shortcuts/types.js'
+
+const openDialogMock = vi.mocked(openDialog)
 
 const blockData = (o: Partial<BlockData> = {}): BlockData => ({
   id: 'src', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: '',
@@ -32,28 +37,22 @@ const run = (block: BlockShortcutDependencies['block']) =>
     {} as KeyboardEvent,
   )
 
-let opened: OpenMergePickerEventDetail[]
-let listener: (e: Event) => void
-beforeEach(() => {
-  opened = []
-  listener = (e: Event) => opened.push((e as CustomEvent<OpenMergePickerEventDetail>).detail)
-  window.addEventListener(openMergePickerEvent, listener)
-})
-afterEach(() => window.removeEventListener(openMergePickerEvent, listener))
+beforeEach(() => openDialogMock.mockClear())
 
 describe('mergeIntoAction', () => {
   it('opens the picker for the focused block, carrying its own workspace', async () => {
     await run(blockStub('src', blockData({ id: 'src', workspaceId: 'ws-9' })))
-    expect(opened).toEqual([{ sourceBlockId: 'src', workspaceId: 'ws-9' }])
+    expect(openDialogMock).toHaveBeenCalledTimes(1)
+    expect(openDialogMock.mock.calls[0][1]).toEqual({ sourceBlockId: 'src', workspaceId: 'ws-9' })
   })
 
   it('falls back to load() when the block is not yet in the peek cache', async () => {
     await run(blockStub('src', null, blockData({ id: 'src', workspaceId: 'ws-2' })))
-    expect(opened).toEqual([{ sourceBlockId: 'src', workspaceId: 'ws-2' }])
+    expect(openDialogMock.mock.calls[0][1]).toEqual({ sourceBlockId: 'src', workspaceId: 'ws-2' })
   })
 
   it('does nothing when the block has no data to merge', async () => {
     await run(blockStub('gone', null, null))
-    expect(opened).toEqual([])
+    expect(openDialogMock).not.toHaveBeenCalled()
   })
 })

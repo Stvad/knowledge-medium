@@ -1,5 +1,12 @@
 import type { AppEffectCleanup } from '@/extensions/core.js'
+import { openDialog } from '@/utils/dialogs.js'
 import { agentTokenStore, agentTokensChangedEvent } from './tokens.ts'
+// Pairing via the hash URL surfaces the tokens dialog. We open it
+// imperatively rather than over a CustomEvent (audit B3). This pulls a
+// UI component into the transport module, but it's bundle-safe: nothing
+// in the agent-cli/server package imports bridge.ts, so React never
+// reaches the node bundle.
+import { AgentTokensDialog, type AgentTokensDialogProps } from './AgentTokensDialog.tsx'
 import { createAgentRuntimeContext, executeCommand } from './commands.ts'
 import { serializeError, serializeValue } from './serialization.ts'
 import type { AgentRuntimeBridgeOptions } from './protocol.ts'
@@ -8,7 +15,6 @@ import { knownAgentCommandSchema } from '@knowledge-medium/agent-cli/protocol'
 const defaultBridgeUrl = 'http://127.0.0.1:8787'
 const bridgeUrlStorageKey = 'agent-runtime:bridge-url'
 const bridgeSecretStorageKey = 'agent-runtime:bridge-secret'
-const openTokensDialogEvent = 'agent-runtime-bridge:open-tokens-dialog'
 const longPollMs = 25_000
 const retryBaseMs = 1_000
 const retryMaxMs = 30_000
@@ -59,9 +65,7 @@ const storeBridgePairingFromHash = () => {
 
   if (openTokensDialog) {
     window.setTimeout(() => {
-      window.dispatchEvent(new CustomEvent(openTokensDialogEvent, {
-        detail: {mode: 'pair-cli'},
-      }))
+      void openDialog<void, AgentTokensDialogProps>(AgentTokensDialog, {mode: 'pair-cli'})
     }, 0)
   }
 }

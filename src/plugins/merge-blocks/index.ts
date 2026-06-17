@@ -6,34 +6,26 @@
  * keepTarget) is decided at commit time by `pickMergeContentStrategy`
  * based on the two blocks' types.
  *
- * Composition mirrors the daily-notes reschedule trio:
- *   - `events.ts`            — cross-component open event
- *   - `MergePicker.tsx`      — modal mounted via appMountsFacet
- *   - `mergeAction.ts`       — block-context action that fires the event
+ * Composition:
+ *   - `MergePicker.tsx`      — modal opened on demand via `openDialog`
+ *   - `mergeAction.ts`       — block-context action that opens the picker
  */
-import { actionsFacet, appMountsFacet, type AppMountContribution } from '@/extensions/core.js'
+import { actionsFacet } from '@/extensions/core.js'
 import type { AppExtension } from '@/facets/facet.js'
+import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
 import { systemToggle } from '@/facets/togglable.js'
-import { MergePicker } from './MergePicker.tsx'
 import { mergeIntoAction } from './mergeAction.ts'
 
 export { MERGE_INTO_ACTION_ID, mergeIntoAction } from './mergeAction.ts'
-export {
-  openMergePicker,
-  openMergePickerEvent,
-  type OpenMergePickerEventDetail,
-} from './events.ts'
-
-const mergePickerMount: AppMountContribution = {
-  id: 'merge-blocks.picker',
-  component: MergePicker,
-}
+export { MergePicker, type MergePickerProps } from './MergePicker.tsx'
 
 export const mergeBlocksPlugin: AppExtension = systemToggle({
   id: 'system:merge-blocks',
   name: 'Merge blocks',
   description: 'Block-merge actions (Backspace at start of a block merges into the previous one).',
 }).of([
-  appMountsFacet.of(mergePickerMount, {source: 'merge-blocks'}),
+  // `mergeIntoAction` opens MergePicker via `openDialog`, which is inert
+  // without DialogHost mounted; pull it in (deduped by reference).
+  dialogAppMountExtension,
   actionsFacet.of(mergeIntoAction, {source: 'merge-blocks'}),
 ])

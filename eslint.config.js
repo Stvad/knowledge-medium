@@ -51,6 +51,27 @@ export default tseslint.config(
           'src/data/typeTagger.ts',
         ],
       }],
+      // Audit B3: the untyped window.CustomEvent UI bus was replaced by
+      // typed channels. Block its reintroduction — dialogs/pickers go
+      // through `openDialog`, toggle/open surfaces through a
+      // `createToggleStore` + an action (reached cross-plugin via
+      // `runActionById`). A genuine broadcast keeps a CustomEvent but
+      // must opt in explicitly with an inline disable + justification
+      // (see runtimeEvents.ts / propertyNavigation.ts / agent-runtime).
+      'no-restricted-syntax': ['error', {
+        selector:
+          "CallExpression[callee.object.name=/^(window|globalThis)$/][callee.property.name='dispatchEvent'] > NewExpression[callee.name='CustomEvent']",
+        message:
+          'Opening/toggling UI via window.dispatchEvent(new CustomEvent(...)) is the retired plugin-bus pattern (audit B3). Use openDialog for dialogs/pickers, and a useSyncExternalStore toggle store (createToggleStore) flipped from an action for toggle/open intents. For a genuine broadcast, add `// eslint-disable-next-line no-restricted-syntax -- genuine broadcast: <why>`.',
+      }],
+    },
+  },
+  {
+    // Tests legitimately dispatch synthetic CustomEvents to drive
+    // components, so the B3 guard above doesn't apply to them.
+    files: ['**/test/**/*.{ts,tsx}', '**/*.test.{ts,tsx}'],
+    rules: {
+      'no-restricted-syntax': 'off',
     },
   },
 )

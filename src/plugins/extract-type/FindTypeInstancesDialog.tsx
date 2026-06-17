@@ -45,10 +45,7 @@ import type { AnyPropertySchema } from '@/data/api'
 import { useHandle } from '@/hooks/block.js'
 import { labelForBlockData } from '@/utils/linkTargetAutocomplete.js'
 import { X } from 'lucide-react'
-import {
-  openFindTypeInstancesDialogEvent,
-  type OpenFindTypeInstancesDialogEventDetail,
-} from './events'
+import type { DialogContextProps } from '@/utils/dialogs.js'
 import {
   buildTypeShapeChoices,
   type PropertyShapeChoice,
@@ -99,9 +96,16 @@ const collectTargetIds = (value: unknown): readonly string[] => {
  *  show an inline truncation hint. */
 const CANDIDATE_DISPLAY_LIMIT = 5000
 
-export function FindTypeInstancesDialog() {
+export interface FindTypeInstancesDialogProps {
+  typeBlockId: string
+}
+
+export function FindTypeInstancesDialog({
+  typeBlockId,
+  resolve,
+  cancel,
+}: DialogContextProps<void> & FindTypeInstancesDialogProps) {
   const repo = useRepo()
-  const [open, setOpen] = useState(false)
   const [typeBlock, setTypeBlock] = useState<BlockData | null>(null)
   const [step, setStep] = useState<DialogStep>('configure')
   const [choices, setChoices] = useState<readonly PropertyShapeChoice[]>([])
@@ -112,38 +116,19 @@ export function FindTypeInstancesDialog() {
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    const handleOpen = async (event: Event) => {
-      const detail = (event as CustomEvent<OpenFindTypeInstancesDialogEventDetail>).detail
-      const data = await repo.load(detail.typeBlockId)
+    let cancelled = false
+    void (async () => {
+      const data = await repo.load(typeBlockId)
+      if (cancelled) return
       if (!data) {
-        setError(`Type block ${detail.typeBlockId} not found`)
+        setError(`Type block ${typeBlockId} not found`)
         return
       }
       setTypeBlock(data)
       setChoices(buildTypeShapeChoices(repo, data))
-      setCandidates([])
-      setTruncated(false)
-      setConfirmed(new Set())
-      setError(null)
-      setBusy(false)
-      setStep('configure')
-      setOpen(true)
-    }
-    window.addEventListener(openFindTypeInstancesDialogEvent, handleOpen)
-    return () => window.removeEventListener(openFindTypeInstancesDialogEvent, handleOpen)
-  }, [repo])
-
-  const close = () => {
-    setOpen(false)
-    setTypeBlock(null)
-    setChoices([])
-    setCandidates([])
-    setTruncated(false)
-    setConfirmed(new Set())
-    setError(null)
-    setBusy(false)
-    setStep('configure')
-  }
+    })()
+    return () => { cancelled = true }
+  }, [repo, typeBlockId])
 
   const pickedChoices = useMemo(
     () => choices.filter(c => c.picked),
@@ -212,7 +197,7 @@ export function FindTypeInstancesDialog() {
       if (instanceIds.length > 0) {
         await retagBlocks(repo, {typeId: typeBlock.id, instanceIds})
       }
-      close()
+      resolve()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to retag')
       setBusy(false)
@@ -222,7 +207,7 @@ export function FindTypeInstancesDialog() {
   const typeLabel = typeBlock ? typeLabelOf(typeBlock) : ''
 
   return (
-    <Dialog open={open} onOpenChange={next => { if (!next) close() }}>
+    <Dialog open onOpenChange={next => { if (!next) cancel() }}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>
@@ -256,7 +241,7 @@ export function FindTypeInstancesDialog() {
             {error && <p className="text-sm text-destructive">{error}</p>}
 
             <DialogFooter>
-              <Button variant="ghost" onClick={close} disabled={busy}>Cancel</Button>
+              <Button variant="ghost" onClick={cancel} disabled={busy}>Cancel</Button>
               <Button onClick={handleSearch} disabled={!canSearch}>
                 {busy ? 'Searching…' : 'Find candidates'}
               </Button>

@@ -1,14 +1,10 @@
 // @vitest-environment jsdom
 
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { DailyNotePicker } from '../DailyNotePicker.tsx'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { DailyNotePicker, type DailyNotePickerProps } from '../DailyNotePicker.tsx'
 import { DailyNotePickerHeaderItem } from '../HeaderItem.tsx'
-import {
-  openDailyNotePicker,
-  openDailyNotePickerEvent,
-  type OpenDailyNotePickerEventDetail,
-} from '../events.ts'
+import { openDialog } from '@/utils/dialogs.js'
 import {
   OPEN_NEXT_DAILY_NOTE_ACTION_ID,
   OPEN_PREVIOUS_DAILY_NOTE_ACTION_ID,
@@ -23,6 +19,19 @@ const mocks = vi.hoisted(() => ({
   resolveCurrentDailyNoteIso: vi.fn<(_repo: unknown, _workspaceId: string) => Promise<string | null>>(async () => null),
   runAction: vi.fn(),
 }))
+
+vi.mock('@/utils/dialogs.js', () => ({ openDialog: vi.fn() }))
+
+const openDialogMock = vi.mocked(openDialog)
+
+/** Render the picker as `openDialog` would — with props + finalize
+ *  callbacks. Returns the spies so tests can assert resolve/cancel. */
+const renderPicker = (props: Partial<DailyNotePickerProps> = {}) => {
+  const resolve = vi.fn()
+  const cancel = vi.fn()
+  render(<DailyNotePicker resolve={resolve} cancel={cancel} {...props} />)
+  return {resolve, cancel}
+}
 
 vi.mock('@/context/repo.tsx', () => ({
   useRepo: () => mocks.repo,
@@ -71,14 +80,11 @@ describe('DailyNotePicker', () => {
     mocks.getOrCreateDailyNote.mockClear()
     mocks.openBlock.mockClear()
     mocks.runAction.mockClear()
+    openDialogMock.mockClear()
   })
 
   it('opens to the initial ISO month and highlights both today and the selected day', () => {
-    render(<DailyNotePicker/>)
-
-    act(() => {
-      openDailyNotePicker({initialIso: '2026-03-21'})
-    })
+    renderPicker({initialIso: '2026-03-21'})
 
     const dialog = screen.getByRole('dialog', {name: 'Daily note picker'})
     expect(dialog.textContent).toContain('March')
@@ -94,11 +100,7 @@ describe('DailyNotePicker', () => {
   })
 
   it('highlights today alongside the selected day when both are visible', () => {
-    render(<DailyNotePicker/>)
-
-    act(() => {
-      openDailyNotePicker({initialIso: '2026-05-04'})
-    })
+    renderPicker({initialIso: '2026-05-04'})
 
     const dialog = screen.getByRole('dialog', {name: 'Daily note picker'})
     expect(dialog.textContent).toContain('May')
@@ -112,12 +114,8 @@ describe('DailyNotePicker', () => {
     expect(selected.getAttribute('aria-current')).toBeNull()
   })
 
-  it('opens from the shared event and forwards the click to the block opener', async () => {
-    render(<DailyNotePicker/>)
-
-    act(() => {
-      openDailyNotePicker({initialIso: '2026-05-13'})
-    })
+  it('forwards the picked day to the block opener and resolves', async () => {
+    const {resolve} = renderPicker({initialIso: '2026-05-13'})
 
     expect(screen.getByRole('dialog', {name: 'Daily note picker'})).toBeTruthy()
 
@@ -133,17 +131,11 @@ describe('DailyNotePicker', () => {
     expect(mocks.openBlock).toHaveBeenCalledOnce()
     const [, ctx] = mocks.openBlock.mock.calls[0]
     expect(ctx).toEqual({blockId: 'daily-2026-05-13', workspaceId: 'ws-1'})
-    await waitFor(() => {
-      expect(screen.queryByRole('dialog', {name: 'Daily note picker'})).toBeNull()
-    })
+    await waitFor(() => expect(resolve).toHaveBeenCalled())
   })
 
   it('forwards shift-click through the block opener for sidebar-stack routing', async () => {
-    render(<DailyNotePicker/>)
-
-    act(() => {
-      openDailyNotePicker({initialIso: '2026-05-13'})
-    })
+    const {resolve} = renderPicker({initialIso: '2026-05-13'})
 
     fireEvent.click(screen.getByRole('button', {name: 'May 13, 2026'}), {
       button: 0,
@@ -161,17 +153,11 @@ describe('DailyNotePicker', () => {
     const [event, ctx] = mocks.openBlock.mock.calls[0]
     expect(event.shiftKey).toBe(true)
     expect(ctx).toEqual({blockId: 'daily-2026-05-13', workspaceId: 'ws-1'})
-    await waitFor(() => {
-      expect(screen.queryByRole('dialog', {name: 'Daily note picker'})).toBeNull()
-    })
+    await waitFor(() => expect(resolve).toHaveBeenCalled())
   })
 
   it('lays out the calendar week from Monday', () => {
-    render(<DailyNotePicker/>)
-
-    act(() => {
-      openDailyNotePicker({initialIso: '2026-05-13'})
-    })
+    renderPicker({initialIso: '2026-05-13'})
 
     const dialog = screen.getByRole('dialog', {name: 'Daily note picker'})
     expect(dialog.textContent).toContain('MonTueWedThuFriSatSun')
@@ -192,46 +178,33 @@ describe('DailyNotePickerHeaderItem', () => {
     mocks.runAction.mockClear()
     mocks.resolveCurrentDailyNoteIso.mockClear()
     mocks.resolveCurrentDailyNoteIso.mockImplementation(async () => null)
+    openDialogMock.mockClear()
   })
 
-  it('opens the shared picker from the header button', async () => {
-    const listener = vi.fn<(event: CustomEvent<OpenDailyNotePickerEventDetail>) => void>()
-    const handleEvent: EventListener = event => {
-      listener(event as CustomEvent<OpenDailyNotePickerEventDetail>)
-    }
-    window.addEventListener(openDailyNotePickerEvent, handleEvent)
-
+  it('opens the picker dialog from the header button', async () => {
     render(<DailyNotePickerHeaderItem/>)
     fireEvent.click(screen.getByRole('button', {name: 'Open daily note picker'}))
 
     await waitFor(() => {
-      expect(listener).toHaveBeenCalledOnce()
+      expect(openDialogMock).toHaveBeenCalledOnce()
     })
-    expect(listener.mock.calls[0][0].detail.anchorRect).toBeTruthy()
-    expect(listener.mock.calls[0][0].detail.initialIso).toBeUndefined()
-
-    window.removeEventListener(openDailyNotePickerEvent, handleEvent)
+    const props = openDialogMock.mock.calls[0][1] as DailyNotePickerProps
+    expect(props.anchorRect).toBeTruthy()
+    expect(props.initialIso).toBeUndefined()
   })
 
   it('passes the currently viewed daily note ISO when opening', async () => {
     mocks.resolveCurrentDailyNoteIso.mockImplementation(async () => '2026-03-21')
 
-    const listener = vi.fn<(event: CustomEvent<OpenDailyNotePickerEventDetail>) => void>()
-    const handleEvent: EventListener = event => {
-      listener(event as CustomEvent<OpenDailyNotePickerEventDetail>)
-    }
-    window.addEventListener(openDailyNotePickerEvent, handleEvent)
-
     render(<DailyNotePickerHeaderItem/>)
     fireEvent.click(screen.getByRole('button', {name: 'Open daily note picker'}))
 
     await waitFor(() => {
-      expect(listener).toHaveBeenCalledOnce()
+      expect(openDialogMock).toHaveBeenCalledOnce()
     })
-    expect(listener.mock.calls[0][0].detail.initialIso).toBe('2026-03-21')
+    const props = openDialogMock.mock.calls[0][1] as DailyNotePickerProps
+    expect(props.initialIso).toBe('2026-03-21')
     expect(mocks.resolveCurrentDailyNoteIso).toHaveBeenCalledWith(mocks.repo, 'ws-1')
-
-    window.removeEventListener(openDailyNotePickerEvent, handleEvent)
   })
 
   it('runs the existing previous and next daily note actions', () => {
