@@ -152,6 +152,10 @@
 <h2 id="scope"><span class="num">0</span>Scope — what this is and isn't</h2>
 <p>knowledge-medium runs on a <strong>small, coordinatable fleet</strong> (≈2 users / 5 devices). The defense is sized for that: cheap read-only detection a human can act on, not auto-healing infrastructure or mixed-version-window machinery. We do <strong>not</strong> gold-plate for scale.</p>
 <p>The single most valuable property the incidents revealed we lack is <strong>early detection</strong>. So detection leads; recovery/write tooling is authored but approval-gated (standing rule: no execution against shared infra without an explicit ask).</p>
+<div class="callout">
+  <h4>Hard constraint — no hot-path cost</h4>
+  <p style="margin:0">No guard here may add latency to the synchronous read or write tail. Audited per layer: <strong>L1</strong> is compile/PR-time; <strong>L3/L4</strong> run on demand or on an idle schedule (the <code>idleMarkerJobs</code> pattern), never on a read/write; <strong>L5</strong> is a separate cron process on its own connection (zero client cost); <strong>L6</strong> is manual/gated. The only layer that touches app code is <strong>L2</strong> — dev-only by default, and any prod variant confined to the <em>already-asynchronous</em> post-commit derivation points (the references processor deliberately runs off the typing tail) and sampled. Nothing synchronous on the hot path. This is also why class D (below) gets <em>no</em> sync-gate change — its defense is operational, in L6.</p>
+</div>
 
 <h2 id="classes"><span class="num">1</span>Failure classes</h2>
 <p>The week produced six incidents. They collapse into <strong>five recurring failure classes</strong> — naming them is the point, because each needs its own defense and any future bug will be a new instance of one of them.</p>
@@ -224,7 +228,7 @@
 
   <circle cx="824" cy="138" r="11" fill="var(--accent-soft)" stroke="var(--accent)"/>
   <text class="mk" x="824" y="142" text-anchor="middle" fill="var(--accent)">D</text>
-  <text class="mkt" x="824" y="156" text-anchor="middle">bulk "make-X-win" re-publishes bad data to all</text>
+  <text class="mkt" x="824" y="156" text-anchor="middle">bulk op spreads existing corruption + erases good replicas</text>
 
   <circle cx="558" cy="248" r="11" fill="var(--violet-soft)" stroke="var(--violet)"/>
   <text class="mk" x="558" y="252" text-anchor="middle" fill="var(--violet)">B</text>
@@ -237,7 +241,7 @@
   <text class="sub" x="70" y="346">Every class above sat undetected for ~a week until a human noticed the symptom. Detection is the gap this design closes.</text>
 
   <!-- legend -->
-  <text class="sub" x="24" y="398">A derivation · B per-column desync · C stranded local · D bulk-op propagation · E no detection</text>
+  <text class="sub" x="24" y="398">A derivation · B per-column desync · C stranded local · D recovery amplifier · E no detection</text>
 </svg>
 <figcaption>Figure 1 — The sync data path, with each failure class pinned to where it strikes.</figcaption>
 </figure>
@@ -265,9 +269,9 @@
     </tr>
     <tr>
       <td><span class="tag D">D</span></td>
-      <td><strong>Bulk/recovery operations propagating bad data</strong></td>
+      <td><strong>Recovery-op amplifier</strong> <span class="footnote">(not an independent corruption source)</span></td>
       <td>06-14 <code>updated_at +1</code> recovery touch (#4)</td>
-      <td>A "make the correct copy win" bulk timestamp bump assumed the server copy was correct. It wasn't — it had the 06-09 strip — so the bump <strong>re-published the corruption fleet-wide</strong>, clobbering good local copies.</td>
+      <td>Server-authoritative LWW is correct, and the touch did its job: force reconvergence to the server. The bug was upstream — the server already held the 06-09 strip (class A). What made it worse than a no-op: it bumped the corrupt server rows above good-but-stale-stamped local copies, <strong>erasing the last uncorrupted replicas</strong>. Needed the <code>skipMetadata</code>-no-bump stamp gap, now fixed (<code>txEngine.ts:758</code>); residual risk is purely operational. Defense lives in L6, not the gate.</td>
     </tr>
     <tr>
       <td><span class="tag E">E</span></td>
@@ -277,7 +281,7 @@
     </tr>
   </tbody>
 </table>
-<p class="footnote">Every layer below cites the classes it defends, so coverage is auditable.</p>
+<p class="footnote">A · B · C <em>create</em> inconsistency; D only <em>amplifies</em> a pre-existing one (it needs prior corruption plus a stale-stamp gap to spread, and server-authoritative LWW is otherwise the correct model); E is the absence of detection. Every layer below cites the classes it defends, so coverage is auditable.</p>
 
 <h2 id="invariants"><span class="num">2</span>Invariants — the contract</h2>
 <p>The properties that must always hold. Each is cheaply checkable; the layers in §3 are just <em>where</em> and <em>when</em> we check them.</p>
@@ -377,13 +381,13 @@
 </div>
 
 <h3>L2 — Write / processor-time assertions</h3>
-<p>Cheap invariant checks <strong>at the point of derivation</strong>, so inconsistency is caught the instant it's introduced. Dev = hard throw; prod = soft <code>log</code> + metric counter (never block a user write in prod).</p>
+<p>Cheap invariant checks <strong>at the point of derivation</strong>, so inconsistency is caught the instant it's introduced. Subject to the no-hot-path constraint (§0): <strong>dev = hard throw; prod = off by default</strong>, and any prod variant is sampled and confined to already-async paths.</p>
 <ul>
-  <li>References processor write phase: recompute references from the <em>same</em> <code>source</code> snapshot used for the write and assert equality (catches a plan built from a stale read). <em>R1/R3</em></li>
-  <li><code>decideStagingRow</code>/apply: flag a references-only apply whose content column differs from the version the refs imply — derived/source desync. <em>R3 · B · Decision D1</em></li>
-  <li>Reprojection: assert add-only (no prior key missing from the next set). Turns a future "I made it strip again" into a dev-time failure. <em>R1/R4 · A</em></li>
+  <li>References processor write phase (already off the synchronous typing tail): recompute references from the <em>same</em> <code>source</code> snapshot used for the write and assert equality (catches a plan built from a stale read). Cheap, async — safe to sample in prod. <em>R1/R3</em></li>
+  <li>Reprojection: assert add-only (no prior key missing from the next set) — a set comparison on an already-async pass. Turns a future "I made it strip again" into a dev-time failure. <em>R1/R4 · A</em></li>
+  <li><code>decideStagingRow</code>/apply: flag a references-only apply whose content differs from the version the refs imply (derived/source desync). Per-synced-row re-derivation is <strong>too expensive for prod</strong> — keep this one dev-only, or reduce it to a stamp/column check. <em>R3 · B · Decision D1</em></li>
 </ul>
-<p>Small and high-leverage but they touch hot/sync-gate paths, so they ship behind a dev flag first, prod metric second. <span class="pill new">roadmap P2</span></p>
+<p>Dev flag first; any prod metric is sampled and async-only. Never on the synchronous read or write tail. <span class="pill new">roadmap P2</span></p>
 
 <h3>L3 — Client background consistency check</h3>
 <p>A periodic/idle self-audit, authored now as a read-only agent-bridge eval (<code>scripts/data-integrity/consistency-check.eval.js</code> — held in a stash pending this review, not yet committed). The ad-hoc checks used during this week's investigation, as a maintained suite — all read-only. It runs on the <em>decrypted</em> client, so unlike the server probe it can audit the e2ee workspace (see §4):</p>
