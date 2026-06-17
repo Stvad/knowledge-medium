@@ -333,7 +333,17 @@ export class ProjectorRuntime {
   }
 
   /** Get-or-create the persistent container for `projectorId`, resolving
-   *  its descriptor from the facet on first access. */
+   *  its descriptor from the facet on first access.
+   *
+   *  Assumes the descriptor for a given id is STABLE for the life of the
+   *  Repo: the container caches the descriptor it was first built with, so
+   *  a later `setFacetRuntime` swap that re-registered the same id with a
+   *  *different* descriptor would keep serving the original. That holds
+   *  today — the two projectors are kernel consts registered once, never
+   *  overridden — and `definitionBlockProjectorFacet` is not last-wins, so
+   *  a duplicate id surfaces as a `startAll` double-start throw rather than
+   *  a silent swap. Revisit this caching if projectors ever become
+   *  per-id-overridable (e.g. plugin-replaceable descriptors). */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- container generics are erased at the registry boundary
   private obtain(projectorId: string): ProjectorLifecycle<any, any> | undefined {
     const existing = this.lifecycles.get(projectorId)
