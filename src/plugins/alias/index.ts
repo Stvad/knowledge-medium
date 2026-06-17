@@ -11,13 +11,18 @@
  */
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
+import { rejectionToastFacet } from '@/extensions/core.js'
 import { aliasDataExtension } from './dataExtension.ts'
+import { aliasCollisionRejectionToast } from './rejectionToast.tsx'
 
 export const aliasPlugin: AppExtension = systemToggle({
   id: 'system:alias',
   name: 'Aliases',
   description: 'Alias property + sync processor so blocks can be referenced by name.',
-}).of([aliasDataExtension])
+}).of([
+  aliasDataExtension,
+  rejectionToastFacet.of(aliasCollisionRejectionToast, {source: 'alias'}),
+])
 
 export { aliasDataExtension } from './dataExtension.ts'
 export { ALIAS_COLLISION_MERGE_MUTATOR, aliasCollisionMerge } from './collisionMerge.ts'

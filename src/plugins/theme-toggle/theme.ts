@@ -72,7 +72,12 @@ let registryById = new Map<string, ThemeDefinition>([
 export const getThemes = (): readonly ThemeDefinition[] => registry
 
 /** Used by the theme-toggle effect. Plugins should not call this
- *  directly — contribute via `themesFacet.of(...)` instead. */
+ *  directly — contribute via `themesFacet.of(...)` instead.
+ *
+ *  NOTE: this is the "module-global mirror synced by an app effect"
+ *  pattern. `processorRejectionToast` now reads `repo.facetRuntime`
+ *  directly instead of mirroring; converging this registry onto that read
+ *  is deferred to the runtime-composition work. */
 export const setThemeRegistry = (next: readonly ThemeDefinition[]): void => {
   registry = next
   registryById = new Map(next.map((t) => [t.id, t]))

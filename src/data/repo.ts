@@ -1241,7 +1241,17 @@ export class Repo {
    *  non-React callers that need to consult facets at action-handler
    *  time (e.g. `pickBlockDateAdapter` from a multi-select handler
    *  where `useAppRuntime()` isn't available). Returns null before the
-   *  first `setFacetRuntime` call. Delegates to `FacetBridge` (D1(c)). */
+   *  first `setFacetRuntime` call. Delegates to `FacetBridge` (D1(c)).
+   *
+   *  NOTE: this also serves as the carrier of *app-layer* facets for
+   *  callers outside React — `AppRuntimeProvider` installs the merged
+   *  app runtime here (so plugin mutators/processors reach the data
+   *  registries), and e.g. `surfaceProcessorRejection` reads app-only
+   *  facets (`rejectionToastFacet`) off it at error-fan-out time. That
+   *  contract holds under the current replace-the-world model; a runtime
+   *  refactor that stops installing the full app runtime here must keep
+   *  "repo.facetRuntime carries app facets" or relocate those reads —
+   *  otherwise they go silently empty. */
   get facetRuntime(): FacetRuntime | null {
     return this.facetBridge.facetRuntime
   }

@@ -73,6 +73,13 @@ let dispatcher: RunActionByIdFn | null = null
 /**
  * Installed by <HotkeyReconciler/> on mount. Keeps the module-level
  * `runActionById` in sync with the current FacetRuntime and active contexts.
+ *
+ * NOTE: this is the "module-global mirror installed from React" pattern.
+ * `processorRejectionToast` now reads `repo.facetRuntime` directly instead
+ * (no mirror); converging this onto that pattern is deferred to the
+ * runtime-composition work — but note the deliberate teardown-to-null on
+ * unmount here (so stray callers fail soft against a stale runtime) is a
+ * lifecycle that a plain `repo.facetRuntime` read would NOT reproduce.
  */
 export function setRunActionDispatcher(next: RunActionByIdFn | null): void {
   dispatcher = next
