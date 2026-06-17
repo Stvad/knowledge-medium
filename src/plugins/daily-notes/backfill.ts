@@ -15,9 +15,24 @@ import { DAILY_NOTE_TYPE, dailyNoteDateProp } from './schema.ts'
  * `tx_context.source = NULL` — so the source-gated upload trigger never fired
  * and the derived property never reached the server or any other client. It
  * was removed in 8c50f167 on the false premise that "it ran, so it synced." It
- * never synced, on any client. This restores it the correct way: a
+ * never synced, on any client. It was restored the correct way in ef0ad445: a
  * `WorkspaceBackfill` whose writes go through `repo.tx` (source='user'), so the
  * server and every client converge.
+ *
+ * Regression (2026-06-16): the write path is sound — it uploads (proven by the
+ * `ps_crud` test below) — but the run is gated by a one-shot marker
+ * (`workspace_backfill:<ws>:<id>` in `client_schema_state`). On graphs that ran
+ * the ef0ad445 backfill while the rows still carried the 2026-05-18 raw
+ * backfill's *local-only* (never-uploaded) value, the per-row recheck below
+ * skipped every row — a clean, write-nothing run — yet still recorded the
+ * marker. A later server-authoritative pass then dropped those never-synced
+ * local values, leaving ~4k daily notes with `daily-note:date` genuinely NULL
+ * on both local and server, and the marker permanently blocking a re-run. The
+ * rows are NULL now, so a fresh run's recheck passes and it actually writes +
+ * uploads — but a re-run is only possible by changing the marker key. Bumping
+ * the `id` (the documented `WorkspaceBackfill.id` escape hatch) forces exactly
+ * one re-run per workspace, healing the regressed rows through the uploading
+ * path. See scripts/daily-note-date-recovery/README.md.
  */
 
 /** Candidate rows: daily-note-typed, undeleted blocks in this workspace that
@@ -48,7 +63,10 @@ const SELECT_LEGACY_DAILY_NOTES_MISSING_DATE_SQL = `
 const BATCH_SIZE = 500
 
 export const dailyNoteDateBackfill: WorkspaceBackfill = {
-  id: 'daily-note-date-from-alias',
+  // v2: bumped 2026-06-16 to re-run once per workspace and heal the ~4k daily
+  // notes whose `daily-note:date` was dropped by a 2026-06-14 server pass after
+  // the v1 run had already recorded its one-shot marker (see docstring).
+  id: 'daily-note-date-from-alias-v2',
   run: async ({workspaceId, getAll, tx}) => {
     const rows = await getAll<{id: string; iso: string}>(
       SELECT_LEGACY_DAILY_NOTES_MISSING_DATE_SQL,

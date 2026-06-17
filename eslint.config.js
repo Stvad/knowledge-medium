@@ -12,8 +12,12 @@ export default tseslint.config(
   // copies that shouldn't be re-linted. docs/**/*.ts are design-sketch
   // files (typechecked via docs/tsconfig.json) — they intentionally have
   // unused stub params and let-vs-const looseness so the prose stays
-  // readable; ESLint shouldn't gate on them.
-  { ignores: ['dist', '**/dist/**', '.claude/**', '.playwright-mcp/**', 'tmp/**', 'docs/**', 'agent-extensions/**'] },
+  // readable; ESLint shouldn't gate on them. **/*.eval.js are agent-bridge
+  // eval scripts: the bridge wraps the file body in an async function
+  // (top-level `await` + `return` to print back to the CLI), so they aren't
+  // standalone ES modules — espree rejects the top-level `return`. Same
+  // "runtime code, not a module" carve-out as agent-extensions/**.
+  { ignores: ['dist', '**/dist/**', '.claude/**', '.playwright-mcp/**', 'tmp/**', 'docs/**', 'agent-extensions/**', '**/*.eval.js'] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],
