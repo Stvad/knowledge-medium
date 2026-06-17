@@ -139,7 +139,7 @@
     <li><a href="#blindspots">4 · Blind spots</a></li>
     <li><a href="#slo">5 · SLO</a></li>
     <li><a href="#roadmap">6 · Roadmap</a></li>
-    <li><a href="#decisions">7 · Open decisions</a></li>
+    <li><a href="#decisions">7 · Decisions</a></li>
     <li><a href="#implemented">8 · Status</a></li>
   </ol>
 </nav>
@@ -154,7 +154,7 @@
 <p>The single most valuable property the incidents revealed we lack is <strong>early detection</strong>. So detection leads; recovery/write tooling is authored but approval-gated (standing rule: no execution against shared infra without an explicit ask).</p>
 <div class="callout">
   <h4>Hard constraint — no hot-path cost</h4>
-  <p style="margin:0">No guard here may add latency to the synchronous read or write tail. Audited per layer: <strong>L1</strong> is compile/PR-time; <strong>L3/L4</strong> run on demand or on an idle schedule (the <code>idleMarkerJobs</code> pattern), never on a read/write; <strong>L5</strong> is a separate cron process on its own connection (zero client cost); <strong>L6</strong> is manual/gated. The only layer that touches app code is <strong>L2</strong> — dev-only by default, and any prod variant confined to the <em>already-asynchronous</em> post-commit derivation points (the references processor deliberately runs off the typing tail) and sampled. Nothing synchronous on the hot path. This is also why class D (below) gets <em>no</em> sync-gate change — its defense is operational, in L6.</p>
+  <p style="margin:0">No guard here may add latency to the synchronous read or write tail. Audited per layer: <strong>L1</strong> is compile/PR-time; <strong>L3/L4</strong> run on demand or on an idle schedule (the <code>idleMarkerJobs</code> pattern), never on a read/write; <strong>L5</strong> is a separate cron process on its own connection (zero client cost); <strong>L6</strong> is manual/gated. the only layer that touches app code is <strong>L2</strong>, and those are <strong>dev/test-only assertions compiled out of prod</strong> (not shipped at all) — so there is no prod runtime variant to sample or bound. This is also why class D (below) gets <em>no</em> sync-gate change — its defense is operational, in L6.</p>
 </div>
 
 <h2 id="classes"><span class="num">1</span>Failure classes</h2>
@@ -381,13 +381,13 @@
 </div>
 
 <h3>L2 — Write / processor-time assertions</h3>
-<p>Cheap invariant checks <strong>at the point of derivation</strong>, so inconsistency is caught the instant it's introduced. Subject to the no-hot-path constraint (§0): <strong>dev = hard throw; prod = off by default</strong>, and any prod variant is sampled and confined to already-async paths.</p>
+<p>Invariant checks <strong>at the point of derivation</strong>, so inconsistency is caught the instant it's introduced. These are <strong>dev/test-only assertions</strong> — a build-time <code>DEV</code> gate (e.g. <code>import.meta.env.DEV</code>), not a user-facing flag. They <strong>hard-throw in dev and test runs and are compiled out of prod entirely</strong>. Two reasons there's no prod variant (and no sampling): you must never throw on a user's write, and even an async recompute is needless cost on every derivation. The <em>in-the-wild</em> signal is L3 + L5's job (at-rest detection); L2 exists purely to fail a regression in CI before it ships.</p>
 <ul>
-  <li>References processor write phase (already off the synchronous typing tail): recompute references from the <em>same</em> <code>source</code> snapshot used for the write and assert equality (catches a plan built from a stale read). Cheap, async — safe to sample in prod. <em>R1/R3</em></li>
-  <li>Reprojection: assert add-only (no prior key missing from the next set) — a set comparison on an already-async pass. Turns a future "I made it strip again" into a dev-time failure. <em>R1/R4 · A</em></li>
-  <li><code>decideStagingRow</code>/apply: flag a references-only apply whose content differs from the version the refs imply (derived/source desync). Per-synced-row re-derivation is <strong>too expensive for prod</strong> — keep this one dev-only, or reduce it to a stamp/column check. <em>R3 · B · Decision D1</em></li>
+  <li>References processor: assert the references being written equal a fresh projection of the <em>committed</em> content + properties. (Not a self-comparison — the point is the basis is committed state, so a plan built from a read that went stale under it fails the check.) <em>R1/R3 · A</em></li>
+  <li>Reprojection: assert add-only (no key in the prior set is missing from the next set) — a cheap set comparison. Turns a future "I made it strip again" into a failing test. <em>R1/R4 · A</em></li>
+  <li><code>decideStagingRow</code>/apply: flag a references-only apply whose content differs from the version the refs imply (derived/source desync, class B). <em>R3 · B · Decision D1</em></li>
 </ul>
-<p>Dev flag first; any prod metric is sampled and async-only. Never on the synchronous read or write tail. <span class="pill new">roadmap P2</span></p>
+<p>Dev/test only — never on the prod path, synchronous or async. <span class="pill new">roadmap P2</span></p>
 
 <h3>L3 — Client background consistency check</h3>
 <p>A periodic/idle self-audit, authored now as a read-only agent-bridge eval (<code>scripts/data-integrity/consistency-check.eval.js</code> — held in a stash pending this review, not yet committed). The ad-hoc checks used during this week's investigation, as a maintained suite — all read-only. It runs on the <em>decrypted</em> client, so unlike the server probe it can audit the e2ee workspace (see §4):</p>
@@ -397,7 +397,7 @@
   <li><strong>R4 property-ref projection</strong> — for every <em>currently-present</em> ref-typed property in <code>repo.propertySchemas</code>, recompute via <code>projectPropertyReferences</code> and diff vs stored: a <em>missing</em> projection is a strip; an <em>extra</em> stored ref is flagged only when its schema is present but the value no longer encodes it. Absent-schema refs are retained-by-design and excluded. Covers all ~83 ref props; degrades gracefully if schemas can't resolve.</li>
   <li><strong>R1/R3 content-link coarse check</strong> — heuristic flag for blocks whose content has link syntax but zero content-refs. Informational (escaping/code-blocks cause benign hits).</li>
 </ol>
-<p>Promotion path: the same logic can become a built-in idle self-audit (the <code>runAnalyzeIfStale</code> / <code>idleMarkerJobs.ts</code> pattern) emitting a metric + optional UI health indicator. This is what would give the checks a real cadence (today they run only on demand — see §4); deferred until the eval proves low-noise.</p>
+<p><strong>The aim: a built-in idle self-audit.</strong> The same logic becomes a scheduled idle job (the <code>runAnalyzeIfStale</code> / <code>idleMarkerJobs.ts</code> pattern) emitting a metric + optional UI health indicator — giving the checks a real cadence instead of running only on demand. The on-demand eval is the <em>bootstrap</em>: it validates the checks are low-noise on real data, then we promote. This is the committed direction the §4 blind spots and decision D3 point at — not an "if only," but the planned next step.</p>
 
 <h3>L4 — Client ↔ server divergence detection</h3>
 <p>The lesson of incidents #3 and #5: <strong>per-client scans miss divergence.</strong> Detection must compare <code>blocks</code> against <code>blocks_synced</code>, <code>ps_crud</code>-aware. Same eval; categories:</p>
@@ -461,7 +461,7 @@
 </table>
 <div class="callout">
   <h4>Net — the honest headline</h4>
-  <p style="margin:0">The "caught within hours, not a week" claim holds today only for the plaintext mass-strip catastrophe (the hourly probe's emptied-refs hard-fail). For the e2ee workspace, slow drips, history-trigger-off bulk ops, and mobile client-local divergence, coverage depends on the client eval — which currently runs only on demand. Closing the "runs only on demand" gap (a scheduled built-in L3) and adding L2 are what make early detection true for <em>every</em> class.</p>
+  <p style="margin:0">The "caught within hours, not a week" claim holds today only for the plaintext mass-strip catastrophe (the hourly probe's emptied-refs hard-fail). For the e2ee workspace, slow drips, history-trigger-off bulk ops, and mobile client-local divergence, coverage depends on the client eval — which currently runs only on demand. Closing the "runs only on demand" gap with the <strong>scheduled built-in L3 self-audit (the committed aim, §3 L3)</strong> and adding L2 are what make early detection true for <em>every</em> class.</p>
 </div>
 
 <h2 id="slo"><span class="num">5</span>Convergence SLO</h2>
@@ -483,27 +483,28 @@
   </tbody>
 </table>
 
-<h2 id="decisions"><span class="num">7</span>Open design decisions — need you</h2>
+<h2 id="decisions"><span class="num">7</span>Design decisions</h2>
+<p>Resolved during review; deferred structural work is tracked in linked issues.</p>
 
 <div class="callout decision">
-  <h4>D1 · Per-column patch / derived-vs-source desync at the sync gate (class B, the matrix incident)</h4>
-  <p>Today the gate is whole-row LWW on <code>updated_at</code>; a references-only patch from a sync-lagged client can win the <code>references_json</code> column carrying refs derived from <em>stale</em> content, independent of the content no-clobber. Options:</p>
-  <ul>
-    <li><strong>(a) Tie derived columns to a content version</strong> — stamp <code>references_json</code> writes with the <code>updated_at</code> of the content they were derived from; reject a references apply whose basis is older than local content. Strongest, but adds a column/semantic to the gate.</li>
-    <li><strong>(b) Re-derive on apply</strong> — when applying a references-only staging row, re-run projection locally instead of trusting incoming refs. Moves derivation to the consumer; cost on the sync path.</li>
-    <li><strong>(c) Accept + detect</strong> — leave the gate, rely on L3/L5 to catch desync after the fact. Cheapest; matches the small-fleet posture.</li>
-  </ul>
-  <p style="margin-bottom:0"><strong>Recommendation: (c) for now</strong>, revisit (a) if L5 shows recurrence. Caveat: "accept + detect" is only as good as the detection — until the L5 detector and a scheduled L3 actually ship, "(c)" currently means just "accept", so class B is undetected, not detected-after-the-fact. This touches sync-gate semantics — flagging for explicit sign-off before any gate change.</p>
+  <h4>D1 · Per-column patch / derived-vs-source desync at the sync gate (class B, the matrix incident) <span class="pill done">resolved</span></h4>
+  <p>The gate is whole-row LWW on <code>updated_at</code>; a references-only patch from a sync-lagged client can win the <code>references_json</code> column carrying refs derived from <em>stale</em> content. Options were (a) tie derived columns to a content version, (b) re-derive on apply, (c) accept + detect.</p>
+  <p style="margin-bottom:0"><strong>Decision: start with detection (c)</strong> — ship the L3/L5 detectors (and the scheduled L3, §3) and see whether class B actually recurs before touching sync-gate semantics. Promote to (a)/(b) only if detection shows recurrence. Tracked in <a href="https://github.com/Stvad/knowledge-medium/issues/165">#165</a>.</p>
 </div>
 
 <div class="callout decision">
-  <h4>D2 · L5 alerting posture</h4>
-  <p style="margin-bottom:0">Warn-by-default with one catastrophe hard-fail, promotable via <code>DATA_INTEGRITY_STRICT</code> (see §3 L5). Confirm this matches how you want the email channel used, and whether data-integrity checks should share the infra-probe's failure channel or get a separate one. <strong>Recommendation: share it</strong> — one cron, one channel, small fleet.</p>
+  <h4>D2 · L5 alerting posture <span class="pill done">resolved</span></h4>
+  <p style="margin-bottom:0"><strong>Decision: share the infra</strong> — the data-integrity detectors run on the existing hourly probe's cron and use its failure-email channel (one cron, one channel; right for the small fleet). Posture stays warn-by-default with the one catastrophe hard-fail, promotable via <code>DATA_INTEGRITY_STRICT</code> (§3 L5).</p>
 </div>
 
 <div class="callout decision">
-  <h4>D3 · Built-in self-audit vs eval-only (L3)</h4>
-  <p style="margin-bottom:0">A built-in idle self-audit means a scheduled task + metric in the app bundle. <strong>Recommendation: stay eval-only</strong> until the eval proves low-noise across a couple of weeks, then promote.</p>
+  <h4>D3 · Built-in self-audit vs eval-only (L3) <span class="pill done">resolved</span></h4>
+  <p style="margin-bottom:0"><strong>Decision: the built-in scheduled idle self-audit is the aim</strong> (§3 L3) — a metric + optional UI health indicator on a real cadence. The on-demand eval is the bootstrap that validates the checks are low-noise on real data; once it does, promote. Not "stay eval-only" indefinitely.</p>
+</div>
+
+<div class="callout decision">
+  <h4>D4 · Dangling wikilinks on page delete <span class="pill new">tracked in #163</span></h4>
+  <p style="margin-bottom:0">What should happen to <code>[[page]]</code> refs when their target is deleted (and later re-created / re-assigned): inline-to-text (Roam-style) vs re-point-on-rebind vs leave-lazy. Today they go dangling and re-point only lazily per-block, and the renderer shows a dead link to the tombstone. Relates to R7. Full tradeoff + the renderer bug are tracked in <a href="https://github.com/Stvad/knowledge-medium/issues/163">#163</a>.</p>
 </div>
 
 <h2 id="implemented"><span class="num">8</span>Status — authored vs. designed</h2>
