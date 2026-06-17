@@ -1,5 +1,6 @@
-import { ReactNode, useEffect, useMemo, useState } from 'react'
+import { ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { useRepo } from '@/context/repo.js'
+import type { Repo } from '@/data/repo'
 import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions.js'
 import {
   AppExtension,
@@ -62,17 +63,33 @@ export function AppRuntimeProvider({
 
   const [runtime, setRuntime] = useState(baseRuntime)
 
-  // Sync state-from-prop pattern: when `baseRuntime` changes (rare —
-  // only on `repo` swap or generation reload) the held `runtime` must
-  // follow. The same effect also pushes that runtime into the Repo
-  // registries. The async effect below will replace it once dynamic
-  // plugins resolve, but the sync runtime keeps kernel + static plugin
-  // mutators / processors live during that gap.
+  // Two-stage load is only worth its cost on a COLD start for a context —
+  // initial mount and repo / workspace / safeMode switch. There we commit
+  // the sync `baseRuntime` immediately so the kernel + static plugins (and
+  // their mutators / processors) come up and the UI paints without waiting
+  // on the async dynamic-extension compile; the async effect below then
+  // swaps in the merged runtime.
+  //
+  // On a same-context RELOAD (extension toggle / `refreshAppRuntime` →
+  // generation bump, or an overrides change) we deliberately SKIP that
+  // intermediate. The current merged runtime is already live and valid for
+  // this context; holding it until the async resolve swaps it once avoids
+  // (a) churning every dynamic effect through a stop→start (baseRuntime
+  // carries no dynamic extensions, so they'd read as "removed" then
+  // "re-added"), and (b) momentarily downgrading the Repo to static-only
+  // and dropping the live dynamic plugins' mutators during the compile gap.
+  const loadedCtx = useRef<{repo: Repo; workspaceId: string | null; safeMode: boolean} | null>(null)
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    const ctxChanged =
+      loadedCtx.current === null ||
+      loadedCtx.current.repo !== repo ||
+      loadedCtx.current.workspaceId !== workspaceId ||
+      loadedCtx.current.safeMode !== safeMode
+    if (!ctxChanged) return // same-context reload: keep current; async swaps once
+    loadedCtx.current = {repo, workspaceId, safeMode}
     setRuntime(baseRuntime)
     repo.setFacetRuntime(baseRuntime)
-  }, [baseRuntime, repo])
+  }, [baseRuntime, repo, workspaceId, safeMode])
 
   useEffect(() => {
     let cancelled = false
