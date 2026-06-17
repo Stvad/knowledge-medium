@@ -108,9 +108,10 @@ const asBlockOrNull = (v: BlockData | null | undefined): BlockData | null => v ?
  * re-resolves to an equal value (or coalesces with a later control write) is
  * deduped and never reaches a subscriber. The synchronous count is complete the
  * moment `tx` resolves because these tests issue only local `repo.tx` writes to
- * `blocks`: the post-commit processor registry is empty (`registerKernelProcessors:
- * false`) AND the default sync observer only reacts to `blocks_synced` writes, so
- * neither re-invalidates a tick later.
+ * `blocks`: the post-commit processor registry is empty (`KERNEL_PROCESSORS` is
+ * `[]` and no plugin processors are registered here) AND the default sync
+ * observer only reacts to `blocks_synced` writes, so neither re-invalidates a
+ * tick later.
  */
 const invalidations = () => env.repo.handleStore.metrics.loaderInvalidations
 
