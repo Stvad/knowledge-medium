@@ -1,6 +1,13 @@
-/** Reactive bridge between user-defined `'property-schema'` blocks and
- *  the `propertySchemasFacet`'s `'user-data'` runtime contribution
- *  bucket. See user-defined-properties.md §5 + §7. */
+/** User-defined `'property-schema'` blocks → the `propertySchemasFacet`
+ *  `'user-data'` runtime-contribution bucket. See
+ *  user-defined-properties.md §5 + §7.
+ *
+ *  The reactive lifecycle (subscribe / pin / publish / reset+clear on
+ *  dispose) lives in the shared `ProjectorRuntime` core, configured by
+ *  `userSchemasProjector` below. This file keeps only the schema-side
+ *  specifics: the builder (`tryBuildSchema`, which needs `valuePresets`)
+ *  and the distinct public surface — `addSchema` / `appendUserSchema`
+ *  and the `getSchemaBlockId` / `getSchemaForBlockId` lookups. */
 
 import {
   ChangeScope,
@@ -8,9 +15,9 @@ import {
   type AnyValuePreset,
   type BlockData,
   type PropertySchema,
-  type Unsubscribe,
 } from '@/data/api'
 import type { Repo } from '@/data/repo'
+import type { DefinitionBlockProjector } from '@/data/projectorRuntime'
 import {
   presetConfigProp,
   presetIdProp,
@@ -18,6 +25,9 @@ import {
 } from '@/data/properties'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 import { propertySchemasFacet } from '@/data/facets'
+
+/** Projector id for the user-defined property-schema bridge. */
+export const USER_SCHEMAS_PROJECTOR_ID = 'user-schemas'
 
 const USER_DATA_SOURCE_ID = 'user-data'
 
@@ -32,6 +42,71 @@ const peekRowProperty = <T>(row: BlockData, schema: PropertySchema<T>): T | unde
   return stored === undefined ? undefined : schema.codec.decode(stored)
 }
 
+/** Validates a schema block against the current presets and returns the
+ *  schema if it parses, or null with a logged diagnostic if not. Three
+ *  skip paths: (1) preset not loaded, (2) name empty, (3)
+ *  configCodec.decode throws. The block stays in the database
+ *  untouched; a fix re-runs this on the next subscription tick (or the
+ *  `onValuePresetsChange` re-resolve when a missing preset's plugin
+ *  loads). */
+const tryBuildSchema = (
+  row: BlockData,
+  presets: ReadonlyMap<string, AnyValuePreset>,
+): AnyPropertySchema | null => {
+  const presetId = peekRowProperty(row, presetIdProp) ?? ''
+  if (!presetId) {
+    console.warn(`[UserSchemasService] schema block ${row.id} has no presetId`)
+    return null
+  }
+  const preset = presets.get(presetId)
+  if (!preset) {
+    console.warn(
+      `[UserSchemasService] schema block ${row.id} references unknown preset ${JSON.stringify(presetId)}; ` +
+      `preset's plugin may not be loaded`,
+    )
+    return null
+  }
+  const name = peekRowProperty(row, propertyNameProp) ?? ''
+  if (!name) {
+    console.warn(`[UserSchemasService] schema block ${row.id} has empty propertyName`)
+    return null
+  }
+  let config: unknown
+  if (preset.configCodec) {
+    try {
+      const raw = peekRowProperty(row, presetConfigProp) ?? {}
+      config = preset.configCodec.decode(raw)
+    } catch (err) {
+      console.warn(
+        `[UserSchemasService] schema "${name}" has invalid config: ${(err as Error).message}; skipping until fixed`,
+      )
+      return null
+    }
+  } else {
+    config = undefined
+  }
+  return {
+    name,
+    codec: preset.build(config as never),
+    defaultValue: preset.defaultValue,
+    changeScope: ChangeScope.BlockDefault,
+  }
+}
+
+/** Descriptor wiring the schema bridge into the shared projector
+ *  lifecycle. Raw `BlockData` rows (no hydrate — see `peekRowProperty`);
+ *  re-resolves on `onValuePresetsChange` so a schema skipped for an
+ *  unknown preset resolves when that preset's plugin loads. */
+export const userSchemasProjector: DefinitionBlockProjector<BlockData, AnyPropertySchema> = {
+  id: USER_SCHEMAS_PROJECTOR_ID,
+  metaType: PROPERTY_SCHEMA_TYPE,
+  targetFacet: propertySchemasFacet,
+  sourceId: USER_DATA_SOURCE_ID,
+  keyOf: schema => schema.name,
+  project: (row, ctx) => tryBuildSchema(row, ctx.repo.valuePresets),
+  secondarySignal: (repo, rebuild) => repo.onValuePresetsChange(rebuild),
+}
+
 export interface AddSchemaArgs {
   name: string
   presetId: string
@@ -42,48 +117,33 @@ export interface AddSchemaArgs {
   config?: unknown
 }
 
+/** Thin facade over the `'user-schemas'` projector. Holds no state of
+ *  its own — the lifecycle + the contribution list / id maps live in
+ *  the projector's `ProjectorHandle`, reached through `repo.projectors`.
+ *  Singleton on `Repo` so imperative call sites (AddPropertyForm, the
+ *  Roam importer) all hit the same in-memory bucket. */
 export class UserSchemasService {
-  /** Single source of truth for the user-data bucket. Both the
-   *  subscription rebuild and `appendUserSchema` assign to this field
-   *  and publish via `setRuntimeContributions`. */
-  private contributions: readonly AnyPropertySchema[] = []
-
-  /** Maps a registered schema's `name` to the property-schema block
-   *  that materialised it. Lets UI surfaces (e.g. the property panel
-   *  glyph button) open the schema block in a panel for in-place
-   *  editing. Built from the same subscription that produces
-   *  `contributions`, so it's always in sync. */
-  private nameToBlockId = new Map<string, string>()
-
-  /** Reverse of `nameToBlockId`: maps a property-schema block id to
-   *  the schema it resolves to in the runtime bucket. Used by
-   *  `UserTypesService` to resolve `block-type:properties` refList
-   *  entries (which carry block ids) to live schema records without
-   *  peeking the schema block directly — a peek would silently drop
-   *  refs whose row hasn't been hydrated by BlockCache yet. */
-  private blockIdToSchema = new Map<string, AnyPropertySchema>()
-
-  /** Active block-subscription disposer, set by `start()`. */
-  private subscriptionDisposer: Unsubscribe | null = null
-
-  /** Disposer for the value-preset listener; we re-resolve when
-   *  presets change (a plugin contributing a new preset id makes
-   *  previously-skipped schemas resolvable). */
-  private presetsListenerDisposer: (() => void) | null = null
-
-  /** Latest rows captured by the subscription. Stored so the value-preset
-   *  change path can re-resolve without a fresh DB read. Kept as raw
-   *  `BlockData` (not Block facades) so rebuilds read the authoritative
-   *  delivered snapshot directly — see `peekRowProperty`. */
-  private latestBlocks: readonly BlockData[] = []
-
   constructor(private readonly repo: Repo) {}
+
+  private get handle() {
+    return this.repo.projectors.handle<AnyPropertySchema>(USER_SCHEMAS_PROJECTOR_ID)
+  }
+
+  /** Start the schema projector for the active workspace. Returns a
+   *  disposer; throws on double-start / no active workspace. */
+  start(): () => void {
+    return this.repo.projectors.startById(USER_SCHEMAS_PROJECTOR_ID)
+  }
+
+  dispose(): void {
+    this.repo.projectors.disposeProjector(USER_SCHEMAS_PROJECTOR_ID)
+  }
 
   /** Look up the property-schema block id for a registered user-data
    *  schema name. Returns undefined for kernel/plugin schemas (which
    *  don't have backing blocks) or names that aren't registered. */
   getSchemaBlockId(name: string): string | undefined {
-    return this.nameToBlockId.get(name)
+    return this.handle?.blockIdForKey(name)
   }
 
   /** Look up the published user-data schema for a property-schema
@@ -92,129 +152,7 @@ export class UserSchemasService {
    *  blocks failing `tryBuildSchema` validation (empty name, unknown
    *  preset, invalid config), and ids that simply don't exist. */
   getSchemaForBlockId(blockId: string): AnyPropertySchema | undefined {
-    return this.blockIdToSchema.get(blockId)
-  }
-
-  start(): () => void {
-    if (this.subscriptionDisposer) {
-      throw new Error('[UserSchemasService] already started')
-    }
-
-    // Pin the workspace at start() time. The React provider restarts
-    // this service on workspace switch, so capturing here pairs the
-    // subscription's lifetime to one workspace explicitly — preventing
-    // a mid-flight switch from silently retagging the user-data bucket
-    // with a different workspace's schemas (PR #47 review).
-    const workspaceId = this.repo.activeWorkspaceId
-    if (!workspaceId) {
-      throw new Error('[UserSchemasService] no active workspace at start()')
-    }
-
-    const rebuildFromBlocks = (blocks: readonly BlockData[]) => {
-      this.latestBlocks = blocks
-      const presets = this.repo.valuePresets
-      const next: AnyPropertySchema[] = []
-      const nextNameToBlockId = new Map<string, string>()
-      const nextBlockIdToSchema = new Map<string, AnyPropertySchema>()
-      for (const block of blocks) {
-        const built = this.tryBuildSchema(block, presets)
-        if (built) {
-          next.push(built)
-          nextNameToBlockId.set(built.name, block.id)
-          nextBlockIdToSchema.set(block.id, built)
-        }
-      }
-      this.contributions = next
-      this.nameToBlockId = nextNameToBlockId
-      this.blockIdToSchema = nextBlockIdToSchema
-      this.repo.setRuntimeContributions(propertySchemasFacet, USER_DATA_SOURCE_ID, this.contributions)
-    }
-
-    this.subscriptionDisposer = this.repo.subscribeBlocks(
-      {workspaceId, types: [PROPERTY_SCHEMA_TYPE]},
-      // Build straight from the delivered rows: they're the authoritative
-      // query snapshot. Going through repo.block(id) facades instead raced
-      // the BlockCache — an un-hydrated facade would read undefined and
-      // drop a freshly-created schema until a later rebuild tick.
-      blocks => rebuildFromBlocks(blocks),
-    )
-
-    this.presetsListenerDisposer = this.repo.onValuePresetsChange(() => {
-      rebuildFromBlocks(this.latestBlocks)
-    })
-
-    return () => this.dispose()
-  }
-
-  dispose(): void {
-    this.subscriptionDisposer?.()
-    this.subscriptionDisposer = null
-    this.presetsListenerDisposer?.()
-    this.presetsListenerDisposer = null
-    // Drop in-memory state AND clear the user-data bucket so the previous
-    // workspace's user-defined property schemas don't remain visible between
-    // dispose and the next subscription tick on a workspace switch. The Repo
-    // is a per-user singleton (reused across workspace switches) and
-    // `setFacetRuntime` carries the durable user-data bucket forward via
-    // `adoptDurableContributionsFrom`, so a stale bucket would leak into the
-    // next workspace until its subscription's first rebuild. Mirrors
-    // UserTypesService.dispose — that workspace-switch-race hardening was
-    // applied to types but never back-ported here, the service it was copied
-    // from.
-    this.latestBlocks = []
-    this.contributions = []
-    this.nameToBlockId = new Map()
-    this.blockIdToSchema = new Map()
-    this.repo.setRuntimeContributions(propertySchemasFacet, USER_DATA_SOURCE_ID, [])
-  }
-
-  /** Validates a schema block against the current presets and returns
-   *  the schema if it parses, or null with a logged diagnostic if not.
-   *  Three skip paths: (1) preset not loaded, (2) name empty,
-   *  (3) configCodec.decode throws. The block stays in the database
-   *  untouched; a fix re-runs this on the next subscription tick. */
-  private tryBuildSchema(
-    row: BlockData,
-    presets: ReadonlyMap<string, AnyValuePreset>,
-  ): AnyPropertySchema | null {
-    const presetId = peekRowProperty(row, presetIdProp) ?? ''
-    if (!presetId) {
-      console.warn(`[UserSchemasService] schema block ${row.id} has no presetId`)
-      return null
-    }
-    const preset = presets.get(presetId)
-    if (!preset) {
-      console.warn(
-        `[UserSchemasService] schema block ${row.id} references unknown preset ${JSON.stringify(presetId)}; ` +
-        `preset's plugin may not be loaded`,
-      )
-      return null
-    }
-    const name = peekRowProperty(row, propertyNameProp) ?? ''
-    if (!name) {
-      console.warn(`[UserSchemasService] schema block ${row.id} has empty propertyName`)
-      return null
-    }
-    let config: unknown
-    if (preset.configCodec) {
-      try {
-        const raw = peekRowProperty(row, presetConfigProp) ?? {}
-        config = preset.configCodec.decode(raw)
-      } catch (err) {
-        console.warn(
-          `[UserSchemasService] schema "${name}" has invalid config: ${(err as Error).message}; skipping until fixed`,
-        )
-        return null
-      }
-    } else {
-      config = undefined
-    }
-    return {
-      name,
-      codec: preset.build(config as never),
-      defaultValue: preset.defaultValue,
-      changeScope: ChangeScope.BlockDefault,
-    }
+    return this.handle?.contributionForBlockId(blockId)
   }
 
   /** Synchronously add a user-data schema to the runtime bucket. Used
@@ -223,13 +161,7 @@ export class UserSchemasService {
    *  write-initial-value" flow doesn't race the subscription tick.
    *  `blockId` is the property-schema block that produced `schema`. */
   appendUserSchema(schema: AnyPropertySchema, blockId: string): void {
-    this.contributions = [
-      ...this.contributions.filter(s => s.name !== schema.name),
-      schema,
-    ]
-    this.nameToBlockId.set(schema.name, blockId)
-    this.blockIdToSchema.set(blockId, schema)
-    this.repo.setRuntimeContributions(propertySchemasFacet, USER_DATA_SOURCE_ID, this.contributions)
+    this.handle?.upsert(schema, blockId)
   }
 
   /** Create a property-schema block in the workspace's Properties
@@ -276,8 +208,9 @@ export class UserSchemasService {
       ? preset.configCodec.encode(parsedConfig as never)
       : {}
 
+    const workspaceId = this.repo.activeWorkspaceId
     const propertiesPageId = this.repo.propertiesPageId
-    if (!propertiesPageId) {
+    if (!workspaceId || !propertiesPageId) {
       throw new Error('[addSchema] no active workspace; properties page unavailable')
     }
 
@@ -297,10 +230,19 @@ export class UserSchemasService {
       await tx.setProperty(childId, presetConfigProp, persistConfig as Record<string, unknown>)
     }, {scope: ChangeScope.BlockDefault, description: `addSchema ${name}`})
 
-    // Register synchronously, before returning. The subscription will
-    // fire later (the block write triggers it) but arrives at an
+    // Register synchronously, before returning — but only if the workspace
+    // didn't change while the create/tx was in flight. The schema block is
+    // durably persisted under `workspaceId`'s Properties page; publishing it
+    // into the (workspace-agnostic) 'user-data' bucket after a switch would
+    // leak it into the new workspace. The projector's `disposed` guard can't
+    // catch this — the per-projector container is reused and re-armed across
+    // the switch — so the in-flight write is pinned to its workspace here.
+    // Skipping is safe: when `workspaceId` is active again, its subscription
+    // re-materialises the block. The subscription otherwise arrives at an
     // idempotent state.
-    this.appendUserSchema(newSchema, childId)
+    if (this.repo.activeWorkspaceId === workspaceId) {
+      this.appendUserSchema(newSchema, childId)
+    }
     return newSchema
   }
 }

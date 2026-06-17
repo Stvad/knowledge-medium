@@ -113,6 +113,7 @@ import { KERNEL_PROPERTY_SCHEMAS } from './properties'
 import { KERNEL_TYPE_CONTRIBUTIONS } from './blockTypes'
 import { propertiesPageBlockId } from './propertiesPage'
 import { typesPageBlockId } from './typesPage'
+import { ProjectorRuntime } from './projectorRuntime'
 import { UserSchemasService } from './userSchemasService'
 import { UserTypesService } from './userTypesService'
 import { TypeTagger } from './typeTagger'
@@ -475,21 +476,29 @@ export class Repo {
     return propertiesPageBlockId(this._activeWorkspaceId)
   }
 
+  /** Registry + driver for definition-block projectors (the
+   *  data-defined "watch a meta-type → mirror into a facet bucket"
+   *  pattern, issue #90). Owns the shared lifecycle for every projector
+   *  registered in `definitionBlockProjectorFacet`; the React provider
+   *  starts them all once per workspace via `startAll()`. The
+   *  `userSchemas` / `userTypes` facades read their state through it. */
+  readonly projectors: ProjectorRuntime = new ProjectorRuntime(this)
+
   /** UserSchemasService singleton bound to this Repo. Owns the
    *  user-data contribution bucket on `propertySchemasFacet`; sharing
    *  one instance means imperative call sites (the AddPropertyForm,
    *  the Roam importer) all hit the same in-memory list rather than
    *  each fresh instance clobbering the bucket from an empty start.
-   *  The block-subscription path is opt-in via `start()`; the React
-   *  provider starts it once per workspace. */
+   *  The block-subscription path is opt-in via `start()` (delegates to
+   *  the `'user-schemas'` projector). */
   readonly userSchemas: UserSchemasService = new UserSchemasService(this)
 
   /** UserTypesService singleton bound to this Repo. Symmetric to
    *  `userSchemas`: owns the user-data contribution bucket on
-   *  `typesFacet` and is started once per workspace by the React
-   *  provider. Depends on `userSchemas` for resolving
-   *  block-type:properties refList entries to live property schemas. */
-  readonly userTypes: UserTypesService = new UserTypesService(this, this.userSchemas)
+   *  `typesFacet`. The `'user-types'` projector depends on
+   *  `'user-schemas'` (started first) to resolve block-type:properties
+   *  refList entries to live property schemas. */
+  readonly userTypes: UserTypesService = new UserTypesService(this)
 
   /** Deterministic id of the workspace's Types page (parent of every
    *  `'block-type'` block in the workspace). Created lazily by

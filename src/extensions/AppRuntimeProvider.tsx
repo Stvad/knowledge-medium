@@ -168,24 +168,20 @@ export function AppRuntimeProvider({
   // (the diff) rather than tearing every effect down.
   useEffect(() => () => effectReconciler.dispose(), [effectReconciler])
 
-  // Reactive bridge between user-defined property-schema blocks and
-  // propertySchemasFacet's user-data bucket (Phase 3b). The service
-  // is the same singleton imperative call sites use (e.g. addSchema
-  // on AddPropertyForm submit) so the in-memory contribution list
-  // stays consistent.
+  // Start every definition-block projector (issue #90) for the active
+  // workspace: user-defined property-schema blocks → propertySchemasFacet
+  // and block-type blocks → typesFacet, each mirrored into a 'user-data'
+  // bucket by the shared ProjectorRuntime. `startAll` reads the
+  // descriptors from `definitionBlockProjectorFacet` and starts them in
+  // dependency order (schemas before types, since the type build path
+  // resolves block-type:properties refs through the schema projector);
+  // the returned disposer tears them down in reverse. The same singleton
+  // facades (repo.userSchemas / repo.userTypes) that imperative call
+  // sites use — e.g. addSchema on AddPropertyForm submit — read the
+  // resulting in-memory state through this runtime.
   useEffect(() => {
     if (!workspaceId) return
-    const dispose = repo.userSchemas.start()
-    return () => dispose()
-  }, [repo, workspaceId])
-
-  // Symmetric bridge for user-defined block-type blocks → typesFacet's
-  // user-data bucket (user-defined-types Phase 1). Started after
-  // userSchemas because the type build path resolves
-  // block-type:properties refs through UserSchemasService.
-  useEffect(() => {
-    if (!workspaceId) return
-    const dispose = repo.userTypes.start()
+    const dispose = repo.projectors.startAll()
     return () => dispose()
   }, [repo, workspaceId])
 
