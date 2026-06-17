@@ -53,6 +53,18 @@ export const routeProcessorRejection = (
  *  rejection-toast contributions off the repo's current runtime, so a
  *  single early subscriber covers both the bootstrap window (data-only
  *  runtime ⇒ empty ⇒ raw-message fallback) and normal operation (full
- *  app runtime ⇒ plugin toasts), and tracks plugin toggles for free. */
+ *  app runtime ⇒ plugin toasts), and tracks plugin toggles for free.
+ *
+ *  CONTRACT: depends on `repo.facetRuntime` carrying app-layer facets —
+ *  true because `AppRuntimeProvider` installs the merged app runtime via
+ *  `setFacetRuntime` (see the `repo.facetRuntime` getter doc). If that
+ *  changes (the runtime-composition work), this read silently returns
+ *  empty and every rejection degrades to the raw-message fallback —
+ *  preserve the contract or relocate this read.
+ *
+ *  This direct read replaces the older "module-global mirror kept in sync
+ *  by an app effect" pattern (still used by `runAction`'s dispatcher and
+ *  theme-toggle's registry); converging those onto this read is left to
+ *  the runtime-composition work. */
 export const surfaceProcessorRejection = (error: ProcessorRejection, repo: Repo): void =>
   routeProcessorRejection(error, repo, repo.facetRuntime?.read(rejectionToastFacet) ?? new Map())

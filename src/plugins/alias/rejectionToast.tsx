@@ -54,8 +54,11 @@ export const aliasCollisionRejectionToast: RejectionToastContribution = {
   code: 'alias.collision',
   render: (error: ProcessorRejection, repo: Repo, toastId: string | number) => {
     if (!isAliasCollisionMeta(error.meta)) {
-      // Defensive: meta shape mismatch shouldn't happen since both ends
-      // are in this repo. Show the raw message rather than crashing.
+      // Reachable when the conflicting block can't be resolved locally
+      // (e.g. `conflictingBlockId` came back null), so there's nothing to
+      // open/merge — show the raw message as the toast body. (Pre-inversion
+      // this was a `showError`; the message is the same, only the styling/
+      // duration follow the generic showCustom envelope now.)
       return createElement('span', null, error.message)
     }
     const {
