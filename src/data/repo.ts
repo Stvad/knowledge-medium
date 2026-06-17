@@ -393,6 +393,7 @@ export class Repo {
     blocksUpdated: 0,
     msTotal: 0,
     skippedByMarker: 0,
+    skippedByAbsence: 0,
   }
   /** Lazy in-memory mirror of the per-name reprojection markers in
    *  `client_schema_state` (rows keyed `reproject_ref:<workspaceId>:<name>`).
@@ -807,6 +808,7 @@ export class Repo {
       blocksUpdated: number
       msTotal: number
       skippedByMarker: number
+      skippedByAbsence: number
     }>
   }> {
     return Object.freeze({
@@ -836,6 +838,7 @@ export class Repo {
     this.reprojectionMetrics.blocksUpdated = 0
     this.reprojectionMetrics.msTotal = 0
     this.reprojectionMetrics.skippedByMarker = 0
+    this.reprojectionMetrics.skippedByAbsence = 0
     this.slowestTx = {description: null, ms: 0}
     this.txLog.length = 0
   }
@@ -1367,30 +1370,57 @@ export class Repo {
     let blocksUpdated = 0
     let scanScheduled = false
     try {
-      // Skip a name only when it's still ref-typed in `propertySchemas` AND
-      // already backfilled for this workspace — the references processor has
-      // maintained `references_json` incrementally since the marker landed, so
-      // a re-scan would be pure overhead. A name that is non-ref OR absent from
-      // the active workspace's schema set is a real "no longer ref-typed here"
-      // transition (the property's schema was redefined or deleted): scan it so
-      // its now-stale derived refs get stripped. Treating absence as a removal
-      // is safe because reprojection is workspace-scoped (above) and a schema
-      // never *transiently* leaves a workspace's set — cold-start
-      // materialization is grow-only and the observer never deletes a
-      // still-staged block (see materialize.ts), so a schema only disappears on
-      // a genuine change.
+      // Live registry *as of the gate decision* — workspace-correct (the live
+      // map only while still on this scan's workspace, else the scheduled
+      // snapshot, so a cross-workspace switch can't decide ref-ness for the
+      // captured workspace's blocks). Used only to tell "absent everywhere"
+      // from a present redefine in the gate below. The per-block projection
+      // later takes a *fresh* `liveSchemas` snapshot (after the SELECT), so it
+      // still reconciles against a redefine that lands while the scan is in
+      // flight (see the `does not let an older … reprojection re-add` test).
+      const liveSchemasAtGate = this._activeWorkspaceId === workspaceId
+        ? this._propertySchemas
+        : propertySchemas
+
+      // Decide, per name, whether to scan it:
+      //  - still ref-typed AND already backfilled here ⇒ SKIP. The references
+      //    processor has maintained `references_json` incrementally since the
+      //    marker landed, so a re-scan is pure overhead.
+      //  - absent from BOTH the scheduled snapshot and the live registry ⇒ SKIP
+      //    and RETAIN its existing refs. Absence is "not loaded / toggled off",
+      //    NOT "deleted": it occurs when async user/import schemas
+      //    (UserSchemasService) republish their bucket as rows materialize,
+      //    when a non-essential plugin is toggled off, and when ?safeMode forces
+      //    every non-essential off at once. Stripping on absence is what
+      //    silently deleted ~10k `next-review-date` backlinks fleet-wide when
+      //    SRS was toggled off. (bd7c363a re-enabled that strip believing that,
+      //    after workspace-scoping, absence ⟺ a genuine redefine/delete — but it
+      //    reasoned only about grow-only cold-start materialization and
+      //    cross-workspace switches, never the toggle/safeMode re-resolve that
+      //    removes a plugin's schema without deleting anything.)
+      //  - PRESENT but non-ref ⇒ SCAN. A real ref→non-ref redefine: its
+      //    now-stale derived refs are swept (the strip we *do* want).
+      // Genuinely deleting a ref-typed schema therefore no longer eagerly sweeps
+      // its backlinks; the references processor strips them on each affected
+      // block's next write — far cheaper than a mass silent delete.
       const markers = await this.reprojectionMarkers.load()
       const namesToScan: string[] = []
       let skippedByMarker = 0
+      let skippedByAbsence = 0
       for (const name of propertyNames) {
         const kind = refCodecKind(propertySchemas.get(name))
         if (kind !== undefined && markers.has(reprojectionMarkerKey(workspaceId, name))) {
           skippedByMarker += 1
           continue
         }
+        if (!propertySchemas.has(name) && !liveSchemasAtGate.has(name)) {
+          skippedByAbsence += 1
+          continue
+        }
         namesToScan.push(name)
       }
       this.reprojectionMetrics.skippedByMarker += skippedByMarker
+      this.reprojectionMetrics.skippedByAbsence += skippedByAbsence
       if (namesToScan.length === 0) return
       scanScheduled = true
       this.reprojectionMetrics.calls += 1
@@ -1426,12 +1456,12 @@ export class Repo {
 
       const propertyNameSet = new Set(namesToScan)
 
-      // Live registry used to reconcile a scan that outlived a schema swap —
-      // but only while we're still on the workspace this scan was scheduled
-      // for. After a workspace switch `this._propertySchemas` reflects the
-      // *other* workspace, so trusting it would let that workspace's schema set
-      // decide ref-ness for blocks in the captured one (a cross-workspace
-      // bleed). Fall back to the scheduled snapshot in that case.
+      // Fresh live snapshot for the per-block projection — re-read here (after
+      // the SELECT) rather than reusing `liveSchemasAtGate`, so a redefine that
+      // landed while the scan was in flight is reconciled. Project against the
+      // live registry only while still on the scan's workspace; after a
+      // workspace switch fall back to the scheduled snapshot so the other
+      // workspace's schema set can't strip the captured workspace's refs.
       const liveSchemas = this._activeWorkspaceId === workspaceId
         ? this._propertySchemas
         : propertySchemas

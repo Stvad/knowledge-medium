@@ -399,14 +399,18 @@ describe('parseReferences — schema-swap reprojection', () => {
     ])
   })
 
-  it('strips stale refs and clears the marker when a ref-typed property is deleted (goes absent)', async () => {
-    // A property whose schema is *deleted* leaves the active workspace's schema
-    // set entirely. That's a genuine "no longer ref-typed here" transition, so
-    // its stale derived backlinks must be swept eagerly — not tolerated until
-    // each affected block is next written. Treating absence as a removal is safe
-    // because reprojection is workspace-scoped and a schema never *transiently*
-    // leaves a workspace's set (cold-start materialization is grow-only; the
-    // observer never deletes a still-staged block — see materialize.ts).
+  it('retains derived refs and the marker when a ref-typed property goes absent (toggle off / not yet loaded)', async () => {
+    // A property *absent* from the active workspace's schema set is "not
+    // ref-typed here right now" — but absence is "not loaded / toggled off",
+    // NOT a deletion. It occurs when async user/import schemas
+    // (UserSchemasService) republish their bucket as rows materialize, when a
+    // non-essential plugin is toggled off, and when ?safeMode forces every
+    // non-essential off at once. Stripping on absence is what silently deleted
+    // ~10k `next-review-date` backlinks fleet-wide when SRS was toggled off, so
+    // the derived refs (and the marker) MUST be retained. Only a *present
+    // non-ref* redefine strips (see the test above). Genuinely deleting a
+    // schema is tolerated until each block's next write — far cheaper than a
+    // mass silent delete.
     env.repo.setFacetRuntime(runtimeWithReviewer())
     await env.repo.tx(
       tx => tx.create({
@@ -429,18 +433,19 @@ describe('parseReferences — schema-swap reprojection', () => {
       `SELECT 1 FROM client_schema_state WHERE key = 'reproject_ref:${WS}:reviewer'`,
     )).not.toBeNull()
 
-    // reviewer's schema is deleted ⇒ it leaves the schema set entirely.
+    // reviewer's schema goes absent (its plugin toggled off / not yet loaded).
     env.repo.setFacetRuntime(runtimeWithoutReviewer())
     await flush()
 
-    // The stale reviewer ref is stripped (content ref retained); the marker is
-    // cleared so a future re-add as ref triggers a fresh backfill.
+    // The reviewer ref is RETAINED (not stripped); the marker is left intact so
+    // re-enabling the plugin doesn't trigger a redundant re-scan.
     expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([
       {id: aliasId('content-target'), alias: 'content-target'},
+      {id: 'target-a', alias: 'target-a', sourceField: 'reviewer'},
     ])
     expect(await env.h.db.getOptional(
       `SELECT 1 FROM client_schema_state WHERE key = 'reproject_ref:${WS}:reviewer'`,
-    )).toBeNull()
+    )).not.toBeNull()
   })
 
   it('only reprojects the active workspace, leaving unopened workspaces untouched', async () => {
@@ -601,6 +606,73 @@ describe('parseReferences — schema-swap reprojection', () => {
     } finally {
       getAllSpy.mockRestore()
       executeSpy.mockRestore()
+    }
+  })
+
+  it('retains refs when a parked ref-typed scan runs after the property goes absent (toggle off)', async () => {
+    // Mirror of the redefine test above, but `reviewer` goes *absent* (its
+    // plugin toggled off / not yet loaded) rather than being redefined to a
+    // non-ref codec. A parked "became ref-typed" scan that fires after the
+    // schema left the live registry must RETAIN the field's refs — absence is
+    // not a deletion. This is the narrower-race sibling of the toggle-off strip
+    // that silently deleted ~10k next-review-date backlinks: the gate skips a
+    // reprojection scheduled with an already-absent snapshot, and
+    // `latestRefProjectionSchema` keeps the scheduled ref schema when the live
+    // registry no longer knows the name, so neither path strips here.
+    const originalGetAll = env.h.db.getAll.bind(env.h.db)
+    let releaseScan: (() => void) | null = null
+    let intercepted = false
+    let scanParked!: () => void
+    const scanParkedPromise = new Promise<void>(resolve => { scanParked = resolve })
+    const getAllSpy = vi.spyOn(env.h.db, 'getAll').mockImplementation(async <T,>(
+      sql: string,
+      params?: unknown[],
+    ): Promise<T[]> => {
+      if (!intercepted && sql.includes('json_each(b.properties_json) prop')) {
+        intercepted = true
+        const rows = await originalGetAll<T>(sql, params)
+        await new Promise<void>(resolve => { releaseScan = resolve; scanParked() })
+        return rows
+      }
+      return originalGetAll<T>(sql, params)
+    })
+
+    try {
+      env.repo.setFacetRuntime(runtimeWithReviewer())
+      await env.repo.tx(
+        tx => tx.create({
+          id: 'src',
+          workspaceId: WS,
+          parentId: null,
+          orderKey: 'a0',
+          content: 'see [[content-target]]',
+          properties: {reviewer: 'target-a'},
+        }),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await env.repo.awaitProcessors()
+
+      await vi.advanceTimersByTimeAsync(1)
+      // Wait for reprojection-1 to park inside its SELECT (release fn captured).
+      await scanParkedPromise
+
+      // `reviewer`'s schema goes absent (its plugin toggled off) while
+      // reprojection-1 is parked. The toggle-off swap schedules reprojection-2
+      // with an already-absent snapshot, which the gate skips (no strip).
+      env.repo.setFacetRuntime(runtimeWithoutReviewer())
+      await vi.advanceTimersByTimeAsync(1)
+
+      // Release the parked scan; it must NOT strip the reviewer ref even though
+      // the live registry no longer knows `reviewer`.
+      releaseScan!()
+      await flush()
+
+      expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([
+        {id: aliasId('content-target'), alias: 'content-target'},
+        {id: 'target-a', alias: 'target-a', sourceField: 'reviewer'},
+      ])
+    } finally {
+      getAllSpy.mockRestore()
     }
   })
 

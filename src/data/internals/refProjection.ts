@@ -120,17 +120,25 @@ export const projectedRefsForField = (
   return refs
 }
 
-/** Reprojection scans can outlive a later schema swap. Keep the
- *  scheduled schema when its ref-ness still matches the live registry;
- *  otherwise project against the live registry so an old scan cannot
- *  re-add refs for a field that is no longer ref-typed (redefined to a
- *  non-ref codec, or deleted ⇒ absent ⇒ refs stripped).
+/** Reprojection scans can outlive a later schema swap. Pick the schema a
+ *  parked scan should project a field against:
+ *   - live registry still knows the name ⇒ project against it, so a genuine
+ *     ref→non-ref redefine that landed after scheduling strips the stale refs,
+ *     and a still-ref field re-adds.
+ *   - live registry no longer knows the name (absent) ⇒ keep the *scheduled*
+ *     schema, so the scan RETAINS the field's refs instead of stripping them.
+ *     Absence is "toggled off / not loaded", not a deletion. The caller already
+ *     drops absent-everywhere names before scanning (see `reprojectRefTyped-
+ *     Properties`); this guards the narrower race where a name was ref-typed at
+ *     schedule time but vanished from the live registry by run time (a plugin
+ *     toggled off, ?safeMode, or an async user/import schema mid-republish).
+ *     Stripping that field is exactly the silent-deletion vector that wiped
+ *     ~10k `next-review-date` backlinks on SRS toggle-off.
  *
  *  The caller passes a *workspace-correct* `currentSchemas`: the live registry
  *  only while still on the scan's workspace, else the scheduled snapshot (see
- *  `liveSchemas` in `reprojectRefTypedProperties`). So "absent in current" here
- *  always means a real same-workspace removal, never a cross-workspace bleed or
- *  a mid-load gap. */
+ *  `liveSchemas` in `reprojectRefTypedProperties`), so cross-workspace state
+ *  never decides ref-ness for the captured workspace's blocks. */
 export const latestRefProjectionSchema = (
   scheduledSchemas: ReadonlyMap<string, AnyPropertySchema>,
   currentSchemas: ReadonlyMap<string, AnyPropertySchema>,
@@ -138,6 +146,7 @@ export const latestRefProjectionSchema = (
 ): AnyPropertySchema | undefined => {
   const scheduledSchema = scheduledSchemas.get(name)
   const currentSchema = currentSchemas.get(name)
+  if (currentSchema === undefined) return scheduledSchema
   return refCodecKind(scheduledSchema) === refCodecKind(currentSchema)
     ? scheduledSchema
     : currentSchema
