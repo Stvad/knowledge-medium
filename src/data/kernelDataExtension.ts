@@ -23,6 +23,7 @@
  */
 
 import {
+  definitionBlockProjectorFacet,
   invalidationRulesFacet,
   mutatorsFacet,
   postCommitProcessorsFacet,
@@ -38,6 +39,8 @@ import { KERNEL_QUERIES } from './internals/kernelQueries'
 import { kernelInvalidationRule } from './internals/kernelInvalidation'
 import { KERNEL_PROPERTY_SCHEMAS } from '@/data/properties'
 import { KERNEL_TYPE_CONTRIBUTIONS } from '@/data/blockTypes'
+import { userSchemasProjector } from '@/data/userSchemasService'
+import { userTypesProjector } from '@/data/userTypesService'
 import type { AppExtension } from '@/facets/facet'
 import { systemToggle } from '@/facets/togglable'
 
@@ -54,4 +57,11 @@ export const kernelDataExtension: AppExtension = systemToggle({
   KERNEL_PROPERTY_SCHEMAS.map(s => propertySchemasFacet.of(s, {source: 'kernel'})),
   KERNEL_TYPE_CONTRIBUTIONS.map(t => typesFacet.of(t, {source: 'kernel'})),
   invalidationRulesFacet.of(kernelInvalidationRule, {source: 'kernel'}),
+  // Definition-block projectors (issue #90): user-defined property
+  // schemas and block types mirror into their facets' user-data buckets
+  // through the shared `ProjectorRuntime`. Registered schemas-before-
+  // types so the dependency order is also the registration order; the
+  // type projector additionally declares `dependsOn: ['user-schemas']`.
+  definitionBlockProjectorFacet.of(userSchemasProjector, {source: 'kernel'}),
+  definitionBlockProjectorFacet.of(userTypesProjector, {source: 'kernel'}),
 ])

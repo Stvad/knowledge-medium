@@ -1,10 +1,13 @@
-/** Reactive bridge between user-defined `'block-type'` blocks and the
- *  `typesFacet`'s `'user-data'` runtime contribution bucket
- *  (user-defined-types Phase 1). Mirrors UserSchemasService in shape:
- *  subscribe to the meta-type blocks, build TypeContribution[],
- *  publish through `repo.setRuntimeContributions`. Re-resolves when
- *  the merged propertySchemas map changes (a newly-published schema
- *  resolves a previously-dropped block-type:properties ref).
+/** User-defined `'block-type'` blocks → the `typesFacet` `'user-data'`
+ *  runtime-contribution bucket (user-defined-types Phase 1).
+ *
+ *  The reactive lifecycle (subscribe / pin / publish / reset+clear on
+ *  dispose) lives in the shared `ProjectorRuntime` core, configured by
+ *  `userTypesProjector` below. This file keeps only the type-side
+ *  specifics: the builder (`tryBuildType`, which resolves
+ *  `block-type:properties` refs through the schema projector's handle),
+ *  the `contributionsEqual` dedup that breaks the feedback loop with the
+ *  propertySchemas rebuild step, and the `getTypeBlockId` lookup.
  *
  *  Deliberately narrow: NO synchronous-append / withProvisional path.
  *  See user-defined-types/design.html §Lessons from PR #50 — callers
@@ -16,11 +19,13 @@
 import {
   type AnyPropertySchema,
   type TypeContribution,
-  type Unsubscribe,
 } from '@/data/api'
 import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
-import type { UserSchemasService } from '@/data/userSchemasService'
+import type {
+  DefinitionBlockProjector,
+  ProjectorHandle,
+} from '@/data/projectorRuntime'
 import {
   blockTypeDescriptionProp,
   blockTypeLabelProp,
@@ -28,189 +33,109 @@ import {
 } from '@/data/properties'
 import { BLOCK_TYPE_TYPE } from '@/data/blockTypes'
 import { typesFacet } from '@/data/facets'
+import { USER_SCHEMAS_PROJECTOR_ID } from '@/data/userSchemasService'
+
+/** Projector id for the user-defined block-type bridge. */
+export const USER_TYPES_PROJECTOR_ID = 'user-types'
 
 const USER_DATA_SOURCE_ID = 'user-data'
 
-export class UserTypesService {
-  /** Source of truth for the user-data bucket on `typesFacet`. */
-  private contributions: readonly TypeContribution[] = []
-
-  /** Maps a published type id back to the block id that materialised
-   *  it. Phase 1's type-id-IS-block-id decision makes the key and the
-   *  value identical for resolved contributions; the map is kept
-   *  explicit so future UI surfaces (a "navigate to type definition"
-   *  action) read through a stable accessor. */
-  private blockIdByTypeId = new Map<string, string>()
-
-  /** Active block-subscription disposer, set by `start()`. */
-  private subscriptionDisposer: Unsubscribe | null = null
-
-  /** Disposer for the property-schemas listener; we re-resolve when
-   *  the merged schema map changes so a newly-arriving schema makes
-   *  previously-dropped `block-type:properties` refs resolvable. */
-  private schemasListenerDisposer: (() => void) | null = null
-
-  /** Latest blocks list captured by the subscription. Stored so the
-   *  schema-change re-resolve can run without a fresh DB read. Reset
-   *  on dispose so a stale workspace's blocks don't get republished
-   *  during the cross-workspace handoff. */
-  private latestBlocks: readonly Block[] = []
-
-  /** True once the workspace-pinned subscription has delivered its
-   *  first tick. Gates the schemas-listener rebuild path: between
-   *  start() and the first subscription emit, `latestBlocks` is
-   *  guaranteed empty (we just reset it in start), but the gate also
-   *  prevents an early onPropertySchemasChange — fired by another
-   *  workspace's userSchemas first publish during the React-effect
-   *  remount sequence — from re-publishing something we don't own
-   *  yet. Reset on dispose. */
-  private subscriptionPrimed = false
-
-  constructor(
-    private readonly repo: Repo,
-    private readonly userSchemas: UserSchemasService,
-  ) {}
-
-  /** Look up the source block id for a published type id. Returns
-   *  undefined for kernel/plugin types (no backing block) or ids
-   *  that aren't user-data registered. */
-  getTypeBlockId(typeId: string): string | undefined {
-    return this.blockIdByTypeId.get(typeId)
+/** Build a TypeContribution from a user-authored block-type block.
+ *  Returns null with a logged diagnostic when the label is empty;
+ *  silently drops refList entries that don't resolve through the schema
+ *  projector's `contributionForBlockId` (those fill in on the next
+ *  `onPropertySchemasChange` tick when the missing schema publishes). */
+const tryBuildType = (
+  block: Block,
+  schemas: ProjectorHandle<AnyPropertySchema> | undefined,
+): TypeContribution | null => {
+  const label = block.peekProperty(blockTypeLabelProp) ?? ''
+  if (!label) {
+    console.warn(`[UserTypesService] block ${block.id} has empty label; skipping`)
+    return null
   }
+  const description = block.peekProperty(blockTypeDescriptionProp) ?? ''
+  const refIds = block.peekProperty(blockTypePropertiesProp) ?? []
+  const properties: AnyPropertySchema[] = []
+  for (const refId of refIds) {
+    const schema = schemas?.contributionForBlockId(refId)
+    if (schema) properties.push(schema)
+  }
+  return {
+    id: block.id,
+    label,
+    ...(description ? {description} : {}),
+    properties,
+  }
+}
 
+/** Field-wise equality on the contribution list. Element identity isn't
+ *  useful because `tryBuildType` creates fresh objects per rebuild;
+ *  compare the load-bearing fields and check the properties array
+ *  element-wise (schemas come from the schema projector and ARE reused
+ *  across rebuilds, so reference identity is the right check there). */
+const contributionsEqual = (
+  a: readonly TypeContribution[],
+  b: readonly TypeContribution[],
+): boolean => {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    const ac = a[i]
+    const bc = b[i]
+    if (ac.id !== bc.id || ac.label !== bc.label || ac.description !== bc.description) return false
+    const ap = ac.properties ?? []
+    const bp = bc.properties ?? []
+    if (ap.length !== bp.length) return false
+    for (let j = 0; j < ap.length; j++) {
+      if (ap[j] !== bp[j]) return false
+    }
+  }
+  return true
+}
+
+/** Descriptor wiring the type bridge into the shared projector
+ *  lifecycle. Hydrates raw rows into `Block` facades so the builder can
+ *  decode through `peekProperty`; depends on the schema projector
+ *  (started first) to resolve property refs; re-resolves on
+ *  `onPropertySchemasChange` when a newly-arriving schema makes a
+ *  previously-dropped ref resolvable. `dedup` short-circuits the
+ *  feedback loop: the propertySchemas rebuild step fires BOTH
+ *  propertySchemas AND types listeners, so an unconditional republish
+ *  from our `onPropertySchemasChange` listener would re-trigger it. */
+export const userTypesProjector: DefinitionBlockProjector<Block, TypeContribution> = {
+  id: USER_TYPES_PROJECTOR_ID,
+  metaType: BLOCK_TYPE_TYPE,
+  targetFacet: typesFacet,
+  sourceId: USER_DATA_SOURCE_ID,
+  dependsOn: [USER_SCHEMAS_PROJECTOR_ID],
+  keyOf: type => type.id,
+  hydrate: (rows, ctx) => rows.map(row => ctx.repo.block(row.id)),
+  project: (block, ctx) =>
+    tryBuildType(block, ctx.handle(USER_SCHEMAS_PROJECTOR_ID) as ProjectorHandle<AnyPropertySchema> | undefined),
+  dedup: contributionsEqual,
+  secondarySignal: (repo, rebuild) => repo.onPropertySchemasChange(rebuild),
+}
+
+/** Thin facade over the `'user-types'` projector. Holds no state of its
+ *  own — the lifecycle + contribution list live in the projector's
+ *  `ProjectorHandle`, reached through `repo.projectors`. */
+export class UserTypesService {
+  constructor(private readonly repo: Repo) {}
+
+  /** Start the type projector for the active workspace. Returns a
+   *  disposer; throws on double-start / no active workspace. */
   start(): () => void {
-    if (this.subscriptionDisposer) {
-      throw new Error('[UserTypesService] already started')
-    }
-
-    // Pin the workspace at start() time, mirroring UserSchemasService.
-    // The React provider restarts the service on workspace switch, so
-    // capturing here pairs the subscription's lifetime to one workspace.
-    const workspaceId = this.repo.activeWorkspaceId
-    if (!workspaceId) {
-      throw new Error('[UserTypesService] no active workspace at start()')
-    }
-
-    const rebuildFromBlocks = (blocks: readonly Block[]): void => {
-      this.latestBlocks = blocks
-      this.subscriptionPrimed = true
-      const next: TypeContribution[] = []
-      const nextBlockIdByTypeId = new Map<string, string>()
-      for (const block of blocks) {
-        const built = this.tryBuildType(block)
-        if (built) {
-          next.push(built)
-          nextBlockIdByTypeId.set(built.id, block.id)
-        }
-      }
-      // The propertySchemas rebuild step in Repo notifies BOTH
-      // propertySchemasListeners AND typesListeners — they share a
-      // step because mergeLiftedSchemas reads typesFacet to lift
-      // properties. We listen to onPropertySchemasChange to re-resolve
-      // refList entries when a new schema lands, so an unconditional
-      // republish would form a feedback loop: our publish triggers the
-      // step, the step fires propertySchemasListeners, we fire again.
-      // Short-circuit when nothing materially changed.
-      if (this.contributionsEqual(next, this.contributions)) return
-      this.contributions = next
-      this.blockIdByTypeId = nextBlockIdByTypeId
-      this.repo.setRuntimeContributions(typesFacet, USER_DATA_SOURCE_ID, this.contributions)
-    }
-
-    this.subscriptionDisposer = this.repo.subscribeBlocks(
-      {workspaceId, types: [BLOCK_TYPE_TYPE]},
-      blocks => {
-        // Hydrate raw rows into Block facades so we can decode through
-        // peekProperty rather than poking properties_json shapes.
-        rebuildFromBlocks(blocks.map(b => this.repo.block(b.id)))
-      },
-    )
-
-    this.schemasListenerDisposer = this.repo.onPropertySchemasChange(() => {
-      // Ignore schema-change rebuilds until our own workspace-pinned
-      // subscription has delivered its first tick. Otherwise the
-      // React-effect remount sequence on workspace switch lets the new
-      // workspace's userSchemas service publish first, fire
-      // onPropertySchemasChange, and trigger a rebuild against
-      // latestBlocks — which would still be the previous workspace's
-      // data if any survived dispose. (We also reset latestBlocks in
-      // dispose, so this is belt-and-suspenders; the gate also catches
-      // the case where the schemas listener happens to fire between
-      // start() and the subscription's first emit.)
-      if (!this.subscriptionPrimed) return
-      rebuildFromBlocks(this.latestBlocks)
-    })
-
-    return () => this.dispose()
+    return this.repo.projectors.startById(USER_TYPES_PROJECTOR_ID)
   }
 
   dispose(): void {
-    this.subscriptionDisposer?.()
-    this.subscriptionDisposer = null
-    this.schemasListenerDisposer?.()
-    this.schemasListenerDisposer = null
-    // Drop in-memory state so a subsequent start() (e.g. on workspace
-    // switch) can't accidentally rebuild from stale data. Also clear
-    // the user-data bucket on typesFacet so the previous workspace's
-    // user-defined types don't remain visible between dispose and the
-    // next subscription tick.
-    this.latestBlocks = []
-    this.contributions = []
-    this.blockIdByTypeId = new Map()
-    this.subscriptionPrimed = false
-    this.repo.setRuntimeContributions(typesFacet, USER_DATA_SOURCE_ID, [])
+    this.repo.projectors.disposeProjector(USER_TYPES_PROJECTOR_ID)
   }
 
-  /** Field-wise equality on the contribution list. Element identity
-   *  isn't useful because tryBuildType creates fresh objects per
-   *  rebuild; compare the load-bearing fields and check the properties
-   *  array element-wise (schemas come from UserSchemasService and ARE
-   *  reused across rebuilds, so reference identity is the right check
-   *  there). */
-  private contributionsEqual(
-    a: readonly TypeContribution[],
-    b: readonly TypeContribution[],
-  ): boolean {
-    if (a.length !== b.length) return false
-    for (let i = 0; i < a.length; i++) {
-      const ac = a[i]
-      const bc = b[i]
-      if (ac.id !== bc.id || ac.label !== bc.label || ac.description !== bc.description) return false
-      const ap = ac.properties ?? []
-      const bp = bc.properties ?? []
-      if (ap.length !== bp.length) return false
-      for (let j = 0; j < ap.length; j++) {
-        if (ap[j] !== bp[j]) return false
-      }
-    }
-    return true
-  }
-
-  /** Build a TypeContribution from a user-authored block-type block.
-   *  Returns null with a logged diagnostic when the label is empty;
-   *  silently drops refList entries that don't resolve through
-   *  `UserSchemasService.getSchemaForBlockId` (those will fill in on
-   *  the next `onPropertySchemasChange` tick when the missing schema
-   *  publishes). */
-  private tryBuildType(block: Block): TypeContribution | null {
-    const label = block.peekProperty(blockTypeLabelProp) ?? ''
-    if (!label) {
-      console.warn(`[UserTypesService] block ${block.id} has empty label; skipping`)
-      return null
-    }
-    const description = block.peekProperty(blockTypeDescriptionProp) ?? ''
-    const refIds = block.peekProperty(blockTypePropertiesProp) ?? []
-    const properties: AnyPropertySchema[] = []
-    for (const refId of refIds) {
-      const schema = this.userSchemas.getSchemaForBlockId(refId)
-      if (schema) properties.push(schema)
-    }
-    const contribution: TypeContribution = {
-      id: block.id,
-      label,
-      ...(description ? {description} : {}),
-      properties,
-    }
-    return contribution
+  /** Look up the source block id for a published type id. Returns
+   *  undefined for kernel/plugin types (no backing block) or ids that
+   *  aren't user-data registered. */
+  getTypeBlockId(typeId: string): string | undefined {
+    return this.repo.projectors.handle<TypeContribution>(USER_TYPES_PROJECTOR_ID)?.blockIdForKey(typeId)
   }
 }

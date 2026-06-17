@@ -21,6 +21,7 @@ import type {
   Tx,
   TypeContribution,
 } from '@/data/api'
+import type { AnyDefinitionBlockProjector } from './projectorRuntime.ts'
 import type { InvalidationRule } from './invalidation.ts'
 
 export interface LocalSchemaDb {
@@ -110,6 +111,16 @@ const isInvalidationRule = (value: unknown): value is InvalidationRule =>
     typeof value.collectFromSnapshots === 'function'
   )
 
+const isDefinitionBlockProjector = (value: unknown): value is AnyDefinitionBlockProjector =>
+  isRecord(value) &&
+  typeof value.id === 'string' &&
+  typeof value.metaType === 'string' &&
+  typeof value.sourceId === 'string' &&
+  typeof value.project === 'function' &&
+  typeof value.keyOf === 'function' &&
+  isRecord(value.targetFacet) &&
+  typeof (value.targetFacet as { id?: unknown }).id === 'string'
+
 /** Key the registry by `Mutator.name`; duplicates log a warning and
  *  last-wins (per §6 convention). Mutators with heterogeneous
  *  Args/Result types share the registry slot via `AnyMutator` (variance
@@ -184,4 +195,19 @@ export const refTargetFilterDefaultsFacet = keyedMapFacet<RefTargetFilterDefault
 export const invalidationRulesFacet = defineFacet<InvalidationRule, readonly InvalidationRule[]>({
   id: 'data.invalidationRules',
   validate: isInvalidationRule,
+})
+
+/** Registry of definition-block projectors — the "data-defined
+ *  contributions over facets" pattern (issue #90). Each contribution
+ *  watches blocks of a meta-type and mirrors them into a target
+ *  facet's `'user-data'` bucket; `ProjectorRuntime` drives the shared
+ *  lifecycle. List-valued (started in `dependsOn` order), not keyed,
+ *  since nothing looks a projector up by id through the facet — the
+ *  driver enumerates them. */
+export const definitionBlockProjectorFacet = defineFacet<
+  AnyDefinitionBlockProjector,
+  readonly AnyDefinitionBlockProjector[]
+>({
+  id: 'data.definitionBlockProjectors',
+  validate: isDefinitionBlockProjector,
 })
