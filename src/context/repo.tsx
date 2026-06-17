@@ -39,11 +39,10 @@ const initRepo = memoize(
     // `repo.tx` call site (mutators, palette actions, bootstrap writes)
     // route through the toast layer from the moment the repo exists. The
     // subscriber is a GENERIC router (no plugin knowledge): it reads the
-    // contributions snapshot that `rejectionToastSyncEffect` keeps in
-    // sync with the app runtime, so per-rejection toasts come from plugin
-    // contributions, while early/bootstrap rejections still surface via
-    // the raw-message fallback (the snapshot is empty until the runtime
-    // resolves). The Repo is a process singleton; we don't unsubscribe.
+    // per-rejection toast contributions off `repo.facetRuntime`, so plugin
+    // toasts apply once the app runtime is installed, while early/bootstrap
+    // rejections (data-only runtime) surface via the raw-message fallback.
+    // The Repo is a process singleton; we don't unsubscribe.
     repo.onUserError(error => surfaceProcessorRejection(error, repo))
     return repo
   },
