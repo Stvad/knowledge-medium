@@ -1,6 +1,5 @@
-import { ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import { ReactNode, useEffect, useMemo, useState } from 'react'
 import { useRepo } from '@/context/repo.js'
-import type { Repo } from '@/data/repo'
 import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions.js'
 import {
   AppExtension,
@@ -63,6 +62,16 @@ export function AppRuntimeProvider({
 
   const [runtime, setRuntime] = useState(baseRuntime)
 
+  // App-effect lifecycle (audit B1(4)). The reconciler keeps unchanged
+  // effects running across a runtime swap (re-pointing them at the fresh
+  // runtime via a LiveRuntimeHandle) and starts/stops only the diff, so
+  // toggling one extension no longer restarts every plugin's effect /
+  // subscriptions. It restarts everything only when repo / workspaceId /
+  // safeMode change (values effects capture directly). It also owns the
+  // authoritative cold-vs-warm latch (`isColdFor`) the gated commit below
+  // consults — declared here so that effect can reference it.
+  const effectReconciler = useMemo(() => new EffectReconciler(), [])
+
   // Two-stage load is only worth its cost on a COLD start for a context —
   // initial mount and repo / workspace / safeMode switch. There we commit
   // the sync `baseRuntime` immediately so the kernel + static plugins (and
@@ -78,18 +87,16 @@ export function AppRuntimeProvider({
   // carries no dynamic extensions, so they'd read as "removed" then
   // "re-added"), and (b) momentarily downgrading the Repo to static-only
   // and dropping the live dynamic plugins' mutators during the compile gap.
-  const loadedCtx = useRef<{repo: Repo; workspaceId: string | null; safeMode: boolean} | null>(null)
+  //
+  // "Cold vs warm" is the reconciler's `isColdFor` — its capturedCtx is the
+  // single source of truth, so this commit and the reconcile below can't
+  // disagree about whether a change is a context switch or a reload.
   useEffect(() => {
-    const ctxChanged =
-      loadedCtx.current === null ||
-      loadedCtx.current.repo !== repo ||
-      loadedCtx.current.workspaceId !== workspaceId ||
-      loadedCtx.current.safeMode !== safeMode
-    if (!ctxChanged) return // same-context reload: keep current; async swaps once
-    loadedCtx.current = {repo, workspaceId, safeMode}
+    if (!effectReconciler.isColdFor(repo, workspaceId, safeMode)) return // warm reload: hold current; async swaps once
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- sync-state-from-prop: held runtime follows baseRuntime on cold start
     setRuntime(baseRuntime)
     repo.setFacetRuntime(baseRuntime)
-  }, [baseRuntime, repo, workspaceId, safeMode])
+  }, [baseRuntime, effectReconciler, repo, workspaceId, safeMode])
 
   useEffect(() => {
     let cancelled = false
@@ -142,14 +149,6 @@ export function AppRuntimeProvider({
       cancelled = true
     }
   }, [baseExtensions, errorStore, overrides, repo, runtimeContext, safeMode, workspaceId])
-
-  // App-effect lifecycle (audit B1(4)). The reconciler keeps unchanged
-  // effects running across a runtime swap (re-pointing them at the fresh
-  // runtime via a LiveRuntimeHandle) and starts/stops only the diff, so
-  // toggling one extension no longer restarts every plugin's effect /
-  // subscriptions. It restarts everything only when repo / workspaceId /
-  // safeMode change (values effects capture directly).
-  const effectReconciler = useMemo(() => new EffectReconciler(), [])
 
   useEffect(() => {
     if (!workspaceId) {

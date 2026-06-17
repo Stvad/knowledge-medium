@@ -1430,11 +1430,14 @@ export class Repo {
       )
       this.reprojectionMetrics.rowsScanned += rows.length
       // Note: we do NOT bail when `this._propertySchemas !== propertySchemas`.
-      // `AppRuntimeProvider` calls `setFacetRuntime` twice during cold-start
-      // (kernel+static, then async with dynamic extensions), so a follow-up
-      // setFacetRuntime always lands while reprojection-1 is mid-SELECT —
-      // bailing here meant reprojection-1 never wrote markers and the same
-      // 1.4 s scan repeated on every reload. Dynamic extensions are additive
+      // On cold start `AppRuntimeProvider` calls `setFacetRuntime` twice
+      // (kernel+static, then async with dynamic extensions); a same-context
+      // reload calls it once (only the async swap — the sync base commit is
+      // gated to cold starts). On cold start that follow-up setFacetRuntime
+      // lands while reprojection-1 is mid-SELECT, so bailing here meant
+      // reprojection-1 never wrote markers and the same 1.4 s scan repeated
+      // on every reload; on a single-swap reload there's no racing follow-up
+      // to bail against anyway. Dynamic extensions are additive
       // (no codec redefinitions), so reprojection-1's snapshot is still
       // correct against the current state; per-block tx.get reads live
       // references and the JSON.stringify diff skips writes when nothing

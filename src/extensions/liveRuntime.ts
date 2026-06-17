@@ -258,12 +258,25 @@ export class EffectReconciler {
   private readonly started = new Map<string, StartedEffect>()
   private capturedCtx: { repo: Repo; workspaceId: string; safeMode: boolean } | null = null
 
-  reconcile(repo: Repo, runtime: FacetRuntime, workspaceId: string, safeMode: boolean): void {
-    const ctxChanged =
+  /** Whether `{repo, workspaceId, safeMode}` differs from the context the
+   *  reconciler last captured — i.e. the next `reconcile` would be a full
+   *  restart (cold) rather than a runtime-only diff (warm). This is the
+   *  single source of truth for "cold vs warm": `AppRuntimeProvider`
+   *  queries it to decide whether to commit the sync base runtime (cold
+   *  start) or hold the current one for a same-context reload, instead of
+   *  tracking the same latch separately. A never-reconciled or
+   *  just-disposed reconciler is cold. */
+  isColdFor(repo: Repo, workspaceId: string | null, safeMode: boolean): boolean {
+    return (
       this.capturedCtx === null ||
       this.capturedCtx.repo !== repo ||
       this.capturedCtx.workspaceId !== workspaceId ||
       this.capturedCtx.safeMode !== safeMode
+    )
+  }
+
+  reconcile(repo: Repo, runtime: FacetRuntime, workspaceId: string, safeMode: boolean): void {
+    const ctxChanged = this.isColdFor(repo, workspaceId, safeMode)
 
     const effects = runtime.read(appEffectsFacet)
     // Dedup by id, last-wins with a warn — matching the repo-wide facet

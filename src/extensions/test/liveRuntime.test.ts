@@ -225,6 +225,21 @@ describe('EffectReconciler', () => {
     expect(start).toHaveBeenCalledTimes(2) // started fresh, not resumed
   })
 
+  // The cold-vs-warm latch AppRuntimeProvider consults to decide whether to
+  // commit the sync base runtime (cold) or hold the current one for a
+  // same-context reload (warm). Pinning the transition keeps the provider's
+  // gating and the reconciler's restart-vs-diff decision from drifting apart.
+  it('isColdFor: cold until a context is reconciled, warm on a same-context reload', () => {
+    const r = new EffectReconciler()
+    expect(r.isColdFor(repo, 'ws', false)).toBe(true) // never reconciled
+    r.reconcile(repo, runtimeWith([]), 'ws', false)
+    expect(r.isColdFor(repo, 'ws', false)).toBe(false) // same context → warm
+    expect(r.isColdFor(repo, 'ws', true)).toBe(true) // safeMode differs → cold
+    expect(r.isColdFor(repo, 'ws-2', false)).toBe(true) // workspace differs → cold
+    r.dispose()
+    expect(r.isColdFor(repo, 'ws', false)).toBe(true) // disposed → cold again
+  })
+
   it('duplicate effect id: the last contribution wins and warns', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const firstStart = vi.fn(() => () => {})
