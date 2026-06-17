@@ -1,20 +1,19 @@
 /**
- * Alias plugin's handler for its own `alias.collision` ProcessorRejection.
+ * Alias plugin's toast for its own `alias.collision` ProcessorRejection.
  *
  * The alias.sync same-tx processor throws `ProcessorRejection {code:
  * 'alias.collision', meta}` when a block tries to claim an alias already
  * held by a different live block. This module owns everything the *user*
  * sees for that rejection — the meta shape, the copy, and the actionable
  * `AliasCollisionToast` — and contributes it through the generic
- * `rejectionToastFacet`. Core (`extensions/processorRejectionToast`)
- * stays ignorant of `alias.collision`: it just routes a rejection code to
- * whatever plugin registered for it.
+ * `rejectionToastFacet`. Core (`extensions/processorRejectionToast`) stays
+ * ignorant of `alias.collision`: it just renders whatever the registered
+ * contribution returns, inside its own `showCustom` envelope.
  */
 import { createElement } from 'react'
 import type { ProcessorRejection } from '@/data/api'
 import type { Repo } from '@/data/repo'
-import { showCustom, showError } from '@/utils/toast.js'
-import type { RejectionToastContribution } from '@/extensions/processorRejectionToast.js'
+import type { RejectionToastContribution } from '@/extensions/core.js'
 import { AliasCollisionToast } from './AliasCollisionToast.tsx'
 
 interface AliasCollisionMeta {
@@ -53,13 +52,11 @@ const truncate = (s: string, n: number): string =>
 /** `rejectionToastFacet` contribution for `alias.collision`. */
 export const aliasCollisionRejectionToast: RejectionToastContribution = {
   code: 'alias.collision',
-  handle: (error: ProcessorRejection, repo: Repo): void => {
+  render: (error: ProcessorRejection, repo: Repo, toastId: string | number) => {
     if (!isAliasCollisionMeta(error.meta)) {
       // Defensive: meta shape mismatch shouldn't happen since both ends
-      // are in this repo, but if it does we fall back to the raw message
-      // rather than crashing.
-      showError(error.message)
-      return
+      // are in this repo. Show the raw message rather than crashing.
+      return createElement('span', null, error.message)
     }
     const {
       alias,
@@ -83,20 +80,17 @@ export const aliasCollisionRejectionToast: RejectionToastContribution = {
     const message = offerMerge
       ? `Alias "${alias}" is already used by ${displayTitle}. Your edit was reverted — try a different name or merge with the existing page.`
       : `Alias "${alias}" is already used by ${displayTitle}. Nothing was created — try a different name.`
-    showCustom(
-      id => createElement(AliasCollisionToast, {
-        toastId: id,
-        message,
-        alias,
-        attemptedOn,
-        conflictingBlockId,
-        conflictingBlockTitle,
-        workspaceId,
-        dropSourceAliases,
-        offerMerge,
-        repo,
-      }),
-      {duration: 12000},
-    )
+    return createElement(AliasCollisionToast, {
+      toastId,
+      message,
+      alias,
+      attemptedOn,
+      conflictingBlockId,
+      conflictingBlockTitle,
+      workspaceId,
+      dropSourceAliases,
+      offerMerge,
+      repo,
+    })
   },
 }

@@ -11,7 +11,7 @@
  */
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
-import { rejectionToastFacet } from '@/extensions/processorRejectionToast.js'
+import { rejectionToastFacet } from '@/extensions/core.js'
 import { aliasDataExtension } from './dataExtension.ts'
 import { aliasCollisionRejectionToast } from './rejectionToast.tsx'
 

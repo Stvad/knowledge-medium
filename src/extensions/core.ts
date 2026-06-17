@@ -1,7 +1,8 @@
-import { defineFacet } from '@/facets/facet.js'
+import { defineFacet, keyedMapFacet } from '@/facets/facet.js'
 import type { FacetRuntime } from '@/facets/facet.js'
 import type { Repo } from '../data/repo'
 import type { Block } from '../data/block'
+import type { ProcessorRejection } from '@/data/api'
 import {
   ActionConfig,
   ActionContextConfig,
@@ -9,7 +10,7 @@ import {
   type ActionTransform,
 } from '@/shortcuts/types.js'
 import { BlockRenderer, RendererRegistry } from '@/types.js'
-import type { ComponentType } from 'react'
+import type { ComponentType, ReactElement } from 'react'
 
 export interface AppEffectContext {
   repo: Repo
@@ -182,6 +183,25 @@ export const appMountsFacet = defineFacet<AppMountContribution, readonly AppMoun
   id: 'core.app-mounts',
   validate: isAppMountContribution,
 })
+
+/** A plugin's toast for a `ProcessorRejection` code it emits. The plugin
+ *  owns the body (copy, actions); core owns the imperative envelope
+ *  (`showCustom`, duration) and the unknown-code fallback — see
+ *  `extensions/processorRejectionToast`. Keyed by `code` (last-wins). */
+export interface RejectionToastContribution {
+  /** `ProcessorRejection.code` this renderer handles. */
+  code: string
+  /** Toast body for `error`. `toastId` lets the body dismiss itself;
+   *  `repo` lets action buttons dispatch. Returning an element for
+   *  malformed meta (rather than throwing) keeps a can't-happen case
+   *  visible. */
+  render: (error: ProcessorRejection, repo: Repo, toastId: string | number) => ReactElement
+}
+
+export const rejectionToastFacet = keyedMapFacet<RejectionToastContribution>(
+  'core.rejection-toasts',
+  c => c.code,
+)
 
 export const isPanelMountContribution = (value: unknown): value is PanelMountContribution =>
   isRecord(value) &&

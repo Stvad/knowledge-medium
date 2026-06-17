@@ -1,50 +1,47 @@
 /**
- * Generic routing of `ProcessorRejection` (thrown from `repo.tx` and
- * surfaced via `repo.onUserError`) to the toast layer.
+ * Generic routing of `ProcessorRejection` (thrown from `repo.tx`, fanned
+ * out via `repo.onUserError`) to the toast layer.
  *
  * Core stays ignorant of any specific rejection: a plugin that emits a
  * `ProcessorRejection {code}` contributes a `rejectionToastFacet` entry
- * for that code (see `@/plugins/alias/rejectionToast`), and the mount
- * below dispatches each rejection to its registered handler — falling
- * back to the raw message for codes nobody claimed. This inverts the
- * old design, where this module imported plugin-specific toasts directly.
+ * (see `@/plugins/alias/rejectionToast`); core just looks the code up and
+ * renders it, falling back to the raw message for codes nobody claimed.
  *
- * The mount lives in the app runtime (not Repo bootstrap) because that's
- * where the resolved facet is readable; toasts can't render before the
- * runtime mounts anyway (the `<Toaster/>` mount has the same lifetime —
- * see `toastAppMount.tsx`).
+ * Two-part wiring, because the subscriber must exist EARLY (the data layer
+ * fans rejections out from the moment the repo exists, incl. bootstrap
+ * writes) but the contributions only resolve once the app runtime is up:
+ *   - `surfaceProcessorRejection` is subscribed at repo construction
+ *     (`context/repo.tsx`). Before the runtime resolves, `activeContributions`
+ *     is empty, so early rejections still surface via the raw-message
+ *     fallback (and sonner queues them until the `<Toaster/>` mounts).
+ *   - `rejectionToastSyncEffect` (an `appEffectsFacet` contribution) keeps
+ *     `activeContributions` pointed at the resolved app runtime's facet,
+ *     so once the UI is up the rich plugin handlers take over. Re-runs on
+ *     runtime swap; same module-state-synced-by-effect pattern as
+ *     `runAction`'s dispatcher and theme-toggle's registry.
  */
-import { useEffect } from 'react'
 import type { ProcessorRejection } from '@/data/api'
 import type { Repo } from '@/data/repo'
-import { keyedMapFacet, type AppExtension } from '@/facets/facet.js'
+import {
+  appEffectsFacet,
+  rejectionToastFacet,
+  type AppEffect,
+  type RejectionToastContribution,
+} from './core.ts'
+import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
-import { appMountsFacet } from './core.ts'
-import { useRepo } from '@/context/repo.js'
-import { useAppRuntime } from '@/extensions/runtimeContext.js'
-import { showError } from '@/utils/toast.js'
+import { showCustom, showError } from '@/utils/toast.js'
 
-/** Plugin-contributed handler for the rejection `code` it emits. Owns the
- *  whole user-facing presentation (copy, custom toast body, duration), so
- *  core never learns a specific rejection's shape. */
-export interface RejectionToastContribution {
-  /** `ProcessorRejection.code` this handler surfaces. */
-  code: string
-  /** Show the toast for `error`. `repo` is supplied so action buttons
-   *  (navigate, merge, …) can dispatch without each handler capturing it. */
-  handle: (error: ProcessorRejection, repo: Repo) => void
-}
+/** Rejection toasts stay up longer than a transient notice — they're
+ *  actionable (open / merge / pick a new name). */
+const REJECTION_TOAST_DURATION_MS = 12000
 
-export const rejectionToastFacet = keyedMapFacet<RejectionToastContribution>(
-  'core.rejectionToasts',
-  c => c.code,
-)
-
-/** Dispatch one rejection to the handler contributed for its `code`. An
- *  unknown code falls back to the raw message — better than swallowing
- *  silently; any new processor that throws `ProcessorRejection` surfaces
- *  SOMETHING until a plugin contributes a tailored handler. Pure (no
- *  React) so the routing contract is unit-testable. */
+/** Dispatch one rejection to the renderer contributed for its `code`,
+ *  wrapping it in `showCustom`. An unknown code falls back to the raw
+ *  message — better than swallowing silently; any new processor that
+ *  throws `ProcessorRejection` surfaces SOMETHING until a plugin
+ *  contributes a tailored toast. Pure (takes the contributions map) so
+ *  the routing contract is unit-testable. */
 export const routeProcessorRejection = (
   error: ProcessorRejection,
   repo: Repo,
@@ -55,32 +52,41 @@ export const routeProcessorRejection = (
     showError(error.message)
     return
   }
-  contribution.handle(error, repo)
+  showCustom(
+    id => contribution.render(error, repo, id),
+    {duration: REJECTION_TOAST_DURATION_MS},
+  )
 }
 
-/** Invisible app-mount that wires `repo.onUserError` to the contributed
- *  handlers. Re-subscribes when the runtime swaps so a freshly
- *  toggled-in plugin's handler is picked up. */
-const ProcessorRejectionToastMount = (): null => {
-  const repo = useRepo()
-  const runtime = useAppRuntime()
-  useEffect(
-    () => repo.onUserError(error =>
-      routeProcessorRejection(error, repo, runtime.read(rejectionToastFacet)),
-    ),
-    [repo, runtime],
-  )
-  return null
+/** Contributions resolved from the live app runtime. Empty until
+ *  `rejectionToastSyncEffect` runs (i.e. during bootstrap), which is why
+ *  `routeProcessorRejection` falls back to the raw message then. */
+let activeContributions: ReadonlyMap<string, RejectionToastContribution> = new Map()
+
+/** Subscribed once at repo construction (`context/repo.tsx`). Reads the
+ *  effect-synced snapshot so a single early subscriber covers both the
+ *  bootstrap window (raw-message fallback) and normal operation (rich
+ *  plugin toasts). */
+export const surfaceProcessorRejection = (error: ProcessorRejection, repo: Repo): void =>
+  routeProcessorRejection(error, repo, activeContributions)
+
+/** Keeps `activeContributions` synced to the resolved app runtime's
+ *  `rejectionToastFacet`. An app effect (not a mount) because there's no
+ *  UI to render — the effect runner hands us the runtime and runs the
+ *  returned cleanup on dispose / re-run. */
+export const rejectionToastSyncEffect: AppEffect = {
+  id: 'core.rejection-toast-sync',
+  start: ({runtime}) => {
+    activeContributions = runtime.read(rejectionToastFacet)
+    return () => { activeContributions = new Map() }
+  },
 }
 
 export const processorRejectionToastExtension: AppExtension = systemToggle({
   id: 'system:processor-rejection-toast',
   name: 'Transaction-error toasts',
-  description: 'Surfaces rejected transactions (e.g. alias collisions) as toasts. Disabling silently drops them.',
+  description: 'Renders rejected transactions (e.g. alias collisions) as their rich toasts. Disabling falls back to plain error messages.',
   essential: true,
 }).of([
-  appMountsFacet.of(
-    {id: 'core.processor-rejection-toast', component: ProcessorRejectionToastMount},
-    {source: 'core'},
-  ),
+  appEffectsFacet.of(rejectionToastSyncEffect, {source: 'core'}),
 ])

@@ -9,6 +9,7 @@ import { User } from '@/types.js'
 import { memoize } from 'lodash'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
+import { surfaceProcessorRejection } from '@/extensions/processorRejectionToast.js'
 
 // Memoize on (userId, useRemoteSync) so toggling local-only doesn't reuse a
 // previously-connected repo. In practice the toggle is followed by a reload
@@ -34,10 +35,16 @@ const initRepo = memoize(
       safeMode: false,
       generation: 'repo-bootstrap',
     }))
-    // `repo.onUserError` → toast routing is wired by the app-layer
-    // `processorRejectionToastExtension` mount (it reads the resolved
-    // app runtime to find each rejection code's contributed handler),
-    // not here — keeps this bootstrap free of any UI/plugin knowledge.
+    // Subscribe at bootstrap so user-surfaceable errors from any
+    // `repo.tx` call site (mutators, palette actions, bootstrap writes)
+    // route through the toast layer from the moment the repo exists. The
+    // subscriber is a GENERIC router (no plugin knowledge): it reads the
+    // contributions snapshot that `rejectionToastSyncEffect` keeps in
+    // sync with the app runtime, so per-rejection toasts come from plugin
+    // contributions, while early/bootstrap rejections still surface via
+    // the raw-message fallback (the snapshot is empty until the runtime
+    // resolves). The Repo is a process singleton; we don't unsubscribe.
+    repo.onUserError(error => surfaceProcessorRejection(error, repo))
     return repo
   },
   (user, useRemoteSync) => `${user.id}:${useRemoteSync ? 'remote' : 'local'}`,
