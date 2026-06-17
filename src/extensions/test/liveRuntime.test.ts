@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { defineFacet, resolveFacetRuntimeSync } from '@/facets/facet.js'
+import { defineFacet, FacetRuntime, resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { appEffectsFacet, type AppEffect } from '@/extensions/core.js'
 import { EffectReconciler, LiveRuntimeHandle } from '@/extensions/liveRuntime.js'
 import type { Repo } from '@/data/repo'
@@ -76,6 +76,50 @@ describe('LiveRuntimeHandle', () => {
     const second = resolveFacetRuntimeSync([labels.of('b')])
     handle.setCurrent(second)
     expect(second.read(out)).toBe('b')
+  })
+
+  it('exposes the current runtime context, live across swaps', () => {
+    const first = resolveFacetRuntimeSync([])
+    const handle = new LiveRuntimeHandle(first)
+    expect(handle.context).toBe(first.context)
+
+    const second = resolveFacetRuntimeSync([])
+    handle.setCurrent(second)
+    expect(handle.context).toBe(second.context) // delegates, not frozen at construction
+  })
+
+  it('setCurrent is a no-op when passed the runtime already current', () => {
+    const rt = resolveFacetRuntimeSync([labels.of('a')])
+    const handle = new LiveRuntimeHandle(rt)
+    const fired = vi.fn()
+    handle.onFacetChange(labels.id, fired)
+
+    handle.setCurrent(rt) // same runtime already installed
+    expect(fired).not.toHaveBeenCalled() // no re-fire / re-subscribe churn
+  })
+
+  it('adoptDurableContributionsFrom throws — the handle is never a swap target', () => {
+    const handle = new LiveRuntimeHandle(resolveFacetRuntimeSync([]))
+    expect(() => handle.adoptDurableContributionsFrom()).toThrow(/not supported/)
+  })
+
+  // Guards the subclass seam: LiveRuntimeHandle owns no contribution state,
+  // so any *public* FacetRuntime method it forgets to override would
+  // silently serve dead inherited storage. FacetRuntime's `private` helpers
+  // (TS-private = runtime-visible) are only called by its own public
+  // methods; since the handle overrides every public method to delegate to
+  // `current`, those base methods — and thus these helpers — never run on
+  // the handle. They're listed as known-unreachable; anything else new must
+  // be overridden.
+  it('overrides every public FacetRuntime method', () => {
+    const internalHelpers = new Set([
+      'collectContributions', 'markDurable', 'unmarkDurable', 'notifyFacetListeners',
+    ])
+    const publicMethods = Object.getOwnPropertyNames(FacetRuntime.prototype)
+      .filter(name => name !== 'constructor' && !internalHelpers.has(name))
+    const handleOwn = new Set(Object.getOwnPropertyNames(LiveRuntimeHandle.prototype))
+    const notOverridden = publicMethods.filter(name => !handleOwn.has(name))
+    expect(notOverridden).toEqual([])
   })
 })
 
@@ -161,6 +205,70 @@ describe('EffectReconciler', () => {
     r.reconcile(repo, runtimeWith([{ id: 'e', start: () => cleanup }]), 'ws', false)
     r.dispose()
     expect(cleanup).toHaveBeenCalledTimes(1)
+  })
+
+  // Provider drives this on workspace → null → workspace: the cleared
+  // workspace disposes, then a restored one reconciles again. The second
+  // reconcile must restart against a fresh handle, not resume the disposed
+  // run (capturedCtx was nulled).
+  it('reconcile → dispose → reconcile restarts effects against a fresh handle', () => {
+    const cleanup = vi.fn()
+    const start = vi.fn(() => cleanup)
+    const effect: AppEffect = { id: 'e', start }
+    const r = new EffectReconciler()
+
+    r.reconcile(repo, runtimeWith([effect]), 'ws', false)
+    r.dispose() // workspace cleared
+    expect(cleanup).toHaveBeenCalledTimes(1)
+
+    r.reconcile(repo, runtimeWith([effect]), 'ws', false) // workspace restored
+    expect(start).toHaveBeenCalledTimes(2) // started fresh, not resumed
+  })
+
+  it('duplicate effect id: the last contribution wins and warns', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const firstStart = vi.fn(() => () => {})
+    const lastStart = vi.fn()
+    const r = new EffectReconciler()
+
+    r.reconcile(repo, runtimeWith([
+      { id: 'dup', start: firstStart },
+      { id: 'dup', start: lastStart },
+    ]), 'ws', false)
+
+    expect(lastStart).toHaveBeenCalledTimes(1) // last-wins, per facet convention
+    expect(firstStart).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('duplicate effect id "dup"'))
+    warn.mockRestore()
+  })
+
+  it('runs a late async cleanup immediately when the effect was stopped before start resolved', async () => {
+    const cleanup = vi.fn()
+    let resolveStart!: (c: () => void) => void
+    const start = vi.fn(() => new Promise<() => void>(res => { resolveStart = res }))
+    const r = new EffectReconciler()
+
+    r.reconcile(repo, runtimeWith([{ id: 'async', start }]), 'ws', false)
+    r.reconcile(repo, runtimeWith([]), 'ws', false) // removed before start resolved → stopped
+
+    resolveStart(cleanup)
+    await new Promise(res => setTimeout(res, 0)) // flush the start promise's .then
+
+    expect(cleanup).toHaveBeenCalledTimes(1) // not stranded — torn down on resolve
+  })
+
+  it('a throwing cleanup does not prevent the rest of stopAll', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const order: string[] = []
+    const r = new EffectReconciler()
+    r.reconcile(repo, runtimeWith([
+      { id: 'a', start: () => () => { order.push('a') } },
+      { id: 'b', start: () => () => { order.push('b'); throw new Error('boom') } },
+    ]), 'ws', false)
+
+    expect(() => r.dispose()).not.toThrow()
+    expect(order).toEqual(['b', 'a']) // LIFO; b throwing didn't abort a's teardown
+    error.mockRestore()
   })
 
   // The reverted #152 regression: a kept effect that captured its

@@ -25,7 +25,6 @@ import {
   FacetRuntime,
   type Facet,
   type FacetContribution,
-  type FacetResolveContext,
   type RuntimeSourceId,
 } from '@/facets/facet.js'
 import {
@@ -71,6 +70,17 @@ export class LiveRuntimeHandle extends FacetRuntime {
   constructor(initial: FacetRuntime) {
     super(initial.context, [])
     this.current = initial
+    // Callers that consult `runtime.context` (e.g. generation bumps read
+    // off the context on toggle) must see the *current* runtime's context,
+    // not a snapshot frozen at construction. Replace the data property the
+    // super constructor set with an accessor that delegates to `current`,
+    // so the value stays live across swaps without `setCurrent` having to
+    // cast away `readonly` and repoint it.
+    Object.defineProperty(this, 'context', {
+      get: () => this.current.context,
+      enumerable: true,
+      configurable: true,
+    })
   }
 
   override read<Input, Output>(facet: Facet<Input, Output>): Output {
@@ -144,10 +154,8 @@ export class LiveRuntimeHandle extends FacetRuntime {
   setCurrent(next: FacetRuntime): void {
     if (next === this.current) return
     this.current = next
-    // FacetRuntime.context is readonly at the type level, but the live
-    // handle must reflect the current runtime's context (e.g. generation
-    // bumps on toggle) for callers that read `runtime.context`.
-    ;(this as { context: FacetResolveContext }).context = next.context
+    // `context` delegates to `current` via the constructor accessor, so it
+    // already reflects `next` — nothing to repoint here.
 
     // Replay transient buckets so a kept effect's contributions survive
     // the swap (it won't re-push them — it isn't restarted).
@@ -258,10 +266,20 @@ export class EffectReconciler {
       this.capturedCtx.safeMode !== safeMode
 
     const effects = runtime.read(appEffectsFacet)
-    // First contribution wins per id (matches the start loop below).
+    // Dedup by id, last-wins with a warn — matching the repo-wide facet
+    // convention (mutatorsFacet / typesFacet / … all warn + last-wins).
+    // The override idiom plugin authors are taught is "register after the
+    // kernel to replace it"; a silent first-wins here would drop their
+    // override with no signal. Duplicate effect ids are a misconfiguration
+    // either way, so we keep the last contribution and warn.
     const nextById = new Map<string, AppEffect>()
     for (const effect of effects) {
-      if (!nextById.has(effect.id)) nextById.set(effect.id, effect)
+      if (nextById.has(effect.id)) {
+        console.warn(
+          `[appEffectsFacet] duplicate effect id "${effect.id}"; last-wins per facet convention`,
+        )
+      }
+      nextById.set(effect.id, effect)
     }
 
     if (ctxChanged) {
@@ -291,7 +309,9 @@ export class EffectReconciler {
     }
 
     const live = this.liveRuntime!
-    for (const effect of effects) {
+    // Iterate the deduped winners (last-wins), not the raw array — starting
+    // the array's first occurrence would contradict the dedup above.
+    for (const effect of nextById.values()) {
       if (this.started.has(effect.id)) continue
       this.started.set(
         effect.id,

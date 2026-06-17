@@ -49,6 +49,32 @@ export type WorkspaceLandingResolver = (
 
 export type AppEffectCleanup = () => void | Promise<void>
 
+/**
+ * A long-lived side-effect (subscription, interval, window listener, the
+ * agent-runtime bridge) tied to the extension lifecycle. `start` runs once
+ * when the effect first appears and returns an optional cleanup.
+ *
+ * Lifecycle contract — the reconciler restarts (cleanup + re-`start`) an
+ * effect only when:
+ *   1. `repo` / `workspaceId` / `safeMode` change (values `start` captures
+ *      directly, not through the runtime), or
+ *   2. the effect's *contribution object identity* changes — i.e. a
+ *      different `AppEffect` reference is registered under the same `id`.
+ *
+ * Otherwise the effect keeps running across runtime swaps (extension
+ * toggles, dynamic-plugin loads); the `runtime` it received is a live
+ * handle that re-points itself at the fresh runtime, so `read` /
+ * `onFacetChange` / `setRuntimeContributions` stay valid without a restart.
+ *
+ * This means the AppEffect object MUST be a stable reference across
+ * resolves unless its code actually changed. Build it once at module scope
+ * (or memoize it); do NOT construct `{id, start}` inline inside a
+ * function-valued extension, and for dynamic extensions export an array,
+ * not a function — a fresh object every resolve reads as "identity
+ * changed" and silently restarts the effect on every unrelated swap.
+ * Duplicate `id`s are last-wins with a warn (per the facet convention).
+ * Cleanup must be idempotent and fast.
+ */
 export interface AppEffect {
   id: string
   start: (
