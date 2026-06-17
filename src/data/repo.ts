@@ -1245,7 +1245,16 @@ export class Repo {
    *  `sourceId`. Triggers a re-run of every rebuild step whose declared
    *  inputs include this facet, plus per-facet listener fan-out for React
    *  subscribers (e.g. usePropertySchemas). Throws if no FacetRuntime has
-   *  been installed yet — callers must setFacetRuntime first. */
+   *  been installed yet — callers must setFacetRuntime first.
+   *
+   *  OWNERSHIP CONTRACT: the bucket is DURABLE — it survives `setFacetRuntime`
+   *  swaps via `FacetRuntime.adoptDurableContributionsFrom`, and the Repo is a
+   *  per-user singleton reused across workspace switches. A writer that owns a
+   *  workspace-scoped bucket (e.g. `UserSchemasService` / `UserTypesService`)
+   *  MUST clear it — `setRuntimeContributions(facet, sourceId, [])` — when it
+   *  tears down on a workspace switch, or the previous workspace's data is
+   *  adopted into the next workspace's runtime until the new bucket rebuilds.
+   *  (This is the leak fixed in `UserSchemasService.dispose`.) */
   setRuntimeContributions<Input>(
     facet: Facet<Input, unknown>,
     sourceId: string,

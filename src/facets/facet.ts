@@ -263,7 +263,12 @@ export class FacetRuntime {
    *  only durable buckets are carried forward, so transient effect-owned
    *  buckets can't strand. Caches for the touched facets are
    *  invalidated; no listeners fire (a fresh runtime has none yet — the
-   *  bridge runs its rebuild steps after this call). */
+   *  bridge runs its rebuild steps after this call).
+   *
+   *  Carry-forward is unconditional, so a writer that owns a workspace-scoped
+   *  durable bucket must clear it on teardown (see the ownership contract on
+   *  `Repo.setRuntimeContributions`) — otherwise its data is adopted into the
+   *  next workspace's runtime on the per-user Repo singleton. */
   adoptDurableContributionsFrom(previous: FacetRuntime): void {
     for (const [facetId, durableSources] of previous.durableRuntimeSources) {
       const prevBuckets = previous.runtimeContributionsByFacet.get(facetId)
