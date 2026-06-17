@@ -136,6 +136,27 @@ describe('references.inlineDeletedBlockReferences', () => {
     ]))
   })
 
+  it('inlines an embed of a block-with-children as the root content only, not the subtree', async () => {
+    // Decision: `!((id))` renders the whole subtree, but on delete we inline
+    // only the deleted block's own content line — the subtree is deleted too,
+    // and dumping its flat text into the referrer is not what we want.
+    await env.repo.tx(async tx => {
+      await tx.create({id: D, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'ROOT'})
+      await tx.create({id: C, workspaceId: WS, parentId: D, orderKey: 'a0', content: 'CHILD'})
+      await tx.create({
+        id: 'x', workspaceId: WS, parentId: null, orderKey: 'a1',
+        content: `embed !((${D}))`,
+        references: [{id: D, alias: D}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    await env.repo.mutate.delete({id: D})
+
+    expect(env.read('x')!.content).toBe('embed ROOT')
+    expect(env.read('x')!.references).toEqual([])
+  })
+
   it('inlines refs to every block in a deleted subtree (parent and child)', async () => {
     await env.repo.tx(async tx => {
       await tx.create({id: D, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'PARENT'})
