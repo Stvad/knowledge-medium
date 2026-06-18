@@ -444,6 +444,16 @@ row_events_log (
       a batched append RPC, and the encrypt-on-upload hook covers the content-bearing columns. The
       block-state upload is untouched.
     </p>
+    <div class="warn">
+      <strong>Connector must demux by type first.</strong> The current upload loop feeds
+      <em>every</em> <code>ps_crud</code> entry into <code>compactBlockCrudEntries</code>, which
+      <code>throw</code>s on any <code>entry.table !== 'blocks'</code> — before the per-tx fallback
+      can apply anything. So a transaction that mixes a block edit with its provenance events would
+      jam the queue and retry forever. The connector has to <strong>partition crud entries by
+      <code>type</code> up front</strong> and route command/row-event entries down their own
+      append + encrypt path, around block compaction. This is a precondition of the new
+      <code>type</code>, not an afterthought.
+    </div>
 
     <h2 id="history">7. Relationship to <code>blocks_history</code></h2>
     <p>
@@ -489,6 +499,17 @@ row_events_log (
         <strong>Server stays blind on E2EE.</strong> The server can't classify or query encrypted
         events; only devices benefit. Accepted — it matches the E2EE design's "server sees only
         ciphertext" posture. Plaintext workspaces get full server-side queryability.
+      </li>
+      <li>
+        <strong>Skipped deterministic creates desync the log.</strong> A local <code>create</code>
+        <code>row_event</code> is recorded before upload, but <code>applyBlockCreates</code> uses
+        insert-or-skip (<code>ignoreDuplicates: true</code>) for deterministic-id collisions — the
+        fresh-client user-prefs / user-page / ui-state bootstrap. There the block create is
+        <em>skipped</em> server-side (the row already exists) while the append log would still claim
+        a <code>kind='create'</code> that never landed. So "the server log is the complete history
+        of how the server graph came to be" needs a qualifier: these no-op creates must be filtered
+        (e.g. don't ship <code>create</code> events for deterministic-id rows, or reconcile against
+        the upload result), or the log records creates the server never performed.
       </li>
       <li>
         <strong>Partial-failure semantics.</strong> The event upload and the block-state upload are
