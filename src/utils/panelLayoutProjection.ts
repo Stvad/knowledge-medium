@@ -10,7 +10,7 @@ import {
   topLevelBlockIdProp,
 } from '@/data/properties'
 import { hasBlockType } from '@/data/properties'
-import { keyAtEnd, keyBetween, keysBetween } from '@/data/orderKey'
+import { keyAfterIndex, keyAtEnd, keyBetween, keysBetween } from '@/data/orderKey'
 import {
   buildLayoutFromSlots,
   parseLayout,
@@ -260,11 +260,13 @@ export const insertPanelRow = async (
     const sourceIndex = options.afterPanelId
       ? siblings.findIndex(row => row.id === options.afterPanelId)
       : -1
-    const previous = sourceIndex >= 0 ? siblings[sourceIndex] : siblings.at(-1)
-    const next = sourceIndex >= 0 ? siblings[sourceIndex + 1] : undefined
+    // Tie-safe (#198/#182): when the source panel shares an order_key with its
+    // next sibling, `keyAfterIndex` widens past the tied run to the next
+    // distinct key instead of `keyBetween(equal, equal)` throwing and rolling
+    // back the insert. Non-tie inputs reduce to the previous keyBetween bounds.
     const orderKey = sourceIndex >= 0
-      ? keyBetween(previous?.orderKey ?? null, next?.orderKey ?? null)
-      : keyAtEnd(previous?.orderKey ?? null)
+      ? keyAfterIndex(siblings.map(row => row.orderKey), sourceIndex)
+      : keyAtEnd(siblings.at(-1)?.orderKey ?? null)
 
     const panelId = await createPanelRowInTx(repo, tx, {
       workspaceId: parent.workspaceId,

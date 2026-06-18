@@ -16,6 +16,7 @@ import {
   PanelLayoutProjection,
   applyCurrentLayoutUrl,
   createPanelRowInTx,
+  insertPanelRow,
   layoutBlockIdsFromRows,
   layoutSlotsFromRows,
   panelBlockIds,
@@ -306,6 +307,29 @@ describe('retargetPanelBlockIds', () => {
       scrollTop: 42,
     })
     expect(panelHistory.getSnapshot(row.id).forward.map(entry => entry.blockId)).toEqual(['source'])
+  })
+})
+
+describe('insertPanelRow', () => {
+  it('inserts after a panel tied with its next sibling without throwing (#198)', async () => {
+    // Two panels share an order_key ('a1'); a third sits after at 'a2'. Inserting
+    // after the first tied panel used keyBetween(equal, equal), which threw
+    // "<key> >= <key>" and rolled back the insert. keyAfterIndex widens past the
+    // tied run instead.
+    const parent = layoutSessionBlock()
+    await env.repo.tx(async tx => {
+      await createPanelRowInTx(env.repo, tx, {workspaceId: WS, parentId: parent.id, orderKey: 'a1', blockId: 'b1'})
+      await createPanelRowInTx(env.repo, tx, {workspaceId: WS, parentId: parent.id, orderKey: 'a1', blockId: 'b2'})
+      await createPanelRowInTx(env.repo, tx, {workspaceId: WS, parentId: parent.id, orderKey: 'a2', blockId: 'b3'})
+    }, {scope: ChangeScope.UiState, description: 'seed tied panels'})
+
+    // The two tied panels render first (by id tiebreak); pick whichever sorts
+    // first so its NEXT sibling is the tied one — that's the equal-bounds case.
+    const seeded = (await rows()).map(row => row.id)
+    const newId = await insertPanelRow(env.repo, parent, 'b4', {afterPanelId: seeded[0]})
+
+    // Lands after the tied run, before the 'a2' panel — nothing rolled back.
+    expect((await rows()).map(row => row.id)).toEqual([seeded[0], seeded[1], newId, seeded[2]])
   })
 })
 
