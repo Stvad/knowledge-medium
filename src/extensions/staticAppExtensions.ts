@@ -55,8 +55,23 @@ const pluginModules = import.meta.glob<PluginModule>(
 const resolvePlugins = ({repo}: {repo: Repo}): AppExtension[] =>
   Object.entries(pluginModules)
     // Glob keys are alphabetical; sort by explicit order first, falling back
-    // to path so the result is stable and deterministic.
-    .map(([path, mod]) => ({path, plugin: mod.default, order: mod.pluginOrder ?? 0}))
+    // to path so the result is stable and deterministic. NOTE: because the
+    // default is alphabetical, keyed/last-wins facet collisions (a renderer
+    // id, action id, or value preset contributed by two plugins) now resolve
+    // by (pluginOrder, path) — set an explicit `pluginOrder` on the plugin
+    // that must win rather than relying on its path sorting later.
+    .map(([path, mod]) => {
+      // A missing default export would otherwise vanish silently from the
+      // assembled app — fail loudly, naming the offending module instead.
+      if (!mod.default) {
+        throw new Error(
+          `Plugin "${path}" has no default export — every ` +
+          `plugins/<name>/index.{ts,tsx} must \`export default\` its ` +
+          `AppExtension (or a ({repo}) => AppExtension factory).`,
+        )
+      }
+      return {path, plugin: mod.default, order: mod.pluginOrder ?? 0}
+    })
     .sort((a, b) => a.order - b.order || a.path.localeCompare(b.path))
     // A function default is a `({repo}) => AppExtension` factory (no plugin is
     // a bare resolve-time function-node), so call it with `{repo}`; everything

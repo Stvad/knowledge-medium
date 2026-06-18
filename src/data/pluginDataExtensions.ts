@@ -41,4 +41,16 @@ const modules = import.meta.glob<AppExtension>('/src/plugins/*/dataExtension.ts'
 })
 
 export const pluginDataExtensions: readonly AppExtension[] =
-  Object.values(modules).filter((ext): ext is AppExtension => Boolean(ext))
+  Object.entries(modules).map(([path, ext]) => {
+    // A `dataExtension.ts` with no default export would otherwise vanish
+    // silently from the data layer (its local schema, processors, and types
+    // would simply never register) — fail loudly, naming the module instead.
+    if (!ext) {
+      throw new Error(
+        `Data extension "${path}" has no default export — every ` +
+        `plugins/<name>/dataExtension.ts must \`export default\` its data ` +
+        `AppExtension.`,
+      )
+    }
+    return ext
+  })
