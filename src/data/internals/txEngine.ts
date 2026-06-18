@@ -409,7 +409,13 @@ export class TxImpl implements Tx {
     // BEFORE UPDATE trigger also enforces this, but only at write time
     // (after the walk), so the explicit preflight is what keeps the error
     // ordering stable.
-    if (target.parentId !== null && parent?.deleted) {
+    //
+    // Gated on `!before.deleted` to match the trigger exactly: it fires only
+    // for `NEW.deleted = 0`, deliberately allowing a tombstone to be
+    // reparented under another tombstone (`move` never changes `deleted`, so
+    // a soft-deleted row stays soft-deleted). The cycle walk below still runs
+    // for deleted rows.
+    if (!before.deleted && target.parentId !== null && parent?.deleted) {
       throw new ParentDeletedError(target.parentId)
     }
 

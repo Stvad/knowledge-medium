@@ -570,6 +570,26 @@ describe('tx.move (cycle validation, §4.7 Layer 1)', () => {
     expect(env.cache.getSnapshot('mv-B')!.parentId).toBe('mv-A')
   })
 
+  it('allows reparenting a tombstone under a soft-deleted parent (matches the NEW.deleted=0 trigger)', async () => {
+    // The parent-deleted preflight must not tighten move beyond the storage
+    // invariant: the trigger only rejects live rows (NEW.deleted=0), so a
+    // tombstone may be parked under another tombstone. Soft-delete both C and
+    // (separately) a root sibling X, then move the tombstoned X under C.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'mv-X', workspaceId: 'ws-1', parentId: 'mv-root', orderKey: 'b0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(async tx => {
+      await tx.delete('mv-C')
+      await tx.delete('mv-X')
+    }, {scope: ChangeScope.BlockDefault})
+
+    await env.repo.tx(
+      tx => tx.move('mv-X', {parentId: 'mv-C', orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    expect(env.cache.getSnapshot('mv-X')).toMatchObject({parentId: 'mv-C', deleted: true})
+  })
+
   it('restoring a node never exposes a live cycle (issue #183)', async () => {
     // Same setup: B soft-deleted, the cycle-creating move rejected above. Once
     // the guard holds, restoring B brings back the original acyclic structure
