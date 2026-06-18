@@ -1,6 +1,6 @@
 ---
-name: adversarial-review
-description: Launch N parallel adversarial review agents that try to break the work done so far in this session, each from a different inferred perspective. Use when the user wants a multi-angle critique of the current session's changes (code or design/docs) before committing/shipping — e.g. "/adversarial-review 4". The number argument sets how many agents (and how many distinct perspectives) to run; default 2.
+name: areview
+description: Launch N parallel adversarial review agents that try to break the work done so far in this session, each from a different inferred perspective. Use when the user wants a multi-angle critique of the current session's changes (code or design/docs) before committing/shipping — e.g. "/areview 4". The number argument sets how many agents (and how many distinct perspectives) to run; default 2.
 ---
 
 # Adversarial review of the current session
