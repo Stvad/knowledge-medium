@@ -900,6 +900,23 @@ describe('tied order_key siblings (A1)', () => {
     expect(order.indexOf('T1')).toBeLessThan(order.indexOf('T2'))
   })
 
+  it('split in the MIDDLE of a 3-member tied run keeps the prefix in place without reordering successors', async () => {
+    // Splitting a block in the middle of a tied run must drop the prefix
+    // immediately before it and leave the tied successors after it. Re-keying
+    // only the split block past the whole run would shove it (and the prefix)
+    // past its tied successors, visibly reordering unrelated siblings.
+    await rawInsert('root', null, 'a0')
+    await rawInsert('Q1', 'root', 'a1', 'Q1')
+    await rawInsert('Q2', 'root', 'a1', 'Q2')
+    await rawInsert('Q3', 'root', 'a1', 'Q3')
+    await rawInsert('Q4', 'root', 'a2', 'Q4')
+    const newId = await env.repo.mutate.split({id: 'Q2', before: 'pre', after: 'suf'})
+    expect(env.read(newId)!.content).toBe('pre')
+    expect(env.read('Q2')!.content).toBe('suf')
+    // prefix lands immediately before Q2; Q3 stays after Q2; nothing reorders.
+    expect(await env.childIds('root')).toEqual(['Q1', newId, 'Q2', 'Q3', 'Q4'])
+  })
+
   it('a run of THREE tied siblings still inserts deterministically between them', async () => {
     await rawInsert('root', null, 'a0')
     await rawInsert('Q1', 'root', 'a1')

@@ -707,23 +707,38 @@ export const split = defineMutator<SplitArgs, string>({
     const ix = siblings.findIndex(s => s.id === id)
     const prev = ix >= 0 ? siblings[ix - 1] : undefined
 
-    // The prefix sibling must sort IMMEDIATELY before `self` — that's the one
-    // case (A1) "widen to the next distinct neighbour" can't satisfy: if `self`
-    // ties with its immediate predecessor there is no key strictly between
-    // them, and `keyBetween(prevKey, selfKey)` throws (rolling back and losing
-    // the typed split). Re-key `self` out of the tie first — bump it to a fresh
-    // key strictly above its tied run and below the next distinct sibling — so a
-    // strict gap exists for the prefix. `self` keeps its relative position (it
-    // was already the highest-id, hence last, member of that tied run on its
-    // side), so nothing visibly reorders.
-    let selfKey = self.orderKey
+    // The prefix sibling must sort IMMEDIATELY before `self` at its current
+    // position — that's the one case (A1) "widen to the next distinct
+    // neighbour" can't satisfy: if `self` ties with its immediate predecessor
+    // there is no key strictly between them, and `keyBetween(prevKey, selfKey)`
+    // throws (rolling back and losing the typed split). Break the tie by
+    // re-keying `self` AND its tied successors to fresh distinct keys just past
+    // the run (preserving their order), which opens a strict gap immediately
+    // before `self` for the prefix WITHOUT shoving `self` past those tied
+    // successors. Re-keying only `self` (anchored at the run's start) would skip
+    // the whole run and visibly reorder a mid-run split past its successors.
     if (prev !== undefined && prev.orderKey === self.orderKey) {
-      // `prev` defined ⇒ ix >= 1, so `ix - 1` (prev's index) is in range.
+      // `prev` defined ⇒ ix >= 1. Find the end of the tied run containing self.
+      let runEnd = ix
+      while (runEnd + 1 < siblings.length && siblings[runEnd + 1].orderKey === self.orderKey) {
+        runEnd++
+      }
+      // gap = [prefix, self, ...tiedSuccessors] — strictly between the run's key
+      // and the next distinct sibling, ascending. `self` (i === ix) and each
+      // successor get the upper keys in order; the prefix takes gap[0].
       const keys = siblings.map(s => s.orderKey)
-      selfKey = keyAfterIndex(keys, ix - 1)  // strictly above the tied run, below next distinct
-      await tx.move(id, {parentId: self.parentId, orderKey: selfKey})
+      const gap = keysAfterIndex(keys, ix, runEnd - ix + 2)
+      for (let i = ix; i <= runEnd; i++) {
+        await tx.move(siblings[i].id, {parentId: self.parentId, orderKey: gap[i - ix + 1]})
+      }
+      return tx.create({
+        workspaceId: self.workspaceId,
+        parentId: self.parentId,
+        orderKey: gap[0],
+        content: before,
+      })
     }
-    const orderKey = keyBetween(prev?.orderKey ?? null, selfKey)
+    const orderKey = keyBetween(prev?.orderKey ?? null, self.orderKey)
     return tx.create({
       workspaceId: self.workspaceId,
       parentId: self.parentId,
