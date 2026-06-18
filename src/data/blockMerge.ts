@@ -46,6 +46,11 @@ export const mergeBlocksInTx = async (
     aliasRewrites = [],
   }: MergeBlocksInTxArgs,
 ): Promise<void> => {
+  // Merging a block into itself would tombstone it (delete), double its
+  // content (read-after-delete via requireExisting), and orphan its children
+  // under the tombstone. Treat self-merge as a no-op.
+  if (into.id === from.id) return
+
   const intoChildren = await tx.childrenOf(into.id)
   const fromChildren = await tx.childrenOf(from.id)
   if (fromChildren.length > 0) {

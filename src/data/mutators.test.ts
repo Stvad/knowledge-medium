@@ -812,6 +812,22 @@ describe('core.merge', () => {
     expect(await env.childIds('p')).toEqual(['a'])
   })
 
+  it('treats self-merge (intoId === fromId) as a no-op', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'p', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await env.repo.mutate.createChild({parentId: 'p', id: 'x', content: 'foo'})
+    await env.repo.mutate.createChild({parentId: 'x', id: 'c', content: 'child'})
+    await env.repo.mutate.merge({intoId: 'x', fromId: 'x'})
+    // Block intact: not deleted, content not doubled, child still parented.
+    expect(env.read('x')!.deleted).toBe(false)
+    expect(env.read('x')!.content).toBe('foo')
+    expect(env.read('c')!.parentId).toBe('x')
+    expect(env.read('c')!.deleted).toBe(false)
+    expect(await env.childIds('x')).toEqual(['c'])
+  })
+
   it("re-parents source's children under the target so they aren't stranded", async () => {
     await env.repo.tx(
       tx => tx.create({id: 'p', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
