@@ -90,6 +90,21 @@ const encryptUploadOps = async (
   getMode: GetWorkspaceMode,
   getCek: GetCek,
 ): Promise<CompactedBlockOperation[]> => {
+  // The mode is constant per workspace, but a bulk upload (import,
+  // reprojection, long-offline drain) carries up to ~10k ops — each
+  // `getMode` is a synchronous localStorage read, so resolving it per op
+  // means thousands of main-thread reads + awaits for one value per
+  // workspace. Memoize per workspaceId (mirrors `materializabilityByWs` in
+  // syncObserver/materialize.ts).
+  const modeByWs = new Map<string, SyncMode>()
+  const resolveMode = async (workspaceId: string): Promise<SyncMode> => {
+    const cached = modeByWs.get(workspaceId)
+    if (cached !== undefined) return cached
+    const resolved = await getMode(workspaceId)
+    modeByWs.set(workspaceId, resolved)
+    return resolved
+  }
+
   const out: CompactedBlockOperation[] = []
   for (const op of ops) {
     if (op.kind === 'delete') {
@@ -101,7 +116,7 @@ const encryptUploadOps = async (
       out.push(op)
       continue
     }
-    const mode = await getMode(workspaceId)
+    const mode = await resolveMode(workspaceId)
     if (mode === 'none') {
       out.push(op)
       continue
