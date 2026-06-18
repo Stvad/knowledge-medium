@@ -8,8 +8,9 @@
  * `repo.mutate.<kernel>` / `repo.query.<kernel>` work immediately, and
  * every later `repo.setFacetRuntime(runtime)` REPLACES that install with
  * the merged kernel + plugin registry — so this extension must be
- * present in every runtime (it is, via `staticDataExtensions`) to keep
- * the kernel dispatch surfaces working after a swap.
+ * present in every runtime (it is, via `staticAppExtensions`, which the
+ * Repo install in `bootstrapWorkspace` and AppRuntimeProvider both
+ * resolve from) to keep the kernel dispatch surfaces working after a swap.
  *
  * Property schemas: the kernel descriptors live in `data/properties.ts`
  * (plain consts); this extension surfaces them through

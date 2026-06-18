@@ -37,9 +37,12 @@
  *     bullet on first-run workspaces).
  *
  * `dailyNotesDataExtension` (in `dataExtension.ts`) contributes the
- * `daily-note` block type via `typesFacet`. It's a separate export so
- * `staticDataExtensions.ts` can install it before the React app
- * mounts, alongside the kernel + other data-only plugins.
+ * `daily-note` block type via `typesFacet`. It's bundled into this
+ * plugin's toggle subtree below (the single definition); the Repo picks
+ * it up when `bootstrapWorkspace` installs the resolved
+ * `staticAppExtensions` runtime. Its local schema (the date index) lives in
+ * `./localSchema.ts` and is auto-discovered for the UI-free pre-observer DDL
+ * path via the `@/data/pluginLocalSchemas` glob.
  */
 import type { Repo } from '@/data/repo'
 import type { AppExtension } from '@/facets/facet.js'
@@ -146,13 +149,12 @@ export const openDailyNotePickerAction = (
 // without going through React context). Same shape as
 // `vimNormalModePlugin({repo})` / `defaultActionsExtension({repo})`.
 //
-// `dailyNotesDataExtension` is bundled here AND exported separately
-// for `staticDataExtensions` (the pre-React Repo bootstrap path).
-// AppRuntimeProvider rebuilds the FacetRuntime from `staticAppExtensions`
-// alone and calls `repo.setFacetRuntime(...)`, which REPLACES the
-// pre-mount registries. Without the data extension here, the
-// daily-note TypeContribution disappears after mount and any later
-// `getOrCreateDailyNote` / `ensureDailyNoteTarget` throws on
+// `dailyNotesDataExtension` is bundled into the toggle subtree below —
+// the single definition of this plugin's data. The Repo gets it when
+// `bootstrapWorkspace` (and later AppRuntimeProvider) resolves
+// `staticAppExtensions` and calls `repo.setFacetRuntime(...)`. Without it
+// here the daily-note TypeContribution would be absent and any
+// `getOrCreateDailyNote` / `ensureDailyNoteTarget` would throw on
 // `repo.addTypeInTx(DAILY_NOTE_TYPE)`. Same pattern as `todoPlugin`,
 // `backlinksPlugin`, `srsReschedulingPlugin`.
 // `spreadDatesAction.ts` calls `openDialog(SpreadDatesDialog)`, which
@@ -268,3 +270,5 @@ export {
   type DateScrubDraft,
   type DateScrubDraftPreview,
 } from './dateScrubGesture.ts'
+
+export default dailyNotesPlugin

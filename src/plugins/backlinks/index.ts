@@ -25,3 +25,5 @@ export const backlinksPlugin: AppExtension = systemToggle({
     {source: 'backlinks'},
   ),
 ])
+
+export default backlinksPlugin

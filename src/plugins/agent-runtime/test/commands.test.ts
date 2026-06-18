@@ -6,7 +6,7 @@ import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { aliasesProp, extensionDescriptionProp, extensionNameProp, typesProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { staticDataExtensions } from '@/extensions/staticDataExtensions'
+import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { __setCompileImplForTest } from '@/extensions/compileExtensionModule'
 import { actionsFacet, appMountsFacet, blockRenderersFacet } from '@/extensions/core'
@@ -33,7 +33,7 @@ const setup = async (): Promise<Harness> => {
     user: USER,
   })
   repo.setActiveWorkspaceId(WS)
-  const runtime = resolveFacetRuntimeSync(staticDataExtensions, {
+  const runtime = resolveFacetRuntimeSync([kernelDataExtension], {
     repo,
     workspaceId: WS,
     safeMode: false,

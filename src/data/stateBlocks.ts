@@ -5,7 +5,7 @@
  * `globalState.ts`. Splitting along this fault line keeps module-init
  * import graphs out of `react`/`@/context/repo`, which is what lets
  * `pluginStateExtensions.ts` import these helpers statically without
- * cycling through `repoProvider → staticDataExtensions → plugin/*`.
+ * cycling through `repoProvider → plugin/*`.
  *
  * Deterministic ids derived from (workspace, user, ...) keep two
  * offline clients converging on the same row when they later sync.

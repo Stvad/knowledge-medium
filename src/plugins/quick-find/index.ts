@@ -60,3 +60,5 @@ export const quickFindPlugin: AppExtension = systemToggle({
     precedence: 10,
   }),
 ])
+
+export default quickFindPlugin

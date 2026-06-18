@@ -3,7 +3,16 @@
  * Provides type-safe access to localStorage with fallback values
  */
 export class ClientLocalSettings {
-  constructor(private readonly storage = localStorage) {}
+  // Resolve `localStorage` lazily (on first method call), not at
+  // construction — so the module-level `clientLocalSettings` singleton can
+  // be imported in a non-browser context (Node-env data tests; the
+  // `pluginDataExtensions` glob pulls settings-plugin data modules, which
+  // transitively reach this, into that path) without throwing at
+  // module-eval. Real reads/writes still require a browser/jsdom env.
+  constructor(private readonly storageOverride?: Storage) {}
+  private get storage(): Storage {
+    return this.storageOverride ?? localStorage
+  }
   /**
    * Get a value from localStorage
    * @param key The key to retrieve

@@ -18,3 +18,5 @@ export const dailyNotesDataExtension: AppExtension = [
     {source: 'daily-notes'},
   ),
 ]
+
+export default dailyNotesDataExtension

@@ -53,7 +53,7 @@ import {
 } from '@/utils/codemirror.js'
 import { copySelectedBlocksToClipboard } from '@/utils/copy.js'
 import { pasteFromClipboard } from '@/utils/paste.js'
-import { actionContextsFacet, actionsFacet } from '@/extensions/core.js'
+import { actionContextsFacet, actionsFacet, appEffectsFacet } from '@/extensions/core.js'
 import { AppExtension } from '@/facets/facet.js'
 import { refreshAppRuntime } from '@/facets/runtimeEvents.js'
 import { systemToggle } from '@/facets/togglable.js'
@@ -69,7 +69,7 @@ import {
   panelBlockId,
   panelRowsInLayoutOrder,
 } from '@/utils/panelLayoutProjection.js'
-import { ensureMetricsConsoleHook } from '@/data/metricsConsoleHook.js'
+import { metricsConsoleHookEffect } from '@/data/metricsConsoleHook.js'
 import { showProgress } from '@/utils/toast.js'
 import {
   chooseRawSqliteExportFile,
@@ -192,11 +192,6 @@ const createNodeInActivePanelFromGlobalContext = async (
 }
 
 export function getDefaultActionGroups({repo}: { repo: Repo }) {
-  // Idempotent metrics console hook — surfaces
-  // `__omniliner.metrics.print()` / `.reset()` / `.snapshot()` and
-  // `__omniliner.repo` for ad-hoc cold-start investigation.
-  ensureMetricsConsoleHook(repo)
-
   const {
     indentBlock,
     outdentBlock,
@@ -1121,5 +1116,11 @@ export function defaultActionsExtension({repo}: { repo: Repo }): AppExtension {
     id: 'system:default-actions',
     name: 'Default keyboard shortcuts',
     description: 'Built-in shortcuts (Enter/Tab/Cmd+K-style). Disabling removes the default bindings; user-defined ones still work.',
-  }).of(actions.map(action => actionsFacet.of(action)))
+  }).of([
+    ...actions.map(action => actionsFacet.of(action)),
+    // Devtools `__omniliner.metrics` console hook — runs at the effect
+    // lifecycle (browser, post-mount) rather than as a build-time side
+    // effect, so resolving the extension tree stays side-effect-free.
+    appEffectsFacet.of(metricsConsoleHookEffect, {source: 'default-actions'}),
+  ])
 }

@@ -209,3 +209,5 @@ declare module '@/data/api' {
     [FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR]: typeof applyContentReplaceMutator
   }
 }
+
+export default findReplaceDataExtension

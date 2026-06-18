@@ -19,6 +19,7 @@
  */
 
 import { Repo } from './repo'
+import type { AppEffect } from '@/extensions/core'
 
 interface MetricsConsoleAPI {
   /** Raw frozen snapshot — same shape as `repo.metrics()`. */
@@ -135,4 +136,17 @@ export const ensureMetricsConsoleHook = (repo: Repo): void => {
     '\n  __omniliner.metrics.snapshot() — raw frozen object',
     '\n  __omniliner.repo — the Repo instance itself',
   )
+}
+
+/** App-effect wrapper for the devtools metrics hook. Installing the hook
+ *  touches `window`, so it must run at the effect lifecycle (browser,
+ *  post-mount) — NOT while building the extension tree, which the data
+ *  layer / headless bench resolve in a non-browser context. Idempotent
+ *  via the module `installed` flag, so the reconciler restarting it is a
+ *  no-op. */
+export const metricsConsoleHookEffect: AppEffect = {
+  id: 'data.metrics-console-hook',
+  start: ({repo}) => {
+    ensureMetricsConsoleHook(repo)
+  },
 }

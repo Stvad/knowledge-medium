@@ -17,3 +17,5 @@ export const plainOutlinerPlugin: AppExtension = systemToggle({
   // than a blockClickHandlersFacet contribution that silently last-wins.
   actionsFacet.of(enterBlockEditModeOnClickAction, {source: 'plain-outliner'}),
 ])
+
+export default plainOutlinerPlugin

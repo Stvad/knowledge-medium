@@ -6,3 +6,5 @@ export const todoDataExtension: AppExtension = [
   propertySchemasFacet.of(roamTodoStateProp, {source: 'todo'}),
   typesFacet.of(todoType, {source: 'todo'}),
 ]
+
+export default todoDataExtension

@@ -16,7 +16,11 @@
  */
 import type {AppExtension} from '@/facets/facet.js'
 import {systemToggle} from '@/facets/togglable.js'
+import {actionsFacet} from '@/extensions/core.js'
+import {propertyEditorOverridesFacet} from '@/data/facets.js'
 import {keybindingsSettingsDataExtension} from './dataExtension.ts'
+import {keybindingsOverridesUi} from './propertyEditorOverride.ts'
+import {openKeybindingsSettingsAction} from './actions.ts'
 
 export const keybindingsSettingsPlugin: AppExtension = systemToggle({
   id: 'system:keybindings-settings',
@@ -25,6 +29,11 @@ export const keybindingsSettingsPlugin: AppExtension = systemToggle({
   essential: true,
 }).of([
   keybindingsSettingsDataExtension,
+  // UI editor + the "Keyboard shortcuts" action live here, not in
+  // dataExtension: the action's handler imports `navigate` → React. Keeps
+  // dataExtension graph-free for the pluginDataExtensions glob.
+  propertyEditorOverridesFacet.of(keybindingsOverridesUi, {source: 'keybindings-settings'}),
+  actionsFacet.of(openKeybindingsSettingsAction, {source: 'keybindings-settings'}),
 ])
 
 export {
@@ -33,3 +42,7 @@ export {
   type StoredKeybindingOverride,
   type StoredKeybindingOverrides,
 } from './config.ts'
+
+export default keybindingsSettingsPlugin
+
+export const pluginOrder = -9

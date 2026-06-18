@@ -34,3 +34,5 @@ export const vimNormalModePlugin = ({repo}: { repo: Repo }): AppExtension =>
     vimNormalModeInteractionExtension,
     vimNormalModeActionsExtension({repo}),
   ])
+
+export default vimNormalModePlugin

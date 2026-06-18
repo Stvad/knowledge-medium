@@ -42,3 +42,5 @@ export const extractTypePlugin: AppExtension = systemToggle({
   actionsFacet.of(extractTypeAction, {source: 'extract-type'}),
   actionsFacet.of(findTypeInstancesAction, {source: 'extract-type'}),
 ])
+
+export default extractTypePlugin

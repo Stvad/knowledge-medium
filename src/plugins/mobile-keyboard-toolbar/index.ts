@@ -20,3 +20,5 @@ export const mobileKeyboardToolbarPlugin: AppExtension = systemToggle({
   mobileKeyboardToolbarActions.map(action => actionsFacet.of(action, {source: 'mobile-keyboard-toolbar'})),
   appMountsFacet.of(mobileKeyboardToolbarMount, {source: 'mobile-keyboard-toolbar'}),
 ])
+
+export default mobileKeyboardToolbarPlugin

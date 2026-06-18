@@ -98,3 +98,5 @@ export const commandPalettePlugin: AppExtension = systemToggle({
     precedence: 20,
   }),
 ])
+
+export default commandPalettePlugin

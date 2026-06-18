@@ -69,3 +69,5 @@ export const mobileBottomNavPlugin: AppExtension = systemToggle({
     precedence: 0,
   }),
 ])
+
+export default mobileBottomNavPlugin

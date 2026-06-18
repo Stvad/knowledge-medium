@@ -53,3 +53,5 @@ export {
   stackSiblingPanel,
   verticalNeighbor,
 } from './walker.ts'
+
+export default spatialNavigationPlugin

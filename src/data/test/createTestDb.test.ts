@@ -8,9 +8,9 @@ import {
   CLIENT_SCHEMA_TRIGGER_NAMES,
 } from '@/data/internals/clientSchema'
 import { resolveLocalSchemaContributions } from '@/data/localSchema.js'
-import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
+import { pluginDataExtensions } from '@/data/pluginDataExtensions.js'
 
-const localSchemaTriggerNames = resolveLocalSchemaContributions(staticDataExtensions)
+const localSchemaTriggerNames = resolveLocalSchemaContributions(pluginDataExtensions)
   .flatMap(contribution => [...(contribution.triggerNames ?? [])])
 
 describe('createTestDb harness', () => {

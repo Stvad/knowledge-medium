@@ -31,3 +31,5 @@ export const videoPlayerPlugin: AppExtension = systemToggle({
   shortcutSurfaceActivationsFacet.of(videoPlayerShortcutActivation, {source: 'video-player'}),
   videoPlayerActionsExtension,
 ])
+
+export default videoPlayerPlugin

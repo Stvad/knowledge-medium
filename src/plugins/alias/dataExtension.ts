@@ -11,3 +11,5 @@ export const aliasDataExtension: AppExtension = [
     mutatorsFacet.of(mutator, {source: 'alias'}),
   ),
 ]
+
+export default aliasDataExtension

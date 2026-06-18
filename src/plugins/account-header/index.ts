@@ -21,3 +21,5 @@ export const accountHeaderPlugin: AppExtension = systemToggle({
     precedence: 50,
   }),
 ])
+
+export default accountHeaderPlugin

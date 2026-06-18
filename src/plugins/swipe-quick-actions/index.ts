@@ -49,3 +49,5 @@ export const swipeQuickActionsPlugin: AppExtension = systemToggle({
   // `.panel`.
   panelMountsFacet.of(swipeActionMenuPanelMount, {source: 'swipe-quick-actions'}),
 ])
+
+export default swipeQuickActionsPlugin

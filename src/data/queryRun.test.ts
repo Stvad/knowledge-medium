@@ -21,7 +21,6 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { queriesFacet } from '@/data/facets'
-import { staticDataExtensions } from '@/extensions/staticDataExtensions'
 import { Repo } from '@/data/repo'
 
 // Typed name for the composed helper the swap test exercises.
@@ -470,14 +469,14 @@ describe('QueryCtx.run', () => {
   it('additive real-runtime swap reuses a kernel handle (instance-stability)', () => {
     // The additive-skip rests on kernel/static query INSTANCES being stable
     // across resolves, so AppRuntimeProvider's base→next reads as ADDITIVE
-    // (not REPLACE). Resolve the real static data extensions twice — plain
+    // (not REPLACE). Resolve the kernel data extension twice — plain
     // ("base") and with one extra query appended ("next", standing in for a
     // dynamic plugin) — and confirm a kernel handle survives the swap. If a
     // query ever got wrapped per-resolve, the shared instances would differ
     // → REPLACE → epoch bump → the handle would re-key and this fails.
     const ctx = {repo, workspaceId: null, safeMode: false, generation: 'test'}
     const baseQ = [...new Map(
-      resolveFacetRuntimeSync(staticDataExtensions, ctx).read(queriesFacet),
+      resolveFacetRuntimeSync([kernelDataExtension], ctx).read(queriesFacet),
     ).values()]
     const extra = defineQuery<{tag: string}, string>({
       name: 'plugin:integrationExtra',
@@ -487,7 +486,7 @@ describe('QueryCtx.run', () => {
     })
     const nextQ = [...new Map(
       resolveFacetRuntimeSync(
-        [...staticDataExtensions, queriesFacet.of(extra, {source: 'plugin'})], ctx,
+        [kernelDataExtension, queriesFacet.of(extra, {source: 'plugin'})], ctx,
       ).read(queriesFacet),
     ).values()]
 

@@ -51,3 +51,5 @@ export const agentRuntimePlugin: AppExtension = systemToggle({
   actionsFacet.of(restartAgentRuntimeBridgeAction, {source: 'agent-runtime'}),
   actionsFacet.of(manageAgentTokensAction, {source: 'agent-runtime'}),
 ])
+
+export default agentRuntimePlugin

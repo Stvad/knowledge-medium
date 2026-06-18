@@ -139,6 +139,14 @@ export function AppRuntimeProvider({
           // the FacetRuntime to UI consumers, never reaching the data
           // layer's dispatch / processor surfaces.
           repo.setFacetRuntime(nextRuntime)
+          // Re-schedule workspace backfills against the freshly-installed
+          // runtime. The Repo install is toggle-aware, so a plugin disabled
+          // at bootstrap had its workspaceBackfillsFacet contribution
+          // pruned; enabling it mid-session (generation bump → this effect
+          // re-runs) would otherwise leave its one-shot backfill unapplied
+          // until a reload. Marker-gated + idempotent, so already-run
+          // backfills no-op and unrelated swaps cost nothing.
+          repo.scheduleWorkspaceBackfills(workspaceId)
         }
       } catch (error) {
         console.error('Failed to resolve app runtime', error)

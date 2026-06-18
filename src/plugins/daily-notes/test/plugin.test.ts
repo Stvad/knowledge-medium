@@ -18,13 +18,12 @@ import {
 
 describe('dailyNotesPlugin', () => {
   it('contributes the daily-note TypeContribution through the app-side plugin', () => {
-    // AppRuntimeProvider rebuilds the FacetRuntime from
-    // `staticAppExtensions` alone (NOT staticDataExtensions) and then
-    // `repo.setFacetRuntime(...)` REPLACES the kernel/bootstrap
-    // registries. Other plugins (todo, backlinks, srs-rescheduling)
-    // bundle their dataExtension into the *Plugin factory output for
-    // exactly this reason — without that, the daily-note type
-    // disappears post-mount and any later getOrCreateDailyNote /
+    // The Repo's plugin data ownership is resolved from the single
+    // `staticAppExtensions` tree (in bootstrapWorkspace, then
+    // AppRuntimeProvider). Plugins (todo, backlinks, srs-rescheduling,
+    // daily-notes) bundle their dataExtension into the *Plugin factory
+    // output for exactly this reason — without that, the daily-note type
+    // would be absent and any later getOrCreateDailyNote /
     // ensureDailyNoteTarget throws on addTypeInTx.
     const fakeRepo = {} as Parameters<typeof dailyNotesPlugin>[0]['repo']
     const runtime = resolveFacetRuntimeSync(dailyNotesPlugin({repo: fakeRepo}))

@@ -41,3 +41,5 @@ export const themeTogglePlugin: AppExtension = systemToggle({
     source: 'theme-toggle',
   }),
 ])
+
+export default themeTogglePlugin

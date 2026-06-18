@@ -629,3 +629,5 @@ export {
   srsSnapshotHistoryProp,
   srsSm25Type,
 } from './schema.ts'
+
+export default srsReschedulingPlugin

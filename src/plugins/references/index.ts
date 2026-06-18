@@ -17,3 +17,5 @@ export const referencesPlugin: AppExtension = systemToggle({
   markdownExtensionsFacet.of(blockrefMarkdownExtension, {source: 'references'}),
   codeMirrorExtensionsFacet.of(referencesCodeMirrorExtensions, {source: 'references'}),
 ])
+
+export default referencesPlugin

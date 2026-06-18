@@ -19,3 +19,5 @@ export const syncStatusPlugin: AppExtension = systemToggle({
     precedence: 40,
   }),
 ])
+
+export default syncStatusPlugin

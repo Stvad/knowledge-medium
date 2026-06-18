@@ -43,3 +43,5 @@ export const updateIndicatorPlugin: AppExtension = systemToggle({
   ...pluginPrefsExtension(updateIndicatorPrefsType, 'update-indicator'),
   blockContentDecoratorsFacet.of(updateIndicatorDecorator, {source: 'update-indicator'}),
 ])
+
+export default updateIndicatorPlugin
