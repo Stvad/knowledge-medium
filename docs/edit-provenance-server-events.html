@@ -399,7 +399,7 @@
 command_events_log (
   client_id     text,        -- originating device
   tx_id         text,        -- command id (text form, as on the client)
-  workspace_id  text not null,
+  workspace_id  text,        -- nullable: zero-write/no-op txs pin no workspace (see note)
   user_id       text not null,
   scope         text not null,
   description    text,        -- enc:v1: on e2ee workspaces
@@ -426,6 +426,17 @@ row_events_log (
       retry a no-op (<code>INSERT … ON CONFLICT DO NOTHING</code>) — events are immutable, so there
       is never an update to reconcile. RLS mirrors <code>blocks_history</code>: read iff workspace
       member; writes only via the upload path.
+    </p>
+    <p>
+      <code>workspace_id</code> is <strong>nullable</strong> on <code>command_events_log</code>,
+      matching the client: <code>commitPipeline.ts</code> writes a <code>command_events</code> row
+      for <em>every</em> <code>repo.tx</code>, with <code>workspace_id</code> left NULL for
+      zero-write / no-op transactions (no workspace gets pinned). A <code>NOT NULL</code> column
+      would reject those on upload. They carry no provenance worth shipping anyway — empty
+      <code>mutator_calls</code>, no associated <code>row_events</code> — so the upload filter
+      <strong>also drops command events that produced no uploaded <code>row_events</code></strong>,
+      which incidentally excludes the null-workspace no-ops. (The RLS workspace-membership read
+      policy then only has to reason about rows that <em>do</em> carry a workspace.)
     </p>
     <p>
       Upload mechanics reuse the existing machinery: an upload-routing trigger emits an envelope per
