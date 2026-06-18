@@ -26,6 +26,7 @@ import {
   DuplicateIdError,
   MutatorNotRegisteredError,
   NotDeletedError,
+  ParentDeletedError,
   ParentNotFoundError,
   ParentWorkspaceMismatchError,
   ProcessorNotRegisteredError,
@@ -552,6 +553,21 @@ describe('tx.move (cycle validation, §4.7 Layer 1)', () => {
     // Rolled back: A still under root, the rest of the chain untouched.
     expect(env.cache.getSnapshot('mv-A')!.parentId).toBe('mv-root')
     expect(env.cache.getSnapshot('mv-C')!.parentId).toBe('mv-B')
+  })
+
+  it('throws ParentDeletedError (not CycleError) when the deleted target is also a descendant (issue #183)', async () => {
+    // Soft-delete C, then move B under C. C is both a tombstone AND a
+    // descendant of B, so the cycle walk (which now crosses deleted edges)
+    // would close a loop B→C→B — but the parent-deleted contract must win.
+    await env.repo.tx(
+      tx => tx.delete('mv-C'),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await expect(env.repo.tx(
+      tx => tx.move('mv-B', {parentId: 'mv-C', orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toThrow(ParentDeletedError)
+    expect(env.cache.getSnapshot('mv-B')!.parentId).toBe('mv-A')
   })
 
   it('restoring a node never exposes a live cycle (issue #183)', async () => {
