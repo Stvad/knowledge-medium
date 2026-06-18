@@ -824,18 +824,26 @@ describe('tied order_key siblings (A1)', () => {
     expect(await env.childIds('root')).toEqual([id, 'T1', 'T2', 'T3'])
   })
 
-  it('moveVertical down across a tie reorders without throwing', async () => {
-    // Moving T3 up so it sits just above the tie exercises a `before`
-    // placement against a tied target.
+  it('moveVertical up swaps exactly one step across a tie (before the neighbour, not past the run)', async () => {
+    // T1/T2 tie at a1; T3 at a2. Moving T3 up one step must swap it with T2 →
+    // T1, T3, T2. Widening "before T2" to before the whole a1 run would
+    // overshoot to T3, T1, T2 — a two-slot jump, not a one-step move.
     await seedTie()
     const moved = await env.repo.mutate.moveVertical({id: 'T3', direction: -1})
     expect(moved).toBe(true)
-    // T3 moves before T2 (its previous sibling), landing inside/around the tie
-    // with a strictly-ordered key. The exact interleave is determined by the
-    // tiebreak, but the op must succeed and T3 must no longer be last.
-    const order = await env.childIds('root')
-    expect(order).toHaveLength(3)
-    expect(order.at(-1)).not.toBe('T3')
+    expect(await env.childIds('root')).toEqual(['T1', 'T3', 'T2'])
+  })
+
+  it('moveVertical down swaps exactly one step past the first member of a tie', async () => {
+    // A sits above a tied T1/T2. Moving A down one step must swap it with T1 →
+    // T1, A, T2, not jump past the whole run to T1, T2, A.
+    await rawInsert('root', null, 'a0')
+    await rawInsert('A', 'root', 'a0', 'A')
+    await rawInsert('T1', 'root', 'a1', 'T1')
+    await rawInsert('T2', 'root', 'a1', 'T2')
+    const moved = await env.repo.mutate.moveVertical({id: 'A', direction: 1})
+    expect(moved).toBe(true)
+    expect(await env.childIds('root')).toEqual(['T1', 'A', 'T2'])
   })
 
   it('insertChildren before a tied sibling inserts the run before the tie', async () => {
