@@ -1,4 +1,4 @@
-import { memoize } from 'lodash'
+import { memoize } from 'lodash-es'
 import { v5 as uuidv5 } from 'uuid'
 import type { Block } from '@/data/block.js'
 import { ChangeScope } from '@/data/api'

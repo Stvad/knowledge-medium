@@ -24,7 +24,7 @@
  * existing primitives; HandleStore is the home for collection handles only.
  */
 
-import { isEqual } from 'lodash'
+import { isEqual } from 'lodash-es'
 import type { Dependency, Handle, HandleStatus, Unsubscribe } from '@/data/api'
 import {
   collectPluginInvalidationsFromSnapshots,

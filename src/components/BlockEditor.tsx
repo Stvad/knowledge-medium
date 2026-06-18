@@ -8,7 +8,7 @@ import {
 } from '@/data/properties.js'
 import { useRef, useEffect, useCallback, useMemo, useState, type Ref } from 'react'
 import { useInEditMode, useIsEditing, useUIStateBlock } from '@/data/globalState'
-import { debounce } from 'lodash'
+import { debounce } from 'lodash-es'
 import { placeCursorAtX, placeCursorAtCoords } from '@/utils/codemirror.js'
 import { useContentRevision, usePropertyValue } from '@/hooks/block.js'
 import { shouldExitEditModeAfterBlur } from '@/utils/dom.js'

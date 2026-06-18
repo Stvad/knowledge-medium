@@ -11,7 +11,7 @@
  * offline clients converging on the same row when they later sync.
  */
 
-import { memoize } from 'lodash'
+import { memoize } from 'lodash-es'
 import { v5 as uuidv5 } from 'uuid'
 import {
   ChangeScope,
