@@ -733,6 +733,190 @@ describe('core.moveVertical', () => {
   })
 })
 
+// ──── tied order_key siblings (A1) ────
+
+/**
+ * Two adjacent siblings sharing an `order_key` is an explicitly supported
+ * on-disk state: the `(parent_id, order_key, id)` index is non-unique and the
+ * `(order_key, id)` secondary sort renders them in a stable order. Ties arrive
+ * via import, `setOrderKey`, and concurrent sync (residual jitter collisions).
+ *
+ * The mutators must insert/move across such a tie WITHOUT throwing —
+ * `keyBetween(equalKey, equalKey)` throws `"<key> >= <key>"` in
+ * `fractional-indexing-jittered`, which rolls back the whole tx and silently
+ * drops the user's edit (worst case: Enter-to-split). These tests place the
+ * engine in the tied state via a raw insert (the mutators never produce a tie
+ * themselves) and drive every affected structural op across it.
+ */
+describe('tied order_key siblings (A1)', () => {
+  /** Raw-insert a block with an explicit `order_key`, bypassing the mutators
+   *  (which would never mint a tie). Runs outside any `repo.tx`, so
+   *  `tx_context.source` stays NULL (reset by `resetTestDb`) and the seed is
+   *  treated as a sync-apply that skips parent-validation — mirrors how a tie
+   *  actually lands (import / concurrent sync). */
+  const rawInsert = async (
+    id: string,
+    parentId: string | null,
+    orderKey: string,
+    content = '',
+  ) => {
+    await env.h.db.execute(
+      `INSERT INTO blocks
+        (id, workspace_id, parent_id, order_key, content, properties_json, references_json,
+         created_at, updated_at, created_by, updated_by, deleted)
+       VALUES (?, 'ws-1', ?, ?, ?, '{}', '[]', 0, 0, 'u', 'u', 0)`,
+      [id, parentId, orderKey, content],
+    )
+  }
+
+  /** root → T1, T2 (same order_key 'a1'), T3 ('a2'). T1/T2 tie; the
+   *  `(order_key, id)` tiebreak renders them T1 < T2 since 'T1' < 'T2'. */
+  const seedTie = async () => {
+    await rawInsert('root', null, 'a0')
+    await rawInsert('T1', 'root', 'a1', 'T1')
+    await rawInsert('T2', 'root', 'a1', 'T2')
+    await rawInsert('T3', 'root', 'a2', 'T3')
+  }
+
+  it('createSiblingBelow on the lower member of a tie lands between the tie and the next key', async () => {
+    await seedTie()
+    const id = await env.repo.mutate.createSiblingBelow({siblingId: 'T1', id: 'X'})
+    // X is "below T1": it sorts after both tied members, before T3.
+    expect(await env.childIds('root')).toEqual(['T1', 'T2', id, 'T3'])
+  })
+
+  it('createSiblingBelow on the upper member of a tie lands after the tie', async () => {
+    await seedTie()
+    const id = await env.repo.mutate.createSiblingBelow({siblingId: 'T2', id: 'X'})
+    expect(await env.childIds('root')).toEqual(['T1', 'T2', id, 'T3'])
+  })
+
+  it('createSiblingAbove on the upper member of a tie lands before the tie', async () => {
+    await seedTie()
+    const id = await env.repo.mutate.createSiblingAbove({siblingId: 'T2', id: 'X'})
+    // "Above T2": sorts before both tied members.
+    expect(await env.childIds('root')).toEqual([id, 'T1', 'T2', 'T3'])
+  })
+
+  it('createSiblingAbove on the lower member of a tie lands before the tie', async () => {
+    await seedTie()
+    const id = await env.repo.mutate.createSiblingAbove({siblingId: 'T1', id: 'X'})
+    expect(await env.childIds('root')).toEqual([id, 'T1', 'T2', 'T3'])
+  })
+
+  it('createChild position={after, tied sibling} lands between the tie and the next key', async () => {
+    await seedTie()
+    const id = await env.repo.mutate.createChild({
+      parentId: 'root',
+      id: 'X',
+      position: {kind: 'after', siblingId: 'T1'},
+    })
+    expect(await env.childIds('root')).toEqual(['T1', 'T2', id, 'T3'])
+  })
+
+  it('createChild position={before, tied sibling} lands before the tie', async () => {
+    await seedTie()
+    const id = await env.repo.mutate.createChild({
+      parentId: 'root',
+      id: 'X',
+      position: {kind: 'before', siblingId: 'T2'},
+    })
+    expect(await env.childIds('root')).toEqual([id, 'T1', 'T2', 'T3'])
+  })
+
+  it('moveVertical down across a tie reorders without throwing', async () => {
+    // Moving T3 up so it sits just above the tie exercises a `before`
+    // placement against a tied target.
+    await seedTie()
+    const moved = await env.repo.mutate.moveVertical({id: 'T3', direction: -1})
+    expect(moved).toBe(true)
+    // T3 moves before T2 (its previous sibling), landing inside/around the tie
+    // with a strictly-ordered key. The exact interleave is determined by the
+    // tiebreak, but the op must succeed and T3 must no longer be last.
+    const order = await env.childIds('root')
+    expect(order).toHaveLength(3)
+    expect(order.at(-1)).not.toBe('T3')
+  })
+
+  it('insertChildren before a tied sibling inserts the run before the tie', async () => {
+    await seedTie()
+    const ids = await env.repo.mutate.insertChildren({
+      parentId: 'root',
+      items: [{id: 'i1'}, {id: 'i2'}],
+      position: {kind: 'before', siblingId: 'T2'},
+    })
+    expect(await env.childIds('root')).toEqual([ids[0], ids[1], 'T1', 'T2', 'T3'])
+  })
+
+  it('insertChildren after a tied sibling inserts the run after the tie', async () => {
+    await seedTie()
+    const ids = await env.repo.mutate.insertChildren({
+      parentId: 'root',
+      items: [{id: 'i1'}, {id: 'i2'}],
+      position: {kind: 'after', siblingId: 'T1'},
+    })
+    expect(await env.childIds('root')).toEqual(['T1', 'T2', ids[0], ids[1], 'T3'])
+  })
+
+  it('outdent across tied parents lands the block after its (tied) parent', async () => {
+    // grandparent G → tied parents P1, P2 (order_key 'a1'); P1 has child C.
+    // Outdenting C must place it under G right after P1 — but P1/P2 tie, so the
+    // naive keyBetween(P1, P2) throws.
+    await rawInsert('G', null, 'a0')
+    await rawInsert('P1', 'G', 'a1')
+    await rawInsert('P2', 'G', 'a1')
+    await rawInsert('C', 'P1', 'b0')
+    const moved = await env.repo.mutate.outdent({id: 'C'})
+    expect(moved).toBe(true)
+    expect(env.read('C')!.parentId).toBe('G')
+    // C sorts after the P1/P2 tie (it outdented from inside P1, which renders
+    // first), before nothing else — order: P1, P2, C.
+    expect(await env.childIds('G')).toEqual(['P1', 'P2', 'C'])
+  })
+
+  it('split on a block tied with its previous sibling preserves the typed before/after text (no lost edit)', async () => {
+    // The Enter-to-split worst case: the user has typed and the cursor splits
+    // the block, but `split`'s `keyBetween(prevKey, selfKey)` throws because the
+    // block ties with its previous sibling — rolling back and dropping the edit.
+    await seedTie()
+    // Split T2 (tied with T1): prefix "foo", suffix "bar".
+    const newId = await env.repo.mutate.split({id: 'T2', before: 'foo', after: 'bar'})
+    // Both halves of the typed text survive — this is the data-loss assertion.
+    expect(env.read(newId)!.content).toBe('foo')
+    expect(env.read('T2')!.content).toBe('bar')
+    // The new prefix sibling sorts immediately before T2 (after T1), so the
+    // visible order keeps the split in place.
+    expect(await env.childIds('root')).toEqual(['T1', newId, 'T2', 'T3'])
+  })
+
+  it('split on the FIRST member of a tie keeps both halves and well-formed order', async () => {
+    await seedTie()
+    const newId = await env.repo.mutate.split({id: 'T1', before: 'pre', after: 'post'})
+    expect(env.read(newId)!.content).toBe('pre')
+    expect(env.read('T1')!.content).toBe('post')
+    // newId sorts before T1 (the prefix), and T1 before T2.
+    const order = await env.childIds('root')
+    expect(order.indexOf(newId)).toBeLessThan(order.indexOf('T1'))
+    expect(order.indexOf('T1')).toBeLessThan(order.indexOf('T2'))
+  })
+
+  it('a run of THREE tied siblings still inserts deterministically between them', async () => {
+    await rawInsert('root', null, 'a0')
+    await rawInsert('Q1', 'root', 'a1')
+    await rawInsert('Q2', 'root', 'a1')
+    await rawInsert('Q3', 'root', 'a1')
+    await rawInsert('Q4', 'root', 'a2')
+    // "after Q2" — Q1/Q2/Q3 all tie. The new block must sort after the whole
+    // tied run (deterministically), before Q4.
+    const id = await env.repo.mutate.createChild({
+      parentId: 'root',
+      id: 'X',
+      position: {kind: 'after', siblingId: 'Q2'},
+    })
+    expect(await env.childIds('root')).toEqual(['Q1', 'Q2', 'Q3', id, 'Q4'])
+  })
+})
+
 // ──── split ────
 
 describe('core.split', () => {

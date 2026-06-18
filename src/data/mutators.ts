@@ -27,7 +27,16 @@ import {
   type Tx,
 } from '@/data/api'
 import { BlockNotFoundError } from '@/data/api'
-import { keyAtEnd, keyAtStart, keyBetween, keysBetween } from './orderKey'
+import {
+  keyAfterIndex,
+  keyAtEnd,
+  keyAtStart,
+  keyBeforeIndex,
+  keyBetween,
+  keysAfterIndex,
+  keysBeforeIndex,
+  keysBetween,
+} from './orderKey'
 import { isCollapsedProp } from '@/data/properties'
 import {
   mergeBlocksInTx,
@@ -44,15 +53,23 @@ const requireBlock = async (tx: Tx, id: string) => {
   return data
 }
 
-const orderKeyAfterSibling = async (tx: Tx, sibling: BlockData): Promise<string> => {
-  const next = await tx.adjacentSibling(sibling, 'after')
-  return keyBetween(sibling.orderKey, next?.orderKey ?? null)
-}
+// `createSiblingAbove` / `createSiblingBelow` funnel through `orderKeyForInsert`
+// (rather than computing against `tx.adjacentSibling`) so the tie-safe
+// gap logic lives in exactly one place. The adjacent-sibling query resolves a
+// tied neighbour by the `(order_key, id)` tiebreak — i.e. it returns a row with
+// the SAME order_key — which would feed `keyBetween(equal, equal)` and throw
+// (A1). The list-based helper instead widens to the next distinct key.
+const orderKeyAfterSibling = (tx: Tx, sibling: BlockData): Promise<string> =>
+  orderKeyForInsert(tx, sibling.parentId, sibling.workspaceId, {
+    kind: 'after',
+    siblingId: sibling.id,
+  })
 
-const orderKeyBeforeSibling = async (tx: Tx, sibling: BlockData): Promise<string> => {
-  const previous = await tx.adjacentSibling(sibling, 'before')
-  return keyBetween(previous?.orderKey ?? null, sibling.orderKey)
-}
+const orderKeyBeforeSibling = (tx: Tx, sibling: BlockData): Promise<string> =>
+  orderKeyForInsert(tx, sibling.parentId, sibling.workspaceId, {
+    kind: 'before',
+    siblingId: sibling.id,
+  })
 
 /** Placement of a block within a parent's child list — an explicit
  *  position used by the insert/move mutators. */
@@ -90,13 +107,14 @@ const orderKeyForInsert = async (
       `position.${position.kind === 'after' ? 'after' : 'before'} sibling ${position.siblingId} not found under ${parentId ?? 'root'}`,
     )
   }
-  if (position.kind === 'after') {
-    const next = siblings[ix + 1]
-    return keyBetween(siblings[ix].orderKey, next?.orderKey ?? null)
-  }
-  // before
-  const prev = siblings[ix - 1]
-  return keyBetween(prev?.orderKey ?? null, siblings[ix].orderKey)
+  // Tie-safe: when the anchor sibling shares an order_key with the neighbour on
+  // the insertion side, `keyAfterIndex`/`keyBeforeIndex` widen to the next
+  // DISTINCT key past the tied run (A1), so the new block lands just outside the
+  // run on the requested side with a strictly-ordered key.
+  const keys = siblings.map(s => s.orderKey)
+  return position.kind === 'after'
+    ? keyAfterIndex(keys, ix)
+    : keyBeforeIndex(keys, ix)
 }
 
 const positionSchema = z.discriminatedUnion('kind', [
@@ -385,15 +403,19 @@ export const insertChildren = defineMutator<InsertChildrenArgs, string[]>({
     const siblings = await tx.childrenOf(args.parentId)
     const position = args.position ?? {kind: 'last'}
 
-    const [lower, upper] = ((): [string | null, string | null] => {
-      if (position.kind === 'first') return [null, siblings[0]?.orderKey ?? null]
-      if (position.kind === 'last')  return [siblings.at(-1)?.orderKey ?? null, null]
+    const n = args.items.length
+    const keys = ((): string[] => {
+      if (position.kind === 'first') return keysBetween(null, siblings[0]?.orderKey ?? null, n)
+      if (position.kind === 'last')  return keysBetween(siblings.at(-1)?.orderKey ?? null, null, n)
       const ix = siblings.findIndex(s => s.id === position.siblingId)
       if (ix < 0) throw new Error(`sibling ${position.siblingId} not found under ${args.parentId}`)
-      if (position.kind === 'after')  return [siblings[ix].orderKey, siblings[ix + 1]?.orderKey ?? null]
-      return [siblings[ix - 1]?.orderKey ?? null, siblings[ix].orderKey]
+      // Tie-safe (A1): widen past a tied run to the next distinct key on the
+      // requested side, so the whole run inserts just outside the tie.
+      const orderKeys = siblings.map(s => s.orderKey)
+      return position.kind === 'after'
+        ? keysAfterIndex(orderKeys, ix, n)
+        : keysBeforeIndex(orderKeys, ix, n)
     })()
-    const keys = keysBetween(lower, upper, args.items.length)
     const ids: string[] = []
     for (let i = 0; i < args.items.length; i++) {
       const item = args.items[i]
@@ -527,8 +549,10 @@ export const outdent = defineMutator<OutdentArgs, boolean>({
       // Stale read — fall back to last position under grandparent.
       orderKey = keyAtEnd(grandSiblings.at(-1)?.orderKey ?? null)
     } else {
-      const next = grandSiblings[parentIx + 1]
-      orderKey = keyBetween(parent.orderKey, next?.orderKey ?? null)
+      // Tie-safe (A1): if the parent shares an order_key with its next
+      // grand-sibling, widen past the tied run so the outdented block still
+      // lands just after the parent with a strictly-ordered key.
+      orderKey = keyAfterIndex(grandSiblings.map(s => s.orderKey), parentIx)
     }
     await tx.move(id, {parentId: grandparent, orderKey})
     return true
@@ -682,7 +706,24 @@ export const split = defineMutator<SplitArgs, string>({
     const siblings = await tx.childrenOf(self.parentId, self.workspaceId)
     const ix = siblings.findIndex(s => s.id === id)
     const prev = ix >= 0 ? siblings[ix - 1] : undefined
-    const orderKey = keyBetween(prev?.orderKey ?? null, self.orderKey)
+
+    // The prefix sibling must sort IMMEDIATELY before `self` — that's the one
+    // case (A1) "widen to the next distinct neighbour" can't satisfy: if `self`
+    // ties with its immediate predecessor there is no key strictly between
+    // them, and `keyBetween(prevKey, selfKey)` throws (rolling back and losing
+    // the typed split). Re-key `self` out of the tie first — bump it to a fresh
+    // key strictly above its tied run and below the next distinct sibling — so a
+    // strict gap exists for the prefix. `self` keeps its relative position (it
+    // was already the highest-id, hence last, member of that tied run on its
+    // side), so nothing visibly reorders.
+    let selfKey = self.orderKey
+    if (prev !== undefined && prev.orderKey === self.orderKey) {
+      // `prev` defined ⇒ ix >= 1, so `ix - 1` (prev's index) is in range.
+      const keys = siblings.map(s => s.orderKey)
+      selfKey = keyAfterIndex(keys, ix - 1)  // strictly above the tied run, below next distinct
+      await tx.move(id, {parentId: self.parentId, orderKey: selfKey})
+    }
+    const orderKey = keyBetween(prev?.orderKey ?? null, selfKey)
     return tx.create({
       workspaceId: self.workspaceId,
       parentId: self.parentId,
