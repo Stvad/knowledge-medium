@@ -493,16 +493,21 @@ create policy …_read on … for select
           grouping; different ids, different jobs.)
         </li>
         <li>
-          <strong>Replay needs an explicit order, not <code>created_at</code>.</strong> When one
-          <code>repo.tx</code> writes a block more than once, the trigger appends multiple
-          <code>row_events</code> whose <code>created_at</code> (ms wall-clock) can <em>tie</em>, so
-          ordering replay by time — or by a lexically-sorted composite id — can apply the before/after
-          chain backwards and reconstruct the wrong state. Expose <code>seq</code> as its own
-          integer column (above) and define the rule: <strong>replay a block's chain ordered by
-          <code>(install_id, seq)</code></strong> — <code>seq</code> is the local append order, the
-          ground truth for one device's contribution. Cross-install ordering of edits to the same
-          block is only partially defined (the same LWW limitation the rest of sync has); a stable
-          tiebreak (<code>created_at</code>, then <code>install_id</code>) keeps it deterministic.
+          <strong>Replay order: within an install, exact; across installs, only approximate.</strong>
+          <code>seq</code> totally orders one install's events (it's the local append order, ground
+          truth for that device's contribution), so <em>per-install</em> replay — including repeated
+          writes to one block in one tx — is exact. But <code>seq</code> must <strong>not</strong> be
+          the leading sort key across installs: with <code>install_id</code> first, two installs that
+          edited a block in interleaved order (A1, B1, A2) would replay grouped (A1, A2, B1) — wrong,
+          and a tiebreak applied <em>after</em> <code>install_id</code> can't repair it. The honest
+          position is that this design has <strong>no reliable global edit order</strong> for a block
+          touched by multiple installs: wall-clock <code>created_at</code> is subject to cross-device
+          skew, and there is no server sequencer or vector clock here (same fundamental limit as
+          blocks' LWW). So the rule is: order primarily by <code>created_at</code> (best-effort global
+          time), then by <code>(install_id, seq)</code> only to break ties and to order within one
+          install. Exact cross-device causal replay would require a server-assigned append order or a
+          per-event vector clock — out of scope, and called out here so consumers don't assume the
+          chain is authoritative across installs.
         </li>
       </ul>
     </div>
@@ -646,6 +651,19 @@ create policy …_read on … for select
         must tolerate orphans on <em>both</em> sides, and the doc must define replay semantics when
         the genesis event is missing (never filter creates? anchor on the surviving event's
         <code>before_json</code>? reconcile against the block upload result?).
+      </li>
+      <li>
+        <strong>Append events only after the block write succeeds.</strong> The event rows ship via a
+        separate append RPC from the block apply path, and the two are not atomic. If the block write
+        is <em>permanently</em> rejected/quarantined (FK violation, missing server row) but the event
+        append already succeeded, the server keeps — idempotently — provenance for a block change that
+        never landed: a false record, worse than a gap. So the ordering must be specified:
+        <strong>gate the event append on the corresponding block upload succeeding for that tx</strong>
+        (block-success-before-event-append), or use a combined rollback boundary. That makes the only
+        possible divergence "block landed, events missing" — a tolerable gap that <code>blocks_history</code>
+        (§7) still covers — never "events claim a change that didn't happen". Note this composes with
+        the replay-ordering caveat above: gating on block success doesn't give a global order, it only
+        prevents false provenance.
       </li>
       <li>
         <strong>Key/clock primitives are missing (see §6 warn).</strong> A durable per-device
