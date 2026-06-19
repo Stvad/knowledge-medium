@@ -466,21 +466,25 @@ export const move = defineMutator<MoveArgs, void>({
   scope: ChangeScope.BlockDefault,
   describe: ({id, parentId}) => `move ${id} → ${parentId ?? 'root'}`,
   apply: async (tx, args) => {
-    // A self-anchored move ("place X immediately before/after X") is a no-op:
-    // X is already at its own position. Short-circuit before `relocateBlock`,
-    // which excludes the moving block from the sibling list and would otherwise
-    // fail to find the anchor and throw (rolling the tx back).
-    if (
-      (args.position.kind === 'after' || args.position.kind === 'before') &&
-      args.position.siblingId === args.id
-    ) {
-      return
-    }
     // Read the moving block first so we know which workspace's root
     // siblings to enumerate when args.parentId is null. The block's
     // workspace_id is immutable (server-side trigger enforces it), so
     // it's also the destination workspace.
     const self = await requireBlock(tx, args.id)
+    // A self-anchored move ("place X immediately before/after X") is a no-op
+    // ONLY when X already lives under the target parent — then it's genuinely
+    // already at its own position. We short-circuit here because `relocateBlock`
+    // excludes the moving block from the sibling list and would otherwise fail
+    // to find the anchor and throw. A self-anchored move to a DIFFERENT parent
+    // is incoherent (X isn't a sibling of itself there); let it fall through so
+    // the normal anchor-not-found lookup throws rather than silently dropping it.
+    if (
+      (args.position.kind === 'after' || args.position.kind === 'before') &&
+      args.position.siblingId === args.id &&
+      self.parentId === args.parentId
+    ) {
+      return
+    }
     await relocateBlock(tx, self, args.parentId, args.position)
   },
 })

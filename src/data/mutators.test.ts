@@ -430,11 +430,18 @@ describe('core.move', () => {
     expect(await env.childIds(null)).toEqual(['r1', 'c1', 'r2'])
   })
 
-  it('a self-anchored move (before/after itself) is a no-op, not an error', async () => {
+  it('a same-parent self-anchored move is a no-op; a cross-parent self-anchor still throws', async () => {
     await seedABC()
+    // Same parent: "place B before/after B" is genuinely already true → no-op.
     await env.repo.mutate.move({id: 'B', parentId: 'root', position: {kind: 'after', siblingId: 'B'}})
     await env.repo.mutate.move({id: 'B', parentId: 'root', position: {kind: 'before', siblingId: 'B'}})
     expect(await env.childIds('root')).toEqual(['A', 'B', 'C'])
+    // Different parent: incoherent (B isn't a sibling of itself under A) — must
+    // surface via the normal anchor lookup, not be silently dropped.
+    await expect(
+      env.repo.mutate.move({id: 'B', parentId: 'A', position: {kind: 'after', siblingId: 'B'}}),
+    ).rejects.toThrow()
+    expect(await env.childIds('root')).toEqual(['A', 'B', 'C'])  // rolled back
   })
 })
 
