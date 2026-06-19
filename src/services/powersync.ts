@@ -183,13 +183,14 @@ const assertSupabase = () => {
  *  PostgREST returns the HTTP status as a SIBLING of `{error}` in the
  *  response tuple — it is never a field on the `PostgrestError` object
  *  (which carries only `{message, details, hint, code}`). The upload-error
- *  classifier's "permanent on 4xx" branch keys off `err.status`, so unless
- *  the status is threaded onto the thrown error that branch is dead: a
- *  codeless permanent 4xx (expired-JWT 401/403, 413, a generic 400, or any
- *  non-JSON body postgrest-js surfaces as `{message: body}` with no `code`)
- *  falls through to `transient`, PowerSync retries the same batch forever,
- *  and the upload queue jams permanently. See `uploadErrorClassifier.ts`
- *  and issue #190. */
+ *  classifier keys its 4xx handling off `err.status`, so unless the status is
+ *  threaded onto the thrown error that handling is dead: a codeless 4xx (a
+ *  generic 400, a 413, or any non-JSON body postgrest-js surfaces as
+ *  `{message: body}` with no `code`) would fall through to `transient` and
+ *  PowerSync would retry the same batch forever — the original queue jam. With
+ *  the status attached, the classifier routes a non-retryable 4xx to
+ *  `ambiguous` (bounded retry, then quarantine) and keeps the retryable subset
+ *  (401/403/408/429) transient. See `uploadErrorClassifier.ts` and issue #190. */
 const throwWithHttpStatus = (error: object, status: number): never => {
   throw Object.assign(error, {status})
 }
@@ -461,26 +462,36 @@ const recordRejectionToTable = async (
   const errorCode = errorCodeOf(error)
   const errorMessage = errorMessageOf(error)
   const rejectedAt = Date.now()
+  const txId = transaction.transactionId ?? transaction.crud[0]?.transactionId ?? 0
 
-  // Preserve every entry in the rejected tx — a single CrudTransaction
-  // can carry many CrudEntries (multi-row repo.tx). Inserting one
-  // ps_crud_rejected row per entry keeps the audit shape symmetric with
-  // ps_crud and lets a future UI count "N changes couldn't sync" directly.
-  for (const entry of transaction.crud) {
-    await database.execute(
-      `INSERT INTO ps_crud_rejected
-         (original_id, tx_id, data, error_code, error_message, rejected_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [
-        entry.clientId,
-        transaction.transactionId ?? entry.transactionId ?? 0,
-        JSON.stringify(crudEntryEnvelope(entry)),
-        errorCode,
-        errorMessage,
-        rejectedAt,
-      ],
-    )
-  }
+  // Preserve every entry in the rejected tx — a single CrudTransaction can
+  // carry many CrudEntries (multi-row repo.tx). We write one ps_crud_rejected
+  // row per entry so a future UI can count "N changes couldn't sync" directly.
+  //
+  // Atomic + idempotent: the whole set runs in one writeTransaction, so a
+  // mid-loop INSERT failure rolls back cleanly (never a partial record), and
+  // the leading DELETE-by-tx_id makes a re-run a no-op replace. Without that,
+  // a failure between recording and the caller's complete() — which is a
+  // separate step — would re-insert duplicate rows for this tx on the next
+  // upload pass (the tx isn't drained, so it's quarantined again).
+  await database.writeTransaction(async tx => {
+    await tx.execute(`DELETE FROM ps_crud_rejected WHERE tx_id = ?`, [txId])
+    for (const entry of transaction.crud) {
+      await tx.execute(
+        `INSERT INTO ps_crud_rejected
+           (original_id, tx_id, data, error_code, error_message, rejected_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [
+          entry.clientId,
+          txId,
+          JSON.stringify(crudEntryEnvelope(entry)),
+          errorCode,
+          errorMessage,
+          rejectedAt,
+        ],
+      )
+    }
+  })
 }
 
 const errorCodeOf = (error: unknown): string | null => {
@@ -567,13 +578,18 @@ const forgetAmbiguousAttempts = (
  *  the tail tx (which drains every preceding tx from ps_crud). Identical
  *  perf to the original handler.
  *
- *  On batch failure: classify the error. Transient (5xx / network /
- *  unknown) → re-throw so PowerSync retries the batch later. Permanent
- *  (FK violation, RLS denial, 4xx) → drop into per-tx fallback: apply
- *  each tx individually, completing on success, recording-then-completing
- *  on permanent failure, re-throwing on transient. This way one bad tx
- *  no longer jams the bucket — the rest of the queue drains and the
- *  bad one lands in ps_crud_rejected for inspection.
+ *  On batch failure: classify the error (see uploadErrorClassifier).
+ *    - transient (5xx / network / auth-token / rate-limit / unknown) →
+ *      re-throw so PowerSync retries the whole batch later.
+ *    - permanent (FK violation, RLS denial, malformed-request code, …) or
+ *      ambiguous (a suspected-permanent 4xx we can't confirm from a code) →
+ *      drop into the per-tx fallback.
+ *  The per-tx fallback applies each tx individually: complete() on success;
+ *  re-throw (retry) on a transient error; record to ps_crud_rejected +
+ *  complete() (quarantine) on a permanent error; and on an ambiguous error
+ *  retry it across AMBIGUOUS_RETRY_BUDGET upload passes, then quarantine. This
+ *  way one bad tx no longer jams the bucket — the rest of the queue drains and
+ *  the bad one lands in ps_crud_rejected for inspection.
  *
  *  Encrypt-on-upload (§9.2) is part of that isolation: a tx for an e2ee
  *  workspace whose key is momentarily missing/unreadable makes `encryptOps`
@@ -744,3 +760,4 @@ export const __orderedBlockUpsertsForTest = orderedBlockUpserts
 export const __uploadTransactionsWithFallbackForTest = uploadTransactionsWithFallback
 export const __applyCompactedBlockOperationsForTest = applyCompactedBlockOperations
 export const __applyBlockPatchesRpcForTest = applyBlockPatchesRpc
+export const __recordRejectionToTableForTest = recordRejectionToTable

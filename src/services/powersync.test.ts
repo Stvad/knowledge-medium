@@ -16,6 +16,7 @@ import {
   MAX_PATCHES_PER_SUPABASE_RPC,
   __applyBlockPatchesRpcForTest,
   __applyCompactedBlockOperationsForTest,
+  __recordRejectionToTableForTest,
   __compactBlockCrudEntriesForTest,
   __encryptUploadOpsForTest,
   __orderedBlockUpsertsForTest,
@@ -823,6 +824,49 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
     expect(tx.completed).toBe(true)
   })
 
+  it('resets the ambiguous budget after a successful pass (a recovered tx gets a fresh budget)', async () => {
+    // forgetAmbiguousAttempts clears the per-tx counter on a successful pass,
+    // so a tx that flaps — ambiguous a few times, then succeeds, then later
+    // goes ambiguous again — gets a FRESH budget rather than being quarantined
+    // early off a stale count.
+    const attempts = new Map<number, number>()
+    const recordRejection = vi.fn<UploadDeps['recordRejection']>().mockResolvedValue(undefined)
+    const deps: UploadDeps = {
+      applyOperations: (db, ops) => __applyCompactedBlockOperationsForTest(db, ops),
+      recordRejection,
+    }
+    const onePass = () => {
+      const tx = fakeTx(9, [new CrudEntry(1, UpdateType.PATCH, 'blocks', 'block-a', 9, {content: 'B'})])
+      const run = __uploadTransactionsWithFallbackForTest(
+        fakeDb, [tx] as unknown as CrudTransaction[], deps, attempts,
+      )
+      return {tx, run}
+    }
+
+    // Two ambiguous passes — the counter climbs to 2, short of the budget.
+    supabaseRef.rpc.mockResolvedValue({data: null, error: {message: 'Bad Request'}, status: 400})
+    for (let i = 0; i < 2; i++) {
+      await expect(onePass().run).rejects.toMatchObject({status: 400})
+    }
+    expect(attempts.get(9)).toBe(2)
+
+    // A successful pass clears the counter.
+    supabaseRef.rpc.mockResolvedValue({data: null, error: null})
+    const recovered = onePass()
+    await recovered.run
+    expect(recovered.tx.completed).toBe(true)
+    expect(attempts.has(9)).toBe(false)
+
+    // Ambiguous again → fresh budget: the first failure re-throws (count back to
+    // 1) and does NOT quarantine off the old near-exhausted count.
+    supabaseRef.rpc.mockResolvedValue({data: null, error: {message: 'Bad Request'}, status: 400})
+    const reflapped = onePass()
+    await expect(reflapped.run).rejects.toMatchObject({status: 400})
+    expect(recordRejection).not.toHaveBeenCalled()
+    expect(reflapped.tx.completed).toBe(false)
+    expect(attempts.get(9)).toBe(1)
+  })
+
   it('retries a codeless 401 instead of dropping the write (expired session is not permanent) (#190)', async () => {
     // The flip side of the codeless-4xx fix: an expired / not-yet-refreshed
     // session surfaces as a codeless 401 whose status arrives only on the
@@ -900,5 +944,63 @@ describe('defaultBlockUploadSink create/delete — status threading', () => {
 
     expect(thrown).toMatchObject({status: 400, message: 'Bad Request'})
     expect(classifyUploadError(thrown)).toBe('ambiguous')
+  })
+})
+
+// ===========================================================================
+// recordRejectionToTable — atomic + idempotent quarantine record.
+//
+// Quarantine is `recordRejection(...)` then a SEPARATE `complete()`. If the
+// per-entry INSERTs ran outside a transaction, a mid-loop failure would leave
+// partial rows and (since complete() never runs) the tx would be re-recorded
+// on the next pass → duplicate ps_crud_rejected rows / a jam. These tests pin
+// that the whole record runs in one writeTransaction (atomic) led by a
+// DELETE-by-tx_id (idempotent re-record).
+// ===========================================================================
+
+describe('recordRejectionToTable — atomic + idempotent', () => {
+  const collectWrites = () => {
+    const calls: Array<{sql: string; params: unknown[]}> = []
+    let writeTxCount = 0
+    const directExecute = vi.fn()
+    const db = {
+      execute: directExecute,
+      writeTransaction: async (
+        cb: (tx: {execute: (sql: string, params: unknown[]) => Promise<unknown>}) => Promise<unknown>,
+      ) => {
+        writeTxCount++
+        return cb({
+          execute: async (sql: string, params: unknown[]) => {
+            calls.push({sql, params})
+            return undefined
+          },
+        })
+      },
+    } as unknown as AbstractPowerSyncDatabase
+    return {db, calls, directExecute, writeTxCount: () => writeTxCount}
+  }
+
+  it('records every entry in one writeTransaction, led by a DELETE-by-tx_id', async () => {
+    const {db, calls, directExecute, writeTxCount} = collectWrites()
+    const tx = fakeTx(42, [
+      new CrudEntry(1, UpdateType.PATCH, 'blocks', 'block-a', 42, {content: 'A'}),
+      new CrudEntry(2, UpdateType.PATCH, 'blocks', 'block-b', 42, {content: 'B'}),
+    ])
+    const err = Object.assign(new Error('Bad Request'), {status: 400})
+
+    await __recordRejectionToTableForTest(db, tx as unknown as CrudTransaction, err)
+
+    // One atomic transaction; nothing written via the non-transactional execute.
+    expect(writeTxCount()).toBe(1)
+    expect(directExecute).not.toHaveBeenCalled()
+    // Leading DELETE-by-tx_id makes a re-run idempotent (replace, not append).
+    expect(calls[0]?.sql).toMatch(/DELETE FROM ps_crud_rejected WHERE tx_id/)
+    expect(calls[0]?.params).toEqual([42])
+    // One INSERT per entry, carrying the entry's clientId as original_id.
+    const inserts = calls.slice(1)
+    expect(inserts).toHaveLength(2)
+    expect(inserts.every(c => /INSERT INTO ps_crud_rejected/.test(c.sql))).toBe(true)
+    expect(inserts.map(c => c.params[0])).toEqual([1, 2]) // original_id = clientId
+    expect(inserts.every(c => c.params[1] === 42)).toBe(true) // tx_id
   })
 })
