@@ -456,6 +456,20 @@ create policy …_read on … for select
       authorship); writes only via the upload path.
     </p>
     <div class="warn">
+      <strong>The append RPC needs an explicit definer-with-checks contract.</strong> The grants
+      above give no INSERT to <code>authenticated</code> and there is no write policy (by design).
+      So a <code>SECURITY INVOKER</code> append function would be unable to insert at all — every
+      event upload rejected. The fix is <code>SECURITY DEFINER</code> (as
+      <code>create_workspace</code> and the <code>blocks_record_history</code> trigger already are),
+      but DEFINER <em>bypasses RLS</em> — so the function must itself verify, <strong>for every
+      appended row</strong>, that <code>auth.uid()</code> is a writer of that row's
+      <code>workspace_id</code> (via <code>private.is_workspace_member</code>), and reject the whole
+      batch otherwise. Without that per-row check, DEFINER opens arbitrary cross-workspace log
+      writes; with INVOKER, nothing inserts. Spell this out in the implementation, plus
+      <code>set search_path = ''</code> and schema-qualified names, matching the existing DEFINER
+      functions.
+    </div>
+    <div class="warn">
       <strong>Keying &amp; ordering primitives the sketch needs but the codebase does not have yet.</strong>
       <ul>
         <li>
@@ -578,11 +592,18 @@ create policy …_read on … for select
       away.
     </div>
     <div class="decision">
-      <strong>The one real overlap.</strong> On E2EE workspaces, <code>blocks_history</code> already
-      stores <code>enc:v1:</code> ciphertext, so it gives up its "server-readable" advantage there
-      and the event log strictly dominates it. A defensible later trim is "skip/trim
-      <code>blocks_history</code> <em>for E2EE workspaces only</em>" — never a blanket replace, since
-      its independence-from-client-upload guarantee still has value. Out of scope for this proposal.
+      <strong>Even on E2EE, don't trim <code>blocks_history</code>.</strong> An earlier draft argued
+      that since <code>blocks_history</code> stores <code>enc:v1:</code> ciphertext on E2EE
+      workspaces it loses its "server-readable" edge and the event log "strictly dominates" it — so
+      it could be skipped/trimmed for E2EE. That's wrong, and it contradicts this doc's own thesis.
+      Readability is only <em>one</em> of <code>blocks_history</code>'s advantages; the load-bearing
+      ones survive encryption: it is <strong>server-triggered, atomic with the landed write,
+      client-independent, and complete</strong> for post-trigger writes. The event log has none of
+      those — it's client-uploaded and best-effort. So on exactly the failure modes this doc keeps
+      flagging (origin device dies / is wiped / its event upload is quarantined),
+      <code>blocks_history</code> is the <em>only</em> surviving record that the write happened, even
+      if the diff is opaque. The event log <em>adds</em> richer (encrypted) provenance on E2EE; it
+      does not replace the backstop. No skip/trim — encrypted or not.
     </div>
 
     <h2 id="costs">8. Costs &amp; open questions</h2>
