@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const supabaseRef = vi.hoisted(() => ({
   rpc: vi.fn(),
+  from: vi.fn(),
 }))
 
 vi.mock('@/services/supabase.js', () => ({
@@ -11,9 +12,11 @@ vi.mock('@/services/supabase.js', () => ({
 }))
 
 import {
+  AMBIGUOUS_RETRY_BUDGET,
   MAX_PATCHES_PER_SUPABASE_RPC,
   __applyBlockPatchesRpcForTest,
   __applyCompactedBlockOperationsForTest,
+  __recordRejectionToTableForTest,
   __compactBlockCrudEntriesForTest,
   __encryptUploadOpsForTest,
   __orderedBlockUpsertsForTest,
@@ -23,6 +26,7 @@ import {
   type GetWorkspaceMode,
   type UploadDeps,
 } from './powersync'
+import { classifyUploadError } from './uploadErrorClassifier'
 import type { GetCek } from '@/sync/transform'
 import { generateWorkspaceKeyBytes, importWorkspaceKey } from '@/sync/crypto/workspaceKey'
 import { hasEnvelopePrefix } from '@/sync/crypto/envelope'
@@ -759,11 +763,244 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
     ).rejects.toMatchObject({code: '42501'})
   })
 
+  it('threads the response HTTP status onto a codeless 4xx so it classifies ambiguous (#190)', async () => {
+    // Production shape: a non-JSON 4xx reaches postgrest-js as `{message: body}`
+    // with NO `code` of its own, and the HTTP status lives as a SIBLING of
+    // `{error}` in the response tuple — never on the error object. The old sink
+    // dropped that status on re-throw, so the classifier's 4xx branch was dead
+    // and PowerSync retried the same batch forever (queue jam). Threading the
+    // status through lets the classifier see it: a codeless non-retryable 4xx
+    // is `ambiguous` — a suspected-permanent client error we can't confirm from
+    // a code, so it gets a retry budget then quarantine. Note: unlike the
+    // standalone classifier tests, this error carries no `.status` of its own —
+    // it gets one only because the sink threads it (the production shape).
+    supabaseRef.rpc.mockResolvedValueOnce({data: null, error: {message: 'Bad Request'}, status: 400})
+
+    const thrown = await __applyBlockPatchesRpcForTest([
+      {id: 'block-a', payload: {content: 'B'}},
+    ]).catch((err: unknown) => err)
+
+    expect(thrown).toMatchObject({status: 400, message: 'Bad Request'})
+    expect(classifyUploadError(thrown)).toBe('ambiguous')
+  })
+
+  it('retries an ambiguous codeless 4xx across the budget, then quarantines it (#190)', async () => {
+    // A codeless non-retryable 4xx is `ambiguous`: we can't confirm it's
+    // permanent from a code, so the orchestrator retries it across a few upload
+    // passes (absorbing a transient blip) and quarantines it only once the
+    // budget is spent — instead of dropping it immediately or jamming the queue
+    // forever. The shared `attempts` map models the per-connector counter that
+    // survives across passes; each call here is one PowerSync upload pass over
+    // the same still-queued tx.
+    supabaseRef.rpc.mockResolvedValue({data: null, error: {message: 'Bad Request'}, status: 400})
+    const attempts = new Map<number, number>()
+    const recordRejection = vi.fn<UploadDeps['recordRejection']>().mockResolvedValue(undefined)
+    const deps: UploadDeps = {
+      applyOperations: (db, ops) => __applyCompactedBlockOperationsForTest(db, ops),
+      recordRejection,
+    }
+    const onePass = () => {
+      const tx = fakeTx(7, [new CrudEntry(1, UpdateType.PATCH, 'blocks', 'block-a', 7, {content: 'B'})])
+      const run = __uploadTransactionsWithFallbackForTest(
+        fakeDb, [tx] as unknown as CrudTransaction[], deps, attempts,
+      )
+      return {tx, run}
+    }
+
+    // The first BUDGET-1 passes re-throw (retry) and never quarantine.
+    for (let pass = 1; pass < AMBIGUOUS_RETRY_BUDGET; pass++) {
+      const {tx, run} = onePass()
+      await expect(run).rejects.toMatchObject({status: 400})
+      expect(tx.completed).toBe(false)
+    }
+    expect(recordRejection).not.toHaveBeenCalled()
+
+    // The final pass exhausts the budget → quarantine: recorded + completed,
+    // no re-throw. The threaded status survives to the rejection record.
+    const {tx, run} = onePass()
+    await run
+    expect(recordRejection).toHaveBeenCalledTimes(1)
+    expect(recordRejection.mock.calls[0]?.[2]).toMatchObject({status: 400})
+    expect(tx.completed).toBe(true)
+  })
+
+  it('resets the ambiguous budget after a successful pass (a recovered tx gets a fresh budget)', async () => {
+    // forgetAmbiguousAttempts clears the per-tx counter on a successful pass,
+    // so a tx that flaps — ambiguous a few times, then succeeds, then later
+    // goes ambiguous again — gets a FRESH budget rather than being quarantined
+    // early off a stale count.
+    const attempts = new Map<number, number>()
+    const recordRejection = vi.fn<UploadDeps['recordRejection']>().mockResolvedValue(undefined)
+    const deps: UploadDeps = {
+      applyOperations: (db, ops) => __applyCompactedBlockOperationsForTest(db, ops),
+      recordRejection,
+    }
+    const onePass = () => {
+      const tx = fakeTx(9, [new CrudEntry(1, UpdateType.PATCH, 'blocks', 'block-a', 9, {content: 'B'})])
+      const run = __uploadTransactionsWithFallbackForTest(
+        fakeDb, [tx] as unknown as CrudTransaction[], deps, attempts,
+      )
+      return {tx, run}
+    }
+
+    // Two ambiguous passes — the counter climbs to 2, short of the budget.
+    supabaseRef.rpc.mockResolvedValue({data: null, error: {message: 'Bad Request'}, status: 400})
+    for (let i = 0; i < 2; i++) {
+      await expect(onePass().run).rejects.toMatchObject({status: 400})
+    }
+    expect(attempts.get(9)).toBe(2)
+
+    // A successful pass clears the counter.
+    supabaseRef.rpc.mockResolvedValue({data: null, error: null})
+    const recovered = onePass()
+    await recovered.run
+    expect(recovered.tx.completed).toBe(true)
+    expect(attempts.has(9)).toBe(false)
+
+    // Ambiguous again → fresh budget: the first failure re-throws (count back to
+    // 1) and does NOT quarantine off the old near-exhausted count.
+    supabaseRef.rpc.mockResolvedValue({data: null, error: {message: 'Bad Request'}, status: 400})
+    const reflapped = onePass()
+    await expect(reflapped.run).rejects.toMatchObject({status: 400})
+    expect(recordRejection).not.toHaveBeenCalled()
+    expect(reflapped.tx.completed).toBe(false)
+    expect(attempts.get(9)).toBe(1)
+  })
+
+  it('retries a codeless 401 instead of dropping the write (expired session is not permanent) (#190)', async () => {
+    // The flip side of the codeless-4xx fix: an expired / not-yet-refreshed
+    // session surfaces as a codeless 401 whose status arrives only on the
+    // response sibling. It must stay transient — the orchestrator re-throws so
+    // PowerSync retries once the token refreshes, and the tx is neither
+    // recorded nor completed. Dropping it would lose a valid edit over a
+    // transient credentials problem, the exact silent-data-loss the classifier
+    // is built to avoid.
+    supabaseRef.rpc.mockResolvedValue({data: null, error: {message: 'JWT expired'}, status: 401})
+    const tx = fakeTx(1, [new CrudEntry(1, UpdateType.PATCH, 'blocks', 'block-a', 1, {content: 'B'})])
+    const recordRejection = vi.fn<UploadDeps['recordRejection']>().mockResolvedValue(undefined)
+
+    await expect(
+      __uploadTransactionsWithFallbackForTest(
+        fakeDb,
+        [tx] as unknown as CrudTransaction[],
+        {
+          applyOperations: (db, ops) => __applyCompactedBlockOperationsForTest(db, ops),
+          recordRejection,
+        },
+      ),
+    ).rejects.toMatchObject({status: 401})
+
+    expect(recordRejection).not.toHaveBeenCalled()
+    expect(tx.completed).toBe(false)
+  })
+
   it('is a no-op when given an empty patches array', async () => {
     // Defence in depth: applyCompactedBlockOperations already guards
     // the empty-patches case, but the sink itself must also skip the
     // round trip when handed an empty array (e.g. a future caller).
     await __applyBlockPatchesRpcForTest([])
     expect(supabaseRef.rpc).not.toHaveBeenCalled()
+  })
+})
+
+// ===========================================================================
+// defaultBlockUploadSink.createRows / deleteRow — status threading (#190).
+//
+// The status-threading fix touches all three sinks, but the supabase mock
+// historically stubbed only `.rpc`, so the CREATE (`.from().upsert()`) and
+// DELETE (`.from().delete()`) sinks had no coverage proving they thread the
+// response HTTP status onto the thrown error. Drive them through the real
+// default sink (no stubSink) so a regression to a bare `throw error` — which
+// would re-open the dead-status hole #190 closed — is caught.
+// ===========================================================================
+
+describe('defaultBlockUploadSink create/delete — status threading', () => {
+  beforeEach(() => {
+    supabaseRef.from.mockReset()
+  })
+
+  it('threads the response HTTP status onto a codeless 4xx from the CREATE sink', async () => {
+    const upsert = vi.fn().mockResolvedValue({data: null, error: {message: 'Bad Request'}, status: 400})
+    supabaseRef.from.mockReturnValue({upsert})
+
+    const thrown = await __applyCompactedBlockOperationsForTest(
+      fakeDatabase,
+      [{kind: 'create', id: 'block-a', payload: {id: 'block-a', content: 'A'}, order: 0}],
+    ).catch((err: unknown) => err)
+
+    expect(thrown).toMatchObject({status: 400, message: 'Bad Request'})
+    expect(classifyUploadError(thrown)).toBe('ambiguous')
+  })
+
+  it('threads the response HTTP status onto a codeless 4xx from the DELETE sink', async () => {
+    const eq = vi.fn().mockResolvedValue({data: null, error: {message: 'Bad Request'}, status: 400})
+    const del = vi.fn().mockReturnValue({eq})
+    supabaseRef.from.mockReturnValue({delete: del})
+
+    const thrown = await __applyCompactedBlockOperationsForTest(
+      fakeDatabase,
+      [{kind: 'delete', id: 'block-a', order: 0}],
+    ).catch((err: unknown) => err)
+
+    expect(thrown).toMatchObject({status: 400, message: 'Bad Request'})
+    expect(classifyUploadError(thrown)).toBe('ambiguous')
+  })
+})
+
+// ===========================================================================
+// recordRejectionToTable — atomic + idempotent quarantine record.
+//
+// Quarantine is `recordRejection(...)` then a SEPARATE `complete()`. If the
+// per-entry INSERTs ran outside a transaction, a mid-loop failure would leave
+// partial rows and (since complete() never runs) the tx would be re-recorded
+// on the next pass → duplicate ps_crud_rejected rows / a jam. These tests pin
+// that the whole record runs in one writeTransaction (atomic) led by a
+// DELETE-by-tx_id (idempotent re-record).
+// ===========================================================================
+
+describe('recordRejectionToTable — atomic + idempotent', () => {
+  const collectWrites = () => {
+    const calls: Array<{sql: string; params: unknown[]}> = []
+    let writeTxCount = 0
+    const directExecute = vi.fn()
+    const db = {
+      execute: directExecute,
+      writeTransaction: async (
+        cb: (tx: {execute: (sql: string, params: unknown[]) => Promise<unknown>}) => Promise<unknown>,
+      ) => {
+        writeTxCount++
+        return cb({
+          execute: async (sql: string, params: unknown[]) => {
+            calls.push({sql, params})
+            return undefined
+          },
+        })
+      },
+    } as unknown as AbstractPowerSyncDatabase
+    return {db, calls, directExecute, writeTxCount: () => writeTxCount}
+  }
+
+  it('records every entry in one writeTransaction, led by a DELETE-by-tx_id', async () => {
+    const {db, calls, directExecute, writeTxCount} = collectWrites()
+    const tx = fakeTx(42, [
+      new CrudEntry(1, UpdateType.PATCH, 'blocks', 'block-a', 42, {content: 'A'}),
+      new CrudEntry(2, UpdateType.PATCH, 'blocks', 'block-b', 42, {content: 'B'}),
+    ])
+    const err = Object.assign(new Error('Bad Request'), {status: 400})
+
+    await __recordRejectionToTableForTest(db, tx as unknown as CrudTransaction, err)
+
+    // One atomic transaction; nothing written via the non-transactional execute.
+    expect(writeTxCount()).toBe(1)
+    expect(directExecute).not.toHaveBeenCalled()
+    // Leading DELETE-by-tx_id makes a re-run idempotent (replace, not append).
+    expect(calls[0]?.sql).toMatch(/DELETE FROM ps_crud_rejected WHERE tx_id/)
+    expect(calls[0]?.params).toEqual([42])
+    // One INSERT per entry, carrying the entry's clientId as original_id.
+    const inserts = calls.slice(1)
+    expect(inserts).toHaveLength(2)
+    expect(inserts.every(c => /INSERT INTO ps_crud_rejected/.test(c.sql))).toBe(true)
+    expect(inserts.map(c => c.params[0])).toEqual([1, 2]) // original_id = clientId
+    expect(inserts.every(c => c.params[1] === 42)).toBe(true) // tx_id
   })
 })
