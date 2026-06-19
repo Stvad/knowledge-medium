@@ -429,7 +429,8 @@ command_events_log (
 -- N rows per command, one per block edit
 row_events_log (
   client_id     text,
-  event_uid     text,        -- (install_id, row_events.id): reset-proof + per-event unique (see warn)
+  install_id    text not null,  -- per-install nonce; with seq forms the reset-proof event id
+  seq           bigint not null,-- the client row_events.id: per-install append order (sortable)
   tx_id         text not null,   -- links to command_events_log
   block_id      text not null,
   workspace_id  text not null,
@@ -437,7 +438,7 @@ row_events_log (
   before_json   text,            -- enc:v1: on e2ee workspaces
   after_json    text,            -- enc:v1: on e2ee workspaces
   created_at    bigint not null,
-  primary key (client_id, event_uid)
+  primary key (client_id, install_id, seq)
 )
 
 -- BOTH tables (public schema): default-deny RLS + revoke, per the repo rule.
@@ -455,7 +456,7 @@ create policy …_read on … for select
       authorship); writes only via the upload path.
     </p>
     <div class="warn">
-      <strong>Two keying primitives the sketch needs but the codebase does not have yet.</strong>
+      <strong>Keying &amp; ordering primitives the sketch needs but the codebase does not have yet.</strong>
       <ul>
         <li>
           <strong><code>client_id</code> does not exist as a sync concept.</strong> There is no
@@ -480,15 +481,28 @@ create policy …_read on … for select
           (<code>clientSchema.ts:436</code>) appends a <em>separate</em> <code>row_event</code> on
           every <code>UPDATE</code>, so those events share all four fields and the later ones get
           dropped. The key needs a genuine per-event discriminator.
-          <br><strong>Workable shape:</strong> <code>event_uid = (install_id, row_events.id)</code>,
-          where <code>install_id</code> is a per-install UUID nonce persisted in
-          <code>client_schema_state</code> and <em>regenerated on every wipe</em>. That makes the
-          per-install autoincrement globally unique <em>and</em> reset-proof (post-wipe events carry a
-          fresh <code>install_id</code>, so they can never collide with pre-wipe ids — no silent
-          drop), while <code>row_events.id</code> being distinct per event handles repeated writes to
-          one block in one tx. (Note this is a per-<em>install</em> nonce, distinct from the durable
-          per-<em>device</em> <code>client_id</code> above, which is for "originating device" grouping;
-          they're different ids serving different jobs.)
+          <br><strong>Workable shape:</strong> identify an event by
+          <code>(install_id, seq)</code> where <code>install_id</code> is a per-install UUID nonce
+          persisted in <code>client_schema_state</code> and <em>regenerated on every wipe</em>, and
+          <code>seq</code> is the client <code>row_events.id</code>. That makes the per-install
+          autoincrement globally unique <em>and</em> reset-proof (post-wipe events carry a fresh
+          <code>install_id</code>, so they can never collide with pre-wipe ids — no silent drop),
+          while <code>seq</code> being distinct per event handles repeated writes to one block in one
+          tx. (<code>install_id</code> is a per-<em>install</em> nonce, distinct from the durable
+          per-<em>device</em> <code>client_id</code> above, which is for "originating device"
+          grouping; different ids, different jobs.)
+        </li>
+        <li>
+          <strong>Replay needs an explicit order, not <code>created_at</code>.</strong> When one
+          <code>repo.tx</code> writes a block more than once, the trigger appends multiple
+          <code>row_events</code> whose <code>created_at</code> (ms wall-clock) can <em>tie</em>, so
+          ordering replay by time — or by a lexically-sorted composite id — can apply the before/after
+          chain backwards and reconstruct the wrong state. Expose <code>seq</code> as its own
+          integer column (above) and define the rule: <strong>replay a block's chain ordered by
+          <code>(install_id, seq)</code></strong> — <code>seq</code> is the local append order, the
+          ground truth for one device's contribution. Cross-install ordering of edits to the same
+          block is only partially defined (the same LWW limitation the rest of sync has); a stable
+          tiebreak (<code>created_at</code>, then <code>install_id</code>) keeps it deterministic.
         </li>
       </ul>
     </div>
@@ -536,17 +550,28 @@ create policy …_read on … for select
       <tr><td>Resolution</td><td>Sync-checkpoint (post-collapse)</td><td>Per-commit, uncollapsed</td></tr>
       <tr><td>Provenance</td><td>None (semantic_op + changed_columns)</td><td>Rich (command description, scope, mutators)</td></tr>
       <tr><td>Readability</td><td>Server-readable for plaintext workspaces</td><td>Encrypted/opaque by design on E2EE</td></tr>
-      <tr><td>Completeness</td><td>Anything that lands in <code>blocks</code>, independent of clients</td><td>Only as complete as clients upload + retention keeps</td></tr>
+      <tr><td>Completeness</td><td>Anything that lands in <code>blocks</code> <em>after the trigger shipped</em>, independent of clients</td><td>Only as complete as clients upload + retention keeps</td></tr>
     </table>
     <p>
       The load-bearing row is the last one. <code>blocks_history</code> is written server-side from
-      the authoritative landed state — it can't be missing history for a block that exists, and it
-      is the declared substrate for server-side point-in-time recovery. The event log is a client
-      assertion on a separate upload path: a quarantined event upload, a device that dies before
-      flushing, or a retention cap can each leave gaps for blocks that are definitely on the server.
-      So <code>blocks_history</code> stays as the server-trustworthy backstop; the event log layers
-      rich, commit-grain provenance on top.
+      the authoritative landed state, so for any write <em>after the trigger landed</em> it can't be
+      missing history, and it is the declared substrate for server-side point-in-time recovery. The
+      event log is a client assertion on a separate upload path: a quarantined event upload, a device
+      that dies before flushing, or a retention cap can each leave gaps for blocks that are definitely
+      on the server. So <code>blocks_history</code> stays as the server-trustworthy backstop; the
+      event log layers rich, commit-grain provenance on top.
     </p>
+    <div class="warn">
+      <strong><code>blocks_history</code> is not retroactive.</strong> Migration
+      <code>20260522062437</code> creates the table + trigger but does <em>not</em> backfill existing
+      <code>blocks</code> rows, and maintenance jobs can disable
+      <code>blocks_record_history_trg</code> for bulk work. So blocks created before the trigger (or
+      written while it was disabled) have no history — "complete backstop" holds only for writes
+      recorded after the trigger. Don't let the event-log design treat a pre-trigger block's absence
+      of history as "safe"; closing that gap needs a one-time backfill/anchor (e.g. seed a synthetic
+      <code>create</code> from current row state) that is out of scope here but must not be assumed
+      away.
+    </div>
     <div class="decision">
       <strong>The one real overlap.</strong> On E2EE workspaces, <code>blocks_history</code> already
       stores <code>enc:v1:</code> ciphertext, so it gives up its "server-readable" advantage there
