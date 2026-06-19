@@ -410,7 +410,7 @@
 <p><code>ps_crud</code> membership read via <code>SELECT json_extract(data,'$.id') FROM ps_crud WHERE json_extract(data,'$.type')='blocks'</code>.</p>
 
 <h3>L5 — Server-side anomaly detection (extend the hourly probe)</h3>
-<p><code>blocks_history</code> is the forensic backbone: append-only, with <code>op</code>/<code>semantic_op</code>/<code>changed_columns</code>/<code>actor</code>/<code>event_time</code>/<code>before_diff</code>/<code>after_diff</code>. The existing hourly probe (<code>scripts/supabase-health.mjs</code>, cron <code>:17</code>) already holds a privileged pooler connection. The plan <strong>extends it</strong> with a <code>runDataIntegrityChecks()</code> pass (designed; <strong>not yet written</strong> — only thresholds drafted) over a 90-minute window (overlaps the hourly cadence so no gap). These detectors read the <em>server</em>, so they are plaintext-only and see nothing in a history-trigger-off window — see §4 for those blind spots:</p>
+<p><code>blocks_history</code> is the forensic backbone: append-only, with <code>op</code>/<code>semantic_op</code>/<code>changed_columns</code>/<code>actor</code>/<code>event_time</code>/<code>before_diff</code>/<code>after_diff</code>. The existing hourly probe (<code>scripts/supabase-health.mjs</code>, cron <code>:17</code>) already holds a privileged pooler connection. The plan <strong>extends it</strong> with a <code>runDataIntegrityChecks()</code> pass (designed; <strong>not yet written</strong> — signatures + starting thresholds below) over a 90-minute window (overlaps the hourly cadence so no gap). These detectors read the <em>server</em>, so they are plaintext-only and see nothing in a history-trigger-off window — see §4 for those blind spots:</p>
 <table>
   <thead><tr><th>Detector</th><th>Signature</th><th>Incident</th></tr></thead>
   <tbody>
@@ -421,6 +421,19 @@
     <tr><td>At-rest property-ref inconsistency</td><td>Curated high-value props (<code>next-review-date</code>): value present in <code>properties_json</code> but ref absent in <code>references_json</code> (the proven detection query).</td><td>#1</td></tr>
   </tbody>
 </table>
+<p><strong>Starting thresholds</strong> — per actor+workspace over an <code>INTEGRITY_WINDOW_MIN = 90</code>-minute window. These are <em>starting points to be baselined (D2), not final</em>:</p>
+<table>
+  <thead><tr><th>Detector</th><th>WARN</th><th>FAIL (email)</th></tr></thead>
+  <tbody>
+    <tr><td>References emptied — durable (still empty at window end)</td><td>50</td><td>1000</td></tr>
+    <tr><td>References shrunk (count merely decreased)</td><td>200 <span class="footnote">(informational / off — noisy)</span></td><td>—</td></tr>
+    <tr><td>Property-key removals</td><td>200</td><td>—</td></tr>
+    <tr><td>Deletions (<code>D</code> + <code>soft_delete</code>)</td><td>200</td><td>2000</td></tr>
+    <tr><td>Bulk <code>updated_at</code>-only bumps</td><td>100</td><td>—</td></tr>
+    <tr><td>At-rest property-ref inconsistency (curated)</td><td>100</td><td>—</td></tr>
+  </tbody>
+</table>
+<p class="footnote">Only "references emptied (durable)" and "deletions" have a FAIL/email tier; the rest are WARN-only until baselined. Per D2 the WARN band is currently email-silent, so for the small fleet these FAIL ceilings should be lowered toward fleet-realistic counts once real traffic is observed. <code>DATA_INTEGRITY_STRICT=1</code> promotes every WARN to FAIL.</p>
 <div class="callout">
   <h4>Detector nuance — the column set is not a discriminator (emptied vs shrunk tradeoff)</h4>
   <p>It's tempting to key the strip detector on <code>changed_columns ⊆ {references_json, updated_at, user_updated_at}</code>. That set is <strong>not</strong> a discriminator: every normal references-processor write <em>and</em> add-only reprojection writes refs with <code>skipMetadata</code> (<code>referencesProcessor.ts:234</code>, <code>repo.ts:1513</code>), which produces exactly <code>{references_json, updated_at}</code> via <code>metadataPatch</code> (<code>txEngine.ts:759</code>). So the column shape matches routine editing too. Two candidate value-signals, with a real tradeoff:</p>
@@ -497,7 +510,7 @@
 
 <div class="callout decision">
   <h4>D2 · L5 alerting posture <span class="pill done">resolved</span></h4>
-  <p style="margin-bottom:0"><strong>Decision: share the infra</strong> — the data-integrity detectors run on the existing hourly probe's cron and use its failure-email channel (one cron, one channel; right for the small fleet). Posture stays warn-by-default with the one catastrophe hard-fail, promotable via <code>DATA_INTEGRITY_STRICT</code> (§3 L5). <strong>Calibration caveat:</strong> WARN is email-silent (snapshot-only), but for a 2-user fleet the <em>realistic</em> incident is a few-hundred-row mistake, which lands in the WARN band — so the dangerous-but-not-catastrophic middle is muted. Once the detector is built and baselined, lower the FAIL thresholds toward fleet-realistic counts (a 200-row unintended delete should page), rather than leaving them at catastrophe-only ceilings.</p>
+  <p style="margin-bottom:0"><strong>Decision: share the infra</strong> — once written, the data-integrity detectors <em>will run</em> on the existing hourly probe's cron and use its failure-email channel (one cron, one channel; right for the small fleet). Posture stays warn-by-default with the one catastrophe hard-fail, promotable via <code>DATA_INTEGRITY_STRICT</code> (§3 L5). <strong>Calibration caveat:</strong> WARN is email-silent (snapshot-only), but for a 2-user fleet the <em>realistic</em> incident is a few-hundred-row mistake, which lands in the WARN band — so the dangerous-but-not-catastrophic middle is muted. Once the detector is built and baselined, lower the FAIL thresholds toward fleet-realistic counts (a 200-row unintended delete should page), rather than leaving them at catastrophe-only ceilings.</p>
 </div>
 
 <div class="callout decision">
