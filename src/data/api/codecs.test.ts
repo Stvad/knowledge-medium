@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest'
 import {
   codecs,
   CodecError,
+  decodeRefListIds,
   isRefCodec,
   isRefListCodec,
+  type RefListCodec,
 } from './codecs'
 
 describe('codec type metadata', () => {
@@ -189,6 +191,52 @@ describe('codecs.refList', () => {
   it('rejects non-arrays and non-string members', () => {
     expect(() => codecs.refList().decode('target-1')).toThrow(CodecError)
     expect(() => codecs.refList().decode(['target-1', 42])).toThrow(CodecError)
+  })
+
+  it('decodeValid keeps well-formed ids and drops only the malformed elements (#189)', () => {
+    const inner = codecs.refList()
+    // The historical whole-field strip: one bad element must NOT discard the
+    // valid backlinks alongside it.
+    expect(inner.decodeValid!(['valid-1', 'valid-2', 42])).toEqual(['valid-1', 'valid-2'])
+    expect(inner.decodeValid!(['a', null, 'b', {}, 'c'])).toEqual(['a', 'b', 'c'])
+    expect(inner.decodeValid!([])).toEqual([])
+    expect(inner.decodeValid!(['a', 'b'])).toEqual(['a', 'b'])
+  })
+
+  it('decodeValid returns [] for non-array input (nothing recoverable)', () => {
+    expect(codecs.refList().decodeValid!('target-1')).toEqual([])
+    expect(codecs.refList().decodeValid!(42)).toEqual([])
+    expect(codecs.refList().decodeValid!(null)).toEqual([])
+  })
+})
+
+describe('decodeRefListIds', () => {
+  it('uses the codec decodeValid when present (lenient element-wise, #189)', () => {
+    expect(decodeRefListIds(codecs.refList(), ['valid-1', 42, 'valid-2'])).toEqual(['valid-1', 'valid-2'])
+    expect(decodeRefListIds(codecs.refList(), 'not-an-array')).toEqual([])
+  })
+
+  it('falls back to a method-free string filter for a codec lacking decodeValid', () => {
+    // Models a RefListCodec authored against the pre-decodeValid public
+    // interface (RefListCodec is exported, so external/older plugins may
+    // implement only the original shape). It must not throw
+    // `decodeValid is not a function` and abort the block's whole projection
+    // — it recovers the well-formed ids the same way.
+    const legacy: RefListCodec = {
+      type: 'refList',
+      targetTypes: [],
+      encode: v => v.map(item => item),
+      decode: j => {
+        if (!Array.isArray(j)) throw new CodecError('array', j)
+        return j.map(item => {
+          if (typeof item !== 'string') throw new CodecError('string', item)
+          return item
+        })
+      },
+    }
+    expect(legacy.decodeValid).toBeUndefined()
+    expect(decodeRefListIds(legacy, ['valid-1', 42, 'valid-2'])).toEqual(['valid-1', 'valid-2'])
+    expect(decodeRefListIds(legacy, 'not-an-array')).toEqual([])
   })
 })
 

@@ -57,6 +57,22 @@ export interface RefCodec extends Codec<string> {
 export interface RefListCodec extends Codec<readonly string[]> {
   readonly type: 'refList'
   readonly targetTypes: readonly string[]
+  /** Lenient element-wise decode for reference projection. Decodes each
+   *  element through the element codec, *dropping* (never throwing on)
+   *  the ones that fail, and returns the well-formed ids. Non-array input
+   *  yields `[]`. This is the projection-safe counterpart to `decode`:
+   *  one malformed element must not strip the whole field's backlinks to
+   *  `[]` (issue #189). `decode` stays strict for the write/read boundary
+   *  call sites that want shape errors surfaced.
+   *
+   *  Optional because `RefListCodec` is a public, exported boundary that
+   *  predates this method: a third-party or older plugin may implement
+   *  only the original shape. Reference projection must reach it through
+   *  `decodeRefListIds`, which feature-detects this method so a legacy
+   *  codec can't throw `decodeValid is not a function` and abort the
+   *  block's whole projection. Codecs built by `codecs.refList()` always
+   *  provide it. */
+  decodeValid?(json: unknown): string[]
 }
 
 const stringCodec: Codec<string> = {
@@ -171,6 +187,21 @@ const refList = (options?: RefCodecOptions): RefListCodec => {
       if (!Array.isArray(j)) throw new CodecError('array', j)
       return j.map(item => stringCodec.decode(item))
     },
+    decodeValid: j => {
+      // Element-wise + fault-tolerant: a non-array has nothing to recover,
+      // and a single bad element drops only itself. Never strips the whole
+      // field's derived refs to [] (issue #189).
+      if (!Array.isArray(j)) return []
+      const out: string[] = []
+      for (const item of j) {
+        try {
+          out.push(stringCodec.decode(item))
+        } catch {
+          // Drop only the malformed element; keep the well-formed ids.
+        }
+      }
+      return out
+    },
   }
 }
 
@@ -179,6 +210,22 @@ export const isRefCodec = (codec: unknown): codec is RefCodec =>
 
 export const isRefListCodec = (codec: unknown): codec is RefListCodec =>
   typeof codec === 'object' && codec !== null && (codec as Codec<unknown>).type === 'refList'
+
+/** Project a refList codec's value to its well-formed ref ids — the
+ *  reference-projection-safe entry point. Prefers the codec's own lenient
+ *  `decodeValid`; falls back to a method-free string filter for a
+ *  `RefListCodec` authored against the pre-`decodeValid` public interface
+ *  (`isRefListCodec` narrows on the discriminator alone, so such a codec
+ *  reaches here). `RefListCodec` is `Codec<readonly string[]>`, so
+ *  well-formed elements are strings — keep those, drop the rest. Total by
+ *  construction: never throws, so one malformed element OR a missing
+ *  method drops only what it must and never aborts the block's projection
+ *  (issue #189 + its follow-up). */
+export const decodeRefListIds = (codec: RefListCodec, value: unknown): string[] => {
+  if (typeof codec.decodeValid === 'function') return codec.decodeValid(value)
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is string => typeof item === 'string')
+}
 
 /** URL codec: plain string with light validation on encode/decode.
  *  Currently accepts any non-empty string; tightening the validation
