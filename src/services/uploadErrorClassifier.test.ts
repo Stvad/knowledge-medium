@@ -39,18 +39,28 @@ describe('classifyUploadError', () => {
     })
 
     it('classifies 42xxx access/syntax errors as permanent', () => {
-      // 42501 = insufficient_privilege (RLS rejection at the GRANT level).
+      // 42501 = insufficient_privilege — an RLS rejection, e.g. a workspace
+      // un-shared out from under a pending write (revoked authorization);
+      // this is the HTTP 403 case the upload path must QUARANTINE, not retry.
       // 42703 = undefined_column (client schema vs server schema drift).
       // Both indicate the request can never succeed unchanged.
       expect(classifyUploadError(postgrestError('42501'))).toBe('permanent')
       expect(classifyUploadError(postgrestError('42703'))).toBe('permanent')
     })
 
-    it('classifies PostgREST RLS denials (PGRST301) as permanent', () => {
-      expect(classifyUploadError(postgrestError('PGRST301'))).toBe('permanent')
+    it('classifies the JWT/auth codes (PGRST301/PGRST302) as transient — an expired token must not drop the write', () => {
+      // PGRST301 = "JWT invalid or expired", PGRST302 = "anonymous access
+      // disabled" — both HTTP 401 and RECOVERABLE: the token refreshes or the
+      // user re-authenticates and the retry succeeds. Quarantining these would
+      // silently drop a valid edit over a transient credentials problem. The
+      // error CODE is what tells a recoverable expired-token (PGRST301) apart
+      // from a permanent revoked-access RLS denial (42501) — not the 401/403,
+      // which both can carry.
+      expect(classifyUploadError(postgrestError('PGRST301'))).toBe('transient')
+      expect(classifyUploadError(postgrestError('PGRST302'))).toBe('transient')
     })
 
-    it('classifies the other narrow PostgREST permanent codes (PGRST204, PGRST116)', () => {
+    it('classifies the narrow PostgREST permanent codes (PGRST204, PGRST116) as permanent', () => {
       // PGRST204 = column not found in schema cache (client/server schema
       // drift); PGRST116 = result-cardinality mismatch. Both fail again
       // unchanged on retry, so they must be dropped, not re-queued.

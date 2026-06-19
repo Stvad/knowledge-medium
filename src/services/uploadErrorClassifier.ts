@@ -45,11 +45,24 @@ const isPermanentSqlState = (code: string): boolean =>
   code.startsWith('42') ||
   PERMANENT_PLPGSQL_SQLSTATES.has(code)
 
-/** PostgREST-specific codes (prefixed `PGRST`) for situations the underlying
- *  Postgres call never reached, e.g. RLS denial expressed as a 4xx response.
- *  Keep this list narrow — broaden as new permanent classes surface in
- *  production logs. */
-const PERMANENT_POSTGREST_CODES = new Set(['PGRST301', 'PGRST204', 'PGRST116'])
+/** PostgREST-specific codes (prefixed `PGRST`) that are permanent — the
+ *  request can never succeed unchanged:
+ *   - `PGRST204` — column not found in the schema cache (client/server schema
+ *     drift); the same payload keeps missing the column until a deploy.
+ *   - `PGRST116` — result-cardinality mismatch (`.single()` got 0 or >1 rows).
+ *  Keep this list narrow — broaden as new permanent classes surface in logs.
+ *
+ *  Deliberately NOT here: the JWT/auth group — `PGRST301` ("JWT invalid or
+ *  expired") and `PGRST302` ("anonymous access disabled"), both HTTP 401.
+ *  Those are RECOVERABLE: the token refreshes or the user re-authenticates and
+ *  the retry succeeds, so they fall through to `transient`. Dropping a write on
+ *  an expired token is exactly the silent data-loss this module exists to
+ *  avoid. A genuine authorization revocation (a workspace un-shared out from
+ *  under a pending write → row-level security rejects it) surfaces instead as
+ *  the Postgres SQLSTATE `42501` (HTTP 403), which `isPermanentSqlState`
+ *  catches — so revoked access is still quarantined, told apart from a
+ *  recoverable expired token by the precise CODE rather than the 401/403. */
+const PERMANENT_POSTGREST_CODES = new Set(['PGRST204', 'PGRST116'])
 
 /** HTTP statuses that mean "the client sent a request the same payload can
  *  never fix" — retry produces the same response, so the write is dropped to
@@ -60,9 +73,12 @@ const PERMANENT_POSTGREST_CODES = new Set(['PGRST301', 'PGRST204', 'PGRST116'])
  *      session, or a gateway-auth blip — recoverable once the token refreshes
  *      or the user re-authenticates, so the queued write must be retried.
  *      Dropping it here would lose a valid edit over a transient credentials
- *      problem. Genuine, unrecoverable authorization failures (RLS denial)
- *      arrive with a code (42501 / PGRST301) and are caught by the code
- *      branch above — not here, where only codeless status-only errors land. */
+ *      problem. The two auth outcomes are told apart by the error CODE, not
+ *      the status: an expired/invalid token carries the JWT code (`PGRST301`,
+ *      transient) while a genuine authorization revocation (workspace
+ *      un-shared → RLS rejects the write) carries the Postgres SQLSTATE
+ *      `42501` and is caught as permanent by the code branch above. Only
+ *      codeless status-only auth errors reach here. */
 const RETRYABLE_HTTP_STATUSES = new Set([401, 403, 408, 429])
 
 const isPermanentHttpStatus = (status: number): boolean =>
