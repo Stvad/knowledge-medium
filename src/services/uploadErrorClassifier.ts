@@ -37,11 +37,22 @@ const isPermanentSqlState = (code: string): boolean =>
  *  production logs. */
 const PERMANENT_POSTGREST_CODES = new Set(['PGRST301', 'PGRST204', 'PGRST116'])
 
-/** HTTP statuses that mean "client made a bad request" — retry will produce
- *  the same response. 408 (timeout) and 429 (rate limit) are deliberately
- *  excluded: the server is inviting a later retry. */
+/** HTTP statuses that mean "the client sent a request the same payload can
+ *  never fix" — retry produces the same response, so the write is dropped to
+ *  the rejection table. The retry-friendly 4xx subset is deliberately
+ *  excluded so a recoverable failure never silently drops a valid write:
+ *    - 408 (timeout) / 429 (rate limit): the server invites a later retry.
+ *    - 401 (unauthorized) / 403 (forbidden): an expired or not-yet-refreshed
+ *      session, or a gateway-auth blip — recoverable once the token refreshes
+ *      or the user re-authenticates, so the queued write must be retried.
+ *      Dropping it here would lose a valid edit over a transient credentials
+ *      problem. Genuine, unrecoverable authorization failures (RLS denial)
+ *      arrive with a code (42501 / PGRST301) and are caught by the code
+ *      branch above — not here, where only codeless status-only errors land. */
+const RETRYABLE_HTTP_STATUSES = new Set([401, 403, 408, 429])
+
 const isPermanentHttpStatus = (status: number): boolean =>
-  status >= 400 && status < 500 && status !== 408 && status !== 429
+  status >= 400 && status < 500 && !RETRYABLE_HTTP_STATUSES.has(status)
 
 export const classifyUploadError = (err: unknown): UploadErrorClass => {
   if (isObjectWith(err, 'code') && typeof err.code === 'string') {

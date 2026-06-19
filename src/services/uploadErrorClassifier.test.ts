@@ -61,17 +61,27 @@ describe('classifyUploadError', () => {
   })
 
   describe('HTTP status codes', () => {
-    it('classifies 4xx client errors as permanent', () => {
+    it('classifies payload-permanent 4xx client errors as permanent', () => {
+      // The same payload can never satisfy these, so retrying forever would
+      // jam the queue — drop them to the rejection table instead. 401/403 are
+      // pointedly NOT here: those are recoverable (see the transient case).
       expect(classifyUploadError(httpError(400))).toBe('permanent')
-      expect(classifyUploadError(httpError(401))).toBe('permanent')
-      expect(classifyUploadError(httpError(403))).toBe('permanent')
       expect(classifyUploadError(httpError(404))).toBe('permanent')
       expect(classifyUploadError(httpError(409))).toBe('permanent')
+      expect(classifyUploadError(httpError(413))).toBe('permanent')
+      expect(classifyUploadError(httpError(422))).toBe('permanent')
     })
 
-    it('classifies 408/429 as transient (the retry-friendly 4xx subset)', () => {
-      // 408 = request timeout (client side, often network blip).
-      // 429 = rate limited; server explicitly invites a retry.
+    it('classifies the retry-friendly 4xx subset (401/403/408/429) as transient', () => {
+      // 408 = request timeout (often a network blip); 429 = rate limited —
+      // both server-invited retries. 401/403 = an expired/not-yet-refreshed
+      // session or a gateway-auth blip: recoverable once the token refreshes
+      // or the user re-authenticates, so the queued write must be retried, not
+      // dropped — dropping it would lose a valid edit over a credentials
+      // problem. Genuine authorization failures (RLS denial) carry a code
+      // (42501 / PGRST301) and are caught by the code branch, not by status.
+      expect(classifyUploadError(httpError(401))).toBe('transient')
+      expect(classifyUploadError(httpError(403))).toBe('transient')
       expect(classifyUploadError(httpError(408))).toBe('transient')
       expect(classifyUploadError(httpError(429))).toBe('transient')
     })

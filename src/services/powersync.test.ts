@@ -806,6 +806,33 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
     expect(tx.completed).toBe(true)
   })
 
+  it('retries a codeless 401 instead of dropping the write (expired session is not permanent) (#190)', async () => {
+    // The flip side of the codeless-4xx fix: an expired / not-yet-refreshed
+    // session surfaces as a codeless 401 whose status arrives only on the
+    // response sibling. It must stay transient — the orchestrator re-throws so
+    // PowerSync retries once the token refreshes, and the tx is neither
+    // recorded nor completed. Dropping it would lose a valid edit over a
+    // transient credentials problem, the exact silent-data-loss the classifier
+    // is built to avoid.
+    supabaseRef.rpc.mockResolvedValue({data: null, error: {message: 'JWT expired'}, status: 401})
+    const tx = fakeTx(1, [new CrudEntry(1, UpdateType.PATCH, 'blocks', 'block-a', 1, {content: 'B'})])
+    const recordRejection = vi.fn<UploadDeps['recordRejection']>().mockResolvedValue(undefined)
+
+    await expect(
+      __uploadTransactionsWithFallbackForTest(
+        fakeDb,
+        [tx] as unknown as CrudTransaction[],
+        {
+          applyOperations: (db, ops) => __applyCompactedBlockOperationsForTest(db, ops),
+          recordRejection,
+        },
+      ),
+    ).rejects.toMatchObject({status: 401})
+
+    expect(recordRejection).not.toHaveBeenCalled()
+    expect(tx.completed).toBe(false)
+  })
+
   it('is a no-op when given an empty patches array', async () => {
     // Defence in depth: applyCompactedBlockOperations already guards
     // the empty-patches case, but the sink itself must also skip the
