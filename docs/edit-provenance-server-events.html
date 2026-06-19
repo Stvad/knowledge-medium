@@ -462,9 +462,12 @@ create policy …_read on … for select
       event upload rejected. The fix is <code>SECURITY DEFINER</code> (as
       <code>create_workspace</code> and the <code>blocks_record_history</code> trigger already are),
       but DEFINER <em>bypasses RLS</em> — so the function must itself verify, <strong>for every
-      appended row</strong>, that <code>auth.uid()</code> is a writer of that row's
-      <code>workspace_id</code> (via <code>private.is_workspace_member</code>), and reject the whole
-      batch otherwise. Without that per-row check, DEFINER opens arbitrary cross-workspace log
+      appended row</strong>, that <code>auth.uid()</code> is a <em>writer</em> of that row's
+      <code>workspace_id</code>. Use <code>private.is_workspace_writer</code> (owner/editor), the
+      same helper the <code>blocks_write</code> policy uses — <strong>not</strong>
+      <code>private.is_workspace_member</code>, which also matches read-only viewers and would let a
+      viewer append forged provenance for writes they could never make. Reject the whole batch
+      otherwise. Without that per-row writer check, DEFINER opens cross-workspace / viewer log
       writes; with INVOKER, nothing inserts. Spell this out in the implementation, plus
       <code>set search_path = ''</code> and schema-qualified names, matching the existing DEFINER
       functions.
