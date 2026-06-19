@@ -178,6 +178,22 @@ const assertSupabase = () => {
   return supabase
 }
 
+/** Re-throw a Supabase/PostgREST error with the HTTP `status` attached.
+ *
+ *  PostgREST returns the HTTP status as a SIBLING of `{error}` in the
+ *  response tuple — it is never a field on the `PostgrestError` object
+ *  (which carries only `{message, details, hint, code}`). The upload-error
+ *  classifier's "permanent on 4xx" branch keys off `err.status`, so unless
+ *  the status is threaded onto the thrown error that branch is dead: a
+ *  codeless permanent 4xx (expired-JWT 401/403, 413, a generic 400, or any
+ *  non-JSON body postgrest-js surfaces as `{message: body}` with no `code`)
+ *  falls through to `transient`, PowerSync retries the same batch forever,
+ *  and the upload queue jams permanently. See `uploadErrorClassifier.ts`
+ *  and issue #190. */
+const throwWithHttpStatus = (error: object, status: number): never => {
+  throw Object.assign(error, {status})
+}
+
 const blockPayloadFromPut = (entry: CrudEntry): BlockUploadPayload => ({
   ...(entry.opData ?? {}),
   id: entry.id,
@@ -327,10 +343,10 @@ const applyBlockPatchesRpc = async (
   for (const chunk of chunked(patches, MAX_PATCHES_PER_SUPABASE_RPC)) {
     console.debug('[powersync] PATCH batch', chunk.length)
     const payload = chunk.map(patch => ({id: patch.id, ...patch.payload}))
-    const {error} = await client.rpc('apply_block_patches', {patches: payload})
+    const {error, status} = await client.rpc('apply_block_patches', {patches: payload})
 
     if (error) {
-      throw error
+      throwWithHttpStatus(error, status)
     }
   }
 }
@@ -339,13 +355,13 @@ const applyBlockDelete = async (id: string) => {
   const client = assertSupabase()
 
   console.debug('[powersync] DELETE', id)
-  const {error} = await client
+  const {error, status} = await client
     .from('blocks')
     .delete()
     .eq('id', id)
 
   if (error) {
-    throw error
+    throwWithHttpStatus(error, status)
   }
 }
 
@@ -360,12 +376,12 @@ const applyBlockCreates = async (rows: readonly BlockUploadPayload[]) => {
 
   for (const chunk of chunked(orderedBlockUpserts(rows), MAX_BLOCKS_PER_SUPABASE_UPSERT)) {
     console.debug('[powersync] CREATE batch', chunk.length)
-    const {error} = await client
+    const {error, status} = await client
       .from('blocks')
       .upsert(chunk, {onConflict: 'id', ignoreDuplicates: true})
 
     if (error) {
-      throw error
+      throwWithHttpStatus(error, status)
     }
   }
 }
