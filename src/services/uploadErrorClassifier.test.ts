@@ -19,6 +19,16 @@ const httpError = (status: number, message = 'test'): Error => {
 
 describe('classifyUploadError', () => {
   describe('Postgres SQLSTATE codes', () => {
+    it('classifies 22xxx data exceptions as permanent', () => {
+      // 22P02 = invalid_text_representation (a malformed cast of e.g.
+      // created_at/updated_at/deleted inside apply_block_patches); 22003 =
+      // numeric_value_out_of_range. The payload is fixed, so retrying it can
+      // only fail identically — drop it rather than jam the queue forever.
+      // Classified permanent by code, independent of any threaded HTTP status.
+      expect(classifyUploadError(postgrestError('22P02'))).toBe('permanent')
+      expect(classifyUploadError(postgrestError('22003'))).toBe('permanent')
+    })
+
     it('classifies 23xxx integrity-constraint violations as permanent', () => {
       // 23503 is the foreign-key violation that originally jammed the
       // upload queue when a child block referenced a parent the server

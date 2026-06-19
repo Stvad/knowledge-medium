@@ -19,9 +19,16 @@ const isObjectWith = <K extends string>(
 ): value is Record<K, unknown> =>
   typeof value === 'object' && value !== null && key in value
 
-/** Postgres integrity-constraint class (`23xxx`) and access/syntax class
- *  (`42xxx`) are permanent — retrying with the same payload cannot succeed.
- *  PostgREST surfaces these on the JS error's `code` field verbatim.
+/** Postgres SQLSTATE classes that can never succeed on retry of the same
+ *  payload, so the tx is dropped to the rejection table rather than retried
+ *  forever. PostgREST surfaces these on the JS error's `code` field verbatim.
+ *   - `22xxx` data exception — a malformed/out-of-range value, e.g. `22P02`
+ *     invalid_text_representation from a bad cast of `created_at` /
+ *     `updated_at` / `user_updated_at` / `deleted` inside `apply_block_patches`.
+ *     The payload is fixed, so it fails identically every time.
+ *   - `23xxx` integrity-constraint violation (FK / unique / check).
+ *   - `42xxx` access-rule / syntax error (RLS GRANT denial, client/server
+ *     schema drift).
  *
  *  `P0002` (`no_data_found`) is raised by `apply_block_patches` when a
  *  patch's target row is missing — retrying the same batch cannot make
@@ -29,7 +36,10 @@ const isObjectWith = <K extends string>(
 const PERMANENT_PLPGSQL_SQLSTATES = new Set(['P0002'])
 
 const isPermanentSqlState = (code: string): boolean =>
-  code.startsWith('23') || code.startsWith('42') || PERMANENT_PLPGSQL_SQLSTATES.has(code)
+  code.startsWith('22') ||
+  code.startsWith('23') ||
+  code.startsWith('42') ||
+  PERMANENT_PLPGSQL_SQLSTATES.has(code)
 
 /** PostgREST-specific codes (prefixed `PGRST`) for situations the underlying
  *  Postgres call never reached, e.g. RLS denial expressed as a 4xx response.
