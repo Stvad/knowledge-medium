@@ -3,8 +3,20 @@ import ReactDOM from 'react-dom'
 import type { Repo } from '@/data/repo'
 import type { Block } from '@/data/block'
 import { ChangeScope, type BlockData, type BlockReference } from '@/data/api'
-import { aliasesProp, extensionDescriptionProp, extensionNameProp, topLevelBlockIdProp } from '@/data/properties.js'
+import { aliasesProp, extensionDescriptionProp, extensionNameProp, getBlockTypes, topLevelBlockIdProp } from '@/data/properties.js'
 import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
+import { BACKLINKS_FOR_BLOCK_QUERY, type BacklinksFilter } from '@/plugins/backlinks/query.js'
+import { resolveBacklinksFilter, type BacklinksFilterSpec } from '@/plugins/backlinks/resolveFilter.js'
+import {
+  GROUPED_BACKLINKS_FOR_BLOCK_QUERY,
+  type GroupedBacklinksResult,
+} from '@/plugins/grouped-backlinks/query.js'
+import {
+  resolveGroupedBacklinksConfig,
+  type GroupedBacklinksGroupingSpec,
+} from '@/plugins/grouped-backlinks/resolveConfig.js'
+import type { GroupedBacklinksConfig } from '@/plugins/grouped-backlinks/config.js'
+import { DATA_MODEL_GUIDE } from './dataModelGuide.ts'
 import { keyAtEnd } from '@/data/orderKey.js'
 import {
   actionsFacet,
@@ -620,6 +632,230 @@ const runRuntimeAction = async (
   }
 }
 
+// ----- backlinks / grouped-backlinks --------------------------------
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+interface HydratedBlockRef {
+  id: string
+  content: string
+  types: string[]
+  deepLink: string
+}
+
+const deepLinkFor = (workspaceId: string, blockId: string): string =>
+  `#${workspaceId}/${blockId}`
+
+const HYDRATE_BLOCK_REFS_SQL = `
+  SELECT b.id AS id, b.content AS content,
+         b.properties_json AS properties_json, b.workspace_id AS workspace_id
+  FROM json_each(?) j
+  JOIN blocks b ON b.id = j.value
+  WHERE b.deleted = 0
+`
+
+interface HydrateRow {
+  id: string
+  content: string | null
+  properties_json: string | null
+  workspace_id: string | null
+}
+
+/** Hydrate a list of block ids into {id, content, types, deepLink},
+ *  preserving the input order. One JSON-array bind regardless of count
+ *  (avoids the SQLite parameter ceiling on heavily-linked targets). */
+const hydrateBlockRefs = async (
+  repo: Repo,
+  fallbackWorkspaceId: string,
+  ids: readonly string[],
+): Promise<HydratedBlockRef[]> => {
+  if (ids.length === 0) return []
+  const rows = await repo.db.getAll<HydrateRow>(HYDRATE_BLOCK_REFS_SQL, [JSON.stringify(ids)])
+  const byId = new Map(rows.map(row => [row.id, row]))
+  return ids.map(id => {
+    const row = byId.get(id)
+    let types: string[] = []
+    if (row?.properties_json) {
+      try {
+        const properties = JSON.parse(row.properties_json) as Record<string, unknown>
+        types = [...getBlockTypes({properties: properties as BlockProperties})]
+      } catch {
+        types = []
+      }
+    }
+    return {
+      id,
+      content: row?.content ?? '',
+      types,
+      deepLink: deepLinkFor(row?.workspace_id ?? fallbackWorkspaceId, id),
+    }
+  })
+}
+
+const SOURCE_FIELDS_SQL = `
+  SELECT DISTINCT source_id, source_field
+  FROM block_references
+  WHERE workspace_id = ? AND target_id = ?
+`
+
+/** Map each backlink source to the set of source_fields it referenced the
+ *  target through. `''` means a plain text wikilink; other values are
+ *  projected property refs (groupWith, next-review-date, …). */
+const sourceFieldsByBacklink = async (
+  repo: Repo,
+  workspaceId: string,
+  targetId: string,
+): Promise<Map<string, string[]>> => {
+  const rows = await repo.db.getAll<{source_id: string, source_field: string}>(
+    SOURCE_FIELDS_SQL,
+    [workspaceId, targetId],
+  )
+  const out = new Map<string, Set<string>>()
+  for (const row of rows) {
+    let set = out.get(row.source_id)
+    if (!set) {
+      set = new Set()
+      out.set(row.source_id, set)
+    }
+    set.add(row.source_field)
+  }
+  return new Map([...out].map(([id, set]) => [id, [...set].sort()]))
+}
+
+const resolveBlockWorkspaceId = async (
+  repo: Repo,
+  blockId: string,
+  override: unknown,
+): Promise<string> => {
+  if (isString(override) && override) return override
+  const data = await repo.load(blockId)
+  if (data?.workspaceId) return data.workspaceId
+  if (repo.activeWorkspaceId) return repo.activeWorkspaceId
+  throw new Error(`Cannot resolve a workspace for block ${blockId}; pass workspaceId`)
+}
+
+const parseFilterSpec = (value: unknown): BacklinksFilterSpec | undefined => {
+  if (value === undefined) return undefined
+  if (value === 'none' || value === 'stored' || value === 'effective') return value
+  if (isRecord(value)) return value as BacklinksFilter
+  throw new Error("filter must be 'none' | 'stored' | 'effective' or a BacklinksFilter object")
+}
+
+const parseGroupingSpec = (value: unknown): GroupedBacklinksGroupingSpec | undefined => {
+  if (value === undefined) return undefined
+  if (value === 'user' || value === 'none') return value
+  if (isRecord(value)) return value as Partial<GroupedBacklinksConfig>
+  throw new Error("grouping must be 'user' | 'none' or a grouping-config object")
+}
+
+interface BacklinksCommandResult {
+  target: HydratedBlockRef
+  workspaceId: string
+  total: number
+  filter: BacklinksFilter | null
+  backlinks: Array<HydratedBlockRef & {sourceFields: string[]}>
+}
+
+const runBacklinksCommand = async (
+  repo: Repo,
+  command: KnownAgentCommand,
+): Promise<BacklinksCommandResult> => {
+  const id = requireString(command.blockId ?? command.id, 'blockId')
+  const workspaceId = await resolveBlockWorkspaceId(repo, id, command.workspaceId)
+  const filter = await resolveBacklinksFilter(repo, workspaceId, id, parseFilterSpec(command.filter))
+
+  const ids = await repo.query[BACKLINKS_FOR_BLOCK_QUERY]({
+    workspaceId,
+    id,
+    ...(filter ? {filter} : {}),
+  }).load()
+
+  const [hydrated, fieldsBySource, [target]] = await Promise.all([
+    hydrateBlockRefs(repo, workspaceId, ids),
+    sourceFieldsByBacklink(repo, workspaceId, id),
+    hydrateBlockRefs(repo, workspaceId, [id]),
+  ])
+
+  return {
+    target,
+    workspaceId,
+    total: ids.length,
+    filter: filter ?? null,
+    backlinks: hydrated.map(ref => ({
+      ...ref,
+      sourceFields: fieldsBySource.get(ref.id) ?? [],
+    })),
+  }
+}
+
+interface GroupedBacklinksCommandGroup {
+  groupId: string
+  label: string
+  fallback: boolean
+  deepLink: string | null
+  members: HydratedBlockRef[]
+}
+
+interface GroupedBacklinksCommandResult {
+  target: HydratedBlockRef
+  workspaceId: string
+  total: number
+  filter: BacklinksFilter | null
+  grouping: GroupedBacklinksConfig
+  groups: GroupedBacklinksCommandGroup[]
+}
+
+const runGroupedBacklinksCommand = async (
+  repo: Repo,
+  command: KnownAgentCommand,
+): Promise<GroupedBacklinksCommandResult> => {
+  const id = requireString(command.blockId ?? command.id, 'blockId')
+  const workspaceId = await resolveBlockWorkspaceId(repo, id, command.workspaceId)
+  const filter = await resolveBacklinksFilter(repo, workspaceId, id, parseFilterSpec(command.filter))
+  const grouping = await resolveGroupedBacklinksConfig(
+    repo,
+    workspaceId,
+    id,
+    parseGroupingSpec(command.grouping),
+  )
+
+  const result = await repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+    workspaceId,
+    id,
+    groupingConfig: grouping,
+    ...(filter ? {filter} : {}),
+  }).load() as GroupedBacklinksResult
+
+  const memberIds = [...new Set(result.groups.flatMap(group => group.sourceIds))]
+  const [members, [target]] = await Promise.all([
+    hydrateBlockRefs(repo, workspaceId, memberIds),
+    hydrateBlockRefs(repo, workspaceId, [id]),
+  ])
+  const memberById = new Map(members.map(member => [member.id, member]))
+
+  return {
+    target,
+    workspaceId,
+    total: result.total,
+    filter: filter ?? null,
+    grouping,
+    groups: result.groups.map(group => ({
+      groupId: group.groupId,
+      label: group.label,
+      fallback: group.fallback,
+      deepLink: UUID_RE.test(group.groupId) ? deepLinkFor(workspaceId, group.groupId) : null,
+      members: group.sourceIds.map(sourceId =>
+        memberById.get(sourceId) ?? {
+          id: sourceId,
+          content: '',
+          types: [],
+          deepLink: deepLinkFor(workspaceId, sourceId),
+        },
+      ),
+    })),
+  }
+}
+
 const executeArbitraryCode = async (
   code: string,
   context: AgentRuntimeContext,
@@ -836,6 +1072,15 @@ export const executeCommand = async (
 
     case 'eval':
       return executeArbitraryCode(requireString(command.code, 'code'), context, command.data)
+
+    case 'backlinks':
+      return runBacklinksCommand(context.repo, command)
+
+    case 'grouped-backlinks':
+      return runGroupedBacklinksCommand(context.repo, command)
+
+    case 'data-model':
+      return DATA_MODEL_GUIDE
 
     default: {
       // Exhaustive — the union covers everything; TS narrows `command`

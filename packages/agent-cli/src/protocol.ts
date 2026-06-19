@@ -217,6 +217,37 @@ export const evalCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
+/** Backlinks for a block. `filter` is either a mode string
+ *  ('none' | 'stored' | 'effective') or an explicit BacklinksFilter
+ *  object — validated/coerced kernel-side, so it stays `unknown` here. */
+export const backlinksCommandSchema = z.looseObject({
+  type: z.literal('backlinks'),
+  id: z.string().optional(),
+  blockId: z.string().optional(),
+  workspaceId: z.string().optional(),
+  filter: z.unknown().optional(),
+  ...commandIdField,
+})
+
+/** Grouped-backlinks (the grouped-references view) for a block.
+ *  `filter` is as above; `grouping` is a mode string ('user' | 'none')
+ *  or an explicit grouping-config object. Both coerced kernel-side. */
+export const groupedBacklinksCommandSchema = z.looseObject({
+  type: z.literal('grouped-backlinks'),
+  id: z.string().optional(),
+  blockId: z.string().optional(),
+  workspaceId: z.string().optional(),
+  filter: z.unknown().optional(),
+  grouping: z.unknown().optional(),
+  ...commandIdField,
+})
+
+/** Print the agent-facing data-model guide. No body beyond the type. */
+export const dataModelCommandSchema = z.looseObject({
+  type: z.literal('data-model'),
+  ...commandIdField,
+})
+
 /** Canonical commands the CLI emits. The 1:1 mapping to kmagent
  *  verbs makes this the right type for CLI construction sites. */
 export const knownCommandSchema = z.discriminatedUnion('type', [
@@ -234,6 +265,9 @@ export const knownCommandSchema = z.discriminatedUnion('type', [
   uninstallExtensionCommandSchema,
   runActionCommandSchema,
   evalCommandSchema,
+  backlinksCommandSchema,
+  groupedBacklinksCommandSchema,
+  dataModelCommandSchema,
 ])
 
 /** Strict shape for any known wire command. CLI authors construct
@@ -264,6 +298,9 @@ export const knownAgentCommandSchema = z.discriminatedUnion('type', [
   runActionCommandSchema,
   actionCommandSchema,
   evalCommandSchema,
+  backlinksCommandSchema,
+  groupedBacklinksCommandSchema,
+  dataModelCommandSchema,
 ])
 export type KnownAgentCommand = z.infer<typeof knownAgentCommandSchema>
 
@@ -349,6 +386,18 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   'eval': {
     usage: 'kmagent eval [--raw] [--file <path>] [--data <path> | --data-json <json>] <code>',
     description: 'Run JS in the app. Use "return …" to print a value. The code runs with `repo`, `db`, `runtime`, `sql`, `block`, `getBlock`, `getSubtree`, `createBlock`, `updateBlock`, `installExtension`, `setExtensionEnabled`, `uninstallExtension`, `actions`, `renderers`, `refreshAppRuntime`, `React`, `ReactDOM`, `window`, `document` already in scope. `--data <path>` reads JSON from a file (or `--data-json <inline>` for an inline payload) and binds the parsed value as `data` — avoids template-embedding structured input in the code string.',
+  },
+  'backlinks': {
+    usage: "kmagent backlinks <blockId> [--filter none|stored|effective|<json>] [--workspace <id>]",
+    description: 'Hydrated backlinks of a block (blocks whose references point at it). --filter defaults to none. See `kmagent data-model`.',
+  },
+  'grouped-backlinks': {
+    usage: "kmagent grouped-backlinks <blockId> [--filter none|stored|effective|<json>] [--grouping user|none|<json>] [--workspace <id>]",
+    description: 'The grouped-references view for a block: hydrated groups (+ Other fallback). --grouping defaults to the user config (matches the UI); --filter defaults to none. See `kmagent data-model`.',
+  },
+  'data-model': {
+    usage: 'kmagent data-model',
+    description: "Print the agent-facing data-model guide (blocks, references, pages/daily-notes, backlinks vs grouped-backlinks, source_field, done-status, deep-links). Read this first when working with a user's data.",
   },
 }
 

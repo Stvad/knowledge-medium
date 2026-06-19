@@ -116,6 +116,20 @@ const toStringArray = (value: unknown): string[] => {
   return []
 }
 
+// `--filter` / `--grouping` accept either a mode keyword (passed through
+// as a string) or inline JSON (an explicit filter / grouping object).
+// The kernel coerces whichever form it receives.
+const parseSpecArg = (
+  value: unknown,
+  modes: readonly string[],
+  label: string,
+): string | unknown | undefined => {
+  if (value === undefined) return undefined
+  const text = String(value)
+  if (modes.includes(text)) return text
+  return parseJson(text, label)
+}
+
 const evalReturnedUndefined = (value: unknown): boolean =>
   value !== null
   && typeof value === 'object'
@@ -939,6 +953,52 @@ cli
       rootId,
       includeRoot: Boolean(options.includeRoot),
     })
+  })
+
+cli
+  .command('backlinks <blockId>', wireDescription('backlinks'))
+  .option('--filter <spec>', 'none|stored|effective, or inline JSON BacklinksFilter (default: none)')
+  .option('--workspace <id>', "Workspace id (defaults to the block's workspace, then the active one)")
+  .action(async (blockId: string, options: {filter?: string, workspace?: string}) => {
+    const filter = parseSpecArg(options.filter, ['none', 'stored', 'effective'], '--filter')
+    await runAndPrint({
+      type: 'backlinks',
+      id: blockId,
+      ...(filter !== undefined ? {filter} : {}),
+      ...(options.workspace ? {workspaceId: options.workspace} : {}),
+    })
+  })
+
+cli
+  .command('grouped-backlinks <blockId>', wireDescription('grouped-backlinks'))
+  .option('--filter <spec>', 'none|stored|effective, or inline JSON BacklinksFilter (default: none)')
+  .option('--grouping <spec>', 'user|none, or inline JSON grouping config (default: user)')
+  .option('--workspace <id>', "Workspace id (defaults to the block's workspace, then the active one)")
+  .action(async (
+    blockId: string,
+    options: {filter?: string, grouping?: string, workspace?: string},
+  ) => {
+    const filter = parseSpecArg(options.filter, ['none', 'stored', 'effective'], '--filter')
+    const grouping = parseSpecArg(options.grouping, ['user', 'none'], '--grouping')
+    await runAndPrint({
+      type: 'grouped-backlinks',
+      id: blockId,
+      ...(filter !== undefined ? {filter} : {}),
+      ...(grouping !== undefined ? {grouping} : {}),
+      ...(options.workspace ? {workspaceId: options.workspace} : {}),
+    })
+  })
+
+cli
+  .command('data-model', wireDescription('data-model'))
+  .action(async () => {
+    await ensureBridgeRunning()
+    const value = await runCommand({type: 'data-model'})
+    process.stdout.write(
+      typeof value === 'string'
+        ? `${value}\n`
+        : `${JSON.stringify(value, null, 2)}\n`,
+    )
   })
 
 cli
