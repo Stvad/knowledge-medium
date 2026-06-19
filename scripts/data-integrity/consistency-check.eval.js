@@ -271,7 +271,11 @@ try {
       }
     }
 
-    record('property_ref_projection', blocksMissing + blocksExtra > 0, {
+    const anomalous = blocksMissing + blocksExtra > 0
+    // A truncated scan only saw part of the workspace, so a clean result is NOT 'ok' —
+    // mark it 'incomplete' (raise candidateCap and re-run) so it can't read as healthy.
+    report.checks.property_ref_projection = {
+      status: anomalous ? 'anomaly' : truncated ? 'incomplete' : 'ok',
       refTypedProps: refNames.length,
       scanned: scanned.length,
       truncated,
@@ -281,7 +285,8 @@ try {
       refsExtra,
       missingSample,
       extraSample,
-    })
+    }
+    if (anomalous) report.anomalies += 1
   }
 } catch (e) {
   skip('property_ref_projection', String(e))
