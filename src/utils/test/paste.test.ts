@@ -100,8 +100,9 @@ describe('pasteMultilineText', () => {
     )
 
     expect(pasted).toHaveLength(2)
-    // The pasted run lands after the tied t1/t2 run, before t3 — no lost content.
-    expect(await childContents('root')).toEqual(['T1', 'T2', 'Alpha', 'Beta', 'T3'])
+    // The pasted run lands EXACTLY after t1 — between t1 and t2 — breaking the
+    // tie (re-keys t2), not past the whole run. No lost content.
+    expect(await childContents('root')).toEqual(['T1', 'Alpha', 'Beta', 'T2', 'T3'])
   })
 
   it('pastes after an expanded target as first visible children', async () => {
@@ -249,8 +250,9 @@ describe('pasteEditModeMultilineText', () => {
     )
 
     expect(env.repo.block('target').peek()?.content).toBe('hello alpha')
-    // The new sibling lands after the tied target/tied run, before 'After'.
-    expect(await childContents('root')).toEqual(['hello alpha', 'Tied', 'betaworld', 'After'])
+    // The new sibling lands EXACTLY after the edited block — between it and the
+    // tied 'Tied' sibling (re-keys 'Tied'), not past the whole run.
+    expect(await childContents('root')).toEqual(['hello alpha', 'betaworld', 'Tied', 'After'])
     expect(result?.focusBlock.peek()?.content).toBe('betaworld')
   })
 

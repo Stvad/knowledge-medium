@@ -4,7 +4,8 @@ import type { Repo } from '../data/repo'
 import { isCollapsedProp } from '@/data/properties.js'
 import { revealChildren } from '@/data/mutators'
 import { parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser.js'
-import { keysAfterIndex, keysBeforeIndex, keysBetween } from '../data/orderKey.ts'
+import { keysBetween } from '../data/orderKey.ts'
+import { keysImmediatelyAfter, keysImmediatelyBefore } from '../data/orderKeyPlacement.ts'
 
 type PastePosition = 'before' | 'after'
 type PastePlacement = 'visible' | 'sibling'
@@ -22,13 +23,12 @@ interface PasteOptions {
 }
 
 interface ExistingParentInsertion {
-  /** Produce `n` ascending order keys for the chosen insertion slot.
-   *  Tie-safe (#198/#182): a sibling-run insertion widens past a tied
-   *  neighbour run to the next distinct key instead of feeding `keysBetween`
-   *  equal bounds (which throws `"<key> >= <key>"` and rolls back the whole
-   *  paste, silently dropping the pasted content). Non-tie inputs reduce to
-   *  the plain `keysBetween(lower, upper, n)` used before. */
-  keys: (n: number) => string[]
+  /** Produce `n` ascending order keys for the chosen insertion slot. A
+   *  sibling-run insertion places the run EXACTLY adjacent to the target
+   *  (between it and its neighbour on that side), breaking a tie by re-keying
+   *  the run when one blocks the slot (#198/#182) — async because that re-key
+   *  is a tx write. Non-tie inputs reduce to a plain `keysBetween`. */
+  keys: (n: number) => Promise<string[]>
 }
 
 interface RootDestination {
@@ -122,10 +122,13 @@ const editorContentForFirstPastedLine = (
 const insertionForFirstChild = (
   firstExistingOrderKey: string | undefined,
 ): ExistingParentInsertion => ({
-  keys: n => keysBetween(null, firstExistingOrderKey ?? null, n),
+  // First-child insert: `null` lower bound, so no tie can block it.
+  keys: async n => keysBetween(null, firstExistingOrderKey ?? null, n),
 })
 
 const insertionForSiblingRun = (
+  tx: Tx,
+  parentId: string,
   siblings: BlockData[],
   targetId: string,
   position: PastePosition,
@@ -133,15 +136,14 @@ const insertionForSiblingRun = (
   const ix = siblings.findIndex(s => s.id === targetId)
   if (ix < 0) throw new Error(`paste target ${targetId} not found among siblings`)
 
-  // Anchor the run at the target and widen past a tied neighbour: inserting
-  // `after` keeps the lower bound pinned to the target and skips any siblings
-  // tied with it; `before` pins the upper bound and skips the tie on the other
-  // side. Non-tie inputs reduce to `keysBetween(siblings[ix±1], siblings[ix])`.
-  const orderKeys = siblings.map(s => s.orderKey)
+  // Place the run EXACTLY adjacent to the target (between it and its neighbour
+  // on the requested side), breaking a tie by re-keying the run when one blocks
+  // the slot. Non-tie inputs reduce to `keysBetween(siblings[ix], siblings[ix+1])`
+  // (after) / `keysBetween(siblings[ix-1], siblings[ix])` (before).
   return {
     keys: n => position === 'after'
-      ? keysAfterIndex(orderKeys, ix, n)
-      : keysBeforeIndex(orderKeys, ix, n),
+      ? keysImmediatelyAfter(tx, parentId, siblings, ix, n)
+      : keysImmediatelyBefore(tx, parentId, siblings, ix, n),
   }
 }
 
@@ -172,6 +174,8 @@ const resolveRootDestination = async (
   const rootInsertion = rootsAsChildren
     ? insertionForFirstChild(targetChildren[0]?.orderKey)
     : insertionForSiblingRun(
+      tx,
+      rootParentId,
       await tx.childrenOf(rootParentId, target.workspaceId),
       target.id,
       position,
@@ -283,7 +287,7 @@ export async function pasteMultilineText(
             ? targetChildren[0]?.orderKey
             : (await tx.childrenOf(parentId, target.workspaceId))[0]?.orderKey,
         )
-      const keys = insertion.keys(blocks.length)
+      const keys = await insertion.keys(blocks.length)
       blocks.forEach((block, index) => orderKeysByParsedId.set(block.id, keys[index]))
     }
 
@@ -352,7 +356,7 @@ export async function pasteEditModeMultilineText(
             ? targetChildren[0]?.orderKey
             : (await tx.childrenOf(parentId, target.workspaceId))[0]?.orderKey,
         )
-      const keys = insertion.keys(blocks.length)
+      const keys = await insertion.keys(blocks.length)
       blocks.forEach((block, index) => orderKeysByParsedId.set(block.id, keys[index]))
     }
 
