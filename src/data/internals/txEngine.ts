@@ -51,6 +51,7 @@ import {
   DuplicateIdError,
   MutatorNotRegisteredError,
   NotDeletedError,
+  ParentDeletedError,
   ParentNotFoundError,
   ParentWorkspaceMismatchError,
   ProcessorNotRegisteredError,
@@ -204,7 +205,7 @@ const SELECT_PREVIOUS_ROOT_SIBLING_SQL =
 const SELECT_PARENT_SQL =
   `SELECT p.* FROM blocks AS c JOIN blocks AS p ON p.id = c.parent_id WHERE c.id = ? AND p.deleted = 0`
 const SELECT_PARENT_WORKSPACE_SQL =
-  `SELECT workspace_id FROM blocks WHERE id = ?`
+  `SELECT workspace_id, deleted FROM blocks WHERE id = ?`
 const INSERT_SQL = `INSERT INTO blocks (${COLUMN_LIST}) VALUES (${COLUMN_PLACEHOLDERS})`
 
 export class TxImpl implements Tx {
@@ -397,8 +398,26 @@ export class TxImpl implements Tx {
   ): Promise<void> {
     const before = await this.requireExisting(id)
     this.checkWorkspace(before.workspaceId)
-    await this.requireParentInWorkspace(target.parentId, before.workspaceId)
+    const parent = await this.requireParentInWorkspace(target.parentId, before.workspaceId)
     if (target.parentId === before.parentId && target.orderKey === before.orderKey) return
+
+    // Parent-deleted check must precede the cycle walk. The walk now
+    // traverses `parent_id` regardless of `deleted` (#183), so when the
+    // target parent is both soft-deleted AND a descendant of `id`, the walk
+    // would report a cycle first — masking the typed `ParentDeletedError`
+    // contract that callers rely on for "moving under a tombstone". The
+    // BEFORE UPDATE trigger also enforces this, but only at write time
+    // (after the walk), so the explicit preflight is what keeps the error
+    // ordering stable.
+    //
+    // Gated on `!before.deleted` to match the trigger exactly: it fires only
+    // for `NEW.deleted = 0`, deliberately allowing a tombstone to be
+    // reparented under another tombstone (`move` never changes `deleted`, so
+    // a soft-deleted row stays soft-deleted). The cycle walk below still runs
+    // for deleted rows.
+    if (!before.deleted && target.parentId !== null && parent?.deleted) {
+      throw new ParentDeletedError(target.parentId)
+    }
 
     // §4.7 Layer 1: FK and triggers can't structurally catch cycles, so
     // this engine check is load-bearing. Skipped when the target parent is
@@ -828,9 +847,9 @@ export class TxImpl implements Tx {
   private async requireParentInWorkspace(
     parentId: string | null,
     childWorkspaceId: string,
-  ): Promise<void> {
-    if (parentId === null) return
-    const parent = await this.ctx.txDb.getOptional<{workspace_id: string}>(
+  ): Promise<{deleted: boolean} | null> {
+    if (parentId === null) return null
+    const parent = await this.ctx.txDb.getOptional<{workspace_id: string; deleted: number}>(
       SELECT_PARENT_WORKSPACE_SQL,
       [parentId],
     )
@@ -838,6 +857,7 @@ export class TxImpl implements Tx {
     if (parent.workspace_id !== childWorkspaceId) {
       throw new ParentWorkspaceMismatchError(parentId, parent.workspace_id, childWorkspaceId)
     }
+    return {deleted: parent.deleted === 1}
   }
 }
 

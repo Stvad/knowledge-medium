@@ -26,6 +26,7 @@ import {
   DuplicateIdError,
   MutatorNotRegisteredError,
   NotDeletedError,
+  ParentDeletedError,
   ParentNotFoundError,
   ParentWorkspaceMismatchError,
   ProcessorNotRegisteredError,
@@ -534,6 +535,82 @@ describe('tx.move (cycle validation, §4.7 Layer 1)', () => {
       {scope: ChangeScope.BlockDefault},
     )).rejects.toThrow(CycleError)
     expect(env.cache.getSnapshot('mv-A')!.parentId).toBe('mv-root')
+  })
+
+  it('throws CycleError when the cycle runs through a soft-deleted intermediate (issue #183)', async () => {
+    // Soft-delete B, the middle of root→A→B→C. Moving A under C still closes a
+    // structural cycle A→C→B→A; the ancestor walk must traverse the deleted B
+    // edge to see it. Before the fix the `deleted=0` filter stopped the walk at
+    // B and the move landed, creating a durable cycle invisible to reads.
+    await env.repo.tx(
+      tx => tx.delete('mv-B'),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await expect(env.repo.tx(
+      tx => tx.move('mv-A', {parentId: 'mv-C', orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toThrow(CycleError)
+    // Rolled back: A still under root, the rest of the chain untouched.
+    expect(env.cache.getSnapshot('mv-A')!.parentId).toBe('mv-root')
+    expect(env.cache.getSnapshot('mv-C')!.parentId).toBe('mv-B')
+  })
+
+  it('throws ParentDeletedError (not CycleError) when the deleted target is also a descendant (issue #183)', async () => {
+    // Soft-delete C, then move B under C. C is both a tombstone AND a
+    // descendant of B, so the cycle walk (which now crosses deleted edges)
+    // would close a loop B→C→B — but the parent-deleted contract must win.
+    await env.repo.tx(
+      tx => tx.delete('mv-C'),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await expect(env.repo.tx(
+      tx => tx.move('mv-B', {parentId: 'mv-C', orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toThrow(ParentDeletedError)
+    expect(env.cache.getSnapshot('mv-B')!.parentId).toBe('mv-A')
+  })
+
+  it('allows reparenting a tombstone under a soft-deleted parent (matches the NEW.deleted=0 trigger)', async () => {
+    // The parent-deleted preflight must not tighten move beyond the storage
+    // invariant: the trigger only rejects live rows (NEW.deleted=0), so a
+    // tombstone may be parked under another tombstone. Soft-delete both C and
+    // (separately) a root sibling X, then move the tombstoned X under C.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'mv-X', workspaceId: 'ws-1', parentId: 'mv-root', orderKey: 'b0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(async tx => {
+      await tx.delete('mv-C')
+      await tx.delete('mv-X')
+    }, {scope: ChangeScope.BlockDefault})
+
+    await env.repo.tx(
+      tx => tx.move('mv-X', {parentId: 'mv-C', orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    expect(env.cache.getSnapshot('mv-X')).toMatchObject({parentId: 'mv-C', deleted: true})
+  })
+
+  it('restoring a node never exposes a live cycle (issue #183)', async () => {
+    // Same setup: B soft-deleted, the cycle-creating move rejected above. Once
+    // the guard holds, restoring B brings back the original acyclic structure
+    // rather than a live 3-cycle.
+    await env.repo.tx(
+      tx => tx.delete('mv-B'),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await expect(env.repo.tx(
+      tx => tx.move('mv-A', {parentId: 'mv-C', orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toThrow(CycleError)
+
+    await env.repo.tx(
+      tx => tx.restore('mv-B'),
+      {scope: ChangeScope.BlockDefault},
+    )
+    // Original chain root→A→B→C intact — no edge points back up.
+    expect(env.cache.getSnapshot('mv-A')!.parentId).toBe('mv-root')
+    expect(env.cache.getSnapshot('mv-B')!.parentId).toBe('mv-A')
+    expect(env.cache.getSnapshot('mv-C')!.parentId).toBe('mv-B')
   })
 
   it('does NOT catch a loop deeper than the §4.7 depth-guard cap (documented truncation)', async () => {

@@ -207,6 +207,18 @@ describe('IS_DESCENDANT_OF_SQL', () => {
     const got = await h.db.getOptional(IS_DESCENDANT_OF_SQL, ['no-such', 'no-such'])
     expect(got).toBeNull()
   })
+
+  it('traverses through a soft-deleted intermediate (issue #183)', async () => {
+    // gp → mid(deleted) → c. The walk up from c must cross the deleted mid to
+    // report gp as an ancestor — cycle-freedom is independent of soft-delete.
+    await seed(h.db, [
+      {id: 'sd-gp',  parent_id: null,    order_key: 'a0'},
+      {id: 'sd-mid', parent_id: 'sd-gp', order_key: 'a0', deleted: 1},
+      {id: 'sd-c',   parent_id: 'sd-mid', order_key: 'a0'},
+    ])
+    const got = await h.db.getOptional<{hit: number}>(IS_DESCENDANT_OF_SQL, ['sd-c', 'sd-gp'])
+    expect(got).toEqual({hit: 1})
+  })
 })
 
 describe('CHILDREN_SQL', () => {
