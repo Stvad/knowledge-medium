@@ -1,4 +1,5 @@
 import {
+  decodeRefListIds,
   isRefCodec,
   isRefListCodec,
   type AnyPropertySchema,
@@ -44,7 +45,7 @@ export const projectPropertyReferences = (
     if (isRefListCodec(schema.codec)) {
       // Element-wise lenient decode: a single malformed element drops only
       // itself instead of stripping the whole field's backlinks to [] (#189).
-      for (const id of schema.codec.decodeValid(encodedValue)) {
+      for (const id of decodeRefListIds(schema.codec, encodedValue)) {
         appendPropertyRef(refs, seen, name, id)
       }
     }

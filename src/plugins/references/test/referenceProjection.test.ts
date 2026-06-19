@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import {
   ChangeScope,
+  CodecError,
   codecs,
   defineProperty,
   type AnyPropertySchema,
+  type RefListCodec,
 } from '@/data/api'
 import { projectPropertyReferences } from '../referenceProjection'
 
@@ -20,6 +22,27 @@ const relatedProp = defineProperty<readonly string[]>('related', {
 const reviewerProp = defineProperty<string>('reviewer', {
   codec: codecs.ref(),
   defaultValue: '',
+  changeScope: ChangeScope.BlockDefault,
+})
+
+// A refList codec authored against the pre-`decodeValid` public interface — an
+// external/older plugin that still satisfies `isRefListCodec` (discriminator
+// only) but has no `decodeValid` method.
+const legacyRefListCodec: RefListCodec = {
+  type: 'refList',
+  targetTypes: [],
+  encode: v => v.map(item => item),
+  decode: j => {
+    if (!Array.isArray(j)) throw new CodecError('array', j)
+    return j.map(item => {
+      if (typeof item !== 'string') throw new CodecError('string', item)
+      return item
+    })
+  },
+}
+const legacyRelatedProp = defineProperty<readonly string[]>('related', {
+  codec: legacyRefListCodec,
+  defaultValue: [],
   changeScope: ChangeScope.BlockDefault,
 })
 
@@ -60,5 +83,22 @@ describe('projectPropertyReferences', () => {
         schemas(relatedProp),
       ),
     ).toEqual([])
+  })
+
+  it('a refList codec lacking decodeValid does not abort the block projection', () => {
+    // Regression for the #214 follow-up: removing the property-local try/catch
+    // meant a refList codec without `decodeValid` would throw
+    // `decodeValid is not a function`, stripping the whole block's refs
+    // (including the other well-formed ref field). It must recover the good
+    // ids instead and leave the other field's ref intact.
+    expect(
+      projectPropertyReferences(
+        { properties: { related: ['ok', 42], reviewer: 'target-a' } },
+        schemas(legacyRelatedProp, reviewerProp),
+      ),
+    ).toEqual([
+      { id: 'ok', alias: 'ok', sourceField: 'related' },
+      { id: 'target-a', alias: 'target-a', sourceField: 'reviewer' },
+    ])
   })
 })

@@ -20,7 +20,7 @@ import type {
   BlockReference,
   TypeContribution,
 } from '@/data/api'
-import { isRefCodec, isRefListCodec } from '@/data/api'
+import { decodeRefListIds, isRefCodec, isRefListCodec } from '@/data/api'
 
 /** Build the merged property-schema registry: type-lifted schemas first
  *  (each `TypeContribution.properties`), then direct `propertySchemasFacet`
@@ -111,7 +111,7 @@ export const projectedRefsForField = (
   if (isRefListCodec(schema.codec)) {
     // Element-wise lenient decode: a single malformed element drops only
     // itself instead of stripping the whole field's backlinks to [] (#189).
-    for (const id of schema.codec.decodeValid(encodedValue)) {
+    for (const id of decodeRefListIds(schema.codec, encodedValue)) {
       appendRefProjection(refs, seen, sourceField, id)
     }
   }
