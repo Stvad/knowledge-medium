@@ -83,6 +83,28 @@ describe('pasteMultilineText', () => {
     expect(await childContents('root')).toEqual(['Alpha', 'Beta', 'Next'])
   })
 
+  it('inserts a multi-block paste between tied siblings without losing content (#198)', async () => {
+    // The insertion neighbours (the target and its next sibling) share an
+    // order_key. The old keysBetween(lower, upper) threw "<key> >= <key>" on the
+    // equal bounds, rolling back the whole tx → the pasted blocks vanished.
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('t1', 'T1', 'root', 'a1')
+    await createBlock('t2', 'T2', 'root', 'a1')  // tied with t1
+    await createBlock('t3', 'T3', 'root', 'a2')
+
+    const pasted = await pasteMultilineText(
+      'Alpha\nBeta',
+      env.repo.block('t1'),
+      env.repo,
+      {scopeRootId: 'root'},
+    )
+
+    expect(pasted).toHaveLength(2)
+    // The pasted run lands EXACTLY after t1 — between t1 and t2 — breaking the
+    // tie (re-keys t2), not past the whole run. No lost content.
+    expect(await childContents('root')).toEqual(['T1', 'Alpha', 'Beta', 'T2', 'T3'])
+  })
+
   it('pastes after an expanded target as first visible children', async () => {
     await createBlock('root', 'Root', null, 'a0')
     await createBlock('parent', 'Parent', 'root', 'a0')
@@ -204,6 +226,34 @@ describe('pasteEditModeMultilineText', () => {
     expect(await childContents('root')).toEqual(['hello alpha', 'betaworld', 'Next'])
     expect(result?.focusBlock.id).not.toBe('target')
     expect(result?.focusOffset).toBe('beta'.length)
+  })
+
+  it('inserts edit-mode paste siblings between tied neighbours without losing content (#198)', async () => {
+    // The edited block ties with its next sibling, so the trailing pasted
+    // sibling's order_key bounds are equal — the old keysBetween threw and rolled
+    // the paste back, dropping the line.
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('target', 'hello world', 'root', 'a1')
+    await createBlock('tied', 'Tied', 'root', 'a1')  // tied with target
+    await createBlock('after', 'After', 'root', 'a2')
+
+    const plan = planEditModeMultilinePaste('alpha\nbeta', 'hello world', {
+      from: 'hello '.length,
+      to: 'hello '.length,
+    })
+
+    const result = await pasteEditModeMultilineText(
+      plan!,
+      env.repo.block('target'),
+      env.repo,
+      {scopeRootId: 'root'},
+    )
+
+    expect(env.repo.block('target').peek()?.content).toBe('hello alpha')
+    // The new sibling lands EXACTLY after the edited block — between it and the
+    // tied 'Tied' sibling (re-keys 'Tied'), not past the whole run.
+    expect(await childContents('root')).toEqual(['hello alpha', 'betaworld', 'Tied', 'After'])
+    expect(result?.focusBlock.peek()?.content).toBe('betaworld')
   })
 
   it('parents children of the first pasted root under the edited block', async () => {

@@ -1,6 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
-import { keyAtEnd, keyAtStart, keyBetween, keysBetween } from './orderKey'
+import {
+  keyAtEnd,
+  keyAtStart,
+  keyBetween,
+  keysBetween,
+} from './orderKey'
 
 describe('orderKey helpers', () => {
   it('keyBetween(null, null) yields a key that sorts deterministically (start of empty list)', () => {

@@ -5,6 +5,7 @@ import { isCollapsedProp } from '@/data/properties.js'
 import { revealChildren } from '@/data/mutators'
 import { parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser.js'
 import { keysBetween } from '../data/orderKey.ts'
+import { keysImmediatelyAfter, keysImmediatelyBefore } from '../data/orderKeyPlacement.ts'
 
 type PastePosition = 'before' | 'after'
 type PastePlacement = 'visible' | 'sibling'
@@ -22,8 +23,12 @@ interface PasteOptions {
 }
 
 interface ExistingParentInsertion {
-  lower: string | null
-  upper: string | null
+  /** Produce `n` ascending order keys for the chosen insertion slot. A
+   *  sibling-run insertion places the run EXACTLY adjacent to the target
+   *  (between it and its neighbour on that side), breaking a tie by re-keying
+   *  the run when one blocks the slot (#198/#182) — async because that re-key
+   *  is a tx write. Non-tie inputs reduce to a plain `keysBetween`. */
+  keys: (n: number) => Promise<string[]>
 }
 
 interface RootDestination {
@@ -117,11 +122,13 @@ const editorContentForFirstPastedLine = (
 const insertionForFirstChild = (
   firstExistingOrderKey: string | undefined,
 ): ExistingParentInsertion => ({
-  lower: null,
-  upper: firstExistingOrderKey ?? null,
+  // First-child insert: `null` lower bound, so no tie can block it.
+  keys: async n => keysBetween(null, firstExistingOrderKey ?? null, n),
 })
 
 const insertionForSiblingRun = (
+  tx: Tx,
+  parentId: string,
   siblings: BlockData[],
   targetId: string,
   position: PastePosition,
@@ -129,15 +136,15 @@ const insertionForSiblingRun = (
   const ix = siblings.findIndex(s => s.id === targetId)
   if (ix < 0) throw new Error(`paste target ${targetId} not found among siblings`)
 
-  return position === 'after'
-    ? {
-      lower: siblings[ix]?.orderKey ?? null,
-      upper: siblings[ix + 1]?.orderKey ?? null,
-    }
-    : {
-      lower: siblings[ix - 1]?.orderKey ?? null,
-      upper: siblings[ix]?.orderKey ?? null,
-    }
+  // Place the run EXACTLY adjacent to the target (between it and its neighbour
+  // on the requested side), breaking a tie by re-keying the run when one blocks
+  // the slot. Non-tie inputs reduce to `keysBetween(siblings[ix], siblings[ix+1])`
+  // (after) / `keysBetween(siblings[ix-1], siblings[ix])` (before).
+  return {
+    keys: n => position === 'after'
+      ? keysImmediatelyAfter(tx, parentId, siblings, ix, n)
+      : keysImmediatelyBefore(tx, parentId, siblings, ix, n),
+  }
 }
 
 const resolveRootDestination = async (
@@ -167,6 +174,8 @@ const resolveRootDestination = async (
   const rootInsertion = rootsAsChildren
     ? insertionForFirstChild(targetChildren[0]?.orderKey)
     : insertionForSiblingRun(
+      tx,
+      rootParentId,
       await tx.childrenOf(rootParentId, target.workspaceId),
       target.id,
       position,
@@ -278,7 +287,7 @@ export async function pasteMultilineText(
             ? targetChildren[0]?.orderKey
             : (await tx.childrenOf(parentId, target.workspaceId))[0]?.orderKey,
         )
-      const keys = keysBetween(insertion.lower, insertion.upper, blocks.length)
+      const keys = await insertion.keys(blocks.length)
       blocks.forEach((block, index) => orderKeysByParsedId.set(block.id, keys[index]))
     }
 
@@ -347,7 +356,7 @@ export async function pasteEditModeMultilineText(
             ? targetChildren[0]?.orderKey
             : (await tx.childrenOf(parentId, target.workspaceId))[0]?.orderKey,
         )
-      const keys = keysBetween(insertion.lower, insertion.upper, blocks.length)
+      const keys = await insertion.keys(blocks.length)
       blocks.forEach((block, index) => orderKeysByParsedId.set(block.id, keys[index]))
     }
 
