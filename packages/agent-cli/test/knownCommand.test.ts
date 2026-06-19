@@ -35,6 +35,9 @@ describe('knownCommandSchema — branch acceptance', () => {
     ['grouped-backlinks', {type: 'grouped-backlinks', id: 'b-1'}],
     ['grouped-backlinks (grouping)', {type: 'grouped-backlinks', id: 'b-1', grouping: 'none'}],
     ['data-model', {type: 'data-model'}],
+    ['page', {type: 'page', name: 'Project Alpha'}],
+    ['daily-note', {type: 'daily-note', date: 'yesterday'}],
+    ['search', {type: 'search', query: 'recipe', limit: 10}],
   ]
 
   for (const [type, body] of cases) {
@@ -106,6 +109,12 @@ describe('knownCommandSchema — rejection', () => {
   it('rejects backlinks / grouped-backlinks with a non-string id', () => {
     expect(knownCommandSchema.safeParse({type: 'backlinks', id: 42}).success).toBe(false)
     expect(knownCommandSchema.safeParse({type: 'grouped-backlinks', id: 42}).success).toBe(false)
+  })
+
+  it('rejects page without name, daily-note without date, search without query', () => {
+    expect(knownCommandSchema.safeParse({type: 'page'}).success).toBe(false)
+    expect(knownCommandSchema.safeParse({type: 'daily-note'}).success).toBe(false)
+    expect(knownCommandSchema.safeParse({type: 'search'}).success).toBe(false)
   })
 
   it('passes filter / grouping bodies through verbatim (kernel coerces them)', () => {

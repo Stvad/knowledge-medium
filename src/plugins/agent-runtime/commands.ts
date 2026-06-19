@@ -16,6 +16,9 @@ import {
   type GroupedBacklinksGroupingSpec,
 } from '@/plugins/grouped-backlinks/resolveConfig.js'
 import type { GroupedBacklinksConfig } from '@/plugins/grouped-backlinks/config.js'
+import { parseRelativeDate } from '@/utils/relativeDate.js'
+import { formatRoamDate } from '@/utils/dailyPage.js'
+import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes.js'
 import { DATA_MODEL_GUIDE } from './dataModelGuide.ts'
 import { keyAtEnd } from '@/data/orderKey.js'
 import {
@@ -856,6 +859,117 @@ const runGroupedBacklinksCommand = async (
   }
 }
 
+// ----- page / daily-note / search -----------------------------------
+
+const hydrateData = (data: BlockData): HydratedBlockRef => ({
+  id: data.id,
+  content: data.content ?? '',
+  types: [...getBlockTypes(data)],
+  deepLink: deepLinkFor(data.workspaceId, data.id),
+})
+
+const commandWorkspaceId = (repo: Repo, override: unknown): string => {
+  if (isString(override) && override) return override
+  if (repo.activeWorkspaceId) return repo.activeWorkspaceId
+  throw new Error('No active workspace; pass workspaceId')
+}
+
+interface PageCommandResult {
+  query: string
+  workspaceId: string
+  match: HydratedBlockRef | null
+  candidates: Array<{id: string, alias: string, content: string, deepLink: string}>
+}
+
+const runPageCommand = async (
+  repo: Repo,
+  command: KnownAgentCommand,
+): Promise<PageCommandResult> => {
+  const name = requireString(command.name, 'name')
+  const workspaceId = commandWorkspaceId(repo, command.workspaceId)
+  const limit = typeof command.limit === 'number' ? command.limit : 20
+
+  const exact = await repo.query.aliasLookup({workspaceId, alias: name}).load() as BlockData | null
+  const candidates = await repo.query.aliasMatches({workspaceId, filter: name, limit}).load()
+
+  return {
+    query: name,
+    workspaceId,
+    match: exact ? hydrateData(exact) : null,
+    candidates: candidates.map(row => ({
+      id: row.blockId,
+      alias: row.alias,
+      content: row.content,
+      deepLink: deepLinkFor(workspaceId, row.blockId),
+    })),
+  }
+}
+
+interface DailyNoteCommandResult {
+  input: string
+  iso: string
+  title: string
+  workspaceId: string
+  blockId: string
+  exists: boolean
+  deepLink: string
+  block: HydratedBlockRef | null
+}
+
+const runDailyNoteCommand = async (
+  repo: Repo,
+  command: KnownAgentCommand,
+): Promise<DailyNoteCommandResult> => {
+  const input = requireString(command.date, 'date')
+  const workspaceId = commandWorkspaceId(repo, command.workspaceId)
+  const parsed = parseRelativeDate(input)
+  if (!parsed) {
+    throw new Error(
+      `Could not parse "${input}" as a date. Try today | yesterday | 2026-06-18 | "June 17th, 2026" | "next monday".`,
+    )
+  }
+
+  // Daily-note ids are deterministic (uuidv5 of workspace+ISO), so the
+  // id is known whether or not the note has been created yet.
+  const blockId = dailyNoteBlockId(workspaceId, parsed.iso)
+  const data = await repo.load(blockId)
+
+  return {
+    input,
+    iso: parsed.iso,
+    title: formatRoamDate(parsed.date),
+    workspaceId,
+    blockId,
+    exists: data !== null,
+    deepLink: deepLinkFor(workspaceId, blockId),
+    block: data ? hydrateData(data) : null,
+  }
+}
+
+interface SearchCommandResult {
+  query: string
+  workspaceId: string
+  total: number
+  results: HydratedBlockRef[]
+}
+
+const runSearchCommand = async (
+  repo: Repo,
+  command: KnownAgentCommand,
+): Promise<SearchCommandResult> => {
+  const query = requireString(command.query, 'query')
+  const workspaceId = commandWorkspaceId(repo, command.workspaceId)
+  const limit = typeof command.limit === 'number' ? command.limit : 50
+
+  const rows = await repo.query.searchByContent({workspaceId, query, limit}).load()
+  return {
+    query,
+    workspaceId,
+    total: rows.length,
+    results: rows.map(hydrateData),
+  }
+}
+
 const executeArbitraryCode = async (
   code: string,
   context: AgentRuntimeContext,
@@ -1081,6 +1195,15 @@ export const executeCommand = async (
 
     case 'data-model':
       return DATA_MODEL_GUIDE
+
+    case 'page':
+      return runPageCommand(context.repo, command)
+
+    case 'daily-note':
+      return runDailyNoteCommand(context.repo, command)
+
+    case 'search':
+      return runSearchCommand(context.repo, command)
 
     default: {
       // Exhaustive — the union covers everything; TS narrows `command`

@@ -248,6 +248,34 @@ export const dataModelCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
+/** Resolve a page by alias/title — exact hit plus substring candidates. */
+export const pageCommandSchema = z.looseObject({
+  type: z.literal('page'),
+  name: z.string(),
+  workspaceId: z.string().optional(),
+  limit: z.number().optional(),
+  ...commandIdField,
+})
+
+/** Resolve a date expression to its daily-note block. `date` accepts
+ *  today | yesterday | an ISO date | the literal title ("June 17th, 2026")
+ *  | natural-language ("next monday"). */
+export const dailyNoteCommandSchema = z.looseObject({
+  type: z.literal('daily-note'),
+  date: z.string(),
+  workspaceId: z.string().optional(),
+  ...commandIdField,
+})
+
+/** Full-text search over block content. */
+export const searchCommandSchema = z.looseObject({
+  type: z.literal('search'),
+  query: z.string(),
+  workspaceId: z.string().optional(),
+  limit: z.number().optional(),
+  ...commandIdField,
+})
+
 /** Canonical commands the CLI emits. The 1:1 mapping to kmagent
  *  verbs makes this the right type for CLI construction sites. */
 export const knownCommandSchema = z.discriminatedUnion('type', [
@@ -268,6 +296,9 @@ export const knownCommandSchema = z.discriminatedUnion('type', [
   backlinksCommandSchema,
   groupedBacklinksCommandSchema,
   dataModelCommandSchema,
+  pageCommandSchema,
+  dailyNoteCommandSchema,
+  searchCommandSchema,
 ])
 
 /** Strict shape for any known wire command. CLI authors construct
@@ -301,6 +332,9 @@ export const knownAgentCommandSchema = z.discriminatedUnion('type', [
   backlinksCommandSchema,
   groupedBacklinksCommandSchema,
   dataModelCommandSchema,
+  pageCommandSchema,
+  dailyNoteCommandSchema,
+  searchCommandSchema,
 ])
 export type KnownAgentCommand = z.infer<typeof knownAgentCommandSchema>
 
@@ -398,6 +432,18 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   'data-model': {
     usage: 'kmagent data-model',
     description: "Print the agent-facing data-model guide (blocks, references, pages/daily-notes, backlinks vs grouped-backlinks, source_field, done-status, deep-links). Read this first when working with a user's data.",
+  },
+  'page': {
+    usage: 'kmagent page <name> [--limit <n>] [--workspace <id>]',
+    description: 'Resolve a page by alias/title: exact match plus substring candidates, hydrated.',
+  },
+  'daily-note': {
+    usage: 'kmagent daily-note <date> [--workspace <id>]',
+    description: 'Resolve a date (today | yesterday | 2026-06-18 | "June 17th, 2026" | "next monday") to its daily-note block (deterministic id; reports whether it exists yet).',
+  },
+  'search': {
+    usage: 'kmagent search <query> [--limit <n>] [--workspace <id>]',
+    description: 'Full-text search over block content; hydrated results.',
   },
 }
 

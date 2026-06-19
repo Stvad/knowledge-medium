@@ -1002,6 +1002,49 @@ cli
   })
 
 cli
+  .command('page [...name]', wireDescription('page'))
+  .option('--workspace <id>', 'Workspace id (defaults to the active one)')
+  .option('--limit <n>', 'Max substring candidates (default 20)')
+  .action(async (name: unknown, options: {workspace?: string, limit?: string}) => {
+    const text = toStringArray(name).join(' ').trim()
+    if (!text) throw new Error('page requires a <name> (e.g. `yarn agent page "Project Alpha"`)')
+    await runAndPrint({
+      type: 'page',
+      name: text,
+      ...(options.workspace ? {workspaceId: options.workspace} : {}),
+      ...(options.limit !== undefined ? {limit: Number(options.limit)} : {}),
+    })
+  })
+
+cli
+  .command('daily-note [...date]', wireDescription('daily-note'))
+  .option('--workspace <id>', 'Workspace id (defaults to the active one)')
+  .action(async (date: unknown, options: {workspace?: string}) => {
+    const text = toStringArray(date).join(' ').trim()
+    if (!text) throw new Error('daily-note requires a <date> (e.g. `yarn agent daily-note yesterday`)')
+    await runAndPrint({
+      type: 'daily-note',
+      date: text,
+      ...(options.workspace ? {workspaceId: options.workspace} : {}),
+    })
+  })
+
+cli
+  .command('search [...query]', wireDescription('search'))
+  .option('--workspace <id>', 'Workspace id (defaults to the active one)')
+  .option('--limit <n>', 'Max results (default 50)')
+  .action(async (query: unknown, options: {workspace?: string, limit?: string}) => {
+    const text = toStringArray(query).join(' ').trim()
+    if (!text) throw new Error('search requires a <query>')
+    await runAndPrint({
+      type: 'search',
+      query: text,
+      ...(options.workspace ? {workspaceId: options.workspace} : {}),
+      ...(options.limit !== undefined ? {limit: Number(options.limit)} : {}),
+    })
+  })
+
+cli
   .command('create-block <json>', wireDescription('create-block'))
   .action(async (json: string) => {
     const parsed = parseJson(json, 'create-block json') as Record<string, unknown>

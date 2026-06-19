@@ -1,16 +1,19 @@
 // @vitest-environment jsdom
 //
-// Exercises the bridge's `backlinks` / `grouped-backlinks` / `data-model`
-// commands end-to-end against a real Repo. The runtime is intentionally
-// minimal — kernel + the backlinks/grouped-backlinks data extensions
-// (which carry the queries AND the user-prefs infra the resolvers read).
-// It deliberately omits the references *parse* processor: that processor
-// re-derives references from content/properties post-commit, so manual
-// `references` arrays would be asynchronously reconciled away. Trigger
-// projection of `references_json` into `block_references` is part of the
-// test DB schema, so the manual references here project deterministically.
+// Exercises the bridge's data commands (`backlinks`, `grouped-backlinks`,
+// `data-model`, `page`, `daily-note`, `search`) end-to-end against a real
+// Repo. The runtime is intentionally minimal — kernel + the
+// backlinks/grouped-backlinks data extensions (which carry the queries AND
+// the user-prefs infra the resolvers read). It deliberately omits the
+// references *parse* processor: that processor re-derives references from
+// content/properties post-commit, so manual `references` arrays would be
+// asynchronously reconciled away. Trigger-maintained derived indexes
+// (`block_references`, `block_aliases`, `blocks_fts`) are part of the test
+// DB schema, so manual references / aliases / content project
+// deterministically on insert without that processor.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, type BlockReference } from '@/data/api'
+import type { BlockProperties } from '@/types.js'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
@@ -18,6 +21,7 @@ import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { backlinksDataExtension } from '@/plugins/backlinks/dataExtension'
 import { groupedBacklinksDataExtension } from '@/plugins/grouped-backlinks/dataExtension'
+import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes'
 import { createAgentRuntimeContext, executeCommand } from '../commands'
 import type { AgentRuntimeContext } from '../protocol'
 
@@ -72,6 +76,7 @@ const create = async (args: {
   id: string
   content?: string
   references?: BlockReference[]
+  properties?: BlockProperties
 }) => {
   await repo.tx(async tx => {
     await tx.create({
@@ -81,6 +86,7 @@ const create = async (args: {
       orderKey: `key-${args.id}`,
       content: args.content ?? args.id,
       references: args.references ?? [],
+      ...(args.properties ? {properties: args.properties} : {}),
     })
   }, {scope: ChangeScope.BlockDefault})
 }
@@ -195,5 +201,81 @@ describe('data-model command', () => {
     expect(guide).toContain('block_references')
     expect(guide).toContain('grouped-backlinks')
     expect(guide).toContain('source_field')
+  })
+})
+
+describe('page command', () => {
+  it('resolves an exact alias and returns substring candidates', async () => {
+    await create({
+      id: 'pg',
+      content: 'Project Alpha',
+      properties: {alias: ['Project Alpha']},
+    })
+
+    const exact = await executeCommand(
+      {commandId: 'pg-1', type: 'page', name: 'Project Alpha'},
+      context,
+    ) as {match: {id: string, deepLink: string} | null, candidates: Array<{id: string}>}
+    expect(exact.match?.id).toBe('pg')
+    expect(exact.match?.deepLink).toBe(`#${WS}/pg`)
+    expect(exact.candidates.map(c => c.id)).toContain('pg')
+
+    // A substring that is not an exact alias → no match, still a candidate.
+    const partial = await executeCommand(
+      {commandId: 'pg-2', type: 'page', name: 'Project'},
+      context,
+    ) as {match: {id: string} | null, candidates: Array<{id: string, alias: string}>}
+    expect(partial.match).toBeNull()
+    expect(partial.candidates.map(c => c.alias)).toContain('Project Alpha')
+  })
+})
+
+describe('daily-note command', () => {
+  it('resolves an ISO date to the deterministic block and reports existence', async () => {
+    const iso = '2026-06-18'
+    const expectedId = dailyNoteBlockId(WS, iso)
+
+    // Before creation: id is known, exists is false.
+    const before = await executeCommand(
+      {commandId: 'dn-1', type: 'daily-note', date: iso},
+      context,
+    ) as {iso: string, blockId: string, exists: boolean, deepLink: string, title: string}
+    expect(before.iso).toBe(iso)
+    expect(before.blockId).toBe(expectedId)
+    expect(before.exists).toBe(false)
+    expect(before.deepLink).toBe(`#${WS}/${expectedId}`)
+    expect(before.title).toBe('June 18th, 2026')
+
+    // After creating that exact block, exists flips and it hydrates.
+    await create({id: expectedId, content: 'June 18th, 2026'})
+    const after = await executeCommand(
+      {commandId: 'dn-2', type: 'daily-note', date: iso},
+      context,
+    ) as {exists: boolean, block: {id: string} | null}
+    expect(after.exists).toBe(true)
+    expect(after.block?.id).toBe(expectedId)
+  })
+
+  it('rejects an unparseable date', async () => {
+    await expect(executeCommand(
+      {commandId: 'dn-bad', type: 'daily-note', date: 'not a date at all'},
+      context,
+    )).rejects.toThrow(/Could not parse/)
+  })
+})
+
+describe('search command', () => {
+  it('full-text searches block content, hydrated', async () => {
+    await create({id: 's1', content: 'banana bread recipe'})
+    await create({id: 's2', content: 'completely unrelated note'})
+
+    const out = await executeCommand(
+      {commandId: 'se-1', type: 'search', query: 'banana'},
+      context,
+    ) as {total: number, results: Array<{id: string, deepLink: string}>}
+
+    expect(out.results.map(r => r.id)).toContain('s1')
+    expect(out.results.map(r => r.id)).not.toContain('s2')
+    expect(out.results.find(r => r.id === 's1')?.deepLink).toBe(`#${WS}/s1`)
   })
 })

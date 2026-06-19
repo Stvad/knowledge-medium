@@ -11,9 +11,9 @@
 export const DATA_MODEL_GUIDE = `# Knowledge Medium — data model (for agents)
 
 Mental model: this is broadly **Roam-like** — an outliner of blocks, where
-pages, daily notes, and "linked references" (backlinks) all work about how
-you'd expect from Roam. That analogy is just a head start; the specifics
-below are what's actually true here.
+pages, daily notes, and "linked references" (backlinks) work about how you'd
+expect from Roam. That analogy is just a head start; the specifics below are
+what's actually true here.
 
 ## Everything is a block
 
@@ -26,106 +26,151 @@ There is one node type. \`blocks\` is the universal table:
 | \`parent_id\`       | parent block id; \`NULL\` for a top-level block (e.g. a page)            |
 | \`order_key\`       | fractional-index sort key among siblings (lexicographic order)          |
 | \`content\`         | the block's text. **A page's title is its \`content\`.**                 |
-| \`properties_json\` | JSON map of typed properties (see below)                                |
+| \`properties_json\` | JSON map of typed properties (see "Types & properties")                 |
 | \`references_json\` | JSON of outgoing references (the projected source of \`block_references\`)|
 | \`created_at\` / \`updated_at\` / \`user_updated_at\` | timestamps (server/local/edit-time)        |
 | \`deleted\`         | soft-delete flag (\`0\`/\`1\`); filter \`deleted = 0\` in raw SQL          |
 
-Two derived/index tables sit alongside it:
+Two derived/index tables sit alongside it (trigger-maintained — you read
+them, you don't write them):
 
 - **\`block_references(source_id, target_id, workspace_id, alias, source_field)\`**
-  — the link index. One row per outgoing reference. This is what backlinks
-  are computed from.
-- **\`block_types(block_id, workspace_id, type)\`** — type tags. A block can
-  have several types (one row each).
+  — the link index; backlinks are computed from it.
+- **\`block_types(block_id, workspace_id, type)\`** — type tags, one row per type.
+- (also \`block_aliases\` for name→block lookup and \`blocks_fts\` for content
+  search — both fed by the named queries below, rarely queried directly.)
 
-## Pages vs daily notes
+A real graph is large (hundreds of thousands of blocks). Prefer the named
+queries and commands below over hand-rolled \`SELECT … LIKE\` scans.
 
-- A **page** is a block with type \`page\` (and usually \`parent_id IS NULL\`).
-  Its title is its \`content\`.
-- A **daily note** is a page with types \`daily-note, page\`. Daily notes are
-  nested under a \`Journal\` page and their title/\`content\` is the human date,
-  e.g. "June 17th, 2026". They also carry a \`daily-note:date\` property for
-  date-comparison queries. (Divergence from Roam: there is no separate
-  calendar entity — a daily note is just a typed page.)
+## Pages, aliases, and finding them by name
+
+- A **page** is a block with type \`page\` (usually \`parent_id IS NULL\`); its
+  title is its \`content\`.
+- Pages can have **multiple names**: the \`alias\` property is a string array,
+  and any alias resolves to the page. \`[[Some Name]]\` in text links to
+  whichever block claims that alias.
+- To find a page by name use \`yarn agent page <name>\` (exact alias hit +
+  substring candidates) — don't scan \`content\`. Pages + aliases are the most
+  common things in the graph.
+
+## Daily notes & dates
+
+A **daily note** is a page with types \`daily-note, page\`, nested under a
+\`Journal\` page. Its title/\`content\` is the human date ("June 17th, 2026") and
+it carries a \`daily-note:date\` property for date-comparison queries.
+(Divergence from Roam: no separate calendar entity — a daily note is just a
+typed page. Daily-note block ids are deterministic from workspace + ISO date.)
+
+- \`yarn agent daily-note <date>\` resolves \`today\` | \`yesterday\` | an ISO date |
+  the literal title | natural language ("next monday") to the daily-note
+  block (and tells you whether it exists yet).
 
 ## References, \`source_field\`, and backlinks
 
 When block S references block T, you get a \`block_references\` row with
 \`source_id = S\`, \`target_id = T\`. The **\`source_field\`** says *how*:
 
-- \`source_field = ''\` → a plain text wikilink \`[[T]]\` in S's body.
+- \`source_field = ''\` → a plain text wikilink \`[[T]]\` (or \`#tag\`) in S's body.
 - \`source_field = '<propName>'\` → a **projected property reference**: S has a
-  ref-typed property (e.g. \`groupWith\`, \`next-review-date\`, \`roam:nextDueDate\`)
-  whose value points at T. These are derived from \`properties_json\`, not from
-  body text.
+  ref-typed property whose value points at T. Common ones in real data:
+  \`roam:author\`, \`next-review-date\`, \`roam:isa\`, \`location\`, \`groupWith\`.
+  These are derived from \`properties_json\`, not body text.
 
 **Backlinks of T** = \`block_references\` rows where \`target_id = T\` (minus T's
-self-reference). Do **not** approximate backlinks by "blocks located on T's
-page", and do **not** filter them by \`created_at\` — that gives the wrong set.
+self-reference). Do **not** approximate backlinks by "blocks on T's page", and
+do **not** filter them by \`created_at\` — that gives the wrong set.
 
-- First-class command: \`yarn agent backlinks <blockId>\` →
-  \`backlinks.forBlock\`. Returns hydrated backlinks (id, content, types,
+- \`yarn agent backlinks <blockId>\` → hydrated backlinks (id, content, types,
   \`sourceFields\`, deep-link).
 
 ## Grouped backlinks (the grouped-references view)
 
-The grouped view takes a **target** block, finds its backlinks, then groups
-each backlink by the references of the backlink itself **and every ancestor
-up its chain** — plus the containing root page, \`groupWith\` expansion, and
-\`types\` enrichment. (Roam-like: "what context is each reference in?")
+The grouped view takes a **target**, finds its backlinks, then groups each
+backlink by the references of the backlink itself **and every ancestor up its
+chain** — plus the containing root page, \`groupWith\` expansion, and \`types\`
+enrichment. ("What context is each reference in?")
 
-- First-class command: \`yarn agent grouped-backlinks <blockId>\` →
-  \`groupedBacklinks.forBlock\`. Returns the same groups the panel shows:
-  each group has a label, an optional deep-link (when the group is a page),
-  and hydrated members, plus an \`Other\` fallback bucket.
-- To answer "which of page T's backlinks group under page P", run
+- \`yarn agent grouped-backlinks <blockId>\` → the same groups the panel shows
+  (label, optional page deep-link, hydrated members) plus an \`Other\` fallback.
+- "Which of page T's backlinks group under page P?" → run
   \`grouped-backlinks <T>\` and find the group whose label/id is P.
 
-### Filters and grouping config are yours to pick
-
-Both commands let you choose how much of the user's live config to apply:
+### Filters and grouping are yours to pick (both backlink commands)
 
 - \`--filter none\` (default) — no filter; every backlink.
 - \`--filter stored\` — the target block's own saved filter.
-- \`--filter effective\` — what the UI actually applies (for a daily note,
-  this folds in the daily-note default filter).
+- \`--filter effective\` — what the UI applies (folds in daily-note defaults).
 - \`--filter '<json>'\` — an explicit \`{include?, exclude?}\` BacklinksFilter.
 
-\`grouped-backlinks\` additionally takes:
+\`grouped-backlinks\` also takes \`--grouping user\` (default; the user's real
+config, matches the UI) | \`none\` (empty — generic groups dominate, can
+mislead) | \`'<json>'\`.
 
-- \`--grouping user\` (default) — the user's real grouping config (prefs
-  defaults merged with per-block overrides). Matches the in-app view.
-- \`--grouping none\` — empty config. Note: with no config the generic
-  \`Page\`/field groups dominate and the result is misleading — prefer
-  \`user\` unless you specifically want the raw grouping.
-- \`--grouping '<json>'\` — an explicit (partial) grouping config.
+## Other block kinds you'll meet
 
-## "Done" / todo status
+The graph is more than pages. The common typed blocks (by frequency):
 
-There is **no** \`DONE\` block type. Completion lives in \`properties_json\`:
+- **todo** — a task. Completion lives in \`properties_json\`, not a type:
+  \`status = 'done'\` (KM-native; open = \`'open'\`) or \`roam:todo-state = 'DONE'\`
+  (imported Roam; open = \`'TODO'\`). Check both when triaging.
+- **srs-sm2.5** — a spaced-repetition card. Scheduling lives in properties:
+  \`next-review-date\` (a ref to a daily note), \`interval\`, \`factor\`,
+  \`review-count\`, \`grade\`. Imported Roam SRS uses \`roam:nextDueDate\`,
+  \`roam:eFactor\`, \`roam:interval\`, \`roam:repetitions\`. "What's due" = cards
+  whose \`next-review-date\` is today or earlier.
+- **place** — a geo location (the geo plugin); \`location\`-field refs point at
+  places. **matrix-message**, **readwise-highlight/-document/-note** — imported
+  from those sources. **map**, **panel**/**panel-stack** (saved layouts).
+- **archived** is a property (\`archived: true\`), not a type — archived blocks
+  still exist and are returned by queries unless you filter them out.
 
-- \`status = 'done'\` (KM-native todos; the open value is \`'open'\`), or
-- \`roam:todo-state = 'DONE'\` (imported Roam todos; open value \`'TODO'\`).
+## Types & properties
 
-When triaging todos, check both.
+- **Types are multi-valued** (\`block_types\`, the \`types\` property). A block can
+  be \`daily-note, page\` at once.
+- **User-defined types are UUIDs.** Built-in types are readable strings
+  (\`page\`, \`todo\`). User-created types store the *type block's id* in \`types\`,
+  so a raw type can be a UUID you must dereference to a label (the type's own
+  block; \`block-type\` / \`property-schema\` blocks define them). Backlinks/
+  grouped output already resolves type labels for you.
+- **Properties are typed.** Each property name has a schema (codec +
+  changeScope). Reading raw \`properties_json\` gives encoded values; the
+  block APIs (\`block.get(schema)\`, \`peekProperty\`) decode them.
+- **Imported-source convention:** \`roam:*\` and \`readwise:*\` property names are
+  origin-tagged data from a Roam/Readwise import (e.g. \`roam:author\`,
+  \`roam:URL\`, \`roam:create/user\`, \`readwise:author\`). Treat them as the source
+  of truth they were imported from; don't delete them when migrating.
+- \`system:*\` (e.g. \`system:collapsed\`) is UI/system state, not user content.
+- To see the property schemas / types the runtime knows:
+  \`yarn agent describe-runtime --facets data.propertySchemas\` (and \`data.types\`).
 
-## Deep-link URLs
+## Finding things — the named queries you can call
 
-The app's hash route is \`#<workspaceId>/<blockId>\`; panels can stack, so
-multiple slots may follow. A single-block link is just
-\`#<workspaceId>/<blockId>\`. The hydrated command output includes ready-made
-\`deepLink\` fields.
+These are reachable in \`yarn agent eval\` via \`repo.query.<name>(args).load()\`.
+The convenience commands above wrap the starred ones (★) and add hydration.
+
+- ★ \`aliasLookup({workspaceId, alias})\` → page by exact name (\`page\` verb).
+- ★ \`aliasMatches({workspaceId, filter, limit?})\` → name substring candidates.
+- ★ \`searchByContent({workspaceId, query, limit?})\` → content FTS (\`search\` verb).
+- ★ \`backlinks.forBlock({workspaceId, id, filter?})\` → backlink source ids.
+- ★ \`groupedBacklinks.forBlock({workspaceId, id, filter?, groupingConfig?})\`.
+- \`byType({workspaceId, type})\` → all blocks of a type (e.g. \`todo\`, \`srs-sm2.5\`).
+- \`recentBlocks({workspaceId, limit?})\` → recently-touched blocks.
+- \`children({id})\` / \`childIds({id})\` / \`subtree({id})\` / \`ancestors({id})\`
+  / \`manyAncestors({ids})\` → outline structure.
+- \`typedBlockIds({workspaceId, match?, exclude?, referencedBy?, order?})\` → the
+  unified predicate engine backing backlinks/filters.
+- \`aliasesInWorkspace({workspaceId, filter?})\` → all alias strings.
+
+(Daily-note ids are derived, not queried: \`daily-note <date>\` resolves them.)
 
 ## Lower-level access
 
-- \`yarn agent get-block <id>\` / \`yarn agent subtree <rootId>\` — fetch a
-  block or its subtree.
-- \`yarn agent sql <all|get|optional|execute> <sql> [paramsJson]\` — raw SQL
-  over the tables above.
-- \`yarn agent eval <code>\` — run JS in the app. Inside, the named queries
-  are callable directly, e.g.
-  \`return await repo.query['groupedBacklinks.forBlock']({workspaceId, id}).load()\`.
-  The dedicated commands above wrap exactly these queries and add config
+- \`yarn agent get-block <id>\` / \`yarn agent subtree <rootId>\` — fetch a block
+  or its subtree.
+- \`yarn agent sql <all|get|optional|execute> <sql> [paramsJson]\` — raw SQL.
+- \`yarn agent eval <code>\` — run JS in the app; the named queries above are
+  callable directly. The dedicated commands wrap them with config
   resolution + hydration, so prefer them unless you need something custom.
 `
