@@ -8,6 +8,7 @@ import {
   type RefListCodec,
 } from '@/data/api'
 import { projectPropertyReferences } from '../referenceProjection'
+import { assertRefListDeriveIsAddOnly } from '@/data/test/derivedDataContract'
 
 // `projectPropertyReferences` is the post-commit references processor's
 // per-block projection (the site named in issue #189). The whole-field strip
@@ -74,6 +75,12 @@ describe('projectPropertyReferences', () => {
       { id: 'ok', alias: 'ok', sourceField: 'related' },
       { id: 'target-a', alias: 'target-a', sourceField: 'reviewer' },
     ])
+  })
+
+  it('satisfies the element-wise refList decode contract (#189)', () => {
+    assertRefListDeriveIsAddOnly(value =>
+      projectPropertyReferences({ properties: { related: value } }, schemas(relatedProp)).map(r => r.id),
+    )
   })
 
   it('a wholly wrong-shape refList value (non-array) still projects nothing', () => {

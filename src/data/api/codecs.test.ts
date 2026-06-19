@@ -7,6 +7,7 @@ import {
   isRefListCodec,
   type RefListCodec,
 } from './codecs'
+import { assertRefListDeriveIsAddOnly } from '@/data/test/derivedDataContract'
 
 describe('codec type metadata', () => {
   it('tags primitive and composed codecs with stable type ids', () => {
@@ -214,6 +215,11 @@ describe('decodeRefListIds', () => {
   it('uses the codec decodeValid when present (lenient element-wise, #189)', () => {
     expect(decodeRefListIds(codecs.refList(), ['valid-1', 42, 'valid-2'])).toEqual(['valid-1', 'valid-2'])
     expect(decodeRefListIds(codecs.refList(), 'not-an-array')).toEqual([])
+  })
+
+  it('satisfies the element-wise refList decode contract (#189)', () => {
+    const codec = codecs.refList()
+    assertRefListDeriveIsAddOnly(value => decodeRefListIds(codec, value))
   })
 
   it('falls back to a method-free string filter for a codec lacking decodeValid', () => {
