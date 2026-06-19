@@ -46,6 +46,8 @@ import {
   ParentDeletedError,
   ProcessorRejection,
   QueryNotRegisteredError,
+  derivedRefKey,
+  reconcileDerived,
 } from '@/data/api'
 import {
   latestRefProjectionSchema,
@@ -1490,17 +1492,17 @@ export class Repo {
           for (const block of blocks) {
             const liveBlock = await tx.get(block.id)
             if (liveBlock === null || liveBlock.deleted) continue
-            // Add-only: reprojection NEVER strips. Union newly-projected refs
-            // into the block's existing set, keeping everything already there.
-            // Reprojection fires on a schema change while block *values* are
-            // static, so a still-ref field projects exactly its existing refs
-            // (no-op), a newly-ref field gains refs, and a now-non-ref / absent
-            // field keeps its existing refs (projection adds nothing). All
-            // removal is lazy — the per-block references processor recomputes a
-            // field on the next write to its value. That is why a schema going
-            // absent (plugin toggled off, ?safeMode) cannot delete derived data
-            // here, and a ref→non-ref redefine's stale refs are swept on the
-            // block's next write rather than eagerly here.
+            // Add-only / retain-on-source contract
+            // (docs/contracts/derived-data-add-only.md): reprojection NEVER
+            // strips. It fires on a schema change while block *values* are
+            // static, so recompute can only ADD — a still-ref field projects
+            // exactly its existing refs (no-op), a newly-ref field gains refs,
+            // and a now-non-ref / absent field keeps its existing refs
+            // (projection adds nothing). `reconcileDerived`'s default retain-all
+            // enforces that: all removal is lazy and value-driven — the
+            // per-block references processor recomputes a field on the next
+            // write to its value — never a side effect of a schema going absent
+            // (plugin toggled off, ?safeMode) or non-ref here.
             const projected = namesToScan.flatMap(name =>
               projectedRefsForField(
                 liveBlock,
@@ -1508,18 +1510,16 @@ export class Repo {
                 name,
               )
             )
-            const existingKeys = new Set(
-              liveBlock.references.map(ref => `${ref.sourceField ?? ''}\u0000${ref.id}`),
-            )
-            const newRefs = projected.filter(
-              ref => !existingKeys.has(`${ref.sourceField ?? ''}\u0000${ref.id}`),
-            )
-            if (newRefs.length === 0) continue
-            await tx.update(
-              liveBlock.id,
-              {references: [...liveBlock.references, ...newRefs]},
-              {skipMetadata: true},
-            )
+            const reconciled = reconcileDerived({
+              prior: liveBlock.references,
+              recomputed: projected,
+              keyOf: derivedRefKey,
+            })
+            // Retain-all add-only ⇒ reconciled ⊇ prior, so an equal length means
+            // nothing new was projected. Skip the no-op write (avoids re-firing
+            // the field-watcher / write amplification).
+            if (reconciled.length === liveBlock.references.length) continue
+            await tx.update(liveBlock.id, {references: reconciled}, {skipMetadata: true})
             blocksUpdated += 1
           }
         }, {

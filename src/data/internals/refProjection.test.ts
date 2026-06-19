@@ -6,6 +6,7 @@ import {
   type AnyPropertySchema,
 } from '@/data/api'
 import { makeBlockData } from '@/data/test/factories'
+import { assertRefListDeriveIsAddOnly } from '@/data/test/derivedDataContract'
 import {
   latestRefProjectionSchema,
   projectedRefsForField,
@@ -99,6 +100,12 @@ describe('projectedRefsForField', () => {
       { id: 'target-b', alias: 'target-b', sourceField: 'related' },
       { id: 'target-c', alias: 'target-c', sourceField: 'related' },
     ])
+  })
+
+  it('satisfies the shared add-only / retain-on-source contract', () => {
+    assertRefListDeriveIsAddOnly(value =>
+      projectedRefsForField(block({ related: value }), refListProp, 'related').map(r => r.id),
+    )
   })
 
   it('returns [] for a present but non-ref schema', () => {

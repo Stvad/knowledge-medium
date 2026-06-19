@@ -45,7 +45,10 @@ import { z } from 'zod'
 import {
   ChangeScope,
   definePostCommitProcessor,
+  derivedRefKey,
   normalizeReferences,
+  reconcileDerived,
+  type AnyPropertySchema,
   type BlockData,
   type BlockReference,
   type AnyPostCommitProcessor,
@@ -97,6 +100,31 @@ interface SourcePlan {
    *  the row — used to skip a no-op write that would re-fire the
    *  field-watcher and produce a useless row_events / ps_crud entry. */
   referencesChanged: boolean
+}
+
+/** A prior property-derived ref the parse must RETAIN rather than recompute
+ *  (the retain-on-source half of the add-only contract). True iff:
+ *   - it's property-derived (`sourceField` set), AND
+ *   - its schema is currently ABSENT from the registry — the owning plugin is
+ *     toggled off / not yet loaded, so we *can't* re-derive it — AND
+ *   - the field still holds a value (the relationship is still encoded), AND
+ *   - this write did NOT change that field's own value.
+ *  The last clause is the one exception to retention: if THIS write changed the
+ *  field's value, a retained ref would contradict the new value and we can't
+ *  re-derive it without the schema, so it's allowed to drop. A *present* schema
+ *  (ref or non-ref) is handled by `projectPropertyReferences` upstream — it
+ *  re-derives, or correctly drops a redefined-to-non-ref field's stale refs. */
+const isRetainableAbsentRef = (
+  ref: BlockReference,
+  source: BlockData,
+  before: BlockData | null,
+  propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
+): boolean => {
+  if (!ref.sourceField) return false
+  if (propertySchemas.has(ref.sourceField)) return false
+  const afterValue = source.properties[ref.sourceField]
+  if (afterValue === undefined) return false
+  return JSON.stringify(before?.properties[ref.sourceField]) === JSON.stringify(afterValue)
 }
 
 /** Read phase: parse refs, resolve existing alias targets via committed-
@@ -167,27 +195,19 @@ const buildSourcePlan = async (
   }
 
   const propertyRefs = projectPropertyReferences(source, ctx.propertySchemas)
-  // Retain derived refs whose property schema is currently ABSENT from the
-  // registry — the owning plugin is toggled off / not yet loaded. Absence means
-  // "can't re-derive", NOT "delete": the value still encodes the relationship,
-  // so keep the existing projection rather than dropping it. Dropping here is
-  // the per-block "drip" that, fleet-wide, complements the reprojection
-  // mass-strip (both silently deleted ~10k SRS `next-review-date` backlinks).
-  // The one exception is when THIS write changed that field's value: a retained
-  // ref would then contradict the new value, and we can't re-derive it without
-  // the schema, so drop it. A *present* schema (ref or non-ref) is already
-  // handled by projectPropertyReferences above — it re-derives, or correctly
-  // drops a redefined-to-non-ref field's stale refs.
-  const retainedAbsentRefs = source.references.filter(ref => {
-    if (!ref.sourceField) return false
-    if (ctx.propertySchemas.has(ref.sourceField)) return false
-    const afterValue = source.properties[ref.sourceField]
-    if (afterValue === undefined) return false
-    return JSON.stringify(before?.properties[ref.sourceField]) === JSON.stringify(afterValue)
+  // Add-only / retain-on-source contract
+  // (docs/contracts/derived-data-add-only.md): recompute is authoritative for
+  // content + present-schema property refs, but a prior ref whose schema is
+  // ABSENT can't be re-derived, so `reconcileDerived` retains it rather than
+  // dropping it (see `isRetainableAbsentRef`). Dropping such a ref is the
+  // per-block "drip" that, fleet-wide, complements the reprojection mass-strip
+  // (both silently deleted ~10k SRS `next-review-date` backlinks).
+  const references = reconcileDerived<BlockReference>({
+    prior: source.references,
+    recomputed: [...aliasRefs, ...dateRefs, ...blockRefs, ...propertyRefs],
+    keyOf: derivedRefKey,
+    retain: ref => isRetainableAbsentRef(ref, source, before, ctx.propertySchemas),
   })
-  const references: BlockReference[] = [
-    ...aliasRefs, ...dateRefs, ...blockRefs, ...propertyRefs, ...retainedAbsentRefs,
-  ]
   // tx.update normalises references on write, so `source.references`'s
   // JSON text — when written by any tx.* path — is already in canonical
   // form (sorted, deduped, omitted-empty-sourceField, no whitespace).
