@@ -429,6 +429,13 @@ describe('core.move', () => {
     await env.repo.mutate.move({id: 'c1', parentId: null, position: {kind: 'before', siblingId: 'r2'}})
     expect(await env.childIds(null)).toEqual(['r1', 'c1', 'r2'])
   })
+
+  it('a self-anchored move (before/after itself) is a no-op, not an error', async () => {
+    await seedABC()
+    await env.repo.mutate.move({id: 'B', parentId: 'root', position: {kind: 'after', siblingId: 'B'}})
+    await env.repo.mutate.move({id: 'B', parentId: 'root', position: {kind: 'before', siblingId: 'B'}})
+    expect(await env.childIds('root')).toEqual(['A', 'B', 'C'])
+  })
 })
 
 // ──── ParentDeletedError — storage-layer enforcement ────
