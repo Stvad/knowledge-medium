@@ -429,7 +429,7 @@ command_events_log (
 -- N rows per command, one per block edit
 row_events_log (
   client_id     text,
-  event_uid     text,        -- stable, reset-proof per-event id (NOT row_events.id; see warn)
+  event_uid     text,        -- (install_id, row_events.id): reset-proof + per-event unique (see warn)
   tx_id         text not null,   -- links to command_events_log
   block_id      text not null,
   workspace_id  text not null,
@@ -467,16 +467,28 @@ create policy …_read on … for select
           this is buildable. This is a prerequisite, not an open question.
         </li>
         <li>
-          <strong><code>row_events.id</code> is NOT stable, so it can't be the event key.</strong>
-          It is <code>INTEGER PRIMARY KEY AUTOINCREMENT</code>; a local DB wipe / reinstall / OPFS
-          reset / <code>lockAndWipe</code> recreates the table and restarts the counter at 1
-          (<code>resetTestDb</code> even clears <code>sqlite_sequence</code>). Re-keyed as
-          <code>(client_id, row_events.id)</code>, a wiped-then-resynced device would mint
-          <code>1,2,3…</code> that collide with already-uploaded ids — and
-          <code>ON CONFLICT DO NOTHING</code> would then <em>silently drop genuine new events</em>,
-          the exact opposite of "never a silent drop". The key must be reset-proof: a
-          content-derived id (e.g. <code>hash(client_id, tx_id, block_id, kind)</code>) or a
-          persisted high-watermark, not a local autoincrement.
+          <strong><code>row_events.id</code> alone can't be the event key — on two counts.</strong>
+          (1) <em>Not reset-proof:</em> it is <code>INTEGER PRIMARY KEY AUTOINCREMENT</code>; a local
+          DB wipe / reinstall / OPFS reset / <code>lockAndWipe</code> recreates the table and
+          restarts the counter at 1 (<code>resetTestDb</code> even clears <code>sqlite_sequence</code>),
+          so a wiped-then-resynced device re-mints <code>1,2,3…</code> that collide with
+          already-uploaded ids and <code>ON CONFLICT DO NOTHING</code> <em>silently drops genuine new
+          events</em>. (2) <em>Content hashes are insufficient too:</em> a tempting
+          <code>hash(client_id, tx_id, block_id, kind)</code> collides on a real case — a single
+          <code>repo.tx</code> can write the same block more than once (e.g. <code>setProperty</code>
+          then <code>move</code>), and <code>blocks_row_event_update</code>
+          (<code>clientSchema.ts:436</code>) appends a <em>separate</em> <code>row_event</code> on
+          every <code>UPDATE</code>, so those events share all four fields and the later ones get
+          dropped. The key needs a genuine per-event discriminator.
+          <br><strong>Workable shape:</strong> <code>event_uid = (install_id, row_events.id)</code>,
+          where <code>install_id</code> is a per-install UUID nonce persisted in
+          <code>client_schema_state</code> and <em>regenerated on every wipe</em>. That makes the
+          per-install autoincrement globally unique <em>and</em> reset-proof (post-wipe events carry a
+          fresh <code>install_id</code>, so they can never collide with pre-wipe ids — no silent
+          drop), while <code>row_events.id</code> being distinct per event handles repeated writes to
+          one block in one tx. (Note this is a per-<em>install</em> nonce, distinct from the durable
+          per-<em>device</em> <code>client_id</code> above, which is for "originating device" grouping;
+          they're different ids serving different jobs.)
         </li>
       </ul>
     </div>
