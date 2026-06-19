@@ -102,7 +102,7 @@ describe('projectedRefsForField', () => {
     ])
   })
 
-  it('satisfies the shared add-only / retain-on-source contract', () => {
+  it('satisfies the element-wise refList decode contract (#189)', () => {
     assertRefListDeriveIsAddOnly(value =>
       projectedRefsForField(block({ related: value }), refListProp, 'related').map(r => r.id),
     )

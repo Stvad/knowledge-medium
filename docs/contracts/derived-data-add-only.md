@@ -58,7 +58,9 @@ recompute.
 
 ## How it's encoded
 
-Two enforcement points, one per failure mode:
+Two enforcement points cover the **absent-deriver** and **partial-decode**
+failure modes. The **replay** mode is a separate, still-open concern — see "Not
+enforced here" below.
 
 ### 1. Decode element-wise (never throw away the recoverable part)
 
@@ -74,11 +76,11 @@ from one-bad-element to whole-field strip).
 
 ### 2. Reconcile on write (retain what you couldn't re-derive)
 
-Every derive site assembles its write through one chokepoint,
+The backlink-deriving sites assemble their write through one chokepoint,
 `reconcileDerived` (`src/data/api/derivedData.ts`). It returns the freshly
 recomputed set **plus** any prior element the recompute didn't reproduce and
 that a `retain` predicate keeps — so an absent deriver retains rather than
-deletes. Consumers:
+deletes. Consumers today:
 
 - **reprojection** (`src/data/repo.ts`) — pure add-only (default retain-all):
   it fires on a *schema* change while block values are static, so recompute can
@@ -88,15 +90,38 @@ deletes. Consumers:
   `isRetainableAbsentRef` retains a prior ref whose schema is absent and whose
   value is unchanged.
 
+**Not yet routed — the importer.** `referencesWithProjectedProperties`
+(`src/plugins/roam-import/import.ts`) replace-writes property-derived refs: it
+keeps content refs but rebuilds the property set wholesale from
+`projectPropertyReferences`. It therefore inherits the *element-wise decode*
+facet (§1) but **not** retain-on-absence — an absent property schema at import
+time drops the prior property refs. Today that's masked because an absent SRS
+schema makes the import crash loudly rather than silently strip (audit `roam-1`,
+`docs/correctness-audit-2026-06-18.md`); routing it through `reconcileDerived`
+is a tracked follow-up.
+
 ### Enforcement (tests)
 
-- `assertRefListDeriveIsAddOnly` (`src/data/test/derivedDataContract.ts`) — the
-  shared property asserted against **every** ref-list derive path: codec decode,
-  `projectPropertyReferences`, `projectedRefsForField` (and the importer, which
-  reuses `projectPropertyReferences`). One malformed element keeps the
-  well-formed siblings; a wrong-shape value yields `[]` and never throws.
-- `reconcileDerived` has direct unit coverage for the retain/drop facets
-  (`src/data/api/derivedData.test.ts`).
+- `assertRefListDeriveIsAddOnly` (`src/data/test/derivedDataContract.ts`) pins
+  the **element-wise decode** facet (§1) — one malformed element keeps the
+  well-formed siblings; a wrong-shape value yields `[]` and never throws —
+  asserted against the three derive functions: codec `decodeRefListIds`,
+  `projectPropertyReferences`, and `projectedRefsForField`. (The importer reuses
+  `projectPropertyReferences`, so it inherits this decode facet; its reconcile
+  is *not* pinned — see the not-yet-routed note above.)
+- The **retain-on-absence** facet (§2) is pinned by `reconcileDerived`'s unit
+  tests (`src/data/api/derivedData.test.ts`) and the reprojection absence branch
+  (`latestRefProjectionSchema`, `src/data/internals/refProjection.test.ts`).
+
+### Not enforced here — undo/redo replay (#187)
+
+Replay re-derivation is the same *shape* of hazard — an incomplete recompute
+clobbering a value that should have been restored exactly — and it motivates
+this contract, but `reconcileDerived` does **not** address it: the helper has no
+knowledge of whether the surrounding tx is a replay. #187 (audit A6) is a
+separate, still-open fix (skip the same-tx processor pass on `_replay` in the
+commit pipeline). It appears in the hazard list and incident history as a
+motivating sibling, not as something this contract now prevents.
 
 ## When you add a new derive path
 

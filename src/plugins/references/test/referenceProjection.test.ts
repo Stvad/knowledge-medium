@@ -77,7 +77,7 @@ describe('projectPropertyReferences', () => {
     ])
   })
 
-  it('satisfies the shared add-only / retain-on-source contract', () => {
+  it('satisfies the element-wise refList decode contract (#189)', () => {
     assertRefListDeriveIsAddOnly(value =>
       projectPropertyReferences({ properties: { related: value } }, schemas(relatedProp)).map(r => r.id),
     )

@@ -217,7 +217,7 @@ describe('decodeRefListIds', () => {
     expect(decodeRefListIds(codecs.refList(), 'not-an-array')).toEqual([])
   })
 
-  it('satisfies the shared add-only / retain-on-source contract', () => {
+  it('satisfies the element-wise refList decode contract (#189)', () => {
     const codec = codecs.refList()
     assertRefListDeriveIsAddOnly(value => decodeRefListIds(codec, value))
   })

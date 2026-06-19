@@ -55,6 +55,23 @@ describe('reconcileDerived', () => {
     expect(result.map(r => r.id)).toEqual(['keep'])
   })
 
+  it('under retain-all, length grows by exactly the count of newly-recomputed elements', () => {
+    // The exact predicate the reprojection skip-write leans on (repo.ts): with
+    // default retain-all, reconciled ⊇ prior, so `reconciled.length ===
+    // prior.length` iff recompute added nothing (skip), and any addition grows
+    // the length by exactly that count (write). A regression that dropped a
+    // prior element would shrink length below prior.length and make the skip lie.
+    const prior = [ref('a', 'field'), ref('b', 'field')]
+    // No-op recompute (re-derives an existing element): length unchanged.
+    expect(
+      reconcileDerived({ prior, recomputed: [ref('a', 'field')], keyOf: derivedRefKey }).length,
+    ).toBe(prior.length)
+    // One genuinely new element: length grows by exactly one.
+    expect(
+      reconcileDerived({ prior, recomputed: [ref('c', 'field')], keyOf: derivedRefKey }).length,
+    ).toBe(prior.length + 1)
+  })
+
   it('keys on (sourceField, id) so the same id under different fields is distinct', () => {
     const result = reconcileDerived({
       prior: [ref('x', 'fieldB')],

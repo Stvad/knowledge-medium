@@ -10,10 +10,12 @@
  * source still implies. (That class wiped ~10k SRS `next-review-date`
  * backlinks; see the contract doc for the incident history.)
  *
- * `reconcileDerived` is the single chokepoint every derive site routes its
+ * `reconcileDerived` is the chokepoint the backlink-deriving sites route their
  * write through, so "recompute never reduces the derived set for a
  * present/unchanged source key" is enforced in one audited place rather than
- * re-hand-rolled per site (reprojection, the references processor, importer).
+ * re-hand-rolled per site. Routed today: reprojection (`repo.ts`) and the
+ * references processor. The roam importer's reference rebuild is a derive site
+ * NOT yet routed through this — see docs/contracts/derived-data-add-only.md.
  */
 
 import type { BlockReference } from './blockData'
