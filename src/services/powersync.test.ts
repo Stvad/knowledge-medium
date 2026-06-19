@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const supabaseRef = vi.hoisted(() => ({
   rpc: vi.fn(),
+  from: vi.fn(),
 }))
 
 vi.mock('@/services/supabase.js', () => ({
@@ -839,5 +840,49 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
     // round trip when handed an empty array (e.g. a future caller).
     await __applyBlockPatchesRpcForTest([])
     expect(supabaseRef.rpc).not.toHaveBeenCalled()
+  })
+})
+
+// ===========================================================================
+// defaultBlockUploadSink.createRows / deleteRow — status threading (#190).
+//
+// The status-threading fix touches all three sinks, but the supabase mock
+// historically stubbed only `.rpc`, so the CREATE (`.from().upsert()`) and
+// DELETE (`.from().delete()`) sinks had no coverage proving they thread the
+// response HTTP status onto the thrown error. Drive them through the real
+// default sink (no stubSink) so a regression to a bare `throw error` — which
+// would re-open the dead-status hole #190 closed — is caught.
+// ===========================================================================
+
+describe('defaultBlockUploadSink create/delete — status threading', () => {
+  beforeEach(() => {
+    supabaseRef.from.mockReset()
+  })
+
+  it('threads the response HTTP status onto a codeless 4xx from the CREATE sink', async () => {
+    const upsert = vi.fn().mockResolvedValue({data: null, error: {message: 'Bad Request'}, status: 400})
+    supabaseRef.from.mockReturnValue({upsert})
+
+    const thrown = await __applyCompactedBlockOperationsForTest(
+      fakeDatabase,
+      [{kind: 'create', id: 'block-a', payload: {id: 'block-a', content: 'A'}, order: 0}],
+    ).catch((err: unknown) => err)
+
+    expect(thrown).toMatchObject({status: 400, message: 'Bad Request'})
+    expect(classifyUploadError(thrown)).toBe('permanent')
+  })
+
+  it('threads the response HTTP status onto a codeless 4xx from the DELETE sink', async () => {
+    const eq = vi.fn().mockResolvedValue({data: null, error: {message: 'Bad Request'}, status: 400})
+    const del = vi.fn().mockReturnValue({eq})
+    supabaseRef.from.mockReturnValue({delete: del})
+
+    const thrown = await __applyCompactedBlockOperationsForTest(
+      fakeDatabase,
+      [{kind: 'delete', id: 'block-a', order: 0}],
+    ).catch((err: unknown) => err)
+
+    expect(thrown).toMatchObject({status: 400, message: 'Bad Request'})
+    expect(classifyUploadError(thrown)).toBe('permanent')
   })
 })

@@ -22,10 +22,14 @@ const isObjectWith = <K extends string>(
 /** Postgres SQLSTATE classes that can never succeed on retry of the same
  *  payload, so the tx is dropped to the rejection table rather than retried
  *  forever. PostgREST surfaces these on the JS error's `code` field verbatim.
- *   - `22xxx` data exception — a malformed/out-of-range value, e.g. `22P02`
+ *   - `22xxx` data exception — a malformed / out-of-range value, e.g. `22P02`
  *     invalid_text_representation from a bad cast of `created_at` /
  *     `updated_at` / `user_updated_at` / `deleted` inside `apply_block_patches`.
- *     The payload is fixed, so it fails identically every time.
+ *     Matched class-wide like `23xxx` / `42xxx`: every class-22 path reachable
+ *     today is a fixed-payload cast that fails identically on retry. (A future
+ *     trigger raising a state-dependent class-22 code would be dropped under
+ *     this same class-wide trade — as a cross-client `23505` already is —
+ *     rather than jamming the whole queue for every write.)
  *   - `23xxx` integrity-constraint violation (FK / unique / check).
  *   - `42xxx` access-rule / syntax error (RLS GRANT denial, client/server
  *     schema drift).
