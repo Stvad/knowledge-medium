@@ -528,6 +528,39 @@ const makeUploadDeps = (
   encryptOps: ops => encryptUploadOps(ops, getWorkspaceMode, getCek),
 })
 
+/** How many upload passes an `ambiguous` tx (a suspected-permanent 4xx with no
+ *  confirming code) is retried before it's quarantined. The first
+ *  `AMBIGUOUS_RETRY_BUDGET - 1` passes re-throw (so PowerSync retries and a
+ *  transient blip can clear); the last records the rejection and completes,
+ *  draining the tx so the queue doesn't jam forever on a real permanent error.
+ *  Counts are kept per `transactionId` for the lifetime of the connector (in
+ *  memory — a restart resets the budget, which is itself a fresh "try again"). */
+export const AMBIGUOUS_RETRY_BUDGET = 5
+
+/** Records one more failed pass for an `ambiguous` tx and reports whether its
+ *  retry budget is now spent. A tx with no stable `transactionId` can't be
+ *  tracked across passes, so it's treated as already-exhausted (quarantine now)
+ *  rather than retried unbounded. */
+const ambiguousBudgetExhausted = (
+  attempts: Map<number, number>,
+  transaction: CrudTransaction,
+): boolean => {
+  const id = transaction.transactionId
+  if (id === undefined) return true
+  const next = (attempts.get(id) ?? 0) + 1
+  attempts.set(id, next)
+  return next >= AMBIGUOUS_RETRY_BUDGET
+}
+
+/** Clears a tx's ambiguous retry counter once it has drained (succeeded or been
+ *  quarantined), so the map stays bounded by the count of currently-stuck txs. */
+const forgetAmbiguousAttempts = (
+  attempts: Map<number, number>,
+  transaction: CrudTransaction,
+): void => {
+  if (transaction.transactionId !== undefined) attempts.delete(transaction.transactionId)
+}
+
 /** Optimistic-batch / pessimistic-per-tx upload orchestrator.
  *
  *  Happy path: one compacted batch → one applyOperations call → complete
@@ -556,6 +589,7 @@ const uploadTransactionsWithFallback = async (
   database: AbstractPowerSyncDatabase,
   transactions: readonly CrudTransaction[],
   deps: UploadDeps,
+  ambiguousAttempts: Map<number, number> = new Map(),
 ): Promise<void> => {
   const encryptOps = deps.encryptOps ?? (async ops => ops)
 
@@ -573,14 +607,22 @@ const uploadTransactionsWithFallback = async (
     try {
       await deps.applyOperations(database, batchOps)
       await transactions[transactions.length - 1]?.complete()
+      // The whole batch drained — clear any ambiguous retry counters it carried
+      // (an earlier pass's transient blip cleared and the batch went through).
+      for (const transaction of transactions) {
+        forgetAmbiguousAttempts(ambiguousAttempts, transaction)
+      }
       return
     } catch (err) {
+      // Transient → retry the whole batch later. Permanent OR ambiguous → drop
+      // into the per-tx loop, where each tx is isolated and an ambiguous one
+      // gets its own retry budget before being quarantined.
       if (classifyUploadError(err) === 'transient') {
         console.error('[powersync] upload failed (transient, will retry)', err)
         throw err
       }
       console.warn(
-        `[powersync] batch upload rejected permanently — isolating ${transactions.length} tx(s)`,
+        `[powersync] batch upload failed — isolating ${transactions.length} tx(s)`,
         err,
       )
     }
@@ -595,9 +637,23 @@ const uploadTransactionsWithFallback = async (
     try {
       await deps.applyOperations(database, txOps)
       await transaction.complete()
+      forgetAmbiguousAttempts(ambiguousAttempts, transaction)
     } catch (err) {
-      if (classifyUploadError(err) === 'transient') {
+      const classification = classifyUploadError(err)
+      if (classification === 'transient') {
         console.error('[powersync] per-tx upload failed (transient, will retry)', err)
+        throw err
+      }
+      // An ambiguous error (a suspected-permanent 4xx with no confirming code)
+      // is retried across a few upload passes before we give up: re-throw until
+      // the budget is spent, then fall through to quarantine. A genuinely
+      // transient blip clears within the budget; a real permanent error
+      // quarantines instead of jamming the queue forever.
+      if (classification === 'ambiguous' && !ambiguousBudgetExhausted(ambiguousAttempts, transaction)) {
+        console.warn(
+          `[powersync] tx ${transaction.transactionId} ambiguous upload error — retrying`,
+          err,
+        )
         throw err
       }
       console.warn(
@@ -606,6 +662,7 @@ const uploadTransactionsWithFallback = async (
       )
       await deps.recordRejection(database, transaction, err)
       await transaction.complete()
+      forgetAmbiguousAttempts(ambiguousAttempts, transaction)
     }
   }
 }
@@ -613,11 +670,12 @@ const uploadTransactionsWithFallback = async (
 const runUploadLoop = async (
   database: AbstractPowerSyncDatabase,
   deps: UploadDeps,
+  ambiguousAttempts: Map<number, number>,
 ): Promise<void> => {
   while (true) {
     const transactions = await collectUploadBatch(database)
     if (transactions.length === 0) return
-    await uploadTransactionsWithFallback(database, transactions, deps)
+    await uploadTransactionsWithFallback(database, transactions, deps, ambiguousAttempts)
   }
 }
 
@@ -671,9 +729,12 @@ export const createPowerSyncConnector = (
     options.getWorkspaceMode ?? defaultGetWorkspaceMode,
     options.getCek ?? defaultUploadGetCek,
   )
+  // Per-connector so `ambiguous` retry counts persist across the repeated
+  // `uploadData` invocations PowerSync makes while a tx stays queued.
+  const ambiguousAttempts = new Map<number, number>()
   return {
     fetchCredentials,
-    uploadData: database => runUploadLoop(database, deps),
+    uploadData: database => runUploadLoop(database, deps, ambiguousAttempts),
   }
 }
 

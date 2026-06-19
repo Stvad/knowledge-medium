@@ -12,6 +12,7 @@ vi.mock('@/services/supabase.js', () => ({
 }))
 
 import {
+  AMBIGUOUS_RETRY_BUDGET,
   MAX_PATCHES_PER_SUPABASE_RPC,
   __applyBlockPatchesRpcForTest,
   __applyCompactedBlockOperationsForTest,
@@ -761,17 +762,17 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
     ).rejects.toMatchObject({code: '42501'})
   })
 
-  it('threads the response HTTP status onto a codeless 4xx so it classifies permanent (#190)', async () => {
-    // Production shape: a non-JSON / auth 4xx (expired JWT 401/403, 413, a
-    // generic 400) reaches postgrest-js as `{message: body}` with NO `code`
-    // of its own, and the HTTP status lives as a SIBLING of `{error}` in the
-    // response tuple — never on the error object. The old sink destructured
-    // only `{error}` and re-threw it, dropping the status, so the classifier's
-    // 4xx-permanent branch was dead and PowerSync retried the same batch
-    // forever (queue jam). Threading the status through makes the codeless 4xx
-    // classify permanent. Note: unlike the standalone classifier tests, this
-    // error carries no `.status` of its own — it gets one only because the
-    // sink threads it, which is the shape production actually produces.
+  it('threads the response HTTP status onto a codeless 4xx so it classifies ambiguous (#190)', async () => {
+    // Production shape: a non-JSON 4xx reaches postgrest-js as `{message: body}`
+    // with NO `code` of its own, and the HTTP status lives as a SIBLING of
+    // `{error}` in the response tuple — never on the error object. The old sink
+    // dropped that status on re-throw, so the classifier's 4xx branch was dead
+    // and PowerSync retried the same batch forever (queue jam). Threading the
+    // status through lets the classifier see it: a codeless non-retryable 4xx
+    // is `ambiguous` — a suspected-permanent client error we can't confirm from
+    // a code, so it gets a retry budget then quarantine. Note: unlike the
+    // standalone classifier tests, this error carries no `.status` of its own —
+    // it gets one only because the sink threads it (the production shape).
     supabaseRef.rpc.mockResolvedValueOnce({data: null, error: {message: 'Bad Request'}, status: 400})
 
     const thrown = await __applyBlockPatchesRpcForTest([
@@ -779,29 +780,44 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
     ]).catch((err: unknown) => err)
 
     expect(thrown).toMatchObject({status: 400, message: 'Bad Request'})
-    expect(classifyUploadError(thrown)).toBe('permanent')
+    expect(classifyUploadError(thrown)).toBe('ambiguous')
   })
 
-  it('records + completes a codeless permanent 4xx end-to-end instead of jamming (#190)', async () => {
-    // Full path through the real default sink: the orchestrator's batch attempt
-    // and its per-tx retry both hit the same codeless 400, the sink threads the
-    // status, and the classifier routes it permanent — so the tx lands in
-    // ps_crud_rejected (recorded) and is completed (queue drains), instead of
-    // re-throwing forever. The threaded status survives all the way to the
-    // rejection record.
+  it('retries an ambiguous codeless 4xx across the budget, then quarantines it (#190)', async () => {
+    // A codeless non-retryable 4xx is `ambiguous`: we can't confirm it's
+    // permanent from a code, so the orchestrator retries it across a few upload
+    // passes (absorbing a transient blip) and quarantines it only once the
+    // budget is spent — instead of dropping it immediately or jamming the queue
+    // forever. The shared `attempts` map models the per-connector counter that
+    // survives across passes; each call here is one PowerSync upload pass over
+    // the same still-queued tx.
     supabaseRef.rpc.mockResolvedValue({data: null, error: {message: 'Bad Request'}, status: 400})
-    const tx = fakeTx(1, [new CrudEntry(1, UpdateType.PATCH, 'blocks', 'block-a', 1, {content: 'B'})])
+    const attempts = new Map<number, number>()
     const recordRejection = vi.fn<UploadDeps['recordRejection']>().mockResolvedValue(undefined)
+    const deps: UploadDeps = {
+      applyOperations: (db, ops) => __applyCompactedBlockOperationsForTest(db, ops),
+      recordRejection,
+    }
+    const onePass = () => {
+      const tx = fakeTx(7, [new CrudEntry(1, UpdateType.PATCH, 'blocks', 'block-a', 7, {content: 'B'})])
+      const run = __uploadTransactionsWithFallbackForTest(
+        fakeDb, [tx] as unknown as CrudTransaction[], deps, attempts,
+      )
+      return {tx, run}
+    }
 
-    await __uploadTransactionsWithFallbackForTest(
-      fakeDb,
-      [tx] as unknown as CrudTransaction[],
-      {
-        applyOperations: (db, ops) => __applyCompactedBlockOperationsForTest(db, ops),
-        recordRejection,
-      },
-    )
+    // The first BUDGET-1 passes re-throw (retry) and never quarantine.
+    for (let pass = 1; pass < AMBIGUOUS_RETRY_BUDGET; pass++) {
+      const {tx, run} = onePass()
+      await expect(run).rejects.toMatchObject({status: 400})
+      expect(tx.completed).toBe(false)
+    }
+    expect(recordRejection).not.toHaveBeenCalled()
 
+    // The final pass exhausts the budget → quarantine: recorded + completed,
+    // no re-throw. The threaded status survives to the rejection record.
+    const {tx, run} = onePass()
+    await run
     expect(recordRejection).toHaveBeenCalledTimes(1)
     expect(recordRejection.mock.calls[0]?.[2]).toMatchObject({status: 400})
     expect(tx.completed).toBe(true)
@@ -869,7 +885,7 @@ describe('defaultBlockUploadSink create/delete — status threading', () => {
     ).catch((err: unknown) => err)
 
     expect(thrown).toMatchObject({status: 400, message: 'Bad Request'})
-    expect(classifyUploadError(thrown)).toBe('permanent')
+    expect(classifyUploadError(thrown)).toBe('ambiguous')
   })
 
   it('threads the response HTTP status onto a codeless 4xx from the DELETE sink', async () => {
@@ -883,6 +899,6 @@ describe('defaultBlockUploadSink create/delete — status threading', () => {
     ).catch((err: unknown) => err)
 
     expect(thrown).toMatchObject({status: 400, message: 'Bad Request'})
-    expect(classifyUploadError(thrown)).toBe('permanent')
+    expect(classifyUploadError(thrown)).toBe('ambiguous')
   })
 })

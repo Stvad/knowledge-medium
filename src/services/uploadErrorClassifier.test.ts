@@ -60,15 +60,23 @@ describe('classifyUploadError', () => {
       expect(classifyUploadError(postgrestError('PGRST302'))).toBe('transient')
     })
 
-    it('classifies the narrow PostgREST permanent codes (PGRST204, PGRST116) as permanent', () => {
-      // PGRST204 = column not found in schema cache (client/server schema
-      // drift); PGRST116 = result-cardinality mismatch. Both fail again
-      // unchanged on retry, so they must be dropped, not re-queued.
+    it('classifies the malformed-request and schema PostgREST codes (PGRST10x / 204 / 116) as permanent', () => {
+      // PGRST100-103 = malformed request (query-string parse / wrong method /
+      // invalid body / invalid range) — for our fixed-shape rpc/upsert/delete
+      // these are client bugs that retrying can't fix. PGRST204 = column not
+      // found in the schema cache (drift); PGRST116 = result-cardinality
+      // mismatch. All fail identically on retry → quarantine, don't re-queue.
+      expect(classifyUploadError(postgrestError('PGRST100'))).toBe('permanent')
+      expect(classifyUploadError(postgrestError('PGRST102'))).toBe('permanent')
       expect(classifyUploadError(postgrestError('PGRST204'))).toBe('permanent')
       expect(classifyUploadError(postgrestError('PGRST116'))).toBe('permanent')
     })
 
-    it('keeps unknown PGRST codes transient (the list stays narrow)', () => {
+    it('keeps an unknown code with no status transient (no confirmed client-error signal)', () => {
+      // An unrecognised code with no HTTP status to disambiguate stays
+      // transient — we don't quarantine a write on a code we can't classify and
+      // have no 4xx signal for. (An unknown code WITH a 4xx status is
+      // `ambiguous`; see the precedence block below.)
       expect(classifyUploadError(postgrestError('PGRST500'))).toBe('transient')
     })
 
@@ -81,15 +89,17 @@ describe('classifyUploadError', () => {
   })
 
   describe('HTTP status codes', () => {
-    it('classifies payload-permanent 4xx client errors as permanent', () => {
-      // The same payload can never satisfy these, so retrying forever would
-      // jam the queue — drop them to the rejection table instead. 401/403 are
-      // pointedly NOT here: those are recoverable (see the transient case).
-      expect(classifyUploadError(httpError(400))).toBe('permanent')
-      expect(classifyUploadError(httpError(404))).toBe('permanent')
-      expect(classifyUploadError(httpError(409))).toBe('permanent')
-      expect(classifyUploadError(httpError(413))).toBe('permanent')
-      expect(classifyUploadError(httpError(422))).toBe('permanent')
+    it('classifies a codeless non-retryable 4xx as ambiguous (retry-budget, then quarantine)', () => {
+      // A 4xx with no structured code is a SUSPECTED client error we can't
+      // confirm is permanent — so it's `ambiguous`: the orchestrator retries it
+      // a few times (absorbing a transient blip) and quarantines it only if it
+      // won't clear, rather than dropping it immediately or jamming forever.
+      // 401/403 are pointedly NOT here — those are recoverable (transient).
+      expect(classifyUploadError(httpError(400))).toBe('ambiguous')
+      expect(classifyUploadError(httpError(404))).toBe('ambiguous')
+      expect(classifyUploadError(httpError(409))).toBe('ambiguous')
+      expect(classifyUploadError(httpError(413))).toBe('ambiguous')
+      expect(classifyUploadError(httpError(422))).toBe('ambiguous')
     })
 
     it('classifies the retry-friendly 4xx subset (401/403/408/429) as transient', () => {
@@ -114,15 +124,12 @@ describe('classifyUploadError', () => {
     })
   })
 
-  describe('code takes precedence over the threaded HTTP status', () => {
-    it('keeps an unknown code-bearing error transient even with a permanent 4xx status', () => {
-      // The status is now threaded onto every PostgREST error (#190), but a
-      // structured code is the precise signal and must win. PGRST202
-      // (stale/missing RPC signature after a migration) is surfaced by
-      // PostgREST as HTTP 404 yet is recoverable once the schema cache
-      // reloads — it is deliberately NOT in the permanent lists, so it must
-      // stay transient. Were the 404 allowed to override the code, the queued
-      // write would be dropped instead of retried.
+  describe('a recognised code wins over the threaded status; an unknown 4xx is ambiguous', () => {
+    it('classifies a known-recoverable code (PGRST202) transient even with a permanent-looking 404', () => {
+      // PGRST202 (stale/missing RPC signature after a migration) is surfaced by
+      // PostgREST as HTTP 404 yet self-heals once the schema cache reloads — it
+      // is in the RECOVERABLE set, so it stays transient. Were the 404 allowed
+      // to override the code, the queued write would be quarantined, not retried.
       const staleRpc = Object.assign(new Error('Could not find the function'), {
         code: 'PGRST202',
         status: 404,
@@ -130,12 +137,21 @@ describe('classifyUploadError', () => {
       expect(classifyUploadError(staleRpc)).toBe('transient')
     })
 
-    it('still classifies a known-permanent code as permanent even when the status alone would be transient', () => {
-      // Inverse precedence check: a permanent code (FK violation) stays
-      // permanent even if the threaded status (401) would, on its own,
-      // classify transient. The code branch decides before status is consulted.
+    it('classifies a known-permanent code permanent even when the status alone would be transient', () => {
+      // Inverse precedence check: a permanent code (FK violation) wins even if
+      // the threaded status (401) would, on its own, classify transient. The
+      // code branch decides before the status is consulted.
       const fk = Object.assign(new Error('fk'), {code: '23503', status: 401})
       expect(classifyUploadError(fk)).toBe('permanent')
+    })
+
+    it('classifies an UNKNOWN code with a non-retryable 4xx as ambiguous', () => {
+      // An unrecognised code (in no list) falls through to the status: a
+      // non-retryable 4xx makes it `ambiguous` (retry-budget then quarantine) —
+      // neither an immediate drop (it could be a recoverable code we haven't
+      // catalogued) nor the old infinite jam.
+      const unknown = Object.assign(new Error('weird'), {code: 'PGRST999', status: 400})
+      expect(classifyUploadError(unknown)).toBe('ambiguous')
     })
   })
 

@@ -1,17 +1,29 @@
-/** Classifies an error thrown during a PowerSync upload attempt as either
- *  recoverable on retry (`transient`) or guaranteed to fail again the
- *  same way (`permanent`).
+/** Classifies an error thrown during a PowerSync upload attempt into one of
+ *  three outcomes that drive the upload orchestrator:
  *
- *  Permanent rejections are dropped from the upload queue and copied to
- *  `ps_crud_rejected` for inspection; transient errors are re-thrown so
- *  PowerSync retries the batch.
+ *   - `transient`  — recoverable; re-thrown so PowerSync retries the batch.
+ *                    Network/offline, 5xx, rate-limit/timeout, an expired or
+ *                    not-yet-refreshed session, and any shape we don't
+ *                    recognise default here: retrying is always safe, and a
+ *                    stuck transient is visible (the queue stops draining) and
+ *                    self-heals when the condition clears.
+ *   - `permanent`  — a precise signal that the same payload can never succeed
+ *                    (an integrity/data/syntax SQLSTATE, or a malformed-request
+ *                    PostgREST code). Quarantined to `ps_crud_rejected`
+ *                    immediately so the rest of the queue keeps draining.
+ *   - `ambiguous`  — a suspected-permanent client error (a 4xx) we CANNOT
+ *                    confirm from a known code. The orchestrator retries it a
+ *                    bounded number of times (absorbing a transient blip) and
+ *                    quarantines it only if it still won't clear — so we
+ *                    neither jam the queue forever on a real permanent error
+ *                    nor drop a write that was only briefly 4xx.
  *
- *  Default for unknown shapes is `transient` — defaulting permanent would
- *  silently drop user data on any error class we haven't seen yet. The
- *  trade-off is that an unfamiliar permanent error keeps jamming the
- *  queue until we add it to the list below; we accept that in exchange
- *  for never losing writes silently. */
-export type UploadErrorClass = 'transient' | 'permanent'
+ *  Quarantine is NOT silent data loss: a rejected tx is recorded to
+ *  `ps_crud_rejected` and surfaced to the user. The bias is still away from
+ *  dropping a recoverable write — only a *precise* permanent signal drops
+ *  immediately; everything uncertain is retried first, and anything that looks
+ *  like infrastructure being down (no code, no 4xx) is retried indefinitely. */
+export type UploadErrorClass = 'transient' | 'permanent' | 'ambiguous'
 
 const isObjectWith = <K extends string>(
   value: unknown,
@@ -46,66 +58,77 @@ const isPermanentSqlState = (code: string): boolean =>
   PERMANENT_PLPGSQL_SQLSTATES.has(code)
 
 /** PostgREST-specific codes (prefixed `PGRST`) that are permanent — the
- *  request can never succeed unchanged:
- *   - `PGRST204` — column not found in the schema cache (client/server schema
- *     drift); the same payload keeps missing the column until a deploy.
- *   - `PGRST116` — result-cardinality mismatch (`.single()` got 0 or >1 rows).
- *  Keep this list narrow — broaden as new permanent classes surface in logs.
- *
- *  Deliberately NOT here: the JWT/auth group — `PGRST301` ("JWT invalid or
- *  expired") and `PGRST302` ("anonymous access disabled"), both HTTP 401.
- *  Those are RECOVERABLE: the token refreshes or the user re-authenticates and
- *  the retry succeeds, so they fall through to `transient`. Dropping a write on
- *  an expired token is exactly the silent data-loss this module exists to
- *  avoid. A genuine authorization revocation (a workspace un-shared out from
- *  under a pending write → row-level security rejects it) surfaces instead as
- *  the Postgres SQLSTATE `42501` (HTTP 403), which `isPermanentSqlState`
- *  catches — so revoked access is still quarantined, told apart from a
- *  recoverable expired token by the precise CODE rather than the 401/403. */
-const PERMANENT_POSTGREST_CODES = new Set(['PGRST204', 'PGRST116'])
+ *  request can never succeed unchanged. Kept narrow; anything not listed that
+ *  still looks like a client error (a 4xx) is caught as `ambiguous`
+ *  (retry-budget) rather than dropped, so under-listing only delays a
+ *  quarantine, it never jams forever.
+ *   - `PGRST100` / `PGRST101` / `PGRST102` / `PGRST103` — malformed request
+ *     (query-string parse, wrong method, invalid body, invalid range). Our
+ *     upload sends fixed-shape `rpc` / `upsert` / `delete` requests, so these
+ *     only arise from a client bug, which retrying cannot fix.
+ *   - `PGRST204` — column not found in the schema cache (client/server drift).
+ *   - `PGRST116` — result-cardinality mismatch (`.single()` got 0 or >1 rows). */
+const PERMANENT_POSTGREST_CODES = new Set([
+  'PGRST100',
+  'PGRST101',
+  'PGRST102',
+  'PGRST103',
+  'PGRST204',
+  'PGRST116',
+])
 
-/** HTTP statuses that mean "the client sent a request the same payload can
- *  never fix" — retry produces the same response, so the write is dropped to
- *  the rejection table. The retry-friendly 4xx subset is deliberately
- *  excluded so a recoverable failure never silently drops a valid write:
+/** PostgREST codes that are RECOVERABLE — retry forever, never quarantine:
+ *   - `PGRST301` ("JWT invalid or expired") / `PGRST302` ("anonymous access
+ *     disabled"), both HTTP 401: the token refreshes or the user
+ *     re-authenticates and the retry succeeds. Dropping a write on an expired
+ *     token is exactly the silent data-loss this module exists to avoid; a
+ *     genuine authorization revocation (a workspace un-shared out from under a
+ *     pending write) surfaces as the Postgres SQLSTATE `42501` instead — told
+ *     apart by the precise CODE, not the coarse 401/403.
+ *   - `PGRST202` ("function not found" — a stale RPC signature after a
+ *     migration, surfaced as HTTP 404): self-heals once PostgREST reloads its
+ *     schema cache, so it must be retried, not quarantined. */
+const RECOVERABLE_POSTGREST_CODES = new Set(['PGRST301', 'PGRST302', 'PGRST202'])
+
+/** HTTP 4xx statuses that are RECOVERABLE (retry forever) rather than a
+ *  suspected-permanent client error:
  *    - 408 (timeout) / 429 (rate limit): the server invites a later retry.
- *    - 401 (unauthorized) / 403 (forbidden): an expired or not-yet-refreshed
- *      session, or a gateway-auth blip — recoverable once the token refreshes
- *      or the user re-authenticates, so the queued write must be retried.
- *      Dropping it here would lose a valid edit over a transient credentials
- *      problem. The two auth outcomes are told apart by the error CODE, not
- *      the status: an expired/invalid token carries the JWT code (`PGRST301`,
- *      transient) while a genuine authorization revocation (workspace
- *      un-shared → RLS rejects the write) carries the Postgres SQLSTATE
- *      `42501` and is caught as permanent by the code branch above. Only
- *      codeless status-only auth errors reach here. */
+ *    - 401 (unauthorized) / 403 (forbidden): an expired / not-yet-refreshed
+ *      session or a gateway-auth blip — recoverable once the token refreshes or
+ *      the user re-authenticates. (A real authorization revocation carries the
+ *      SQLSTATE `42501`, caught as permanent by the code branch.) */
 const RETRYABLE_HTTP_STATUSES = new Set([401, 403, 408, 429])
 
-const isPermanentHttpStatus = (status: number): boolean =>
-  status >= 400 && status < 500 && !RETRYABLE_HTTP_STATUSES.has(status)
+const isClientErrorStatus = (status: number): boolean => status >= 400 && status < 500
 
 export const classifyUploadError = (err: unknown): UploadErrorClass => {
-  // A structured `code` is the precise signal: classify on it and never fall
-  // through to the coarse HTTP status. An unrecognized code stays transient by
-  // default — we promote codes into the permanent lists above only as we
-  // confirm they're unrecoverable. Letting the threaded status override that
-  // would drop writes for recoverable code-bearing errors, e.g. PGRST202
-  // (stale/missing RPC signature after a migration, surfaced by PostgREST as
-  // HTTP 404) which recovers once the schema cache reloads.
-  if (isObjectWith(err, 'code') && typeof err.code === 'string') {
+  // 1. A structured code we recognise is the precise signal — classify on it
+  //    and never let the coarse HTTP status override it.
+  if (isObjectWith(err, 'code') && typeof err.code === 'string' && err.code !== '') {
     if (isPermanentSqlState(err.code)) return 'permanent'
     if (PERMANENT_POSTGREST_CODES.has(err.code)) return 'permanent'
-    return 'transient'
+    if (RECOVERABLE_POSTGREST_CODES.has(err.code)) return 'transient'
+    // An unrecognised code falls through to the status buckets below. A 4xx
+    // becomes `ambiguous` (retry-budget) — not an immediate drop (which would
+    // lose a recoverable code we haven't catalogued yet, e.g. a new
+    // self-healing PGRST class) and not the old infinite jam.
   }
 
-  // Codeless errors only: a non-JSON 4xx body postgrest-js surfaces as
-  // `{message: body}` with no `code`, and raw auth/gateway failures carry no
-  // code either — so the HTTP status threaded onto the throw is the only
-  // signal we have to classify on. (See `throwWithHttpStatus` in powersync.ts
-  // and issue #190.)
-  if (isObjectWith(err, 'status') && typeof err.status === 'number') {
-    if (isPermanentHttpStatus(err.status)) return 'permanent'
+  // 2. Codeless / unrecognised-code errors: the HTTP status threaded onto the
+  //    throw (see `throwWithHttpStatus` in powersync.ts, issue #190) is the
+  //    only signal. A 4xx is a suspected client error — the retry-friendly
+  //    subset retries forever, the rest is `ambiguous` (retry-budget then
+  //    quarantine).
+  if (
+    isObjectWith(err, 'status') &&
+    typeof err.status === 'number' &&
+    isClientErrorStatus(err.status)
+  ) {
+    return RETRYABLE_HTTP_STATUSES.has(err.status) ? 'transient' : 'ambiguous'
   }
 
+  // 3. No code we recognise and no 4xx: network/offline (a thrown fetch error,
+  //    or postgrest-js's `status: 0`), a 5xx, or a shape we've never seen. All
+  //    retry forever — never quarantine a write over infrastructure being down.
   return 'transient'
 }
