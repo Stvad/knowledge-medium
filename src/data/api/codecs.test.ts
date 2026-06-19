@@ -190,6 +190,22 @@ describe('codecs.refList', () => {
     expect(() => codecs.refList().decode('target-1')).toThrow(CodecError)
     expect(() => codecs.refList().decode(['target-1', 42])).toThrow(CodecError)
   })
+
+  it('decodeValid keeps well-formed ids and drops only the malformed elements (#189)', () => {
+    const inner = codecs.refList()
+    // The historical whole-field strip: one bad element must NOT discard the
+    // valid backlinks alongside it.
+    expect(inner.decodeValid(['valid-1', 'valid-2', 42])).toEqual(['valid-1', 'valid-2'])
+    expect(inner.decodeValid(['a', null, 'b', {}, 'c'])).toEqual(['a', 'b', 'c'])
+    expect(inner.decodeValid([])).toEqual([])
+    expect(inner.decodeValid(['a', 'b'])).toEqual(['a', 'b'])
+  })
+
+  it('decodeValid returns [] for non-array input (nothing recoverable)', () => {
+    expect(codecs.refList().decodeValid('target-1')).toEqual([])
+    expect(codecs.refList().decodeValid(42)).toEqual([])
+    expect(codecs.refList().decodeValid(null)).toEqual([])
+  })
 })
 
 describe('CodecError', () => {

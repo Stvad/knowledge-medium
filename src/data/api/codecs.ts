@@ -57,6 +57,14 @@ export interface RefCodec extends Codec<string> {
 export interface RefListCodec extends Codec<readonly string[]> {
   readonly type: 'refList'
   readonly targetTypes: readonly string[]
+  /** Lenient element-wise decode for reference projection. Decodes each
+   *  element through the element codec, *dropping* (never throwing on)
+   *  the ones that fail, and returns the well-formed ids. Non-array input
+   *  yields `[]`. This is the projection-safe counterpart to `decode`:
+   *  one malformed element must not strip the whole field's backlinks to
+   *  `[]` (issue #189). `decode` stays strict for the write/read boundary
+   *  call sites that want shape errors surfaced. */
+  decodeValid(json: unknown): string[]
 }
 
 const stringCodec: Codec<string> = {
@@ -170,6 +178,21 @@ const refList = (options?: RefCodecOptions): RefListCodec => {
     decode: j => {
       if (!Array.isArray(j)) throw new CodecError('array', j)
       return j.map(item => stringCodec.decode(item))
+    },
+    decodeValid: j => {
+      // Element-wise + fault-tolerant: a non-array has nothing to recover,
+      // and a single bad element drops only itself. Never strips the whole
+      // field's derived refs to [] (issue #189).
+      if (!Array.isArray(j)) return []
+      const out: string[] = []
+      for (const item of j) {
+        try {
+          out.push(stringCodec.decode(item))
+        } catch {
+          // Drop only the malformed element; keep the well-formed ids.
+        }
+      }
+      return out
     },
   }
 }
