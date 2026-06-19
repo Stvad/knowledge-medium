@@ -55,11 +55,24 @@ const isPermanentHttpStatus = (status: number): boolean =>
   status >= 400 && status < 500 && !RETRYABLE_HTTP_STATUSES.has(status)
 
 export const classifyUploadError = (err: unknown): UploadErrorClass => {
+  // A structured `code` is the precise signal: classify on it and never fall
+  // through to the coarse HTTP status. An unrecognized code stays transient by
+  // default — we promote codes into the permanent lists above only as we
+  // confirm they're unrecoverable. Letting the threaded status override that
+  // would drop writes for recoverable code-bearing errors, e.g. PGRST202
+  // (stale/missing RPC signature after a migration, surfaced by PostgREST as
+  // HTTP 404) which recovers once the schema cache reloads.
   if (isObjectWith(err, 'code') && typeof err.code === 'string') {
     if (isPermanentSqlState(err.code)) return 'permanent'
     if (PERMANENT_POSTGREST_CODES.has(err.code)) return 'permanent'
+    return 'transient'
   }
 
+  // Codeless errors only: a non-JSON 4xx body postgrest-js surfaces as
+  // `{message: body}` with no `code`, and raw auth/gateway failures carry no
+  // code either — so the HTTP status threaded onto the throw is the only
+  // signal we have to classify on. (See `throwWithHttpStatus` in powersync.ts
+  // and issue #190.)
   if (isObjectWith(err, 'status') && typeof err.status === 'number') {
     if (isPermanentHttpStatus(err.status)) return 'permanent'
   }

@@ -94,6 +94,31 @@ describe('classifyUploadError', () => {
     })
   })
 
+  describe('code takes precedence over the threaded HTTP status', () => {
+    it('keeps an unknown code-bearing error transient even with a permanent 4xx status', () => {
+      // The status is now threaded onto every PostgREST error (#190), but a
+      // structured code is the precise signal and must win. PGRST202
+      // (stale/missing RPC signature after a migration) is surfaced by
+      // PostgREST as HTTP 404 yet is recoverable once the schema cache
+      // reloads — it is deliberately NOT in the permanent lists, so it must
+      // stay transient. Were the 404 allowed to override the code, the queued
+      // write would be dropped instead of retried.
+      const staleRpc = Object.assign(new Error('Could not find the function'), {
+        code: 'PGRST202',
+        status: 404,
+      })
+      expect(classifyUploadError(staleRpc)).toBe('transient')
+    })
+
+    it('still classifies a known-permanent code as permanent even when the status alone would be transient', () => {
+      // Inverse precedence check: a permanent code (FK violation) stays
+      // permanent even if the threaded status (401) would, on its own,
+      // classify transient. The code branch decides before status is consulted.
+      const fk = Object.assign(new Error('fk'), {code: '23503', status: 401})
+      expect(classifyUploadError(fk)).toBe('permanent')
+    })
+  })
+
   describe('network / unknown errors', () => {
     it('classifies plain Error (no code, no status) as transient', () => {
       // Default unknown → transient. The alternative — defaulting to
