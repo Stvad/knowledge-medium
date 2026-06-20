@@ -379,20 +379,34 @@
     </p>
     <ol>
       <li>
-        <strong>The server sequences.</strong> On receipt the server assigns a monotonic global
-        position (its <code>BIGSERIAL</code> / receive order) — the authoritative order for
-        replay/pagination. The client's <code>(install_id, seq)</code> is carried only for
-        <em>idempotent dedup</em> (<code>INSERT … ON CONFLICT DO NOTHING</code>), never as the global
-        order. This is the line between "client log dumped into a table" and server-as-log.
+        <strong>The server sequences — but the cursor must be commit-ordered, not raw
+        <code>BIGSERIAL</code>.</strong> On receipt the server assigns the authoritative global order
+        for replay/pagination. The naive choice — a <code>BIGSERIAL</code> read order — is
+        <em>unsafe as a tail cursor</em>: serial values are allocated <em>before</em> the inserting
+        transaction commits, so under concurrent appends a higher seq can become visible before a
+        lower one commits, and a reader tailing <code>server_seq &gt; cursor</code> advances past the
+        gap and never sees the late-committing lower seq (the classic CDC visibility gap). So the
+        frontier must be <strong>commit-ordered</strong>: a commit timestamp
+        (<code>track_commit_timestamp</code>), a logical-replication LSN, or appends serialized through
+        a sequence assigned <em>at commit</em> — or a watermark cursor that refuses to advance past a
+        non-contiguous (uncommitted) gap. The client's <code>(install_id, seq)</code> is carried only
+        for <em>idempotent dedup</em> (<code>INSERT … ON CONFLICT DO NOTHING</code>), never as the
+        global order. This is the line between "client log dumped into a table" and server-as-log.
       </li>
       <li>
-        <strong>Ordering primitive: monotonic, not wall-clock.</strong> <code>seq</code> (the client
-        <code>row_events.id</code>) totally orders one install's events — so per-install replay is
-        exact, including repeated writes to one block in a tx. Across installs there is no ground-truth
-        total order (see §8); stamp each event with the codebase's existing <strong>monotonic edit
-        stamp</strong> (the <code>updated_at</code> / <code>user_updated_at</code> clamp — §9) for a
-        clock-skew-resistant causal-ish order, server position for dedup/cursor, and accept that
-        genuinely concurrent cross-device edits are concurrent.
+        <strong>Ordering primitive: monotonic, not wall-clock — and not <code>user_updated_at</code>.</strong>
+        <code>seq</code> (the client <code>row_events.id</code>) totally orders one install's events —
+        so per-install replay is exact, including repeated writes to one block in a tx. The global /
+        cross-install order is the server's commit-ordered frontier (above). Do <strong>not</strong>
+        reach for the <code>updated_at</code>/<code>user_updated_at</code> pair as an ordering key:
+        only <code>updated_at</code> is monotonic (and it's a per-<em>row-version</em> value, not
+        per-event), while <code>user_updated_at</code> is display/provenance time that is
+        <em>intentionally non-monotonic</em> — <code>sourceTimestamps</code> imports historical Roam
+        edit times and <code>{skipMetadata}</code> leaves it untouched, so import/restore/bookkeeping
+        events would sort wrong (§9). If a client-side causal hint is ever wanted beyond
+        <code>seq</code> + server commit-order, it must be a <strong>dedicated monotonic event
+        stamp</strong> (a logical clock), not a reused row column. Genuinely concurrent cross-device
+        edits remain concurrent — no key invents a true order for them.
       </li>
       <li>
         <strong>Upload only locally-originated events</strong> (<code>source ≠ 'sync'</code> /
@@ -442,10 +456,10 @@
   workspace_id text,           -- nullable: zero-write/no-op txs pin no workspace
   user_id      text not null,
   scope        text not null,
+  machine_origin text,         -- explicit processor/import marker (NOT source/scope); gates compaction (§7)
   description   text,          -- enc:v1: on e2ee workspaces
   mutator_calls text,          -- enc:v1: on e2ee workspaces
-  edit_stamp   bigint,         -- monotonic client stamp (see §9), for cross-install ordering
-  server_seq   bigserial,      -- server-assigned global order (the sequencer)
+  commit_seq   bigint,         -- server commit-ordered frontier for cursors (LSN / commit-ts; NOT bigserial)
   primary key (install_id, tx_id)
 )
 
@@ -458,8 +472,7 @@ row_events_log (
   kind         text not null,  -- create | update | soft-delete | delete
   before_json  text,           -- enc:v1: on e2ee workspaces
   after_json   text,           -- enc:v1: on e2ee workspaces
-  edit_stamp   bigint,         -- monotonic client stamp (§9)
-  server_seq   bigserial,      -- server-assigned global order
+  commit_seq   bigint,         -- server commit-ordered frontier for cursors (see §6/§8; NOT bigserial)
   primary key (install_id, seq)
 )
 
@@ -487,27 +500,35 @@ create policy …_read on … for select
       blobs can't be GC'd by content. But "machine edits are edits" — we don't want to drop them by
       actor. The resolution is <strong>compaction by class via snapshots</strong>, not deletion:
     </p>
+    <div class="warn">
+      <strong>Eligibility needs an explicit marker — <code>source</code>/<code>scope</code> can't carry it.</strong>
+      <code>command_events.source</code> is uniformly <code>'user'</code> for every <code>repo.tx</code>
+      (§2), and machine migrations such as <code>scripts/migrate-roam-location-refs.mjs</code> run under
+      <code>ChangeScope.BlockDefault</code> — the <em>same</em> scope as ordinary edits. So a policy keyed
+      on those fields would either compact human edits or miss noisy machine runs. Compaction must be
+      gated on a <strong>dedicated, explicit machine/processor marker</strong> recorded at commit time
+      (the <code>machine_origin</code> field in the sketch — e.g. processor id, agent-runtime, or import),
+      added as part of this work. Until a command carries that marker, its events are never compacted.
+    </div>
     <ul>
       <li>
         <strong>Run-compaction (lossless on the facts).</strong> Collapse a <em>contiguous run</em> of
-        events on the <em>same block</em> that share a compaction-eligible class (e.g. same processor /
-        machine <code>scope</code>) into one span-event: <code>before</code> = the run's first
-        before-state, <code>after</code> = the run's last after-state, plus the list/count of
-        contributing commands. You keep <em>that</em> it happened, <em>what</em> it net-did, and
-        <em>which</em> commands — you lose only the intermediate snapshots. This is exactly the
-        snapshot+truncate move from event sourcing, and exactly what <code>compactBlockCrudEntries</code>
-        already does for block state, applied per-class to the log.
+        events on the <em>same block</em> that share a <code>machine_origin</code> marker into one
+        span-event: <code>before</code> = the run's first before-state, <code>after</code> = the run's
+        last after-state, plus the list/count of contributing commands. You keep <em>that</em> it
+        happened, <em>what</em> it net-did, and <em>which</em> commands — you lose only the intermediate
+        snapshots. This is exactly the snapshot+truncate move from event sourcing, and what
+        <code>compactBlockCrudEntries</code> already does for block state, applied per-marker to the log.
       </li>
       <li>
         <strong>Per-operation summary (lossy — reserved for uniform bulk).</strong> A 300K-block
-        <code>roam import</code> is uniform; collapse it to one record ("imported N blocks under scope
+        <code>roam import</code> is uniform; collapse it to one record ("imported N blocks under marker
         X") with no per-block events. This is the only place per-block detail is dropped, and it
         aligns with the <code>follow-ups.md</code> plan to skip events for import.
       </li>
       <li>
-        <strong>Human edits are never eligible</strong> — not because humans are special, but because
-        their <code>source</code> / <code>scope</code> isn't in a compactable class. The discriminator
-        already exists on <code>command_events</code>.
+        <strong>Human edits are never eligible</strong> — they simply carry no <code>machine_origin</code>
+        marker, so they are untouched by construction.
       </li>
     </ul>
     <p>
@@ -525,8 +546,8 @@ create policy …_read on … for select
       <tr><th>Problem</th><th>Standard solution</th><th>Here</th></tr>
       <tr>
         <td>Ordering</td>
-        <td>Central sequencer (Kafka offset, Replicache version) <em>or</em> logical clocks (Lamport/HLC); per-aggregate version usually suffices</td>
-        <td>Server <code>server_seq</code> + per-install <code>seq</code> + monotonic edit stamp; per-block is the aggregate</td>
+        <td>Commit-ordered sequencer (Kafka offset, Postgres LSN/commit-ts — <em>not</em> a pre-commit serial); logical clocks (Lamport/HLC) for causality; per-aggregate version usually suffices</td>
+        <td>Server commit-ordered <code>commit_seq</code> (LSN/commit-ts) for the cursor + per-install <code>seq</code>; per-block is the aggregate</td>
       </tr>
       <tr>
         <td>Identity / idempotency</td>
@@ -569,12 +590,18 @@ create policy …_read on … for select
     </p>
     <ul>
       <li>
-        <strong>The clock-goes-backward bug is already solved — reuse the fix.</strong> The saga
-        replaced unreliable wall-clock comparison with a <em>monotonic, always-increasing</em> stamp.
-        Ordering events by raw <code>created_at</code> reintroduces exactly the inversion that fix
-        removed. So the event ordering key should be the existing monotonic stamp
-        (<code>updated_at</code>/<code>user_updated_at</code> clamp), not a fresh wall-clock — and not a
-        new HLC invented from scratch when a hardened monotonic primitive already exists.
+        <strong>The clock-goes-backward bug is already solved — but borrow the <em>principle</em>, not
+        the wrong column.</strong> The saga replaced unreliable wall-clock comparison with a
+        <em>monotonic, always-increasing</em> version. Ordering events by raw <code>created_at</code>
+        reintroduces exactly that inversion. The lesson is "monotonic, not wall-clock" — but be precise
+        about <em>which</em> stamp: <code>updated_at</code> is the monotonic row-version (per row-version,
+        not per-event), whereas <code>user_updated_at</code> is display/provenance time and is
+        <em>deliberately non-monotonic</em> (<code>sourceTimestamps</code> imports historical Roam times;
+        <code>{skipMetadata}</code> leaves it untouched). So <code>user_updated_at</code> is <em>not</em>
+        an ordering key, and the pair must not be treated as one. Event order comes from per-install
+        <code>seq</code> + the server's commit-ordered frontier (§6); if a cross-install causal hint is
+        ever needed, it's a <strong>dedicated monotonic event stamp / logical clock</strong>, reusing the
+        saga's principle without overloading a row column whose semantics don't fit.
       </li>
       <li>
         <strong>Provenance must never feed convergence.</strong> The gate deliberately stopped reading
@@ -630,9 +657,21 @@ create policy …_read on … for select
     </div>
 
     <h2 id="costs">11. Residual costs &amp; open questions</h2>
-    <p>Under server-as-log, the connector/ordering/identity/atomicity/authz problems are answered. What
-       genuinely remains:</p>
+    <p>Under server-as-log, the identity/atomicity/authz problems are answered. What genuinely
+       remains:</p>
     <ul>
+      <li>
+        <strong>The cursor needs a commit-order frontier.</strong> A pre-commit <code>BIGSERIAL</code>
+        is not a safe tail cursor (§6): a serial allocated by an earlier-but-later-committing tx can be
+        skipped by a reader that already advanced. The frontier must be commit-ordered (commit
+        timestamp / LSN / commit-time-assigned sequence), or the cursor must be a watermark that won't
+        advance past an uncommitted gap. This is a real mechanism to choose, not a free property.
+      </li>
+      <li>
+        <strong>Compaction needs an explicit machine marker.</strong> <code>source</code>/<code>scope</code>
+        don't distinguish machine from human (§7), so a <code>machine_origin</code> field must be added
+        and populated at commit before any run-compaction is safe.
+      </li>
       <li>
         <strong>Volume / retention.</strong> Mitigated by run-compaction (§7) but not eliminated.
         Open: keep-forever vs. cap/TTL; whether <code>command_events_log</code> outlives
@@ -699,12 +738,15 @@ create policy …_read on … for select
       <li><strong>Pick the model (§5).</strong> Server-as-log (recommended) vs. server-captured
         checkpoints (if "enough to classify edits" is the real bar) vs. peer CRDT (if no-central-authority
         ever becomes a goal).</li>
-      <li><strong>Compaction + retention policy (§7).</strong> Which classes are run-compactable; bulk-import
-        summary; keep-forever vs. cap.</li>
+      <li><strong>Compaction + retention policy (§7).</strong> An explicit <code>machine_origin</code>
+        marker (source/scope don't distinguish machine from human); which markers are run-compactable;
+        bulk-import summary; keep-forever vs. cap.</li>
       <li><strong>Prerequisites (§6).</strong> A per-install <code>install_id</code> nonce (mint + persist
-        in <code>client_schema_state</code>, regenerate on wipe); reuse of the monotonic edit stamp as the
-        ordering key (§9); the append RPC's definer + <code>is_workspace_writer</code> contract; the AAD
-        for an opaque event blob.</li>
+        in <code>client_schema_state</code>, regenerate on wipe); a <strong>commit-ordered</strong> cursor
+        frontier (LSN / commit-ts / watermark — not a pre-commit <code>BIGSERIAL</code>); per-install
+        <code>seq</code> for exact intra-install order (and a dedicated logical clock only if a
+        cross-install causal hint is needed — <em>not</em> <code>user_updated_at</code>); the append RPC's
+        definer + <code>is_workspace_writer</code> contract; the AAD for an opaque event blob.</li>
     </ol>
     <p>
       The direction (append-only log, server-sequenced, additive to collapsed state, complementing
