@@ -977,16 +977,26 @@ export class Repo {
    *  the workspace the user is currently looking at — never reverting (or
    *  re-uploading) an edit in a workspace they've switched away from.
    *  Entries from other workspaces are left untouched on the stack, so
-   *  switching back to a workspace restores its undo history.
+   *  switching back to a workspace restores its undo history (up to the
+   *  shared per-scope `maxDepth` cap — see `UndoManager`).
    *
    *  Replay opens its own `repo.tx` with `source = 'user'` so the
    *  inverse syncs upstream just like the original write did (per the
    *  spec's §7.3 + the follow-ups doc's "undo of a content edit
-   *  should sync the un-edit"). Read-only is resolved against the
-   *  ENTRY's workspace, not the active one (issue #186 A5b): viewing a
-   *  read-only workspace must not block undo of an editable workspace's
-   *  edit. Throws `ReadOnlyError` when the entry's own workspace is
-   *  read-only for scopes that cannot write locally. */
+   *  should sync the un-edit"). Because undo is scoped to the active
+   *  workspace, the replayed entry always belongs to it, so the active
+   *  workspace's read-only flag (`this.isReadOnly`) IS the entry's own
+   *  workspace read-only — viewing a read-only workspace B can never
+   *  block undo of an editable workspace A's edit, because cmd-Z in B
+   *  never reaches A's entry (issue #186 A5b). Throws `ReadOnlyError`
+   *  when the active workspace is read-only for scopes that cannot write
+   *  locally. (Known pre-existing limitation: `isReadOnly` is updated by
+   *  an async App effect, so it can briefly lag a just-switched-to
+   *  workspace; a cmd-Z in that window may transiently `ReadOnlyError`,
+   *  but the entry is pushed back so a retry once the flag settles
+   *  succeeds. Fully closing it needs an atomic active-workspace +
+   *  read-only switch in the App layer, which also has to account for
+   *  e2ee lock state — out of scope here.) */
   async undo(scope: ChangeScope = ChangeScope.BlockDefault): Promise<boolean> {
     const workspaceId = this.activeWorkspaceId
     if (workspaceId === null) return false
@@ -1022,21 +1032,6 @@ export class Repo {
     }
   }
 
-  /** Read-only resolution for an undo / redo replay (issue #186 A5b).
-   *  The global `isReadOnly` flag tracks the *active* workspace's role,
-   *  so it only governs entries that belong to the active workspace. An
-   *  entry from a different workspace is not gated by the active
-   *  workspace's read-only state — `undo`/`redo` are scoped to the active
-   *  workspace, so the entry replayed here belongs to it and this returns
-   *  the active flag; the cross-workspace branch is a guard that keeps a
-   *  read-only viewer workspace from ever blocking another workspace's
-   *  edit. We don't have other workspaces' roles synchronously, and an
-   *  undo entry can only exist for a workspace the user could write to
-   *  when the edit landed, so default those to writable. */
-  private isWorkspaceReadOnly(workspaceId: string): boolean {
-    return workspaceId === this._activeWorkspaceId ? this.isReadOnly : false
-  }
-
   /** Shared `runTx` + processor-dispatch path. Used by both `tx`
    *  (records on undo stack) and `_replay` (does not).
    *
@@ -1055,10 +1050,6 @@ export class Repo {
   private async _runAndDispatch<R>(
     fn: (tx: Tx) => Promise<R>,
     opts: RepoTxOptions,
-    // Defaults to the active workspace's read-only flag; `_replay` passes
-    // the entry's-workspace flag so undo/redo gate on the entry's
-    // workspace, not the active one (issue #186 A5b).
-    isReadOnly: boolean = this.isReadOnly,
   ) {
     const txT0 = performance.now()
     let result
@@ -1069,7 +1060,7 @@ export class Repo {
         fn,
         opts,
         user: this.user,
-        isReadOnly,
+        isReadOnly: this.isReadOnly,
         newTxId: this.newId,
         newTxSeq: this.newTxSeq,
         newId: this.newId,
@@ -1157,7 +1148,7 @@ export class Repo {
       for (const [id, snap] of entry.snapshots) {
         await txImpl.applyRaw(id, snap[direction])
       }
-    }, {scope: entry.scope, description}, this.isWorkspaceReadOnly(entry.workspaceId))
+    }, {scope: entry.scope, description})
   }
 
   /** Dynamic dispatch — used by runtime-loaded plugins where the

@@ -401,9 +401,13 @@ const runRescheduleWithFeedback = async (
   if (!result) return
   // JS is single-threaded; the entry recorded by the just-completed tx
   // is guaranteed to be the BlockDefault top right now, so peekUndo
-  // gives us the txId to gate the toast's Undo button on. If a later
-  // tx pushes onto the stack, the toast subscribes via UndoManager and
-  // disables itself rather than reverting the wrong action.
+  // gives us the txId to gate the toast's Undo button on. We also capture
+  // the entry's workspaceId: undo is workspace-scoped (issue #186), so the
+  // toast must track the reschedule's own workspace — `repo.undo()` only
+  // reverts it while that workspace is active and it's still that
+  // workspace's top. If a later tx pushes onto the stack, the toast
+  // subscribes via UndoManager and disables itself rather than reverting
+  // the wrong action.
   const top = block.repo.undoManager.peekUndo(ChangeScope.BlockDefault)
   if (!top) return
   const message = formatRescheduleToastMessage(result)
@@ -411,6 +415,7 @@ const runRescheduleWithFeedback = async (
     toastId: id,
     message,
     txId: top.txId,
+    workspaceId: top.workspaceId,
     repo: block.repo,
   }))
 }

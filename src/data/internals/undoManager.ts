@@ -50,7 +50,13 @@ export interface UndoEntry {
 
 export interface UndoManagerOptions {
   /** Cap per-scope stack depth. Older entries fall off. Default 100;
-   *  matches typical editor undo bounds. */
+   *  matches typical editor undo bounds. NB the cap is per-scope and
+   *  SHARED across workspaces (not per-(scope, workspace)) — so in the
+   *  rare case where total entries across all workspaces exceed the cap,
+   *  the oldest-overall entry falls off even if it's the only history its
+   *  workspace had. At the default depth this is unreachable for a human;
+   *  if strict per-workspace retention is ever needed, account depth per
+   *  (scope, workspace) in push{Undo,Redo}. */
   maxDepth?: number
 }
 
@@ -159,7 +165,14 @@ export class UndoManager {
     for (const scope of touched) this.notify(scope)
   }
 
-  /** Stack depths — used by UI to enable / disable undo/redo buttons. */
+  /** Stack depths — used by UI to enable / disable undo/redo buttons.
+   *  NB these are GLOBAL per-scope counts across all workspaces, NOT
+   *  scoped to the active workspace. A future per-workspace Undo/Redo
+   *  surface (e.g. an Edit menu) must NOT gate on this — it would
+   *  mis-enable when another workspace has history but the active one
+   *  doesn't. Use `peekUndoForWorkspace`/`peekRedoForWorkspace` (or a
+   *  per-workspace depth accessor) for that. Today the only reactive
+   *  consumer is the SRS reschedule toast, which is workspace-scoped. */
   depths(scope: ChangeScope): { undo: number; redo: number } {
     return {
       undo: this.getUndo(scope).length,
