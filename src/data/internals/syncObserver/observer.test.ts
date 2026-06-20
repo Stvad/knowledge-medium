@@ -334,12 +334,15 @@ describe('blocksSyncedObserver — robustness', () => {
     // disk gate skip-staled the now-equal stamp so handleStore.invalidate never
     // re-fired — a permanently-stale UI. Per-rule isolation now lets the kernel
     // notification AND the watermark DELETE both run.
-    let throwsLeft = 1
+    //
+    // The rule throws on EVERY call (the worst case: a permanently-buggy plugin,
+    // which is also what could strand a window forever pre-fix). We then assert
+    // it was invoked exactly once — proving the watermark advanced and the row
+    // was NOT requeued for a (futile, skip-staled) reprocess.
+    let calls = 0
     const flakyRule: InvalidationRule = {
       id: 'test.flaky-rule',
-      collectFromSnapshots: () => {
-        if (throwsLeft > 0) { throwsLeft -= 1; throw new Error('rule boom') }
-      },
+      collectFromSnapshots: () => { calls += 1; throw new Error('rule boom') },
     }
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     await put(data({ content: 'fresh' }))
@@ -349,6 +352,8 @@ describe('blocksSyncedObserver — robustness', () => {
     })
 
     await observer.flush()
+    // A second flush would re-run the rule if the row were still queued.
+    await observer.flush()
     warn.mockRestore()
 
     // The throw didn't abort the watermark DELETE: the row materialized and the
@@ -356,6 +361,7 @@ describe('blocksSyncedObserver — robustness', () => {
     expect(await blocks()).toEqual([{ id: 'b1', content: 'fresh' }])
     expect(await queueLen()).toBe(0)
     expect(cache.getSnapshot('b1')).toMatchObject({ content: 'fresh' })
+    expect(calls).toBe(1) // consumed once; not reprocessed despite the throw
     // The kernel notification still reached the handle store despite the throw —
     // the handle for b1 is invalidated, not permanently stale.
     expect(notifications).toHaveLength(1)

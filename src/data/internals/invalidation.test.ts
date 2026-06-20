@@ -28,7 +28,7 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams } from '@/data/blockSchema'
 import { Repo } from '../repo'
-import { resolveFacetRuntimeSync } from '@/facets/facet.js'
+import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet.js'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import {
   LoaderHandle,
@@ -36,11 +36,12 @@ import {
   type ChangeSnapshot,
 } from './handleStore'
 import type { InvalidationRule } from '@/data/invalidation.js'
+import { invalidationRulesFacet } from '@/data/facets.js'
 
 interface Harness { h: TestDb; cache: BlockCache; repo: Repo }
 
 const setup = async (
-  opts: {startTail?: boolean} = {},
+  opts: {startTail?: boolean; extraExtensions?: readonly AppExtension[]} = {},
 ): Promise<Harness> => {
   // Shared DB opened once per file (beforeAll), reset per test in setup().
   await resetTestDb(sharedDb.db)
@@ -54,6 +55,7 @@ const setup = async (
   })
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
+    ...(opts.extraExtensions ?? []),
   ]))
   return {h, cache, repo}
 }
@@ -731,6 +733,41 @@ describe('sync observer: sync-applied invalidation', () => {
     await Promise.resolve()
     expect(env.repo.handleStore.metrics.snapshot().invalidations).toBe(invalidationsBefore)
     expect(fired.length).toBe(firedBefore)
+  })
+
+  it('a throwing plugin rule does NOT leave a real handle permanently stale (#191 acceptance)', async () => {
+    // The issue's literal acceptance criterion, end-to-end with a REAL
+    // LoaderHandle + subscriber (not a spy handleStore): a plugin
+    // InvalidationRule that throws for an id must still leave that id's handle
+    // invalidated. The kernel parent-edge dep is computed independently of the
+    // plugin loop, so children(p) re-resolves on the sync-applied child even
+    // though the registered rule throws on every pass. Pre-fix, the throw
+    // aborted the drain before the watermark DELETE and the notification was
+    // lost for good.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const throwingRule: InvalidationRule = {
+      id: 'test.always-throws',
+      collectFromSnapshots: () => { throw new Error('rule boom') },
+    }
+    env = await setup({
+      startTail: false,
+      extraExtensions: [invalidationRulesFacet.of(throwingRule, {source: 'test'})],
+    })
+
+    await create('p')
+    const h = env.repo.query.children({id: 'p'})
+    const fired: string[][] = []
+    h.subscribe(v => fired.push(v.map(b => b.id)))
+    await vi.waitFor(() => expect(fired).toEqual([[]]))
+
+    env.repo.startSyncObserver({throttleMs: 0})
+    await syncApply({id: 'c-remote', parentId: 'p', orderKey: 'a0', content: 'remote'})
+    await env.repo.flushSyncObserver()
+
+    // The handle re-resolved despite the throwing rule — not permanently stale.
+    await vi.waitFor(() => expect(fired).toEqual([[], ['c-remote']]))
+    expect(warn).toHaveBeenCalled() // the rule's failure was logged, not silent
+    warn.mockRestore()
   })
 
 })

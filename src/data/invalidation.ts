@@ -69,13 +69,20 @@ export const collectPluginInvalidationsFromSnapshots = (
   // DELETE. A throw from one rule must not abort the pass: it would skip the
   // watermark advance and the handle invalidation, and on retry the disk gate
   // skip-stales the now-equal stamp, so the handle never re-fires — a
-  // permanently-stale UI (issue #191). Swallow + log so the kernel rowIds /
-  // parentIds notification and the other rules still go through.
+  // permanently-stale UI (issue #191). The kernel rowIds/parentIds/workspaceIds
+  // are computed by the caller independently of this loop, so the affected ids'
+  // row/parent deps still invalidate regardless; only deps that depend SOLELY on
+  // a throwing rule's channel can miss this window. We keep whatever the rule
+  // emitted before it threw (over-firing an invalidation is a harmless re-read;
+  // under-firing is the bug), drop the rest, and log loudly.
   for (const rule of rules) {
     try {
       rule.collectFromSnapshots?.(snapshots, emit)
     } catch (err) {
-      console.warn(`[invalidation] rule "${rule.id}" threw; skipping its contribution`, err)
+      console.warn(
+        `[invalidation] rule "${rule.id}" threw; keeping its emissions so far, dropping the rest`,
+        err,
+      )
     }
   }
   return out.size > 0 ? out : undefined
