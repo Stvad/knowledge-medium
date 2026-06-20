@@ -19,14 +19,16 @@ export interface RescheduleToastProps {
 /** Predicate: clicking Undo right now would revert exactly this
  *  reschedule. True only when the reschedule's workspace is active and
  *  the reschedule is still that workspace's top BlockDefault entry —
- *  mirroring what `repo.undo()` (workspace-scoped, issue #186) will do. */
+ *  mirroring what `repo.undo()` (per-workspace, issue #186) will do.
+ *  `repo.undoManager` resolves to the active workspace's manager, so the
+ *  active-workspace check gates which manager `peekUndo` reads. */
 const wouldUndoThisReschedule = (
   repo: Repo,
   workspaceId: string,
   txId: string,
 ): boolean =>
   repo.activeWorkspaceId === workspaceId &&
-  repo.undoManager.peekUndoForWorkspace(ChangeScope.BlockDefault, workspaceId)?.txId === txId
+  repo.undoManager.peekUndo(ChangeScope.BlockDefault)?.txId === txId
 
 /** Custom toast body for SRS reschedule feedback. The Undo button
  *  reactively disables itself once another `BlockDefault` tx lands on

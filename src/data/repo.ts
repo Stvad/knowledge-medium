@@ -185,6 +185,13 @@ const KERNEL_PROPERTY_SCHEMA_MAP = new Map(KERNEL_PROPERTY_SCHEMAS.map(s => [s.n
  *  diagnostic dumps right after page load don't lose entries. */
 const TX_LOG_CAPACITY = 64
 
+/** Registry key for the per-workspace undo manager when no workspace is
+ *  active (issue #186). Workspace ids are UUIDs, so this sentinel can
+ *  never collide with a real one. The manager under this key stays empty
+ *  in practice — `repo.tx` only records under a pinned (non-null)
+ *  workspace and `undo()`/`redo()` no-op when there's no active workspace. */
+const NO_ACTIVE_WORKSPACE = '__no_active_workspace__'
+
 /** Max `ctx.run` composition depth before we assume a cycle (a query
  *  composing itself, directly or transitively). Composition chains are
  *  shallow in practice; this just turns a stack overflow into a clear
@@ -339,10 +346,16 @@ export class Repo {
   /** Type-tagging engine (audit D1(b)) — backs the `addType` /
    *  `removeType` / `toggleType` / `setBlockTypes` delegating methods. */
   private readonly typeTagger: TypeTagger
-  /** Per-scope undo / redo stacks (spec §10 step 7, §17 line 2228).
-   *  `repo.tx` records every undoable commit here; `repo.undo` /
-   *  `repo.redo` pop entries and replay them via `TxImpl.applyRaw`. */
-  readonly undoManager: UndoManager
+  /** Per-WORKSPACE undo / redo state (spec §10 step 7, §17 line 2228;
+   *  issue #186). Each workspace gets its own `UndoManager` (independent
+   *  per-scope stacks), so cmd-Z only ever acts on the workspace the user
+   *  is looking at and a switch can never revert an edit in a workspace
+   *  they've left — while switching back restores that workspace's
+   *  history. The public `undoManager` getter resolves to the active
+   *  workspace's manager; `repo.tx` records into the tx's pinned
+   *  workspace; `repo.undo` / `repo.redo` pop + replay via
+   *  `TxImpl.applyRaw`. */
+  private readonly undoManagers = new Map<string, UndoManager>()
   /** Identity-stable Block facades, keyed by id. Block satisfies
    *  Handle<BlockData|null> structurally (spec §5.1, §5.2) — its
    *  row-grain reactivity goes through BlockCache.subscribe directly,
@@ -606,7 +619,6 @@ export class Repo {
     // baked into TxResult — we don't sync a registry into the runner
     // here.
     this.processorRunner = new ProcessorRunner(this, this.db)
-    this.undoManager = new UndoManager()
     // Type-tagging engine (audit D1(b)). Repo keeps spec-pinned
     // delegating methods over this single instance.
     this.typeTagger = new TypeTagger(this)
@@ -929,6 +941,30 @@ export class Repo {
     this._activeWorkspaceId = workspaceId
   }
 
+  /** The active workspace's undo / redo manager — what cmd-Z and the
+   *  Undo UI act on (issue #186). Because each workspace has its own
+   *  manager, callers can use the plain `peekUndo` / `popUndo` API and it
+   *  is implicitly scoped to the active workspace; switching workspace
+   *  swaps which manager this returns without disturbing the others.
+   *  When no workspace is active, returns a stable throwaway manager
+   *  (keyed by `NO_ACTIVE_WORKSPACE`) so callers don't have to null-check
+   *  — `undo()` / `redo()` still guard on `activeWorkspaceId`. */
+  get undoManager(): UndoManager {
+    return this.undoManagerFor(this._activeWorkspaceId ?? NO_ACTIVE_WORKSPACE)
+  }
+
+  /** Undo manager for a specific workspace, lazily created. `repo.tx`
+   *  records into the tx's pinned workspace's manager so history follows
+   *  the workspace, not the (possibly since-changed) active pin. */
+  private undoManagerFor(workspaceId: string): UndoManager {
+    let manager = this.undoManagers.get(workspaceId)
+    if (!manager) {
+      manager = new UndoManager()
+      this.undoManagers.set(workspaceId, manager)
+    }
+    return manager
+  }
+
   /** Toggle read-only mode. Wrapping the field write in a method
    *  keeps call sites that come from inside React hooks lint-clean
    *  (`react-hooks/immutability` flags direct property writes on
@@ -949,17 +985,16 @@ export class Repo {
     // shaping — `repo.tx` just re-throws here.
     const result: Awaited<ReturnType<typeof this._runAndDispatch<R>>> =
       await this._runAndDispatch(fn, opts)
-    // Step 7 of the §10 pipeline — record undo entry, scoped to the tx's
-    // pinned workspace so a later cmd-Z only ever acts on entries from the
-    // workspace the user is looking at (issue #186). Non-undoable scopes
-    // are filtered inside `record`; zero-write txs have no pinned
+    // Step 7 of the §10 pipeline — record undo entry into the tx's pinned
+    // workspace's manager, so a later cmd-Z only ever acts on entries from
+    // the workspace the user is looking at (issue #186). Non-undoable
+    // scopes are filtered inside `record`; zero-write txs have no pinned
     // workspace (null) and nothing to undo, so skip them here. Replays go
     // through `_replay`, not here, so they don't add new history.
     if (result.workspaceId !== null) {
-      this.undoManager.record({
+      this.undoManagerFor(result.workspaceId).record({
         scope: opts.scope,
         txId: result.txId,
-        workspaceId: result.workspaceId,
         snapshots: result.snapshots,
         description: opts.description,
       })
@@ -970,64 +1005,62 @@ export class Repo {
   /** Undo the most recent committed `repo.tx` for `scope` *in the active
    *  workspace*. Default scope is `BlockDefault` (the cmd-Z target).
    *  Resolves to true if an entry was popped + replayed, false if there
-   *  is no active workspace or no entry for it.
+   *  is no active workspace or its manager has no entry for `scope`.
    *
-   *  Undo is workspace-scoped (issue #186): a workspace switch is
-   *  in-place (no reload, no stack clear), so cmd-Z must only ever act on
-   *  the workspace the user is currently looking at — never reverting (or
-   *  re-uploading) an edit in a workspace they've switched away from.
-   *  Entries from other workspaces are left untouched on the stack, so
-   *  switching back to a workspace restores its undo history (up to the
-   *  shared per-scope `maxDepth` cap — see `UndoManager`).
+   *  Undo is per-workspace (issue #186): each workspace has its own
+   *  `UndoManager`, and we operate on the active one — so a workspace
+   *  switch (in-place, no reload) can never revert (or re-upload) an edit
+   *  in a workspace the user has left, and switching back restores that
+   *  workspace's history. The active manager is captured up front so a
+   *  switch mid-replay can't redirect the redo push to a different
+   *  workspace's manager.
    *
    *  Replay opens its own `repo.tx` with `source = 'user'` so the
    *  inverse syncs upstream just like the original write did (per the
    *  spec's §7.3 + the follow-ups doc's "undo of a content edit
-   *  should sync the un-edit"). Because undo is scoped to the active
-   *  workspace, the replayed entry always belongs to it, so the active
-   *  workspace's read-only flag (`this.isReadOnly`) IS the entry's own
-   *  workspace read-only — viewing a read-only workspace B can never
-   *  block undo of an editable workspace A's edit, because cmd-Z in B
-   *  never reaches A's entry (issue #186 A5b). Throws `ReadOnlyError`
-   *  when the active workspace is read-only for scopes that cannot write
-   *  locally. (Known pre-existing limitation: `isReadOnly` is updated by
-   *  an async App effect, so it can briefly lag a just-switched-to
-   *  workspace; a cmd-Z in that window may transiently `ReadOnlyError`,
-   *  but the entry is pushed back so a retry once the flag settles
-   *  succeeds. Fully closing it needs an atomic active-workspace +
-   *  read-only switch in the App layer, which also has to account for
-   *  e2ee lock state — out of scope here.) */
+   *  should sync the un-edit"). The replayed entry belongs to the active
+   *  workspace, so the active workspace's read-only flag
+   *  (`this.isReadOnly`) is the entry's own workspace read-only —
+   *  viewing a read-only workspace B can never block undo of an editable
+   *  workspace A's edit, because cmd-Z in B operates on B's (empty)
+   *  manager, not A's (issue #186 A5b). Throws `ReadOnlyError` when the
+   *  active workspace is read-only for scopes that cannot write locally.
+   *  (Known pre-existing limitation: `isReadOnly` is updated by an async
+   *  App effect, so it can briefly lag a just-switched-to workspace; a
+   *  cmd-Z in that window may transiently `ReadOnlyError`, but the entry
+   *  is pushed back so a retry once the flag settles succeeds — see
+   *  issue #226.) */
   async undo(scope: ChangeScope = ChangeScope.BlockDefault): Promise<boolean> {
-    const workspaceId = this.activeWorkspaceId
-    if (workspaceId === null) return false
-    const entry = this.undoManager.popUndoForWorkspace(scope, workspaceId)
+    if (this._activeWorkspaceId === null) return false
+    const manager = this.undoManager
+    const entry = manager.popUndo(scope)
     if (entry === null) return false
     try {
       await this._replay(entry, 'before')
-      this.undoManager.pushRedo(scope, entry)
+      manager.pushRedo(scope, entry)
       return true
     } catch (err) {
       // Replay failed — push the entry back so the user can retry
       // (e.g. after toggling read-only off, fixing a missing parent).
-      this.undoManager.pushUndo(scope, entry)
+      manager.pushUndo(scope, entry)
       throw err
     }
   }
 
   /** Redo the most recently undone tx for `scope` in the active
-   *  workspace. Same defaults + same workspace-scoping + read-only
+   *  workspace. Same defaults + same per-workspace + read-only
    *  semantics as `undo`, mirrored. */
   async redo(scope: ChangeScope = ChangeScope.BlockDefault): Promise<boolean> {
-    const workspaceId = this.activeWorkspaceId
-    if (workspaceId === null) return false
-    const entry = this.undoManager.popRedoForWorkspace(scope, workspaceId)
+    if (this._activeWorkspaceId === null) return false
+    const manager = this.undoManager
+    const entry = manager.popRedo(scope)
     if (entry === null) return false
     try {
       await this._replay(entry, 'after')
-      this.undoManager.pushUndo(scope, entry)
+      manager.pushUndo(scope, entry)
       return true
     } catch (err) {
-      this.undoManager.pushRedo(scope, entry)
+      manager.pushRedo(scope, entry)
       throw err
     }
   }

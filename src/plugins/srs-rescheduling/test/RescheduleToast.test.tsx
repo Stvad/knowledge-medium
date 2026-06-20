@@ -27,16 +27,20 @@ vi.mock('@/utils/toast.js', () => ({
   showError: showErrorMock,
 }))
 
-const makeEntry = (txId: string, workspaceId: string) => {
+const makeEntry = (txId: string) => {
   const snapshots = newSnapshotsMap()
-  snapshots.set('a', {before: null, after: makeBlockData({id: 'a', workspaceId})})
-  return {txId, scope: ChangeScope.BlockDefault, workspaceId, snapshots}
+  snapshots.set('a', {before: null, after: makeBlockData({id: 'a', workspaceId: 'ws-1'})})
+  return {txId, scope: ChangeScope.BlockDefault, snapshots}
 }
 
 // Minimal Repo stand-in: the toast only reads `activeWorkspaceId`,
-// `undoManager`, and calls `undo()`. `activeWorkspaceId` is a getter so a
-// test can flip it post-render WITHOUT a re-render (simulating an in-place
-// workspace switch, which is exactly the reactivity gap the handler guards).
+// `undoManager`, and calls `undo()`. `undoManager` here stands in for the
+// ACTIVE workspace's manager (per-workspace registry, issue #186); the
+// gate's `activeWorkspaceId === workspaceId` check means `peekUndo` is only
+// consulted while ws-1 is active, so a single manager suffices.
+// `activeWorkspaceId` is a getter so a test can flip it post-render WITHOUT
+// a re-render (simulating an in-place workspace switch — exactly the
+// reactivity gap the click-time handler guards).
 const makeRepo = (
   undoManager: UndoManager,
   active: { id: string | null },
@@ -58,7 +62,7 @@ afterEach(() => {
 describe('RescheduleToast workspace scoping (#186)', () => {
   it('enables Undo and reverts when the reschedule is the active workspace top', () => {
     const m = new UndoManager()
-    m.record(makeEntry('t1', 'ws-1'))
+    m.record(makeEntry('t1'))
     const undo = vi.fn().mockResolvedValue(true)
     render(
       <RescheduleToast
@@ -80,7 +84,7 @@ describe('RescheduleToast workspace scoping (#186)', () => {
 
   it('disables Undo while viewing a different workspace than the reschedule', () => {
     const m = new UndoManager()
-    m.record(makeEntry('t1', 'ws-1'))
+    m.record(makeEntry('t1'))
     render(
       <RescheduleToast
         toastId="toast-1"
@@ -97,7 +101,7 @@ describe('RescheduleToast workspace scoping (#186)', () => {
 
   it('does NOT revert a different workspace if the active workspace changed after render', () => {
     const m = new UndoManager()
-    m.record(makeEntry('t1', 'ws-1'))
+    m.record(makeEntry('t1'))
     const active = {id: 'ws-1'}
     const undo = vi.fn().mockResolvedValue(true)
     render(
@@ -127,7 +131,7 @@ describe('RescheduleToast workspace scoping (#186)', () => {
 
   it('disables Undo once a newer entry lands on the reschedule workspace', () => {
     const m = new UndoManager()
-    m.record(makeEntry('t1', 'ws-1'))
+    m.record(makeEntry('t1'))
     render(
       <RescheduleToast
         toastId="toast-1"
@@ -142,7 +146,7 @@ describe('RescheduleToast workspace scoping (#186)', () => {
     // A later edit in ws-1 makes the reschedule no longer the top; the
     // subscribe-driven re-render must disable the button. Wrap the
     // external-store mutation in act() so React flushes the notify.
-    act(() => { m.record(makeEntry('t2', 'ws-1')) })
+    act(() => { m.record(makeEntry('t2')) })
     expect(undoButton().disabled).toBe(true)
   })
 })

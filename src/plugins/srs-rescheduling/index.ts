@@ -400,14 +400,16 @@ const runRescheduleWithFeedback = async (
   const result = await rescheduleBlock(block, signal)
   if (!result) return
   // JS is single-threaded; the entry recorded by the just-completed tx
-  // is guaranteed to be the BlockDefault top right now, so peekUndo
-  // gives us the txId to gate the toast's Undo button on. We also capture
-  // the entry's workspaceId: undo is workspace-scoped (issue #186), so the
-  // toast must track the reschedule's own workspace — `repo.undo()` only
-  // reverts it while that workspace is active and it's still that
-  // workspace's top. If a later tx pushes onto the stack, the toast
-  // subscribes via UndoManager and disables itself rather than reverting
-  // the wrong action.
+  // is guaranteed to be the active workspace's BlockDefault top right now,
+  // so peekUndo gives us the txId to gate the toast's Undo button on. We
+  // also capture the reschedule's workspace: undo is per-workspace (issue
+  // #186), so the toast must track it — `repo.undo()` only reverts the
+  // reschedule while that workspace is active and it's still its top. The
+  // reschedule wrote `block`, so its workspace is the active one. If a
+  // later tx pushes onto the stack, the toast subscribes via UndoManager
+  // and disables itself rather than reverting the wrong action.
+  const workspaceId = block.repo.activeWorkspaceId
+  if (workspaceId === null) return
   const top = block.repo.undoManager.peekUndo(ChangeScope.BlockDefault)
   if (!top) return
   const message = formatRescheduleToastMessage(result)
@@ -415,7 +417,7 @@ const runRescheduleWithFeedback = async (
     toastId: id,
     message,
     txId: top.txId,
-    workspaceId: top.workspaceId,
+    workspaceId,
     repo: block.repo,
   }))
 }
@@ -495,7 +497,15 @@ const isSrsBlockTarget = ({block}: BlockShortcutDependencies): boolean => {
 
 const canPasteSrsState = ({block}: BlockShortcutDependencies): boolean => {
   const entry = getSrsClipboard()
-  return entry !== null && entry.sourceBlockId !== block.id
+  if (entry === null || entry.sourceBlockId === block.id) return false
+  // The clipboard is a module singleton that survives an in-place
+  // workspace switch (issue #186 class). SRS state can't move across
+  // workspaces anyway — moveSrsState's tx would hit the single-workspace
+  // invariant (WorkspaceMismatchError) and roll back — so only offer
+  // paste in the source's own workspace. Uses the workspaceId captured at
+  // cut; the affordance simply disappears in any other workspace and
+  // reappears on return, rather than arming a guaranteed-to-fail paste.
+  return entry.sourceWorkspaceId === block.peek()?.workspaceId
 }
 
 const srsCutAction: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {

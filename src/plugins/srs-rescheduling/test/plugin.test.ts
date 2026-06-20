@@ -312,6 +312,14 @@ describe('srsReschedulingPlugin', () => {
     setSrsClipboard({sourceBlockId: 'srs-block', sourceWorkspaceId: 'ws-1'})
     expect(paste.canDispatch?.({block: plainBlock, uiStateBlock: plainBlock})).toBe(true)
     expect(paste.canDispatch?.({block: srsBlock, uiStateBlock: srsBlock})).toBe(false)
+
+    // Cross-workspace gate (issue #186): the clipboard is a module
+    // singleton that survives an in-place workspace switch, but SRS state
+    // can't move across workspaces (moveSrsState's tx would hit the
+    // single-workspace invariant). A clipboard whose source is in another
+    // workspace must NOT arm paste on a target here.
+    setSrsClipboard({sourceBlockId: 'srs-block', sourceWorkspaceId: 'ws-other'})
+    expect(paste.canDispatch?.({block: plainBlock, uiStateBlock: plainBlock})).toBe(false)
     clearSrsClipboard()
   })
 
