@@ -935,6 +935,50 @@ describe('importRoam', () => {
     expect(JSON.parse(after!.properties_json)['local:note']).toBe('precious')
   })
 
+  it('preserves a tombstone whose only payload is references (#195 references arm)', async () => {
+    // A data-bearing block can carry only outgoing references (empty
+    // content, no properties) — e.g. a block that was just a link. Create
+    // one directly, tombstone it, then reference its uid from a
+    // placeholder-only import.
+    const blockId = roamBlockId(WORKSPACE, 'refsOnly195')
+    const refTargetId = roamBlockId(WORKSPACE, 'refsOnlyTarget195')
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: blockId,
+        workspaceId: WORKSPACE,
+        parentId: null,
+        orderKey: 'a0',
+        content: '',
+        references: [{id: refTargetId, alias: refTargetId}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.delete({id: blockId})
+    expect((await readBlock(blockId))?.deleted).toBe(1)
+
+    const placeholderExport: RoamExport = [
+      {
+        title: 'page-refs-only',
+        uid: 'pageRefsOnly195',
+        children: [
+          {
+            string: 'see ((refsOnly195))',
+            uid: 'refRefsOnly195',
+            ':block/refs': [{':block/uid': 'refsOnly195'}],
+          },
+        ],
+      },
+    ]
+    await importRoam(placeholderExport, env.repo, {
+      workspaceId: WORKSPACE, currentUserId: USER_ID,
+    })
+
+    // Empty content + no properties, but an outgoing reference → still
+    // data-bearing → must NOT be blank-restored.
+    const after = await readBlock(blockId)
+    expect(after?.deleted).toBe(1)
+    expect(JSON.parse(after!.references_json)).toEqual([{id: refTargetId, alias: refTargetId}])
+  })
+
   it('leaves a tombstoned placeholder the user touched (any property → non-pristine) untouched (#195)', async () => {
     // First import emits a blank placeholder for the unresolved ((leafUi)).
     const placeholderExport: RoamExport = [
