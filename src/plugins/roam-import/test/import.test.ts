@@ -821,6 +821,72 @@ describe('importRoam', () => {
     expect(restored?.content).toBe('')
   })
 
+  it('does not blank-restore a tombstoned data-bearing block to an empty stub (#195)', async () => {
+    // 1. Import a real block under uid U, holding real content.
+    const realExport: RoamExport = [
+      {
+        title: 'page-with-real-block',
+        uid: 'pageReal195',
+        children: [
+          {
+            string: 'precious real content',
+            uid: 'realLeaf195',
+          },
+        ],
+      },
+    ]
+    await importRoam(realExport, env.repo, {
+      workspaceId: WORKSPACE, currentUserId: USER_ID,
+    })
+
+    const blockId = roamBlockId(WORKSPACE, 'realLeaf195')
+    // Give the real block a property too, mirroring user-authored data
+    // that a blank-restore would silently destroy alongside content.
+    await env.repo.tx(async tx => {
+      const row = await tx.get(blockId)
+      if (!row) throw new Error('expected imported real block')
+      await tx.update(blockId, {
+        properties: {...row.properties, 'local:note': 'keep me'},
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    // 2. User deletes the real block — tombstoned, still holding data.
+    await env.repo.mutate.delete({id: blockId})
+    const tombstoned = await readBlock(blockId)
+    expect(tombstoned?.deleted).toBe(1)
+    expect(tombstoned?.content).toBe('precious real content')
+
+    // 3. A later export references ((U)) but does NOT include the real
+    //    block, so the planner registers U as a placeholder. Without the
+    //    #195 guard, ensurePlaceholderRow would resurrect the
+    //    data-bearing tombstone as an empty root stub.
+    const placeholderExport: RoamExport = [
+      {
+        title: 'page-with-ref-195',
+        uid: 'pageRef195',
+        children: [
+          {
+            string: 'see ((realLeaf195))',
+            uid: 'refBlock195',
+            ':block/refs': [{':block/uid': 'realLeaf195'}],
+          },
+        ],
+      },
+    ]
+    await importRoam(placeholderExport, env.repo, {
+      workspaceId: WORKSPACE, currentUserId: USER_ID,
+    })
+
+    // 4. The data-bearing tombstone is NOT resurrected as an empty stub:
+    //    its content + properties survive and it stays tombstoned (the
+    //    lossless state — a later import that includes the real block can
+    //    still upsert it back).
+    const after = await readBlock(blockId)
+    expect(after?.deleted).toBe(1)
+    expect(after?.content).toBe('precious real content')
+    expect(JSON.parse(after!.properties_json)['local:note']).toBe('keep me')
+  })
+
   it('does not create placeholders for unconfirmed double-paren prose', async () => {
     const proseExport: RoamExport = [
       {

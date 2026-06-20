@@ -1090,18 +1090,37 @@ const patchAliasReferences = (data: BlockData, aliasIdMap: AliasIdMap) => {
   }
 }
 
+/** A tombstone "holds real content" when it carries content, references,
+ *  or properties — i.e. it was a data-bearing block (a real imported
+ *  block, or one the user authored at this id), not a blank placeholder
+ *  stub. Blank-restoring such a row would destroy that data, so the
+ *  placeholder path must leave it tombstoned instead. */
+const tombstoneHoldsRealContent = (row: BlockData): boolean =>
+  row.content !== '' ||
+  row.references.length > 0 ||
+  Object.keys(row.properties).length > 0
+
 /**
  * Ensure a placeholder row exists at `id`. Used for ((uid)) targets
  * whose real block isn't in this export — references[] in imported
- * content needs the row to be present so backlinks resolve. Three
- * branches:
+ * content needs the row to be present so backlinks resolve. Branches:
  *   - Fresh insert: write an empty stub at workspace root.
  *   - Live-row hit: leave alone (a real block with content may
  *     already live at this id; a placeholder must NOT clobber it).
- *   - Tombstone hit: tx.restore with empty content so the row comes
- *     back to life and references resolve. The user can re-delete
- *     after the import if they were intentionally cleaning up;
+ *   - Tombstone hit, blank stub: tx.restore with empty content so the
+ *     row comes back to life and references resolve. The user can
+ *     re-delete after the import if they were intentionally cleaning up;
  *     leaving the row tombstoned would crash the import tx.
+ *   - Tombstone hit, data-bearing: the deleted row still holds real
+ *     content / references / properties (e.g. a real block imported
+ *     under this uid earlier, then user-deleted; this export references
+ *     ((uid)) but does NOT include the real block). Blank-restoring it
+ *     would resurrect a data-bearing block as an empty stub and destroy
+ *     its content/properties/backlinks (#195). Preserving live user data
+ *     — including history — is paramount, so we leave it tombstoned. A
+ *     later, more-complete import that DOES include the real block
+ *     upserts it back via upsertImportedBlock; an unresolved ((uid))
+ *     pointing at a tombstone is the correct, lossless state until then.
  */
 const ensurePlaceholderRow = async (
   tx: Tx,
@@ -1117,12 +1136,17 @@ const ensurePlaceholderRow = async (
     })
   } catch (err) {
     if (!(err instanceof DeletedConflictError)) throw err
-    // Restoring as an empty stub: clear references and properties too,
-    // not just content. The id may have previously been a real imported
-    // block whose tombstone left stale references / properties in place;
-    // a fresh placeholder must look genuinely fresh, otherwise old
-    // backlinks and property values can persist into the upgrade
-    // window (and indefinitely if the planned content is also empty).
+    // The id collides with a tombstone. If that tombstone is a
+    // data-bearing block, do NOT blank-restore it — that would destroy
+    // the user's deleted-but-recoverable content (#195). Leave it
+    // tombstoned; tx.get returns deleted rows (no `deleted` filter).
+    const existing = await tx.get(id)
+    if (existing && tombstoneHoldsRealContent(existing)) return
+    // Blank stub tombstone: restore as an empty placeholder. Clear
+    // references and properties too, not just content, so a fresh
+    // placeholder looks genuinely fresh (no stale backlinks / property
+    // values leaking through). The data-bearing case is already handled
+    // above, so this only ever wipes already-empty fields.
     await tx.restore(id, {content: '', references: [], properties: {}})
     // Move the restored row to the placeholder location. tx.restore
     // alone keeps parentId / orderKey at whatever they were when the
