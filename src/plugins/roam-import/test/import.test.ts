@@ -935,7 +935,7 @@ describe('importRoam', () => {
     expect(JSON.parse(after!.properties_json)['local:note']).toBe('precious')
   })
 
-  it('restores a tombstoned placeholder that only carried UI state (#195 guard ignores cosmetic props)', async () => {
+  it('leaves a tombstoned placeholder the user touched (any property → non-pristine) untouched (#195)', async () => {
     // First import emits a blank placeholder for the unresolved ((leafUi)).
     const placeholderExport: RoamExport = [
       {
@@ -955,27 +955,84 @@ describe('importRoam', () => {
     })
 
     const placeholderId = roamBlockId(WORKSPACE, 'leafUi')
-    // The placeholder is a blank root stub; the user collapses it — pure
-    // UI state, no recoverable content — then deletes it.
+    // The user touches the stub (collapses it → writes a property) before
+    // deleting it. We deliberately do NOT keep a cosmetic-property
+    // allowlist: ANY property makes the stub non-pristine, matching the
+    // alias-seat "restorable transient tombstone" convention where a
+    // user's explicit deletion is never undone.
     await env.repo.mutate.setProperty({
       id: placeholderId, schema: isCollapsedProp, value: true,
     })
     await env.repo.mutate.delete({id: placeholderId})
     const tombstoned = await readBlock(placeholderId)
     expect(tombstoned?.deleted).toBe(1)
-    // Guard against a vacuous test: the cosmetic property must really be
-    // on the tombstone, so the restore path is exercising the exclusion.
+    // Non-vacuous: the property must really be on the tombstone.
     expect(JSON.parse(tombstoned!.properties_json)[isCollapsedProp.name]).toBe(true)
 
-    // Re-importing the same export must still restore the blank stub: a
-    // cosmetic-only property does not make it data-bearing.
+    // Re-importing the same export must leave the touched stub tombstoned
+    // (not blank-restored), preserving the row + its property.
     await importRoam(placeholderExport, env.repo, {
       workspaceId: WORKSPACE, currentUserId: USER_ID,
     })
 
-    const restored = await readBlock(placeholderId)
-    expect(restored?.deleted).toBe(0)
-    expect(restored?.content).toBe('')
+    const after = await readBlock(placeholderId)
+    expect(after?.deleted).toBe(1)
+    expect(JSON.parse(after!.properties_json)[isCollapsedProp.name]).toBe(true)
+  })
+
+  it('leaves a tombstoned container with live children untouched instead of re-rooting its subtree (#195)', async () => {
+    // Build a page → container → child tree where the container's own
+    // content is empty but it has a LIVE child, then tombstone ONLY the
+    // container (raw tx.delete, no cascade) — a deleted container that
+    // still has a live subtree under a live page.
+    const pageId = roamBlockId(WORKSPACE, 'containerPageUid')
+    const containerId = roamBlockId(WORKSPACE, 'containerUid')
+    const childId = roamBlockId(WORKSPACE, 'childUid')
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: pageId, workspaceId: WORKSPACE,
+        parentId: null, orderKey: 'a0', content: 'container page',
+      })
+      await tx.create({
+        id: containerId, workspaceId: WORKSPACE,
+        parentId: pageId, orderKey: 'a0', content: '',
+      })
+      await tx.create({
+        id: childId, workspaceId: WORKSPACE,
+        parentId: containerId, orderKey: 'a0', content: 'child content',
+      })
+      await tx.delete(containerId)
+    }, {scope: ChangeScope.BlockDefault})
+    expect((await readBlock(containerId))?.deleted).toBe(1)
+    expect((await readBlock(childId))?.deleted).toBe(0)
+
+    const placeholderExport: RoamExport = [
+      {
+        title: 'page-ref-container',
+        uid: 'pageRefContainer',
+        children: [
+          {
+            string: 'see ((containerUid))',
+            uid: 'refContainer',
+            ':block/refs': [{':block/uid': 'containerUid'}],
+          },
+        ],
+      },
+    ]
+    await importRoam(placeholderExport, env.repo, {
+      workspaceId: WORKSPACE, currentUserId: USER_ID,
+    })
+
+    // The container's own fields are empty, but its live child makes it
+    // non-pristine: it stays tombstoned under its page (NOT resurrected
+    // and re-rooted to the workspace root by a restore + move), and the
+    // child stays under the container.
+    const containerAfter = await readBlock(containerId)
+    expect(containerAfter?.deleted).toBe(1)
+    expect(containerAfter?.parent_id).toBe(pageId)
+    const childAfter = await readBlock(childId)
+    expect(childAfter?.deleted).toBe(0)
+    expect(childAfter?.parent_id).toBe(containerId)
   })
 
   it('does not create placeholders for unconfirmed double-paren prose', async () => {
