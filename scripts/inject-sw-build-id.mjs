@@ -9,7 +9,9 @@
  *      placeholder) so the install handler can fetch them up front. The
  *      initial module graph is dispatched by the browser before our SW
  *      activates, so without this list a first-time offline reload would
- *      fail to boot.
+ *      fail to boot. This covers the first-paint HTML graph PLUS a small
+ *      set of must-be-offline lazy chunks and their transitive deps
+ *      (`@babel/standalone` — see scripts/precache-lazy-assets.mjs).
  *
  * Fails the build if either placeholder is missing — both are required
  * for the SW to behave correctly.
@@ -18,6 +20,7 @@ import {readFileSync, writeFileSync, existsSync, readdirSync} from 'node:fs'
 import {execSync} from 'node:child_process'
 import {dirname, resolve, relative, sep} from 'node:path'
 import {fileURLToPath} from 'node:url'
+import {transitiveClosure} from './precache-lazy-assets.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const distDir = resolve(__dirname, '..', 'dist')
@@ -68,8 +71,36 @@ const collectPrecacheAssets = () => {
   return [...hrefs].sort()
 }
 
+// Lazy chunks that are NOT in the first-paint HTML graph but must be
+// offline-available — and their transitive sibling-chunk deps. Today this
+// is `@babel/standalone`, dynamically imported by compileExtensionModule
+// on a compile-cache miss; without re-precaching it, a cold offline
+// compile would fail (see scripts/precache-lazy-assets.mjs). Paths are
+// dist-relative (POSIX), stable + unhashed thanks to preserveModules.
+const LAZY_PRECACHE_ENTRYPOINTS = ['node_modules/@babel/standalone/babel.js']
+
+// Base-prefix a dist-relative path the same way Vite emits the
+// index.html-derived precache URLs (absolute, under the configured base),
+// so the two sets dedupe and the SW resolves them against its scope. Base
+// is read the same way vite.config.ts derives it.
+const base = (() => {
+  let b = process.env.APP_BASE_PATH?.trim() || '/'
+  if (!b.startsWith('/')) b = `/${b}`
+  if (!b.endsWith('/')) b = `${b}/`
+  return b
+})()
+const toBaseUrl = (rel) => `${base}${rel.replace(/^\/+/, '')}`
+
+const collectLazyPrecacheAssets = () =>
+  transitiveClosure(LAZY_PRECACHE_ENTRYPOINTS, {
+    exists: (rel) => existsSync(resolve(distDir, rel)),
+    readFile: (rel) => readFileSync(resolve(distDir, rel), 'utf8'),
+  }).map(toBaseUrl)
+
 const buildId = resolveBuildId()
-const precacheAssets = collectPrecacheAssets()
+const precacheAssets = [
+  ...new Set([...collectPrecacheAssets(), ...collectLazyPrecacheAssets()]),
+].sort()
 
 let source = readFileSync(swPath, 'utf8')
 
