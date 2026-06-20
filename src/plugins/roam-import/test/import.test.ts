@@ -22,7 +22,7 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import { aliasesProp, typesProp } from '@/data/properties'
+import { aliasesProp, isCollapsedProp, typesProp } from '@/data/properties'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -885,6 +885,97 @@ describe('importRoam', () => {
     expect(after?.deleted).toBe(1)
     expect(after?.content).toBe('precious real content')
     expect(JSON.parse(after!.properties_json)['local:note']).toBe('keep me')
+
+    // ...and the import still completed: the referencing block landed and
+    // rewrote ((U)) to the deterministic id, so the ref resolves (at a
+    // tombstone for now) rather than the guard breaking import/ref output.
+    const refBlock = await readBlock(roamBlockId(WORKSPACE, 'refBlock195'))
+    expect(refBlock?.content).toBe(`see ((${blockId}))`)
+  })
+
+  it('preserves a tombstone whose only payload is a real property (#195 properties arm)', async () => {
+    // A data-bearing block can carry meaningful state with empty content
+    // (e.g. a typed/annotated block). Create one directly, tombstone it,
+    // then reference its uid from a placeholder-only import.
+    const blockId = roamBlockId(WORKSPACE, 'propOnly195')
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: blockId,
+        workspaceId: WORKSPACE,
+        parentId: null,
+        orderKey: 'a0',
+        content: '',
+        properties: {'local:note': 'precious'},
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.delete({id: blockId})
+    expect((await readBlock(blockId))?.deleted).toBe(1)
+
+    const placeholderExport: RoamExport = [
+      {
+        title: 'page-prop-only',
+        uid: 'pagePropOnly195',
+        children: [
+          {
+            string: 'see ((propOnly195))',
+            uid: 'refPropOnly195',
+            ':block/refs': [{':block/uid': 'propOnly195'}],
+          },
+        ],
+      },
+    ]
+    await importRoam(placeholderExport, env.repo, {
+      workspaceId: WORKSPACE, currentUserId: USER_ID,
+    })
+
+    // Empty content + no references, but a real property → still
+    // data-bearing → must NOT be blank-restored.
+    const after = await readBlock(blockId)
+    expect(after?.deleted).toBe(1)
+    expect(JSON.parse(after!.properties_json)['local:note']).toBe('precious')
+  })
+
+  it('restores a tombstoned placeholder that only carried UI state (#195 guard ignores cosmetic props)', async () => {
+    // First import emits a blank placeholder for the unresolved ((leafUi)).
+    const placeholderExport: RoamExport = [
+      {
+        title: 'page-with-ui-ref',
+        uid: 'pageUiRef',
+        children: [
+          {
+            string: 'see ((leafUi))',
+            uid: 'parentUiRef',
+            ':block/refs': [{':block/uid': 'leafUi'}],
+          },
+        ],
+      },
+    ]
+    await importRoam(placeholderExport, env.repo, {
+      workspaceId: WORKSPACE, currentUserId: USER_ID,
+    })
+
+    const placeholderId = roamBlockId(WORKSPACE, 'leafUi')
+    // The placeholder is a blank root stub; the user collapses it — pure
+    // UI state, no recoverable content — then deletes it.
+    await env.repo.mutate.setProperty({
+      id: placeholderId, schema: isCollapsedProp, value: true,
+    })
+    await env.repo.mutate.delete({id: placeholderId})
+    const tombstoned = await readBlock(placeholderId)
+    expect(tombstoned?.deleted).toBe(1)
+    // Guard against a vacuous test: the cosmetic property must really be
+    // on the tombstone, so the restore path is exercising the exclusion.
+    expect(JSON.parse(tombstoned!.properties_json)[isCollapsedProp.name]).toBe(true)
+
+    // Re-importing the same export must still restore the blank stub: a
+    // cosmetic-only property does not make it data-bearing.
+    await importRoam(placeholderExport, env.repo, {
+      workspaceId: WORKSPACE, currentUserId: USER_ID,
+    })
+
+    const restored = await readBlock(placeholderId)
+    expect(restored?.deleted).toBe(0)
+    expect(restored?.content).toBe('')
   })
 
   it('does not create placeholders for unconfirmed double-paren prose', async () => {

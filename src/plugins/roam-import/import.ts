@@ -24,7 +24,14 @@ import {
   type TypeRegistrySnapshot,
   type Tx,
 } from '@/data/api'
-import { addBlockTypeToProperties, aliasesProp, hasBlockType, typesProp } from '@/data/properties'
+import {
+  addBlockTypeToProperties,
+  aliasesProp,
+  hasBlockType,
+  isCollapsedProp,
+  showPropertiesProp,
+  typesProp,
+} from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { dailyNoteBlockId, getOrCreateDailyNote } from '@/plugins/daily-notes'
 import {
@@ -1090,15 +1097,29 @@ const patchAliasReferences = (data: BlockData, aliasIdMap: AliasIdMap) => {
   }
 }
 
+/** Pure display/UI-state property names that carry no recoverable user
+ *  content. A bare placeholder stub can pick these up if the user
+ *  collapses it or opens its property panel before deleting it (the
+ *  collapse / show-properties shortcuts write through to the focused
+ *  block's `properties`). They must NOT make a re-import treat an
+ *  otherwise-empty stub as data-bearing — that would leave a legitimate
+ *  blank placeholder dead and stop its ((uid)) ref from resolving. */
+const DISPLAY_ONLY_PROPERTY_NAMES: ReadonlySet<string> = new Set([
+  isCollapsedProp.name,
+  showPropertiesProp.name,
+])
+
 /** A tombstone "holds real content" when it carries content, references,
- *  or properties — i.e. it was a data-bearing block (a real imported
- *  block, or one the user authored at this id), not a blank placeholder
- *  stub. Blank-restoring such a row would destroy that data, so the
- *  placeholder path must leave it tombstoned instead. */
+ *  or any non-cosmetic property — i.e. it was a data-bearing block (a
+ *  real imported block, or one the user authored at this id), not a blank
+ *  placeholder stub. Blank-restoring such a row would destroy that data,
+ *  so the placeholder path must leave it tombstoned instead. Pure
+ *  display/UI-state properties (collapse, show-properties) are ignored:
+ *  a stub holding only those is still empty and should restore. */
 const tombstoneHoldsRealContent = (row: BlockData): boolean =>
   row.content !== '' ||
   row.references.length > 0 ||
-  Object.keys(row.properties).length > 0
+  Object.keys(row.properties).some(name => !DISPLAY_ONLY_PROPERTY_NAMES.has(name))
 
 /**
  * Ensure a placeholder row exists at `id`. Used for ((uid)) targets
