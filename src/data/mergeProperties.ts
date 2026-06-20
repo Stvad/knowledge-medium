@@ -11,7 +11,8 @@
  * Rules per key:
  *   1. Key in only one side  → take that value.
  *   2. Both arrays           → concat with target order first, then
- *                              source-only entries (JSON-keyed dedupe).
+ *                              source-only entries (canonical-keyed dedupe:
+ *                              key-order-insensitive, value-distinguishing).
  *   3. Both deep-equal       → keep target's value.
  *   4. Otherwise (collision) → target wins.
  *
@@ -42,17 +43,51 @@ export const mergeProperties = (
 const unionArrays = (into: unknown[], from: unknown[]): unknown[] => {
   const seen = new Set<string>()
   const out: unknown[] = []
-  for (const item of into) {
-    const key = JSON.stringify(item)
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push(item)
-  }
-  for (const item of from) {
-    const key = JSON.stringify(item)
+  for (const item of [...into, ...from]) {
+    const key = canonicalKey(item)
     if (seen.has(key)) continue
     seen.add(key)
     out.push(item)
   }
   return out
+}
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  Object.prototype.toString.call(value) === '[object Object]'
+
+/**
+ * Stable, value-distinguishing string key for list dedupe.
+ *
+ * `JSON.stringify` is unsuitable here on two counts: it is key-order-sensitive
+ * (`{id,alias}` vs `{alias,id}` produce different strings for an equal object)
+ * and value-lossy (`NaN`, `null`, and `undefined` all collapse to `"null"`,
+ * conflating distinct values). This walker sorts object keys and type-tags
+ * every leaf so equal values share a key and distinct values never collide —
+ * strings are JSON-quoted so structural delimiters inside them can't be
+ * confused with the encoding's own.
+ */
+const canonicalKey = (value: unknown): string => {
+  if (value === null) return 'null'
+  if (value === undefined) return 'undef'
+  if (Array.isArray(value)) return `[${value.map(canonicalKey).join(',')}]`
+  if (isPlainObject(value)) {
+    const body = Object.keys(value)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${canonicalKey(value[k])}`)
+      .join(',')
+    return `{${body}}`
+  }
+  switch (typeof value) {
+    case 'string':
+      return `s:${JSON.stringify(value)}`
+    case 'number':
+      return Number.isNaN(value) ? 'n:NaN' : `n:${value}`
+    case 'boolean':
+      return `b:${value}`
+    case 'bigint':
+      return `B:${value}`
+    default:
+      // Functions/symbols shouldn't appear in encoded props; tag defensively.
+      return `x:${String(value)}`
+  }
 }

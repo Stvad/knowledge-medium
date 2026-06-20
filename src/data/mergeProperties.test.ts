@@ -80,6 +80,22 @@ describe('mergeProperties', () => {
       expect(mergeProperties({xs: ['a']}, {xs: []})).toEqual({xs: ['a']})
       expect(mergeProperties({xs: []}, {xs: []})).toEqual({xs: []})
     })
+
+    // #196: dedupe key must be key-order-insensitive and value-distinguishing.
+    it('dedupes reordered-equal objects regardless of key order', () => {
+      // {id, alias} vs {alias, id} encode the same value; keep one.
+      expect(
+        mergeProperties({refs: [{id: 'x', alias: 'A'}]}, {refs: [{alias: 'A', id: 'x'}]}).refs,
+      ).toHaveLength(1)
+    })
+
+    it('keeps NaN and null distinct (both stringify to "null")', () => {
+      expect(mergeProperties({xs: [NaN]}, {xs: [null]}).xs).toHaveLength(2)
+    })
+
+    it('keeps nested undefined and null distinct (both stringify to "[null]")', () => {
+      expect(mergeProperties({xs: [[undefined]]}, {xs: [[null]]}).xs).toHaveLength(2)
+    })
   })
 
   it('does not mutate input bags', () => {
