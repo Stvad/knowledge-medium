@@ -50,6 +50,9 @@ const setup = async (): Promise<Harness> => {
     // add its own tx entries during these tests — keeps the audited
     // stack predictable.
   })
+  // Undo / redo are scoped to the active workspace (issue #186); pin it
+  // to WS so the default-workspace edits below are the cmd-Z target.
+  repo.setActiveWorkspaceId(WS)
   return {h, repo}
 }
 
@@ -246,6 +249,55 @@ describe('repo.undo in read-only mode', () => {
     await expect(env.repo.undo()).rejects.toBeInstanceOf(ReadOnlyError)
 
     // Entry was pushed back so user can retry once read-only flips
+    env.repo.setReadOnly(false)
+    expect(await env.repo.undo()).toBe(true)
+    expect(await readContent(env.repo, 'a')).toBe('live')
+  })
+})
+
+describe('cross-workspace undo isolation (#186)', () => {
+  it('does not revert / upload a block in a workspace other than the active one', async () => {
+    // Edit a block in workspace A (= WS, the active workspace).
+    await seedRoot(env.repo, 'a', 'live')
+    await env.repo.tx(async (tx) => {
+      await tx.update('a', {content: 'edited'})
+    }, {scope: ChangeScope.BlockDefault, description: 'edit a'})
+    expect(await readContent(env.repo, 'a')).toBe('edited')
+
+    // Switch to a different workspace in-place (no reload, no stack clear).
+    env.repo.setActiveWorkspaceId('ws-B')
+
+    // cmd-Z while viewing ws-B must NOT touch the ws-A edit: nothing to
+    // undo here, so it no-ops rather than reverting an unopened workspace.
+    expect(await env.repo.undo()).toBe(false)
+    expect(await readContent(env.repo, 'a')).toBe('edited')
+
+    // The ws-A history survives the switch — back in ws-A, undo works.
+    env.repo.setActiveWorkspaceId(WS)
+    expect(await env.repo.undo()).toBe(true)
+    expect(await readContent(env.repo, 'a')).toBe('live')
+  })
+
+  it('does not block an editable-workspace entry while viewing a read-only workspace (A5b)', async () => {
+    // Edit a block in editable workspace A (= WS, active).
+    await seedRoot(env.repo, 'a', 'live')
+    await env.repo.tx(async (tx) => {
+      await tx.update('a', {content: 'edited'})
+    }, {scope: ChangeScope.BlockDefault, description: 'edit a'})
+
+    // View a read-only (viewer-role) workspace B.
+    env.repo.setActiveWorkspaceId('ws-B')
+    env.repo.setReadOnly(true)
+
+    // Pre-fix, this cmd-Z popped the ws-A entry and replayed it under the
+    // active (ws-B) read-only flag → spurious ReadOnlyError. Now undo is
+    // scoped to ws-B, so the editable ws-A entry is neither reverted nor
+    // blocked: undo no-ops without throwing.
+    await expect(env.repo.undo()).resolves.toBe(false)
+    expect(await readContent(env.repo, 'a')).toBe('edited')
+
+    // Returning to editable A, the entry is still undoable.
+    env.repo.setActiveWorkspaceId(WS)
     env.repo.setReadOnly(false)
     expect(await env.repo.undo()).toBe(true)
     expect(await readContent(env.repo, 'a')).toBe('live')

@@ -52,6 +52,8 @@ const setup = async (): Promise<Harness> => {
     referencesDataExtension,
     aliasDataExtension,
   ]))
+  // Undo/redo are scoped to the active workspace (issue #186).
+  repo.setActiveWorkspaceId(WS)
   return {
     h,
     repo,

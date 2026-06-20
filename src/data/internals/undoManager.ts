@@ -37,6 +37,12 @@ import type { SnapshotsMap } from './txSnapshots'
 
 export interface UndoEntry {
   scope: ChangeScope
+  /** Workspace this tx was pinned to. Undo / redo are scoped to the
+   *  active workspace through this field, so cmd-Z only ever acts on the
+   *  workspace the user is actually looking at and never reverts — or
+   *  re-uploads — an edit in a workspace they've switched away from
+   *  (issue #186). Captured from the committed tx's pinned workspace. */
+  workspaceId: string
   txId: string
   snapshots: SnapshotsMap
   description?: string
@@ -59,8 +65,10 @@ export class UndoManager {
   }
 
   /** Push an entry onto the undo stack of its scope. Side-effects:
-   *  clears the redo stack for that scope (a new action invalidates
-   *  the redo branch). No-op for non-undoable scopes and zero-write txs.
+   *  clears the redo branch for the entry's *workspace* (a new action
+   *  invalidates that workspace's redo future, but must not wipe another
+   *  workspace's history — issue #186). No-op for non-undoable scopes
+   *  and zero-write txs.
    *
    *  Subscriber-visible state must be consistent at notify-time, so the
    *  redo clear happens BEFORE pushUndo's notify fires — otherwise a
@@ -69,7 +77,7 @@ export class UndoManager {
   record(entry: UndoEntry): void {
     if (!this.isUndoable(entry.scope)) return
     if (entry.snapshots.size === 0) return
-    this.getRedo(entry.scope).length = 0
+    this.clearRedoForWorkspace(entry.scope, entry.workspaceId)
     this.pushUndo(entry.scope, entry)
   }
 
@@ -79,6 +87,16 @@ export class UndoManager {
 
   peekRedo(scope: ChangeScope): UndoEntry | null {
     return this.getRedo(scope).at(-1) ?? null
+  }
+
+  /** Most recent undo entry for `workspaceId` (the cmd-Z target while
+   *  that workspace is active). Skips entries from other workspaces. */
+  peekUndoForWorkspace(scope: ChangeScope, workspaceId: string): UndoEntry | null {
+    return this.lastMatching(this.getUndo(scope), workspaceId)
+  }
+
+  peekRedoForWorkspace(scope: ChangeScope, workspaceId: string): UndoEntry | null {
+    return this.lastMatching(this.getRedo(scope), workspaceId)
   }
 
   popUndo(scope: ChangeScope): UndoEntry | null {
@@ -91,6 +109,19 @@ export class UndoManager {
     const entry = this.getRedo(scope).pop() ?? null
     if (entry !== null) this.notify(scope)
     return entry
+  }
+
+  /** Pop the most recent entry for `workspaceId` off `scope`'s undo
+   *  stack, leaving entries from other workspaces in place. This is the
+   *  workspace-scoped cmd-Z primitive: undo only ever acts on the active
+   *  workspace's most recent entry, never an edit in a workspace the user
+   *  has since switched away from (issue #186). */
+  popUndoForWorkspace(scope: ChangeScope, workspaceId: string): UndoEntry | null {
+    return this.popMatching(this.getUndo(scope), scope, workspaceId)
+  }
+
+  popRedoForWorkspace(scope: ChangeScope, workspaceId: string): UndoEntry | null {
+    return this.popMatching(this.getRedo(scope), scope, workspaceId)
   }
 
   pushUndo(scope: ChangeScope, entry: UndoEntry): void {
@@ -139,6 +170,46 @@ export class UndoManager {
   /** Only document/reference scopes are undoable. */
   private isUndoable(scope: ChangeScope): boolean {
     return scopeIsUndoable(scope)
+  }
+
+  /** Last entry in `stack` belonging to `workspaceId`, or null. */
+  private lastMatching(stack: UndoEntry[], workspaceId: string): UndoEntry | null {
+    for (let i = stack.length - 1; i >= 0; i--) {
+      if (stack[i].workspaceId === workspaceId) return stack[i]
+    }
+    return null
+  }
+
+  /** Remove + return the last entry in `stack` belonging to
+   *  `workspaceId`, notifying on `scope` if one was removed. Splicing
+   *  from the middle keeps the relative order of the remaining (and the
+   *  removed workspace's older) entries, so the undo↔redo shuttle stays
+   *  symmetric within each workspace. */
+  private popMatching(
+    stack: UndoEntry[],
+    scope: ChangeScope,
+    workspaceId: string,
+  ): UndoEntry | null {
+    for (let i = stack.length - 1; i >= 0; i--) {
+      if (stack[i].workspaceId === workspaceId) {
+        const [entry] = stack.splice(i, 1)
+        this.notify(scope)
+        return entry
+      }
+    }
+    return null
+  }
+
+  /** Drop only `workspaceId`'s redo branch on `scope`. A new edit in one
+   *  workspace invalidates that workspace's redo future but must leave
+   *  every other workspace's history intact (issue #186). */
+  private clearRedoForWorkspace(scope: ChangeScope, workspaceId: string): void {
+    const redo = this.getRedo(scope)
+    const kept = redo.filter((e) => e.workspaceId !== workspaceId)
+    if (kept.length !== redo.length) {
+      redo.length = 0
+      redo.push(...kept)
+    }
   }
 
   private getUndo(scope: ChangeScope): UndoEntry[] {

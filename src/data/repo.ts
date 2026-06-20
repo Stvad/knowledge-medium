@@ -949,29 +949,48 @@ export class Repo {
     // shaping — `repo.tx` just re-throws here.
     const result: Awaited<ReturnType<typeof this._runAndDispatch<R>>> =
       await this._runAndDispatch(fn, opts)
-    // Step 7 of the §10 pipeline — record undo entry. Non-undoable
-    // scopes and zero-write txs are filtered inside `record`. Replays go
+    // Step 7 of the §10 pipeline — record undo entry, scoped to the tx's
+    // pinned workspace so a later cmd-Z only ever acts on entries from the
+    // workspace the user is looking at (issue #186). Non-undoable scopes
+    // are filtered inside `record`; zero-write txs have no pinned
+    // workspace (null) and nothing to undo, so skip them here. Replays go
     // through `_replay`, not here, so they don't add new history.
-    this.undoManager.record({
-      scope: opts.scope,
-      txId: result.txId,
-      snapshots: result.snapshots,
-      description: opts.description,
-    })
+    if (result.workspaceId !== null) {
+      this.undoManager.record({
+        scope: opts.scope,
+        txId: result.txId,
+        workspaceId: result.workspaceId,
+        snapshots: result.snapshots,
+        description: opts.description,
+      })
+    }
     return result.value
   }
 
-  /** Undo the most recent committed `repo.tx` for `scope`. Default
-   *  scope is `BlockDefault` (the cmd-Z target). Resolves to true if
-   *  an entry was popped + replayed, false if the stack was empty.
+  /** Undo the most recent committed `repo.tx` for `scope` *in the active
+   *  workspace*. Default scope is `BlockDefault` (the cmd-Z target).
+   *  Resolves to true if an entry was popped + replayed, false if there
+   *  is no active workspace or no entry for it.
+   *
+   *  Undo is workspace-scoped (issue #186): a workspace switch is
+   *  in-place (no reload, no stack clear), so cmd-Z must only ever act on
+   *  the workspace the user is currently looking at — never reverting (or
+   *  re-uploading) an edit in a workspace they've switched away from.
+   *  Entries from other workspaces are left untouched on the stack, so
+   *  switching back to a workspace restores its undo history.
+   *
    *  Replay opens its own `repo.tx` with `source = 'user'` so the
    *  inverse syncs upstream just like the original write did (per the
    *  spec's §7.3 + the follow-ups doc's "undo of a content edit
-   *  should sync the un-edit"). Throws `ReadOnlyError` in read-only
-   *  mode for scopes that cannot write locally — matches normal
-   *  `repo.tx` gating. */
+   *  should sync the un-edit"). Read-only is resolved against the
+   *  ENTRY's workspace, not the active one (issue #186 A5b): viewing a
+   *  read-only workspace must not block undo of an editable workspace's
+   *  edit. Throws `ReadOnlyError` when the entry's own workspace is
+   *  read-only for scopes that cannot write locally. */
   async undo(scope: ChangeScope = ChangeScope.BlockDefault): Promise<boolean> {
-    const entry = this.undoManager.popUndo(scope)
+    const workspaceId = this.activeWorkspaceId
+    if (workspaceId === null) return false
+    const entry = this.undoManager.popUndoForWorkspace(scope, workspaceId)
     if (entry === null) return false
     try {
       await this._replay(entry, 'before')
@@ -985,10 +1004,13 @@ export class Repo {
     }
   }
 
-  /** Redo the most recently undone tx for `scope`. Same default + same
+  /** Redo the most recently undone tx for `scope` in the active
+   *  workspace. Same defaults + same workspace-scoping + read-only
    *  semantics as `undo`, mirrored. */
   async redo(scope: ChangeScope = ChangeScope.BlockDefault): Promise<boolean> {
-    const entry = this.undoManager.popRedo(scope)
+    const workspaceId = this.activeWorkspaceId
+    if (workspaceId === null) return false
+    const entry = this.undoManager.popRedoForWorkspace(scope, workspaceId)
     if (entry === null) return false
     try {
       await this._replay(entry, 'after')
@@ -998,6 +1020,21 @@ export class Repo {
       this.undoManager.pushRedo(scope, entry)
       throw err
     }
+  }
+
+  /** Read-only resolution for an undo / redo replay (issue #186 A5b).
+   *  The global `isReadOnly` flag tracks the *active* workspace's role,
+   *  so it only governs entries that belong to the active workspace. An
+   *  entry from a different workspace is not gated by the active
+   *  workspace's read-only state — `undo`/`redo` are scoped to the active
+   *  workspace, so the entry replayed here belongs to it and this returns
+   *  the active flag; the cross-workspace branch is a guard that keeps a
+   *  read-only viewer workspace from ever blocking another workspace's
+   *  edit. We don't have other workspaces' roles synchronously, and an
+   *  undo entry can only exist for a workspace the user could write to
+   *  when the edit landed, so default those to writable. */
+  private isWorkspaceReadOnly(workspaceId: string): boolean {
+    return workspaceId === this._activeWorkspaceId ? this.isReadOnly : false
   }
 
   /** Shared `runTx` + processor-dispatch path. Used by both `tx`
@@ -1018,6 +1055,10 @@ export class Repo {
   private async _runAndDispatch<R>(
     fn: (tx: Tx) => Promise<R>,
     opts: RepoTxOptions,
+    // Defaults to the active workspace's read-only flag; `_replay` passes
+    // the entry's-workspace flag so undo/redo gate on the entry's
+    // workspace, not the active one (issue #186 A5b).
+    isReadOnly: boolean = this.isReadOnly,
   ) {
     const txT0 = performance.now()
     let result
@@ -1028,7 +1069,7 @@ export class Repo {
         fn,
         opts,
         user: this.user,
-        isReadOnly: this.isReadOnly,
+        isReadOnly,
         newTxId: this.newId,
         newTxSeq: this.newTxSeq,
         newId: this.newId,
@@ -1116,7 +1157,7 @@ export class Repo {
       for (const [id, snap] of entry.snapshots) {
         await txImpl.applyRaw(id, snap[direction])
       }
-    }, {scope: entry.scope, description})
+    }, {scope: entry.scope, description}, this.isWorkspaceReadOnly(entry.workspaceId))
   }
 
   /** Dynamic dispatch — used by runtime-loaded plugins where the

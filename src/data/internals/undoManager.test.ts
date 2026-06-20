@@ -25,10 +25,15 @@ import { makeBlockData } from '@/data/test/factories'
 const A = makeBlockData({id: 'a', workspaceId: 'ws-1', content: 'A'})
 const B = makeBlockData({id: 'b', workspaceId: 'ws-1', content: 'B'})
 
-const entry = (txId: string, scope: ChangeScope, ids: string[] = ['a']) => {
+const entry = (
+  txId: string,
+  scope: ChangeScope,
+  ids: string[] = ['a'],
+  workspaceId = 'ws-1',
+) => {
   const snapshots = newSnapshotsMap()
   for (const id of ids) snapshots.set(id, {before: null, after: A})
-  return {txId, scope, snapshots, description: `tx ${txId}`}
+  return {txId, scope, workspaceId, snapshots, description: `tx ${txId}`}
 }
 
 describe('UndoManager.record', () => {
@@ -71,6 +76,7 @@ describe('UndoManager.record', () => {
     m.record({
       txId: 'noop',
       scope: ChangeScope.BlockDefault,
+      workspaceId: 'ws-1',
       snapshots: newSnapshotsMap(),
     })
     expect(m.peekUndo(ChangeScope.BlockDefault)).toBeNull()
@@ -109,6 +115,43 @@ describe('UndoManager pop / push round trips', () => {
     const m = new UndoManager()
     expect(m.popUndo(ChangeScope.BlockDefault)).toBeNull()
     expect(m.popRedo(ChangeScope.BlockDefault)).toBeNull()
+  })
+})
+
+describe('UndoManager workspace scoping (#186)', () => {
+  it('pops the active workspace\'s most recent entry, skipping other workspaces', () => {
+    const m = new UndoManager()
+    // Interleaved: edit in A, switch to B + edit, switch back to A.
+    m.record(entry('a1', ChangeScope.BlockDefault, ['a'], 'ws-A'))
+    m.record(entry('b1', ChangeScope.BlockDefault, ['b'], 'ws-B'))
+
+    // While viewing A, undo targets a1 even though b1 is the global top.
+    expect(m.peekUndoForWorkspace(ChangeScope.BlockDefault, 'ws-A')?.txId).toBe('a1')
+    expect(m.popUndoForWorkspace(ChangeScope.BlockDefault, 'ws-A')?.txId).toBe('a1')
+
+    // b1 is untouched — switching to B still finds it.
+    expect(m.popUndoForWorkspace(ChangeScope.BlockDefault, 'ws-B')?.txId).toBe('b1')
+  })
+
+  it('returns null for a workspace with no entries', () => {
+    const m = new UndoManager()
+    m.record(entry('a1', ChangeScope.BlockDefault, ['a'], 'ws-A'))
+    expect(m.popUndoForWorkspace(ChangeScope.BlockDefault, 'ws-B')).toBeNull()
+    // The other workspace's entry is left in place.
+    expect(m.peekUndoForWorkspace(ChangeScope.BlockDefault, 'ws-A')?.txId).toBe('a1')
+  })
+
+  it('a new edit clears only its own workspace\'s redo branch', () => {
+    const m = new UndoManager()
+    // Both workspaces have a redo branch (an undone entry).
+    m.pushRedo(ChangeScope.BlockDefault, entry('a-redo', ChangeScope.BlockDefault, ['a'], 'ws-A'))
+    m.pushRedo(ChangeScope.BlockDefault, entry('b-redo', ChangeScope.BlockDefault, ['b'], 'ws-B'))
+
+    // A new edit in A invalidates A's redo future but must keep B's.
+    m.record(entry('a-new', ChangeScope.BlockDefault, ['a'], 'ws-A'))
+
+    expect(m.peekRedoForWorkspace(ChangeScope.BlockDefault, 'ws-A')).toBeNull()
+    expect(m.peekRedoForWorkspace(ChangeScope.BlockDefault, 'ws-B')?.txId).toBe('b-redo')
   })
 })
 
@@ -154,6 +197,7 @@ describe('UndoManager.subscribe', () => {
     m.record({
       txId: 'noop',
       scope: ChangeScope.BlockDefault,
+      workspaceId: 'ws-1',
       snapshots: newSnapshotsMap(),
     })
 
