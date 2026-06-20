@@ -176,6 +176,41 @@ describe('dedupById combine', () => {
       warn.mockRestore()
     }
   })
+
+  it('breaks an equal-precedence same-id tie by registration order (later wins)', () => {
+    // Only different-precedence wins were covered above; this pins the
+    // documented "register after to replace" tie-break at EQUAL precedence,
+    // which relies on the stable precedence sort in read() + last-wins.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const runtime = resolveFacetRuntimeSync([
+        mounts.of({id: 'a', label: 'first'}, {precedence: 5}),
+        mounts.of({id: 'a', label: 'second'}, {precedence: 5}),
+      ])
+
+      expect(runtime.read(mounts)).toEqual([{id: 'a', label: 'second'}])
+      expect(warn).toHaveBeenCalledTimes(1)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('dedups a runtime contribution against a static same-id one (runtime wins, last-wins)', () => {
+    // The combine runs in read() over static + runtime buckets, and
+    // collectContributions appends runtime after static — so the runtime
+    // entry is last in the combine input and wins. This is the live-effect
+    // override path (keybindings/theme/schemas push runtime contributions).
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const runtime = resolveFacetRuntimeSync([mounts.of({id: 'a', label: 'static'})])
+      runtime.setRuntimeContributions(mounts, 'effect', [{id: 'a', label: 'runtime'}])
+
+      expect(runtime.read(mounts)).toEqual([{id: 'a', label: 'runtime'}])
+      expect(warn).toHaveBeenCalledTimes(1)
+    } finally {
+      warn.mockRestore()
+    }
+  })
 })
 
 // The runtime-mutation path (setRuntimeContributions + onFacetChange) backs

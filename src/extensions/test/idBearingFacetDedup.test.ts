@@ -32,6 +32,10 @@ describe('appMountsFacet — id dedup', () => {
 
       expect(runtime.read(appMountsFacet).filter(m => m.id === 'demo.picker')).toHaveLength(1)
       expect(warn).toHaveBeenCalledTimes(1)
+      // The warning names the real facet + colliding key, so it points at
+      // the offending mount rather than being a generic "something dup'd".
+      expect(warn.mock.calls[0]?.[0]).toContain('core.app-mounts')
+      expect(warn.mock.calls[0]?.[0]).toContain('demo.picker')
     } finally {
       warn.mockRestore()
     }
