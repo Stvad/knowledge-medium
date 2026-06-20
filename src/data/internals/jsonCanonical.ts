@@ -22,7 +22,17 @@ export const stableJsonValue = (value: unknown): unknown => {
   if (!isPlainObject(value)) return value
   const out: Record<string, unknown> = {}
   for (const key of Object.keys(value).sort()) {
-    out[key] = stableJsonValue(value[key])
+    // `out[key] = …` would route a literal `__proto__` key through the
+    // prototype setter instead of creating an own property, dropping it from
+    // the JSON form — whereas storage (`JSON.stringify` of a `JSON.parse`d
+    // value) keeps it. `defineProperty` makes every key, `__proto__` included,
+    // an own enumerable property so the canonical form matches what persists.
+    Object.defineProperty(out, key, {
+      value: stableJsonValue(value[key]),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    })
   }
   return out
 }

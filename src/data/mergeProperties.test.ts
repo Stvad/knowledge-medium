@@ -91,14 +91,27 @@ describe('mergeProperties', () => {
       ).toHaveLength(1)
     })
 
-    it('collapses NaN and null (both persist as null), avoiding a stored dup', () => {
-      // JSON.stringify serializes NaN and null alike, so keeping both here
-      // would persist [null, null]; dedupe to one to match storage.
-      expect(mergeProperties({xs: [NaN]}, {xs: [null]}).xs).toHaveLength(1)
+    it('aligns dedupe with the persisted-JSON form (no stored duplicates)', () => {
+      // The merged array is persisted via JSON.stringify, so the contract is
+      // that the *stored* form carries no duplicate the dedupe should have
+      // collapsed. Assert on the round-tripped value, not just in-memory length.
+      const objs = mergeProperties({refs: [{id: 'x', alias: 'A'}]}, {refs: [{alias: 'A', id: 'x'}]})
+      expect(JSON.parse(JSON.stringify(objs.refs))).toEqual([{id: 'x', alias: 'A'}])
+
+      // NaN/undefined serialize as null, so collapsing them is deliberate:
+      // distinguishing them would persist [null, null] / [[null], [null]].
+      expect(JSON.parse(JSON.stringify(mergeProperties({xs: [NaN]}, {xs: [null]}).xs))).toEqual([null])
+      expect(JSON.parse(JSON.stringify(mergeProperties({xs: [[undefined]]}, {xs: [[null]]}).xs)))
+        .toEqual([[null]])
     })
 
-    it('collapses nested undefined and null (both persist as [null])', () => {
-      expect(mergeProperties({xs: [[undefined]]}, {xs: [[null]]}).xs).toHaveLength(1)
+    it('keeps items that differ only in an own __proto__ key', () => {
+      // JSON.parse materializes __proto__ as a real own key that JSON.stringify
+      // persists, so these two items are genuinely distinct and must not
+      // collapse (regression guard for the canonical-key __proto__ handling).
+      const a = JSON.parse('{"__proto__": {"t": "dark"}, "id": "p"}')
+      const b = JSON.parse('{"id": "p", "__proto__": {"t": "light"}}')
+      expect(mergeProperties({opts: [a]}, {opts: [b]}).opts).toHaveLength(2)
     })
   })
 
