@@ -59,6 +59,15 @@ describe('CompiledModuleCache stores', () => {
         await store.delete(`${name}-del`)
         expect(await store.read(`${name}-del`)).toBeUndefined()
       })
+
+      it('clear() drops every row (lock & wipe)', async () => {
+        const store = make()
+        await store.write(`${name}-c1`, record({compiled: 'A'}))
+        await store.write(`${name}-c2`, record({compiled: 'B'}))
+        await store.clear()
+        expect(await store.read(`${name}-c1`)).toBeUndefined()
+        expect(await store.read(`${name}-c2`)).toBeUndefined()
+      })
     })
   }
 
@@ -161,6 +170,7 @@ describe('compileExtensionModule — persistent (L3) cache', () => {
       read: async () => { throw new Error('read boom') },
       write: async () => {},
       delete: async () => {},
+      clear: async () => {},
     }
     vi.spyOn(console, 'warn').mockImplementation(() => {})
 
@@ -174,6 +184,7 @@ describe('compileExtensionModule — persistent (L3) cache', () => {
       read: async () => undefined,
       write: async () => { throw new Error('write boom') },
       delete: async () => {},
+      clear: async () => {},
     }
     vi.spyOn(console, 'warn').mockImplementation(() => {})
 

@@ -26,7 +26,10 @@
  *
  * Coarse by design: the whole DB file is wiped rather than per-workspace
  * surgery. Chasing one workspace's plaintext across every local surface (blocks,
- * derived indexes, FTS, caches) is exactly what the coarse file-wipe sidesteps.
+ * derived indexes, FTS, caches) is exactly what the coarse file-wipe sidesteps —
+ * for surfaces that live INSIDE that file. The one derived cache that lives
+ * outside it (the compiled-extension store in its own IndexedDB DB) is cleared
+ * explicitly here via {@link LockAndWipeDeps.compiledCache}.
  */
 
 import type { WorkspaceKeyStore } from '../keyStore.js'
@@ -149,11 +152,24 @@ export const flushUploadQueue = async (
   return { flushed: true, remaining: 0 }
 }
 
+/** The slice of the extension compile cache §6 needs: drop every locally
+ *  persisted compiled-extension blob. Injected (rather than imported) so
+ *  this keys-layer flow stays free of an `@/extensions` dependency. */
+export interface LocalCompiledCache {
+  clear(): Promise<void>
+}
+
 export interface LockAndWipeDeps {
   /** The signed-in user — keys, pins, and the DB file are all per-user. */
   readonly userId: string
   /** This device's workspace-key store (§5); every WK is dropped. */
   readonly keyStore: WorkspaceKeyStore
+  /** Device-local cache of transpiled extension *source* (a separate
+   *  IndexedDB store, NOT inside the per-user SQLite file the wipe
+   *  deletes). Cleared so a lock & wipe doesn't leave plaintext-derived
+   *  extension code behind. Optional/best-effort — a flaky clear must not
+   *  block the load-bearing key drop + DB-file wipe. */
+  readonly compiledCache?: LocalCompiledCache
 }
 
 /**
@@ -192,6 +208,17 @@ export const lockAndWipe = async (deps: LockAndWipeDeps): Promise<void> => {
     // still present (and don't report success). Rollback is best-effort.
     clearPendingWipe(deps.userId)
     throw err
+  }
+
+  // Keys dropped + wipe armed. Now clear the separate compiled-extension
+  // cache — it lives outside the SQLite file, so the boot-time file wipe
+  // wouldn't touch it, leaving plaintext-derived extension source on disk.
+  // Best-effort: the critical plaintext removal (key drop + DB-file wipe)
+  // has already happened/is armed, so a failing clear is logged, not fatal.
+  try {
+    await deps.compiledCache?.clear()
+  } catch (err) {
+    console.warn('[lock-and-wipe] failed to clear compiled-extension cache', err)
   }
 }
 

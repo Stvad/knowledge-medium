@@ -181,6 +181,33 @@ describe('lockAndWipe commit (§6)', () => {
     )
     expect(isPendingWipe(USER)).toBe(false)
   })
+
+  it('clears the compiled-extension cache so no plaintext survives the wipe', async () => {
+    const keyStore = new InMemoryWorkspaceKeyStore()
+    const compiledCache = { clear: vi.fn(async () => {}) }
+
+    await lockAndWipe({ userId: USER, keyStore, compiledCache })
+
+    expect(compiledCache.clear).toHaveBeenCalledTimes(1)
+    expect(isPendingWipe(USER)).toBe(true)
+  })
+
+  it('still completes the wipe when the compiled-cache clear fails (best-effort)', async () => {
+    // The load-bearing plaintext removal (key drop + armed DB-file wipe) has
+    // already happened, so a flaky derived-cache clear must not abort it.
+    const keyStore = new InMemoryWorkspaceKeyStore()
+    const clearForUser = vi.spyOn(keyStore, 'clearForUser')
+    const compiledCache = { clear: vi.fn(async () => { throw new Error('idb clear boom') }) }
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await expect(
+      lockAndWipe({ userId: USER, keyStore, compiledCache }),
+    ).resolves.toBeUndefined()
+
+    expect(clearForUser).toHaveBeenCalledWith(USER)
+    expect(isPendingWipe(USER)).toBe(true) // wipe stays armed
+    warn.mockRestore()
+  })
 })
 
 describe('consumePendingWipe (boot-time, §6)', () => {

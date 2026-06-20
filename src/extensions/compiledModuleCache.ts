@@ -46,6 +46,14 @@ export interface CompiledModuleCache {
   read(blockId: string): Promise<CompiledRecord | undefined>
   write(blockId: string, record: CompiledRecord): Promise<void>
   delete(blockId: string): Promise<void>
+  /** Drop every row. This is a derived cache of (potentially
+   *  E2EE-workspace) extension *source*, so the §6 lock & wipe flow
+   *  clears it to avoid leaving plaintext behind after the SQLite DB is
+   *  wiped. The store has no per-user/per-workspace dimension (keyed only
+   *  by the globally-unique blockId), so the clear is coarse — but
+   *  over-clearing is harmless here: unlike workspace keys, a dropped
+   *  compiled row only costs a one-time recompile, never a lockout. */
+  clear(): Promise<void>
 }
 
 /** In-memory store. Used in tests and as the fallback when IndexedDB is
@@ -65,6 +73,10 @@ export class InMemoryCompiledModuleCache implements CompiledModuleCache {
 
   async delete(blockId: string): Promise<void> {
     this.rows.delete(blockId)
+  }
+
+  async clear(): Promise<void> {
+    this.rows.clear()
   }
 }
 
@@ -144,6 +156,10 @@ export class IndexedDbCompiledModuleCache implements CompiledModuleCache {
 
   async delete(blockId: string): Promise<void> {
     await this.tx('readwrite', store => store.delete(blockId))
+  }
+
+  async clear(): Promise<void> {
+    await this.tx('readwrite', store => store.clear())
   }
 }
 
