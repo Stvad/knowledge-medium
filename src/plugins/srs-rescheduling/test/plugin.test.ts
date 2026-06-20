@@ -366,7 +366,9 @@ describe('srsReschedulingPlugin', () => {
     repo.setActiveWorkspaceId('ws-2')
 
     const reschedule = getEffectiveActions(runtime).find(it => it.id === 'srs.reschedule.good')!
-    await reschedule.handler?.({block, uiStateBlock: block})
+    // handler takes (deps, trigger, dispatch?); the reschedule handler ignores
+    // the trigger, so a bare CustomEvent satisfies the ActionTrigger union.
+    await reschedule.handler?.({block, uiStateBlock: block}, new CustomEvent('test'))
 
     // Old behavior: workspaceId = activeWorkspaceId ('ws-2'), peekUndo on
     // ws-2's (empty) manager → `if (!top) return` → no toast at all.

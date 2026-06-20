@@ -15,6 +15,20 @@ describe('AES-256-GCM seal/open', () => {
     expect(await open(key, envelope, aad)).toBe('Hello, world 🌍')
   })
 
+  it('round-trips the empty string (blank block content)', async () => {
+    // A blank block's content seals to a payload at exactly the
+    // nonce+tag floor (the empty plaintext adds no ciphertext bytes), so
+    // it sits right on decodeEnvelope's `< floor` boundary. This pins
+    // open(seal('')) === '' so a future off-by-one in the floor check
+    // (e.g. `< floor` → `<= floor`) can't silently quarantine every
+    // empty block on download.
+    const key = await keyFrom(0x01)
+    const aad = contentAad('block-1', 'ws-A', 'content')
+    const envelope = await seal(key, '', aad)
+    expect(envelope.startsWith(ENVELOPE_PREFIX)).toBe(true)
+    expect(await open(key, envelope, aad)).toBe('')
+  })
+
   it('produces a fresh nonce per seal (distinct envelopes for identical input)', async () => {
     const key = await keyFrom(0x01)
     const aad = contentAad('block-1', 'ws-A', 'content')

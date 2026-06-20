@@ -427,11 +427,9 @@ export class TxImpl implements Tx {
       target.parentId !== before.parentId &&
       target.parentId !== id
     ) {
-      const hit = await this.ctx.txDb.getOptional<{hit: number}>(
-        IS_DESCENDANT_OF_SQL,
-        [target.parentId, id],
-      )
-      if (hit !== null) throw new CycleError(id, target.parentId)
+      if (await this.isDescendantOf(target.parentId, id)) {
+        throw new CycleError(id, target.parentId)
+      }
     } else if (target.parentId === id) {
       throw new CycleError(id, id)
     }
@@ -559,6 +557,14 @@ export class TxImpl implements Tx {
     return row === null ? null : parseBlockRow(row)
   }
 
+  async isDescendantOf(id: string, potentialAncestorId: string): Promise<boolean> {
+    const hit = await this.ctx.txDb.getOptional<{hit: number}>(
+      IS_DESCENDANT_OF_SQL,
+      [id, potentialAncestorId],
+    )
+    return hit !== null
+  }
+
   async aliasLookup(alias: string, workspaceId: string): Promise<BlockData | null> {
     // Defensive: both args are required for a meaningful lookup, but a
     // bad caller passing '' would otherwise match a row whose alias
@@ -638,7 +644,14 @@ export class TxImpl implements Tx {
    *
    *  Captures `(currentRow, applied)` into the snapshots map so the
    *  pipeline's commit-walk updates the cache and fires handles for the
-   *  rolled-back row. */
+   *  rolled-back row.
+   *
+   *  Exactness depends on the commit pipeline SKIPPING its same-tx
+   *  processor pass for replay txs (`runTx`'s `isReplay`, threaded from
+   *  `Repo._replay`). `applyRaw`'s write is still a field change in the
+   *  replay tx, so without that gate a value-deriving same-tx processor
+   *  would re-derive and override the restore — leaving the row at a
+   *  derived value, not `target` (#187). */
   async applyRaw(id: string, target: BlockData | null): Promise<void> {
     const beforeRow = await this.ctx.txDb.getOptional<BlockRow>(SELECT_BY_ID_SQL, [id])
     const beforeData = beforeRow === null ? null : parseBlockRow(beforeRow)

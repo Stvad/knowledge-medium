@@ -17,6 +17,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import {
   CORE_BLOCK_MERGED_EVENT,
   ChangeScope,
+  MergeIntoDescendantError,
   ParentDeletedError,
   codecs,
   defineProperty,
@@ -1056,6 +1057,70 @@ describe('core.merge', () => {
     expect(env.read('c')!.parentId).toBe('x')
     expect(env.read('c')!.deleted).toBe(false)
     expect(await env.childIds('x')).toEqual(['c'])
+  })
+
+  it('rejects merging into a descendant with a typed precondition error, not a raw CycleError (#188)', async () => {
+    // ancestor → mid → leaf. Merging the ancestor INTO the leaf would
+    // re-home `mid` (an ancestor of leaf) under leaf and trip the cycle
+    // guard mid-fold. The pre-check turns that into a typed, actionable
+    // MergeIntoDescendantError up front — clean, no partial mutation.
+    await env.repo.tx(
+      tx => tx.create({id: 'p', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await env.repo.mutate.createChild({parentId: 'p', id: 'ancestor', content: 'A'})
+    await env.repo.mutate.createChild({parentId: 'ancestor', id: 'mid', content: 'M'})
+    await env.repo.mutate.createChild({parentId: 'mid', id: 'leaf', content: 'L'})
+
+    await expect(env.repo.mutate.merge({intoId: 'leaf', fromId: 'ancestor'}))
+      .rejects.toBeInstanceOf(MergeIntoDescendantError)
+
+    // Nothing folded or tombstoned — the tx rolled back cleanly.
+    expect(env.read('ancestor')!.deleted).toBe(false)
+    expect(env.read('leaf')!.deleted).toBe(false)
+    expect(env.read('mid')!.parentId).toBe('ancestor')
+    expect(env.read('leaf')!.parentId).toBe('mid')
+  })
+
+  it('rejects merging into a direct child with the typed precondition error (#188)', async () => {
+    // The degenerate descendant case: `into` is a direct child of `from`,
+    // so the fold would try to move `into` under itself. Still caught by
+    // the up-front pre-check rather than the self-move cycle guard.
+    await env.repo.tx(
+      tx => tx.create({id: 'p', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await env.repo.mutate.createChild({parentId: 'p', id: 'parent', content: 'P'})
+    await env.repo.mutate.createChild({parentId: 'parent', id: 'child', content: 'C'})
+
+    await expect(env.repo.mutate.merge({intoId: 'child', fromId: 'parent'}))
+      .rejects.toBeInstanceOf(MergeIntoDescendantError)
+
+    expect(env.read('parent')!.deleted).toBe(false)
+    expect(env.read('child')!.deleted).toBe(false)
+  })
+
+  it('still merges a descendant UP into its ancestor — the legal direction is not over-blocked (#188)', async () => {
+    // Inverse of the rejected case: into=ancestor, from=leaf (a descendant).
+    // `isDescendantOf(into, from)` is false here, so the pre-check must NOT
+    // fire; the fold proceeds and re-homes leaf's own child up under the
+    // ancestor. Guards against an inverted-argument regression in the check.
+    await env.repo.tx(
+      tx => tx.create({id: 'p', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await env.repo.mutate.createChild({parentId: 'p', id: 'ancestor', content: 'A:'})
+    await env.repo.mutate.createChild({parentId: 'ancestor', id: 'mid', content: 'M'})
+    await env.repo.mutate.createChild({parentId: 'mid', id: 'leaf', content: 'L:'})
+    await env.repo.mutate.createChild({parentId: 'leaf', id: 'leafKid', content: 'k'})
+
+    await env.repo.mutate.merge({intoId: 'ancestor', fromId: 'leaf'})
+
+    expect(env.read('leaf')!.deleted).toBe(true)
+    expect(env.read('ancestor')!.content).toBe('A:L:')
+    // leaf's child re-homed under the ancestor, not stranded.
+    expect(env.read('leafKid')!.parentId).toBe('ancestor')
+    expect(env.read('leafKid')!.deleted).toBe(false)
   })
 
   it("re-parents source's children under the target so they aren't stranded", async () => {

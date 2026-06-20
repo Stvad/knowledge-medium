@@ -786,6 +786,42 @@ describe('tx.childrenOf / tx.parentOf', () => {
   })
 })
 
+describe('tx.isDescendantOf', () => {
+  // Pins the boolean wrapper + argument order at the public Tx surface.
+  // tx.move's cycle guard and blockMerge's pre-check both route through
+  // this, so an inverted-argument regression would break two live
+  // guarantees at once; the SQL itself is covered in treeQueries.test.ts.
+  beforeEach(async () => {
+    // gp → p → c
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'd-gp', workspaceId: 'ws-1', parentId: null,   orderKey: 'a0'})
+      await tx.create({id: 'd-p',  workspaceId: 'ws-1', parentId: 'd-gp', orderKey: 'a0'})
+      await tx.create({id: 'd-c',  workspaceId: 'ws-1', parentId: 'd-p',  orderKey: 'a0'})
+      await tx.create({id: 'd-x',  workspaceId: 'ws-1', parentId: null,   orderKey: 'a1'})
+    }, {scope: ChangeScope.BlockDefault})
+  })
+
+  it('is true when the second arg is an ancestor of the first (and false the other way)', async () => {
+    await env.repo.tx(async tx => {
+      expect(await tx.isDescendantOf('d-c', 'd-gp')).toBe(true)
+      // Argument order matters: ancestor-of-descendant is not symmetric.
+      expect(await tx.isDescendantOf('d-gp', 'd-c')).toBe(false)
+    }, {scope: ChangeScope.BlockDefault})
+  })
+
+  it('is false for unrelated blocks', async () => {
+    await env.repo.tx(async tx => {
+      expect(await tx.isDescendantOf('d-c', 'd-x')).toBe(false)
+    }, {scope: ChangeScope.BlockDefault})
+  })
+
+  it('is true on identity (a node is in its own chain)', async () => {
+    await env.repo.tx(async tx => {
+      expect(await tx.isDescendantOf('d-c', 'd-c')).toBe(true)
+    }, {scope: ChangeScope.BlockDefault})
+  })
+})
+
 describe('tx.aliasLookup', () => {
   it('finds a block by exact alias inside the user tx (read-your-own-writes)', async () => {
     await env.repo.tx(async tx => {

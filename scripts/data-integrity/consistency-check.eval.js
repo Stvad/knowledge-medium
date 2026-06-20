@@ -69,6 +69,18 @@ try {
     AND (json_type(je.value,'$.sourceField') IS NULL
          OR typeof(json_extract(je.value,'$.sourceField'))='text')`
 
+  // (0) malformed JSON must be DETECTED, not silently abort the check. `json_each` throws
+  // on invalid JSON, which would crash this whole try and leave the mirror 'skipped' with
+  // report.anomalies untouched. Count bad rows directly, and feed `json_each` a guarded
+  // value below so a single bad row can't throw.
+  const malformedJson = await countOf(
+    `SELECT count(*) AS n FROM blocks
+     WHERE deleted=0 AND ${wsClause('workspace_id')}
+       AND (NOT json_valid(references_json) OR NOT json_valid(properties_json))`,
+    wsParams(),
+  )
+  const refsJson = `CASE WHEN json_valid(b.references_json) THEN b.references_json ELSE '[]' END`
+
   // (a) entries in references_json with no matching block_references row
   const missingRows = await countOf(
     `SELECT count(*) AS n FROM (
@@ -76,7 +88,7 @@ try {
               json_extract(je.value,'$.id') AS target_id,
               json_extract(je.value,'$.alias') AS alias,
               COALESCE(json_extract(je.value,'$.sourceField'),'') AS source_field
-       FROM blocks b, json_each(b.references_json) je
+       FROM blocks b, json_each(${refsJson}) je
        WHERE b.deleted=0 AND ${wsClause('b.workspace_id')} AND ${expandedRefFilter}
      ) exp
      LEFT JOIN block_references br
@@ -92,7 +104,7 @@ try {
      JOIN blocks b ON b.id=br.source_id AND b.deleted=0
      WHERE ${wsClause('br.workspace_id')}
        AND NOT EXISTS (
-         SELECT 1 FROM json_each(b.references_json) je
+         SELECT 1 FROM json_each(${refsJson}) je
          WHERE json_extract(je.value,'$.id')=br.target_id
            AND json_extract(je.value,'$.alias')=br.alias
            AND COALESCE(json_extract(je.value,'$.sourceField'),'')=br.source_field)`,
@@ -118,7 +130,7 @@ try {
               json_extract(je.value,'$.id') AS tid,
               json_extract(je.value,'$.alias') AS al,
               COALESCE(json_extract(je.value,'$.sourceField'),'') AS sf
-       FROM blocks b, json_each(b.references_json) je
+       FROM blocks b, json_each(${refsJson}) je
        WHERE b.deleted=0 AND ${wsClause('b.workspace_id')} AND ${expandedRefFilter}
        GROUP BY b.id, tid, al, sf
        HAVING count(*) > 1
@@ -128,12 +140,13 @@ try {
 
   record(
     'references_index_mirror',
-    missingRows + extraRows + orphanSourceRows + duplicateTuples > 0,
+    missingRows + extraRows + orphanSourceRows + duplicateTuples + malformedJson > 0,
     {
       missingIndexRows: missingRows,
       extraIndexRows: extraRows,
       orphanSourceRows,
       duplicateTuples,
+      malformedJson,
     },
   )
 } catch (e) {
@@ -271,7 +284,11 @@ try {
       }
     }
 
-    record('property_ref_projection', blocksMissing + blocksExtra > 0, {
+    const anomalous = blocksMissing + blocksExtra > 0
+    // A truncated scan only saw part of the workspace, so a clean result is NOT 'ok' —
+    // mark it 'incomplete' (raise candidateCap and re-run) so it can't read as healthy.
+    report.checks.property_ref_projection = {
+      status: anomalous ? 'anomaly' : truncated ? 'incomplete' : 'ok',
       refTypedProps: refNames.length,
       scanned: scanned.length,
       truncated,
@@ -281,7 +298,8 @@ try {
       refsExtra,
       missingSample,
       extraSample,
-    })
+    }
+    if (anomalous) report.anomalies += 1
   }
 } catch (e) {
   skip('property_ref_projection', String(e))

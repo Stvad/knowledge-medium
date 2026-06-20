@@ -1088,6 +1088,7 @@ export class Repo {
   private async _runAndDispatch<R>(
     fn: (tx: Tx) => Promise<R>,
     opts: RepoTxOptions,
+    isReplay = false,
   ) {
     const txT0 = performance.now()
     let result
@@ -1107,6 +1108,10 @@ export class Repo {
         processors: this.processors,
         sameTxProcessors: this.sameTxProcessors,
         propertySchemas: this._propertySchemas,
+        // Undo/redo replays skip the same-tx processor pass so a
+        // value-deriving processor can't override `applyRaw`'s exact
+        // restore (#187). Post-commit processors still dispatch below.
+        isReplay,
       })
     } catch (err) {
       const collision = parseAliasCollisionError(err)
@@ -1186,7 +1191,7 @@ export class Repo {
       for (const [id, snap] of entry.snapshots) {
         await txImpl.applyRaw(id, snap[direction])
       }
-    }, {scope: entry.scope, description})
+    }, {scope: entry.scope, description}, true)
   }
 
   /** Dynamic dispatch — used by runtime-loaded plugins where the

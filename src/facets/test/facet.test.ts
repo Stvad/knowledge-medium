@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { defineFacet, resolveFacetRuntime, resolveFacetRuntimeSync } from '@/facets/facet.js'
+import { dedupById, defineFacet, resolveFacetRuntime, resolveFacetRuntimeSync } from '@/facets/facet.js'
 
 describe('facet runtime', () => {
   it('combines nested and async contributions in precedence order', async () => {
@@ -74,6 +74,141 @@ describe('facet runtime', () => {
       expect(runtime.read(numbersFacet)).toBe(5)
     } finally {
       error.mockRestore()
+    }
+  })
+})
+
+// `dedupById` is the combine for id-bearing list facets (app/panel/header
+// mounts). It collapses logical duplicates the resolver's reference dedup
+// can't catch — fresh contributions, same `id` — to a single last-wins
+// survivor (#64). Covered directly here so the mount facets in core.ts
+// don't each re-test the same machinery.
+describe('dedupById combine', () => {
+  interface Mount { id: string; label: string }
+  const mounts = defineFacet<Mount, readonly Mount[]>({
+    id: 'test.id-dedup',
+    combine: dedupById('test.id-dedup'),
+    empty: () => [],
+  })
+
+  it('collapses distinct contributions sharing an id to one (last-wins), preserving first-seen order', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const runtime = resolveFacetRuntimeSync([
+        mounts.of({id: 'a', label: 'first'}),
+        mounts.of({id: 'b', label: 'only-b'}),
+        mounts.of({id: 'a', label: 'second'}),
+      ])
+
+      // Single `a`, value from the later contribution, still positioned
+      // where `a` first appeared (override updates in place).
+      expect(runtime.read(mounts)).toEqual([
+        {id: 'a', label: 'second'},
+        {id: 'b', label: 'only-b'},
+      ])
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(warn.mock.calls[0]?.[0]).toContain('test.id-dedup')
+      expect(warn.mock.calls[0]?.[0]).toContain('"a"')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('resolves a same-id tie by precedence (higher precedence wins) regardless of registration order', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const runtime = resolveFacetRuntimeSync([
+        mounts.of({id: 'a', label: 'high'}, {precedence: 10}),
+        mounts.of({id: 'a', label: 'low'}, {precedence: 0}),
+      ])
+
+      // read() sorts ascending by precedence before combine, so the
+      // higher-precedence contribution lands last and wins last-wins.
+      expect(runtime.read(mounts)).toEqual([{id: 'a', label: 'high'}])
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('leaves a single contribution per id unchanged and does not warn', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const runtime = resolveFacetRuntimeSync([
+        mounts.of({id: 'a', label: 'a'}),
+        mounts.of({id: 'b', label: 'b'}),
+      ])
+
+      expect(runtime.read(mounts)).toEqual([
+        {id: 'a', label: 'a'},
+        {id: 'b', label: 'b'},
+      ])
+      expect(warn).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('dedups on a composite key when one is supplied, keeping entries that differ outside the id', () => {
+    // Mirrors the `headerItemsFacet` region scoping: the consumer keys
+    // each region separately, so the same id in two regions must survive.
+    interface RegionItem { id: string; region: 'start' | 'end' }
+    const items = defineFacet<RegionItem, readonly RegionItem[]>({
+      id: 'test.composite-dedup',
+      combine: dedupById('test.composite-dedup', i => `${i.region}:${i.id}`),
+      empty: () => [],
+    })
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const runtime = resolveFacetRuntimeSync([
+        items.of({id: 'a', region: 'start'}),
+        items.of({id: 'a', region: 'end'}),   // same id, other region — kept
+        items.of({id: 'a', region: 'start'}), // same (region, id) — collapsed
+      ])
+
+      expect(runtime.read(items)).toEqual([
+        {id: 'a', region: 'start'},
+        {id: 'a', region: 'end'},
+      ])
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(warn.mock.calls[0]?.[0]).toContain('start:a')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('breaks an equal-precedence same-id tie by registration order (later wins)', () => {
+    // Only different-precedence wins were covered above; this pins the
+    // documented "register after to replace" tie-break at EQUAL precedence,
+    // which relies on the stable precedence sort in read() + last-wins.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const runtime = resolveFacetRuntimeSync([
+        mounts.of({id: 'a', label: 'first'}, {precedence: 5}),
+        mounts.of({id: 'a', label: 'second'}, {precedence: 5}),
+      ])
+
+      expect(runtime.read(mounts)).toEqual([{id: 'a', label: 'second'}])
+      expect(warn).toHaveBeenCalledTimes(1)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('dedups a runtime contribution against a static same-id one (runtime wins, last-wins)', () => {
+    // The combine runs in read() over static + runtime buckets, and
+    // collectContributions appends runtime after static — so the runtime
+    // entry is last in the combine input and wins. This is the live-effect
+    // override path (keybindings/theme/schemas push runtime contributions).
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const runtime = resolveFacetRuntimeSync([mounts.of({id: 'a', label: 'static'})])
+      runtime.setRuntimeContributions(mounts, 'effect', [{id: 'a', label: 'runtime'}])
+
+      expect(runtime.read(mounts)).toEqual([{id: 'a', label: 'runtime'}])
+      expect(warn).toHaveBeenCalledTimes(1)
+    } finally {
+      warn.mockRestore()
     }
   })
 })

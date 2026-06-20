@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { bytesToBase64Url } from './base64url.js'
 import {
   ENVELOPE_PREFIX,
   GCM_TAG_BYTES,
@@ -9,6 +10,10 @@ import {
 } from './envelope.js'
 
 const filled = (len: number, value: number) => new Uint8Array(len).fill(value)
+
+/** Envelope whose decoded payload is exactly `payloadLen` bytes. */
+const envelopeWithPayloadLen = (payloadLen: number) =>
+  ENVELOPE_PREFIX + bytesToBase64Url(filled(payloadLen, 0))
 
 describe('enc:v1: envelope', () => {
   it('round-trips nonce and ciphertext', () => {
@@ -33,6 +38,24 @@ describe('enc:v1: envelope', () => {
   it('rejects a payload too short to hold a nonce and tag', () => {
     const tooShort = encodeEnvelope(filled(NONCE_BYTES, 0), filled(GCM_TAG_BYTES - 1, 0))
     expect(() => decodeEnvelope(tooShort)).toThrow(/too short/)
+  })
+
+  it('pins the nonce+tag floor: rejects every payload below it, accepts it exactly', () => {
+    // The floor is the smallest legal payload: a nonce plus a bare GCM tag
+    // (what the empty plaintext seals to). Walk every truncated length in
+    // [0, floor) and assert rejection, then assert the floor itself decodes.
+    // This brackets the `< floor` check so a future `<= floor` regression —
+    // which would quarantine every empty block on download — fails here.
+    const floor = NONCE_BYTES + GCM_TAG_BYTES
+    for (let payloadLen = 0; payloadLen < floor; payloadLen++) {
+      expect(
+        () => decodeEnvelope(envelopeWithPayloadLen(payloadLen)),
+        `payload of ${payloadLen} bytes must be rejected`,
+      ).toThrow(/too short/)
+    }
+    const decoded = decodeEnvelope(envelopeWithPayloadLen(floor))
+    expect(decoded.nonce.length).toBe(NONCE_BYTES)
+    expect(decoded.ciphertext.length).toBe(GCM_TAG_BYTES)
   })
 
   it('hasEnvelopePrefix is a pure prefix check, not a decode', () => {
