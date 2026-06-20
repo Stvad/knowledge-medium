@@ -384,7 +384,7 @@
         for replay/pagination. The naive choice — a <code>BIGSERIAL</code> read order — is
         <em>unsafe as a tail cursor</em>: serial values are allocated <em>before</em> the inserting
         transaction commits, so under concurrent appends a higher seq can become visible before a
-        lower one commits, and a reader tailing <code>server_seq &gt; cursor</code> advances past the
+        lower one commits, and a reader tailing <code>commit_seq &gt; cursor</code> advances past the
         gap and never sees the late-committing lower seq (the classic CDC visibility gap). So the
         frontier must be <strong>commit-ordered</strong>: a commit timestamp
         (<code>track_commit_timestamp</code>), a logical-replication LSN, or appends serialized through
@@ -448,7 +448,7 @@
       Two server tables, not synced down (read via RPC like <code>blocks_history</code> — syncing every
       event to every device would balloon buckets). <code>command_events_log</code> carries one row per
       command; <code>row_events_log</code> one per edit, linked by <code>tx_id</code>. The server adds
-      its own <code>server_seq</code> on insert.
+      its own commit-ordered <code>commit_seq</code> (not a pre-commit serial — see §6).
     </p>
     <pre><code>command_events_log (
   install_id   text not null,  -- per-install nonce, regenerated on wipe (NOT a durable device id)
