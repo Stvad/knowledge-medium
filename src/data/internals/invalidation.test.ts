@@ -194,6 +194,36 @@ describe('snapshotsToChangeNotification', () => {
     expect(Array.from(note.plugin?.get('test.channel') ?? []).sort()).toEqual(['a', 'b'])
   })
 
+  it('isolates a throwing rule: kernel deps and sibling rules still contribute (#191)', () => {
+    // A plugin rule that throws must not abort the whole pass. In the sync
+    // observer this loop runs before the drain's watermark DELETE, so an
+    // un-isolated throw would skip both the watermark advance and the handle
+    // notification, permanently stranding the UI on a since-equal stamp. The
+    // throw is swallowed (logged) so the kernel rowIds and other rules survive.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const throwing: InvalidationRule = {
+      id: 'test.throwing-rule',
+      collectFromSnapshots: () => { throw new Error('boom') },
+    }
+    const sibling: InvalidationRule = {
+      id: 'test.sibling-rule',
+      collectFromSnapshots: (snapshots, emit) => {
+        for (const id of snapshots.keys()) emit('sibling.channel', id)
+      },
+    }
+    const map = new Map<string, ChangeSnapshot>([
+      ['a', {before: null, after: {parentId: null, workspaceId: 'w'}}],
+    ])
+
+    const note = snapshotsToChangeNotification(map, [throwing, sibling])
+    // Kernel notification unaffected by the throw.
+    expect(Array.from(note.rowIds!)).toEqual(['a'])
+    // The sibling rule (registered after the thrower) still ran.
+    expect(Array.from(note.plugin?.get('sibling.channel') ?? [])).toEqual(['a'])
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
   it('plugin invalidations stay undefined when no rule emits', () => {
     const rule: InvalidationRule = {
       id: 'test.noop-rule',

@@ -64,7 +64,20 @@ export const collectPluginInvalidationsFromSnapshots = (
   if (rules.length === 0 || snapshots.size === 0) return undefined
   const out: MutablePluginInvalidationMap = new Map()
   const emit = createPluginInvalidationEmitter(out)
-  for (const rule of rules) rule.collectFromSnapshots?.(snapshots, emit)
+  // Isolate each plugin rule. `InvalidationRule` is a live extension point, and
+  // this loop runs inside the sync observer's drain window BEFORE its watermark
+  // DELETE. A throw from one rule must not abort the pass: it would skip the
+  // watermark advance and the handle invalidation, and on retry the disk gate
+  // skip-stales the now-equal stamp, so the handle never re-fires — a
+  // permanently-stale UI (issue #191). Swallow + log so the kernel rowIds /
+  // parentIds notification and the other rules still go through.
+  for (const rule of rules) {
+    try {
+      rule.collectFromSnapshots?.(snapshots, emit)
+    } catch (err) {
+      console.warn(`[invalidation] rule "${rule.id}" threw; skipping its contribution`, err)
+    }
+  }
   return out.size > 0 ? out : undefined
 }
 

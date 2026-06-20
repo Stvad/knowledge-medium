@@ -14,6 +14,7 @@ import type { GetMaterializability, Materializability } from './materialize.js'
 import { encodeForWire, type GetCek } from '@/sync/transform.js'
 import { generateWorkspaceKeyBytes, importWorkspaceKey } from '@/sync/crypto/workspaceKey.js'
 import type { ChangeNotification } from '@/data/internals/handleStore'
+import type { InvalidationRule } from '@/data/invalidation'
 import type { BlockData, CycleDetectedEvent } from '@/data/api'
 
 const data = (o: Partial<BlockData> = {}): BlockData => ({
@@ -80,6 +81,7 @@ const start = (opts: {
   onCycleDetected?: (e: CycleDetectedEvent) => void
   drainChunkSize?: number
   onError?: (err: unknown) => void
+  getInvalidationRules?: () => readonly InvalidationRule[]
 }): Harness => {
   const cache = new BlockCache()
   const notifications: ChangeNotification[] = []
@@ -95,6 +97,7 @@ const start = (opts: {
     throttleMs: 5,
     drainChunkSize: opts.drainChunkSize,
     onError: opts.onError,
+    getInvalidationRules: opts.getInvalidationRules,
   })
   observers.push(observer)
   return { observer, cache, notifications }
@@ -321,6 +324,42 @@ describe('blocksSyncedObserver — robustness', () => {
     // materialize unit level.)
     expect(await blocks()).toEqual([{ id: 'good', content: 'readable' }])
     expect(await queueLen()).toBe(0)
+  })
+
+  it('isolates a throwing plugin invalidation rule: watermark still advances and the handle still invalidates (#191)', async () => {
+    // A plugin InvalidationRule is a live extension point. Before #191's fix, a
+    // throw from one rule propagated out of snapshotsToChangeNotification →
+    // applySyncInvalidation, aborting the drain AFTER the committed materialize
+    // but BEFORE its watermark DELETE: the row stayed queued, and on retry the
+    // disk gate skip-staled the now-equal stamp so handleStore.invalidate never
+    // re-fired — a permanently-stale UI. Per-rule isolation now lets the kernel
+    // notification AND the watermark DELETE both run.
+    let throwsLeft = 1
+    const flakyRule: InvalidationRule = {
+      id: 'test.flaky-rule',
+      collectFromSnapshots: () => {
+        if (throwsLeft > 0) { throwsLeft -= 1; throw new Error('rule boom') }
+      },
+    }
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await put(data({ content: 'fresh' }))
+    const { observer, cache, notifications } = start({
+      getMaterializability: constMat('copy'),
+      getInvalidationRules: () => [flakyRule],
+    })
+
+    await observer.flush()
+    warn.mockRestore()
+
+    // The throw didn't abort the watermark DELETE: the row materialized and the
+    // queue fully drained — no retry-on-equal-stamp that would lose the notify.
+    expect(await blocks()).toEqual([{ id: 'b1', content: 'fresh' }])
+    expect(await queueLen()).toBe(0)
+    expect(cache.getSnapshot('b1')).toMatchObject({ content: 'fresh' })
+    // The kernel notification still reached the handle store despite the throw —
+    // the handle for b1 is invalidated, not permanently stale.
+    expect(notifications).toHaveLength(1)
+    expect([...(notifications[0]!.rowIds ?? [])]).toEqual(['b1'])
   })
 
   it('drains a backlog larger than the chunk size across bounded windows', async () => {
