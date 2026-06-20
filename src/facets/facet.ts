@@ -132,15 +132,24 @@ export function keyedMapFacet<Input>(
  *  resolver's identity dedup (`seen` set in `walkAppExtension`) never
  *  fires. Two code paths contributing the same logical `id` would then
  *  BOTH render — two components, two `addEventListener`s, one dispatch
- *  handled twice (the #64 double-mount trap). This collapses duplicate
- *  `id`s to a single survivor while keeping the output a `readonly
- *  Input[]` — use `keyedMapFacet` instead when the consumer wants a
- *  `ReadonlyMap`.
+ *  handled twice (the #64 double-mount trap). This collapses duplicates
+ *  to a single survivor while keeping the output a `readonly Input[]` —
+ *  use `keyedMapFacet` instead when the consumer wants a `ReadonlyMap`.
+ *
+ *  `keyOf` defaults to the logical `id`, which is right when the consumer
+ *  renders the whole output as one keyed list. Pass a composite key when
+ *  the consumer FIRST partitions the list and keys each partition
+ *  separately — e.g. `headerItemsFacet` splits into `start`/`end` regions
+ *  with React keys scoped inside each region (`Header.tsx`), so its dedup
+ *  key is `${region}:${id}`: same id in two different regions is NOT a
+ *  collision and both must survive. The key must mirror the consumer's
+ *  render-key scope, or this either over-collapses (drops a legit entry)
+ *  or under-collapses (lets a real double-render through).
  *
  *  Tie-break — LAST-WINS, precedence-ordered. `FacetRuntime.read` sorts
  *  contributions ascending by `precedence` (default 0, then registration
  *  order) before calling `combine`, so when two survive with the same
- *  `id` the later one — higher precedence, or later registration at equal
+ *  key the later one — higher precedence, or later registration at equal
  *  precedence — replaces the earlier. This matches the repo-wide §6
  *  registry convention (`keyedMapFacet`, the effects reconciler in
  *  `liveRuntime.ts`) whose documented override idiom is "register after
@@ -149,28 +158,32 @@ export function keyedMapFacet<Input>(
  *  override updates in place rather than moving to the end), so dedup
  *  never reshuffles render order.
  *
- *  A same-`id` collision is a misconfiguration even when the tie-break is
+ *  A same-key collision is a misconfiguration even when the tie-break is
  *  "fine" (it's what made bundling the reschedule-picker mount unsafe in
- *  #63/#64), so each displacement logs a warning naming the facet + id.
+ *  #63/#64), so each displacement logs a warning naming the facet + key.
  *
  *  NOT appropriate for `actionsFacet` (keyed by `context:id` downstream —
  *  the same id legitimately appears in multiple contexts) or
  *  `appEffectsFacet` (the liveRuntime reconciler already dedups it by id,
  *  because it owns the effect start/stop lifecycle). */
 export const dedupById =
-  <Input extends {id: string}>(facetId: string) =>
+  <Input extends {id: string}>(
+    facetId: string,
+    keyOf: (value: Input) => string = value => value.id,
+  ) =>
     (values: readonly Input[]): readonly Input[] => {
-      const byId = new Map<string, Input>()
+      const byKey = new Map<string, Input>()
       for (const value of values) {
-        if (byId.has(value.id)) {
+        const key = keyOf(value)
+        if (byKey.has(key)) {
           console.warn(
-            `[${facetId}] duplicate contribution for id "${value.id}"; ` +
+            `[${facetId}] duplicate contribution for key "${key}"; ` +
               'collapsed to a single entry (last-wins per facet convention)',
           )
         }
-        byId.set(value.id, value)
+        byKey.set(key, value)
       }
-      return [...byId.values()]
+      return [...byKey.values()]
     }
 
 /** Per-facet identifier for a runtime contribution bucket. Each

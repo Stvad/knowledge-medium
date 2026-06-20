@@ -258,11 +258,15 @@ export const isHeaderItemContribution = (value: unknown): value is HeaderItemCon
   isHeaderItemRegion(value.region) &&
   typeof value.component === 'function'
 
-// Header items render once per contribution keyed by `id` (see Header.tsx)
-// — dedup by id (last-wins) so a logical duplicate can't render twice.
+// Header items are split into `start`/`end` regions and each region is
+// rendered as its own list keyed by `id` (see Header.tsx), so the real
+// render-key scope is `(region, id)` — dedup on that, NOT plain `id`.
+// Plain-id dedup would wrongly collapse a `start` and an `end` item that
+// share a logical id (dropping one) even though there's no key collision;
+// region-scoped dedup still catches a genuine same-region double-render.
 export const headerItemsFacet = defineFacet<HeaderItemContribution, readonly HeaderItemContribution[]>({
   id: 'core.header-items',
-  combine: dedupById('core.header-items'),
+  combine: dedupById('core.header-items', item => `${item.region}:${item.id}`),
   validate: isHeaderItemContribution,
 })
 

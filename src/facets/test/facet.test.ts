@@ -147,6 +147,35 @@ describe('dedupById combine', () => {
       warn.mockRestore()
     }
   })
+
+  it('dedups on a composite key when one is supplied, keeping entries that differ outside the id', () => {
+    // Mirrors the `headerItemsFacet` region scoping: the consumer keys
+    // each region separately, so the same id in two regions must survive.
+    interface RegionItem { id: string; region: 'start' | 'end' }
+    const items = defineFacet<RegionItem, readonly RegionItem[]>({
+      id: 'test.composite-dedup',
+      combine: dedupById('test.composite-dedup', i => `${i.region}:${i.id}`),
+      empty: () => [],
+    })
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const runtime = resolveFacetRuntimeSync([
+        items.of({id: 'a', region: 'start'}),
+        items.of({id: 'a', region: 'end'}),   // same id, other region — kept
+        items.of({id: 'a', region: 'start'}), // same (region, id) — collapsed
+      ])
+
+      expect(runtime.read(items)).toEqual([
+        {id: 'a', region: 'start'},
+        {id: 'a', region: 'end'},
+      ])
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(warn.mock.calls[0]?.[0]).toContain('start:a')
+    } finally {
+      warn.mockRestore()
+    }
+  })
 })
 
 // The runtime-mutation path (setRuntimeContributions + onFacetChange) backs
