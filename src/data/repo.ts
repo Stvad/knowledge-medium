@@ -955,8 +955,13 @@ export class Repo {
 
   /** Undo manager for a specific workspace, lazily created. `repo.tx`
    *  records into the tx's pinned workspace's manager so history follows
-   *  the workspace, not the (possibly since-changed) active pin. */
-  private undoManagerFor(workspaceId: string): UndoManager {
+   *  the workspace, not the (possibly since-changed) active pin. Public
+   *  for the rare caller that must address a *known* workspace regardless
+   *  of which is currently active — e.g. the SRS reschedule toast, which
+   *  captures the rescheduled block's workspace so a workspace switch
+   *  during the reschedule's await can't rebind the toast to the wrong
+   *  stack. Most callers want `undoManager` (the active one). */
+  undoManagerFor(workspaceId: string): UndoManager {
     let manager = this.undoManagers.get(workspaceId)
     if (!manager) {
       manager = new UndoManager()

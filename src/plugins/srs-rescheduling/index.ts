@@ -399,18 +399,19 @@ const runRescheduleWithFeedback = async (
 ): Promise<void> => {
   const result = await rescheduleBlock(block, signal)
   if (!result) return
-  // JS is single-threaded; the entry recorded by the just-completed tx
-  // is guaranteed to be the active workspace's BlockDefault top right now,
-  // so peekUndo gives us the txId to gate the toast's Undo button on. We
-  // also capture the reschedule's workspace: undo is per-workspace (issue
-  // #186), so the toast must track it — `repo.undo()` only reverts the
-  // reschedule while that workspace is active and it's still its top. The
-  // reschedule wrote `block`, so its workspace is the active one. If a
-  // later tx pushes onto the stack, the toast subscribes via UndoManager
-  // and disables itself rather than reverting the wrong action.
-  const workspaceId = block.repo.activeWorkspaceId
-  if (workspaceId === null) return
-  const top = block.repo.undoManager.peekUndo(ChangeScope.BlockDefault)
+  // Capture the reschedule's OWN workspace + entry, NOT the active ones.
+  // `rescheduleBlock` awaited, so the user may have switched workspaces in
+  // the meantime — reading `activeWorkspaceId` / the active undo manager
+  // here would bind the toast to a different workspace's top entry, and
+  // clicking Undo could then revert an unrelated action (issue #186; PR
+  // review). The reschedule wrote `block`, whose workspace is immutable,
+  // and `rescheduleBlock` just resolved with no further await — so that
+  // workspace's manager top is reliably the reschedule entry. The toast
+  // subscribes via UndoManager and disables itself once a later tx lands
+  // or the user leaves this workspace.
+  const workspaceId = block.peek()?.workspaceId
+  if (!workspaceId) return
+  const top = block.repo.undoManagerFor(workspaceId).peekUndo(ChangeScope.BlockDefault)
   if (!top) return
   const message = formatRescheduleToastMessage(result)
   showCustom(id => createElement(RescheduleToast, {
