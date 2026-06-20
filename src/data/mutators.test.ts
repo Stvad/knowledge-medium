@@ -1097,6 +1097,29 @@ describe('core.merge', () => {
     expect(env.read('child')!.deleted).toBe(false)
   })
 
+  it('still merges a descendant UP into its ancestor — the legal direction is not over-blocked (#188)', async () => {
+    // Inverse of the rejected case: into=ancestor, from=leaf (a descendant).
+    // `isDescendantOf(into, from)` is false here, so the pre-check must NOT
+    // fire; the fold proceeds and re-homes leaf's own child up under the
+    // ancestor. Guards against an inverted-argument regression in the check.
+    await env.repo.tx(
+      tx => tx.create({id: 'p', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await env.repo.mutate.createChild({parentId: 'p', id: 'ancestor', content: 'A:'})
+    await env.repo.mutate.createChild({parentId: 'ancestor', id: 'mid', content: 'M'})
+    await env.repo.mutate.createChild({parentId: 'mid', id: 'leaf', content: 'L:'})
+    await env.repo.mutate.createChild({parentId: 'leaf', id: 'leafKid', content: 'k'})
+
+    await env.repo.mutate.merge({intoId: 'ancestor', fromId: 'leaf'})
+
+    expect(env.read('leaf')!.deleted).toBe(true)
+    expect(env.read('ancestor')!.content).toBe('A:L:')
+    // leaf's child re-homed under the ancestor, not stranded.
+    expect(env.read('leafKid')!.parentId).toBe('ancestor')
+    expect(env.read('leafKid')!.deleted).toBe(false)
+  })
+
   it("re-parents source's children under the target so they aren't stranded", async () => {
     await env.repo.tx(
       tx => tx.create({id: 'p', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
