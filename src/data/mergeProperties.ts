@@ -1,3 +1,5 @@
+import { stableJsonValue } from './internals/jsonCanonical'
+
 /**
  * Merge two encoded property bags into one. Used by `core.merge` to fold
  * the source block's properties into the target.
@@ -11,8 +13,8 @@
  * Rules per key:
  *   1. Key in only one side  → take that value.
  *   2. Both arrays           → concat with target order first, then
- *                              source-only entries (canonical-keyed dedupe:
- *                              key-order-insensitive, value-distinguishing).
+ *                              source-only entries (dedupe keyed by the
+ *                              persisted-JSON form: key-order-insensitive).
  *   3. Both deep-equal       → keep target's value.
  *   4. Otherwise (collision) → target wins.
  *
@@ -44,7 +46,7 @@ const unionArrays = (into: unknown[], from: unknown[]): unknown[] => {
   const seen = new Set<string>()
   const out: unknown[] = []
   for (const item of [...into, ...from]) {
-    const key = canonicalKey(item)
+    const key = dedupeKey(item)
     if (seen.has(key)) continue
     seen.add(key)
     out.push(item)
@@ -52,42 +54,17 @@ const unionArrays = (into: unknown[], from: unknown[]): unknown[] => {
   return out
 }
 
-const isPlainObject = (value: unknown): value is Record<string, unknown> =>
-  Object.prototype.toString.call(value) === '[object Object]'
-
 /**
- * Stable, value-distinguishing string key for list dedupe.
+ * Dedupe key for a list item, aligned with how the merged result is persisted.
  *
- * `JSON.stringify` is unsuitable here on two counts: it is key-order-sensitive
- * (`{id,alias}` vs `{alias,id}` produce different strings for an equal object)
- * and value-lossy (`NaN`, `null`, and `undefined` all collapse to `"null"`,
- * conflating distinct values). This walker sorts object keys and type-tags
- * every leaf so equal values share a key and distinct values never collide —
- * strings are JSON-quoted so structural delimiters inside them can't be
- * confused with the encoding's own.
+ * Merged properties are stored via `JSON.stringify`, so the equivalence that
+ * matters is the persisted-JSON one: object key order is irrelevant and
+ * `NaN`/`undefined` collapse to `null`. `stableJsonValue` sorts object keys
+ * (fixing the key-order-sensitivity that left reordered-equal objects as
+ * duplicates), and wrapping the item in an array before `JSON.stringify`
+ * normalizes `NaN`/`undefined` array elements to `null` exactly as the real
+ * `properties_json` serialization does — so we never keep two items the
+ * storage layer would persist as identical.
  */
-const canonicalKey = (value: unknown): string => {
-  if (value === null) return 'null'
-  if (value === undefined) return 'undef'
-  if (Array.isArray(value)) return `[${value.map(canonicalKey).join(',')}]`
-  if (isPlainObject(value)) {
-    const body = Object.keys(value)
-      .sort()
-      .map((k) => `${JSON.stringify(k)}:${canonicalKey(value[k])}`)
-      .join(',')
-    return `{${body}}`
-  }
-  switch (typeof value) {
-    case 'string':
-      return `s:${JSON.stringify(value)}`
-    case 'number':
-      return Number.isNaN(value) ? 'n:NaN' : `n:${value}`
-    case 'boolean':
-      return `b:${value}`
-    case 'bigint':
-      return `B:${value}`
-    default:
-      // Functions/symbols shouldn't appear in encoded props; tag defensively.
-      return `x:${String(value)}`
-  }
-}
+const dedupeKey = (item: unknown): string =>
+  JSON.stringify(stableJsonValue([item]))

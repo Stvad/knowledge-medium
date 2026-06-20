@@ -81,7 +81,9 @@ describe('mergeProperties', () => {
       expect(mergeProperties({xs: []}, {xs: []})).toEqual({xs: []})
     })
 
-    // #196: dedupe key must be key-order-insensitive and value-distinguishing.
+    // #196: the dedupe key is the persisted-JSON form, so it must be
+    // key-order-insensitive (the real bug) and consistent with how the merged
+    // result is stored (JSON.stringify collapses NaN/undefined to null).
     it('dedupes reordered-equal objects regardless of key order', () => {
       // {id, alias} vs {alias, id} encode the same value; keep one.
       expect(
@@ -89,12 +91,14 @@ describe('mergeProperties', () => {
       ).toHaveLength(1)
     })
 
-    it('keeps NaN and null distinct (both stringify to "null")', () => {
-      expect(mergeProperties({xs: [NaN]}, {xs: [null]}).xs).toHaveLength(2)
+    it('collapses NaN and null (both persist as null), avoiding a stored dup', () => {
+      // JSON.stringify serializes NaN and null alike, so keeping both here
+      // would persist [null, null]; dedupe to one to match storage.
+      expect(mergeProperties({xs: [NaN]}, {xs: [null]}).xs).toHaveLength(1)
     })
 
-    it('keeps nested undefined and null distinct (both stringify to "[null]")', () => {
-      expect(mergeProperties({xs: [[undefined]]}, {xs: [[null]]}).xs).toHaveLength(2)
+    it('collapses nested undefined and null (both persist as [null])', () => {
+      expect(mergeProperties({xs: [[undefined]]}, {xs: [[null]]}).xs).toHaveLength(1)
     })
   })
 
