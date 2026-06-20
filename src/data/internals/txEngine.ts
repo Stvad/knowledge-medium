@@ -68,6 +68,7 @@ import {
 import { recordWrite, type SnapshotsMap, peekSnapshot } from './txSnapshots'
 import { IS_DESCENDANT_OF_SQL } from './treeQueries'
 import { SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL } from './kernelQueries'
+import { jsonValuesEqual } from './jsonCanonical'
 import type { BlockCache } from '@/data/blockCache'
 
 /** Minimal subset of `@powersync/common`'s `LockContext` we actually use.
@@ -79,22 +80,6 @@ export interface TxDb {
   getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
   get<T>(sql: string, params?: unknown[]): Promise<T>
 }
-
-const isPlainObject = (value: unknown): value is Record<string, unknown> =>
-  Object.prototype.toString.call(value) === '[object Object]'
-
-const stableJsonValue = (value: unknown): unknown => {
-  if (Array.isArray(value)) return value.map(stableJsonValue)
-  if (!isPlainObject(value)) return value
-  const out: Record<string, unknown> = {}
-  for (const key of Object.keys(value).sort()) {
-    out[key] = stableJsonValue(value[key])
-  }
-  return out
-}
-
-const jsonValuesEqual = (a: unknown, b: unknown): boolean =>
-  JSON.stringify(stableJsonValue(a)) === JSON.stringify(stableJsonValue(b))
 
 const updatePatchChangesBlock = (before: BlockData, patch: BlockDataPatch): boolean => {
   if (patch.content !== undefined && patch.content !== before.content) return true

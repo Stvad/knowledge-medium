@@ -80,6 +80,39 @@ describe('mergeProperties', () => {
       expect(mergeProperties({xs: ['a']}, {xs: []})).toEqual({xs: ['a']})
       expect(mergeProperties({xs: []}, {xs: []})).toEqual({xs: []})
     })
+
+    // #196: the dedupe key is the persisted-JSON form, so it must be
+    // key-order-insensitive (the real bug) and consistent with how the merged
+    // result is stored (JSON.stringify collapses NaN/undefined to null).
+    it('dedupes reordered-equal objects regardless of key order', () => {
+      // {id, alias} vs {alias, id} encode the same value; keep one.
+      expect(
+        mergeProperties({refs: [{id: 'x', alias: 'A'}]}, {refs: [{alias: 'A', id: 'x'}]}).refs,
+      ).toHaveLength(1)
+    })
+
+    it('aligns dedupe with the persisted-JSON form (no stored duplicates)', () => {
+      // The merged array is persisted via JSON.stringify, so the contract is
+      // that the *stored* form carries no duplicate the dedupe should have
+      // collapsed. Assert on the round-tripped value, not just in-memory length.
+      const objs = mergeProperties({refs: [{id: 'x', alias: 'A'}]}, {refs: [{alias: 'A', id: 'x'}]})
+      expect(JSON.parse(JSON.stringify(objs.refs))).toEqual([{id: 'x', alias: 'A'}])
+
+      // NaN/undefined serialize as null, so collapsing them is deliberate:
+      // distinguishing them would persist [null, null] / [[null], [null]].
+      expect(JSON.parse(JSON.stringify(mergeProperties({xs: [NaN]}, {xs: [null]}).xs))).toEqual([null])
+      expect(JSON.parse(JSON.stringify(mergeProperties({xs: [[undefined]]}, {xs: [[null]]}).xs)))
+        .toEqual([[null]])
+    })
+
+    it('keeps items that differ only in an own __proto__ key', () => {
+      // JSON.parse materializes __proto__ as a real own key that JSON.stringify
+      // persists, so these two items are genuinely distinct and must not
+      // collapse (regression guard for the canonical-key __proto__ handling).
+      const a = JSON.parse('{"__proto__": {"t": "dark"}, "id": "p"}')
+      const b = JSON.parse('{"id": "p", "__proto__": {"t": "light"}}')
+      expect(mergeProperties({opts: [a]}, {opts: [b]}).opts).toHaveLength(2)
+    })
   })
 
   it('does not mutate input bags', () => {
