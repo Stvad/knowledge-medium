@@ -30,6 +30,18 @@ describe('workspace key', () => {
     expect(parseWorkspaceKey(formatted.toUpperCase())).toEqual(bytes)
   })
 
+  it('tolerates internal whitespace/newlines on paste (#192)', () => {
+    const bytes = generateWorkspaceKeyBytes()
+    const formatted = formatWorkspaceKey(bytes)
+    const payload = formatted.slice(WK_PREFIX.length)
+    // Line-wrapped paste: payload split across lines.
+    const wrapped = `${WK_PREFIX}${payload.slice(0, 26)}\n${payload.slice(26)}`
+    expect(parseWorkspaceKey(wrapped)).toEqual(bytes)
+    // Retyped-from-paper: a space between every character (prefix included).
+    const spaced = formatted.split('').join(' ')
+    expect(parseWorkspaceKey(`\t${spaced}\n`)).toEqual(bytes)
+  })
+
   it('rejects a string without the prefix', () => {
     expect(() => parseWorkspaceKey('AAAA')).toThrow(/prefix/)
   })
