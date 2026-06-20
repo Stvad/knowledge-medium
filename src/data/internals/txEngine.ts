@@ -427,11 +427,9 @@ export class TxImpl implements Tx {
       target.parentId !== before.parentId &&
       target.parentId !== id
     ) {
-      const hit = await this.ctx.txDb.getOptional<{hit: number}>(
-        IS_DESCENDANT_OF_SQL,
-        [target.parentId, id],
-      )
-      if (hit !== null) throw new CycleError(id, target.parentId)
+      if (await this.isDescendantOf(target.parentId, id)) {
+        throw new CycleError(id, target.parentId)
+      }
     } else if (target.parentId === id) {
       throw new CycleError(id, id)
     }
@@ -557,6 +555,14 @@ export class TxImpl implements Tx {
   async parentOf(childId: string): Promise<BlockData | null> {
     const row = await this.ctx.txDb.getOptional<BlockRow>(SELECT_PARENT_SQL, [childId])
     return row === null ? null : parseBlockRow(row)
+  }
+
+  async isDescendantOf(id: string, potentialAncestorId: string): Promise<boolean> {
+    const hit = await this.ctx.txDb.getOptional<{hit: number}>(
+      IS_DESCENDANT_OF_SQL,
+      [id, potentialAncestorId],
+    )
+    return hit !== null
   }
 
   async aliasLookup(alias: string, workspaceId: string): Promise<BlockData | null> {

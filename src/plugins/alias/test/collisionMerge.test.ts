@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { ChangeScope, type BlockData } from '@/data/api'
+import { ChangeScope, MergeIntoDescendantError, type BlockData } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
@@ -90,6 +90,36 @@ describe('alias.mergeCollision', () => {
     expect(env.read('source')!.deleted).toBe(true)
     expect(env.read('target')!.content).toBe('Existing')
     expect(env.read('target')!.properties[aliasesProp.name]).toEqual(['Existing', 'Other'])
+  })
+
+  it('rejects merging into a descendant with the typed precondition error (#188)', async () => {
+    // Reproduces the stuck "Merge into…" flow: renaming an aliased
+    // ancestor page onto a descendant page's alias offers a merge with
+    // the descendant as target. That direction can never succeed, so the
+    // mutator must surface MergeIntoDescendantError (which the toast turns
+    // into an actionable message) rather than a raw CycleError.
+    await createBlock('ancestor', 'Ancestor', ['Ancestor'], 'a0')
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'descendant',
+        workspaceId: WS,
+        parentId: 'ancestor',
+        orderKey: 'a0',
+        content: 'Descendant',
+        properties: aliasProperty(['Descendant']),
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    await expect(env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
+      intoId: 'descendant',
+      fromId: 'ancestor',
+      collisionAlias: 'Descendant',
+    })).rejects.toBeInstanceOf(MergeIntoDescendantError)
+
+    expect(env.read('ancestor')!.deleted).toBe(false)
+    expect(env.read('descendant')!.deleted).toBe(false)
+    expect(env.read('descendant')!.parentId).toBe('ancestor')
   })
 
   it('keeps all source aliases for direct alias collisions when no rename alias is supplied', async () => {
