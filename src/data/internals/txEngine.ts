@@ -638,7 +638,14 @@ export class TxImpl implements Tx {
    *
    *  Captures `(currentRow, applied)` into the snapshots map so the
    *  pipeline's commit-walk updates the cache and fires handles for the
-   *  rolled-back row. */
+   *  rolled-back row.
+   *
+   *  Exactness depends on the commit pipeline SKIPPING its same-tx
+   *  processor pass for replay txs (`runTx`'s `isReplay`, threaded from
+   *  `Repo._replay`). `applyRaw`'s write is still a field change in the
+   *  replay tx, so without that gate a value-deriving same-tx processor
+   *  would re-derive and override the restore — leaving the row at a
+   *  derived value, not `target` (#187). */
   async applyRaw(id: string, target: BlockData | null): Promise<void> {
     const beforeRow = await this.ctx.txDb.getOptional<BlockRow>(SELECT_BY_ID_SQL, [id])
     const beforeData = beforeRow === null ? null : parseBlockRow(beforeRow)
