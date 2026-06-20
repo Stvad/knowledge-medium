@@ -195,6 +195,14 @@ export interface Tx {
    *  exist. Reads SQL via the writeTransaction. */
   parentOf(childId: string): Promise<BlockData | null>
 
+  /** True when `potentialAncestorId` is an ancestor of `id` (i.e. `id` is
+   *  a descendant of `potentialAncestorId`). Walks `parent_id` up from `id`
+   *  via the same bounded CTE (`IS_DESCENDANT_OF_SQL`) that backs
+   *  `tx.move`'s cycle guard, so — like that guard — it does NOT filter
+   *  soft-deleted nodes: a tombstone on the ancestor chain is still a real
+   *  structural edge (#183). `id === potentialAncestorId` returns true. */
+  isDescendantOf(id: string, potentialAncestorId: string): Promise<boolean>
+
   /** Look up the live block in `workspaceId` whose `aliases` property
    *  contains the exact `alias` text. Returns null when no such block
    *  exists. Tx-aware version of the kernel `core.aliasLookup` query;
