@@ -60,6 +60,9 @@ const setup = async (): Promise<Harness> => {
     // no follow-up txs run. Plugin-processor integration lives in the
     // backlinks plugin processor tests.
   })
+  // Undo/redo are scoped to the active workspace (issue #186); the
+  // seeded blocks live in ws-1.
+  repo.setActiveWorkspaceId('ws-1')
   return {
     h,
     cache,

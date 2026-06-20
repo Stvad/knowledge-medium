@@ -49,6 +49,16 @@ import {
   setSrsClipboard,
 } from '../srsClipboard.ts'
 
+// Intercept the reschedule feedback toast so we can assert which workspace
+// it's bound to. Only `runRescheduleWithFeedback` calls `showCustom`, and no
+// other test in this file invokes that path, so overriding it (while keeping
+// the rest of the toast module real) is side-effect-free here.
+const { showCustomMock } = vi.hoisted(() => ({ showCustomMock: vi.fn() }))
+vi.mock('@/utils/toast.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/utils/toast.js')>()),
+  showCustom: showCustomMock,
+}))
+
 describe('srsReschedulingPlugin', () => {
   let sharedDb: TestDb
 
@@ -312,7 +322,64 @@ describe('srsReschedulingPlugin', () => {
     setSrsClipboard({sourceBlockId: 'srs-block', sourceWorkspaceId: 'ws-1'})
     expect(paste.canDispatch?.({block: plainBlock, uiStateBlock: plainBlock})).toBe(true)
     expect(paste.canDispatch?.({block: srsBlock, uiStateBlock: srsBlock})).toBe(false)
+
+    // Cross-workspace gate (issue #186): the clipboard is a module
+    // singleton that survives an in-place workspace switch, but SRS state
+    // can't move across workspaces (moveSrsState's tx would hit the
+    // single-workspace invariant). A clipboard whose source is in another
+    // workspace must NOT arm paste on a target here.
+    setSrsClipboard({sourceBlockId: 'srs-block', sourceWorkspaceId: 'ws-other'})
+    expect(paste.canDispatch?.({block: plainBlock, uiStateBlock: plainBlock})).toBe(false)
     clearSrsClipboard()
+  })
+
+  it('binds the reschedule toast to the block\'s workspace, not the active one (#186)', async () => {
+    // The reschedule writes to `block` (ws-1), pinning its undo entry to
+    // ws-1's manager — regardless of which workspace is active. The toast
+    // must capture the reschedule's OWN workspace + entry, NOT the active
+    // workspace: pre-fix it read `activeWorkspaceId` / the active manager
+    // after the `rescheduleBlock` await, so a workspace switch in that
+    // window bound the toast (and its Undo) to an unrelated workspace.
+    showCustomMock.mockClear()
+    let txSeq = 0
+    const repo = new Repo({
+      db: sharedDb.db,
+      cache: new BlockCache(),
+      user: {id: 'user-1'},
+      newTxSeq: () => ++txSeq,
+      startSyncObserver: false,
+    })
+    const runtime = resolveFacetRuntimeSync([
+      kernelDataExtension,
+      dailyNotesDataExtension,
+      srsReschedulingPlugin,
+    ])
+    repo.setFacetRuntime(runtime)
+
+    await repo.tx(async tx => {
+      await tx.create({id: 'card', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'Card'})
+    }, {scope: ChangeScope.BlockDefault, description: 'seed card'})
+    const block = repo.block('card')
+    await block.load()
+
+    // User is viewing a DIFFERENT workspace than the block's when cmd-Z'd.
+    repo.setActiveWorkspaceId('ws-2')
+
+    const reschedule = getEffectiveActions(runtime).find(it => it.id === 'srs.reschedule.good')!
+    // handler takes (deps, trigger, dispatch?); the reschedule handler ignores
+    // the trigger, so a bare CustomEvent satisfies the ActionTrigger union.
+    await reschedule.handler?.({block, uiStateBlock: block}, new CustomEvent('test'))
+
+    // Old behavior: workspaceId = activeWorkspaceId ('ws-2'), peekUndo on
+    // ws-2's (empty) manager → `if (!top) return` → no toast at all.
+    expect(showCustomMock).toHaveBeenCalledTimes(1)
+    const element = showCustomMock.mock.calls[0][0]('toast-id') as { props: { workspaceId: string; txId: string } }
+    expect(element.props.workspaceId).toBe('ws-1')
+    const top = repo.undoManagerFor('ws-1').peekUndo(ChangeScope.BlockDefault)
+    expect(top).not.toBeNull()
+    expect(element.props.txId).toBe(top?.txId)
+    // The active (ws-2) manager has nothing — the toast did not bind to it.
+    expect(repo.undoManagerFor('ws-2').peekUndo(ChangeScope.BlockDefault)).toBeNull()
   })
 
   it('decorates the swipe-right block action to archive SRS blocks', async () => {
