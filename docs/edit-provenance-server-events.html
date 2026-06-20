@@ -197,15 +197,14 @@
     <h1>Edit Provenance on the Server</h1>
     <p class="meta">Status: proposal / discussion artifact — not yet committed to. No code in this PR.</p>
     <p class="lede">
-      Edit provenance — <em>why</em> a block changed, via what command — lives only on the
-      client today. This proposes shipping it to the server as an append-only, per-commit
-      <strong>event log</strong> (the existing <code>command_events</code> + <code>row_events</code>
-      tables), additive to the current block-state upload, so that other devices and (for plaintext
-      workspaces) the server can read the granular history of how a graph came to be —
-      without weakening the upload path that the 300K-row Roam import was tuned for. The log is a
-      <strong>best-effort overlay, not a complete record</strong>: it covers only txs originated,
-      post-feature, by still-live and un-trimmed devices (§8 spells out the holes). The complete,
-      server-guaranteed history stays <code>blocks_history</code> (§7).
+      Edit provenance — <em>why</em> a block changed, via what command — lives only on the client
+      today. The question is how to get it off-device. This doc frames that as <strong>one
+      decision</strong> (does the server sequence the log, or not?) with three coherent answers, and
+      recommends <strong>server-as-log</strong>: ship every event through a cheap append path, let
+      the server assign the order, and keep the collapsed block-state upload exactly as is. That
+      reconciles canonical event sourcing with the upload performance the 300K-row Roam import was
+      tuned for — and dissolves the cluster of problems an earlier "client uploads its own ordered
+      log" sketch kept generating.
     </p>
 
     <div class="toc">
@@ -213,12 +212,15 @@
       <ol>
         <li><a href="#problem">The problem</a></li>
         <li><a href="#today">What exists today</a></li>
-        <li><a href="#options">Options considered</a></li>
-        <li><a href="#batching">Batching is not collapsing</a></li>
-        <li><a href="#proposal">Proposal: upload the event log</a></li>
-        <li><a href="#schema">Shape sketch</a></li>
+        <li><a href="#crux">The crux: a sequencer orders only what it receives</a></li>
+        <li><a href="#transport">Batching ≠ collapsing — the transport-cost split</a></li>
+        <li><a href="#models">Three coherent models</a></li>
+        <li><a href="#proposal">Recommended: server-as-log, full human fidelity</a></li>
+        <li><a href="#compaction">Fidelity vs. volume: run-compaction by class</a></li>
+        <li><a href="#priorart">How the field solves these</a></li>
+        <li><a href="#stalegate">Lessons from the stale-gate saga</a></li>
         <li><a href="#history">Relationship to <code>blocks_history</code></a></li>
-        <li><a href="#costs">Costs &amp; open questions</a></li>
+        <li><a href="#costs">Residual costs &amp; open questions</a></li>
         <li><a href="#rejected">Rejected / deferred alternatives</a></li>
         <li><a href="#scope">What this PR is (and isn't)</a></li>
       </ol>
@@ -230,523 +232,485 @@
       somehow. We only know things on the client, but they do not know things on the server."</em>
     </p>
     <p>
-      Concretely: when a block changes, the client knows the <em>command</em> behind it — a
-      <code>roam import</code>, a <code>migrate roam:location ref</code> machine op, a genuine
-      content edit, a <code>move</code>, an <code>undo:*</code>. The server knows none of this. It
-      sees only the resulting block row. The Roam timestamp backfill made the gap concrete: to tell
-      a genuine user edit from a machine op it had to run a <code>row_events ⋈ command_events</code>
-      join against a <em>client replica</em>, because the server simply had no provenance to query
-      (see <code>scripts/roam-ts-backfill/README.md</code>).
+      When a block changes, the client knows the <em>command</em> behind it — a <code>roam import</code>,
+      a <code>migrate roam:location ref</code> machine op, a genuine content edit, a <code>move</code>,
+      an <code>undo:*</code>. The server knows none of it; it sees only the resulting block row. The
+      Roam timestamp backfill made the gap concrete: to tell a genuine user edit from a machine op it
+      had to join <code>row_events ⋈ command_events</code> against a <em>client replica</em>, because
+      the server had no provenance to query (<code>scripts/roam-ts-backfill/README.md</code>).
     </p>
     <p>
-      We want fairly <strong>granular</strong> provenance available off-device: durable against
-      device loss, visible to other devices, and (where the workspace is not encrypted) queryable
-      server-side.
+      Goal: fairly <strong>granular</strong> provenance available off-device — durable against device
+      loss, visible to other devices, and (where the workspace is not encrypted) queryable
+      server-side. We do <em>not</em> want to lose machine-edit fidelity wholesale; machine edits are
+      edits.
     </p>
 
     <h2 id="today">2. What exists today</h2>
-    <p>
-      The client already has an event-sourcing substrate. Two local-only SQLite tables
-      (<code>src/data/internals/clientSchema.ts</code>):
-    </p>
     <ul>
       <li>
-        <code>command_events</code> — <strong>one row per <code>repo.tx</code></strong> (the
-        "command"): <code>tx_id</code>, <code>scope</code>, <code>description</code>,
-        <code>mutator_calls</code>, <code>user_id</code>, <code>workspace_id</code>,
-        <code>source</code> (uniformly <code>'user'</code> for commands), <code>created_at</code>.
-        Written at commit time in <code>commitPipeline.ts</code>. Covers
-        local <code>repo.tx</code> only — sync-applied writes never go through <code>repo.tx</code>.
+        <code>command_events</code> (client-only) — <strong>one row per <code>repo.tx</code></strong>:
+        <code>tx_id</code>, <code>scope</code>, <code>description</code>, <code>mutator_calls</code>,
+        <code>user_id</code>, <code>workspace_id</code> (nullable — NULL on zero-write txs),
+        <code>source</code> (uniformly <code>'user'</code>), <code>created_at</code>. Local
+        <code>repo.tx</code> only — sync-applied writes never go through <code>repo.tx</code>.
       </li>
       <li>
-        <code>row_events</code> — <strong>N rows per command</strong>, one per block change, each
-        with full <code>before_json</code> / <code>after_json</code> and the same <code>tx_id</code>.
-        Fires for both local and sync-applied writes; the <code>source</code> column
-        (<code>'user'</code> vs <code>'sync'</code>) distinguishes them.
+        <code>row_events</code> (client-only) — <strong>N rows per command</strong>, one per block
+        change, with full <code>before_json</code> / <code>after_json</code> and the same
+        <code>tx_id</code>. Fires for both local and sync-applied writes; <code>source</code>
+        (<code>'user'</code> vs <code>'sync'</code>) distinguishes them, and sync-applied rows carry
+        <code>tx_id = NULL</code>.
+      </li>
+      <li>
+        <code>blocks_history</code> (server, migration <code>20260522062437</code>) — a Postgres
+        AFTER-trigger log of every block write that lands, at sync-checkpoint resolution, with
+        <code>semantic_op</code> + <code>changed_columns</code> + <code>actor</code> + before/after
+        diffs, but <strong>no command-level provenance</strong>.
       </li>
     </ul>
     <p>
-      <code>command_events (1) ⋈ row_events (N)</code> on <code>tx_id</code> <em>is</em> the
-      "one command responsible for a series of block edits, each edit with its own diff" model. It
-      already exists — it just never leaves the device.
-    </p>
-    <p>
-      On the server side there is <code>public.blocks_history</code> (migration
-      <code>20260522062437</code>): a Postgres AFTER-trigger log of every block write that lands,
-      at sync-checkpoint resolution, with <code>semantic_op</code> + <code>changed_columns</code> +
-      <code>actor</code> + before/after diffs — but <strong>no command-level provenance</strong>
-      (no description, scope, or mutators). §7 covers how the two relate.
+      <code>command_events (1) ⋈ row_events (N)</code> on <code>tx_id</code> is already the
+      "one command, a series of block edits, each edit with its own diff" model — an event-sourcing
+      substrate that simply never leaves the device.
     </p>
 
-    <h2 id="options">3. Options considered</h2>
-    <p>The discussion walked through three families before landing on the event log:</p>
-    <ul>
-      <li>
-        <strong>A — Stamp a coarse classification on the block row</strong> (e.g.
-        <code>last_edit_kind</code> enum: user / import / migration / processor). Cheap, E2EE-safe,
-        rides the existing blocks upload, lands in <code>blocks_history</code> for free. But
-        <em>lossy</em>: latest-per-row only, no description, no per-edit detail. Retires the
-        backfill's classifier debt but throws away the granularity we said we wanted.
-      </li>
-      <li>
-        <strong>B — Stamp a minimal command-event blob on the block row</strong> (encrypted JSON:
-        reason, scope, tx id). Richer than A and still rides the blocks upload, but it forces an
-        awkward fit: <em>one command maps to many block edits</em>, so attaching a single diff to a
-        command — or duplicating the same command blob across every block it touched — is the wrong
-        shape. Still latest-per-row.
-      </li>
-      <li>
-        <strong>C — Upload the event log (this proposal).</strong> Ship <code>command_events</code>
-        and <code>row_events</code> as append-only logs, linked by <code>tx_id</code>. Native
-        1-command→N-edits structure; each edit keeps its own diff on its own <code>row_event</code>;
-        nothing is collapsed.
-      </li>
-    </ul>
-
-    <h2 id="batching">4. Batching is not collapsing</h2>
+    <h2 id="crux">3. The crux: a sequencer orders only what it receives</h2>
     <p>
-      A key clarification that unlocks the proposal. The current upload path
-      (<code>compactBlockCrudEntries</code> + <code>apply_block_patches</code> in
-      <code>src/services/powersync.ts</code>) does two <em>independent</em> things that are easy to
-      conflate:
+      Canonical event sourcing leans on a <strong>sequencer</strong> — a single authority that assigns
+      each event a global order and identity (Kafka offsets, EventStoreDB's <code>$all</code>,
+      Replicache's server-assigned version). That is the property that makes ordering, identity, and
+      idempotency easy.
+    </p>
+    <p>
+      A first sketch of this doc had the <em>client</em> own the order: upload <code>command_events</code>
+      + <code>row_events</code> keyed by a client-assigned <code>(install_id, seq)</code>, with the
+      server as dumb storage. That shape generated a long tail of problems — colliding ids across
+      resets, no sortable order, wrong cross-install replay, clock-skew inversions, append/authz/atomicity
+      gaps. Every one traces to a single mistake: <strong>asking N peer clients to jointly own a global
+      log without a sequencer.</strong> That's the "incoherent middle" — it takes on the peer model's
+      hard problems (identity, ordering, completeness) <em>and</em> the server model's (atomicity,
+      authz) at once, and solves neither the canonical way.
+    </p>
+    <p>
+      The honest objection to "just make the server the sequencer" is: <strong>the server can only
+      order what it receives, and we deliberately collapse writes before upload</strong> (built for the
+      300K-import performance). If the client merges 50 edits into one block PATCH, the server never
+      sees the other 49 to sequence them. §4 shows why that objection is narrower than it looks.
+    </p>
+
+    <h2 id="transport">4. Batching ≠ collapsing — the transport-cost split</h2>
+    <p>
+      Two independent things the current upload path
+      (<code>compactBlockCrudEntries</code> + <code>apply_block_patches</code>,
+      <code>src/services/powersync.ts</code>) does together:
     </p>
     <table>
       <tr><th>Step</th><th>What it does</th><th>Property</th></tr>
+      <tr><td><strong>Batching</strong></td><td>Many ops in one round trip (the RPC takes an array)</td><td>Performance — <strong>lossless</strong></td></tr>
+      <tr><td><strong>Collapsing</strong></td><td>Merge 50 edits to one row into one PATCH</td><td>Discards intermediate edits — <strong>lossy</strong></td></tr>
+    </table>
+    <p>
+      Collapsing was built for <strong>upload throughput</strong> (the import was slow), and its cost
+      target is <em>block-table op-count and per-row <code>UPDATE</code> amplification</em>. Critically,
+      "we don't ship every change" is a property of the <strong>block-state transport</strong>, not a
+      law about events:
+    </p>
+    <ul>
+      <li>
+        <strong>Block state is expensive un-collapsed</strong> — each version = a server
+        <code>UPDATE</code> (row rewrite, index churn, history-trigger fire). Keep collapsing it;
+        the live row only needs its final value.
+      </li>
+      <li>
+        <strong>Events are cheap in full</strong> — each = an immutable <code>INSERT</code>. A bulk
+        append of N rows is one statement: no row rewrite, no hot-row contention, batchable into a
+        few round trips. The amplification collapse protects against <em>isn't incurred by appends.</em>
+      </li>
+    </ul>
+    <div class="decision">
+      <strong>So you can ship every change — just not as block <code>UPDATE</code>s.</strong> Send the
+      full event stream via the cheap append path and let the <em>server</em> assign the order on
+      receipt. Now the server genuinely is the sequencer for the fine-grained stream (canonical
+      ordering/identity/atomicity return), <em>and</em> the import stays fast because block state is
+      still collapsed. The two streams diverge exactly where their costs diverge. The only residual
+      cost is <strong>storage/volume</strong>, not latency — addressed in §7.
+    </div>
+
+    <h2 id="models">5. Three coherent models</h2>
+    <p>
+      The design space has three internally-consistent points. The decision reduces to: <em>do you want
+      fine-grained provenance server-side, and will you pay storage for it?</em>
+    </p>
+    <table>
+      <tr><th>Model</th><th>Who sequences</th><th>Solves cheaply</th><th>Gives up</th></tr>
       <tr>
-        <td><strong>Batching</strong></td>
-        <td>Many operations in one network round trip (the RPC takes an array)</td>
-        <td>Pure performance win — <strong>lossless</strong></td>
+        <td><strong>A. Server-as-log</strong> (recommended)</td>
+        <td>Server, on receipt</td>
+        <td>Ordering, identity, idempotency, atomicity, authz</td>
+        <td>Storage cost; needs the append/demux path built</td>
       </tr>
       <tr>
-        <td><strong>Collapsing</strong></td>
-        <td>Merge 50 edits to one row into one PATCH</td>
-        <td>Discards intermediate edits — <strong>lossy</strong></td>
+        <td><strong>B. Server-captured checkpoints</strong></td>
+        <td>Server, but only sees collapsed state</td>
+        <td>Everything in A <em>plus</em> zero new transport — stamp a descriptor on the block PATCH; <code>blocks_history</code> records it</td>
+        <td>Per-commit fidelity (checkpoint-grain only — the lossy option)</td>
+      </tr>
+      <tr>
+        <td><strong>C. Peer CRDT</strong></td>
+        <td>No one — logical clocks (HLC/Lamport) at edit time</td>
+        <td>Offline-first, no central authority</td>
+        <td>Server-queryability + complete server history; needs full CRDT machinery (a big philosophical shift from today's LWW)</td>
       </tr>
     </table>
     <p>
-      Collapsing was built for <strong>upload throughput</strong> (the 300K-row Roam import was
-      slow), not to suppress server-side write/history amplification. Crucially, batching does not
-      <em>depend</em> on collapsing: <code>apply_block_patches</code> already loops an array
-      server-side, so 50 distinct edits can ship in roughly the <em>same number of round trips</em>
-      as one collapsed edit.
-    </p>
-    <p>What un-collapsing the <em>blocks</em> upload would cost is not round trips, but server writes:</p>
-    <ul>
-      <li>~50× the payload bytes (one round trip, bigger body),</li>
-      <li>50 <code>UPDATE</code>s on the hot <code>blocks</code> row instead of 1 — each rewriting
-      the row, churning indexes, and firing the <code>blocks_history</code> trigger,</li>
-      <li>under E2EE, 50 separate encryptions.</li>
-    </ul>
-    <div class="decision">
-      <strong>Insight.</strong> Replaying 50 <code>UPDATE</code>s on the live row is the wasteful
-      part — the live row only ever needs its <em>final</em> state. The performant way to keep all
-      50 edits is <strong>appends, not updates</strong>: collapse the block <em>state</em> to one
-      converged <code>UPDATE</code>, and append the 50 edits as immutable rows in one bulk
-      <code>INSERT</code>. Appends don't rewrite a hot row or churn its indexes, and batch into a
-      single statement. The event log <em>is</em> "performant without collapsing."
-    </div>
-
-    <h2 id="proposal">5. Proposal: upload the event log</h2>
-    <p>
-      Upload <code>command_events</code> and the <strong>locally-originated</strong>
-      <code>row_events</code> as encrypted, append-only logs, linked by <code>tx_id</code>,
-      <strong>additive</strong> to the existing block-state upload. Each stream then does the job it
-      is cheap at:
-    </p>
-    <ul>
-      <li>
-        <strong>Block state</strong> — keep collapsing + down-sync exactly as today. One converged
-        PATCH per row; <code>blocks</code> stays the fast, LWW state-of-the-world. Collapse goes
-        back to doing <em>only</em> the throughput job it was built for.
-      </li>
-      <li>
-        <strong>Event log</strong> — uncollapsed, append-batched. N event rows in one multi-row
-        <code>INSERT</code>; append-only means no per-id merge, no ordering hazard, idempotent retry
-        on the primary key. Granular by construction.
-      </li>
-    </ul>
-    <p>
-      This is event sourcing in the honest sense: events are the record; <code>blocks</code> is a
-      materialized projection of them (which it already is on the client — the sync observer
-      materializes <code>blocks</code> from the stream).
+      The earlier sketch was none of these — it was A's transport with the client (not server)
+      sequencing. This doc recommends <strong>A</strong>: our stack already runs server-authoritative
+      Postgres (PowerSync) + a server-trigger log (<code>blocks_history</code>), so A is a small step;
+      C is a large one. B is the fallback if "just enough to classify edits" turns out to be the real
+      requirement.
     </p>
 
-    <h3>Two rules that make it correct</h3>
+    <h2 id="proposal">6. Recommended: server-as-log, full human fidelity</h2>
+    <p>
+      Ship every event through a cheap, append-only path, <strong>additive</strong> to the existing
+      collapsed block-state upload. Each stream does the job it is cheap at: block state collapses for
+      fast convergent state; events append for lossless granular history. The defining properties:
+    </p>
     <ol>
       <li>
-        <strong>Upload only locally-originated <code>row_events</code></strong>
-        (<code>source ≠ 'sync'</code> / <code>tx_id IS NOT NULL</code>). <code>row_events</code> logs
-        both local and sync-applied writes; without this filter every client would re-upload every
-        edit it <em>received</em> via sync, and the server would double-count. The filter partitions
-        ownership: each client uploads exactly its own commands + edits. <strong>The union across
-        devices is <em>not</em> a complete history</strong>, though — only sync-applied rows are
-        excluded, and a tx's events exist on exactly one device (the originator). Members who joined
-        after the fact, pre-feature history, and trimmed/wiped originators all leave permanent holes;
-        see §8.
+        <strong>The server sequences.</strong> On receipt the server assigns a monotonic global
+        position (its <code>BIGSERIAL</code> / receive order) — the authoritative order for
+        replay/pagination. The client's <code>(install_id, seq)</code> is carried only for
+        <em>idempotent dedup</em> (<code>INSERT … ON CONFLICT DO NOTHING</code>), never as the global
+        order. This is the line between "client log dumped into a table" and server-as-log.
       </li>
       <li>
-        <strong>Encrypt the content-bearing fields; keep identifiers clear.</strong>
-        <code>before_json</code> / <code>after_json</code> and <code>description</code> /
-        <code>mutator_calls</code> carry workspace content (page names, property values), so on E2EE
-        workspaces they ship as <code>enc:v1:</code> ciphertext. But the routing/RLS identifiers —
-        <code>client_id</code>, <code>tx_id</code>, <code>block_id</code>, <code>workspace_id</code>,
-        <code>kind</code>, timestamps — <strong>must stay plaintext</strong>: RLS filters on a clear
-        <code>workspace_id</code> (mirroring <code>blocks_history</code>), so sealing the whole row
-        would make the read policy match zero rows. Note <code>workspace_id</code> then lives both in
-        the clear top-level column and inside the (encrypted) <code>*_json</code> blob, which embeds
-        the full row — acceptable (it's an identifier, not content), but it must be called out.
-        Consequence: on E2EE workspaces the server stores the content <em>opaquely</em> — only
-        devices can read it (device-loss recovery, cross-device history). On plaintext workspaces the
-        server can read and query it directly (e.g. re-run the backfill classifier server-side, never
-        against a client replica again).
-        <br><strong>Open:</strong> the existing <code>enc:v1:</code> primitive is <em>per-column</em>
-        AEAD with AAD bound to <code>(blockId, workspaceId, columnName)</code> — it has no shape for
-        a single serialized event blob (and a hard-delete event references a <code>block_id</code>
-        whose block is gone). The blob AAD must be defined fresh; it cannot reuse the block-column
-        scheme.
+        <strong>Ordering primitive: monotonic, not wall-clock.</strong> <code>seq</code> (the client
+        <code>row_events.id</code>) totally orders one install's events — so per-install replay is
+        exact, including repeated writes to one block in a tx. Across installs there is no ground-truth
+        total order (see §8); stamp each event with the codebase's existing <strong>monotonic edit
+        stamp</strong> (the <code>updated_at</code> / <code>user_updated_at</code> clamp — §9) for a
+        clock-skew-resistant causal-ish order, server position for dedup/cursor, and accept that
+        genuinely concurrent cross-device edits are concurrent.
+      </li>
+      <li>
+        <strong>Upload only locally-originated events</strong> (<code>source ≠ 'sync'</code> /
+        <code>tx_id IS NOT NULL</code>). Otherwise every client re-uploads edits it merely
+        <em>received</em> via sync and the server double-counts. Each client owns exactly its own
+        events; the union is the server log.
+      </li>
+      <li>
+        <strong>Atomicity: append after block success.</strong> Events ride a separate route from the
+        block apply, so gate the event append on the corresponding block upload succeeding for that tx
+        (or a combined boundary). Then the only possible divergence is "block landed, events missing"
+        — a gap <code>blocks_history</code> still covers — never a false record of a change that never
+        landed.
+      </li>
+      <li>
+        <strong>Authorization at the append endpoint.</strong> The append RPC runs
+        <code>SECURITY DEFINER</code> (the table is default-deny, like <code>blocks_history</code>) and
+        must verify, per appended row, that <code>auth.uid()</code> is a <strong>writer</strong> of
+        that row's <code>workspace_id</code> via <code>private.is_workspace_writer</code> (owner/editor)
+        — <em>not</em> <code>is_workspace_member</code>, which would let a read-only viewer append
+        forged provenance. <code>set search_path = ''</code> + schema-qualified names, matching the
+        existing definer functions.
+      </li>
+      <li>
+        <strong>Encrypt content, keep identifiers clear.</strong> <code>before_json</code> /
+        <code>after_json</code> / <code>description</code> / <code>mutator_calls</code> carry workspace
+        content, so on E2EE workspaces they ship as <code>enc:v1:</code>. Routing/RLS identifiers
+        (<code>install_id</code>, <code>seq</code>, <code>tx_id</code>, <code>block_id</code>,
+        <code>workspace_id</code>, <code>kind</code>, stamps) stay plaintext — RLS filters on a clear
+        <code>workspace_id</code>. Note the existing <code>enc:v1:</code> primitive is <em>per-column</em>
+        AEAD with AAD bound to <code>(blockId, workspaceId, columnName)</code>; an opaque event blob
+        needs its AAD defined fresh (it cannot reuse that binding, and a hard-delete event references a
+        <code>block_id</code> whose block is gone).
       </li>
     </ol>
 
-    <h2 id="schema">6. Shape sketch</h2>
+    <h3>Shape sketch (illustrative)</h3>
     <p>
-      Two server tables mirroring the client tables, keyed for idempotent cross-client append. Not
-      synced down via PowerSync (like <code>blocks_history</code>, read via RPC) — syncing every
-      event to every device would balloon buckets for no benefit. Illustrative, not final:
+      Two server tables, not synced down (read via RPC like <code>blocks_history</code> — syncing every
+      event to every device would balloon buckets). <code>command_events_log</code> carries one row per
+      command; <code>row_events_log</code> one per edit, linked by <code>tx_id</code>. The server adds
+      its own <code>server_seq</code> on insert.
     </p>
-    <pre><code>-- one row per command
-command_events_log (
-  client_id     text,        -- durable per-device id — MUST be minted/persisted (see warn)
-  tx_id         text,        -- command id (text form, as on the client)
-  workspace_id  text,        -- nullable: zero-write/no-op txs pin no workspace (see note)
-  user_id       text not null,
-  scope         text not null,
-  description    text,        -- enc:v1: on e2ee workspaces
-  mutator_calls  text,        -- enc:v1: on e2ee workspaces
-  created_at    bigint not null,
-  primary key (client_id, tx_id)
+    <pre><code>command_events_log (
+  install_id   text not null,  -- per-install nonce, regenerated on wipe (NOT a durable device id)
+  tx_id        text not null,
+  workspace_id text,           -- nullable: zero-write/no-op txs pin no workspace
+  user_id      text not null,
+  scope        text not null,
+  description   text,          -- enc:v1: on e2ee workspaces
+  mutator_calls text,          -- enc:v1: on e2ee workspaces
+  edit_stamp   bigint,         -- monotonic client stamp (see §9), for cross-install ordering
+  server_seq   bigserial,      -- server-assigned global order (the sequencer)
+  primary key (install_id, tx_id)
 )
 
--- N rows per command, one per block edit
 row_events_log (
-  client_id     text,
-  install_id    text not null,  -- per-install nonce; with seq forms the reset-proof event id
-  seq           bigint not null,-- the client row_events.id: per-install append order (sortable)
-  tx_id         text not null,   -- links to command_events_log
-  block_id      text not null,
-  workspace_id  text not null,
-  kind          text not null,   -- create | update | soft-delete | delete
-  before_json   text,            -- enc:v1: on e2ee workspaces
-  after_json    text,            -- enc:v1: on e2ee workspaces
-  created_at    bigint not null,
-  primary key (client_id, install_id, seq)
+  install_id   text not null,  -- with seq, the reset-proof idempotency key
+  seq          bigint not null,-- client row_events.id: exact per-install append order (sortable)
+  tx_id        text not null,  -- links to command_events_log
+  block_id     text not null,
+  workspace_id text not null,
+  kind         text not null,  -- create | update | soft-delete | delete
+  before_json  text,           -- enc:v1: on e2ee workspaces
+  after_json   text,           -- enc:v1: on e2ee workspaces
+  edit_stamp   bigint,         -- monotonic client stamp (§9)
+  server_seq   bigserial,      -- server-assigned global order
+  primary key (install_id, seq)
 )
 
--- BOTH tables (public schema): default-deny RLS + revoke, per the repo rule.
--- A CREATE TABLE in public is world-CRUD via the anon key until locked down.
-alter table … enable row level security;       -- no policy = default-deny writes
+-- public schema: default-deny RLS + revoke (repo rule); writes only via the
+-- SECURITY DEFINER append RPC, which checks private.is_workspace_writer per row.
+alter table … enable row level security;
 revoke all on … from anon, authenticated;
-grant select on … to authenticated;            -- reads still gated by the policy below
+grant select on … to authenticated;
 create policy …_read on … for select
   using (private.is_workspace_member(workspace_id, (auth.uid())::text));</code></pre>
     <p>
-      Re-upload after a retry is a no-op (<code>INSERT … ON CONFLICT DO NOTHING</code>) — events are
-      immutable, so there is never an update to reconcile. RLS mirrors <code>blocks_history</code>:
-      read iff <em>current</em> workspace member (a removed member loses read access to history they
-      authored — same as <code>blocks_history</code>; provenance is gated on membership, not
-      authorship); writes only via the upload path.
+      <strong>Identity is reset-proof by construction:</strong> <code>install_id</code> is a per-install
+      UUID nonce regenerated on every wipe/reinstall (a fresh DB restarts the
+      <code>row_events.id</code> autoincrement at 1, so the id alone is not stable). Post-wipe events
+      carry a new <code>install_id</code>, so they can never collide with already-uploaded ids — no
+      silent <code>ON CONFLICT</code> drop. <code>install_id</code> is a per-<em>install</em> dedup
+      nonce; a durable per-<em>device</em> identity, if ever wanted for "originating device" grouping,
+      is a separate concern and is not required here.
     </p>
-    <div class="warn">
-      <strong>The append RPC needs an explicit definer-with-checks contract.</strong> The grants
-      above give no INSERT to <code>authenticated</code> and there is no write policy (by design).
-      So a <code>SECURITY INVOKER</code> append function would be unable to insert at all — every
-      event upload rejected. The fix is <code>SECURITY DEFINER</code> (as
-      <code>create_workspace</code> and the <code>blocks_record_history</code> trigger already are),
-      but DEFINER <em>bypasses RLS</em> — so the function must itself verify, <strong>for every
-      appended row</strong>, that <code>auth.uid()</code> is a <em>writer</em> of that row's
-      <code>workspace_id</code>. Use <code>private.is_workspace_writer</code> (owner/editor), the
-      same helper the <code>blocks_write</code> policy uses — <strong>not</strong>
-      <code>private.is_workspace_member</code>, which also matches read-only viewers and would let a
-      viewer append forged provenance for writes they could never make. Reject the whole batch
-      otherwise. Without that per-row writer check, DEFINER opens cross-workspace / viewer log
-      writes; with INVOKER, nothing inserts. Spell this out in the implementation, plus
-      <code>set search_path = ''</code> and schema-qualified names, matching the existing DEFINER
-      functions.
-    </div>
-    <div class="warn">
-      <strong>Keying &amp; ordering primitives the sketch needs but the codebase does not have yet.</strong>
-      <ul>
-        <li>
-          <strong><code>client_id</code> does not exist as a sync concept.</strong> There is no
-          durable per-device/per-install id in the sync layer. The tempting in-scope values are both
-          wrong: PowerSync's <code>CrudEntry.clientId</code> is the local <code>ps_crud</code> row
-          number (per-entry, resets on reinstall), and <code>auth.uid()</code> is per-<em>user</em>
-          (two devices of one user would collide). A durable <code>client_id</code> (a UUID
-          persisted in <code>client_schema_state</code> / IndexedDB) must be minted <em>before</em>
-          this is buildable. This is a prerequisite, not an open question.
-        </li>
-        <li>
-          <strong><code>row_events.id</code> alone can't be the event key — on two counts.</strong>
-          (1) <em>Not reset-proof:</em> it is <code>INTEGER PRIMARY KEY AUTOINCREMENT</code>; a local
-          DB wipe / reinstall / OPFS reset / <code>lockAndWipe</code> recreates the table and
-          restarts the counter at 1 (<code>resetTestDb</code> even clears <code>sqlite_sequence</code>),
-          so a wiped-then-resynced device re-mints <code>1,2,3…</code> that collide with
-          already-uploaded ids and <code>ON CONFLICT DO NOTHING</code> <em>silently drops genuine new
-          events</em>. (2) <em>Content hashes are insufficient too:</em> a tempting
-          <code>hash(client_id, tx_id, block_id, kind)</code> collides on a real case — a single
-          <code>repo.tx</code> can write the same block more than once (e.g. <code>setProperty</code>
-          then <code>move</code>), and <code>blocks_row_event_update</code>
-          (<code>clientSchema.ts:436</code>) appends a <em>separate</em> <code>row_event</code> on
-          every <code>UPDATE</code>, so those events share all four fields and the later ones get
-          dropped. The key needs a genuine per-event discriminator.
-          <br><strong>Workable shape:</strong> identify an event by
-          <code>(install_id, seq)</code> where <code>install_id</code> is a per-install UUID nonce
-          persisted in <code>client_schema_state</code> and <em>regenerated on every wipe</em>, and
-          <code>seq</code> is the client <code>row_events.id</code>. That makes the per-install
-          autoincrement globally unique <em>and</em> reset-proof (post-wipe events carry a fresh
-          <code>install_id</code>, so they can never collide with pre-wipe ids — no silent drop),
-          while <code>seq</code> being distinct per event handles repeated writes to one block in one
-          tx. (<code>install_id</code> is a per-<em>install</em> nonce, distinct from the durable
-          per-<em>device</em> <code>client_id</code> above, which is for "originating device"
-          grouping; different ids, different jobs.)
-        </li>
-        <li>
-          <strong>Replay order: within an install, exact; across installs, only approximate.</strong>
-          <code>seq</code> totally orders one install's events (it's the local append order, ground
-          truth for that device's contribution), so <em>per-install</em> replay — including repeated
-          writes to one block in one tx — is exact. But <code>seq</code> must <strong>not</strong> be
-          the leading sort key across installs: with <code>install_id</code> first, two installs that
-          edited a block in interleaved order (A1, B1, A2) would replay grouped (A1, A2, B1) — wrong,
-          and a tiebreak applied <em>after</em> <code>install_id</code> can't repair it. The honest
-          position is that this design has <strong>no reliable global edit order</strong> for a block
-          touched by multiple installs: wall-clock <code>created_at</code> is subject to cross-device
-          skew, and there is no server sequencer or vector clock here (same fundamental limit as
-          blocks' LWW). So the rule is: order primarily by <code>created_at</code> (best-effort global
-          time), then by <code>(install_id, seq)</code> only to break ties and to order within one
-          install. Exact cross-device causal replay would require a server-assigned append order or a
-          per-event vector clock — out of scope, and called out here so consumers don't assume the
-          chain is authoritative across installs.
-        </li>
-      </ul>
-    </div>
-    <p>
-      <code>workspace_id</code> is <strong>nullable</strong> on <code>command_events_log</code>,
-      matching the client: <code>commitPipeline.ts</code> writes a <code>command_events</code> row
-      for <em>every</em> <code>repo.tx</code>, with <code>workspace_id</code> left NULL for
-      zero-write / no-op transactions (no workspace gets pinned). A <code>NOT NULL</code> column
-      would reject those on upload. They carry no provenance worth shipping anyway — no associated
-      <code>row_events</code> (a no-op-write tx may still have non-empty <code>mutator_calls</code>,
-      so the filter keys on row_events, not on mutator_calls) — so the upload filter
-      <strong>also drops command events that produced no uploaded <code>row_events</code></strong>,
-      which incidentally excludes the null-workspace no-ops. (The RLS workspace-membership read
-      policy then only has to reason about rows that <em>do</em> carry a workspace.)
-    </p>
-    <p>
-      Upload mechanics reuse the existing machinery: an upload-routing trigger emits an envelope per
-      event row (a new <code>type</code> beyond <code>'blocks'</code>), the connector ships them via
-      a batched append RPC, and the encrypt-on-upload hook covers the content-bearing columns. The
-      block-state upload <em>semantics</em> are preserved — but "additive" is true at the design
-      level, not the code level: the shared connector (<code>uploadTransactionsWithFallback</code>,
-      <code>compactBlockCrudEntries</code>, the batch-encrypt guard, and the rejection-recording
-      path) is restructured to demux by type (see warn below), so a bug there can regress the very
-      block path §4 protects. The blast radius is the connector, not just new tables.
-    </p>
-    <div class="warn">
-      <strong>Connector must demux by type first.</strong> The current upload loop feeds
-      <em>every</em> <code>ps_crud</code> entry into <code>compactBlockCrudEntries</code>, which
-      <code>throw</code>s on any <code>entry.table !== 'blocks'</code> — before the per-tx fallback
-      can apply anything. So a transaction that mixes a block edit with its provenance events would
-      jam the queue and retry forever. The connector has to <strong>partition crud entries by
-      <code>type</code> up front</strong> and route command/row-event entries down their own
-      append + encrypt path, around block compaction. This is a precondition of the new
-      <code>type</code>, not an afterthought.
-    </div>
 
-    <h2 id="history">7. Relationship to <code>blocks_history</code></h2>
+    <h2 id="compaction">7. Fidelity vs. volume: run-compaction by class</h2>
     <p>
-      <strong>This complements <code>blocks_history</code>; it does not replace it.</strong> They
-      look redundant but answer different questions under different trust models:
+      Volume is the one real cost of shipping every event: the 300K import wrote ~304K
+      <code>row_events</code> ≈ 262&nbsp;MB locally (<code>docs/follow-ups.md</code>), and on E2EE the
+      blobs can't be GC'd by content. But "machine edits are edits" — we don't want to drop them by
+      actor. The resolution is <strong>compaction by class via snapshots</strong>, not deletion:
     </p>
+    <ul>
+      <li>
+        <strong>Run-compaction (lossless on the facts).</strong> Collapse a <em>contiguous run</em> of
+        events on the <em>same block</em> that share a compaction-eligible class (e.g. same processor /
+        machine <code>scope</code>) into one span-event: <code>before</code> = the run's first
+        before-state, <code>after</code> = the run's last after-state, plus the list/count of
+        contributing commands. You keep <em>that</em> it happened, <em>what</em> it net-did, and
+        <em>which</em> commands — you lose only the intermediate snapshots. This is exactly the
+        snapshot+truncate move from event sourcing, and exactly what <code>compactBlockCrudEntries</code>
+        already does for block state, applied per-class to the log.
+      </li>
+      <li>
+        <strong>Per-operation summary (lossy — reserved for uniform bulk).</strong> A 300K-block
+        <code>roam import</code> is uniform; collapse it to one record ("imported N blocks under scope
+        X") with no per-block events. This is the only place per-block detail is dropped, and it
+        aligns with the <code>follow-ups.md</code> plan to skip events for import.
+      </li>
+      <li>
+        <strong>Human edits are never eligible</strong> — not because humans are special, but because
+        their <code>source</code> / <code>scope</code> isn't in a compactable class. The discriminator
+        already exists on <code>command_events</code>.
+      </li>
+    </ul>
+    <p>
+      Compaction is a <strong>policy on a derived view</strong>: keep the fine-grained events locally
+      (in <code>row_events</code>) as long as you like, and compact only what you <em>ship/retain</em>
+      server-side. Default conservative — keep everything, compact only known-noisy machine runs.
+      Retention beyond that (a TTL/cap below a snapshot) is the standard log-compaction story; the open
+      knob is whether <code>command_events_log</code> outlives <code>row_events_log</code>.
+    </p>
+
+    <h2 id="priorart">8. How the field solves these</h2>
+    <p>Every problem here is canonical. The point of this section is that the recommended design picks
+       the field's standard answer for each rather than improvising.</p>
     <table>
-      <tr><th></th><th><code>blocks_history</code></th><th>uploaded event log</th></tr>
-      <tr><td>Who writes it</td><td>Server trigger, from the write that actually lands</td><td>Client uploads it as a parallel stream</td></tr>
-      <tr><td>Resolution</td><td>Sync-checkpoint (post-collapse)</td><td>Per-commit, uncollapsed</td></tr>
-      <tr><td>Provenance</td><td>None (semantic_op + changed_columns)</td><td>Rich (command description, scope, mutators)</td></tr>
-      <tr><td>Readability</td><td>Server-readable for plaintext workspaces</td><td>Encrypted/opaque by design on E2EE</td></tr>
-      <tr><td>Completeness</td><td>Anything that lands in <code>blocks</code> <em>after the trigger shipped</em>, independent of clients</td><td>Only as complete as clients upload + retention keeps</td></tr>
+      <tr><th>Problem</th><th>Standard solution</th><th>Here</th></tr>
+      <tr>
+        <td>Ordering</td>
+        <td>Central sequencer (Kafka offset, Replicache version) <em>or</em> logical clocks (Lamport/HLC); per-aggregate version usually suffices</td>
+        <td>Server <code>server_seq</code> + per-install <code>seq</code> + monotonic edit stamp; per-block is the aggregate</td>
+      </tr>
+      <tr>
+        <td>Identity / idempotency</td>
+        <td><code>(replicaId, counter)</code> with a fresh replicaId on reset (Yjs, Automerge, Replicache <code>(clientID, mutationID)</code>)</td>
+        <td><code>(install_id, seq)</code>, install_id regenerated on wipe</td>
+      </tr>
+      <tr>
+        <td>Atomicity (state vs events)</td>
+        <td>Transactional outbox, or single log + projections (no dual-write)</td>
+        <td>Append-after-block-success; block state stays a projection of what landed</td>
+      </tr>
+      <tr>
+        <td>Completeness / catch-up</td>
+        <td>Snapshot + log: read snapshot, tail log; full history needs a central retained log</td>
+        <td>Snapshot = the <code>blocks</code> table; central log = these server tables</td>
+      </tr>
+      <tr>
+        <td>Command → N events</td>
+        <td>Correlation / causation ids on self-describing events</td>
+        <td><code>tx_id</code> as correlation id; events carry their own diff</td>
+      </tr>
+      <tr>
+        <td>Retention</td>
+        <td>Log compaction + snapshots; accept a history horizon</td>
+        <td>Run-compaction by class (§7)</td>
+      </tr>
     </table>
     <p>
-      The load-bearing row is the last one. <code>blocks_history</code> is written server-side from
-      the authoritative landed state, so for any write <em>after the trigger landed</em> it can't be
-      missing history, and it is the declared substrate for server-side point-in-time recovery. The
-      event log is a client assertion on a separate upload path: a quarantined event upload, a device
-      that dies before flushing, or a retention cap can each leave gaps for blocks that are definitely
-      on the server. So <code>blocks_history</code> stays as the server-trustworthy backstop; the
-      event log layers rich, commit-grain provenance on top.
+      The honest limit no one escapes: a sequencer's order is <strong>receipt order, not causal edit
+      order</strong> (an offline device's week-old edits sequence "now"), and genuinely concurrent
+      cross-device edits to one block have <em>no</em> ground-truth order. Logical clocks capture
+      causality where it exists; concurrency is stated as concurrency, not forced into a false line.
+    </p>
+
+    <h2 id="stalegate">9. Lessons from the stale-gate saga</h2>
+    <p>
+      The hydration/stale-gate work (which landed the always-increasing <code>updated_at</code> and the
+      monotonic <code>user_updated_at</code> clamp) is the same family of problem — convergence ordering
+      under LWW with untrustworthy clocks — and it carries three lessons straight into this design:
+    </p>
+    <ul>
+      <li>
+        <strong>The clock-goes-backward bug is already solved — reuse the fix.</strong> The saga
+        replaced unreliable wall-clock comparison with a <em>monotonic, always-increasing</em> stamp.
+        Ordering events by raw <code>created_at</code> reintroduces exactly the inversion that fix
+        removed. So the event ordering key should be the existing monotonic stamp
+        (<code>updated_at</code>/<code>user_updated_at</code> clamp), not a fresh wall-clock — and not a
+        new HLC invented from scratch when a hardened monotonic primitive already exists.
+      </li>
+      <li>
+        <strong>Provenance must never feed convergence.</strong> The gate deliberately stopped reading
+        author/provenance and became a plain version comparison, because entangling "who/why" with
+        "which state wins" was complex and buggy. Hard constraint for us: the event log is strictly
+        <strong>additive and read-only w.r.t. convergence</strong> — it records what happened, it never
+        gates which row wins. (So this design has <em>no</em> impact on the stale gate, by intent.)
+      </li>
+      <li>
+        <strong>The <code>updated_at</code> / <code>user_updated_at</code> split is the seam we widen.</strong>
+        One is the convergence version, the other the human/provenance timestamp. The "state vs
+        provenance" separation we keep rediscovering is already in the schema; the event log
+        generalizes <code>user_updated_at</code>'s role while <code>updated_at</code> stays the
+        convergence version, untouched.
+      </li>
+    </ul>
+    <p>
+      The tempting direction the saga rules in only <em>eventually</em>: a complete, server-sequenced
+      log could resolve conflicts by replay/merge instead of LWW-on-<code>updated_at</code> — a more
+      principled convergence. That is "events as the source of truth," the big rewrite deferred below.
+    </p>
+
+    <h2 id="history">10. Relationship to <code>blocks_history</code></h2>
+    <p>
+      <strong>The event log complements <code>blocks_history</code>; it does not replace it.</strong>
+      Different trust models:
+    </p>
+    <table>
+      <tr><th></th><th><code>blocks_history</code></th><th>event log</th></tr>
+      <tr><td>Who writes it</td><td>Server trigger, from the write that lands</td><td>Client-originated, server-sequenced on receipt</td></tr>
+      <tr><td>Resolution</td><td>Sync-checkpoint (post-collapse)</td><td>Per-commit (run-compacted per §7)</td></tr>
+      <tr><td>Provenance</td><td>None (semantic_op + changed_columns)</td><td>Rich (command, scope, mutators)</td></tr>
+      <tr><td>Completeness</td><td>Anything landing in <code>blocks</code> after the trigger shipped, client-independent</td><td>As complete as clients upload + retention keeps</td></tr>
+    </table>
+    <p>
+      The load-bearing row is the last. <code>blocks_history</code> is server-triggered from
+      authoritative landed state — atomic with the write, client-independent, and the declared PITR
+      substrate — so it is the backstop on exactly the failure modes the log is best-effort about
+      (origin device dies / is wiped / its upload is quarantined). <strong>Even on E2EE, do not
+      trim it:</strong> readability is only one of its advantages; server-triggered + atomic +
+      client-independent survive encryption, so on an encrypted workspace it remains the only record
+      that a write happened even when its diff is opaque. The event log <em>adds</em> richer
+      (encrypted) provenance; it never substitutes for the backstop.
     </p>
     <div class="warn">
       <strong><code>blocks_history</code> is not retroactive.</strong> Migration
-      <code>20260522062437</code> creates the table + trigger but does <em>not</em> backfill existing
-      <code>blocks</code> rows, and maintenance jobs can disable
-      <code>blocks_record_history_trg</code> for bulk work. So blocks created before the trigger (or
-      written while it was disabled) have no history — "complete backstop" holds only for writes
-      recorded after the trigger. Don't let the event-log design treat a pre-trigger block's absence
-      of history as "safe"; closing that gap needs a one-time backfill/anchor (e.g. seed a synthetic
-      <code>create</code> from current row state) that is out of scope here but must not be assumed
-      away.
-    </div>
-    <div class="decision">
-      <strong>Even on E2EE, don't trim <code>blocks_history</code>.</strong> An earlier draft argued
-      that since <code>blocks_history</code> stores <code>enc:v1:</code> ciphertext on E2EE
-      workspaces it loses its "server-readable" edge and the event log "strictly dominates" it — so
-      it could be skipped/trimmed for E2EE. That's wrong, and it contradicts this doc's own thesis.
-      Readability is only <em>one</em> of <code>blocks_history</code>'s advantages; the load-bearing
-      ones survive encryption: it is <strong>server-triggered, atomic with the landed write,
-      client-independent, and complete</strong> for post-trigger writes. The event log has none of
-      those — it's client-uploaded and best-effort. So on exactly the failure modes this doc keeps
-      flagging (origin device dies / is wiped / its event upload is quarantined),
-      <code>blocks_history</code> is the <em>only</em> surviving record that the write happened, even
-      if the diff is opaque. The event log <em>adds</em> richer (encrypted) provenance on E2EE; it
-      does not replace the backstop. No skip/trim — encrypted or not.
+      <code>20260522062437</code> creates the table/trigger but does <em>not</em> backfill existing
+      <code>blocks</code>, and maintenance jobs can disable the trigger for bulk work. So blocks
+      written before the trigger (or while it was disabled) have no history — the "complete backstop"
+      guarantee holds only for writes recorded after the trigger. Closing that gap needs a one-time
+      backfill/anchor (seed a synthetic <code>create</code> from current row state); out of scope, but
+      not to be assumed away.
     </div>
 
-    <h2 id="costs">8. Costs &amp; open questions</h2>
+    <h2 id="costs">11. Residual costs &amp; open questions</h2>
+    <p>Under server-as-log, the connector/ordering/identity/atomicity/authz problems are answered. What
+       genuinely remains:</p>
     <ul>
       <li>
-        <strong>Volume / retention is the real price — and bigger than §4's "appends are cheap"
-        lets on.</strong> Appends are cheap on <em>write</em> (no hot-row rewrite); they are not
-        cheap on <em>storage</em>. Concretely (per <code>docs/follow-ups.md</code>): the 300K Roam
-        import wrote <strong>~304K <code>row_events</code> ≈ 262&nbsp;MB locally</strong>. Shipping
-        the locally-originated log means hundreds of MB to the server <em>per importing device</em>,
-        and on E2EE workspaces the blobs are opaque ciphertext that can <em>never</em> be GC'd by
-        content. So the §4 performance framing and this cost must be read together: cheap to append,
-        expensive to keep. A retention stance is a <em>prerequisite</em>, not a someday — the real
-        discussion lives in <code>docs/follow-ups.md</code> ("Periodic <code>row_events</code> trim";
-        there is no <code>docs/row-events-retention.md</code> despite dangling references to it).
-        <strong>Open:</strong> keep-forever vs. cap/TTL (and, if capped, keep
-        <code>command_events_log</code> longer than <code>row_events_log</code>, since the per-edit
-        diffs dominate volume?).
+        <strong>Volume / retention.</strong> Mitigated by run-compaction (§7) but not eliminated.
+        Open: keep-forever vs. cap/TTL; whether <code>command_events_log</code> outlives
+        <code>row_events_log</code>.
       </li>
       <li>
-        <strong>Conflict with the planned import path.</strong> <code>docs/follow-ups.md</code> also
-        proposes an <code>'import'</code> source that <em>skips</em> both <code>row_events</code> and
-        <code>ps_crud</code> precisely to avoid that ~262&nbsp;MB bloat. If that lands, imported
-        blocks emit no events to upload — so this design either forces import to keep emitting events
-        (re-bloating the path the codebase was tuned to de-bloat) or accepts that imports have
-        <em>zero</em> server provenance (compounding the completeness holes below). Pick one
-        explicitly.
+        <strong>Server stays blind on E2EE.</strong> Encrypted events are opaque server-side; only
+        devices benefit. Plaintext workspaces get full server-side queryability. Accepted — matches
+        the E2EE posture.
       </li>
       <li>
-        <strong>"Complete history" has structural holes, not just transient ones.</strong> The
-        union-of-devices is best-effort: (a) a member who <em>joins</em> an existing workspace syncs
-        every historical block as <code>source='sync'</code> → filtered → never uploaded, and the
-        originators may have left/wiped/been-capped, so that history is permanently absent; (b)
-        pre-feature blocks have no upload-routed events and nothing back-fills them; (c) a device's
-        local <code>row_events</code> are subject to the existing trim, so once trimmed the only
-        copy of that provenance is gone. <code>blocks_history</code> (§7) is the complete record
-        precisely because it is server-written from landed state; this log is an overlay. Every
-        "complete" claim elsewhere is downgraded to "complete for post-feature txs from still-live,
-        un-trimmed originators".
+        <strong>Completeness has structural holes.</strong> A member who <em>joins</em> later gets
+        current state (the snapshot) but not pre-join event detail unless an originator's log still
+        covers it; pre-feature blocks and trimmed/compacted runs are gaps. The log is an overlay;
+        <code>blocks_history</code> + the <code>blocks</code> snapshot are the complete-state floor.
       </li>
       <li>
-        <strong>Server stays blind on E2EE.</strong> The server can't classify or query encrypted
-        events; only devices benefit. Accepted — it matches the E2EE design's "server sees only
-        ciphertext" posture. Plaintext workspaces get full server-side queryability.
+        <strong>Connector demux.</strong> The new event <code>type</code> must be partitioned out
+        <em>before</em> <code>compactBlockCrudEntries</code> (which throws on non-<code>blocks</code>
+        tables) and routed down the append+encrypt path. "Additive" is true at the design level; the
+        shared connector is genuinely restructured, so a bug there can regress the block path.
       </li>
       <li>
-        <strong>Skipped deterministic creates desync the log.</strong> A local <code>create</code>
-        <code>row_event</code> is recorded before upload, but <code>applyBlockCreates</code> uses
-        insert-or-skip (<code>ignoreDuplicates: true</code>) for deterministic-id collisions — the
-        fresh-client user-prefs / user-page / ui-state bootstrap. There the block create is
-        <em>skipped</em> server-side (the row already exists) while the append log would still claim
-        a <code>kind='create'</code> that never landed. So "the server log is the complete history
-        of how the server graph came to be" needs a qualifier: these no-op creates must be filtered
-        (e.g. don't ship <code>create</code> events for deterministic-id rows, or reconcile against
-        the upload result), or the log records creates the server never performed.
-      </li>
-      <li>
-        <strong>Partial failure splits a command from its edits — and orphans are unavoidable.</strong>
-        The <code>command_event</code> and its <code>row_events</code> are separate queue entries, so
-        a quarantine can land one without the other; there is no server FK to prevent it. Worse, the
-        two filters above (drop no-row-events commands; drop skipped-deterministic creates) mean a
-        command with a <em>mix</em> of a filtered <code>create</code> + a real <code>update</code>
-        ships the update but not the genesis create: the per-block log then starts mid-stream with an
-        <code>update</code> whose <code>before_json</code> references a state no prior event explains,
-        and "each edit keeps its own diff" (§3) can no longer be replayed from the log. Consumers
-        must tolerate orphans on <em>both</em> sides, and the doc must define replay semantics when
-        the genesis event is missing (never filter creates? anchor on the surviving event's
-        <code>before_json</code>? reconcile against the block upload result?).
-      </li>
-      <li>
-        <strong>Append events only after the block write succeeds.</strong> The event rows ship via a
-        separate append RPC from the block apply path, and the two are not atomic. If the block write
-        is <em>permanently</em> rejected/quarantined (FK violation, missing server row) but the event
-        append already succeeded, the server keeps — idempotently — provenance for a block change that
-        never landed: a false record, worse than a gap. So the ordering must be specified:
-        <strong>gate the event append on the corresponding block upload succeeding for that tx</strong>
-        (block-success-before-event-append), or use a combined rollback boundary. That makes the only
-        possible divergence "block landed, events missing" — a tolerable gap that <code>blocks_history</code>
-        (§7) still covers — never "events claim a change that didn't happen". Note this composes with
-        the replay-ordering caveat above: gating on block success doesn't give a global order, it only
-        prevents false provenance.
-      </li>
-      <li>
-        <strong>Key/clock primitives are missing (see §6 warn).</strong> A durable per-device
-        <code>client_id</code> does not exist today, and <code>row_events.id</code> (AUTOINCREMENT)
-        is not reset-proof — so the idempotency key needs both invented before this is buildable.
-        Treat as prerequisites, not open questions.
-      </li>
-      <li>
-        <strong>Three history-ish things coexist</strong> (client <code>row_events</code>, server
-        <code>blocks_history</code>, server event log). That's the honest cost of keeping a
-        server-guaranteed backstop separate from an encrypted commit-grain provenance log — two
-        contradictory requirements that shouldn't be merged into one table.
+        <strong>Skipped deterministic creates.</strong> <code>applyBlockCreates</code> is insert-or-skip
+        (<code>ignoreDuplicates</code>) for deterministic-id bootstrap; a skipped create must not leave
+        a <code>kind='create'</code> event claiming a row the server already had. The append-after-block-
+        success rule (§6) plus filtering creates whose block upload was a no-op handles this.
       </li>
     </ul>
 
-    <h2 id="rejected">9. Rejected / deferred alternatives</h2>
+    <h2 id="rejected">12. Rejected / deferred alternatives</h2>
     <div class="reject">
-      <strong>Un-collapse the blocks upload itself.</strong> Replays 50 <code>UPDATE</code>s on the
-      hot row to manufacture history — maximal write/index/trigger amplification for a row that ends
-      in one state. The append-only event log gets the same granularity far cheaper (§4).
+      <strong>Client-authored global order (the incoherent middle).</strong> Upload a client-sequenced
+      <code>(install_id, seq)</code> log to a dumb server table. This was the original sketch; it is the
+      source of the ordering/identity/atomicity/authz problem cascade (§3). Superseded by server
+      sequencing.
     </div>
     <div class="reject">
-      <strong>Sync the event log down to every device via PowerSync.</strong> Balloons bucket sizes
-      for data almost no device queries. Read via RPC instead, like <code>blocks_history</code>.
+      <strong>Un-collapse the blocks upload itself.</strong> Replays 50 <code>UPDATE</code>s on the hot
+      row to manufacture history — maximal write/index/trigger amplification for a row that ends in one
+      state. Appends get the same granularity far cheaper (§4).
+    </div>
+    <div class="reject">
+      <strong>Sync the event log down to every device.</strong> Balloons bucket sizes for data almost
+      no device queries. Read via RPC, like <code>blocks_history</code>.
     </div>
     <div class="reject">
       <strong>Replace <code>blocks_history</code> with the event log.</strong> Loses the
-      server-guaranteed, client-independent backstop and the plaintext server-side PITR substrate
-      (§7).
+      server-guaranteed, client-independent backstop and the plaintext PITR substrate (§10).
     </div>
     <div class="warn">
-      <strong>Deferred: full event-sourcing (events as the sole source of truth, server materializes
-      <code>blocks</code> from them).</strong> A much larger rewrite (server-side materialization,
-      <code>blocks</code> as projection-only). This proposal is deliberately <em>additive</em>:
-      <code>blocks</code> stays the convergent state path; the event log layers on top.
+      <strong>Deferred: events as the sole source of truth</strong> (server materializes
+      <code>blocks</code> from events; convergence by replay/merge). The principled end state (§9), but a
+      much larger rewrite. This proposal is deliberately additive: <code>blocks</code> stays the
+      convergent state path; the log layers on top.
     </div>
 
-    <h2 id="scope">10. What this PR is (and isn't)</h2>
+    <h2 id="scope">13. What this PR is (and isn't)</h2>
     <p>
       This PR adds <strong>only this design document</strong>. No schema, migration, connector, or
-      encryption changes. It captures the proposal and its trade-offs for review before any code is
-      written. What gates an implementation:
+      encryption changes. What gates an implementation:
     </p>
     <ol>
-      <li><strong>Decisions:</strong> dual-path confirmed? (blocks stays + event log is additive — the
-        recommendation); retention stance (keep-forever vs. cap/TTL); and whether imports emit
-        provenance or are accepted as having none (§8).</li>
-      <li><strong>Prerequisites that don't exist yet</strong> (§6 warn): a durable per-device
-        <code>client_id</code>, and a reset-proof per-event key (not <code>row_events.id</code>).
-        Neither is a "later" — the keying is unbuildable without them.</li>
-      <li><strong>Specs to write:</strong> the connector demux + its effect on the block path (§6);
-        the AAD for an opaque event blob, which can't reuse the per-column scheme (§5); and which
-        columns stay plaintext for RLS (§5).</li>
+      <li><strong>Pick the model (§5).</strong> Server-as-log (recommended) vs. server-captured
+        checkpoints (if "enough to classify edits" is the real bar) vs. peer CRDT (if no-central-authority
+        ever becomes a goal).</li>
+      <li><strong>Compaction + retention policy (§7).</strong> Which classes are run-compactable; bulk-import
+        summary; keep-forever vs. cap.</li>
+      <li><strong>Prerequisites (§6).</strong> A per-install <code>install_id</code> nonce (mint + persist
+        in <code>client_schema_state</code>, regenerate on wipe); reuse of the monotonic edit stamp as the
+        ordering key (§9); the append RPC's definer + <code>is_workspace_writer</code> contract; the AAD
+        for an opaque event blob.</li>
     </ol>
     <p>
-      The honest summary: the <em>direction</em> (append-only event log, additive to collapsed block
-      state, complementing <code>blocks_history</code>) holds up; the <em>completeness</em> claim and
-      the <em>keying</em> were over-stated in earlier drafts and are corrected above. This is a
-      sound overlay for post-feature provenance, not a complete server-side history.
+      The direction (append-only log, server-sequenced, additive to collapsed state, complementing
+      <code>blocks_history</code>, run-compacted for machine bulk) is what the design discussion
+      converged on. The earlier client-sequenced sketch is retained above only as the rejected baseline
+      that motivates it.
     </p>
   </main>
 </body>
