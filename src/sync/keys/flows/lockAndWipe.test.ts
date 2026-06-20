@@ -192,21 +192,20 @@ describe('lockAndWipe commit (§6)', () => {
     expect(isPendingWipe(USER)).toBe(true)
   })
 
-  it('still completes the wipe when the compiled-cache clear fails (best-effort)', async () => {
-    // The load-bearing plaintext removal (key drop + armed DB-file wipe) has
-    // already happened, so a flaky derived-cache clear must not abort it.
+  it('refuses the wipe (no keys dropped, no marker) when the compiled-cache clear fails', async () => {
+    // The compiled cache is plaintext-derived source the wipe must remove, so a
+    // clear failure has to BLOCK the wipe — not report success while it lingers.
+    // Clearing first means we refuse before anything destructive happens.
     const keyStore = new InMemoryWorkspaceKeyStore()
     const clearForUser = vi.spyOn(keyStore, 'clearForUser')
     const compiledCache = { clear: vi.fn(async () => { throw new Error('idb clear boom') }) }
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     await expect(
       lockAndWipe({ userId: USER, keyStore, compiledCache }),
-    ).resolves.toBeUndefined()
+    ).rejects.toThrow(/idb clear boom/)
 
-    expect(clearForUser).toHaveBeenCalledWith(USER)
-    expect(isPendingWipe(USER)).toBe(true) // wipe stays armed
-    warn.mockRestore()
+    expect(clearForUser).not.toHaveBeenCalled()
+    expect(isPendingWipe(USER)).toBe(false)
   })
 })
 

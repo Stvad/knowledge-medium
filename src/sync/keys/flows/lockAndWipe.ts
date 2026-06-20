@@ -167,16 +167,19 @@ export interface LockAndWipeDeps {
   /** Device-local cache of transpiled extension *source* (a separate
    *  IndexedDB store, NOT inside the per-user SQLite file the wipe
    *  deletes). Cleared so a lock & wipe doesn't leave plaintext-derived
-   *  extension code behind. Optional/best-effort — a flaky clear must not
-   *  block the load-bearing key drop + DB-file wipe. */
+   *  extension code behind. Cleared FIRST — before keys are dropped or the
+   *  wipe is armed — so that if it can't be cleared we refuse the whole
+   *  command rather than report success with that plaintext still on disk.
+   *  Optional: skipped when absent. */
   readonly compiledCache?: LocalCompiledCache
 }
 
 /**
- * Commit the wipe: arm the next-boot DB-file wipe, then drop this user's
- * workspace keys. Does NOT reload — the caller forces the reload (which also
- * clears the in-memory BlockCache and other live JS state) and the file delete
- * happens on that next boot via {@link consumePendingWipe}.
+ * Commit the wipe: clear the compiled-extension cache, arm the next-boot
+ * DB-file wipe, then drop this user's workspace keys. Does NOT reload — the
+ * caller forces the reload (which also clears the in-memory BlockCache and other
+ * live JS state) and the file delete happens on that next boot via
+ * {@link consumePendingWipe}.
  *
  * Key clearing is scoped to `deps.userId`: the IndexedDB key store is shared
  * across all accounts in the browser profile, but the wipe (marker + DB file) is
@@ -192,6 +195,13 @@ export interface LockAndWipeDeps {
  * `canPersistPins()` preflight makes the marker write near-certain, but ordering
  * it first also closes the residual TOCTOU window a sibling tab or quota change
  * could open between the probe and the write.
+ *
+ * The compiled-extension cache is cleared even earlier — before the marker — for
+ * the same reason: it is plaintext-derived source living outside the SQLite file,
+ * so if IndexedDB can't drop it we must refuse the wipe up front rather than
+ * report success (and reload) with that plaintext still on disk. It is cleared
+ * first rather than last so a failure costs nothing destructive; `clear()` is
+ * idempotent, so a retry or the key-drop rollback below is harmless.
  */
 export const lockAndWipe = async (deps: LockAndWipeDeps): Promise<void> => {
   if (!canPersistPins()) {
@@ -200,6 +210,16 @@ export const lockAndWipe = async (deps: LockAndWipeDeps): Promise<void> => {
         '(private mode or storage disabled).',
     )
   }
+  // Drop the compiled-extension cache FIRST. It is plaintext-derived source
+  // living outside the SQLite file, so the boot-time file wipe wouldn't touch
+  // it. Letting a failure here propagate (before anything destructive) means a
+  // wipe that can't remove this plaintext REFUSES rather than reporting success
+  // and reloading with the code still on disk. `clear()` is idempotent, so the
+  // user can simply retry.
+  if (deps.compiledCache) {
+    await deps.compiledCache.clear()
+  }
+
   markPendingWipe(deps.userId)
   try {
     await deps.keyStore.clearForUser(deps.userId)
@@ -208,17 +228,6 @@ export const lockAndWipe = async (deps: LockAndWipeDeps): Promise<void> => {
     // still present (and don't report success). Rollback is best-effort.
     clearPendingWipe(deps.userId)
     throw err
-  }
-
-  // Keys dropped + wipe armed. Now clear the separate compiled-extension
-  // cache — it lives outside the SQLite file, so the boot-time file wipe
-  // wouldn't touch it, leaving plaintext-derived extension source on disk.
-  // Best-effort: the critical plaintext removal (key drop + DB-file wipe)
-  // has already happened/is armed, so a failing clear is logged, not fatal.
-  try {
-    await deps.compiledCache?.clear()
-  } catch (err) {
-    console.warn('[lock-and-wipe] failed to clear compiled-extension cache', err)
   }
 }
 
