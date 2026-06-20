@@ -162,6 +162,17 @@ export interface RunTxParams<R> {
    *  Throws (e.g. `ProcessorRejection`) propagate out and roll back
    *  the user's tx atomically. */
   sameTxProcessors: ReadonlyMap<string, AnySameTxProcessor>
+  /** When true this tx is an undo/redo replay driven by
+   *  `TxImpl.applyRaw` (see `Repo._replay`). The same-tx processor
+   *  pass is SKIPPED for replays: `applyRaw` is contracted to drive
+   *  each row to EXACTLY the restored snapshot (§10 step 7, the
+   *  `applyRaw` doc in `txEngine.ts`), but its write is still a field
+   *  change in the replay tx — so a value-deriving same-tx processor
+   *  (e.g. one that appends to `content`) would re-fire and override
+   *  the restore, leaving the row at a derived value rather than the
+   *  state being restored to. Post-commit processors are unaffected;
+   *  they dispatch from `_runAndDispatch` regardless. Default false. */
+  isReplay?: boolean
   /** Merged property-schema registry snapshot, captured at the same
    *  boundary as `processors` so processor code sees a consistent
    *  runtime bundle. */
@@ -203,6 +214,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     db, cache, fn, opts, user, isReadOnly,
     newTxId, newTxSeq, newId, now,
     mutators, processors, sameTxProcessors, propertySchemas,
+    isReplay = false,
   } = params
   const {scope, description} = opts
 
@@ -274,7 +286,12 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     // Only the snapshot taken at tx start (`sameTxProcessors`) is
     // iterated — mid-tx facet swaps don't affect the running tx,
     // matching the §3/§8 contract.
-    if (sameTxProcessors.size > 0 && (snapshots.size > 0 || sameTxEvents.length > 0)) {
+    //
+    // Replay txs (undo/redo) skip this pass entirely (`isReplay`):
+    // `applyRaw` drives each row to EXACTLY the restored snapshot, so
+    // re-deriving here would override the restore. See the `isReplay`
+    // doc on RunTxParams.
+    if (!isReplay && sameTxProcessors.size > 0 && (snapshots.size > 0 || sameTxEvents.length > 0)) {
       for (const processor of sameTxProcessors.values()) {
         const changedRows = collectSameTxFieldMatches(processor, snapshots)
         const emittedEvents = collectSameTxEventMatches(processor, sameTxEvents)
