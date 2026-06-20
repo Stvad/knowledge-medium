@@ -1,4 +1,4 @@
-import { defineFacet, keyedMapFacet } from '@/facets/facet.js'
+import { dedupById, defineFacet, keyedMapFacet } from '@/facets/facet.js'
 import type { FacetRuntime } from '@/facets/facet.js'
 import type { Repo } from '../data/repo'
 import type { Block } from '../data/block'
@@ -205,8 +205,15 @@ export const isAppMountContribution = (value: unknown): value is AppMountContrib
   typeof value.id === 'string' &&
   typeof value.component === 'function'
 
+// Dedup by logical `id` (last-wins) rather than the default keep-all: an
+// app mount is rendered once per contribution keyed by `id` (see
+// `AppMounts` in AppRuntimeProvider), and mounts are minted fresh inside
+// plugin factories, so resolver identity dedup can't catch a logical
+// duplicate — two same-id contributions would otherwise double-mount
+// (#64). See `dedupById` for the tie-break rationale.
 export const appMountsFacet = defineFacet<AppMountContribution, readonly AppMountContribution[]>({
   id: 'core.app-mounts',
+  combine: dedupById('core.app-mounts'),
   validate: isAppMountContribution,
 })
 
@@ -234,8 +241,11 @@ export const isPanelMountContribution = (value: unknown): value is PanelMountCon
   typeof value.id === 'string' &&
   typeof value.component === 'function'
 
+// Per-panel render mount keyed by `id` — same double-mount hazard as
+// `appMountsFacet`, so dedup by id (last-wins).
 export const panelMountsFacet = defineFacet<PanelMountContribution, readonly PanelMountContribution[]>({
   id: 'core.panel-mounts',
+  combine: dedupById('core.panel-mounts'),
   validate: isPanelMountContribution,
 })
 
@@ -248,8 +258,11 @@ export const isHeaderItemContribution = (value: unknown): value is HeaderItemCon
   isHeaderItemRegion(value.region) &&
   typeof value.component === 'function'
 
+// Header items render once per contribution keyed by `id` (see Header.tsx)
+// — dedup by id (last-wins) so a logical duplicate can't render twice.
 export const headerItemsFacet = defineFacet<HeaderItemContribution, readonly HeaderItemContribution[]>({
   id: 'core.header-items',
+  combine: dedupById('core.header-items'),
   validate: isHeaderItemContribution,
 })
 
