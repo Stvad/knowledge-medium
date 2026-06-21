@@ -1842,25 +1842,41 @@ export class Repo {
       return
     }
     try {
-      const result = await runConsistencyAudit(this.db, workspaceId, Date.now())
-      this.consistencyAuditLastRun.set(workspaceId, Date.now())
-      this.consistencyAuditState.runs += 1
-      this.consistencyAuditState.lastError = null
-      this.consistencyAuditState.lastResult = result
-      // Publish to the in-memory store the UI health indicator subscribes to.
-      publishConsistencyAudit(result)
-      if (result.anomalies > 0) {
-        console.warn(
-          `[consistencyAudit] workspace ${workspaceId}: ${result.anomalies} anomalous check(s)`,
-          result.checks,
-        )
-      }
+      await this.executeConsistencyAudit(workspaceId)
     } catch (err) {
       // No cadence stamp on failure → the next open retries (read-only, idempotent).
       const reason = err instanceof Error ? err.message : String(err)
       this.consistencyAuditState.lastError = reason
       console.error(`[consistencyAudit] workspace ${workspaceId} failed (will retry next open): ${reason}`)
     }
+  }
+
+  /** Run the audit, record state, stamp the cadence, and publish to the UI store.
+   *  Shared by the idle job (which gates on cadence first) and the on-demand
+   *  action (which bypasses it). Throws on failure — callers decide how to react. */
+  private async executeConsistencyAudit(workspaceId: string): Promise<ConsistencyAuditResult> {
+    const result = await runConsistencyAudit(this.db, workspaceId, Date.now())
+    this.consistencyAuditLastRun.set(workspaceId, Date.now())
+    this.consistencyAuditState.runs += 1
+    this.consistencyAuditState.lastError = null
+    this.consistencyAuditState.lastResult = result
+    // Publish to the in-memory store the UI health indicator subscribes to.
+    publishConsistencyAudit(result)
+    if (result.anomalies > 0) {
+      console.warn(
+        `[consistencyAudit] workspace ${workspaceId}: ${result.anomalies} anomalous check(s)`,
+        result.checks,
+      )
+    }
+    return result
+  }
+
+  /** Run the built-in consistency audit immediately, bypassing the idle cadence,
+   *  and publish the result (so the health indicator updates). For the on-demand
+   *  command-palette action / dropdown button. Throws on failure so the caller
+   *  can surface it. */
+  async runConsistencyAuditNow(workspaceId: string): Promise<ConsistencyAuditResult> {
+    return this.executeConsistencyAudit(workspaceId)
   }
 
   /** Test helper — drains consistency-audits whose deferral timer has fired. */

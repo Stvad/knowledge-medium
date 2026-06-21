@@ -34,6 +34,8 @@ import { RejectionDialog } from './RejectionDialog.tsx'
 import { useConsistencyAudit } from './useConsistencyAudit.ts'
 import { useRepo } from '@/context/repo.js'
 import type { ConsistencyAuditResult } from '@/data/internals/consistencyAudit.js'
+import { RUN_DATA_INTEGRITY_AUDIT_ACTION_ID } from '@/data/internals/consistencyAuditStore.js'
+import { runActionById } from '@/shortcuts/runAction.js'
 
 interface UploadQueueCountRow {
   count: number
@@ -350,6 +352,20 @@ function SyncStatusHeaderContent({
   const auditErroredChecks = audit
     ? Object.entries(audit.checks).filter(([, c]) => c.status === 'error').map(([name]) => name)
     : []
+  const hasAuditSection =
+    auditAnomalies.length > 0 || auditInfos.length > 0 || auditErroredChecks.length > 0
+  // Re-run the built-in audit on demand via the global action (also in the
+  // command palette). The action toasts the outcome and republishes the result,
+  // so the dropdown's counts refresh in place.
+  const runAudit = (): void => {
+    try {
+      void Promise.resolve(
+        runActionById(RUN_DATA_INTEGRITY_AUDIT_ACTION_ID, new CustomEvent('run-data-integrity-audit')),
+      ).catch((e) => console.error('Failed to run data-integrity audit', e))
+    } catch (e) {
+      console.error('Failed to run data-integrity audit', e)
+    }
+  }
   const view = getSyncIndicatorView({
     localOnly,
     connected: status.connected,
@@ -478,9 +494,6 @@ function SyncStatusHeaderContent({
                     </div>
                   ))}
                 </div>
-                <div className="mt-1 text-[11px] leading-4 text-muted-foreground">
-                  Run the consistency-check eval for full details.
-                </div>
               </div>
             )}
             {auditInfos.length > 0 && (
@@ -495,13 +508,30 @@ function SyncStatusHeaderContent({
                   ))}
                 </div>
                 <div className="mt-1 text-[11px] leading-4 text-muted-foreground">
-                  Minor / expected baseline (e.g. cleared values) — not alerting. Run the consistency-check eval for full details.
+                  Minor / expected baseline (e.g. cleared values) — not alerting.
                 </div>
               </div>
             )}
             {auditErroredChecks.length > 0 && (
               <div className="border-t pt-2 text-[11px] leading-4 text-muted-foreground">
                 {auditErroredChecks.length} integrity {auditErroredChecks.length === 1 ? 'check' : 'checks'} couldn't run ({auditErroredChecks.join(', ')}).
+              </div>
+            )}
+            {hasAuditSection && (
+              <div className="border-t pt-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-[11px] leading-4 text-muted-foreground">
+                    Run the consistency-check eval for per-block detail.
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs"
+                    onClick={runAudit}
+                  >
+                    Re-run audit
+                  </Button>
+                </div>
               </div>
             )}
           </div>
