@@ -189,8 +189,9 @@ properties: {
   hash:        'sha256:…',      // of plaintext bytes; client-side dedup key
   filename:    'screenshot.png',
   width:       1280,            // optional, for layout reservation
-  height:      720,
-  status:      'uploading' | 'synced'
+  height:      720
+  // NOTE: no upload `status` here — that's per-device, tracked in the local
+  // upload queue (§9), NOT in synced (encrypted) properties_json. See §8.
 }
 content: 'image: screenshot.png'   // human-readable summary</code></pre>
 
@@ -281,9 +282,22 @@ for E2EE workspaces" — applied to bytes.) The escape hatch survives in a diffe
 
 <p>What the encryption model gives us in return is also worth stating: because metadata rides the
   encrypted <code>properties_json</code> column, an attachment's <strong>mime, filename, and hash are
-  confidential automatically</strong> on an E2EE workspace. Only the routing identifiers
+  confidential automatically</strong> on an E2EE workspace. The block-row routing identifiers
   (<code>id</code>, <code>workspace_id</code>) are in clear — exactly the columns the sync transform
   already leaves in clear.</p>
+
+<div class="warn">
+<strong>But the Storage object leaks more than the block row does — call it out, don't fold it into
+the inherited block-metadata leak.</strong> The encrypted blob's <strong>byte length</strong>
+(≈ plaintext size + 28&nbsp;B) is visible to the server via the stored object size and the
+<code>Content-Length</code> of an RLS-gated GET, and the object's existence and per-workspace count are
+visible. Exact file size is a much stronger fingerprint than note-text length — it can confirm a
+specific known file (a leaked document, a known image) by size, and combined with the
+<code>asset_block_id</code> in the path + timing, correlate which block embeds which known-size asset.
+This is a <em>new</em> leak <em>outside</em> the enumerated e2ee §15 set (tree shape / order / timing /
+authorship). Document it as an accepted tradeoff (§17), or pad ciphertext to size buckets if the
+threat model cares.
+</div>
 
 <h2 id="onepath">5. One byte transform; plaintext is the identity case</h2>
 
@@ -329,9 +343,26 @@ encode/decode seam is mode-aware, and plaintext is its degenerate (identity) bra
     as raw bytes) sharing the nonce/tag layout. Small new module next to <code>aead.ts</code>.</li>
 </ul>
 
-<p>The envelope being <strong>self-describing</strong> is what later lets the service worker decide
-  decrypt-vs-passthrough without resolving workspace mode (§7): a blob that starts with the
-  <code>encb:v1:</code> magic needs a key; anything else is plaintext.</p>
+<div class="warn">
+<strong>The AAD does not bind freshness — verify the content hash on read.</strong> Every AAD term
+(<code>asset_block_id</code>, <code>workspace_id</code>, the literal, schema version) and the storage
+path are <em>stable across an asset's whole life</em>. AAD stops cross-block / cross-workspace swaps,
+but it does <em>not</em> stop a <strong>rollback/replay of an older ciphertext for the same
+<code>asset_block_id</code></strong>: an untrusted server (in scope per e2ee §2 — it may serve
+whichever bytes it likes) can return a stale blob that decrypts cleanly and the GCM tag verifies. The
+bytes lane has no <code>updated_at</code>/monotonicity channel the text path gets from PowerSync. The
+fix is already in hand: the asset block stores <code>hash = sha256(plaintext)</code> in its
+(encrypted) <code>properties_json</code>; the read path <strong>must verify the decrypted bytes
+against that hash before caching/serving</strong>, and reject on mismatch. This also closes the
+re-upload-version question for free (a new version writes a new hash on the block, which syncs with
+its own monotonicity).
+</div>
+
+<p>The <code>encb:v1:</code> magic is a <strong>format tag, not an authorization signal.</strong>
+  Whether to decrypt is decided by the workspace's mode pin (§7), exactly as the text path decides via
+  the pin rather than the <code>enc:v1:</code> prefix (<code>envelope.ts</code> / e2ee §6 rule&nbsp;2).
+  An E2EE-pinned workspace requires the magic and treats its absence as tampering; only an unpinned
+  workspace passes bytes through.</p>
 
 <h2 id="bytepath">6. The byte path, end to end</h2>
 
@@ -409,14 +440,27 @@ encode/decode seam is mode-aware, and plaintext is its degenerate (identity) bra
     <code>&lt;img src="/asset/&lt;workspace_id&gt;/&lt;asset_block_id&gt;"&gt;</code>. No mode awareness,
     no <code>createObjectURL</code> lifecycle, native <code>&lt;img&gt;</code> / <code>&lt;video&gt;</code>
     / range-requests / <code>&lt;a download&gt;</code> all work uniformly.</li>
-  <li><strong>The SW resolves it, auth-first:</strong> establish the active <code>user_id</code> and
-    (for E2EE) WK availability <em>before</em> consulting the cache → serve from cache only on a
-    namespace match → on miss, fetch the stored blob → if it starts with the <code>encb:v1:</code>
-    magic, decrypt with the WK from <code>km-e2ee-keys</code>; otherwise pass through → put the
-    displayable bytes in the user-scoped cache → respond.</li>
-  <li><strong>Mode is self-describing</strong> via the envelope, so the SW does not re-implement
-    workspace-mode resolution. It only needs the WK lookup (it has <code>workspace_id</code> from the
-    URL and <code>user_id</code> from the handshake below).</li>
+  <li><strong>The SW resolves it, auth-first:</strong> establish the active <code>user_id</code> (for
+    the requesting client — §7.1) and the workspace's <em>mode pin</em> + WK availability
+    <em>before</em> consulting the cache → serve from cache only on a namespace match and a still-valid
+    session → on miss, fetch the stored blob → decrypt/passthrough <em>per the mode pin</em> (below) →
+    put the displayable bytes in the user-scoped cache → respond.</li>
+  <li><strong>The mode pin decides decrypt-vs-passthrough, NOT the envelope magic.</strong> This is a
+    deliberate carry-over of the rule the text path already enforces (<code>src/sync/crypto/envelope.ts</code>
+    / e2ee §6 rule&nbsp;2: "the prefix is a FORMAT tag, not a decrypt trigger — the durable mode pin
+    decides"). The SW reads the workspace's local mode pin (it has <code>workspace_id</code> from the
+    URL): if the workspace is <strong>E2EE-pinned, the SW <em>requires</em> a well-formed
+    <code>encb:v1:</code> envelope and decrypts</strong> — a blob that arrives <em>without</em> the
+    magic is treated as tampering and rejected, never served as plaintext. Only an
+    unpinned/plaintext workspace passes bytes through. Deciding from the self-describing magic alone
+    would re-introduce exactly the downgrade vector (hostile server strips the magic → attacker
+    plaintext reaches <code>&lt;img&gt;</code>) that the text wire-boundary was hardened against.</li>
+  <li><strong>Render gates on SW readiness (cold start).</strong> An <code>&lt;img src="/asset/…"&gt;</code>
+    can fire before the app has handed the SW a token (§7.1) or before the SW has re-read its state on
+    a cold respawn. The SW must not "fail open": a request with no established active user / no fresh
+    unlock signal <code>respondWith</code>s a deterministic placeholder (or holds briefly on a
+    readiness promise, short timeout → placeholder), never a stale cache hit and never an unauthorized
+    fetch.</li>
 </ul>
 
 <div class="warn">
@@ -425,13 +469,19 @@ bytes in the Cache API are not themselves access-controlled, so a cache key of
 <code>/asset/&lt;ws&gt;/&lt;id&gt;</code> alone would let a later request return previously-decrypted
 bytes <em>without</em> re-checking the active session or key — bypassing Storage RLS and key
 availability across an account switch, a workspace revoke/leave, or a purge that missed an entry.
-Two defenses, both required: (1) <strong>namespace the cache by the active <code>user_id</code></strong>
-(e.g. a per-user Cache bucket <code>assets:&lt;user_id&gt;</code>), so another account in the same
-profile can never read it; and (2) <strong>validate before every hit</strong> — the SW confirms the
-requesting client's active user matches the namespace and, for E2EE, that the workspace is currently
-unlocked (WK present) before serving cached bytes; otherwise it falls through to a fresh
-RLS-checked fetch (or fails closed). This is what makes the §7.2 purge a backstop, not the only line
-of defense.
+Three defenses, all required: (1) <strong>namespace the cache by <code>user_id</code></strong> (a
+per-user bucket <code>assets:&lt;user_id&gt;</code>); (2) <strong>resolve the active user per
+requesting client, not globally</strong> — a single SW serves every tab, and a browser profile can
+hold two accounts at once (the keyStore is shared across accounts), so the SW keys its session map by
+<code>event.clientId</code> → that tab's user, never a single global "active user" slot that the last
+<code>onAuthStateChange</code> wins; and (3) <strong>validate before every hit against a
+<em>push-driven</em> locked state</strong> — lock is signalled <em>to</em> the SW (§7.2), and the SW
+treats "no fresh unlock signal for this workspace" as locked, evicting rather than serving. Pulling
+"is the WK present in IndexedDB?" is not sufficient on its own: that read can be stale between a lock
+and the SW's next read, and it doesn't gate plaintext-workspace cached bytes at all. Together these
+make the §7.2 purge a backstop, not the only line of defense — but note the cross-account case is the
+subtle one (§16): the cache namespace isolates <em>reads</em>, while the per-client session keying is
+what isolates the <em>fetch token</em>.
 </div>
 
 <p>The thing that actually constrains the SW approach is not decryption — it's two coordination
@@ -440,26 +490,48 @@ of defense.
 <h3>7.1 Coordination problem A — fetching private bytes needs the session</h3>
 
 <p>Storage objects are RLS-protected; reads need a bearer token, which lives in the app's supabase-js
-  session in <code>localStorage</code> — which the SW cannot read. Resolution: the app
+  session in <code>localStorage</code> — which the SW cannot read. Resolution: each app client
   <code>postMessage</code>s <code>{ userId, accessToken }</code> to the SW on
-  <code>onAuthStateChange</code> / token refresh, and the SW issues
+  <code>onAuthStateChange</code> / token refresh, the SW records it <strong>keyed by the sender's
+  <code>client.id</code></strong> (not a single global slot — see the cross-account defense above),
+  and on a fetch the SW looks up the session for that request's <code>event.clientId</code> and issues
   <code>GET /storage/v1/object/attachments/&lt;ws&gt;/&lt;id&gt;</code> with
   <code>Authorization: Bearer</code>. This also <strong>eliminates per-object signed URLs</strong> for
   the in-app case (signed URLs are only needed for the logged-out public case, §13). The token expires
-  hourly; the app re-posts on refresh, and the SW must re-request on activation (it can be killed and
-  respawned at any time) — store the active <code>{ userId, accessToken }</code> in a known IndexedDB
-  key the SW re-reads on activation.</p>
+  hourly; the app re-posts on refresh.</p>
+
+<p>Persistence across SW respawn is deliberately minimal and <strong>wipe-gated</strong>: the token
+  store, if persisted at all, lives under the same per-user <code>PENDING_WIPE</code> marker the DB
+  wipe uses (§7.2), so a boot-time consumer drops it deterministically. A bearer token must never
+  outlive a lock just because a runtime <code>postMessage</code> was missed; gating it on the marker
+  (rather than only on a best-effort message) is what guarantees that.</p>
 
 <h3>7.2 Coordination problem B — Lock &amp; Wipe must reach the SW</h3>
 
 <div class="warn">
-<strong>This is the load-bearing risk.</strong> If the SW caches <em>decrypted</em> bytes in the
-Cache API, those are plaintext-at-rest in a context that <code>src/sync/keys/flows/lockAndWipe.ts</code>
-does not touch today. On lock, <code>lockAndWipe</code> clears the WK (<code>clearForUser</code>) and
-nukes the OPFS DB file — it must <em>also</em> <code>postMessage</code> the SW to purge the asset
-Cache and drop the cached <code>{ userId, accessToken }</code>. Get this wrong and decrypted images
-survive a lock. This must be wired in from day one, not retrofitted, and covered by the same flavor
-of tests that already pin <code>lockAndWipe</code> behavior.
+<strong>This is the load-bearing risk — and a fire-and-forget purge does NOT close it.</strong> If the
+SW caches <em>decrypted</em> bytes in the Cache API, those are plaintext-at-rest in a context that
+<code>src/sync/keys/flows/lockAndWipe.ts</code> does not touch today. Critically, the real lock
+sequence does <em>not</em> delete the local store inline: <code>lockAndWipe</code> drops the WKs
+(<code>clearForUser</code>) and <em>arms a per-user <code>PENDING_WIPE</code> marker</em>; the caller
+(<code>src/shortcuts/defaultShortcuts.ts</code>) then immediately calls
+<code>window.location.reload()</code>, and the OPFS DB file is deleted on the <em>next boot</em> by
+<code>consumePendingWipe</code> (before the DB is opened) — precisely because an inline delete isn't
+safe. A <code>postMessage(SW, 'purge')</code> issued just before that synchronous <code>reload()</code>
+is fire-and-forget: it races the navigation, the SW need not dispatch it before the page is gone, and
+nothing keeps an idle SW alive to finish <code>caches.delete</code>. So the obvious mechanism leaves
+decrypted bytes (and the bearer token) alive past a lock.
+</div>
+
+<div class="decision">
+<strong>Fix: gate the SW purge on the existing wipe marker, not on a message.</strong> Mirror the OPFS
+pattern that already works. Arm the asset-cache + token purge under the same per-user
+<code>PENDING_WIPE</code> marker, and have <code>consumePendingWipe</code> (which already runs at
+next boot, before the DB opens) perform <code>caches.delete('assets:&lt;userId&gt;')</code> and clear
+the SW token store as injected best-effort steps — alongside the compiled-extension cache clear it
+already does. The runtime <code>postMessage</code>, if kept, is only a fast path; the marker is the
+guarantee. This must be wired in from day one and covered by the same flavor of tests that pin
+<code>lockAndWipe</code>.
 </div>
 
 <p>Storing decrypted bytes in the Cache API is <em>consistent</em> with the accepted posture (e2ee
@@ -494,15 +566,26 @@ cache. Mandatory companions: the app→SW token handshake (§7.1) and the lock�
     bytes.</li>
   <li><strong>Eviction:</strong> soft LRU cap (≈500&nbsp;MB default). An evicted entry simply
     round-trips to the object store on next view.</li>
-  <li><strong>Lock &amp; Wipe:</strong> the cache is a registered participant in
-    <code>lockAndWipe</code> (§7.2). On lock: purge. On per-workspace revoke/leave: purge that
-    workspace's prefix.</li>
+  <li><strong>Lock &amp; Wipe:</strong> the cache + SW token store are purged via the
+    <code>PENDING_WIPE</code> marker consumed at next boot (§7.2), not a runtime message. On
+    per-workspace revoke/leave: purge that workspace's prefix.</li>
   <li><strong>Optimistic local-first write:</strong> on paste, the encoded bytes are written to the
-    <em>durable upload queue's own store</em> (§9), the display cache is warmed, and the asset block
-    is created with <code>status: 'uploading'</code>. The image renders immediately from local
-    bytes; the upload drains in the background; the block flips to <code>status: 'synced'</code>.
-    Offline, it simply stays <code>uploading</code> and still renders on this device.</li>
+    <em>durable upload queue's own store</em> (§9) and the display cache is warmed. The image renders
+    immediately from local bytes; the upload drains in the background. Whether the bytes have uploaded
+    yet is a <strong>per-device</strong> fact, read from the local queue — see the next point. Offline
+    it simply stays pending and still renders on this device.</li>
 </ul>
+
+<div class="warn">
+<strong>Upload status is per-device; do not put it in synced block properties.</strong> An earlier
+draft stored <code>status: 'uploading' | 'synced'</code> on the asset block. But block
+<code>properties</code> serialize to the single synced (and, for E2EE, encrypted)
+<code>properties_json</code> column — so a flip to <code>'synced'</code> would replicate to every
+device and clobber a peer for which the bytes are <em>not</em> local. "Have the bytes uploaded?" and
+"are the bytes cached <em>here</em>?" are both per-device questions answered by the <strong>local
+upload queue</strong> (§9) / local cache, keyed by <code>asset_block_id</code> — never by a synced
+flag. The synced block's mere existence is the only cross-device signal needed.
+</div>
 
 <div class="warn">
 <strong>The LRU display cache must not be the only home for un-uploaded bytes.</strong> The cache is
@@ -524,9 +607,21 @@ purely a display-cache concern.
   (the §8 hazard). Entries drain when connectivity returns, retrying with backoff; the durable copy
   is deleted only on a confirmed upload, after which the bytes are purely a display-cache concern.
   This is new infra the pre-E2EE proposal under-specified; E2EE doesn't change it, but the design
-  surfaces it clearly. Cross-device arrival is naturally eventually-consistent: a peer that has the
-  block but not yet the bytes shows the "metadata present, bytes pending" state until the upload from
-  the origin device completes.</p>
+  surfaces it clearly. The queue's local <code>status</code> is also the per-device source of truth
+  for the "bytes pending here?" UI (§8) — there is no synced status flag. Cross-device arrival is
+  naturally eventually-consistent: a peer that has the block but not yet the bytes shows the
+  "metadata present, bytes pending" state until the upload from the origin device completes.</p>
+
+<div class="warn">
+<strong>Undo / delete must compensate the byte lane.</strong> §11 puts the asset-block create + the
+<code>!((id))</code> insert in one <code>repo.tx</code> so they share an undo bucket — but that only
+makes the <em>DB</em> half atomic. The bytes (queue entry + any already-PUT object) are not
+transactional. So: (1) the drain step <strong>re-checks the block still exists (and is not deleted)
+before PUT</strong>, and drops the entry otherwise; (2) undo of an asset-block insert
+<strong>cancels the queue entry</strong> (keyed by <code>asset_block_id</code>) and, if the object
+already uploaded, enqueues a delete. Without this, undo leaves an orphaned Storage object and a queue
+entry that resurrects bytes for a block that no longer exists. (This is the undo case the §16 orphan
+sweep does <em>not</em> cover.)</div>
 
 <h2 id="storage">10. Storage layout &amp; RLS</h2>
 
@@ -547,15 +642,41 @@ using (
 );
 -- writes: analogous, private.is_workspace_writer.</code></pre>
 
-<p>The helpers live in the <code>private</code> schema — <code>private.is_workspace_member</code> /
-  <code>private.is_workspace_writer</code>, the same functions the <code>blocks</code> RLS uses
-  (consolidated migration). There is no <code>public</code> wrapper; the storage policy references
-  the <code>private.*</code> functions directly (or the bucket migration adds an explicit wrapper if
-  the policy owner can't reference <code>private</code>).</p>
+<div class="warn">
+<strong>The <code>private.*</code> grant is not free — verify it, don't assume parity with
+<code>blocks</code>.</strong> <code>private.is_workspace_member</code> / <code>is_workspace_writer</code>
+exist and are <code>SECURITY DEFINER</code>, but the migrations contain <em>no explicit</em>
+<code>GRANT USAGE ON SCHEMA private</code> / <code>GRANT EXECUTE</code> to the app roles — the
+<code>blocks</code> RLS works via defaults and the fact that the policy and the table live in
+<code>public</code>. A <code>storage.objects</code> policy runs in a <em>different</em> ownership/role
+context (the table is owned by <code>supabase_storage_admin</code>, in the <code>storage</code>
+schema), so "the same functions <code>blocks</code> uses" is <em>not</em> automatically callable
+there. Treat the schema-<code>USAGE</code> + <code>EXECUTE</code> grants (or a thin public wrapper) as
+a first-class, tested step of the bucket migration — a wrong assumption yields a policy that errors at
+query time or silently denies all reads.
+</div>
 
 <p>For an E2EE workspace the blob is already ciphertext, so RLS here is defense-in-depth — it stops a
   non-member from hoarding ciphertext against a future key compromise, and avoids leaking object
   existence. For a plaintext workspace it is the actual access boundary.</p>
+
+<h3>10.1 Server-side ciphertext enforcement for E2EE bytes</h3>
+
+<div class="warn">
+<strong>RLS is not the ciphertext guarantee — and there is no storage analog to
+<code>blocks_require_ciphertext_for_e2ee</code> for free.</strong> For blocks, a server trigger
+<em>rejects</em> a plaintext write to an E2EE workspace (<code>is_enc_v1_envelope</code> shape-check),
+so "the server only ever sees ciphertext" does not rest solely on the client upload hook. Storage has
+no such trigger by default, so for attachment bytes that invariant would rest <em>entirely</em> on
+client correctness — a stale client, a bug in <code>encodeBytes</code>, a missed mode check, or a
+direct authenticated write could land plaintext image bytes in an E2EE workspace's bucket. Two honest
+options, pick one explicitly: <strong>(a)</strong> add a server-side upload guard (a Storage
+trigger / Edge Function that, for objects under an E2EE workspace's prefix, rejects bytes that don't
+begin with the <code>encb:v1:</code> magic + minimum nonce/tag length — the binary analog of
+<code>is_enc_v1_envelope</code>); or <strong>(b)</strong> accept and <em>document</em> that, for
+bytes, the ciphertext guarantee is client-enforced only — a strictly weaker property than the text
+path, with the recovery path named. Recommended: (a), so attachments match the block guarantee.
+</div>
 
 <div class="info">
 <strong>Share-ready by construction.</strong> Keeping <code>asset_block_id</code> in the path means
@@ -588,12 +709,37 @@ foreclose it. This is the cheap-option-value posture, not speculative building.
     parallel to today's <code>text/plain</code> handlers in
     <code>CodeMirrorContentRenderer.tsx</code> / <code>DefaultBlockRenderer.tsx</code>; and a
     <code>/image</code> command + file-picker action through the existing action/shortcut system.</li>
-  <li><strong>On capture:</strong> client-side mime/size guard → hash → dedup lookup
-    (same-hash-in-workspace → new <code>!((existing-id))</code> embed) → otherwise create the asset
-    block as a <em>child of the containing block</em> (see §12) + write bytes to cache + enqueue
-    upload, all inside one <code>repo.tx({scope: ChangeScope.BlockDefault})</code> so the URI-insert
-    and the asset block land in the same undo bucket.</li>
+  <li><strong>On capture:</strong> client-side mime/size guard → hash → <em>best-effort</em> dedup
+    lookup (same-hash-in-workspace → new <code>!((existing-id))</code> embed) → otherwise create the
+    asset block as a <em>child of the containing block</em> (see §12), registering the type with
+    <code>repo.addTypeInTx(tx, id, 'media', …)</code> (the in-tx variant — the standalone
+    <code>block.addType</code> wouldn't compose into the single tx) + write bytes to the durable queue
+    store + enqueue upload, all inside one <code>repo.tx({scope: ChangeScope.BlockDefault})</code> so
+    the URI-insert and the asset block land in the same undo bucket (byte-lane compensation per §9).</li>
 </ul>
+
+<div class="warn">
+<strong>Dedup is best-effort, not an invariant.</strong> The lookup reads <em>local</em> synced state,
+so two devices (or two tabs, or an offline-then-reconnect) pasting the same image concurrently both
+miss, both create an asset block, and — because the object path is <code>&lt;ws&gt;/&lt;asset_block_id&gt;</code>
+— produce <strong>two Storage objects</strong> for identical bytes. The server can't break the tie
+(randomized GCM ⇒ no ciphertext dedup; <code>hash</code> is inside encrypted
+<code>properties_json</code>). So: state dedup as best-effort and make GC tolerate multiple blocks per
+hash. The tempting "make the id a deterministic function of <code>(workspace_id, hash)</code> so
+pastes converge" is <strong>unsafe as stated under E2EE</strong> — an id derived from the plaintext
+hash is a content oracle (the server could confirm a known image's presence by id, or correlate the
+same image across workspaces). If determinism is wanted, derive the id under the WK
+(<code>HMAC(WK, hash)</code>) so it's workspace-local and reveals nothing to the server — otherwise
+keep random ids + tolerate duplicates.
+</div>
+
+<div class="info">
+<strong>SW route ordering.</strong> The existing <code>public/sw.js</code> fetch handler routes by
+<code>request.destination</code>, and an <code>&lt;img&gt;</code> has destination <code>'image'</code>
+— which the current handler sends to the generation <code>assetCacheFirst</code> branch. The new
+<code>/asset/&lt;ws&gt;/&lt;id&gt;</code> route must be matched <strong>before</strong> that branch,
+or the auth-first resolution in §7 is shadowed by the existing image-cache path.
+</div>
 
 <h2 id="sharing">12. Interaction with subtree sharing</h2>
 
@@ -642,11 +788,30 @@ Do not special-case it.
       The original signed-URL story works here.</td></tr>
 <tr><td>E2EE workspace</td>
     <td>Either <strong>export-to-plaintext</strong> (decrypt + re-upload to a public bucket — the
-      asset deliberately <em>leaves</em> E2EE, like an export) or <strong>key-in-fragment</strong>
-      (<code>app/share#&lt;asset-key&gt;</code>; the encrypted blob is public, the client decrypts
-      from the URL fragment, which is never sent to the server). "Anyone with the link" is exactly
-      key-in-link semantics.</td></tr>
+      asset deliberately <em>leaves</em> E2EE, an explicit, consensual exit, never silent) or
+      <strong>key-in-fragment</strong> (<code>app/share#&lt;per-asset-key&gt;</code>; the client
+      decrypts from the URL fragment, which the browser never sends to the server). "Anyone with the
+      link" is exactly key-in-link semantics.</td></tr>
 </table>
+
+<div class="reject">
+<strong>The fragment key MUST be a fresh per-asset key, NEVER the workspace key.</strong> The §5.1
+crypto seals bytes with the WK <em>directly</em> — there is no per-asset key in the v1 design. So a
+naïve "put the decrypt key in the fragment" would put the <em>WK</em> in a URL, exposing the
+<em>entire workspace</em>, not one image. Key-in-fragment therefore requires its own step: generate a
+one-off key, re-encrypt the bytes under it, upload that to a <em>public</em> bucket, and put only that
+per-asset key in the fragment. The WK never leaves the device (preserving the e2ee §5 invariant).
+</div>
+
+<div class="warn">
+<strong>Document the fragment's leak surface and irrevocability.</strong> "Not sent in the HTTP
+request" is necessary but not sufficient: a fragment persists in history, is readable as
+<code>location.hash</code> by any script on the share page, and can ride a <code>Referer</code> or a
+third-party resource off-page. A public share page that loads a key into the DOM is a far softer
+target than the authenticated app (which is CSP-hardened). And it is <strong>irrevocable</strong> —
+once the link leaks, the asset leaks, permanently, short of re-encrypting under a new key. Both
+escape hatches are vNext; neither ships without these stated as accepted, explicit tradeoffs.
+</div>
 
 <p>Reserving the property + the audience flag costs almost nothing now and avoids a content migration
   later. The renderer's URL resolver branches on <em>both</em> workspace mode and render audience.</p>
@@ -674,15 +839,18 @@ Do not special-case it.
 <tr><th>Phase</th><th>Scope</th></tr>
 <tr><td>1 — crypto seam</td>
     <td><code>encb:v1:</code> binary envelope + <code>encodeBytes</code>/<code>decodeBytes</code> in
-      <code>src/sync/</code>, reusing <code>getCek</code> and the AAD pattern. Unit tests incl. the
-      plaintext-identity case and a tamper/swap test.</td></tr>
+      <code>src/sync/</code>, reusing <code>getCek</code> and the AAD pattern. Read path verifies the
+      decrypted bytes against the block's <code>hash</code> (§5.1). Unit tests incl. the
+      plaintext-identity case, a tamper/swap test, and a stale-ciphertext-replay test.</td></tr>
 <tr><td>2 — storage + RLS</td>
-    <td><code>attachments</code> bucket migration; membership storage RLS; <code>BlobStore</code>
-      over Supabase Storage. Post-create RLS audit per the Supabase rule.</td></tr>
+    <td><code>attachments</code> bucket migration; membership storage RLS (with the explicit
+      <code>private</code>-schema grants / wrapper, §10); the E2EE byte-ciphertext upload guard (§10.1);
+      <code>BlobStore</code> over Supabase Storage. Post-create RLS audit per the Supabase rule.</td></tr>
 <tr><td>3 — cache + SW</td>
-    <td>SW asset route (<code>/asset/&lt;ws&gt;/&lt;id&gt;</code>) with decrypt-or-passthrough; Cache
-      API byte cache; the app→SW token handshake and the
-      <code>lockAndWipe</code>→SW wipe handshake (with tests).</td></tr>
+    <td>SW asset route (<code>/asset/&lt;ws&gt;/&lt;id&gt;</code>, ordered before the image-cache
+      branch) with mode-pin-driven decrypt-or-passthrough; user-scoped Cache; per-<code>clientId</code>
+      token handshake; the marker-gated boot-time cache+token purge (§7.2) — covered by
+      <code>lockAndWipe</code>-flavored tests incl. a "plaintext survives lock" regression.</td></tr>
 <tr><td>4 — block model + renderer</td>
     <td><code>media</code> block type; <code>MediaBlockRenderer</code> (image branch) reusing the
       lightbox; markdown <code>img</code> override.</td></tr>
@@ -698,29 +866,53 @@ Do not special-case it.
 <ul>
   <li><strong>Cache backing if SW decryption is adopted:</strong> Cache API only, or Cache API +
     OPFS for an explicit LRU index? Cache API alone is simpler; OPFS gives finer eviction control.</li>
-  <li><strong>SW token handshake robustness across account switch:</strong> a browser profile can hold
-    multiple accounts (the keyStore is shared across them); the active-user handshake must be correct
-    under switch, not just single-account. Mirror the care the keyStore's <code>clearForUser</code>
-    already takes.</li>
+  <li><strong>Multi-account profile (decided shape, needs care):</strong> the SW session map is keyed
+    by <code>event.clientId</code> → that tab's user, and the cache by <code>user_id</code> (§7), so a
+    concurrent second account neither reads the wrong cache nor borrows the wrong bearer token. The
+    residual work is making this correct under <em>switch</em> and under the per-user wipe — mirror the
+    care <code>keyStore.clearForUser</code> already takes (it is per-user precisely so account A's wipe
+    doesn't disturb B).</li>
   <li><strong>Max inline size + large-media story:</strong> a v1 cap (e.g. 10&nbsp;MB) with a clear
     error, deferring resumable/tus upload to vNext. Where exactly is the cap enforced?</li>
   <li><strong>Asset block deletion → byte GC:</strong> delete the asset block ⇒ delete the object
     (storage cascade or an explicit step). Embeds that dangle render the existing "unresolved embed"
-    state. Orphan sweep is a vNext follow-up.</li>
-  <li><strong>Dedup scope:</strong> within-workspace only (confirmed — randomized GCM means the
-    server can't dedup anyway). Cross-workspace deliberately duplicates bytes for clean boundaries.</li>
+    state. The <em>undo</em> case is handled by the §9 byte-lane compensator; the broader orphan sweep
+    is a vNext follow-up.</li>
+  <li><strong>Cache backing:</strong> Cache API only, or Cache API + an IndexedDB LRU index for finer
+    eviction? Cache API alone is simpler; the durable upload-queue store (§9) is separate from either.</li>
 </ul>
 
 <h2 id="tradeoffs">17. Tradeoffs we're accepting</h2>
 <table>
 <tr><th>Choice</th><th>Cost</th><th>Why / exit</th></tr>
 <tr><td>SW is an E2EE-lifecycle participant</td>
-    <td>Two handshakes (token in, wipe out); decrypted bytes cached in a second location.</td>
-    <td>Buys a mode-agnostic renderer and native media semantics. Wipe-on-lock is mandatory and
-      tested; consistent with e2ee §15 #7.</td></tr>
+    <td>A per-client token handshake; decrypted bytes + token in a new (Cache API / SW) location.</td>
+    <td>Buys a mode-agnostic renderer and native media semantics. Wipe is <strong>marker-gated at
+      next boot</strong> (§7.2), not a racy runtime message; mandatory and tested (incl. a
+      "plaintext survives lock" regression). Consistent with e2ee §15 #7.</td></tr>
+<tr><td>Storage byte-length is visible to the server</td>
+    <td>Exact encrypted-object size (≈ plaintext + 28&nbsp;B) + existence/count — a stronger known-file
+      fingerprint than the accepted block-metadata leak (§4).</td>
+    <td><strong>New</strong> accepted leak, outside the e2ee §15 set. Size-bucket padding if the threat
+      model later cares.</td></tr>
+<tr><td>Byte AAD doesn't bind freshness</td>
+    <td>An untrusted server can replay an older ciphertext for the same asset (no PowerSync
+      monotonicity on the byte lane).</td>
+    <td>Closed by verifying decrypted bytes against the block's synced <code>hash</code> on read
+      (§5.1) — not left as a residual.</td></tr>
+<tr><td>Server byte-ciphertext enforcement is a deliberate add</td>
+    <td>Without §10.1's upload guard, "server sees only ciphertext" rests on client correctness for
+      bytes — weaker than the block trigger.</td>
+    <td>Recommended: ship the storage upload guard (§10.1) so bytes match the block guarantee;
+      otherwise document the weaker property explicitly.</td></tr>
 <tr><td>Bytes off the sync path</td>
-    <td>A second durable upload queue; eventual consistency between metadata and bytes.</td>
+    <td>A second durable upload queue; eventual consistency between metadata and bytes; undo needs a
+      byte-lane compensator (§9).</td>
     <td>Keeps large blobs out of SQLite/PowerSync entirely; the queue is small and self-draining.</td></tr>
+<tr><td>Dedup is best-effort</td>
+    <td>Concurrent same-hash pastes can produce duplicate objects (§11).</td>
+    <td>GC tolerates multiple blocks per hash; WK-keyed deterministic ids are the only safe
+      convergence option (a plaintext-hash id would be a content oracle).</td></tr>
 <tr><td>No server-side media features for E2EE</td>
     <td>No server thumbnails / OCR / transcode for encrypted workspaces.</td>
     <td>Inherited from e2ee §15 #2, not new. Client-side transforms remain possible.</td></tr>
@@ -733,13 +925,19 @@ Do not special-case it.
       bytes-copy + one module.</td></tr>
 </table>
 
-<p><small>Grounded against: <code>src/sync/transform.ts</code>, <code>src/sync/crypto/</code>,
-  <code>src/sync/keys/</code> (incl. <code>keyStore.ts</code>, <code>flows/lockAndWipe.ts</code>),
-  <code>supabase/migrations/20260529120000_add_e2ee_workspace_columns.sql</code>,
+<p><small>Grounded against: <code>src/sync/transform.ts</code>, <code>src/sync/crypto/</code>
+  (incl. <code>aead.ts</code>, <code>envelope.ts</code>, <code>aad.ts</code>),
+  <code>src/sync/keys/</code> (incl. <code>keyStore.ts</code>, <code>flows/lockAndWipe.ts</code>,
+  the <code>PENDING_WIPE</code> / <code>consumePendingWipe</code> path),
+  <code>src/shortcuts/defaultShortcuts.ts</code> (the lock caller),
+  <code>src/data/properties.ts</code> (<code>typesProp</code> / <code>getBlockTypes</code>),
+  <code>supabase/migrations/20260529120000_add_e2ee_workspace_columns.sql</code> and the consolidated
+  migration's <code>private.is_workspace_member</code>/<code>is_workspace_writer</code>,
   <code>src/data/repoProvider.ts</code>, <code>src/components/references/BlockEmbed.tsx</code>,
   <code>src/markdown/MarkdownImage.tsx</code>, <code>public/sw.js</code>, and the design docs
   <a href="./e2ee-design.html">e2ee-design.html</a> /
-  <a href="./shares-and-api-tokens.html">shares-and-api-tokens.html</a>.</small></p>
+  <a href="./shares-and-api-tokens.html">shares-and-api-tokens.html</a>. Revised after an adversarial
+  review pass (SW lifecycle, threat-model, and factual-grounding lenses).</small></p>
 
 </main>
 </body>
