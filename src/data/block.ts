@@ -275,9 +275,35 @@ export class Block implements Handle<BlockData | null> {
   // ──── Single-block write sugar (each is a 1-mutator tx) ────
 
   /** Set a typed property. Each call is its own tx, equivalent to
-   *  `repo.mutate.setProperty({id, schema, value})`. */
-  async set<T>(schema: PropertySchema<T>, value: T): Promise<void> {
-    await this.repo.mutate.setProperty({id: this.id, schema, value})
+   *  `repo.mutate.setProperty({id, schema, value})`.
+   *
+   *  Updater overload — `set(schema, current => next)` — reads the CURRENT
+   *  committed value INSIDE the (serialized) write-transaction and writes
+   *  the result, so concurrent single-key edits of a map/collection
+   *  property compose instead of clobbering a stale snapshot. The function
+   *  is never stored (it runs inside the tx; only its resolved value is
+   *  written), so this stays replay-safe — and works because property
+   *  values are serializable, so a value is never itself a function. */
+  async set<T>(schema: PropertySchema<T>, value: T): Promise<void>
+  async set<T>(
+    schema: PropertySchema<T>,
+    updater: (current: T | undefined) => T,
+  ): Promise<void>
+  async set<T>(
+    schema: PropertySchema<T>,
+    valueOrUpdater: T | ((current: T | undefined) => T),
+  ): Promise<void> {
+    if (typeof valueOrUpdater !== 'function') {
+      await this.repo.mutate.setProperty({id: this.id, schema, value: valueOrUpdater})
+      return
+    }
+    const updater = valueOrUpdater as (current: T | undefined) => T
+    await this.repo.tx(async tx => {
+      const data = await tx.get(this.id)
+      const raw = data?.properties[schema.name]
+      const current = raw === undefined ? undefined : schema.codec.decode(raw)
+      await tx.setProperty(this.id, schema, updater(current))
+    }, {scope: schema.changeScope, description: `update property ${schema.name} on ${this.id}`})
   }
 
   async addType(typeId: string): Promise<void> {

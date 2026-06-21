@@ -6,8 +6,10 @@
  *   - `useToggleTree()` — walks the full extension tree (static +
  *     dynamic) into a discoverable forest
  *   - `<ExtensionsSettings>` — the presentational checkbox tree
- *   - `applyToggle` + `onChange` — the property-panel infrastructure
- *     handles the `tx.setProperty` write of the synced INTENT map
+ *   - `block.set(extensionsOverridesProp, updater)` — a read-modify-write
+ *     of the synced INTENT map inside the serialized write-tx, so two
+ *     overlapping toggles (whose first-enable approvals run async) can't
+ *     each compute from a stale snapshot and drop one another's intent.
  *
  * Two-layer enable model (issue #67): the synced overrides map is the
  * cross-device INTENT; whether a user extension actually runs is gated by
@@ -28,6 +30,7 @@
 
 import {useCallback} from 'react'
 import type {PropertyEditorProps} from '@/data/api'
+import type {Block} from '@/data/block.js'
 import {useRepo} from '@/context/repo.js'
 import {
   approveExtension,
@@ -36,15 +39,19 @@ import {
 import {refreshAppRuntime} from '@/facets/runtimeEvents.js'
 import {applyToggle, type Overrides, type Togglable} from '@/facets/togglable.js'
 import {showError} from '@/utils/toast.js'
+import {extensionsOverridesProp} from './config.ts'
 import {ExtensionsSettings} from './ExtensionsSettings.tsx'
 import {useToggleTree} from './useToggleTree.ts'
 
 export const ExtensionsOverridesEditor = ({
   value,
-  onChange,
+  block,
 }: PropertyEditorProps<Overrides>) => {
   const repo = useRepo()
   const {tree, loading, workspaceId} = useToggleTree()
+  // `PropertyEditorProps.block` is intentionally `unknown` (the data-layer
+  // api avoids importing the Block facade) — narrow it here.
+  const prefsBlock = block as Block
 
   // Approve (or re-approve) a user extension on THIS device: pin the live
   // source so the loader will run it. The EXPLICIT trust action, shared by
@@ -85,10 +92,15 @@ export const ExtensionsOverridesEditor = ({
         if (handle.kind === 'user' && nextState && !(await readApproval(handle.id))) {
           if (!(await approveHere(handle))) return
         }
-        onChange(applyToggle(value, handle, nextState))
+        // Read-modify-write inside the serialized write-tx (not against the
+        // captured `value` snapshot), so an overlapping toggle whose async
+        // approval is still in flight can't drop this one's intent.
+        await prefsBlock.set(extensionsOverridesProp, current =>
+          applyToggle(current ?? new Map(), handle, nextState),
+        )
       })()
     },
-    [approveHere, onChange, value],
+    [approveHere, prefsBlock],
   )
 
   // Affordance path: intent is already true, so only the approval changes —
