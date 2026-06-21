@@ -1079,6 +1079,60 @@ describe('importRoam', () => {
     expect(childAfter?.parent_id).toBe(containerId)
   })
 
+  it('does not resurrect a tombstoned container whose whole subtree was deleted (#195)', async () => {
+    // Build page → container(empty content) → child, then delete the
+    // container via the cascading kernel mutator so the WHOLE subtree is
+    // tombstoned. The container's own fields are empty and it has NO live
+    // children — but its tombstoned child means it was a real user-deleted
+    // container, not a never-populated stub. (This is the case tx.childrenOf
+    // alone misses; isPristineRestorableStub passes {includeDeleted: true}.)
+    const pageId = roamBlockId(WORKSPACE, 'delContainerPageUid')
+    const containerId = roamBlockId(WORKSPACE, 'delContainerUid')
+    const childId = roamBlockId(WORKSPACE, 'delChildUid')
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: pageId, workspaceId: WORKSPACE,
+        parentId: null, orderKey: 'a0', content: 'del container page',
+      })
+      await tx.create({
+        id: containerId, workspaceId: WORKSPACE,
+        parentId: pageId, orderKey: 'a0', content: '',
+      })
+      await tx.create({
+        id: childId, workspaceId: WORKSPACE,
+        parentId: containerId, orderKey: 'a0', content: 'child content',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    // core.delete cascades — tombstones the container AND its subtree.
+    await env.repo.mutate.delete({id: containerId})
+    expect((await readBlock(containerId))?.deleted).toBe(1)
+    expect((await readBlock(childId))?.deleted).toBe(1)
+
+    const placeholderExport: RoamExport = [
+      {
+        title: 'page-ref-del-container',
+        uid: 'pageRefDelContainer',
+        children: [
+          {
+            string: 'see ((delContainerUid))',
+            uid: 'refDelContainer',
+            ':block/refs': [{':block/uid': 'delContainerUid'}],
+          },
+        ],
+      },
+    ]
+    await importRoam(placeholderExport, env.repo, {
+      workspaceId: WORKSPACE, currentUserId: USER_ID,
+    })
+
+    // Must stay tombstoned under its page — NOT resurrected (deleted→0)
+    // and re-rooted as a blank stub, which would undo the user's deletion.
+    const containerAfter = await readBlock(containerId)
+    expect(containerAfter?.deleted).toBe(1)
+    expect(containerAfter?.parent_id).toBe(pageId)
+    expect((await readBlock(childId))?.deleted).toBe(1)
+  })
+
   it('does not create placeholders for unconfirmed double-paren prose', async () => {
     const proseExport: RoamExport = [
       {

@@ -171,6 +171,12 @@ const COLUMN_PLACEHOLDERS = COLUMN_NAMES.map(() => '?').join(', ')
 const SELECT_BY_ID_SQL = `SELECT ${COLUMN_LIST} FROM blocks WHERE id = ?`
 const SELECT_CHILDREN_SQL =
   `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id`
+/** `childrenOf(..., {includeDeleted: true})` variant — keeps tombstoned
+ *  rows. Used to detect that a row ever had children (a real container,
+ *  even one whose whole subtree was soft-deleted) vs a never-populated
+ *  stub. */
+const SELECT_CHILDREN_INCLUDING_DELETED_SQL =
+  `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id = ? ORDER BY order_key, id`
 /** Root-level siblings (parent_id IS NULL). When a tx has pinned a
  *  workspace, scope to that workspace so `tx.childrenOf(null)` doesn't
  *  spill across workspaces — important for single-workspace-per-tx
@@ -178,6 +184,8 @@ const SELECT_CHILDREN_SQL =
  *  on root blocks. */
 const SELECT_ROOT_SIBLINGS_SQL =
   `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id IS NULL AND deleted = 0 AND workspace_id = ? ORDER BY order_key, id`
+const SELECT_ROOT_SIBLINGS_INCLUDING_DELETED_SQL =
+  `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id IS NULL AND workspace_id = ? ORDER BY order_key, id`
 const SELECT_NEXT_CHILD_SIBLING_SQL =
   `SELECT ${COLUMN_LIST} FROM blocks
    WHERE parent_id = ? AND deleted = 0
@@ -513,7 +521,12 @@ export class TxImpl implements Tx {
 
   // ──── Within-tx tree primitives ────
 
-  async childrenOf(parentId: string | null, workspaceId?: string): Promise<BlockData[]> {
+  async childrenOf(
+    parentId: string | null,
+    workspaceId?: string,
+    opts?: {includeDeleted?: boolean},
+  ): Promise<BlockData[]> {
+    const includeDeleted = opts?.includeDeleted ?? false
     if (parentId === null) {
       // SQL `parent_id = NULL` never matches; use `IS NULL`. Scope to
       // a workspace by one of: explicit arg → pinned meta → throw.
@@ -529,10 +542,12 @@ export class TxImpl implements Tx {
       if (ws === null) {
         throw new WorkspaceNotPinnedError()
       }
-      const rows = await this.ctx.txDb.getAll<BlockRow>(SELECT_ROOT_SIBLINGS_SQL, [ws])
+      const sql = includeDeleted ? SELECT_ROOT_SIBLINGS_INCLUDING_DELETED_SQL : SELECT_ROOT_SIBLINGS_SQL
+      const rows = await this.ctx.txDb.getAll<BlockRow>(sql, [ws])
       return rows.map(parseBlockRow)
     }
-    const rows = await this.ctx.txDb.getAll<BlockRow>(SELECT_CHILDREN_SQL, [parentId])
+    const sql = includeDeleted ? SELECT_CHILDREN_INCLUDING_DELETED_SQL : SELECT_CHILDREN_SQL
+    const rows = await this.ctx.txDb.getAll<BlockRow>(sql, [parentId])
     return rows.map(parseBlockRow)
   }
 

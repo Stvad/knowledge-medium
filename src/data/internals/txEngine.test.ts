@@ -755,6 +755,36 @@ describe('tx.childrenOf / tx.parentOf', () => {
     }, {scope: ChangeScope.BlockDefault})
   })
 
+  it('childrenOf keeps tombstoned children only with {includeDeleted}', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'cd-p',    workspaceId: 'ws-1', parentId: null,   orderKey: 'a0'})
+      await tx.create({id: 'cd-del',  workspaceId: 'ws-1', parentId: 'cd-p', orderKey: 'a0'})
+      await tx.create({id: 'cd-live', workspaceId: 'ws-1', parentId: 'cd-p', orderKey: 'a1'})
+      await tx.delete('cd-del')
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(async tx => {
+      expect((await tx.childrenOf('cd-p')).map(k => k.id)).toEqual(['cd-live'])
+      expect((await tx.childrenOf('cd-p', undefined, {includeDeleted: true})).map(k => k.id))
+        .toEqual(['cd-del', 'cd-live'])
+    }, {scope: ChangeScope.BlockDefault})
+  })
+
+  it('childrenOf(null, ws, {includeDeleted}) keeps tombstoned root rows', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'cdr-live', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'cdr-del',  workspaceId: 'ws-1', parentId: null, orderKey: 'a1'})
+      await tx.delete('cdr-del')
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(async tx => {
+      const live = (await tx.childrenOf(null, 'ws-1')).map(k => k.id)
+      expect(live).toContain('cdr-live')
+      expect(live).not.toContain('cdr-del')
+      const all = (await tx.childrenOf(null, 'ws-1', {includeDeleted: true})).map(k => k.id)
+      expect(all).toContain('cdr-live')
+      expect(all).toContain('cdr-del')
+    }, {scope: ChangeScope.BlockDefault})
+  })
+
   it('finds adjacent siblings without enumerating the full sibling list', async () => {
     await env.repo.tx(async tx => {
       await tx.create({id: 'adj-p',  workspaceId: 'ws-1', parentId: null,    orderKey: 'a0'})

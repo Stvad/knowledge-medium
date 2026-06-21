@@ -169,7 +169,7 @@ export interface Tx {
   // ──── Within-tx tree primitives ────
 
   /** Children of `parentId`, ordered `(order_key, id)`, filtered
-   *  `deleted = 0`. Reads SQL via the writeTransaction.
+   *  `deleted = 0` by default. Reads SQL via the writeTransaction.
    *  Pass `null` to enumerate workspace-root rows (rows with
    *  `parent_id IS NULL`); the result is scoped to a workspace by
    *  one of three sources, in priority order:
@@ -181,8 +181,17 @@ export interface Tx {
    *       cross-workspace rows is never safe for sibling-position
    *       computation.
    *  When `parentId !== null`, `workspaceId` is ignored — the parent
-   *  row already constrains the query. */
-  childrenOf(parentId: string | null, workspaceId?: string): Promise<BlockData[]>
+   *  row already constrains the query.
+   *  Pass `{includeDeleted: true}` to keep tombstoned children too —
+   *  e.g. to tell a row that ever had children (a real container, even
+   *  one whose whole subtree was soft-deleted) apart from a
+   *  never-populated stub. Default `false` preserves the live-only
+   *  behavior every sibling-position caller relies on. */
+  childrenOf(
+    parentId: string | null,
+    workspaceId?: string,
+    opts?: {includeDeleted?: boolean},
+  ): Promise<BlockData[]>
 
   /** Nearest live sibling before/after `anchor` in `(order_key, id)`
    *  order. Unlike `childrenOf`, this is a cursor lookup, so insertion

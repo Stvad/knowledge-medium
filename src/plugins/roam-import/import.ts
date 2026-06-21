@@ -1094,11 +1094,13 @@ const patchAliasReferences = (data: BlockData, aliasIdMap: AliasIdMap) => {
  *  blank-restore as a placeholder. Pristine = empty content, no
  *  references, NO properties at all (any property — even a cosmetic one
  *  like collapse / show-properties — means a user touched this row), and
- *  no live children (a tombstoned container would otherwise have its live
- *  subtree relocated to the workspace root by the restore + move). Mirrors
- *  the "restorable transient tombstone" test alias-seat reuse applies in
- *  src/data/targets.ts (`isRestorableTransientTombstone`): the row must
- *  still equal its empty seed and have no live children, so "a user's
+ *  no children at all — live OR tombstoned. A container the user deleted
+ *  (which cascade-tombstones its whole subtree) still has child rows, so
+ *  including deleted children keeps us from resurrecting + re-rooting that
+ *  container as a blank stub and thereby undoing the user's deletion.
+ *  Mirrors the "restorable transient tombstone" test alias-seat reuse
+ *  applies in src/data/targets.ts (`isRestorableTransientTombstone`): the
+ *  row must still equal its empty seed and have no children, so "a user's
  *  explicit deletion is never undone". Anything that is NOT pristine is
  *  user data we must not resurrect or relocate (#195), so the placeholder
  *  path leaves it tombstoned; an unresolved ((uid)) pointing at such a
@@ -1108,7 +1110,7 @@ const isPristineRestorableStub = async (tx: Tx, row: BlockData): Promise<boolean
   if (row.content !== '') return false
   if (row.references.length > 0) return false
   if (Object.keys(row.properties).length > 0) return false
-  const children = await tx.childrenOf(row.id)
+  const children = await tx.childrenOf(row.id, undefined, {includeDeleted: true})
   return children.length === 0
 }
 
@@ -1121,15 +1123,16 @@ const isPristineRestorableStub = async (tx: Tx, row: BlockData): Promise<boolean
  *     already live at this id; a placeholder must NOT clobber it).
  *   - Tombstone hit, pristine stub: tx.restore to an empty placeholder
  *     and move it to the workspace root so references resolve. "Pristine"
- *     = empty content/references/properties and no live children (see
- *     isPristineRestorableStub). The user can re-delete after the import
- *     if they were intentionally cleaning up; leaving the row tombstoned
- *     would crash the import tx.
+ *     = empty content/references/properties and no children (live or
+ *     tombstoned) (see isPristineRestorableStub). The user can re-delete
+ *     after the import if they were intentionally cleaning up; leaving the
+ *     row tombstoned would crash the import tx.
  *   - Tombstone hit, NOT pristine: the deleted row is user data — a real
  *     block deleted under this uid (content / properties / backlinks), a
  *     stub the user touched (e.g. collapsed → a stray property), or a
- *     container with a live subtree. Blank-restoring it would destroy
- *     that data or relocate the subtree to the workspace root (#195).
+ *     container the user deleted (whose subtree is cascade-tombstoned but
+ *     still present). Blank-restoring it would destroy that data, or undo
+ *     the deletion and relocate the container to the workspace root (#195).
  *     Preserving live user data — including history — is paramount, so we
  *     leave it tombstoned. A later, more-complete import that DOES include
  *     the real block upserts it back via upsertImportedBlock; an
@@ -1152,10 +1155,10 @@ const ensurePlaceholderRow = async (
     if (!(err instanceof DeletedConflictError)) throw err
     // The id collides with a tombstone. Only a genuinely pristine stub is
     // safe to blank-restore — anything else (a real block deleted under
-    // this uid, a stub the user touched, or a container with a live
-    // subtree) is user data a blank-restore would destroy or relocate
-    // (#195). Leave non-pristine tombstones alone. tx.get returns deleted
-    // rows (no `deleted` filter).
+    // this uid, a stub the user touched, or a container the user deleted
+    // whose subtree is still present) is user data a blank-restore would
+    // destroy or relocate (#195). Leave non-pristine tombstones alone.
+    // tx.get returns deleted rows (no `deleted` filter).
     const existing = await tx.get(id)
     if (!existing || !(await isPristineRestorableStub(tx, existing))) return
     // Pristine stub: restore as an empty placeholder so the ((uid)) ref
