@@ -1,0 +1,207 @@
+// Built-in client-side consistency audit (L3 of the data-integrity defense —
+// docs/data-integrity-defense.html). The cadenced, always-on complement to the
+// on-demand bridge eval (scripts/data-integrity/consistency-check.eval.js): a
+// lean, count-only subset of the same invariants that the Repo runs on idle and
+// surfaces as a metric, so the catastrophic strip/divergence classes are caught
+// on a cadence instead of only when a human remembers to run the eval.
+//
+// All checks are READ-ONLY counts over the client SQLite (it runs on the
+// decrypted client, so unlike the server probe it covers the e2ee workspace).
+// Each check is isolated: a missing table or malformed row degrades that one
+// check to `error`, never crashing the audit or reading as clean. The deep
+// per-ref/sample/precise-projection diffs stay in the eval — this is the smoke
+// alarm, not the full inspection.
+
+/** Minimal DB surface the audit needs (a subset of the Repo's PowerSyncDb). */
+export interface AuditDb {
+  getAll<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<T[]>
+}
+
+export interface ConsistencyCheckResult {
+  status: 'ok' | 'anomaly' | 'error'
+  [key: string]: unknown
+}
+
+export interface ConsistencyAuditResult {
+  workspaceId: string
+  /** epoch ms; passed in by the caller so the module stays pure/testable. */
+  checkedAt: number
+  /** number of checks whose status is 'anomaly'. */
+  anomalies: number
+  checks: Record<string, ConsistencyCheckResult>
+}
+
+// Curated high-value ref props checked at rest (the proven 06-09 next-review-date
+// detector). Kept tiny and stable — the eval does the schema-independent
+// enumeration; the built-in audit only needs the known-catastrophic one.
+const CURATED_REF_PROPS = ['next-review-date']
+
+const count = async (db: AuditDb, sql: string, params: unknown[]): Promise<number> => {
+  const rows = await db.getAll<{ n: number }>(sql, params)
+  return Number(rows[0]?.n ?? 0)
+}
+
+// json_each throws on invalid JSON; feed it a guarded value so one bad row can't
+// abort the mirror check (the bad row is counted separately as malformedJson).
+const REFS_JSON = `CASE WHEN json_valid(b.references_json) THEN b.references_json ELSE '[]' END`
+const EXPANDED_REF_FILTER = `
+      typeof(json_extract(je.value,'$.id'))='text'
+  AND typeof(json_extract(je.value,'$.alias'))='text'
+  AND (json_type(je.value,'$.sourceField') IS NULL
+       OR typeof(json_extract(je.value,'$.sourceField'))='text')`
+
+/** Run the built-in consistency audit for one workspace. Pure: caller supplies
+ *  `now` (epoch ms). Never throws — per-check failures are captured as `error`. */
+export const runConsistencyAudit = async (
+  db: AuditDb,
+  workspaceId: string,
+  now: number,
+): Promise<ConsistencyAuditResult> => {
+  const checks: Record<string, ConsistencyCheckResult> = {}
+  let anomalies = 0
+  const run = async (name: string, fn: () => Promise<ConsistencyCheckResult>): Promise<void> => {
+    try {
+      const result = await fn()
+      checks[name] = result
+      if (result.status === 'anomaly') anomalies += 1
+    } catch (e) {
+      checks[name] = { status: 'error', error: String((e as Error)?.message ?? e) }
+    }
+  }
+
+  // R2 — references_json <-> block_references mirror (both directions + dupes + malformed).
+  await run('references_index_mirror', async () => {
+    const malformedJson = await count(
+      db,
+      `SELECT count(*) AS n FROM blocks b
+       WHERE b.deleted=0 AND b.workspace_id=?
+         AND (NOT json_valid(b.references_json) OR NOT json_valid(b.properties_json))`,
+      [workspaceId],
+    )
+    const missingIndexRows = await count(
+      db,
+      `SELECT count(*) AS n FROM (
+         SELECT b.id AS source_id,
+                json_extract(je.value,'$.id') AS target_id,
+                json_extract(je.value,'$.alias') AS alias,
+                COALESCE(json_extract(je.value,'$.sourceField'),'') AS source_field
+         FROM blocks b, json_each(${REFS_JSON}) je
+         WHERE b.deleted=0 AND b.workspace_id=? AND ${EXPANDED_REF_FILTER}
+       ) exp
+       LEFT JOIN block_references br
+         ON br.source_id=exp.source_id AND br.target_id=exp.target_id
+        AND br.alias=exp.alias AND br.source_field=exp.source_field
+       WHERE br.source_id IS NULL`,
+      [workspaceId],
+    )
+    const extraIndexRows = await count(
+      db,
+      `SELECT count(*) AS n FROM block_references br
+       JOIN blocks b ON b.id=br.source_id AND b.deleted=0
+       WHERE br.workspace_id=?
+         AND NOT EXISTS (
+           SELECT 1 FROM json_each(${REFS_JSON}) je
+           WHERE json_extract(je.value,'$.id')=br.target_id
+             AND json_extract(je.value,'$.alias')=br.alias
+             AND COALESCE(json_extract(je.value,'$.sourceField'),'')=br.source_field)`,
+      [workspaceId],
+    )
+    const orphanSourceRows = await count(
+      db,
+      `SELECT count(*) AS n FROM block_references br
+       LEFT JOIN blocks b ON b.id=br.source_id
+       WHERE br.workspace_id=? AND (b.id IS NULL OR b.deleted=1)`,
+      [workspaceId],
+    )
+    const duplicateTuples = await count(
+      db,
+      `SELECT count(*) AS n FROM (
+         SELECT b.id,
+                json_extract(je.value,'$.id') AS tid,
+                json_extract(je.value,'$.alias') AS al,
+                COALESCE(json_extract(je.value,'$.sourceField'),'') AS sf
+         FROM blocks b, json_each(${REFS_JSON}) je
+         WHERE b.deleted=0 AND b.workspace_id=? AND ${EXPANDED_REF_FILTER}
+         GROUP BY b.id, tid, al, sf
+         HAVING count(*) > 1
+       )`,
+      [workspaceId],
+    )
+    const total = missingIndexRows + extraIndexRows + orphanSourceRows + duplicateTuples + malformedJson
+    return {
+      status: total > 0 ? 'anomaly' : 'ok',
+      missingIndexRows,
+      extraIndexRows,
+      orphanSourceRows,
+      duplicateTuples,
+      malformedJson,
+    }
+  })
+
+  // R4 — curated property-ref at-rest: value present in properties_json, projected
+  // ref absent from references_json (the proven 06-09 detection query).
+  await run('property_ref_at_rest', async () => {
+    const findings: Array<{ prop: string; valuePresentRefAbsent: number }> = []
+    for (const name of CURATED_REF_PROPS) {
+      const n = await count(
+        db,
+        `SELECT count(*) AS n FROM blocks
+         WHERE deleted=0 AND workspace_id=?
+           AND properties_json LIKE '%"' || ? || '"%'
+           AND references_json NOT LIKE '%"sourceField":"' || ? || '"%'`,
+        [workspaceId, name, name],
+      )
+      if (n > 0) findings.push({ prop: name, valuePresentRefAbsent: n })
+    }
+    return { status: findings.length > 0 ? 'anomaly' : 'ok', curatedProps: CURATED_REF_PROPS, findings }
+  })
+
+  // L4 — blocks <-> blocks_synced divergence (ps_crud-aware). Per-client scans
+  // miss divergence (#3, #5); this is the cross-view detector.
+  await run('local_server_divergence', async () => {
+    const pendingClause = `NOT EXISTS (
+      SELECT 1 FROM ps_crud p
+      WHERE json_extract(p.data,'$.type')='blocks' AND json_extract(p.data,'$.id')=b.id)`
+    const strandedLocalOnly = await count(
+      db,
+      `SELECT count(*) AS n FROM blocks b
+       WHERE b.workspace_id=? AND b.deleted=0
+         AND NOT EXISTS (SELECT 1 FROM blocks_synced bs WHERE bs.id=b.id)
+         AND ${pendingClause}`,
+      [workspaceId],
+    )
+    const equalStampStandoff = await count(
+      db,
+      `SELECT count(*) AS n FROM blocks b JOIN blocks_synced bs ON bs.id=b.id
+       WHERE b.workspace_id=? AND b.updated_at=bs.updated_at AND b.updated_at!=0
+         AND (b.content!=bs.content OR b.properties_json!=bs.properties_json
+              OR b.references_json!=bs.references_json OR b.deleted!=bs.deleted)`,
+      [workspaceId],
+    )
+    const localRicherNoPending = await count(
+      db,
+      `SELECT count(*) AS n FROM blocks b JOIN blocks_synced bs ON bs.id=b.id
+       WHERE b.workspace_id=? AND b.updated_at>bs.updated_at AND ${pendingClause}`,
+      [workspaceId],
+    )
+    const serverAheadUndrained = await count(
+      db,
+      `SELECT count(*) AS n FROM blocks b JOIN blocks_synced bs ON bs.id=b.id
+       WHERE b.workspace_id=? AND bs.updated_at>b.updated_at AND ${pendingClause}
+         AND (b.content!=bs.content OR b.properties_json!=bs.properties_json
+              OR b.references_json!=bs.references_json OR b.deleted!=bs.deleted)`,
+      [workspaceId],
+    )
+    // stranded + standoff + local-richer are real anomalies; server-ahead is info.
+    const total = strandedLocalOnly + equalStampStandoff + localRicherNoPending
+    return {
+      status: total > 0 ? 'anomaly' : 'ok',
+      strandedLocalOnly,
+      equalStampStandoff,
+      localRicherNoPending,
+      serverAheadUndrained,
+    }
+  })
+
+  return { workspaceId, checkedAt: now, anomalies, checks }
+}

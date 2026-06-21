@@ -139,6 +139,13 @@ export const bootstrapWorkspace = async ({
   // holds the default this session).
   repo.scheduleReconcileRescan(workspaceId)
 
+  // Built-in data-integrity self-audit (L3): a cadenced, read-only background
+  // check (references mirror, curated property-ref at rest, local↔server
+  // divergence) that surfaces anomaly counts via repo.metrics().consistencyAudit.
+  // Marker-gated so it runs at most once per workspace per cadence window. Placed
+  // after the access gate so it never reads a locked/unverified workspace.
+  repo.scheduleConsistencyAudit(workspaceId)
+
   // Freshly inserted personal workspace: install the starter tutorial
   // as its own parent-less page. The [[Tutorial]] bullet on today's
   // daily note (added below) makes it discoverable from the landing

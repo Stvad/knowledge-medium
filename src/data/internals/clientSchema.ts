@@ -1131,6 +1131,22 @@ export const RECORD_RECONCILE_RESCAN_MARKER_SQL = `
   VALUES (?, strftime('%s', 'now') * 1000)
 `
 
+/** Built-in consistency audit (L3, src/data/internals/consistencyAudit.ts).
+ *  Keyed `consistency_audit:<workspaceId>`. Unlike the run-once markers above
+ *  this is CADENCED — the marker stores `completed_at` and the job re-runs once
+ *  the last run is older than its cadence window, so the audit recurs instead of
+ *  firing once per client. INSERT OR REPLACE updates `completed_at` each run. */
+export const CONSISTENCY_AUDIT_MARKER_PREFIX = 'consistency_audit:'
+
+export const SELECT_CONSISTENCY_AUDIT_MARKER_SQL = `
+  SELECT completed_at FROM client_schema_state WHERE key = ?
+`
+
+export const RECORD_CONSISTENCY_AUDIT_MARKER_SQL = `
+  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
+  VALUES (?, strftime('%s', 'now') * 1000)
+`
+
 // ============================================================================
 // Bulk-apply ordered list. Run after `blocks` exists (PowerSync's schema
 // initialization creates it). Idempotent (`IF NOT EXISTS`).

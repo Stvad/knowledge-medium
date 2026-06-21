@@ -138,8 +138,9 @@ describe('repo.instanceId', () => {
 describe('repo.metrics() / resetMetrics()', () => {
   it('exposes all subsections; all start empty / at zero', () => {
     const m = env.repo.metrics()
-    expect(Object.keys(m).sort()).toEqual(['blockCache', 'db', 'handleStore', 'handleStoreInventory', 'queries', 'reprojection', 'slowestTx', 'txLog'])
+    expect(Object.keys(m).sort()).toEqual(['blockCache', 'consistencyAudit', 'db', 'handleStore', 'handleStoreInventory', 'queries', 'reprojection', 'slowestTx', 'txLog'])
     expect(Object.isFrozen(m)).toBe(true)
+    expect(m.consistencyAudit).toEqual({runs: 0, skipped: 0, lastError: null, lastResult: null})
     expect(m.handleStore.invalidations).toBe(0)
     expect(m.handleStoreInventory.handleCount).toBe(0)
     expect(m.handleStoreInventory.topHeavy).toEqual([])
