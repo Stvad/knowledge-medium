@@ -516,10 +516,13 @@ its own monotonicity).
     hash, e.g. <code>/asset/&lt;ws&gt;/&lt;id&gt;?h=&lt;sha256&gt;</code>, and the SW verifies the
     decrypted bytes against it before caching/serving. Unlike the mode, an app-passed hash is
     <em>safe</em>: it is a positive integrity check that can only <em>reject</em> (fail closed), never
-    downgrade — a hostile server can't weaken it, and a wrong/absent hash just declines to serve from
-    that fetch. A bare navigation/download with no <code>h</code> (no renderer to add it) decrypts and
-    serves but skips the replay check — acceptable for a user-initiated download; the download action
-    should append <code>h</code> when it can.</li>
+    downgrade — a hostile server can't weaken it, and a wrong hash just declines to serve from that
+    fetch. <strong>For an E2EE workspace a missing <code>h</code> fails closed</strong>: the server is
+    in the threat model, so a no-<code>h</code> download would let it replay an older ciphertext for the
+    same <code>&lt;ws&gt;/&lt;id&gt;</code> (GCM verifies; the SW has no hash to reject it). So the
+    download/navigation action <em>must</em> append <code>h</code> for E2EE assets (the renderer has it),
+    and the SW refuses to serve an E2EE asset without it. Only a plaintext workspace — where there is no
+    replay concern — may serve a no-<code>h</code> request.</li>
   <li><strong>Active user + token</strong> — already covered by the §7.1 per-<code>clientId</code>
     handshake.</li>
 </ul>
@@ -1077,7 +1080,8 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
     <td>Closed by verifying decrypted bytes against the block's synced <code>hash</code> on read
       (§5.1) — not left as a residual.</td></tr>
 <tr><td>Server byte-ciphertext enforcement is a deliberate add</td>
-    <td>An extra storage trigger / mediating Edge Function on the upload path.</td>
+    <td>A body-inspecting mediating Edge Function as the sole write path (a
+      <code>storage.objects</code> trigger can't see body bytes, §10.1).</td>
     <td><strong>Decided: ship it</strong> (§10.1), so the byte ciphertext guarantee matches the block
       trigger rather than resting on client correctness.</td></tr>
 <tr><td>Bytes off the sync path</td>
