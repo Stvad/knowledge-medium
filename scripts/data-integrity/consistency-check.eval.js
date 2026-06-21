@@ -364,22 +364,26 @@ try {
   skip('property_ref_at_rest', String(e))
 }
 
-// ── R1/R3: content-link strip recompute (parser-precise) ──────────────────────
-// Upgrade of the old LIKE heuristic: parse each candidate's content with the SAME
-// parser the references processor uses (parseReferences + parseBlockRefs), so a
-// `[[` in a code block or an `((not-a-uuid))` produces no mark — exactly as the
-// processor sees it (it uses the plain-text parser too, and parses no hashtags),
-// eliminating the heuristic's code-block / false-bracket noise. A block with >=1
-// real content mark but ZERO stored content refs (sourceField empty) is a strip:
-// content the processor WOULD project a ref from, with none stored.
+// ── R1/R3: content-ref consistency recompute (parser-precise, both directions) ─
+// Parse each candidate's content with the SAME parser the references processor
+// uses (parseReferences + parseBlockRefs), so a `[[` in a code block or an
+// `((not-a-uuid))` produces no mark — exactly as the processor sees it (plain-text
+// parser, no hashtags), eliminating the old LIKE heuristic's noise. Two signals:
 //
-// Sound without alias resolution because it keys on presence (>=1 mark vs 0 refs),
-// not per-ref identity: reconcileDerived dedups content refs by target id, so two
-// aliases that resolve to one target collapse to one ref — a per-mark count diff
-// would false-positive, the zero-check does not. The remaining cases are a strip
-// (real) or a not-yet-processed fresh block (transient) — re-run to clear the
-// latter. The full per-id alias-resolving diff (catching a PARTIAL content-ref
-// strip) needs the processor's read-only seat resolution and is deferred (§6).
+//   strippedBlocks  — >=1 real content mark but ZERO stored content refs. A total
+//                     strip, or a not-yet-processed fresh block (re-run to clear).
+//   staleRefBlocks  — a stored content ref whose alias current content NO LONGER
+//                     contains: a ref derived from a STALE content version. This
+//                     is the class-B / matrix-incident signature (refs that won
+//                     independently of the content they were derived from), or a
+//                     not-yet-reprojected content edit.
+//
+// Compared by ALIAS, which the processor stores verbatim on every content ref
+// ({id, alias:<mark text>}; block refs store alias=id). No alias resolution
+// needed. One known false positive (rare): two aliases in one block resolving to
+// the SAME target collapse to one ref (reconcileDerived dedups by id), so if the
+// surviving ref's alias is the one removed from content while the other remains,
+// it reads as stale. Sampled — treat staleRefBlocks as a lead, not a hard count.
 try {
   const { parseReferences, parseBlockRefs } = await import(
     '@/plugins/references/referenceParser.js'
@@ -394,8 +398,11 @@ try {
   let scanned = 0
   let withMarks = 0
   let strippedBlocks = 0
+  let staleRefBlocks = 0
+  let staleRefs = 0
   let truncated = false
   const strippedSample = []
+  const staleSample = []
   for (;;) {
     const batch = await rows(
       `SELECT id, content, references_json FROM blocks
@@ -407,9 +414,11 @@ try {
     )
     if (batch.length === 0) break
     for (const row of batch) {
-      const markCount =
-        parseReferences(row.content).length + parseBlockRefs(row.content).length
-      if (markCount === 0) continue // LIKE matched but no real mark (code/escaped/non-uuid)
+      const parsedAliases = new Set([
+        ...parseReferences(row.content).map((m) => m.alias),
+        ...parseBlockRefs(row.content).map((m) => m.blockId),
+      ])
+      if (parsedAliases.size === 0) continue // LIKE matched but no real mark
       withMarks += 1
       let stored
       try {
@@ -418,10 +427,20 @@ try {
         continue // malformed JSON is the index-mirror check's job
       }
       const contentRefs = stored.filter((r) => r && !r.sourceField)
+      // (missing) marks but zero content refs → a strip.
       if (contentRefs.length === 0) {
         strippedBlocks += 1
         if (strippedSample.length < sampleLimit)
-          strippedSample.push({ id: row.id, marks: markCount, content_preview: row.content.slice(0, 120) })
+          strippedSample.push({ id: row.id, marks: parsedAliases.size, content_preview: row.content.slice(0, 120) })
+        continue
+      }
+      // (stale, class-B) stored content refs whose alias current content lacks.
+      const stale = contentRefs.filter((r) => !parsedAliases.has(r.alias))
+      if (stale.length > 0) {
+        staleRefBlocks += 1
+        staleRefs += stale.length
+        if (staleSample.length < sampleLimit)
+          staleSample.push({ id: row.id, stale: stale.map((r) => r.alias), content_preview: row.content.slice(0, 120) })
       }
     }
     scanned += batch.length
@@ -430,7 +449,7 @@ try {
     if (scanned >= contentCap) { truncated = true; break } // safety ceiling only
   }
 
-  const anomalous = strippedBlocks > 0
+  const anomalous = strippedBlocks > 0 || staleRefBlocks > 0
   // Only a safety-ceiling hit leaves part of the graph unseen → not 'ok'.
   report.checks.content_link_recompute = {
     status: anomalous ? 'anomaly' : truncated ? 'incomplete' : 'ok',
@@ -438,8 +457,11 @@ try {
     truncated,
     blocksWithMarks: withMarks,
     strippedBlocks,
-    note: 'block has >=1 parsed content mark but zero stored content refs — a strip, or a not-yet-processed fresh block (re-run to clear the latter)',
+    staleRefBlocks,
+    staleRefs,
+    note: 'strippedBlocks: >=1 content mark, 0 stored content refs (strip / fresh unprocessed). staleRefBlocks: stored content ref whose alias current content lacks (class-B desync from stale content, or a not-yet-reprojected edit). Both can include benign transients — re-run to clear; staleRefBlocks has a rare dedup false positive (see check comment).',
     strippedSample,
+    staleSample,
   }
   if (anomalous) report.anomalies += 1
 } catch (e) {
