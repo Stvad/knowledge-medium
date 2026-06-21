@@ -150,41 +150,52 @@ function AppVersionValue() {
   )
 }
 
-// Compact per-check summaries of an audit's anomalies, for the dropdown details.
-function summarizeAuditAnomalies(
-  result: ConsistencyAuditResult,
-): {label: string; detail: string}[] {
-  const summaries: {label: string; detail: string}[] = []
-  for (const [name, check] of Object.entries(result.checks)) {
-    if (check.status !== 'anomaly') continue
-    const n = (key: string): number => Number(check[key] ?? 0)
-    if (name === 'references_index_mirror') {
-      const parts: string[] = []
-      if (n('missingIndexRows')) parts.push(`${n('missingIndexRows')} missing`)
-      if (n('extraIndexRows')) parts.push(`${n('extraIndexRows')} extra`)
-      if (n('orphanSourceRows')) parts.push(`${n('orphanSourceRows')} orphaned`)
-      if (n('duplicateTuples')) parts.push(`${n('duplicateTuples')} duplicate`)
-      if (n('malformedJson')) parts.push(`${n('malformedJson')} malformed`)
-      summaries.push({label: 'References index', detail: parts.join(', ')})
-    } else if (name === 'property_ref_at_rest') {
-      const findings = Array.isArray(check.findings)
-        ? (check.findings as {prop: string; valuePresentRefAbsent: number}[])
-        : []
-      summaries.push({
-        label: 'Property references',
-        detail: findings.map((f) => `${f.prop}: ${f.valuePresentRefAbsent}`).join(', '),
-      })
-    } else if (name === 'local_server_divergence') {
-      const parts: string[] = []
-      if (n('strandedLocalOnly')) parts.push(`${n('strandedLocalOnly')} stranded`)
-      if (n('equalStampStandoff')) parts.push(`${n('equalStampStandoff')} stalemate`)
-      if (n('localRicherNoPending')) parts.push(`${n('localRicherNoPending')} unsynced local`)
-      summaries.push({label: 'Local vs server', detail: parts.join(', ')})
-    } else {
-      summaries.push({label: name, detail: 'anomaly'})
+// Compact per-check summary (counts) for the dropdown details. `detail` is ''
+// when the check found no signal (so the info band can filter those out).
+function summarizeAuditCheck(
+  name: string,
+  check: ConsistencyAuditResult['checks'][string],
+): {label: string; detail: string} {
+  const n = (key: string): number => Number(check[key] ?? 0)
+  if (name === 'references_index_mirror') {
+    const parts: string[] = []
+    if (n('missingIndexRows')) parts.push(`${n('missingIndexRows')} missing`)
+    if (n('extraIndexRows')) parts.push(`${n('extraIndexRows')} extra`)
+    if (n('orphanSourceRows')) parts.push(`${n('orphanSourceRows')} orphaned`)
+    if (n('duplicateTuples')) parts.push(`${n('duplicateTuples')} duplicate`)
+    if (n('malformedJson')) parts.push(`${n('malformedJson')} malformed`)
+    return {label: 'References index', detail: parts.join(', ')}
+  }
+  if (name === 'property_ref_at_rest') {
+    const findings = Array.isArray(check.findings)
+      ? (check.findings as {prop: string; valuePresentRefAbsent: number}[])
+      : []
+    return {
+      label: 'Property references',
+      detail: findings.map((f) => `${f.prop}: ${f.valuePresentRefAbsent}`).join(', '),
     }
   }
-  return summaries
+  if (name === 'local_server_divergence') {
+    const parts: string[] = []
+    if (n('strandedLocalOnly')) parts.push(`${n('strandedLocalOnly')} stranded`)
+    if (n('equalStampStandoff')) parts.push(`${n('equalStampStandoff')} stalemate`)
+    if (n('localRicherNoPending')) parts.push(`${n('localRicherNoPending')} unsynced local`)
+    return {label: 'Local vs server', detail: parts.join(', ')}
+  }
+  return {label: name, detail: ''}
+}
+
+// Checks of a given status, summarized. 'anomaly' → the red section (all kept,
+// the chip is already red). 'ok' → the informational band, where the caller
+// filters on a non-empty `detail` to show only sub-threshold findings that
+// carry a real signal (e.g. a benign-baseline count below the alert floor).
+function summarizeAuditByStatus(
+  result: ConsistencyAuditResult,
+  status: 'anomaly' | 'ok',
+): {label: string; detail: string}[] {
+  return Object.entries(result.checks)
+    .filter(([, check]) => check.status === status)
+    .map(([name, check]) => summarizeAuditCheck(name, check))
 }
 
 export function SyncStatusHeaderItem() {
@@ -328,7 +339,11 @@ function SyncStatusHeaderContent({
   const stableNetworkError = useStableError(networkError, networkErrorGraceMs)
   const errorMessage = localErrorMessage ?? stableNetworkError
   const integrityAnomalies = audit?.anomalies ?? 0
-  const auditSummaries = audit && integrityAnomalies > 0 ? summarizeAuditAnomalies(audit) : []
+  // Anomalies (>= alert threshold) redden the chip; sub-threshold 'ok' checks
+  // that still carry a signal (e.g. a benign-baseline count below the floor)
+  // surface as muted info so they're visible without alarming.
+  const auditAnomalies = audit && integrityAnomalies > 0 ? summarizeAuditByStatus(audit, 'anomaly') : []
+  const auditInfos = audit ? summarizeAuditByStatus(audit, 'ok').filter((s) => s.detail) : []
   // A check that threw degrades to status 'error' (not counted as an anomaly, so
   // it doesn't redden the chip) — but surface it so a self-audit that couldn't
   // run doesn't silently read as healthy.
@@ -450,13 +465,13 @@ function SyncStatusHeaderContent({
                 </div>
               </div>
             )}
-            {auditSummaries.length > 0 && (
+            {auditAnomalies.length > 0 && (
               <div className="border-t pt-2">
                 <div className="text-xs font-medium text-destructive">
                   Data integrity: {integrityAnomalies} {integrityAnomalies === 1 ? 'issue' : 'issues'}
                 </div>
                 <div className="mt-1 space-y-0.5">
-                  {auditSummaries.map((s) => (
+                  {auditAnomalies.map((s) => (
                     <div key={s.label} className="grid grid-cols-[auto_1fr] gap-x-2 text-xs">
                       <div className="text-muted-foreground">{s.label}</div>
                       <div className="text-right">{s.detail || 'anomaly'}</div>
@@ -465,6 +480,22 @@ function SyncStatusHeaderContent({
                 </div>
                 <div className="mt-1 text-[11px] leading-4 text-muted-foreground">
                   Run the consistency-check eval for full details.
+                </div>
+              </div>
+            )}
+            {auditInfos.length > 0 && (
+              <div className="border-t pt-2">
+                <div className="text-xs font-medium">Data integrity — below alert threshold</div>
+                <div className="mt-1 space-y-0.5">
+                  {auditInfos.map((s) => (
+                    <div key={s.label} className="grid grid-cols-[auto_1fr] gap-x-2 text-xs">
+                      <div className="text-muted-foreground">{s.label}</div>
+                      <div className="text-right">{s.detail}</div>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-1 text-[11px] leading-4 text-muted-foreground">
+                  Minor / expected baseline (e.g. cleared values) — not alerting. Run the consistency-check eval for full details.
                 </div>
               </div>
             )}

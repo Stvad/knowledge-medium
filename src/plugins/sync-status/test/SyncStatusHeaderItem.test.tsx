@@ -372,6 +372,40 @@ describe('SyncStatusHeaderItem', () => {
     expect(screen.getByRole('button').getAttribute('aria-label')).not.toContain('data-integrity')
   })
 
+  it('surfaces sub-threshold findings as muted info without reddening the chip', async () => {
+    mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
+    publishConsistencyAudit({
+      workspaceId: 'ws-1',
+      checkedAt: 0,
+      anomalies: 0, // below the alert floor → ok, not an anomaly
+      checks: {
+        references_index_mirror: {
+          status: 'ok',
+          missingIndexRows: 0,
+          extraIndexRows: 0,
+          orphanSourceRows: 0,
+          duplicateTuples: 0,
+          malformedJson: 0,
+        },
+        property_ref_at_rest: {
+          status: 'ok',
+          curatedProps: ['next-review-date'],
+          findings: [{prop: 'next-review-date', valuePresentRefAbsent: 3}],
+          total: 3,
+        },
+      },
+    })
+
+    render(<SyncStatusHeaderItem/>)
+
+    const button = screen.getByRole('button')
+    expect(button.getAttribute('aria-label')).not.toContain('data-integrity') // chip stays calm
+
+    fireEvent.pointerDown(button)
+    expect(await screen.findByText(/below alert threshold/i)).toBeInTheDocument()
+    expect(screen.getByText('next-review-date: 3')).toBeInTheDocument()
+  })
+
   it('surfaces an app-update prompt with a Reload action when a new build is ready', async () => {
     mocks.updateAvailable = true
 
