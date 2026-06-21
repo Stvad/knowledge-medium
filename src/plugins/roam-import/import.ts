@@ -1096,23 +1096,23 @@ const patchAliasReferences = (data: BlockData, aliasIdMap: AliasIdMap) => {
  *  like collapse / show-properties — means a user touched this row), and
  *  no children at all — live OR tombstoned. A container the user deleted
  *  (which cascade-tombstones its whole subtree) still has child rows, so
- *  including deleted children keeps us from resurrecting + re-rooting that
+ *  counting deleted children keeps us from resurrecting + re-rooting that
  *  container as a blank stub and thereby undoing the user's deletion.
- *  Mirrors the "restorable transient tombstone" test alias-seat reuse
- *  applies in src/data/targets.ts (`isRestorableTransientTombstone`): the
- *  row must still equal its empty seed and have no children, so "a user's
- *  explicit deletion is never undone". Anything that is NOT pristine is
+ *  Same spirit as the "restorable transient tombstone" test alias-seat
+ *  reuse applies in src/data/targets.ts (`isRestorableTransientTombstone`)
+ *  — empty seed + no children — but deliberately STRICTER on children:
+ *  that predicate ignores tombstoned children (live-only), whereas a Roam
+ *  placeholder id can collide with a real container the user deleted, so
+ *  here we also reject deleted children. Anything that is NOT pristine is
  *  user data we must not resurrect or relocate (#195), so the placeholder
  *  path leaves it tombstoned; an unresolved ((uid)) pointing at such a
  *  tombstone is the correct, lossless state until a complete import
  *  upserts the real block back via upsertImportedBlock. */
-const isPristineRestorableStub = async (tx: Tx, row: BlockData): Promise<boolean> => {
-  if (row.content !== '') return false
-  if (row.references.length > 0) return false
-  if (Object.keys(row.properties).length > 0) return false
-  const children = await tx.childrenOf(row.id, undefined, {includeDeleted: true})
-  return children.length === 0
-}
+const isPristineRestorableStub = async (tx: Tx, row: BlockData): Promise<boolean> =>
+  row.content === '' &&
+  row.references.length === 0 &&
+  Object.keys(row.properties).length === 0 &&
+  !(await tx.hasChildren(row.id, {includeDeleted: true}))
 
 /**
  * Ensure a placeholder row exists at `id`. Used for ((uid)) targets

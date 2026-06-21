@@ -171,12 +171,15 @@ const COLUMN_PLACEHOLDERS = COLUMN_NAMES.map(() => '?').join(', ')
 const SELECT_BY_ID_SQL = `SELECT ${COLUMN_LIST} FROM blocks WHERE id = ?`
 const SELECT_CHILDREN_SQL =
   `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id`
-/** `childrenOf(..., {includeDeleted: true})` variant — keeps tombstoned
- *  rows. Used to detect that a row ever had children (a real container,
- *  even one whose whole subtree was soft-deleted) vs a never-populated
- *  stub. */
-const SELECT_CHILDREN_INCLUDING_DELETED_SQL =
-  `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id = ? ORDER BY order_key, id`
+/** Existence probes for `tx.hasChildren`. The live-only form keeps the
+ *  `deleted = 0` clause so it stays served by the partial
+ *  `idx_blocks_parent_order`; the `includeDeleted` form drops it (and so
+ *  cannot use that partial index — table scan), used only off hot paths
+ *  to detect a row that ever had children vs a never-populated stub. */
+const SELECT_HAS_CHILD_SQL =
+  `SELECT 1 AS one FROM blocks WHERE parent_id = ? AND deleted = 0 LIMIT 1`
+const SELECT_HAS_CHILD_INCLUDING_DELETED_SQL =
+  `SELECT 1 AS one FROM blocks WHERE parent_id = ? LIMIT 1`
 /** Root-level siblings (parent_id IS NULL). When a tx has pinned a
  *  workspace, scope to that workspace so `tx.childrenOf(null)` doesn't
  *  spill across workspaces — important for single-workspace-per-tx
@@ -184,8 +187,6 @@ const SELECT_CHILDREN_INCLUDING_DELETED_SQL =
  *  on root blocks. */
 const SELECT_ROOT_SIBLINGS_SQL =
   `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id IS NULL AND deleted = 0 AND workspace_id = ? ORDER BY order_key, id`
-const SELECT_ROOT_SIBLINGS_INCLUDING_DELETED_SQL =
-  `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id IS NULL AND workspace_id = ? ORDER BY order_key, id`
 const SELECT_NEXT_CHILD_SIBLING_SQL =
   `SELECT ${COLUMN_LIST} FROM blocks
    WHERE parent_id = ? AND deleted = 0
@@ -521,12 +522,7 @@ export class TxImpl implements Tx {
 
   // ──── Within-tx tree primitives ────
 
-  async childrenOf(
-    parentId: string | null,
-    workspaceId?: string,
-    opts?: {includeDeleted?: boolean},
-  ): Promise<BlockData[]> {
-    const includeDeleted = opts?.includeDeleted ?? false
+  async childrenOf(parentId: string | null, workspaceId?: string): Promise<BlockData[]> {
     if (parentId === null) {
       // SQL `parent_id = NULL` never matches; use `IS NULL`. Scope to
       // a workspace by one of: explicit arg → pinned meta → throw.
@@ -542,13 +538,17 @@ export class TxImpl implements Tx {
       if (ws === null) {
         throw new WorkspaceNotPinnedError()
       }
-      const sql = includeDeleted ? SELECT_ROOT_SIBLINGS_INCLUDING_DELETED_SQL : SELECT_ROOT_SIBLINGS_SQL
-      const rows = await this.ctx.txDb.getAll<BlockRow>(sql, [ws])
+      const rows = await this.ctx.txDb.getAll<BlockRow>(SELECT_ROOT_SIBLINGS_SQL, [ws])
       return rows.map(parseBlockRow)
     }
-    const sql = includeDeleted ? SELECT_CHILDREN_INCLUDING_DELETED_SQL : SELECT_CHILDREN_SQL
-    const rows = await this.ctx.txDb.getAll<BlockRow>(sql, [parentId])
+    const rows = await this.ctx.txDb.getAll<BlockRow>(SELECT_CHILDREN_SQL, [parentId])
     return rows.map(parseBlockRow)
+  }
+
+  async hasChildren(parentId: string, opts?: {includeDeleted?: boolean}): Promise<boolean> {
+    const sql = opts?.includeDeleted ? SELECT_HAS_CHILD_INCLUDING_DELETED_SQL : SELECT_HAS_CHILD_SQL
+    const row = await this.ctx.txDb.getOptional<{one: number}>(sql, [parentId])
+    return row !== null
   }
 
   async adjacentSibling(

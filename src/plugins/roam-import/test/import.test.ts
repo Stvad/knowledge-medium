@@ -1131,6 +1131,12 @@ describe('importRoam', () => {
     expect(containerAfter?.deleted).toBe(1)
     expect(containerAfter?.parent_id).toBe(pageId)
     expect((await readBlock(childId))?.deleted).toBe(1)
+
+    // ...and the import still completed: the referencing block rewrote
+    // ((delContainerUid)) to the deterministic id (resolving at the
+    // tombstone) rather than the guard breaking import/ref output.
+    const refBlock = await readBlock(roamBlockId(WORKSPACE, 'refDelContainer'))
+    expect(refBlock?.content).toBe(`see ((${containerId}))`)
   })
 
   it('does not create placeholders for unconfirmed double-paren prose', async () => {
