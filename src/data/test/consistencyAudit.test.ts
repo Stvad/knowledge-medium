@@ -105,4 +105,37 @@ describe('runConsistencyAudit — property_ref_at_rest catastrophe floor', () =>
     expect(result.checks.property_ref_at_rest.status).toBe('anomaly')
     expect(result.anomalies).toBe(1)
   })
+
+  it('captures sample block ids for a finding (and only queries them when the count is non-zero)', async () => {
+    let sampleQueries = 0
+    // count query → 2; sample query (SELECT id … LIMIT) → two ids; all else 0.
+    const db: AuditDb = {
+      getAll: async <T = Record<string, unknown>>(sql: string): Promise<T[]> => {
+        if (sql.includes('properties_json LIKE')) {
+          if (sql.includes('count(*)')) return [{ n: 2 }] as unknown as T[]
+          sampleQueries += 1
+          return [{ id: 'blk-a' }, { id: 'blk-b' }] as unknown as T[]
+        }
+        return [{ n: 0 }] as unknown as T[]
+      },
+    }
+    const check = (await runConsistencyAudit(db, 'ws', 0)).checks.property_ref_at_rest
+    expect(check.total).toBe(2)
+    expect(check.samples).toEqual(['blk-a', 'blk-b'])
+    expect(sampleQueries).toBe(1) // ran once, because the count was > 0
+  })
+
+  it('does not run sample queries when a check is clean', async () => {
+    let sampleQueries = 0
+    const db: AuditDb = {
+      getAll: async <T = Record<string, unknown>>(sql: string): Promise<T[]> => {
+        // A sample query never selects count(*); flag any non-count SELECT as one.
+        if (!sql.includes('count(*)')) sampleQueries += 1
+        return [{ n: 0 }] as unknown as T[]
+      },
+    }
+    const result = await runConsistencyAudit(db, 'ws', 0)
+    expect(result.anomalies).toBe(0)
+    expect(sampleQueries).toBe(0) // clean path runs zero sample queries
+  })
 })

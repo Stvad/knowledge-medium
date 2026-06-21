@@ -1,4 +1,4 @@
-import { PanelRightOpen, Plus, Settings, ShieldCheck, Undo2, ZoomIn } from 'lucide-react'
+import { PanelRightOpen, Plus, Settings, Undo2, ZoomIn } from 'lucide-react'
 import { defaultActionContextConfigs } from './defaultContexts.ts'
 import {
   ActionContextTypes,
@@ -70,8 +70,7 @@ import {
   panelRowsInLayoutOrder,
 } from '@/utils/panelLayoutProjection.js'
 import { ensureMetricsConsoleHook } from '@/data/metricsConsoleHook.js'
-import { showError, showProgress, showSuccess } from '@/utils/toast.js'
-import { RUN_DATA_INTEGRITY_AUDIT_ACTION_ID } from '@/data/internals/consistencyAuditStore.js'
+import { showProgress } from '@/utils/toast.js'
 import {
   chooseRawSqliteExportFile,
   downloadBlob,
@@ -399,31 +398,6 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       context: ActionContextTypes.GLOBAL,
       handler: () => {
         reloadInSafeMode()
-      },
-    },
-    {
-      id: RUN_DATA_INTEGRITY_AUDIT_ACTION_ID,
-      description: 'Run data integrity audit',
-      context: ActionContextTypes.GLOBAL,
-      icon: ShieldCheck,
-      handler: async () => {
-        const workspaceId = repo.activeWorkspaceId
-        if (!workspaceId) {
-          showError('Data integrity audit: no active workspace.')
-          return
-        }
-        try {
-          const result = await repo.runConsistencyAuditNow(workspaceId)
-          if (result.anomalies > 0) {
-            showError(
-              `Data integrity: ${result.anomalies} ${result.anomalies === 1 ? 'issue' : 'issues'} found — open the sync menu for details.`,
-            )
-          } else {
-            showSuccess('Data integrity audit: no issues found.')
-          }
-        } catch (e) {
-          showError(`Data integrity audit failed: ${e instanceof Error ? e.message : String(e)}`)
-        }
       },
     },
     {

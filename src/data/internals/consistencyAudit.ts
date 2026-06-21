@@ -45,9 +45,28 @@ const CURATED_REF_PROPS = ['next-review-date']
 // on-demand eval's job (precise R4). Below the floor the count is still reported.
 export const AT_REST_ANOMALY_FLOOR = 100
 
+// Up to this many offending block ids are captured per check as a lead for the
+// in-app results view. The FULL per-block list stays the bridge eval's job; this
+// is an illustrative sample, queried only when a count is already non-zero (so
+// the common clean path runs no extra queries).
+export const SAMPLE_LIMIT = 8
+
 const count = async (db: AuditDb, sql: string, params: unknown[]): Promise<number> => {
   const rows = await db.getAll<{ n: number }>(sql, params)
   return Number(rows[0]?.n ?? 0)
+}
+
+const sampleIds = async (db: AuditDb, sql: string, params: unknown[]): Promise<string[]> => {
+  const rows = await db.getAll<{ id: string }>(sql, params)
+  return rows.map((r) => String(r.id))
+}
+
+/** Merge sample ids into an accumulator, deduped and capped at SAMPLE_LIMIT. */
+const addSamples = (acc: string[], more: string[]): void => {
+  for (const id of more) {
+    if (acc.length >= SAMPLE_LIMIT) return
+    if (!acc.includes(id)) acc.push(id)
+  }
 }
 
 // json_each throws on invalid JSON; feed it a guarded value so one bad row can't
@@ -137,6 +156,49 @@ export const runConsistencyAudit = async (
       [workspaceId],
     )
     const total = missingIndexRows + extraIndexRows + orphanSourceRows + duplicateTuples + malformedJson
+    const samples: string[] = []
+    if (missingIndexRows > 0) {
+      addSamples(samples, await sampleIds(
+        db,
+        `SELECT exp.source_id AS id FROM (
+           SELECT b.id AS source_id,
+                  json_extract(je.value,'$.id') AS target_id,
+                  json_extract(je.value,'$.alias') AS alias,
+                  COALESCE(json_extract(je.value,'$.sourceField'),'') AS source_field
+           FROM blocks b, json_each(${REFS_JSON}) je
+           WHERE b.deleted=0 AND b.workspace_id=? AND ${EXPANDED_REF_FILTER}
+         ) exp
+         LEFT JOIN block_references br
+           ON br.source_id=exp.source_id AND br.target_id=exp.target_id
+          AND br.alias=exp.alias AND br.source_field=exp.source_field
+         WHERE br.source_id IS NULL LIMIT ${SAMPLE_LIMIT}`,
+        [workspaceId],
+      ))
+    }
+    if (extraIndexRows > 0) {
+      addSamples(samples, await sampleIds(
+        db,
+        `SELECT br.source_id AS id FROM block_references br
+         JOIN blocks b ON b.id=br.source_id AND b.deleted=0
+         WHERE br.workspace_id=?
+           AND NOT EXISTS (
+             SELECT 1 FROM json_each(${REFS_JSON}) je
+             WHERE json_extract(je.value,'$.id')=br.target_id
+               AND json_extract(je.value,'$.alias')=br.alias
+               AND COALESCE(json_extract(je.value,'$.sourceField'),'')=br.source_field)
+         LIMIT ${SAMPLE_LIMIT}`,
+        [workspaceId],
+      ))
+    }
+    if (orphanSourceRows > 0) {
+      addSamples(samples, await sampleIds(
+        db,
+        `SELECT br.source_id AS id FROM block_references br
+         LEFT JOIN blocks b ON b.id=br.source_id
+         WHERE br.workspace_id=? AND (b.id IS NULL OR b.deleted=1) LIMIT ${SAMPLE_LIMIT}`,
+        [workspaceId],
+      ))
+    }
     return {
       status: total > 0 ? 'anomaly' : 'ok',
       missingIndexRows,
@@ -144,6 +206,7 @@ export const runConsistencyAudit = async (
       orphanSourceRows,
       duplicateTuples,
       malformedJson,
+      samples,
     }
   })
 
@@ -151,16 +214,24 @@ export const runConsistencyAudit = async (
   // ref absent from references_json (the proven 06-09 detection query).
   await run('property_ref_at_rest', async () => {
     const findings: Array<{ prop: string; valuePresentRefAbsent: number }> = []
+    const samples: string[] = []
     for (const name of CURATED_REF_PROPS) {
+      const valueAbsentClause = `deleted=0 AND workspace_id=?
+        AND properties_json LIKE '%"' || ? || '"%'
+        AND references_json NOT LIKE '%"sourceField":"' || ? || '"%'`
       const n = await count(
         db,
-        `SELECT count(*) AS n FROM blocks
-         WHERE deleted=0 AND workspace_id=?
-           AND properties_json LIKE '%"' || ? || '"%'
-           AND references_json NOT LIKE '%"sourceField":"' || ? || '"%'`,
+        `SELECT count(*) AS n FROM blocks WHERE ${valueAbsentClause}`,
         [workspaceId, name, name],
       )
-      if (n > 0) findings.push({ prop: name, valuePresentRefAbsent: n })
+      if (n > 0) {
+        findings.push({ prop: name, valuePresentRefAbsent: n })
+        addSamples(samples, await sampleIds(
+          db,
+          `SELECT id FROM blocks WHERE ${valueAbsentClause} LIMIT ${SAMPLE_LIMIT}`,
+          [workspaceId, name, name],
+        ))
+      }
     }
     const total = findings.reduce((sum, f) => sum + f.valuePresentRefAbsent, 0)
     // Anomaly only at catastrophe scale (see AT_REST_ANOMALY_FLOOR) — a small
@@ -170,6 +241,7 @@ export const runConsistencyAudit = async (
       curatedProps: CURATED_REF_PROPS,
       findings,
       total,
+      samples,
     }
   })
 
@@ -211,12 +283,44 @@ export const runConsistencyAudit = async (
     )
     // stranded + standoff + local-richer are real anomalies; server-ahead is info.
     const total = strandedLocalOnly + equalStampStandoff + localRicherNoPending
+    const samples: string[] = []
+    if (strandedLocalOnly > 0) {
+      addSamples(samples, await sampleIds(
+        db,
+        `SELECT b.id AS id FROM blocks b
+         WHERE b.workspace_id=? AND b.deleted=0
+           AND NOT EXISTS (SELECT 1 FROM blocks_synced bs WHERE bs.id=b.id)
+           AND ${pendingClause} LIMIT ${SAMPLE_LIMIT}`,
+        [workspaceId],
+      ))
+    }
+    if (equalStampStandoff > 0) {
+      addSamples(samples, await sampleIds(
+        db,
+        `SELECT b.id AS id FROM blocks b JOIN blocks_synced bs ON bs.id=b.id
+         WHERE b.workspace_id=? AND b.updated_at=bs.updated_at AND b.updated_at!=0
+           AND (b.content!=bs.content OR b.properties_json!=bs.properties_json
+                OR b.references_json!=bs.references_json OR b.deleted!=bs.deleted)
+         LIMIT ${SAMPLE_LIMIT}`,
+        [workspaceId],
+      ))
+    }
+    if (localRicherNoPending > 0) {
+      addSamples(samples, await sampleIds(
+        db,
+        `SELECT b.id AS id FROM blocks b JOIN blocks_synced bs ON bs.id=b.id
+         WHERE b.workspace_id=? AND b.updated_at>bs.updated_at AND ${pendingClause}
+         LIMIT ${SAMPLE_LIMIT}`,
+        [workspaceId],
+      ))
+    }
     return {
       status: total > 0 ? 'anomaly' : 'ok',
       strandedLocalOnly,
       equalStampStandoff,
       localRicherNoPending,
       serverAheadUndrained,
+      samples,
     }
   })
 
