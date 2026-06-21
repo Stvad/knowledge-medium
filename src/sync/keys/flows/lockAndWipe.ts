@@ -222,8 +222,8 @@ export interface ConsumeWipeOptions {
 }
 
 /**
- * Boot-time half of the wipe: if a wipe is armed for this user, drop the
- * compiled-extension cache and delete the DB file, then disarm. MUST run before
+ * Boot-time half of the wipe: if a wipe is armed for this user, delete the DB
+ * file, then drop the compiled-extension cache, then disarm. MUST run before
  * the DB is opened (see file header).
  *
  * The OPFS remover and filename resolver are injected so this orchestration is
@@ -232,12 +232,18 @@ export interface ConsumeWipeOptions {
  *
  * Why the compiled-extension cache is cleared HERE (boot), not in `lockAndWipe`
  * (lock time): it's a separate IndexedDB store the file delete doesn't touch, so
- * it needs explicit removal — and doing it at boot, gated by the armed marker
- * and before any compile can run, is what makes it durable. A lock-time clear
- * could be re-populated by an in-flight recompile (this tab) or a sibling tab
- * before the reload completes; here nothing can write a row back in. It is also
- * BEST-EFFORT (the injected fn never rejects): a derived cache must never block
- * the wipe — the load-bearing plaintext removal is the file delete below.
+ * it needs explicit removal, and a lock-time clear could be re-populated by an
+ * in-flight recompile before the reload. It is BEST-EFFORT (isolated from the
+ * delete loop): a derived cache must never block the wipe — the load-bearing
+ * plaintext removal is the file delete.
+ *
+ * Crucially the clear runs AFTER the file delete SUCCEEDS, not before. The delete
+ * succeeding is the synchronization point: it means every sibling same-user tab
+ * has released the OPFS sync-access handle — i.e. its wa-sqlite worker (and page)
+ * has been torn down — so none can still be running an extension compile that
+ * would write a fresh plaintext row. Clearing before the (retrying) delete would
+ * race a sibling that finishes an in-flight compile during the wait and writes a
+ * row after the clear, which the subsequent disarm would then leave behind.
  *
  * Retries the file delete a few times: with multi-tab enabled, another same-user
  * tab that received the {@link broadcastWipeReload} signal may still be mid-reload
@@ -256,38 +262,45 @@ export const consumePendingWipe = async (
 ): Promise<boolean> => {
   if (!isPendingWipe(userId)) return false
 
-  // Drop the compiled-extension cache first — before the (possibly throwing)
-  // file-delete loop, so it still runs if the file delete defers to a later
-  // boot. Best-effort and defensively guarded: the load-bearing plaintext
-  // removal is the file delete, so a derived-cache hiccup must never abort the
-  // wipe (the injected fn is contracted not to reject, but we don't rely on it).
-  try {
-    await opts.clearCompiledCache?.()
-  } catch (err) {
-    console.warn('[lock-and-wipe] failed to clear compiled-extension cache on boot', err)
-  }
-
   const retries = opts.retries ?? 5
   const delayMs = opts.delayMs ?? 200
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)))
   const filename = resolveFilename(userId)
 
   let lastErr: unknown
+  let deleted = false
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       await removeDbFile(filename)
-      clearPendingWipe(userId)
-      return true
+      deleted = true
+      break
     } catch (err) {
       lastErr = err
       if (attempt < retries) await sleep(delayMs)
     }
   }
-  throw new Error(
-    'Could not finish wiping local data — another tab of this app may still be ' +
-      'open and holding the database. Close other tabs and reload to finish.',
-    { cause: lastErr },
-  )
+
+  if (!deleted) {
+    throw new Error(
+      'Could not finish wiping local data — another tab of this app may still be ' +
+        'open and holding the database. Close other tabs and reload to finish.',
+      { cause: lastErr },
+    )
+  }
+
+  // File deleted ⟹ all sibling tabs released the OPFS handle (their workers/
+  // pages are torn down), so the last possible compiled-row write has happened.
+  // Clear the compiled-extension cache NOW. Best-effort + isolated from the
+  // delete loop (its own try/catch): a derived-cache hiccup must never abort or
+  // retry the already-completed file wipe.
+  try {
+    await opts.clearCompiledCache?.()
+  } catch (err) {
+    console.warn('[lock-and-wipe] failed to clear compiled-extension cache on boot', err)
+  }
+
+  clearPendingWipe(userId)
+  return true
 }
 
 // Cross-tab reload signal (BroadcastChannel — the design's §5/§6 cross-tab
