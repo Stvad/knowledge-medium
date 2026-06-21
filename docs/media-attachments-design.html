@@ -117,6 +117,7 @@ The load-bearing risk is making the SW a participant in the E2EE lock/wipe lifec
   <li><a href="#plan">Phased plan</a></li>
   <li><a href="#open">Open questions</a></li>
   <li><a href="#tradeoffs">Tradeoffs we're accepting</a></li>
+  <li><a href="#design-notes">Design notes — where the complexity lives</a></li>
 </ol>
 </div>
 
@@ -756,9 +757,37 @@ that loss is surfaced, not silent.</div>
 <h2 id="storage">10. Storage layout &amp; RLS</h2>
 
 <p>One private bucket, <code>attachments</code>. Object path
-  <strong><code>&lt;workspace_id&gt;/&lt;asset_block_id&gt;</code></strong>. For an E2EE workspace the
-  object is the <code>encb:v1:</code> ciphertext; for a plaintext workspace it is the raw bytes
-  (identity case, §5).</p>
+  <strong><code>&lt;workspace_id&gt;/&lt;asset_block_id&gt;</code></strong> — block-id-addressed, NOT
+  content-hash-addressed. For an E2EE workspace the object is the <code>encb:v1:</code> ciphertext;
+  for a plaintext workspace it is the raw bytes (identity case, §5).</p>
+
+<div class="info">
+<strong>Why not content-addressed paths (and what we keep instead).</strong> An earlier (pre-E2EE)
+sketch keyed everything off <code>sha256(bytes)</code> — path, cache, dedup — which is clean because
+content-addressing makes uploads idempotent and dedup free. E2EE removes the hash from the two
+<em>server-visible</em> identifiers, for two reasons:
+<ul>
+  <li><strong>Content oracle.</strong> A path <code>&lt;ws&gt;/&lt;sha256-of-plaintext&gt;</code> lets
+    the untrusted server confirm "does this workspace contain <em>this known file</em>?" by hashing a
+    candidate and probing for the object — a confidentiality break for known files.</li>
+  <li><strong>Share-RLS join.</strong> The §12 share path keys off the block id
+    (object → block → <code>effective_share_ids</code>); a hash path breaks that join.</li>
+</ul>
+Hashing itself is <em>not</em> lost — it stays everywhere it's <strong>client-local</strong>: the
+cache key (<code>&lt;ws&gt;/&lt;id&gt;/&lt;hash&gt;</code>, §8), within-subtree dedup (§11), and the
+integrity/replay check (§5.1); and the hash lives in the <em>encrypted</em> <code>properties_json</code>
+so the server never sees it. Only the server-visible path and the block id drop it. The direct cost is
+that idempotent-by-content uploads and free dedup are gone — which is the root of the dedup/duplicate-object
+and "a fresh block must re-upload" wrinkles (§11).
+<br><br>
+<strong>Lever if that friction bites: a keyed hash.</strong> Path
+<code>&lt;ws&gt;/HMAC(WK, sha256-of-plaintext)</code> restores content-addressing — deterministic
+within a workspace (dedup + idempotent PUT return), unguessable to the server (no oracle), and
+distinct across workspaces (no correlation). Cost: the path no longer carries the block id, so the
+share-RLS join needs a separate cleartext <code>object_key → block_id</code> mapping — which leaks the
+same object↔block association the block-id path already does, so it's no worse on that axis. Not worth
+it for the small fleet vs block-id paths + client dedup; recorded so the option isn't re-discovered.
+</div>
 
 <p>Storage <strong>reads</strong> are RLS-gated by workspace membership on the path's first segment.
   Storage <strong>writes</strong> are NOT direct — they go through the guarded upload path (§10.1);
@@ -1103,6 +1132,40 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
     <td>Behind <code>BlobStore</code>; E2EE makes the backend a dumb blob store, so the swap is a
       bytes-copy + one module.</td></tr>
 </table>
+
+<h2 id="design-notes">18. Design notes — where the complexity lives, and the seams that contain it</h2>
+
+<p>This design went through several adversarial review passes; the findings clustered in a few places,
+  and the pattern is worth recording so the implementation leans on the seams that keep it simple.</p>
+
+<ul>
+  <li><strong>Reuse the proven block lane; don't re-derive a parallel one.</strong> "An attachment is a
+    block" (§3) is load-bearing: metadata sync, encryption (<code>transform.ts</code>), undo, and
+    permissions all come for free by riding the existing block path. The fragile parts are exactly
+    where the <em>byte</em> lane <em>diverges</em> from how blocks already work — blocks have
+    <code>ps_crud</code> (→ we need a §9 queue), a server ciphertext trigger (→ a §10.1 guard), and
+    PowerSync monotonicity (→ a §5.1 hash check). Each divergence had to re-solve a problem blocks
+    already solved. Prefer mirroring the block mechanism over inventing a byte-specific one wherever
+    the choice exists.</li>
+  <li><strong>Funnel URL + mode + hash + cache-key through one asset-resolver seam.</strong> Many
+    review findings were not "the design is wrong" but "a fact didn't propagate" — the base-path
+    prefix, the <code>?h=</code> hash, the mode decision, and the cache key are all facets of one
+    operation ("given an asset block + render context, produce displayable bytes"). Implement that as a
+    single named function so those parameters can't drift apart; scattering them across call sites is
+    what manufactured the drift.</li>
+  <li><strong>Content-addressing is confined to client-local use under E2EE</strong> (§10): cache,
+    dedup, and integrity keep the hash; the server-visible storage path and block id do not (oracle +
+    share-join). The dedup/duplicate-object friction is the price; a keyed hash
+    (<code>HMAC(WK, …)</code>) is the recorded lever to buy content-addressing back if it bites.</li>
+  <li><strong>Open: the decryption boundary.</strong> The single biggest source of genuine (not
+    cosmetic) complexity is putting decryption in the <em>service worker</em> — a context that can't
+    read app state (→ IDB mode-pin, <code>?h=</code> hash-passing), is shared across tabs/accounts and
+    respawned arbitrarily (→ per-<code>clientId</code> sessions, readiness gating), and caches
+    plaintext (→ a second store in the lock-wipe lifecycle). The app-thread-decrypt alternative (§7.3)
+    trades all of that for a mode-aware renderer + manual object-URL lifecycle. This choice is
+    <em>deliberately left open</em> pending a focused re-evaluation; §7–§10 are written for the SW path
+    but most of the data model is boundary-agnostic.</li>
+</ul>
 
 <p><small>Grounded against: <code>src/sync/transform.ts</code>, <code>src/sync/crypto/</code>
   (incl. <code>aead.ts</code>, <code>envelope.ts</code>, <code>aad.ts</code>),
