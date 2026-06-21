@@ -301,6 +301,11 @@ export async function loadApprovedExtension(
     if (compileImplOverride) return compileImplOverride(approval.approvedSource)
     if (approval.compilerVersion !== COMPILER_VERSION) {
       const compiled = await transpileImpl(approval.approvedSource)
+      // Deliberate (#67): this is the ONLY write on the load path, and it
+      // re-pins the SAME approved `sourceHash` (only the compiled output +
+      // compilerVersion change). Loading must never establish trust for a
+      // new/changed source — that is exclusively `approveExtension`'s job.
+      // Do not "optimize" by persisting live content here.
       await persistApproval(persistent, blockId, {...approval, compiled, compilerVersion: COMPILER_VERSION})
       return instantiateImpl(compiled)
     }
