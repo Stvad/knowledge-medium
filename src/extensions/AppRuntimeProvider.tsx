@@ -1,4 +1,4 @@
-import { ReactNode, useEffect, useMemo, useState } from 'react'
+import { ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { useRepo } from '@/context/repo.js'
 import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions.js'
 import {
@@ -22,6 +22,7 @@ import {
   ExtensionLoadErrorStore,
 } from '@/extensions/extensionLoadErrors.js'
 import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.js'
+import { toastExtensionLoadError } from '@/extensions/extensionLoadErrorToast.js'
 
 export function AppRuntimeProvider({
   children,
@@ -46,6 +47,13 @@ export function AppRuntimeProvider({
     void workspaceId
     return new ExtensionLoadErrorStore()
   }, [workspaceId])
+
+  // Keys (`${workspaceId}:${blockId}`) we've already toasted a load error
+  // for. The runtime re-resolves on every toggle / refresh and a broken
+  // block re-reports each time; this keeps the toast to once per block per
+  // workspace for the provider's lifetime. The errorStore (status icons)
+  // still reflects every report.
+  const toastedLoadErrors = useRef<Set<string>>(new Set())
 
   const runtimeContext: FacetResolveContext = useMemo(() => ({
     repo,
@@ -126,6 +134,12 @@ export function AppRuntimeProvider({
             errorReporter: (blockId, error) => {
               if (cancelled) return
               errorStore.reportError(blockId, error)
+              toastExtensionLoadError(
+                toastedLoadErrors.current,
+                `${workspaceId}:${blockId}`,
+                blockId,
+                error,
+              )
             },
           }),
         ], {overrides, safeMode, context: runtimeContext})
