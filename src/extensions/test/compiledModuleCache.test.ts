@@ -105,21 +105,24 @@ describe('CompiledModuleCache stores', () => {
 
 describe('approveExtension + loadApprovedExtension — trust gate + L3 cache', () => {
   let transpileCount = 0
+  let instantiateCount = 0
   let restoreTranspile: () => void
   let restoreInstantiate: () => void
 
   beforeEach(() => {
     transpileCount = 0
+    instantiateCount = 0
     // Stub the pipeline so no real Babel / blob-URL import runs: transpile
     // tags the source, instantiate exposes which compiled string it built
-    // from so we can assert the cache fed it (not Babel).
+    // from (and counts, so we can assert approve never instantiates).
     restoreTranspile = __setTranspileImplForTest(async (content) => {
       transpileCount += 1
       return `transpiled:${content}`
     })
-    restoreInstantiate = __setInstantiateImplForTest(async (compiled) => ({
-      default: compiled,
-    }))
+    restoreInstantiate = __setInstantiateImplForTest(async (compiled) => {
+      instantiateCount += 1
+      return {default: compiled}
+    })
   })
 
   afterEach(() => {
@@ -128,12 +131,13 @@ describe('approveExtension + loadApprovedExtension — trust gate + L3 cache', (
     vi.restoreAllMocks()
   })
 
-  it('approveExtension transpiles, writes the approval row, and returns the module', async () => {
+  it('approveExtension transpiles + writes the approval row, and does NOT instantiate', async () => {
     const persistent = new InMemoryCompiledModuleCache()
-    const result = await approveExtension('block-1', 'SRC', createCompileCache(), persistent)
+    const result = await approveExtension('block-1', 'SRC', persistent)
 
     expect(transpileCount).toBe(1)
-    expect(result.module).toEqual({default: 'transpiled:SRC'})
+    // Approving vouches the SOURCE; it doesn't run the module (#67 review).
+    expect(instantiateCount).toBe(0)
     const row = await persistent.read('block-1')
     expect(row).toMatchObject({
       sourceHash: result.contentHash,
@@ -144,27 +148,21 @@ describe('approveExtension + loadApprovedExtension — trust gate + L3 cache', (
     expect(typeof row!.approvedAt).toBe('number')
   })
 
-  it('writes the approval BEFORE instantiating (a throwing module still leaves a valid approval row)', async () => {
-    // Ordering contract: approval is about TRUST of the source. A module
-    // that throws at import-eval is still approved (the runtime bug is
-    // separate, surfaced via the loader's errorReporter), and the row holds
-    // valid transpiled JS so the next load skips Babel. Pin it so a reorder
-    // (persisting only after a successful instantiate) is caught.
+  it('does not instantiate during approve, so a module that throws at eval still gets a valid pin', async () => {
+    // The runtime error must surface later via the loader's errorReporter,
+    // not abort the approve/enable action (#67 review).
     restoreInstantiate()
     restoreInstantiate = __setInstantiateImplForTest(async () => {
       throw new Error('module threw at import-eval')
     })
     const persistent = new InMemoryCompiledModuleCache()
 
-    await expect(
-      approveExtension('block-1', 'SRC', createCompileCache(), persistent),
-    ).rejects.toThrow(/import-eval/)
-
-    expect(transpileCount).toBe(1)
+    const result = await approveExtension('block-1', 'SRC', persistent) // does NOT throw
+    expect(result.contentHash).toMatch(/^[0-9a-f]{64}$/)
+    expect(instantiateCount).toBe(0)
     expect(await persistent.read('block-1')).toMatchObject({
       approvedSource: 'SRC',
       compiled: 'transpiled:SRC',
-      compilerVersion: '1',
     })
   })
 
@@ -172,7 +170,7 @@ describe('approveExtension + loadApprovedExtension — trust gate + L3 cache', (
     // Real (fake-indexeddb) store + fresh in-memory caches model: approve
     // this session, reload, run next session.
     const session1Persistent = new IndexedDbCompiledModuleCache()
-    await approveExtension('warm-1', 'SRC', createCompileCache(), session1Persistent)
+    await approveExtension('warm-1', 'SRC', session1Persistent)
     expect(transpileCount).toBe(1)
 
     const session2Persistent = new IndexedDbCompiledModuleCache()
@@ -188,18 +186,16 @@ describe('approveExtension + loadApprovedExtension — trust gate + L3 cache', (
 
   it('idempotent re-approve of unchanged source skips Babel (reuses the pinned output)', async () => {
     const persistent = new InMemoryCompiledModuleCache()
-    await approveExtension('idem', 'SRC', createCompileCache(), persistent)
+    await approveExtension('idem', 'SRC', persistent)
     expect(transpileCount).toBe(1)
 
-    // Fresh in-memory cache so the skip relies on the persisted fast-path,
-    // not an L1 hit.
-    await approveExtension('idem', 'SRC', createCompileCache(), persistent)
+    await approveExtension('idem', 'SRC', persistent)
     expect(transpileCount).toBe(1)
   })
 
   it('loadApprovedExtension recompiles the APPROVED source on a compiler-version bump, and re-pins', async () => {
     const persistent = new InMemoryCompiledModuleCache()
-    await approveExtension('cv-1', 'SRC', createCompileCache(), persistent)
+    await approveExtension('cv-1', 'SRC', persistent)
     expect(transpileCount).toBe(1)
 
     // Simulate a COMPILER_VERSION bump: same approved source, stale output.
@@ -221,12 +217,11 @@ describe('approveExtension + loadApprovedExtension — trust gate + L3 cache', (
 
   it('approving changed source overwrites the row and re-pins to the new hash', async () => {
     const persistent = new InMemoryCompiledModuleCache()
-    await approveExtension('src-1', 'V1', createCompileCache(), persistent)
+    await approveExtension('src-1', 'V1', persistent)
     const first = await persistent.read('src-1')
 
-    const result = await approveExtension('src-1', 'V2', createCompileCache(), persistent)
+    await approveExtension('src-1', 'V2', persistent)
     expect(transpileCount).toBe(2)
-    expect(result.module).toEqual({default: 'transpiled:V2'})
 
     const second = await persistent.read('src-1')
     expect(second!.compiled).toBe('transpiled:V2')
@@ -234,17 +229,17 @@ describe('approveExtension + loadApprovedExtension — trust gate + L3 cache', (
     expect(second!.sourceHash).not.toBe(first!.sourceHash)
   })
 
-  it('still returns the module from approveExtension when the persistent write fails', async () => {
+  it('rejects (does not silently succeed) when the trust write fails', async () => {
+    // A swallowed write would let the caller set "enabled" intent against a
+    // non-existent approval → a silent needs-approval loop (#67 review).
     const flaky: CompiledModuleCache = {
       read: async () => undefined,
       write: async () => { throw new Error('write boom') },
       delete: async () => {},
       clear: async () => {},
     }
-    vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    const result = await approveExtension('w-1', 'SRC', createCompileCache(), flaky)
-    expect(result.module).toEqual({default: 'transpiled:SRC'})
+    await expect(approveExtension('w-1', 'SRC', flaky)).rejects.toThrow(/write boom/)
   })
 
   it('readApproval resolves undefined (not throws) when the persistent read fails', async () => {

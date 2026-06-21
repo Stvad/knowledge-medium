@@ -35,6 +35,7 @@ import {
 } from '@/extensions/compileExtensionModule.js'
 import {refreshAppRuntime} from '@/facets/runtimeEvents.js'
 import {applyToggle, type Overrides, type Togglable} from '@/facets/togglable.js'
+import {showError} from '@/utils/toast.js'
 import {ExtensionsSettings} from './ExtensionsSettings.tsx'
 import {useToggleTree} from './useToggleTree.ts'
 
@@ -47,12 +48,29 @@ export const ExtensionsOverridesEditor = ({
 
   // Approve (or re-approve) a user extension on THIS device: pin the live
   // source so the loader will run it. The EXPLICIT trust action, shared by
-  // "Enable here" (cross-device) and "Update" (source drifted).
+  // "Enable here" (cross-device) and "Update" (source drifted). Returns
+  // whether trust was established; surfaces a toast on failure so the caller
+  // can avoid setting "enabled" intent against a non-existent approval
+  // (which would silently loop on needs-approval — #67 review).
   const approveHere = useCallback(
-    async (handle: Togglable) => {
+    async (handle: Togglable): Promise<boolean> => {
       const block = await repo.load(handle.id)
-      if (!block) return
-      await approveExtension(handle.id, block.content ?? '')
+      if (!block) {
+        showError(`Couldn't enable "${handle.name}" — its definition block wasn't found.`)
+        return false
+      }
+      try {
+        await approveExtension(handle.id, block.content ?? '')
+        return true
+      } catch (error) {
+        console.error(`Failed to approve extension ${handle.id}`, error)
+        showError(
+          `Couldn't enable "${handle.name}" — ${
+            error instanceof Error ? error.message : 'approval could not be saved'
+          }.`,
+        )
+        return false
+      }
     },
     [repo],
   )
@@ -63,8 +81,9 @@ export const ExtensionsOverridesEditor = ({
         // First-time enable grants device-local trust; a subsequent enable
         // keeps the existing pin (drift shows as update-available rather
         // than being silently adopted). Disabling never touches the pin.
+        // Don't flip intent on if trust couldn't be established.
         if (handle.kind === 'user' && nextState && !(await readApproval(handle.id))) {
-          await approveHere(handle)
+          if (!(await approveHere(handle))) return
         }
         onChange(applyToggle(value, handle, nextState))
       })()
@@ -73,13 +92,12 @@ export const ExtensionsOverridesEditor = ({
   )
 
   // Affordance path: intent is already true, so only the approval changes —
-  // dispatch a refresh so the loader re-resolves and the pinned version
-  // starts running / updates.
+  // dispatch a refresh (only if it succeeded) so the loader re-resolves and
+  // the pinned version starts running / updates.
   const handleApprove = useCallback(
     (handle: Togglable) => {
       void (async () => {
-        await approveHere(handle)
-        refreshAppRuntime()
+        if (await approveHere(handle)) refreshAppRuntime()
       })()
     },
     [approveHere],

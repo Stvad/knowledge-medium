@@ -250,61 +250,62 @@ async function persistApproval(
 }
 
 /**
- * Grant (or refresh) the device-local approval for a block and return the
- * runnable module. This is the ONLY path that loads Babel and writes an
- * approval row — i.e. the only place trust is established. Callers are the
- * settings "enable/update" control and the agent `enable-extension`
- * command; both pass the CURRENT live `block.content` as the approved
- * source.
+ * Grant (or refresh) the device-local approval for a block: transpile the
+ * source and DURABLY persist the approval row. This is the ONLY path that
+ * loads Babel and writes an approval row — the only place trust is
+ * established (#67). Callers are the settings "enable/update" control and
+ * the agent `enable-extension` command; both pass the CURRENT live
+ * `block.content` as the approved source.
  *
- *   - unchanged source already approved under the current compiler → reuse
- *     the pinned output, no Babel.
- *   - otherwise → transpile (loads Babel), persist the approval row BEFORE
- *     instantiating (so a module that throws at import-eval still leaves a
- *     valid approval — the source IS trusted, the runtime bug is separate),
- *     then instantiate.
+ * Deliberately DECOUPLED from running the module (#67 review):
+ *   - It does NOT instantiate. Approving a block vouches the SOURCE, not its
+ *     runtime behaviour — a module that transpiles but throws at import/eval
+ *     must NOT abort the approve/enable action. That runtime error surfaces
+ *     through the loader's `errorReporter` after intent is applied, where it
+ *     belongs (and where the row still shows in settings for recovery).
+ *   - The persist is NOT best-effort. If the trust row can't be written
+ *     (quota / private-mode / aborted tx) the approve has FAILED and throws,
+ *     so callers don't set "enabled" intent against a non-existent approval
+ *     (which would silently loop on needs-approval). Contrast the load
+ *     path's compiler-bump rewrite, which stays best-effort.
  *
- * `contentHash` in the result is the approved source hash (the pin).
+ * Idempotent for unchanged, already-approved source (no Babel, no write).
+ * Throws if the source can't be transpiled (syntax error — nothing to pin)
+ * or the approval can't be persisted. Returns the approved source hash.
  */
 export async function approveExtension(
   blockId: string,
   source: string,
-  cache: CompileCache = defaultCache,
   persistent: CompiledModuleCache = getCompiledModuleCache(),
-): Promise<CompileResult> {
+): Promise<{contentHash: string}> {
   const sourceHash = await hashExtensionSource(source)
 
-  // Idempotent re-approve of unchanged source under the current compiler:
-  // the pinned output is still valid, so skip Babel and reuse it. (Skipped
-  // when a full compile override is active — that path has no stored JS to
-  // trust.)
-  if (!compileImplOverride) {
-    const existing = await readApproval(blockId, persistent)
-    if (existing?.sourceHash === sourceHash && existing.compilerVersion === COMPILER_VERSION) {
-      const module = await resolveCachedModule(cache, sourceHash, blockId, () =>
-        instantiateImpl(existing.compiled),
-      )
-      return {module, contentHash: sourceHash}
-    }
+  // Idempotent: unchanged source already approved under the current compiler
+  // → the pin is current, nothing to do (and no Babel). `readApproval`
+  // rejects legacy Phase-1 rows, so an upgraded profile still re-approves.
+  const existing = await readApproval(blockId, persistent)
+  if (existing?.sourceHash === sourceHash && existing.compilerVersion === COMPILER_VERSION) {
+    return {contentHash: sourceHash}
   }
 
-  const record: CompiledRecord = compileImplOverride
-    // Override mode: there's no real transpiled string, so store the
-    // source as a placeholder. Warm loads under the override re-derive the
-    // module from `approvedSource` and ignore `compiled`.
-    ? {sourceHash, approvedSource: source, compiled: source, compilerVersion: COMPILER_VERSION, approvedAt: Date.now()}
-    : {sourceHash, approvedSource: source, compiled: await transpileImpl(source), compilerVersion: COMPILER_VERSION, approvedAt: Date.now()}
+  // `compiled` is the pinned output. Under a full compile override (tests)
+  // there's no real transpile; store the source as a placeholder the
+  // override-aware load path ignores. A transpile failure (bad syntax)
+  // propagates — there's nothing to pin.
+  const compiled = compileImplOverride ? source : await transpileImpl(source)
 
-  // Persist BEFORE instantiating (see doc above). Approval is per-block, so
-  // write it directly — never route it through the (content-keyed,
-  // block-agnostic) in-memory cache, or two blocks sharing source would
-  // leave the second block's row unwritten.
-  await persistApproval(persistent, blockId, record)
-
-  const module = await resolveCachedModule(cache, sourceHash, blockId, () =>
-    compileImplOverride ? compileImplOverride(source) : instantiateImpl(record.compiled),
-  )
-  return {module, contentHash: sourceHash}
+  // Throwing write (NOT persistApproval's swallow): a failed persist must
+  // fail the approve so the caller doesn't proceed to set intent. Written
+  // per-block directly (approval is per-block), never via the content-keyed
+  // in-memory cache.
+  await persistent.write(blockId, {
+    sourceHash,
+    approvedSource: source,
+    compiled,
+    compilerVersion: COMPILER_VERSION,
+    approvedAt: Date.now(),
+  })
+  return {contentHash: sourceHash}
 }
 
 /**

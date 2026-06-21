@@ -46,6 +46,11 @@ vi.mock('@/extensions/compileExtensionModule.js', async (importActual) => ({
   readApproval: readApprovalSpy,
 }))
 
+// Spy the toast so a failed approval surfaces an assertable error instead
+// of rendering a real sonner toast.
+const showErrorSpy = vi.hoisted(() => vi.fn())
+vi.mock('@/utils/toast.js', () => ({showError: showErrorSpy}))
+
 const handleA = systemToggle({id: 'system:a', name: 'Alpha'})
 const userBlock = makeBlockData({id: 'block-user', workspaceId: 'ws', content: 'SRC'})
 const userHandle = userExtensionToggle(userBlock)
@@ -61,8 +66,9 @@ const renderEditor = (props: Partial<PropertyEditorProps<Overrides>> = {}) => {
 
 describe('ExtensionsOverridesEditor', () => {
   beforeEach(() => {
-    approveSpy.mockClear()
+    approveSpy.mockReset()
     revokeSpy.mockClear()
+    showErrorSpy.mockClear()
     readApprovalSpy.mockReset()
     readApprovalSpy.mockResolvedValue(undefined)
     mockRepo.load.mockReset()
@@ -130,6 +136,24 @@ describe('ExtensionsOverridesEditor', () => {
     const next = onChange.mock.calls[0][0] as Overrides
     expect(next.get('block-user')).toBe(true)
     expect(revokeSpy).not.toHaveBeenCalled()
+  })
+
+  it('surfaces an error and does NOT set intent when the approval fails', async () => {
+    const tree: ToggleNode[] = [{handle: userHandle, children: []}]
+    useToggleTreeMock.mockReturnValue({tree, loading: false})
+    readApprovalSpy.mockResolvedValue(undefined) // not yet approved here
+    mockRepo.load.mockResolvedValue(userBlock)
+    approveSpy.mockRejectedValue(new Error('write boom')) // trust persist fails
+    const onChange = vi.fn()
+
+    renderEditor({value: new Map(), onChange})
+
+    await userEvent.click(screen.getByRole('checkbox', {name: /block-user|extension/i}))
+
+    await vi.waitFor(() => expect(showErrorSpy).toHaveBeenCalledTimes(1))
+    // Intent must NOT be flipped on when trust couldn't be established —
+    // otherwise the row loops on needs-approval with nothing running.
+    expect(onChange).not.toHaveBeenCalled()
   })
 
   it('enabling an already-approved user extension keeps the pin (no re-approve)', async () => {
