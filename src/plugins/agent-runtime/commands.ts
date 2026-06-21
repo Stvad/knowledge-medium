@@ -316,21 +316,16 @@ const updateRuntimeBlock = async (
   return repo.load(input.id)
 }
 
-const aliasValuesFromProperties = (properties: BlockProperties | undefined): string[] => {
-  const value = properties?.[aliasesProp.name]
-  return Array.isArray(value) && value.every(isString) ? value : []
-}
-
 const extensionBlockProperties = (
   existing: BlockProperties | undefined,
   label: string | null,
   description: string | null,
 ): BlockProperties => {
-  const aliases = new Set<string>(Array.isArray(existing?.[aliasesProp.name])
-    ? (existing?.[aliasesProp.name] as unknown[]).filter(isString)
-    : [])
-  if (label) aliases.add(label)
-
+  // Extensions are identified by `extension:name` only — install no
+  // longer writes an alias or tags PAGE_TYPE. An aliased block whose
+  // content is its own source would have that source mirrored into an
+  // alias by the content↔alias parity processor
+  // (`@/plugins/alias/syncProcessor.ts`).
   return {
     ...(existing ?? {}),
     ...(label ? {[extensionNameProp.name]: extensionNameProp.codec.encode(label)} : {}),
@@ -339,7 +334,6 @@ const extensionBlockProperties = (
     ...(description !== null
       ? {[extensionDescriptionProp.name]: extensionDescriptionProp.codec.encode(description ?? '')}
       : {}),
-    ...(aliases.size > 0 ? {[aliasesProp.name]: aliasesProp.codec.encode([...aliases])} : {}),
   }
 }
 
@@ -386,10 +380,6 @@ const installRuntimeExtension = async (
         properties,
       })
       await repo.addTypeInTx(tx, existing.id, EXTENSION_TYPE, {}, typeSnapshot)
-      const aliases = aliasValuesFromProperties(properties)
-      if (aliases.length > 0) {
-        await repo.addTypeInTx(tx, existing.id, PAGE_TYPE, {[aliasesProp.name]: aliases}, typeSnapshot)
-      }
     }, {scope: ChangeScope.BlockDefault, description: `agent runtime install extension ${label ?? existing.id}`})
     // Run verify *before* refreshAppRuntime so the verify's isolated
     // facet resolution doesn't contend with the app-wide runtime
@@ -441,9 +431,9 @@ const installRuntimeExtension = async (
     // root. This leaves room for the user to keep notes / configuration
     // pages / etc. as siblings of the extension code block, instead of
     // every install being a flat sibling of every other install. The
-    // container has no alias of its own (the extension block still owns
-    // the `extension:name`/alias projection used by enable-extension
-    // lookups), so there's no alias collision between the two.
+    // extension block itself is identified by `extension:name`, not an
+    // alias (see extensionBlockProperties), so it carries no PAGE_TYPE /
+    // alias to keep its source out of the alias index.
     let parentId = rootId
     if (label && !parentIdFromInput) {
       const rootChildren = await tx.childrenOf(rootId, workspaceId)
@@ -474,10 +464,6 @@ const installRuntimeExtension = async (
       properties,
     })
     await repo.addTypeInTx(tx, installedId, EXTENSION_TYPE, {}, typeSnapshot)
-    const aliases = aliasValuesFromProperties(properties)
-    if (aliases.length > 0) {
-      await repo.addTypeInTx(tx, installedId, PAGE_TYPE, {[aliasesProp.name]: aliases}, typeSnapshot)
-    }
   }, {scope: ChangeScope.BlockDefault, description: `agent runtime install extension ${label ?? 'unnamed'}`})
 
   const verification = input.verify

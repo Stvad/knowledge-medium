@@ -13,18 +13,18 @@ import type {BlockData} from '@/data/api'
 import type {Repo} from '@/data/repo'
 import {EXTENSION_TYPE} from '@/data/blockTypes'
 import type {BlockProperties} from '@/types.js'
-import {extensionAliasValues} from '@/extensions/extensionToggles.js'
+import {extensionName} from '@/extensions/extensionToggles.js'
 
 export interface ExtensionHandle {
   /** Extension block id. Either `id` or `label` is required. */
   id?: string
-  /** Extension alias / extension:name (the label passed at install time). */
+  /** Extension `extension:name` (the label passed at install time). */
   label?: string
 }
 
 export interface ExtensionLookupResult {
   block: BlockData
-  /** Best human-readable label (first alias that isn't the block id). */
+  /** Human-readable label (the block's `extension:name`). */
   label: string | null
 }
 
@@ -54,8 +54,8 @@ export const findExtensionBlock = async (
   })
   const match = idHint
     ? candidates.find(block => block.id === idHint) ?? null
-    : candidates.find(block => extensionAliasValues(block).includes(labelHint!)) ?? null
+    : candidates.find(block => extensionName(block) === labelHint) ?? null
   if (!match) return null
-  const label = extensionAliasValues(match).find(value => value !== match.id) ?? null
+  const label = extensionName(match) ?? null
   return {block: match, label}
 }

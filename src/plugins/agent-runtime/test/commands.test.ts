@@ -76,8 +76,10 @@ describe('agent runtime commands', () => {
     expect(installed?.properties[extensionDescriptionProp.name]).toEqual(
       'A worked example for the agent bridge',
     )
-    expect(installed?.properties[aliasesProp.name]).toEqual(['Example extension'])
-    expect(installed?.properties[typesProp.name]).toEqual([EXTENSION_TYPE, PAGE_TYPE])
+    // The extension block is identified by extension:name only — no
+    // alias, no PAGE_TYPE (keeps its source out of the alias index).
+    expect(installed?.properties[aliasesProp.name]).toBeUndefined()
+    expect(installed?.properties[typesProp.name]).toEqual([EXTENSION_TYPE])
 
     // The extension block is nested under a label-named container,
     // which is itself a child of the agent-extensions root. So the
@@ -86,8 +88,6 @@ describe('agent runtime commands', () => {
     expect(container?.content).toBe('Example extension')
     expect(container?.parentId).toBe(root?.id)
     expect(container?.properties[typesProp.name]).toEqual([PAGE_TYPE])
-    // Container has no alias of its own — the alias projection still
-    // lives on the extension block so enable-extension lookups work.
     expect(container?.properties[aliasesProp.name]).toBeUndefined()
   })
 

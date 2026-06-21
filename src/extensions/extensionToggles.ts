@@ -4,8 +4,13 @@
  * The facet kernel (`@/facets/togglable.ts`) is data-free: its
  * `userToggle({id, name, description})` factory takes display metadata
  * as plain strings. This module is the inverse half — it reads an
- * extension *block*'s properties (name, description, aliases) without
- * compiling the block, then hands the resolved labels to `userToggle`.
+ * extension *block*'s properties (name, description) without compiling
+ * the block, then hands the resolved metadata to `userToggle`.
+ *
+ * Extensions are identified by `extension:name` only. They are
+ * deliberately NOT aliased / page-typed: an aliased block whose content
+ * is its own source would have that source mirrored into an alias by the
+ * content↔alias parity processor (`@/plugins/alias/syncProcessor.ts`).
  *
  * Keeping this decode here (not in the kernel) is what makes `@/data`
  * able to import `@/facets` one-directionally: the kernel never reaches
@@ -17,7 +22,6 @@
  */
 
 import type {BlockData} from '@/data/api'
-import {aliasesProp} from '@/data/properties'
 import {
   extensionDescriptionProp,
   extensionNameProp,
@@ -41,37 +45,23 @@ function blockStringProperty(
 }
 
 /** Resolve a display name from block-level data only — no module
- *  compilation. Prefers the explicit `extension:name`, then the first
- *  non-empty alias, then a block-id snippet (rendered as a link in the
- *  settings UI). */
+ *  compilation. Uses the explicit `extension:name`, falling back to a
+ *  block-id snippet (rendered as a link in the settings UI). */
 function blockOnlyName(block: BlockData): string {
-  const extensionName = blockStringProperty(block, extensionNameProp)
-  if (extensionName) return extensionName
-
-  const firstAlias = extensionAliasValues(block).find(alias => alias.trim().length > 0)
-  if (firstAlias) return firstAlias
+  const name = extensionName(block)
+  if (name) return name
 
   // Settings UI renders this string as a link to the block.
   return `Extension ${block.id.slice(0, 8)}`
 }
 
-/** Every label that identifies this extension block: the explicit
- *  `extension:name` plus any aliases. The agent bridge uses this to
- *  resolve `enable-extension <label>` / `uninstall-extension <label>`
- *  to a block; the settings UI uses `blockOnlyName` (above) for
- *  display. Same input, different projection. */
-export function extensionAliasValues(block: BlockData): string[] {
-  const aliases = (() => {
-    const encoded = block.properties[aliasesProp.name]
-    if (encoded === undefined) return [] as string[]
-    try {
-      return aliasesProp.codec.decode(encoded)
-    } catch {
-      return [] as string[]
-    }
-  })()
-  const extensionName = blockStringProperty(block, extensionNameProp)
-  return extensionName ? [...aliases, extensionName] : aliases
+/** The label that identifies this extension block: its explicit
+ *  `extension:name` (set at install time). The agent bridge uses this to
+ *  resolve `enable-extension <name>` / `uninstall-extension <name>` to a
+ *  block; the settings UI uses `blockOnlyName` (above) for display.
+ *  Undefined when absent/empty/malformed. */
+export function extensionName(block: BlockData): string | undefined {
+  return blockStringProperty(block, extensionNameProp)
 }
 
 /** Build a user-extension togglable from a block: decode the display
