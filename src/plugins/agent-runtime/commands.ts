@@ -35,6 +35,7 @@ import { applyToggle } from '@/facets/togglable.js'
 import { userExtensionToggle } from '@/extensions/extensionToggles.js'
 import {
   approveExtension,
+  createCompileCache,
   revokeExtensionApproval,
 } from '@/extensions/compileExtensionModule.js'
 import { findExtensionBlock } from '@/extensions/extensionLookup.js'
@@ -199,6 +200,9 @@ const verifyExtensionBlock = async (
       // so it bypasses the approval gate (#67). This does NOT run the
       // block in the app — it's a throwaway resolution for the bridge.
       verifyLiveSource: true,
+      // Throwaway in-memory cache so verifying live (un-approved) source
+      // never shares the process-wide cache with the user-facing loader.
+      cache: createCompileCache(),
       errorReporter: (reportedBlockId, error) => {
         errors.push(serializeVerificationError(reportedBlockId, error))
       },

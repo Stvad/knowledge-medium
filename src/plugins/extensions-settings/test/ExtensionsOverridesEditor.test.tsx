@@ -40,12 +40,12 @@ vi.mock('@/context/repo.js', () => ({
 // Spy the device-local trust calls without touching IndexedDB/Babel.
 const approveSpy = vi.hoisted(() => vi.fn())
 const revokeSpy = vi.hoisted(() => vi.fn())
-const readApprovalSpy = vi.hoisted(() => vi.fn())
+const lookupApprovalSpy = vi.hoisted(() => vi.fn())
 vi.mock('@/extensions/compileExtensionModule.js', async (importActual) => ({
   ...(await importActual<object>()),
   approveExtension: approveSpy,
   revokeExtensionApproval: revokeSpy,
-  readApproval: readApprovalSpy,
+  lookupApproval: lookupApprovalSpy,
 }))
 
 // Spy the toast so a failed approval surfaces an assertable error instead
@@ -81,8 +81,8 @@ describe('ExtensionsOverridesEditor', () => {
     revokeSpy.mockClear()
     showErrorSpy.mockClear()
     blockSet.mockReset()
-    readApprovalSpy.mockReset()
-    readApprovalSpy.mockResolvedValue(undefined)
+    lookupApprovalSpy.mockReset()
+    lookupApprovalSpy.mockResolvedValue({status: 'unapproved'})
     mockRepo.load.mockReset()
   })
 
@@ -132,7 +132,7 @@ describe('ExtensionsOverridesEditor', () => {
   it('first-time enable of a user extension approves its live source, then sets intent', async () => {
     const tree: ToggleNode[] = [{handle: userHandle, children: []}]
     useToggleTreeMock.mockReturnValue({tree, loading: false})
-    readApprovalSpy.mockResolvedValue(undefined) // not yet approved here
+    lookupApprovalSpy.mockResolvedValue({status: 'unapproved'}) // not yet approved here
     mockRepo.load.mockResolvedValue(userBlock)
 
     renderEditor({value: new Map()})
@@ -149,7 +149,7 @@ describe('ExtensionsOverridesEditor', () => {
   it('surfaces an error and does NOT set intent when the approval fails', async () => {
     const tree: ToggleNode[] = [{handle: userHandle, children: []}]
     useToggleTreeMock.mockReturnValue({tree, loading: false})
-    readApprovalSpy.mockResolvedValue(undefined) // not yet approved here
+    lookupApprovalSpy.mockResolvedValue({status: 'unapproved'}) // not yet approved here
     mockRepo.load.mockResolvedValue(userBlock)
     approveSpy.mockRejectedValue(new Error('write boom')) // trust persist fails
 
@@ -163,16 +163,35 @@ describe('ExtensionsOverridesEditor', () => {
     expect(blockSet).not.toHaveBeenCalled()
   })
 
+  it('fails closed when the approval store is unreadable (no re-approve, no intent)', async () => {
+    const tree: ToggleNode[] = [{handle: userHandle, children: []}]
+    useToggleTreeMock.mockReturnValue({tree, loading: false})
+    // Transient store error → indeterminate. Must NOT pin live source over a
+    // pin we just couldn't see (#67 review).
+    lookupApprovalSpy.mockResolvedValue({status: 'unreadable'})
+
+    renderEditor({value: new Map()})
+
+    await userEvent.click(screen.getByRole('checkbox', {name: /block-user|extension/i}))
+
+    await vi.waitFor(() => expect(showErrorSpy).toHaveBeenCalledTimes(1))
+    expect(approveSpy).not.toHaveBeenCalled()
+    expect(blockSet).not.toHaveBeenCalled()
+  })
+
   it('enabling an already-approved user extension keeps the pin (no re-approve)', async () => {
     const tree: ToggleNode[] = [{handle: userHandle, children: []}]
     useToggleTreeMock.mockReturnValue({tree, loading: false})
     // Already approved here (e.g. re-enable after a disable).
-    readApprovalSpy.mockResolvedValue({
-      sourceHash: 'h',
-      approvedSource: 'SRC',
-      compiled: 'SRC',
-      compilerVersion: '1',
-      approvedAt: 0,
+    lookupApprovalSpy.mockResolvedValue({
+      status: 'approved',
+      record: {
+        sourceHash: 'h',
+        approvedSource: 'SRC',
+        compiled: 'SRC',
+        compilerVersion: '1',
+        approvedAt: 0,
+      },
     })
 
     renderEditor({value: new Map()})

@@ -283,7 +283,11 @@ export class Block implements Handle<BlockData | null> {
    *  property compose instead of clobbering a stale snapshot. The function
    *  is never stored (it runs inside the tx; only its resolved value is
    *  written), so this stays replay-safe — and works because property
-   *  values are serializable, so a value is never itself a function. */
+   *  values are serializable, so a value is never itself a function.
+   *
+   *  NOTE: unlike `get`, the updater receives `undefined` (NOT
+   *  `schema.defaultValue`) when the property is absent, so handle the
+   *  empty case yourself (e.g. `current => fn(current ?? new Map())`). */
   async set<T>(schema: PropertySchema<T>, value: T): Promise<void>
   async set<T>(
     schema: PropertySchema<T>,

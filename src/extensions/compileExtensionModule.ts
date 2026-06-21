@@ -215,23 +215,48 @@ const isApprovalRecord = (row: unknown): row is CompiledRecord => {
   )
 }
 
-/** Best-effort read of a block's device-local approval record. A flaky
- *  read must never break loading — a failure (or absence, or a legacy
- *  non-approval row) is reported as "no approval", which surfaces as the
- *  cross-device "enable here?" prompt rather than silently running
- *  anything. See {@link isApprovalRecord} for why legacy rows are rejected. */
-export async function readApproval(
+/** Three-way result of an approval lookup. The `unreadable` arm exists so
+ *  callers whose fallback is to (re-)pin LIVE source — the settings enable
+ *  path — can FAIL CLOSED on a transient store error instead of mistaking
+ *  a real pin for "never approved" and silently adopting a drifted source.
+ *  `unapproved` covers both a missing row and a rejected legacy Phase-1 row
+ *  (either is eligible for a first real approval). */
+export type ApprovalLookup =
+  | {status: 'approved', record: CompiledRecord}
+  | {status: 'unapproved'}
+  | {status: 'unreadable'}
+
+/** Distinguish "no approval" from "couldn't read the approval store". Use
+ *  this (not {@link readApproval}) anywhere the no-approval fallback is to
+ *  pin live source. */
+export async function lookupApproval(
   blockId: string,
   persistent: CompiledModuleCache = getCompiledModuleCache(),
-): Promise<CompiledRecord | undefined> {
+): Promise<ApprovalLookup> {
   let row: CompiledRecord | undefined
   try {
     row = await persistent.read(blockId)
   } catch (error) {
     console.warn(`Extension approval read failed for ${blockId}`, error)
-    return undefined
+    return {status: 'unreadable'}
   }
-  return isApprovalRecord(row) ? row : undefined
+  return isApprovalRecord(row) ? {status: 'approved', record: row} : {status: 'unapproved'}
+}
+
+/** Best-effort read of a block's device-local approval record. A flaky
+ *  read (or absence, or a legacy non-approval row) is reported as "no
+ *  approval", which surfaces as the cross-device "enable here?" prompt
+ *  rather than silently running anything — correct for the LOADER, which
+ *  simply declines to run on `undefined`. Callers whose no-approval
+ *  fallback is to pin live source must use {@link lookupApproval} so they
+ *  can fail closed on a transient read error. See {@link isApprovalRecord}
+ *  for why legacy rows are rejected. */
+export async function readApproval(
+  blockId: string,
+  persistent: CompiledModuleCache = getCompiledModuleCache(),
+): Promise<CompiledRecord | undefined> {
+  const lookup = await lookupApproval(blockId, persistent)
+  return lookup.status === 'approved' ? lookup.record : undefined
 }
 
 /** Best-effort write — a flaky persist must never reject the operation

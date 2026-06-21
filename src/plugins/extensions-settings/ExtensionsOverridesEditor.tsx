@@ -34,7 +34,7 @@ import type {Block} from '@/data/block.js'
 import {useRepo} from '@/context/repo.js'
 import {
   approveExtension,
-  readApproval,
+  lookupApproval,
 } from '@/extensions/compileExtensionModule.js'
 import {refreshAppRuntime} from '@/facets/runtimeEvents.js'
 import {applyToggle, type Overrides, type Togglable} from '@/facets/togglable.js'
@@ -88,16 +88,37 @@ export const ExtensionsOverridesEditor = ({
         // First-time enable grants device-local trust; a subsequent enable
         // keeps the existing pin (drift shows as update-available rather
         // than being silently adopted). Disabling never touches the pin.
-        // Don't flip intent on if trust couldn't be established.
-        if (handle.kind === 'user' && nextState && !(await readApproval(handle.id))) {
-          if (!(await approveHere(handle))) return
+        if (handle.kind === 'user' && nextState) {
+          const approval = await lookupApproval(handle.id)
+          // Fail closed if the store is unreadable: approving here would
+          // pin the current (possibly drifted) live source over an existing
+          // pin we just couldn't see (#67 review).
+          if (approval.status === 'unreadable') {
+            showError(
+              `Couldn't enable "${handle.name}" — couldn't read its approval state. Try again.`,
+            )
+            return
+          }
+          // Only a definitively-absent approval triggers a first-time
+          // approve; an existing pin is kept. Don't flip intent on if trust
+          // couldn't be established.
+          if (approval.status === 'unapproved' && !(await approveHere(handle))) return
         }
         // Read-modify-write inside the serialized write-tx (not against the
         // captured `value` snapshot), so an overlapping toggle whose async
         // approval is still in flight can't drop this one's intent.
-        await prefsBlock.set(extensionsOverridesProp, current =>
-          applyToggle(current ?? new Map(), handle, nextState),
-        )
+        try {
+          await prefsBlock.set(extensionsOverridesProp, current =>
+            applyToggle(current ?? new Map(), handle, nextState),
+          )
+        } catch (error) {
+          // A failed intent write must surface, not become a silent
+          // unhandled rejection that snaps the checkbox back with no reason.
+          console.error(`Failed to write extensions intent for ${handle.id}`, error)
+          showError(
+            `Couldn't ${nextState ? 'enable' : 'disable'} "${handle.name}" — the change couldn't be saved.`,
+          )
+        }
       })()
     },
     [approveHere, prefsBlock],

@@ -19,6 +19,7 @@ import {
   approveExtension,
   createCompileCache,
   loadApprovedExtension,
+  lookupApproval,
   readApproval,
 } from '@/extensions/compileExtensionModule'
 
@@ -270,5 +271,34 @@ describe('approveExtension + loadApprovedExtension — trust gate + L3 cache', (
     // A real Phase-2 approval (carries the markers) IS returned.
     await persistent.write('real', record({sourceHash: 'h2'}))
     expect(await readApproval('real', persistent)).toMatchObject({sourceHash: 'h2'})
+  })
+
+  it('lookupApproval distinguishes approved / unapproved / unreadable (#67 fail-closed)', async () => {
+    const persistent = new InMemoryCompiledModuleCache()
+    await persistent.write('ok', record({sourceHash: 'h3'}))
+    await persistent.write('legacy', {
+      sourceHash: 'h',
+      compiled: 'export default 1',
+      compilerVersion: '1',
+    } as unknown as CompiledRecord)
+
+    expect(await lookupApproval('ok', persistent)).toMatchObject({
+      status: 'approved',
+      record: {sourceHash: 'h3'},
+    })
+    // Legacy + missing rows are both "unapproved" (eligible for approval).
+    expect(await lookupApproval('legacy', persistent)).toEqual({status: 'unapproved'})
+    expect(await lookupApproval('missing', persistent)).toEqual({status: 'unapproved'})
+
+    // A transient read error is NOT "no approval" — callers that would pin
+    // live source must fail closed on this.
+    const flaky: CompiledModuleCache = {
+      read: async () => { throw new Error('read boom') },
+      write: async () => {},
+      delete: async () => {},
+      clear: async () => {},
+    }
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(await lookupApproval('x', flaky)).toEqual({status: 'unreadable'})
   })
 })
