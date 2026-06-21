@@ -488,21 +488,26 @@ its own monotonicity).
     re-prompted — e2ee §6). The mode is <em>authoritative</em>, so it must come from this durable pin,
     <strong>never</strong> from a per-request claim (an app-claimed "plaintext" would be the downgrade
     vector again). If no pin exists for the workspace yet (never validated), the SW fails closed —
-    never a magic-fallback. Two shapes, both viable:
+    never a magic-fallback.
+    <div class="decision" style="margin-top:8px">
+    <strong>Decision: move the pin to IndexedDB as the single source of truth</strong> (not a
+    localStorage mirror) — one store, no dual-write bookkeeping. The <code>modePin</code> module's
+    backing changes from localStorage to IDB; both the app and the SW read the same store.
     <ul>
-      <li><strong>Mirror</strong> — keep localStorage authoritative for the app's <em>synchronous</em>
-        pin reads (the existing resolver API is sync), add an IDB copy written in the same operation
-        for the SW. The dual-write is <strong>safe by construction</strong>: a workspace's
-        <code>encryption_mode</code> is <em>immutable</em> (server-enforced —
-        <code>workspaces_prevent_e2ee_field_change</code> in
-        <code>…_add_e2ee_workspace_columns.sql</code>), so a stale/missing mirror can only ever mean
-        "absent → fail closed", never "wrong → downgrade". Lowest blast radius.</li>
-      <li><strong>Move</strong> — make IDB the single source of truth, with a boot-hydrated in-memory
-        cache so the app keeps synchronous reads. Cleaner (one store) but a larger change to the
-        tested <code>modePin</code> module. Prefer this only if the dual-write bookkeeping proves
-        annoying; the immutability argument makes the mirror's drift risk negligible, so the mirror is
-        the recommended v1.</li>
-    </ul></li>
+      <li><strong>Async is a non-issue</strong> because the app keeps a <em>boot-hydrated in-memory
+        cache</em>: at data-layer init (where the keyStore / DB already open) load all pins — a handful,
+        one per workspace — into an in-memory map, and the app's synchronous <code>getModePin</code>
+        reads off that map. Writes are write-through (sync map + async IDB) and are rare (only on mode
+        establishment / key validation), so async IDB never touches the hot read path. The SW reads IDB
+        directly, but its fetch handler is already async (and the §7.1.1 in-SW cache below amortizes it).</li>
+      <li><strong>Durability downgrade is acceptable and fails closed.</strong> IDB is evictable under
+        storage pressure (localStorage less so) — but a missing pin for an encrypted workspace resolves
+        to <code>defer</code> (don't materialize, re-prompt), never "plaintext". So eviction →
+        <em>user re-affirms workspace status</em> → pin re-established; it can never silently downgrade.
+        Preserve the existing pin semantics through the move: <em>survives</em> Lock &amp; Wipe
+        (not purged), shared across accounts in the profile, and an in-memory-only fallback when IDB is
+        unavailable (mirroring the keyStore's <code>InMemory</code> fallback).</li>
+    </ul></div></li>
   <li><strong>Expected hash → passed in the request by the renderer.</strong> The replay/rollback
     defense (§5.1) verifies decrypted bytes against the block's <code>hash</code>, but that hash is in
     the block's <em>encrypted</em> <code>properties_json</code> — in app/PowerSync state the SW can't
@@ -517,6 +522,16 @@ its own monotonicity).
   <li><strong>Active user + token</strong> — already covered by the §7.1 per-<code>clientId</code>
     handshake.</li>
 </ul>
+
+<div class="info">
+<strong>Cache the SW's IDB reads on the hot path.</strong> Both the mode-pin store and the WK store
+(<code>km-e2ee-keys</code>) are now SW-readable IDB, so a naïve handler does two async IDB opens per
+<code>&lt;img&gt;</code> fetch. Keep a small in-SW in-memory cache of <code>{ workspace_id → mode pin,
+WK handle }</code>, populated lazily and <strong>invalidated on the wipe and auth/token messages</strong>
+(the same signals that already drive §7.1/§7.2) — and on the per-workspace revoke/leave purge. The
+cache is per-SW-lifetime, so a respawn re-reads IDB once; correctness still comes from IDB + the
+invalidation signals, the cache is only to avoid per-request opens.
+</div>
 
 <div class="warn">
 <strong>Whole-blob AEAD ≠ native range/streaming for E2EE.</strong> The <code>encb:v1:</code>
@@ -983,11 +998,13 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
       <code>private</code>-schema grants / wrapper, §10); the E2EE byte-ciphertext upload guard (§10.1);
       <code>BlobStore</code> over Supabase Storage. Post-create RLS audit per the Supabase rule.</td></tr>
 <tr><td>3 — cache + SW</td>
-    <td>SW asset route (<code>${BASE_URL}asset/&lt;ws&gt;/&lt;id&gt;</code>, base-prefixed and ordered
-      before the image-cache branch) with mode-pin-driven decrypt-or-passthrough; user-scoped Cache;
-      per-<code>clientId</code>
-      token handshake; the marker-gated boot-time cache+token purge (§7.2) — covered by
-      <code>lockAndWipe</code>-flavored tests incl. a "plaintext survives lock" regression.</td></tr>
+    <td><strong>Prereq:</strong> move <code>modePin</code> from localStorage to IndexedDB (single source
+      of truth + boot-hydrated in-memory cache, §7.1.1). Then: SW asset route
+      (<code>${BASE_URL}asset/&lt;ws&gt;/&lt;id&gt;</code>, base-prefixed and ordered before the
+      image-cache branch) with mode-pin-driven decrypt-or-passthrough; in-SW read cache for pin/WK;
+      user-scoped Cache; per-<code>clientId</code> token handshake; the marker-gated boot-time
+      cache+token purge (§7.2) — covered by <code>lockAndWipe</code>-flavored tests incl. a "plaintext
+      survives lock" regression.</td></tr>
 <tr><td>4 — block model + renderer</td>
     <td><code>media</code> block type; <code>MediaBlockRenderer</code> (image branch) reusing the
       lightbox; markdown <code>img</code> override.</td></tr>
