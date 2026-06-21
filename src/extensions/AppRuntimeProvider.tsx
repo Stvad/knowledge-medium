@@ -21,6 +21,10 @@ import {
   ExtensionLoadErrorsProvider,
   ExtensionLoadErrorStore,
 } from '@/extensions/extensionLoadErrors.js'
+import {
+  ExtensionApprovalStatusProvider,
+  ExtensionApprovalStatusStore,
+} from '@/extensions/extensionApprovalStatus.js'
 import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.js'
 import { toastExtensionLoadError } from '@/extensions/extensionLoadErrorToast.js'
 
@@ -54,6 +58,14 @@ export function AppRuntimeProvider({
   // workspace for the provider's lifetime. The errorStore (status icons)
   // still reflects every report.
   const toastedLoadErrors = useRef<Set<string>>(new Set())
+
+  // Device-local trust status (needs-approval / update-available) for the
+  // current resolution, surfaced to the Extensions settings UI (#67). Same
+  // per-provider / per-workspace lifecycle as the error store.
+  const approvalStore = useMemo(() => {
+    void workspaceId
+    return new ExtensionApprovalStatusStore()
+  }, [workspaceId])
 
   const runtimeContext: FacetResolveContext = useMemo(() => ({
     repo,
@@ -108,9 +120,10 @@ export function AppRuntimeProvider({
 
   useEffect(() => {
     let cancelled = false
-    // Wipe stale errors from the previous resolution; the loader will
-    // re-report any that still apply.
+    // Wipe stale errors + trust statuses from the previous resolution; the
+    // loader will re-report any that still apply.
     errorStore.reset()
+    approvalStore.reset()
 
     if (!workspaceId) {
       // Should not happen — getInitialBlock sets activeWorkspaceId
@@ -141,6 +154,10 @@ export function AppRuntimeProvider({
                 error,
               )
             },
+            approvalStatusReporter: (blockId, status) => {
+              if (cancelled) return
+              approvalStore.report(blockId, status)
+            },
           }),
         ], {overrides, safeMode, context: runtimeContext})
 
@@ -162,7 +179,7 @@ export function AppRuntimeProvider({
     return () => {
       cancelled = true
     }
-  }, [baseExtensions, errorStore, overrides, repo, runtimeContext, safeMode, workspaceId])
+  }, [approvalStore, baseExtensions, errorStore, overrides, repo, runtimeContext, safeMode, workspaceId])
 
   useEffect(() => {
     if (!workspaceId) {
@@ -202,11 +219,13 @@ export function AppRuntimeProvider({
   return (
     <AppRuntimeContextProvider value={runtime}>
       <ExtensionLoadErrorsProvider store={errorStore}>
-        <ActiveContextsProvider>
-          <HotkeyReconciler/>
-          <AppMounts runtime={runtime}/>
-          {children}
-        </ActiveContextsProvider>
+        <ExtensionApprovalStatusProvider store={approvalStore}>
+          <ActiveContextsProvider>
+            <HotkeyReconciler/>
+            <AppMounts runtime={runtime}/>
+            {children}
+          </ActiveContextsProvider>
+        </ExtensionApprovalStatusProvider>
       </ExtensionLoadErrorsProvider>
     </AppRuntimeContextProvider>
   )

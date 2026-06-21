@@ -18,8 +18,10 @@
  */
 
 import {Fragment, useMemo} from 'react'
+import {Button} from '@/components/ui/button.js'
 import {Checkbox} from '@/components/ui/checkbox.js'
 import {Label} from '@/components/ui/label.js'
+import {useExtensionApprovalStatus} from '@/extensions/extensionApprovalStatus.js'
 import type {ToggleNode} from '@/facets/discoverToggleTree.js'
 import {isEnabled, type Overrides, type Togglable} from '@/facets/togglable.js'
 import {buildAppHash} from '@/utils/routing.js'
@@ -51,6 +53,10 @@ export interface ExtensionsSettingsProps {
   tree: ReadonlyArray<ToggleNode>
   overrides: Overrides
   onToggle: (handle: Togglable, nextState: boolean) => void
+  /** Approve / re-approve a user extension on THIS device (the
+   *  "Enable here" / "Update" affordance for #67). Optional — when omitted
+   *  the trust affordance isn't rendered (e.g. presentational tests). */
+  onApprove?: (handle: Togglable) => void
   workspaceId?: string
 }
 
@@ -58,6 +64,7 @@ export const ExtensionsSettings = ({
   tree,
   overrides,
   onToggle,
+  onApprove,
   workspaceId,
 }: ExtensionsSettingsProps) => {
   // Bucket the top level by handle.kind so user extensions get their
@@ -89,11 +96,13 @@ export const ExtensionsSettings = ({
     <div className="flex flex-col gap-4">
       {sections.system.length > 0 && (
         <Section title="Built-in extensions" nodes={sections.system}
-          overrides={overrides} onToggle={onToggle} workspaceId={workspaceId}/>
+          overrides={overrides} onToggle={onToggle} onApprove={onApprove}
+          workspaceId={workspaceId}/>
       )}
       {sections.user.length > 0 && (
         <Section title="User extensions" nodes={sections.user}
-          overrides={overrides} onToggle={onToggle} workspaceId={workspaceId}/>
+          overrides={overrides} onToggle={onToggle} onApprove={onApprove}
+          workspaceId={workspaceId}/>
       )}
     </div>
   )
@@ -104,10 +113,11 @@ interface SectionProps {
   nodes: ReadonlyArray<ToggleNode>
   overrides: Overrides
   onToggle: (handle: Togglable, nextState: boolean) => void
+  onApprove?: (handle: Togglable) => void
   workspaceId?: string
 }
 
-const Section = ({title, nodes, overrides, onToggle, workspaceId}: SectionProps) => (
+const Section = ({title, nodes, overrides, onToggle, onApprove, workspaceId}: SectionProps) => (
   <section className="flex flex-col gap-1">
     <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
       {title}
@@ -119,6 +129,7 @@ const Section = ({title, nodes, overrides, onToggle, workspaceId}: SectionProps)
           node={node}
           overrides={overrides}
           onToggle={onToggle}
+          onApprove={onApprove}
           workspaceId={workspaceId}
           level={1}
         />
@@ -131,14 +142,19 @@ interface ToggleRowProps {
   node: ToggleNode
   overrides: Overrides
   onToggle: (handle: Togglable, nextState: boolean) => void
+  onApprove?: (handle: Togglable) => void
   workspaceId?: string
   level: number
 }
 
-const ToggleRow = ({node, overrides, onToggle, workspaceId, level}: ToggleRowProps) => {
+const ToggleRow = ({node, overrides, onToggle, onApprove, workspaceId, level}: ToggleRowProps) => {
   const {handle, children} = node
   const checked = isEnabled(handle, overrides)
   const essential = handle.essential === true
+  // Device-local trust status (#67) — only user extensions ever carry one;
+  // the hook returns undefined for system rows (and when no provider is
+  // mounted, e.g. presentational tests).
+  const approvalStatus = useExtensionApprovalStatus(handle.id)
   const checkboxId = `system-plugin-toggle-${handle.id}`
   const labelId = `${checkboxId}-label`
   const definitionHref = handle.kind === 'user' && workspaceId
@@ -198,6 +214,23 @@ const ToggleRow = ({node, overrides, onToggle, workspaceId, level}: ToggleRowPro
               {handle.description}
             </span>
           )}
+          {handle.kind === 'user' && approvalStatus && onApprove && (
+            <div className="mt-1 flex items-center gap-2">
+              <span className="text-xs text-amber-600 dark:text-amber-500">
+                {approvalStatus.kind === 'needs-approval'
+                  ? 'Not approved on this device'
+                  : 'Update available — review before enabling'}
+              </span>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => onApprove(handle)}
+              >
+                {approvalStatus.kind === 'needs-approval' ? 'Enable here' : 'Update'}
+              </Button>
+            </div>
+          )}
         </div>
       </li>
       {children.length > 0 && children.map(child => (
@@ -206,6 +239,7 @@ const ToggleRow = ({node, overrides, onToggle, workspaceId, level}: ToggleRowPro
           node={child}
           overrides={overrides}
           onToggle={onToggle}
+          onApprove={onApprove}
           workspaceId={workspaceId}
           level={level + 1}
         />
