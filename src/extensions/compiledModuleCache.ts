@@ -1,26 +1,26 @@
 /**
- * Persistent (cross-reload) compile cache for extension modules.
+ * Device-local approval store for extension modules (issue #67), which
+ * doubles as the persistent compile cache (issue #167).
  *
- * Issue #167: `@babel/standalone` (~0.85 MB gz) is needed *only* to
- * transpile an extension block's TS/JSX source into runnable JS. The
- * in-memory cache in `compileExtensionModule.ts` is empty on every cold
- * start, so the current fleet — where every user has ≥1 enabled
- * extension — re-runs Babel on every boot. Persisting the transpiled JS
- * lets a warm boot rebuild the module from the cached string via the
- * blob-URL path WITHOUT loading Babel at all; Babel is then fetched only
- * on a genuine cache miss (first-ever compile or the source changed).
+ * Each row is a *trust grant*: its presence means "on THIS device, the
+ * user has reviewed this block's source (hash `sourceHash`) and approved
+ * it to run." A user-extension block executes only if such a row exists,
+ * and it runs the row's PINNED `compiled` output — never the live
+ * `block.content` — so a source change synced from elsewhere can't
+ * silently execute new code (#67). The same pinned output is what lets a
+ * warm boot rebuild the module without loading Babel (#167): the trust
+ * record and the compile cache are one and the same row.
  *
- * Storage shape — one self-contained row per block — is deliberately the
- * Phase-2 "approval record" shape running in implicit auto-approve mode:
- * issue #67 layers a device-local trust gate on top of the same row
- * (binding execution to an approved `sourceHash`). Keying by `blockId`
- * (a globally-unique id) means each LIVE extension occupies exactly one
- * row (overwritten when its source changes). Deleting a block leaves its
- * row orphaned — there is no production `delete`/evict caller yet (that's
- * Phase 2) — so the row count tracks cumulative blockId churn, not the
- * current extension count. The lock & wipe path empties the whole store
- * (`clearCompiledModuleCache`), which is the only thing that bounds it
- * today.
+ * Write discipline: rows are written ONLY by an explicit approval
+ * (`approveExtension` in `compileExtensionModule.ts`), never as a
+ * side-effect of loading/compiling. That is the line between Phase 1's
+ * implicit auto-approve (every compile wrote a row) and Phase 2's
+ * device-local trust gate.
+ *
+ * Keyed by `blockId` (globally-unique), so each block occupies exactly
+ * one row, overwritten on re-approval (an explicit update). `delete`
+ * revokes a single approval (disable / uninstall / remote-disable);
+ * `clear` empties the whole store (§6 lock & wipe boot path).
  *
  * Mirrors the interface + in-memory-fallback + IndexedDB pattern of
  * `sync/keys/keyStore.ts`. Unlike that store — which holds a
@@ -30,22 +30,35 @@
  */
 
 export interface CompiledRecord {
-  /** Pure SHA-256 of the block's source. NOT salted by compiler version
-   *  (that lives in `compilerVersion`) — Phase 2 reuses this exact hash
-   *  as the content the user approves, and a compiler bump must not look
-   *  like a source change. */
+  /** Pure SHA-256 of `approvedSource`. NOT salted by compiler version
+   *  (that lives in `compilerVersion`): this is the exact content the
+   *  user approved, so a compiler bump must invalidate the cached
+   *  *output* without looking like a *source* change (which would
+   *  require re-approval). The execution gate compares this against
+   *  `sha256(live block.content)` to detect drift. */
   sourceHash: string
-  /** Transpiled JS string (Babel output) ready for blob-URL import. */
+  /** The exact source the user approved. Kept (not just its hash) so a
+   *  compiler-version bump can recompile the APPROVED source even when
+   *  the live block content has since drifted — we must never silently
+   *  recompile from the drifted (un-approved) live source. */
+  approvedSource: string
+  /** Transpiled JS string (Babel output) of `approvedSource`, ready for
+   *  blob-URL import. This is what actually runs — the pinned output. */
   compiled: string
   /** The `COMPILER_VERSION` the `compiled` string was produced under. A
-   *  bump invalidates the row (forces recompile) while leaving
-   *  `sourceHash` — and therefore any Phase-2 approval — intact. */
+   *  bump invalidates the cached output (forces a recompile from
+   *  `approvedSource`) while leaving `sourceHash` — and therefore the
+   *  approval itself — intact. */
   compilerVersion: string
+  /** Epoch ms the approval was granted/last updated. Display + debug
+   *  only; not load-bearing for the trust decision. */
+  approvedAt: number
 }
 
-/** A device-local store of transpiled extension modules, keyed by block
- *  id. All operations are async (IndexedDB) and must tolerate being
- *  called when persistence is unavailable — see the in-memory fallback. */
+/** A device-local store of approved/transpiled extension modules, keyed
+ *  by block id. All operations are async (IndexedDB) and must tolerate
+ *  being called when persistence is unavailable — see the in-memory
+ *  fallback. */
 export interface CompiledModuleCache {
   read(blockId: string): Promise<CompiledRecord | undefined>
   write(blockId: string, record: CompiledRecord): Promise<void>

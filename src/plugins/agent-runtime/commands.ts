@@ -190,6 +190,11 @@ const verifyExtensionBlock = async (
       workspaceId: block.workspaceId,
       safeMode: false,
       overrides: new Map([[block.id, true]]),
+      // Verification compiles the brand-new LIVE source in isolation to
+      // inspect its contributions before any device-local approval exists,
+      // so it bypasses the approval gate (#67). This does NOT run the
+      // block in the app — it's a throwaway resolution for the bridge.
+      verifyLiveSource: true,
       errorReporter: (reportedBlockId, error) => {
         errors.push(serializeVerificationError(reportedBlockId, error))
       },
