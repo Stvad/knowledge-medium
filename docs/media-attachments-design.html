@@ -453,9 +453,10 @@ its own monotonicity).
     E2EE</strong> — see the note below; images and moderate files are unaffected.)</li>
   <li><strong>The SW resolves it, auth-first:</strong> establish the active <code>user_id</code> (for
     the requesting client — §7.1) and the workspace's <em>mode pin</em> + WK availability
-    <em>before</em> consulting the cache → serve from cache only on a namespace match and a still-valid
-    session → on miss, fetch the stored blob → decrypt/passthrough <em>per the mode pin</em> (below) →
-    put the displayable bytes in the user-scoped cache → respond.</li>
+    <em>before</em> consulting the cache → serve from cache only on a namespace match, a still-valid
+    session, <em>and a matching content hash</em> (the cache key includes <code>h</code>, §8) → on miss,
+    fetch the stored blob → decrypt/passthrough <em>per the mode pin</em> (below) → verify against
+    <code>h</code> (§5.1) → put the displayable bytes in the user-scoped, hash-keyed cache → respond.</li>
   <li><strong>The mode pin decides decrypt-vs-passthrough, NOT the envelope magic.</strong> This is a
     deliberate carry-over of the rule the text path already enforces (<code>src/sync/crypto/envelope.ts</code>
     / e2ee §6 rule&nbsp;2: "the prefix is a FORMAT tag, not a decrypt trigger — the durable mode pin
@@ -627,10 +628,18 @@ decrypted bytes (and the bearer token) alive past a lock.
 pattern that already works. Arm the asset-cache + token purge under the same per-user
 <code>PENDING_WIPE</code> marker, and have <code>consumePendingWipe</code> (which already runs at
 next boot, before the DB opens) perform <code>caches.delete('assets:&lt;userId&gt;')</code> and clear
-the SW token store as injected best-effort steps — alongside the compiled-extension cache clear it
-already does. The runtime <code>postMessage</code>, if kept, is only a fast path; the marker is the
-guarantee. This must be wired in from day one and covered by the same flavor of tests that pin
+the SW token store. The runtime <code>postMessage</code>, if kept, is only a fast path; the marker is
+the guarantee. This must be wired in from day one and covered by the same flavor of tests that pin
 <code>lockAndWipe</code>.
+<br><br>
+<strong>And it must <em>block</em> marker-clear — it is NOT best-effort like the compiled-extension
+clear.</strong> The compiled-extension cache is non-secret, so its clear can fail-and-forget; the asset
+cache is the <em>primary plaintext store</em> for attachments (and the token store holds a live bearer
+token). So <code>consumePendingWipe</code> must clear <code>PENDING_WIPE</code> <strong>only after</strong>
+both purges succeed — if <code>caches.delete</code> or the token-store clear throws/partial-fails, keep
+the marker armed (retry next boot) or fail the boot, never proceed with the DB open. Otherwise a transient
+Cache/IDB failure on the wipe boot leaves decrypted bytes or a token alive while the marker that would
+retry the wipe is gone.
 </div>
 
 <p>Storing decrypted bytes in the Cache API is <em>consistent</em> with the accepted posture (e2ee
@@ -659,10 +668,15 @@ cache. Mandatory companions: the app→SW token handshake (§7.1) and the lock�
   <li><strong>Backing store:</strong> with SW decryption, the Cache API is the natural byte cache
     (SW-served <code>Response</code>s, native streaming). If we ever move decryption to the app
     thread, OPFS becomes the cache instead — the choice follows the decrypt location. The cache is
-    <strong>keyed by <code>user_id</code> then <code>workspace_id</code></strong>
-    (<code>assets:&lt;user_id&gt;</code> → <code>&lt;ws&gt;/&lt;id&gt;</code>): user-scoping is the
-    access-isolation boundary (§7), workspace-scoping makes leave / lock evict only the affected
-    bytes.</li>
+    <strong>keyed by <code>user_id</code>, then <code>workspace_id</code>, then the content
+    <code>hash</code></strong> (<code>assets:&lt;user_id&gt;</code> →
+    <code>&lt;ws&gt;/&lt;id&gt;/&lt;hash&gt;</code>): user-scoping is the access-isolation boundary (§7),
+    workspace-scoping makes leave / lock evict only the affected bytes, and <strong>including the hash
+    is what makes a re-upload self-invalidating</strong> — an edited asset gets a new
+    <code>hash</code> (§5.1), so the new <code>h=</code> misses the cache and triggers a fresh
+    fetch+decrypt+verify rather than serving the stale plaintext (the old entry ages out by LRU). The
+    cache hit must match the requested <code>h</code>; never serve <code>&lt;ws&gt;/&lt;id&gt;</code>
+    bytes for a different hash.</li>
   <li><strong>Eviction:</strong> soft LRU cap (≈500&nbsp;MB default). An evicted entry simply
     round-trips to the object store on next view.</li>
   <li><strong>Lock &amp; Wipe:</strong> the cache, the SW token store, <em>and the §9 byte-upload
@@ -757,7 +771,9 @@ using (
 );
 -- NO insert/update policy for `authenticated` on the attachments bucket:
 -- direct client writes are denied so they can't bypass the §10.1 byte guard.
--- The upload service (service-role / signed) is the only writer.</code></pre>
+-- The service-role Edge Function (which receives + inspects the body) is the
+-- ONLY writer. Not a signed upload URL: uploadToSignedUrl writes direct to
+-- Storage without the function seeing bytes, defeating the encb:v1: check (§10.1).</code></pre>
 
 <div class="warn">
 <strong>The <code>private.*</code> grant is not free — verify it, don't assume parity with
@@ -863,10 +879,16 @@ block in the workspace" breaks the share model: §12.1 grants byte access by wal
 and the §10 storage-RLS share branch never stamps that asset. So dedup is <strong>scoped to assets
 already under the containing subtree</strong>: reuse only an existing asset block whose
 <code>parent_id</code> chain is within (or an ancestor shared with) the current containing block;
-otherwise create a <em>fresh</em> asset block as a child here (bytes still dedup at the cache/queue
-layer by hash, so no extra upload). Cross-page reuse that deliberately crosses subtrees is then the
-same "cross-subtree embed" case §12 already calls out — resolved at share time by copying the
-referenced-but-outside asset into the shared subtree, not by a single workspace-wide asset block.</div>
+otherwise create a <em>fresh</em> asset block as a child here. <strong>A fresh block still uploads its
+own bytes.</strong> Object paths are <code>&lt;ws&gt;/&lt;asset_block_id&gt;</code> and storage
+RLS/share lookup key off that block id, so a new id is a new, currently-absent object — "reuse the
+hash" only saves re-reading/re-encoding the <em>local</em> source bytes; it must still PUT them (via
+§10.1) to the new block's path, or other devices / shared viewers 404. (A hash-addressed storage path
+would avoid the copy, but it's ruled out: under E2EE a plaintext-hash path is a content oracle, and it
+breaks the block-id share-RLS join — §11 dedup note, §10.) Cross-page reuse that deliberately crosses
+subtrees is then the same "cross-subtree embed" case §12 already calls out — resolved at share time by
+copying the referenced-but-outside asset into the shared subtree, not by a single workspace-wide asset
+block.</div>
 
 <div class="warn">
 <strong>Dedup is best-effort, not an invariant.</strong> The lookup reads <em>local</em> synced state,
