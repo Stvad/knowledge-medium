@@ -28,8 +28,11 @@
  * surgery. Chasing one workspace's plaintext across every local surface (blocks,
  * derived indexes, FTS, caches) is exactly what the coarse file-wipe sidesteps —
  * for surfaces that live INSIDE that file. The one derived cache that lives
- * outside it (the compiled-extension store in its own IndexedDB DB) is cleared
- * explicitly here via {@link LockAndWipeDeps.compiledCache}.
+ * outside it (the compiled-extension store in its own IndexedDB DB) is dropped
+ * by {@link consumePendingWipe} on the next boot, alongside the file delete and
+ * gated by the same armed marker (see its `clearCompiledCache` option) — NOT at
+ * lock time, so it can't be re-populated by an in-flight recompile before the
+ * reload, and a flaky IndexedDB can never block the wipe.
  */
 
 import type { WorkspaceKeyStore } from '../keyStore.js'
@@ -152,33 +155,18 @@ export const flushUploadQueue = async (
   return { flushed: true, remaining: 0 }
 }
 
-/** The slice of the extension compile cache §6 needs: drop every locally
- *  persisted compiled-extension blob. Injected (rather than imported) so
- *  this keys-layer flow stays free of an `@/extensions` dependency. */
-export interface LocalCompiledCache {
-  clear(): Promise<void>
-}
-
 export interface LockAndWipeDeps {
   /** The signed-in user — keys, pins, and the DB file are all per-user. */
   readonly userId: string
   /** This device's workspace-key store (§5); every WK is dropped. */
   readonly keyStore: WorkspaceKeyStore
-  /** Device-local cache of transpiled extension *source* (a separate
-   *  IndexedDB store, NOT inside the per-user SQLite file the wipe
-   *  deletes). Cleared so a lock & wipe doesn't leave plaintext-derived
-   *  extension code behind. Cleared FIRST — before keys are dropped or the
-   *  wipe is armed — so that if it can't be cleared we refuse the whole
-   *  command rather than report success with that plaintext still on disk.
-   *  Optional: skipped when absent. */
-  readonly compiledCache?: LocalCompiledCache
 }
 
 /**
- * Commit the wipe: clear the compiled-extension cache, arm the next-boot
- * DB-file wipe, then drop this user's workspace keys. Does NOT reload — the
- * caller forces the reload (which also clears the in-memory BlockCache and other
- * live JS state) and the file delete happens on that next boot via
+ * Commit the wipe: arm the next-boot DB-file wipe, then drop this user's
+ * workspace keys. Does NOT reload — the caller forces the reload (which also
+ * clears the in-memory BlockCache and other live JS state) and the file delete
+ * (plus the compiled-extension-cache drop) happens on that next boot via
  * {@link consumePendingWipe}.
  *
  * Key clearing is scoped to `deps.userId`: the IndexedDB key store is shared
@@ -196,12 +184,10 @@ export interface LockAndWipeDeps {
  * it first also closes the residual TOCTOU window a sibling tab or quota change
  * could open between the probe and the write.
  *
- * The compiled-extension cache is cleared even earlier — before the marker — for
- * the same reason: it is plaintext-derived source living outside the SQLite file,
- * so if IndexedDB can't drop it we must refuse the wipe up front rather than
- * report success (and reload) with that plaintext still on disk. It is cleared
- * first rather than last so a failure costs nothing destructive; `clear()` is
- * idempotent, so a retry or the key-drop rollback below is harmless.
+ * The compiled-extension cache (a separate IndexedDB store of plaintext-derived
+ * source) is NOT touched here. It is dropped on the next boot by
+ * {@link consumePendingWipe}, gated by the same armed marker — see that
+ * function for why boot, not lock time.
  */
 export const lockAndWipe = async (deps: LockAndWipeDeps): Promise<void> => {
   if (!canPersistPins()) {
@@ -210,16 +196,6 @@ export const lockAndWipe = async (deps: LockAndWipeDeps): Promise<void> => {
         '(private mode or storage disabled).',
     )
   }
-  // Drop the compiled-extension cache FIRST. It is plaintext-derived source
-  // living outside the SQLite file, so the boot-time file wipe wouldn't touch
-  // it. Letting a failure here propagate (before anything destructive) means a
-  // wipe that can't remove this plaintext REFUSES rather than reporting success
-  // and reloading with the code still on disk. `clear()` is idempotent, so the
-  // user can simply retry.
-  if (deps.compiledCache) {
-    await deps.compiledCache.clear()
-  }
-
   markPendingWipe(deps.userId)
   try {
     await deps.keyStore.clearForUser(deps.userId)
@@ -238,18 +214,33 @@ export interface ConsumeWipeOptions {
   readonly retries?: number
   readonly delayMs?: number
   readonly sleep?: (ms: number) => Promise<void>
+  /** Empty the compiled-extension IndexedDB store (plaintext-derived source
+   *  that lives OUTSIDE the SQLite file). Injected so the keys layer keeps
+   *  no `@/extensions` import and tests can stub it; production wires
+   *  `clearCompiledModuleCache`. Best-effort — see below. */
+  readonly clearCompiledCache?: () => Promise<void>
 }
 
 /**
- * Boot-time half of the wipe: if a wipe is armed for this user, delete the DB
- * file, then disarm. MUST run before the DB is opened (see file header).
+ * Boot-time half of the wipe: if a wipe is armed for this user, drop the
+ * compiled-extension cache and delete the DB file, then disarm. MUST run before
+ * the DB is opened (see file header).
  *
  * The OPFS remover and filename resolver are injected so this orchestration is
  * unit-testable without a browser; production wires the real OPFS delete +
  * `dbFilenameForUser`. Returns whether a wipe was carried out.
  *
- * Retries the delete a few times: with multi-tab enabled, another same-user tab
- * that received the {@link broadcastWipeReload} signal may still be mid-reload
+ * Why the compiled-extension cache is cleared HERE (boot), not in `lockAndWipe`
+ * (lock time): it's a separate IndexedDB store the file delete doesn't touch, so
+ * it needs explicit removal — and doing it at boot, gated by the armed marker
+ * and before any compile can run, is what makes it durable. A lock-time clear
+ * could be re-populated by an in-flight recompile (this tab) or a sibling tab
+ * before the reload completes; here nothing can write a row back in. It is also
+ * BEST-EFFORT (the injected fn never rejects): a derived cache must never block
+ * the wipe — the load-bearing plaintext removal is the file delete below.
+ *
+ * Retries the file delete a few times: with multi-tab enabled, another same-user
+ * tab that received the {@link broadcastWipeReload} signal may still be mid-reload
  * and holding the OPFS sync-access handle, so the first attempt can fail with a
  * "no modification allowed" error that clears within ~a second. If every attempt
  * fails the marker is deliberately LEFT armed and the error propagates (aborting
@@ -264,6 +255,17 @@ export const consumePendingWipe = async (
   opts: ConsumeWipeOptions = {},
 ): Promise<boolean> => {
   if (!isPendingWipe(userId)) return false
+
+  // Drop the compiled-extension cache first — before the (possibly throwing)
+  // file-delete loop, so it still runs if the file delete defers to a later
+  // boot. Best-effort and defensively guarded: the load-bearing plaintext
+  // removal is the file delete, so a derived-cache hiccup must never abort the
+  // wipe (the injected fn is contracted not to reject, but we don't rely on it).
+  try {
+    await opts.clearCompiledCache?.()
+  } catch (err) {
+    console.warn('[lock-and-wipe] failed to clear compiled-extension cache on boot', err)
+  }
 
   const retries = opts.retries ?? 5
   const delayMs = opts.delayMs ?? 200

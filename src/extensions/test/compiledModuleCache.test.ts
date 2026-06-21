@@ -6,6 +6,8 @@ import 'fake-indexeddb/auto'
 
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import {
+  clearCompiledModuleCache,
+  getCompiledModuleCache,
   IndexedDbCompiledModuleCache,
   InMemoryCompiledModuleCache,
   type CompiledModuleCache,
@@ -60,7 +62,7 @@ describe('CompiledModuleCache stores', () => {
         expect(await store.read(`${name}-del`)).toBeUndefined()
       })
 
-      it('clear() drops every row (lock & wipe)', async () => {
+      it('clear() empties every row', async () => {
         const store = make()
         await store.write(`${name}-c1`, record({compiled: 'A'}))
         await store.write(`${name}-c2`, record({compiled: 'B'}))
@@ -79,6 +81,21 @@ describe('CompiledModuleCache stores', () => {
     // same named DB — the row must still be there.
     const reader = new IndexedDbCompiledModuleCache()
     expect(await reader.read('reload-block')).toMatchObject({compiled: 'PERSISTED'})
+  })
+
+  it('clearCompiledModuleCache empties the store via a connection (§6 lock & wipe, boot)', async () => {
+    // Operates on the process singleton (IndexedDB-backed in this file).
+    const cache = getCompiledModuleCache()
+    await cache.write('wipe-a', record({compiled: 'A'}))
+    await cache.write('wipe-b', record({compiled: 'B'}))
+
+    await clearCompiledModuleCache()
+
+    expect(await cache.read('wipe-a')).toBeUndefined()
+    expect(await cache.read('wipe-b')).toBeUndefined()
+    // Store is still usable (clear empties rows, doesn't drop the store).
+    await cache.write('wipe-c', record({compiled: 'C'}))
+    expect(await cache.read('wipe-c')).toMatchObject({compiled: 'C'})
   })
 })
 
@@ -115,6 +132,29 @@ describe('compileExtensionModule — persistent (L3) cache', () => {
 
     expect(transpileCount).toBe(1)
     expect(result.module).toEqual({default: 'transpiled:SRC'})
+    expect(await persistent.read('block-1')).toMatchObject({
+      compiled: 'transpiled:SRC',
+      compilerVersion: '1',
+    })
+  })
+
+  it('persists the transpiled output BEFORE instantiating (a failing instantiate still leaves a valid row)', async () => {
+    // Ordering contract: the row holds the *transpiled JS*, which is valid even
+    // when the module throws at import-eval. So a transpile-success /
+    // instantiate-failure persists a good row, and the next load skips Babel —
+    // the failure is in the module code, not the cache. Pin it so a reorder
+    // (e.g. persisting only after a successful instantiate) is caught.
+    restoreInstantiate()
+    restoreInstantiate = __setInstantiateImplForTest(async () => {
+      throw new Error('module threw at import-eval')
+    })
+    const persistent = new InMemoryCompiledModuleCache()
+
+    await expect(
+      compileExtensionModule('SRC', 'block-1', createCompileCache(), persistent),
+    ).rejects.toThrow(/import-eval/)
+
+    expect(transpileCount).toBe(1)
     expect(await persistent.read('block-1')).toMatchObject({
       compiled: 'transpiled:SRC',
       compilerVersion: '1',

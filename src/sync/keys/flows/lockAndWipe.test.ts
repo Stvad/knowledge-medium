@@ -182,35 +182,46 @@ describe('lockAndWipe commit (§6)', () => {
     expect(isPendingWipe(USER)).toBe(false)
   })
 
-  it('clears the compiled-extension cache so no plaintext survives the wipe', async () => {
-    const keyStore = new InMemoryWorkspaceKeyStore()
-    const compiledCache = { clear: vi.fn(async () => {}) }
-
-    await lockAndWipe({ userId: USER, keyStore, compiledCache })
-
-    expect(compiledCache.clear).toHaveBeenCalledTimes(1)
-    expect(isPendingWipe(USER)).toBe(true)
-  })
-
-  it('refuses the wipe (no keys dropped, no marker) when the compiled-cache clear fails', async () => {
-    // The compiled cache is plaintext-derived source the wipe must remove, so a
-    // clear failure has to BLOCK the wipe — not report success while it lingers.
-    // Clearing first means we refuse before anything destructive happens.
-    const keyStore = new InMemoryWorkspaceKeyStore()
-    const clearForUser = vi.spyOn(keyStore, 'clearForUser')
-    const compiledCache = { clear: vi.fn(async () => { throw new Error('idb clear boom') }) }
-
-    await expect(
-      lockAndWipe({ userId: USER, keyStore, compiledCache }),
-    ).rejects.toThrow(/idb clear boom/)
-
-    expect(clearForUser).not.toHaveBeenCalled()
-    expect(isPendingWipe(USER)).toBe(false)
-  })
 })
 
 describe('consumePendingWipe (boot-time, §6)', () => {
   const resolveFilename = (userId: string) => `kmp-v6-${userId}.db`
+
+  it('drops the compiled-extension cache when a wipe is armed (before the file delete)', async () => {
+    markPendingWipe(USER)
+    const order: string[] = []
+    const clearCompiledCache = vi.fn(async () => { order.push('compiled') })
+    const remove = vi.fn(async () => { order.push('file') })
+
+    const wiped = await consumePendingWipe(USER, remove, resolveFilename, {clearCompiledCache})
+
+    expect(wiped).toBe(true)
+    expect(clearCompiledCache).toHaveBeenCalledTimes(1)
+    // Compiled cache is dropped before the (possibly retrying) file delete.
+    expect(order).toEqual(['compiled', 'file'])
+  })
+
+  it('does not touch the compiled-extension cache when no wipe is armed', async () => {
+    const clearCompiledCache = vi.fn(async () => {})
+    await consumePendingWipe(USER, vi.fn().mockResolvedValue(undefined), resolveFilename, {
+      clearCompiledCache,
+    })
+    expect(clearCompiledCache).not.toHaveBeenCalled()
+  })
+
+  it('still wipes (best-effort) when the compiled-cache clear rejects — a derived cache must not block the wipe', async () => {
+    markPendingWipe(USER)
+    const clearCompiledCache = vi.fn(async () => { throw new Error('idb gone') })
+    const remove = vi.fn().mockResolvedValue(undefined)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const wiped = await consumePendingWipe(USER, remove, resolveFilename, {clearCompiledCache})
+
+    expect(wiped).toBe(true)
+    expect(remove).toHaveBeenCalledWith('kmp-v6-user-1.db')
+    expect(isPendingWipe(USER)).toBe(false)
+    warn.mockRestore()
+  })
 
   it('does nothing when no wipe is armed', async () => {
     const remove = vi.fn().mockResolvedValue(undefined)

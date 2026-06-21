@@ -120,12 +120,19 @@ self.addEventListener('install', (event) => {
         caches.open(ASSET_CACHE),
       ])
       // Shell entries use { cache: 'reload' } so an SW update always
-      // pulls fresh HTML/icons from the network. The first-paint asset
-      // list uses { cache: 'default' } so the install satisfies from the
-      // browser's HTTP cache (the page itself populated it moments ago) —
-      // copying it into Cache Storage costs almost nothing and gives this
-      // generation full offline-boot coverage. Per-URL failures are
-      // swallowed so one 404 can't strand install.
+      // pulls fresh HTML/icons from the network. The asset list uses
+      // { cache: 'default' }: for the first-paint modules the page just
+      // fetched them, so the install satisfies from the browser's HTTP
+      // cache almost for free. NOTE: PRECACHE_ASSETS also includes a few
+      // must-be-offline LAZY chunks (e.g. @babel/standalone) that were NOT
+      // first-painted — their install fetch is a genuine network round-trip.
+      // Per-URL failures are swallowed so one 404 can't strand install, but
+      // that means if a lazy entry's fetch fails here (offline/flaky during
+      // an SW update) it's absent from this generation's cache, and a COLD
+      // offline compile on this generation would fail until the app is
+      // online once — at which point `assetCacheFirst` fetches + caches it
+      // on demand (self-heal). The persistent IndexedDB compile cache
+      // (survives deploys) covers the warm case regardless.
       const fetchInto = (cache, url, mode) =>
         fetch(new Request(url, {cache: mode}))
           .then((res) => (res && res.ok ? cache.put(url, res) : null))

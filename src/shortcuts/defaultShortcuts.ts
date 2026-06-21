@@ -81,7 +81,6 @@ import {
 } from '@/utils/exportSqliteDb.js'
 import { broadcastWipeReload, flushUploadQueue, lockAndWipe } from '@/sync/keys/flows/lockAndWipe.js'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore.js'
-import { getCompiledModuleCache } from '@/extensions/compiledModuleCache.js'
 import { getPowerSyncDb } from '@/data/repoProvider.js'
 import { focusPropertyRow } from '@/utils/propertyNavigation.js'
 import { reloadInSafeMode } from '@/utils/safeMode.js'
@@ -560,11 +559,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           }
 
           banner.update('Wiping local data — reloading…')
-          await lockAndWipe({
-            userId: repo.user.id,
-            keyStore: getWorkspaceKeyStore(),
-            compiledCache: getCompiledModuleCache(),
-          })
+          await lockAndWipe({ userId: repo.user.id, keyStore: getWorkspaceKeyStore() })
           // Reload every other same-user tab too (multi-tab): otherwise they
           // keep the wiped plaintext in memory and hold the OPFS DB handle open,
           // blocking the boot-time file delete. Then reload self — the armed

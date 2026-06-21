@@ -14,9 +14,13 @@
  * Phase-2 "approval record" shape running in implicit auto-approve mode:
  * issue #67 layers a device-local trust gate on top of the same row
  * (binding execution to an approved `sourceHash`). Keying by `blockId`
- * (a globally-unique id) keeps the store bounded by the number of
- * installed extensions — a row is overwritten when its source changes,
- * so there is nothing to evict.
+ * (a globally-unique id) means each LIVE extension occupies exactly one
+ * row (overwritten when its source changes). Deleting a block leaves its
+ * row orphaned — there is no production `delete`/evict caller yet (that's
+ * Phase 2) — so the row count tracks cumulative blockId churn, not the
+ * current extension count. The lock & wipe path empties the whole store
+ * (`clearCompiledModuleCache`), which is the only thing that bounds it
+ * today.
  *
  * Mirrors the interface + in-memory-fallback + IndexedDB pattern of
  * `sync/keys/keyStore.ts`. Unlike that store — which holds a
@@ -46,13 +50,14 @@ export interface CompiledModuleCache {
   read(blockId: string): Promise<CompiledRecord | undefined>
   write(blockId: string, record: CompiledRecord): Promise<void>
   delete(blockId: string): Promise<void>
-  /** Drop every row. This is a derived cache of (potentially
-   *  E2EE-workspace) extension *source*, so the §6 lock & wipe flow
-   *  clears it to avoid leaving plaintext behind after the SQLite DB is
-   *  wiped. The store has no per-user/per-workspace dimension (keyed only
-   *  by the globally-unique blockId), so the clear is coarse — but
-   *  over-clearing is harmless here: unlike workspace keys, a dropped
-   *  compiled row only costs a one-time recompile, never a lockout. */
+  /** Empty the whole store. Used by §6 lock & wipe's boot-time half to
+   *  drop plaintext-derived extension source that lives OUTSIDE the
+   *  per-user SQLite file. Clearing through a transaction (rather than
+   *  `deleteDatabase`) is deliberate: a delete is BLOCKED by any
+   *  concurrent connection — a sibling tab mid-reload during the wipe is
+   *  exactly that — whereas a readwrite `clear()` is not. Coarse (no
+   *  per-user/workspace dimension), but over-clearing only costs a
+   *  recompile, never a lockout. */
   clear(): Promise<void>
 }
 
@@ -180,3 +185,25 @@ export const createCompiledModuleCache = (): CompiledModuleCache => {
 let sharedCache: CompiledModuleCache | null = null
 export const getCompiledModuleCache = (): CompiledModuleCache =>
   (sharedCache ??= createCompiledModuleCache())
+
+/**
+ * Empty the compiled-module store, best-effort and never-rejecting. Used
+ * by §6 lock & wipe's boot-time half (`consumePendingWipe`) to remove
+ * plaintext-derived extension source that lives OUTSIDE the per-user
+ * SQLite file the wipe deletes.
+ *
+ * Goes through the cache's `clear()` (a readwrite transaction) rather than
+ * `indexedDB.deleteDatabase`: a database delete is blocked by any
+ * concurrent connection — a sibling tab still mid-reload during the wipe
+ * is exactly that — and could silently no-op, whereas a `clear()` tx
+ * isn't blocked by other connections. Swallows any error: a derived cache
+ * must never strand the boot or the wipe (the load-bearing plaintext
+ * removal is the SQLite file delete).
+ */
+export const clearCompiledModuleCache = async (): Promise<void> => {
+  try {
+    await getCompiledModuleCache().clear()
+  } catch (error) {
+    console.warn('Failed to clear compiled-extension cache', error)
+  }
+}
