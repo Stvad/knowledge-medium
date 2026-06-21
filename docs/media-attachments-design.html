@@ -82,7 +82,8 @@
   now has per-workspace opt-in end-to-end encryption. 2026-06-21.</p>
 
 <div class="info">
-<strong>TL;DR.</strong> An attachment is a <em>block</em> (<code>properties.type = 'media'</code>),
+<strong>TL;DR.</strong> An attachment is a <em>block</em> carrying the registered <code>media</code>
+type (in the <code>types</code> array, via <code>typesProp</code>),
 embedded into prose with the existing <code>!((id))</code> mechanism — no new reference syntax, and
 metadata rides the existing encrypted block-content columns for free. The <em>bytes</em> live in an
 object store (Supabase Storage v1), behind a <code>BlobStore</code> interface. The reshaping
@@ -175,12 +176,14 @@ The load-bearing risk is making the SW a participant in the E2EE lock/wipe lifec
 
 <h2 id="asblock">3. The core model: an attachment is a block</h2>
 
-<p>An attachment is not a row in a side table. It is a <code>blocks</code> row with a type
-  discriminator and binary-pointer metadata in its properties:</p>
+<p>An attachment is not a row in a side table. It is a <code>blocks</code> row carrying the
+  <code>media</code> type and binary-pointer metadata in its properties:</p>
 
-<pre><code>// asset block (illustrative property shape)
+<pre><code>// asset block (illustrative). The type lives in the `types` ARRAY (typesProp),
+// NOT a `properties.type` scalar — that's what the type registry, type queries,
+// and the property panel read. Set via block.addType('media') / typesProp.
 properties: {
-  type:        'media',
+  types:       ['media'],       // typesProp — registered media type id
   mime:        'image/png',
   size:        184213,          // plaintext byte length
   hash:        'sha256:…',      // of plaintext bytes; client-side dedup key
@@ -190,6 +193,12 @@ properties: {
   status:      'uploading' | 'synced'
 }
 content: 'image: screenshot.png'   // human-readable summary</code></pre>
+
+<p>The <code>media</code> type is <strong>registered with the type registry</strong> (a property
+  schema, as <code>video-player</code> does for its own props) so type-filtered queries, the property
+  panel, and renderer discovery all see media blocks — stamping a bare <code>properties.type</code>
+  would make them invisible to every current <code>types</code>-array consumer
+  (<code>getBlockTypes</code> / <code>hasBlockType</code> / <code>block.hasType</code>).</p>
 
 <p>Why a block, not an <code>attachments</code> table:</p>
 <ul>
@@ -201,9 +210,9 @@ content: 'image: screenshot.png'   // human-readable summary</code></pre>
     captions / alt-text / OCR / transcripts are <em>child blocks</em>; "what references this image?"
     is the existing backlink machinery.</li>
   <li><strong>Type-dispatched rendering already exists.</strong> A <code>MediaBlockRenderer</code>
-    registers via <code>blockRenderersFacet</code> with a <code>canRender</code> gate on the type
-    property — the same pattern as <code>VideoPlayerRenderer</code>. New file types are new mime
-    branches, never a schema change.</li>
+    registers via <code>blockRenderersFacet</code> with a <code>canRender</code> gate on
+    <code>block.hasType('media')</code> — the same registration pattern as
+    <code>VideoPlayerRenderer</code>. New file types are new mime branches, never a schema change.</li>
   <li><strong>Dedup within a workspace</strong> is natural: paste the same screenshot ten times into
     a page and you get ten <code>!((id))</code> embeds of one asset block, one byte copy.</li>
 </ul>
@@ -400,13 +409,30 @@ encode/decode seam is mode-aware, and plaintext is its degenerate (identity) bra
     <code>&lt;img src="/asset/&lt;workspace_id&gt;/&lt;asset_block_id&gt;"&gt;</code>. No mode awareness,
     no <code>createObjectURL</code> lifecycle, native <code>&lt;img&gt;</code> / <code>&lt;video&gt;</code>
     / range-requests / <code>&lt;a download&gt;</code> all work uniformly.</li>
-  <li><strong>The SW resolves it:</strong> check Cache → on miss, fetch the stored blob → if it
-    starts with the <code>encb:v1:</code> magic, look up the WK from <code>km-e2ee-keys</code> and
-    decrypt; otherwise pass through → put the displayable bytes in Cache → respond.</li>
+  <li><strong>The SW resolves it, auth-first:</strong> establish the active <code>user_id</code> and
+    (for E2EE) WK availability <em>before</em> consulting the cache → serve from cache only on a
+    namespace match → on miss, fetch the stored blob → if it starts with the <code>encb:v1:</code>
+    magic, decrypt with the WK from <code>km-e2ee-keys</code>; otherwise pass through → put the
+    displayable bytes in the user-scoped cache → respond.</li>
   <li><strong>Mode is self-describing</strong> via the envelope, so the SW does not re-implement
     workspace-mode resolution. It only needs the WK lookup (it has <code>workspace_id</code> from the
     URL and <code>user_id</code> from the handshake below).</li>
 </ul>
+
+<div class="warn">
+<strong>Cache hits must be authorized, and the cache key must be user-scoped.</strong> Decrypted
+bytes in the Cache API are not themselves access-controlled, so a cache key of
+<code>/asset/&lt;ws&gt;/&lt;id&gt;</code> alone would let a later request return previously-decrypted
+bytes <em>without</em> re-checking the active session or key — bypassing Storage RLS and key
+availability across an account switch, a workspace revoke/leave, or a purge that missed an entry.
+Two defenses, both required: (1) <strong>namespace the cache by the active <code>user_id</code></strong>
+(e.g. a per-user Cache bucket <code>assets:&lt;user_id&gt;</code>), so another account in the same
+profile can never read it; and (2) <strong>validate before every hit</strong> — the SW confirms the
+requesting client's active user matches the namespace and, for E2EE, that the workspace is currently
+unlocked (WK present) before serving cached bytes; otherwise it falls through to a fresh
+RLS-checked fetch (or fails closed). This is what makes the §7.2 purge a backstop, not the only line
+of defense.
+</div>
 
 <p>The thing that actually constrains the SW approach is not decryption — it's two coordination
   problems, and they are the real work of this design:</p>
@@ -461,30 +487,46 @@ cache. Mandatory companions: the app→SW token handshake (§7.1) and the lock�
 <ul>
   <li><strong>Backing store:</strong> with SW decryption, the Cache API is the natural byte cache
     (SW-served <code>Response</code>s, native streaming). If we ever move decryption to the app
-    thread, OPFS becomes the cache instead — the choice follows the decrypt location. Either way the
-    cache is <strong>workspace-scoped</strong> so leaving / locking a workspace evicts only its
+    thread, OPFS becomes the cache instead — the choice follows the decrypt location. The cache is
+    <strong>keyed by <code>user_id</code> then <code>workspace_id</code></strong>
+    (<code>assets:&lt;user_id&gt;</code> → <code>&lt;ws&gt;/&lt;id&gt;</code>): user-scoping is the
+    access-isolation boundary (§7), workspace-scoping makes leave / lock evict only the affected
     bytes.</li>
   <li><strong>Eviction:</strong> soft LRU cap (≈500&nbsp;MB default). An evicted entry simply
     round-trips to the object store on next view.</li>
   <li><strong>Lock &amp; Wipe:</strong> the cache is a registered participant in
     <code>lockAndWipe</code> (§7.2). On lock: purge. On per-workspace revoke/leave: purge that
     workspace's prefix.</li>
-  <li><strong>Optimistic local-first write:</strong> on paste, the bytes are written to the cache
-    <em>before</em> upload, and the asset block is created with <code>status: 'uploading'</code>. The
-    image renders immediately from local cache; the upload drains in the background; the block flips
-    to <code>status: 'synced'</code>. Offline, it simply stays <code>uploading</code> and still
-    renders on this device.</li>
+  <li><strong>Optimistic local-first write:</strong> on paste, the encoded bytes are written to the
+    <em>durable upload queue's own store</em> (§9), the display cache is warmed, and the asset block
+    is created with <code>status: 'uploading'</code>. The image renders immediately from local
+    bytes; the upload drains in the background; the block flips to <code>status: 'synced'</code>.
+    Offline, it simply stays <code>uploading</code> and still renders on this device.</li>
 </ul>
+
+<div class="warn">
+<strong>The LRU display cache must not be the only home for un-uploaded bytes.</strong> The cache is
+evictable (and capped); if a paste happens offline, or the cap is hit before the queue drains, an
+evicted entry would leave a synced asset block stuck in <code>uploading</code> forever with no bytes
+to send. So pending bytes are <strong>owned by the upload queue's durable store</strong> (§9), which
+is <em>not</em> subject to the display cache's LRU, until the upload succeeds. Only then are they
+purely a display-cache concern.
+</div>
 
 <h2 id="queue">9. Offline: the byte upload queue</h2>
 
 <p>Block <em>metadata</em> rides PowerSync's <code>ps_crud</code> upload queue. Bytes go to the object
-  store on a different path with no such queue, so they need their own durable one. A small
-  IndexedDB-backed list of <code>{ asset_block_id, workspace_id, status }</code> whose entries drain
-  when connectivity returns, retrying with backoff. This is new infra the pre-E2EE proposal
-  under-specified; E2EE doesn't change it, but the design surfaces it clearly. Cross-device arrival
-  is naturally eventually-consistent: a peer that has the block but not yet the bytes shows the
-  "metadata present, bytes pending" state until the upload from the origin device completes.</p>
+  store on a different path with no such queue, so they need their own durable one. Crucially the
+  queue <strong>owns the encoded bytes</strong>, not just a pointer: an IndexedDB/OPFS record of
+  <code>{ asset_block_id, workspace_id, status, encodedBytes }</code> (the <code>encb:v1:</code>
+  payload for E2EE, raw bytes otherwise), held in a store that is <em>not</em> the evictable display
+  cache, so a pending upload can never lose its source bytes to LRU eviction or an offline window
+  (the §8 hazard). Entries drain when connectivity returns, retrying with backoff; the durable copy
+  is deleted only on a confirmed upload, after which the bytes are purely a display-cache concern.
+  This is new infra the pre-E2EE proposal under-specified; E2EE doesn't change it, but the design
+  surfaces it clearly. Cross-device arrival is naturally eventually-consistent: a peer that has the
+  block but not yet the bytes shows the "metadata present, bytes pending" state until the upload from
+  the origin device completes.</p>
 
 <h2 id="storage">10. Storage layout &amp; RLS</h2>
 
@@ -499,11 +541,17 @@ cache. Mandatory companions: the app→SW token handshake (§7.1) and the lock�
 on storage.objects for select to authenticated
 using (
   bucket_id = 'attachments'
-  and public.is_workspace_member(
+  and private.is_workspace_member(
         (storage.foldername(name))[1],   -- &lt;workspace_id&gt;
         (auth.uid())::text)
 );
--- writes: analogous, is_workspace_writer.</code></pre>
+-- writes: analogous, private.is_workspace_writer.</code></pre>
+
+<p>The helpers live in the <code>private</code> schema — <code>private.is_workspace_member</code> /
+  <code>private.is_workspace_writer</code>, the same functions the <code>blocks</code> RLS uses
+  (consolidated migration). There is no <code>public</code> wrapper; the storage policy references
+  the <code>private.*</code> functions directly (or the bucket migration adds an explicit wrapper if
+  the policy owner can't reference <code>private</code>).</p>
 
 <p>For an E2EE workspace the blob is already ciphertext, so RLS here is defense-in-depth — it stops a
   non-member from hoarding ciphertext against a future key compromise, and avoids leaking object
@@ -527,7 +575,7 @@ foreclose it. This is the cheap-option-value posture, not speculative building.
 
 <ul>
   <li><strong><code>MediaBlockRenderer</code></strong> via <code>blockRenderersFacet</code>, with
-    <code>canRender = ({block}) =&gt; block.peek()?.properties.type === 'media'</code> and a
+    <code>canRender = ({block}) =&gt; block.hasType('media')</code> and a
     <code>priority</code> above the default. Branches on <code>mime</code>: image → the existing
     <code>MarkdownImage</code> lightbox fed the virtual URL; later, PDF / audio / video / generic
     file-chip.</li>
