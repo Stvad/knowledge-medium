@@ -214,8 +214,10 @@ content: 'image: screenshot.png'   // human-readable summary</code></pre>
     registers via <code>blockRenderersFacet</code> with a <code>canRender</code> gate on
     <code>block.hasType('media')</code> — the same registration pattern as
     <code>VideoPlayerRenderer</code>. New file types are new mime branches, never a schema change.</li>
-  <li><strong>Dedup within a workspace</strong> is natural: paste the same screenshot ten times into
-    a page and you get ten <code>!((id))</code> embeds of one asset block, one byte copy.</li>
+  <li><strong>Dedup within a subtree</strong> is natural: paste the same screenshot ten times into
+    a page and you get ten <code>!((id))</code> embeds of one asset block, one byte copy. (Reuse is
+    scoped to the containing subtree, not workspace-wide, to stay compatible with the §12 share
+    model — see §11.)</li>
 </ul>
 
 <figure class="diagram">
@@ -438,8 +440,9 @@ its own monotonicity).
 <ul>
   <li><strong>The renderer emits a stable virtual URL:</strong>
     <code>&lt;img src="/asset/&lt;workspace_id&gt;/&lt;asset_block_id&gt;"&gt;</code>. No mode awareness,
-    no <code>createObjectURL</code> lifecycle, native <code>&lt;img&gt;</code> / <code>&lt;video&gt;</code>
-    / range-requests / <code>&lt;a download&gt;</code> all work uniformly.</li>
+    no <code>createObjectURL</code> lifecycle, native <code>&lt;img&gt;</code> and
+    <code>&lt;a download&gt;</code> work uniformly. (<strong>Range/streaming is the exception under
+    E2EE</strong> — see the note below; images and moderate files are unaffected.)</li>
   <li><strong>The SW resolves it, auth-first:</strong> establish the active <code>user_id</code> (for
     the requesting client — §7.1) and the workspace's <em>mode pin</em> + WK availability
     <em>before</em> consulting the cache → serve from cache only on a namespace match and a still-valid
@@ -464,6 +467,19 @@ its own monotonicity).
 </ul>
 
 <div class="warn">
+<strong>Whole-blob AEAD ≠ native range/streaming for E2EE.</strong> The <code>encb:v1:</code>
+envelope is a single AES-GCM seal over the whole byte array, and a GCM ciphertext byte range cannot
+be decrypted independently. So an E2EE <code>&lt;video&gt;</code> (or any <code>Range</code> request)
+cannot stream a slice: the SW would have to fetch+decrypt the <em>entire</em> object and synthesize a
+<code>206</code> from the plaintext — fine for images and moderate files, but it defeats true
+streaming for large video. Two honest paths, both vNext: the SW fully materializes + serves
+synthesized ranges (simple, no streaming), or large media uses a <strong>chunked</strong> envelope
+(per-chunk nonce/tag, range maps to chunk boundaries) designed before relying on streaming
+<code>&lt;video&gt;</code>. v1 images don't hit this; the doc just must not <em>promise</em> native
+ranges under E2EE. (Plaintext workspaces keep native ranges — the object is the raw bytes.)
+</div>
+
+<div class="warn">
 <strong>Cache hits must be authorized, and the cache key must be user-scoped.</strong> Decrypted
 bytes in the Cache API are not themselves access-controlled, so a cache key of
 <code>/asset/&lt;ws&gt;/&lt;id&gt;</code> alone would let a later request return previously-decrypted
@@ -482,6 +498,22 @@ and the SW's next read, and it doesn't gate plaintext-workspace cached bytes at 
 make the §7.2 purge a backstop, not the only line of defense — but note the cross-account case is the
 subtle one (§16): the cache namespace isolates <em>reads</em>, while the per-client session keying is
 what isolates the <em>fetch token</em>.
+</div>
+
+<div class="warn">
+<strong>Membership revocation needs the same backstop as lock — especially for plaintext.</strong> The
+locked-state check above is the E2EE arm; the symmetric hazard is a user <em>removed from a workspace
+server-side</em> (by another admin), with no local signal. For a <strong>plaintext</strong> workspace
+— where §10 says RLS <em>is</em> the access boundary — a stale cache hit in <code>assets:&lt;user_id&gt;</code>
+would keep serving bytes after removal if the revoke-purge is delayed or misses an entry, because a
+cache hit never goes back through Storage RLS. So a cache hit must <em>never</em> be treated as an
+independent authority: (a) <strong>purge the workspace's cache prefix on leave/revoke</strong> (primary,
+but it can race / miss); and (b) <strong>bound cache authority</strong> — give cached entries a short
+freshness TTL after which the SW re-validates access (cheapest: re-issue the RLS-gated Storage
+<code>GET</code>, which 403s for a removed member, before serving a stale-past-TTL hit). The membership
+signal is not locally authoritative, so the TTL-bounded revalidation — not just the purge — is what
+closes the plaintext-removal window. (E2EE leans on the same shape, with key-absence as the faster
+signal.)
 </div>
 
 <p>The thing that actually constrains the SW approach is not decryption — it's two coordination
@@ -709,14 +741,27 @@ foreclose it. This is the cheap-option-value posture, not speculative building.
     parallel to today's <code>text/plain</code> handlers in
     <code>CodeMirrorContentRenderer.tsx</code> / <code>DefaultBlockRenderer.tsx</code>; and a
     <code>/image</code> command + file-picker action through the existing action/shortcut system.</li>
-  <li><strong>On capture:</strong> client-side mime/size guard → hash → <em>best-effort</em> dedup
-    lookup (same-hash-in-workspace → new <code>!((existing-id))</code> embed) → otherwise create the
-    asset block as a <em>child of the containing block</em> (see §12), registering the type with
+  <li><strong>On capture:</strong> client-side mime/size guard → hash → <em>subtree-scoped</em>
+    best-effort dedup lookup (see the caveat below) → otherwise create the asset block as a
+    <em>child of the containing block</em> (see §12), registering the type with
     <code>repo.addTypeInTx(tx, id, 'media', …)</code> (the in-tx variant — the standalone
     <code>block.addType</code> wouldn't compose into the single tx) + write bytes to the durable queue
     store + enqueue upload, all inside one <code>repo.tx({scope: ChangeScope.BlockDefault})</code> so
     the URI-insert and the asset block land in the same undo bucket (byte-lane compensation per §9).</li>
 </ul>
+
+<div class="warn">
+<strong>Dedup must respect the share-coverage boundary (§12).</strong> Naïve "reuse any same-hash asset
+block in the workspace" breaks the share model: §12.1 grants byte access by walking
+<code>parent_id</code>, so an embed of an asset whose parent lives under a <em>different</em> page is
+<em>not</em> covered when you share <em>this</em> page's subtree — the recipient gets a broken image,
+and the §10 storage-RLS share branch never stamps that asset. So dedup is <strong>scoped to assets
+already under the containing subtree</strong>: reuse only an existing asset block whose
+<code>parent_id</code> chain is within (or an ancestor shared with) the current containing block;
+otherwise create a <em>fresh</em> asset block as a child here (bytes still dedup at the cache/queue
+layer by hash, so no extra upload). Cross-page reuse that deliberately crosses subtrees is then the
+same "cross-subtree embed" case §12 already calls out — resolved at share time by copying the
+referenced-but-outside asset into the shared subtree, not by a single workspace-wide asset block.</div>
 
 <div class="warn">
 <strong>Dedup is best-effort, not an invariant.</strong> The lookup reads <em>local</em> synced state,
