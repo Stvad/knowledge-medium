@@ -21,6 +21,14 @@ describe('transitiveClosure', () => {
     ])
   })
 
+  it('follows a multi-line static import', () => {
+    const fs = fakeFs({
+      'a.js': 'import {\n  foo,\n  bar,\n} from "./b.js"\nconsole.log(foo, bar)',
+      'b.js': '',
+    })
+    expect(transitiveClosure(['a.js'], fs)).toEqual(['a.js', 'b.js'])
+  })
+
   it('ignores bare/external specifiers and only walks relative chunk edges', () => {
     const fs = fakeFs({
       'a.js': 'import "react"\nimport x from "@babel/core"\nimport y from "./b.js"',
@@ -51,5 +59,26 @@ describe('transitiveClosure', () => {
 
   it('throws when an entrypoint is missing (chunk layout drift)', () => {
     expect(() => transitiveClosure(['gone.js'], fakeFs({}))).toThrow(/missing/)
+  })
+
+  it('FAILS LOUDLY when a precached chunk imports an emitted chunk the walk missed', () => {
+    // A dynamic `import("./b.js")` isn't followed by the static walk, so b.js
+    // would be left out of the precache — the completeness backstop must catch
+    // it (it would 404 offline) and fail the build instead of silently shipping.
+    const fs = fakeFs({
+      'a.js': 'const load = () => import("./b.js")',
+      'b.js': '',
+    })
+    expect(() => transitiveClosure(['a.js'], fs)).toThrow(/INCOMPLETE/)
+  })
+
+  it('does not false-fail on a relative path that resolves to no emitted chunk', () => {
+    // A `from "./x"` inside a code string whose target isn't an emitted chunk
+    // must neither be walked nor trip the completeness backstop.
+    const fs = fakeFs({
+      'a.js': 'const code = `import z from "./nope.js"`\nimport y from "./b.js"',
+      'b.js': '',
+    })
+    expect(transitiveClosure(['a.js'], fs)).toEqual(['a.js', 'b.js'])
   })
 })

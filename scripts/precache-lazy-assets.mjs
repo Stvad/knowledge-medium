@@ -29,7 +29,12 @@ import {posix} from 'node:path'
 // capture RELATIVE specifiers (`./` or `../`), which is what keeps a
 // `from "..."` sitting inside a module's body (Babel ships codegen
 // templates full of them) from being mistaken for a real graph edge.
-const FROM_IMPORT = /(?:^|\n)\s*(?:import|export)\b[^\n;'"`]*?\bfrom\s*["'](\.[^"']*)["']/g
+// The clause between `import`/`export` and `from` MAY span newlines (a
+// multi-line `import {\n a,\n b\n} from './x'`) — we still exclude
+// quotes/backticks/`;`, so a `from "..."` inside a string literal can't be
+// crossed into. `assertClosureComplete` (below) is the backstop for any
+// edge these miss.
+const FROM_IMPORT = /(?:^|\n)\s*(?:import|export)\b[^;'"`]*?\bfrom\s*["'](\.[^"']*)["']/g
 const BARE_IMPORT = /(?:^|\n)\s*import\s*["'](\.[^"']*)["']/g
 
 const relativeImports = (source) => {
@@ -38,6 +43,41 @@ const relativeImports = (source) => {
     for (const match of source.matchAll(re)) specs.add(match[1])
   }
   return [...specs]
+}
+
+// Broad relative-specifier matcher used ONLY to VERIFY the precise walk
+// above didn't drop an edge. Deliberately permissive — it also catches
+// dynamic `import("./x")`, which the static walk never follows — because a
+// precached chunk that imports a NON-precached chunk would 404 offline, and
+// we want that to be a loud build failure rather than a silent break. It is
+// safe to be loose: a match only matters when it RESOLVES to one of our
+// emitted chunks, so a relative path sitting in a code string (which won't
+// resolve to a chunk) can't cause a spurious failure.
+const VERIFY_REL_SPEC = /(?:\bfrom\s*|\bimport\s*\(\s*)["'](\.[^"']+)["']/g
+
+/**
+ * Backstop for {@link transitiveClosure}: assert every relative import edge
+ * out of a precached chunk lands inside the closure. Throws (fails the
+ * build) if a precached chunk references an emitted chunk that wasn't
+ * included — converting a silent offline break into a build error.
+ */
+const assertClosureComplete = (closure, {exists, readFile}) => {
+  const inClosure = new Set(closure)
+  const missing = new Set()
+  for (const rel of closure) {
+    for (const match of readFile(rel).matchAll(VERIFY_REL_SPEC)) {
+      const dep = posix.normalize(posix.join(posix.dirname(rel), match[1]))
+      if (exists(dep) && !inClosure.has(dep)) missing.add(`${rel} -> ${dep}`)
+    }
+  }
+  if (missing.size > 0) {
+    throw new Error(
+      '[precache] lazy-precache closure is INCOMPLETE — a precached chunk ' +
+      'imports an emitted chunk that was not included, so it would 404 ' +
+      'offline. The import-walk likely missed a form (multi-line or dynamic ' +
+      `import). Missing edges:\n  ${[...missing].join('\n  ')}`,
+    )
+  }
 }
 
 /**
@@ -77,5 +117,10 @@ export const transitiveClosure = (entryRelPaths, {exists, readFile}) => {
     }
   }
 
-  return [...seen].sort()
+  const closure = [...seen].sort()
+  // Backstop: fail loudly if the precise walk missed any edge (e.g. a
+  // dynamic import, or a form the regex doesn't model) rather than ship a
+  // chunk that 404s offline.
+  assertClosureComplete(closure, {exists, readFile})
+  return closure
 }
