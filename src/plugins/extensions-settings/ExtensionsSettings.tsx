@@ -219,7 +219,7 @@ const ToggleRow = ({node, overrides, onToggle, onApprove, workspaceId, level}: T
               <span className="text-xs text-amber-600 dark:text-amber-500">
                 {approvalStatus.kind === 'needs-approval'
                   ? 'Not approved on this device'
-                  : 'Update available — review before enabling'}
+                  : 'Running an older approved version — Update to adopt the latest source'}
               </span>
               <Button
                 type="button"

@@ -396,6 +396,39 @@ describe('dynamicExtensionsExtension — gate 2 (device-local trust / #67)', () 
     }
   })
 
+  it('does NOT treat a legacy Phase-1 compile-cache row as approval (#67 upgrade path)', async () => {
+    const compileImpl = vi.fn().mockImplementation(async () => ({
+      default: labelsFacet.of('should-not-run'),
+    }))
+    const restore = __setCompileImplForTest(compileImpl)
+    const block = blockData({id: 'legacy', content: 'src-legacy'})
+    const approvalStatusReporter = vi.fn()
+
+    try {
+      // A row left over from Phase 1's implicit auto-approve: no
+      // approvedSource / approvedAt. Must NOT count as a trust grant.
+      await persistent.write('legacy', {
+        sourceHash: await hashExtensionSource('src-legacy'),
+        compiled: 'src-legacy',
+        compilerVersion: '1',
+      } as never)
+      const ext = loadExtensions([block], {
+        overrides: enableBlocks([block]),
+        approvalStatusReporter,
+      })
+      const runtime = await resolveFacetRuntime(ext)
+
+      expect(runtime.read(labelsFacet)).toEqual([])
+      expect(compileImpl).not.toHaveBeenCalled()
+      expect(approvalStatusReporter).toHaveBeenCalledWith(
+        'legacy',
+        expect.objectContaining({kind: 'needs-approval'}),
+      )
+    } finally {
+      restore()
+    }
+  })
+
   it('keeps running the PINNED approved version when live source drifted, and reports update-available', async () => {
     // override resolves both versions so we can detect which one ran.
     const restore = __setCompileImplForTest(async (content) => {

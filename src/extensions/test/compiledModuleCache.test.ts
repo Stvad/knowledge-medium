@@ -258,4 +258,22 @@ describe('approveExtension + loadApprovedExtension — trust gate + L3 cache', (
 
     expect(await readApproval('r-1', flaky)).toBeUndefined()
   })
+
+  it('rejects a legacy Phase-1 compile-cache row as an approval (#67)', async () => {
+    const persistent = new InMemoryCompiledModuleCache()
+    // The exact shape Phase 1 (#167) auto-wrote on every compile: no
+    // approvedSource / approvedAt. Treating it as trust would let every
+    // already-compiled extension on an upgraded profile run without the
+    // explicit approval #67 requires.
+    await persistent.write('legacy', {
+      sourceHash: 'h',
+      compiled: 'export default 1',
+      compilerVersion: '1',
+    } as unknown as CompiledRecord)
+    expect(await readApproval('legacy', persistent)).toBeUndefined()
+
+    // A real Phase-2 approval (carries the markers) IS returned.
+    await persistent.write('real', record({sourceHash: 'h2'}))
+    expect(await readApproval('real', persistent)).toMatchObject({sourceHash: 'h2'})
+  })
 })

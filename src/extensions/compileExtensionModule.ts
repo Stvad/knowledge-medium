@@ -188,20 +188,50 @@ function resolveCachedModule(
   return modulePromise
 }
 
+/**
+ * Runtime shape-guard that tells a real Phase-2 approval record apart from
+ * a leftover Phase-1 (#167) compile-cache row.
+ *
+ * THIS IS A SECURITY CHECK (#67), not a defensive nicety. Phase 1 shipped
+ * the SAME `km-extension-compiled` store and auto-wrote a row
+ * `{sourceHash, compiled, compilerVersion}` on EVERY compile (implicit
+ * auto-approve), with no `approvedSource`/`approvedAt`. On every upgraded
+ * profile that store is already full of such rows. If row-presence alone
+ * counted as trust, every already-compiled extension would skip
+ * `needs-approval` and execute its cached JS with no explicit approval —
+ * defeating the gate for the entire existing fleet. A row is an approval
+ * ONLY if it carries the Phase-2 fields; legacy rows read as "no approval"
+ * and are overwritten by the next real `approveExtension`.
+ */
+const isApprovalRecord = (row: unknown): row is CompiledRecord => {
+  if (!row || typeof row !== 'object') return false
+  const r = row as Partial<CompiledRecord>
+  return (
+    typeof r.approvedSource === 'string' &&
+    typeof r.approvedAt === 'number' &&
+    typeof r.sourceHash === 'string' &&
+    typeof r.compiled === 'string' &&
+    typeof r.compilerVersion === 'string'
+  )
+}
+
 /** Best-effort read of a block's device-local approval record. A flaky
- *  read must never break loading — a failure (or absence) is reported as
- *  "no approval", which surfaces as the cross-device "enable here?"
- *  prompt rather than silently running anything. */
+ *  read must never break loading — a failure (or absence, or a legacy
+ *  non-approval row) is reported as "no approval", which surfaces as the
+ *  cross-device "enable here?" prompt rather than silently running
+ *  anything. See {@link isApprovalRecord} for why legacy rows are rejected. */
 export async function readApproval(
   blockId: string,
   persistent: CompiledModuleCache = getCompiledModuleCache(),
 ): Promise<CompiledRecord | undefined> {
+  let row: CompiledRecord | undefined
   try {
-    return await persistent.read(blockId)
+    row = await persistent.read(blockId)
   } catch (error) {
     console.warn(`Extension approval read failed for ${blockId}`, error)
     return undefined
   }
+  return isApprovalRecord(row) ? row : undefined
 }
 
 /** Best-effort write — a flaky persist must never reject the operation
