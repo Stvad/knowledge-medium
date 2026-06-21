@@ -76,6 +76,13 @@ const SHELL_URLS = [
 const PRECACHE_ASSETS = JSON.parse('__PRECACHE_ASSETS__')
   .map((p) => new URL(p, scopeURL).toString())
 
+// Build-injected list of must-be-offline LAZY chunks (e.g. @babel/standalone
+// + transitive deps) that are NOT in the first-paint graph. Kept separate
+// from PRECACHE_ASSETS because they're installed with a different cache mode
+// (see install). Replaced by scripts/inject-sw-build-id.mjs.
+const PRECACHE_LAZY_ASSETS = JSON.parse('__PRECACHE_LAZY_ASSETS__')
+  .map((p) => new URL(p, scopeURL).toString())
+
 const VENDOR_HOSTS = new Set(['esm.sh'])
 
 // --- generation ledger ------------------------------------------------------
@@ -119,20 +126,24 @@ self.addEventListener('install', (event) => {
         caches.open(SHELL_CACHE),
         caches.open(ASSET_CACHE),
       ])
-      // Shell entries use { cache: 'reload' } so an SW update always
-      // pulls fresh HTML/icons from the network. The asset list uses
-      // { cache: 'default' }: for the first-paint modules the page just
-      // fetched them, so the install satisfies from the browser's HTTP
-      // cache almost for free. NOTE: PRECACHE_ASSETS also includes a few
-      // must-be-offline LAZY chunks (e.g. @babel/standalone) that were NOT
-      // first-painted — their install fetch is a genuine network round-trip.
-      // Per-URL failures are swallowed so one 404 can't strand install, but
-      // that means if a lazy entry's fetch fails here (offline/flaky during
-      // an SW update) it's absent from this generation's cache, and a COLD
-      // offline compile on this generation would fail until the app is
-      // online once — at which point `assetCacheFirst` fetches + caches it
-      // on demand (self-heal). The persistent IndexedDB compile cache
-      // (survives deploys) covers the warm case regardless.
+      // Three cache modes, by what the browser's HTTP cache holds for each:
+      //   - SHELL_URLS → 'reload': always pull fresh HTML/icons from network.
+      //   - PRECACHE_ASSETS (first-paint) → 'default': the page just fetched
+      //     these exact unhashed URLs, so the HTTP cache holds THIS
+      //     generation's bytes — copying them into Cache Storage is near-free.
+      //   - PRECACHE_LAZY_ASSETS (e.g. @babel/standalone) → 'reload': these
+      //     were NOT first-painted and their unhashed URLs carry per-deploy-
+      //     varying bytes, so a 'default' fetch could copy a STALE prior-
+      //     deploy entry out of the HTTP cache into this generation's cache
+      //     (an offline cold compile would then run old compiler bytes under
+      //     the new build). 'reload' forces the network for the current bytes.
+      // Per-URL failures are swallowed so one 404 can't strand install. For a
+      // lazy entry that means a fetch failure here (offline/flaky during an SW
+      // update) leaves it absent from this generation; a COLD offline compile
+      // would then fail until the app is online once, at which point
+      // `assetCacheFirst` fetches + caches it on demand (self-heal). The
+      // persistent IndexedDB compile cache (survives deploys) covers the warm
+      // case regardless.
       const fetchInto = (cache, url, mode) =>
         fetch(new Request(url, {cache: mode}))
           .then((res) => (res && res.ok ? cache.put(url, res) : null))
@@ -140,6 +151,7 @@ self.addEventListener('install', (event) => {
       await Promise.all([
         ...SHELL_URLS.map((u) => fetchInto(shell, u, 'reload')),
         ...PRECACHE_ASSETS.map((u) => fetchInto(assets, u, 'default')),
+        ...PRECACHE_LAZY_ASSETS.map((u) => fetchInto(assets, u, 'reload')),
       ])
     })(),
   )

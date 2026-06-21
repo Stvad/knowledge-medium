@@ -1,20 +1,25 @@
 /**
- * Post-build step that stamps dist/sw.js with two things:
+ * Post-build step that stamps dist/sw.js with three things:
  *
  *   1. A per-build identifier (`__BUILD_ID__` placeholder) so each deploy
  *      lands in its own cache namespace and stale entries are dropped on
  *      activate. Source order: SW_BUILD_ID env, GITHUB_SHA, git rev-parse
  *      HEAD, then a timestamped fallback.
- *   2. The list of emitted JS/CSS assets (`__PRECACHE_ASSETS__`
- *      placeholder) so the install handler can fetch them up front. The
- *      initial module graph is dispatched by the browser before our SW
- *      activates, so without this list a first-time offline reload would
- *      fail to boot. This covers the first-paint HTML graph PLUS a small
- *      set of must-be-offline lazy chunks and their transitive deps
- *      (`@babel/standalone` — see scripts/precache-lazy-assets.mjs).
+ *   2. The first-paint asset list (`__PRECACHE_ASSETS__` placeholder) — the
+ *      HTML graph the browser dispatches before our SW activates — so the
+ *      install handler can fetch them up front; without it a first-time
+ *      offline reload would fail to boot. Installed `{ cache: 'default' }`
+ *      (the page just fetched these exact URLs).
+ *   3. The must-be-offline LAZY asset list (`__PRECACHE_LAZY_ASSETS__`) —
+ *      chunks not in the first-paint graph but needed offline, plus their
+ *      transitive deps (`@babel/standalone` — see
+ *      scripts/precache-lazy-assets.mjs). Kept SEPARATE because the SW
+ *      installs them `{ cache: 'reload' }`: they weren't first-painted and
+ *      their unhashed URLs carry per-deploy-varying bytes, so a default
+ *      fetch could copy a stale prior-deploy entry into this generation.
  *
- * Fails the build if either placeholder is missing — both are required
- * for the SW to behave correctly.
+ * Fails the build if any placeholder is missing — all are required for the
+ * SW to behave correctly.
  */
 import {readFileSync, writeFileSync, existsSync, readdirSync} from 'node:fs'
 import {execSync} from 'node:child_process'
@@ -98,8 +103,22 @@ const collectLazyPrecacheAssets = () =>
   }).map(toBaseUrl)
 
 const buildId = resolveBuildId()
-const precacheAssets = [
-  ...new Set([...collectPrecacheAssets(), ...collectLazyPrecacheAssets()]),
+
+// Two lists, fetched with DIFFERENT cache modes at install (see sw.js):
+//   - first-paint assets → { cache: 'default' }: the page just fetched these
+//     exact (unhashed) URLs, so the browser HTTP cache holds THIS generation's
+//     bytes — copying them into Cache Storage is near-free and correct.
+//   - lazy assets (Babel) → { cache: 'reload' }: these were NOT first-painted,
+//     and their URLs are unhashed with bytes that vary per deploy, so a
+//     { cache: 'default' } fetch could copy a STALE prior-deploy entry out of
+//     the HTTP cache into this generation's cache. 'reload' forces the network
+//     so the generation always gets its own bytes.
+// A chunk that IS first-painted (e.g. the shared rolldown runtime that Babel
+// also imports) stays in the first-paint list only — no double fetch.
+const firstPaintAssets = collectPrecacheAssets()
+const firstPaintSet = new Set(firstPaintAssets)
+const lazyPrecacheAssets = [
+  ...new Set(collectLazyPrecacheAssets().filter((u) => !firstPaintSet.has(u))),
 ].sort()
 
 let source = readFileSync(swPath, 'utf8')
@@ -112,14 +131,18 @@ const requirePlaceholder = (placeholder) => {
 }
 requirePlaceholder('__BUILD_ID__')
 requirePlaceholder('__PRECACHE_ASSETS__')
+requirePlaceholder('__PRECACHE_LAZY_ASSETS__')
 
-source = source.split('__BUILD_ID__').join(buildId)
 // Embed as a JSON string then JSON.parse at runtime so the array can
 // contain any number of entries without breaking the surrounding source.
-source = source.split('__PRECACHE_ASSETS__').join(
-  JSON.stringify(precacheAssets).replace(/\\/g, '\\\\').replace(/'/g, "\\'"),
-)
+const encodeArray = (arr) =>
+  JSON.stringify(arr).replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+
+source = source.split('__BUILD_ID__').join(buildId)
+source = source.split('__PRECACHE_ASSETS__').join(encodeArray(firstPaintAssets))
+source = source.split('__PRECACHE_LAZY_ASSETS__').join(encodeArray(lazyPrecacheAssets))
 writeFileSync(swPath, source)
 console.log(
-  `[inject-sw-build-id] stamped sw.js with ${buildId} and ${precacheAssets.length} precache assets`,
+  `[inject-sw-build-id] stamped sw.js with ${buildId}, ` +
+  `${firstPaintAssets.length} first-paint + ${lazyPrecacheAssets.length} lazy precache assets`,
 )
