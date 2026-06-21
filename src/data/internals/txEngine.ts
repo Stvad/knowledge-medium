@@ -156,6 +156,15 @@ const COLUMN_PLACEHOLDERS = COLUMN_NAMES.map(() => '?').join(', ')
 const SELECT_BY_ID_SQL = `SELECT ${COLUMN_LIST} FROM blocks WHERE id = ?`
 const SELECT_CHILDREN_SQL =
   `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id`
+/** Existence probes for `tx.hasChildren`. The live-only form keeps the
+ *  `deleted = 0` clause so it stays served by the partial
+ *  `idx_blocks_parent_order`; the `includeDeleted` form drops it (and so
+ *  cannot use that partial index — table scan), used only off hot paths
+ *  to detect a row that ever had children vs a never-populated stub. */
+const SELECT_HAS_CHILD_SQL =
+  `SELECT 1 AS one FROM blocks WHERE parent_id = ? AND deleted = 0 LIMIT 1`
+const SELECT_HAS_CHILD_INCLUDING_DELETED_SQL =
+  `SELECT 1 AS one FROM blocks WHERE parent_id = ? LIMIT 1`
 /** Root-level siblings (parent_id IS NULL). When a tx has pinned a
  *  workspace, scope to that workspace so `tx.childrenOf(null)` doesn't
  *  spill across workspaces — important for single-workspace-per-tx
@@ -517,6 +526,12 @@ export class TxImpl implements Tx {
     }
     const rows = await this.ctx.txDb.getAll<BlockRow>(SELECT_CHILDREN_SQL, [parentId])
     return rows.map(parseBlockRow)
+  }
+
+  async hasChildren(parentId: string, opts?: {includeDeleted?: boolean}): Promise<boolean> {
+    const sql = opts?.includeDeleted ? SELECT_HAS_CHILD_INCLUDING_DELETED_SQL : SELECT_HAS_CHILD_SQL
+    const row = await this.ctx.txDb.getOptional<{one: number}>(sql, [parentId])
+    return row !== null
   }
 
   async adjacentSibling(

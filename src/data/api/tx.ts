@@ -184,6 +184,18 @@ export interface Tx {
    *  row already constrains the query. */
   childrenOf(parentId: string | null, workspaceId?: string): Promise<BlockData[]>
 
+  /** Existence probe: does `parentId` have any child row? Live-only by
+   *  default (`SELECT 1 … WHERE parent_id = ? AND deleted = 0 LIMIT 1`,
+   *  index-served via the partial `idx_blocks_parent_order`).
+   *  `{includeDeleted: true}` also counts tombstoned children — used to
+   *  tell a row that ever had children (a real container, even one whose
+   *  whole subtree was soft-deleted) apart from a never-populated stub.
+   *  NOTE: the `includeDeleted` variant cannot use the partial
+   *  (`deleted = 0`) index and falls back to a table scan, so reach for it
+   *  only off hot paths. Cheaper than `childrenOf().length` — no row
+   *  materialization, no `ORDER BY` sort, and stops at the first match. */
+  hasChildren(parentId: string, opts?: {includeDeleted?: boolean}): Promise<boolean>
+
   /** Nearest live sibling before/after `anchor` in `(order_key, id)`
    *  order. Unlike `childrenOf`, this is a cursor lookup, so insertion
    *  mutators can compute adjacent order keys without loading a large

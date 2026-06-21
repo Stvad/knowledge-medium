@@ -755,6 +755,25 @@ describe('tx.childrenOf / tx.parentOf', () => {
     }, {scope: ChangeScope.BlockDefault})
   })
 
+  it('hasChildren counts tombstoned children only with {includeDeleted}', async () => {
+    await env.repo.tx(async tx => {
+      // hc-livep has a live child; hc-p has only a tombstoned child;
+      // hc-none never had children.
+      await tx.create({id: 'hc-livep', workspaceId: 'ws-1', parentId: null,      orderKey: 'a0'})
+      await tx.create({id: 'hc-live',  workspaceId: 'ws-1', parentId: 'hc-livep', orderKey: 'a0'})
+      await tx.create({id: 'hc-p',     workspaceId: 'ws-1', parentId: null,      orderKey: 'a1'})
+      await tx.create({id: 'hc-del',   workspaceId: 'ws-1', parentId: 'hc-p',    orderKey: 'a0'})
+      await tx.create({id: 'hc-none',  workspaceId: 'ws-1', parentId: null,      orderKey: 'a2'})
+      await tx.delete('hc-del')
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(async tx => {
+      expect(await tx.hasChildren('hc-livep')).toBe(true)                       // live child
+      expect(await tx.hasChildren('hc-p')).toBe(false)                          // only a tombstone
+      expect(await tx.hasChildren('hc-p', {includeDeleted: true})).toBe(true)
+      expect(await tx.hasChildren('hc-none', {includeDeleted: true})).toBe(false)
+    }, {scope: ChangeScope.BlockDefault})
+  })
+
   it('finds adjacent siblings without enumerating the full sibling list', async () => {
     await env.repo.tx(async tx => {
       await tx.create({id: 'adj-p',  workspaceId: 'ws-1', parentId: null,    orderKey: 'a0'})
