@@ -62,6 +62,7 @@ import {
   parseBlockRefs,
 } from './referenceParser.ts'
 import { projectPropertyReferences } from './referenceProjection.ts'
+import { devAssertionsEnabled } from '@/data/internals/devAssertions.js'
 import { aliasSeatReaderFromDb, ensureAliasTarget, resolveAliasSeatId } from '@/data/targets'
 import {
   dailyNoteBlockId,
@@ -208,6 +209,33 @@ const buildSourcePlan = async (
     keyOf: derivedRefKey,
     retain: ref => isRetainableAbsentRef(ref, source, before, ctx.propertySchemas),
   })
+  if (devAssertionsEnabled()) {
+    // L2 dev/test-only assertion (off in prod): the basis of the
+    // written refs is the committed source, and the reconcile must honor the
+    // add-only / retain-on-source contract AT THIS SITE — every recomputed ref
+    // (content + present-schema property) survives, and every prior ref we're
+    // bound to retain (absent-schema, value unchanged) survives. Catches a
+    // future "made it strip again" here, which a reconcileDerived unit test
+    // can't (wrong args at this call site would still pass there).
+    const resultKeys = new Set(references.map(derivedRefKey))
+    for (const ref of [...aliasRefs, ...dateRefs, ...blockRefs, ...propertyRefs]) {
+      if (!resultKeys.has(derivedRefKey(ref))) {
+        throw new Error(
+          `[references] reconcile dropped a recomputed ref ${ref.sourceField ?? ''}/${ref.id} on ${source.id}`,
+        )
+      }
+    }
+    for (const ref of source.references) {
+      if (
+        isRetainableAbsentRef(ref, source, before, ctx.propertySchemas)
+        && !resultKeys.has(derivedRefKey(ref))
+      ) {
+        throw new Error(
+          `[references] reconcile dropped a retainable absent-schema ref ${ref.sourceField ?? ''}/${ref.id} on ${source.id}`,
+        )
+      }
+    }
+  }
   // tx.update normalises references on write, so `source.references`'s
   // JSON text — when written by any tx.* path — is already in canonical
   // form (sorted, deduped, omitted-empty-sourceField, no whitespace).

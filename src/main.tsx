@@ -9,6 +9,11 @@ import { Login } from '@/components/Login.js'
 import { SuspenseFallback } from '@/components/util/suspense.js'
 import { BootstrapErrorFallback } from '@/components/util/error.js'
 import { registerServiceWorker } from '@/registerServiceWorker.js'
+import { setDevAssertionsEnabled } from '@/data/internals/devAssertions.js'
+
+// L2 data-integrity invariant assertions: on in dev builds, compiled-away to a
+// constant false in prod (import.meta.env.DEV is statically replaced by Vite).
+setDevAssertionsEnabled(import.meta.env.DEV)
 
 // Todo remember why I need this something about version mismatch/having implied react in custom blocks
 window.React = React

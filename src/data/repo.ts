@@ -55,6 +55,7 @@ import {
   refCodecKind,
 } from './internals/refProjection'
 import { runTx, type PowerSyncDb } from './internals/commitPipeline'
+import { devAssertionsEnabled } from './internals/devAssertions'
 import type { BlockCache } from '@/data/blockCache'
 import { buildQualifiedBlockColumnsSql, parseBlockRow, type BlockRow } from '@/data/blockSchema'
 import { kernelDataExtension } from './kernelDataExtension'
@@ -1590,6 +1591,21 @@ export class Repo {
               recomputed: projected,
               keyOf: derivedRefKey,
             })
+            if (devAssertionsEnabled()) {
+              // L2 dev/test-only assertion (off in prod): reprojection
+              // must be ADD-ONLY — prior ⊆ reconciled. A dropped ref here is the
+              // mass-strip regression 21494fdb fixed; fail it in CI, never on a
+              // user's write. (The length-equality skip below also assumes this
+              // superset, so this guards that optimization too.)
+              const nextKeys = new Set(reconciled.map(derivedRefKey))
+              for (const ref of liveBlock.references) {
+                if (!nextKeys.has(derivedRefKey(ref))) {
+                  throw new Error(
+                    `[reprojection] add-only violated: block ${liveBlock.id} dropped ref ${ref.sourceField ?? ''}/${ref.id}`,
+                  )
+                }
+              }
+            }
             // Retain-all add-only ⇒ reconciled ⊇ prior, so an equal length means
             // nothing new was projected. Skip the no-op write (avoids re-firing
             // the field-watcher / write amplification).
