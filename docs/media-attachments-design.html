@@ -1,0 +1,698 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Media attachments — design</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --fg: #171717;
+      --muted: #5f6368;
+      --line: #d6d9de;
+      --code: #f5f6f8;
+      --accent: #0f766e;
+      --accent-soft: #d1faf2;
+      --warn: #b45309;
+      --warn-soft: #fef3c7;
+      --reject: #9f1239;
+      --reject-soft: #ffe4e6;
+      --info: #1d4ed8;
+      --info-soft: #dbeafe;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --fg: #e8eaed;
+        --muted: #a8adb4;
+        --line: #343941;
+        --code: #20242a;
+        --accent: #5eead4;
+        --accent-soft: #134e4a;
+        --warn: #fbbf24;
+        --warn-soft: #422006;
+        --reject: #fda4af;
+        --reject-soft: #4c0519;
+        --info: #93c5fd;
+        --info-soft: #1e3a5f;
+      }
+    }
+
+    body { margin: 0; color: var(--fg); background: Canvas; line-height: 1.55; }
+    main { max-width: 880px; margin: 0 auto; padding: 40px 24px 56px; }
+    h1 { margin: 0 0 8px; font-size: 2rem; }
+    h2 { margin: 36px 0 8px; font-size: 1.3rem; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+    h3 { margin: 24px 0 6px; font-size: 1.05rem; }
+    p { margin: 0 0 14px; }
+    ul, ol { margin: 0 0 16px 20px; padding: 0; }
+    li { margin-bottom: 4px; }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+    code { padding: 0.08rem 0.25rem; border-radius: 4px; background: var(--code); font-size: 0.92em; }
+    pre { overflow-x: auto; padding: 14px 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--code); font-size: 0.88em; line-height: 1.5; }
+    pre code { padding: 0; background: transparent; }
+    .lede { color: var(--muted); font-size: 1.05rem; }
+    .decision { border-left: 3px solid var(--accent); padding: 10px 14px; background: var(--accent-soft); border-radius: 0 6px 6px 0; margin: 12px 0 18px; }
+    .decision strong { color: var(--accent); }
+    .warn { border-left: 3px solid var(--warn); padding: 10px 14px; background: var(--warn-soft); border-radius: 0 6px 6px 0; margin: 12px 0 18px; }
+    .reject { border-left: 3px solid var(--reject); padding: 10px 14px; background: var(--reject-soft); border-radius: 0 6px 6px 0; margin: 12px 0 18px; }
+    .info { border-left: 3px solid var(--info); padding: 10px 14px; background: var(--info-soft); border-radius: 0 6px 6px 0; margin: 12px 0 18px; }
+    .info strong { color: var(--info); }
+    table { width: 100%; border-collapse: collapse; margin: 12px 0 20px; font-size: 0.95em; }
+    th, td { border-bottom: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+    th { font-weight: 600; color: var(--muted); font-size: 0.85em; text-transform: uppercase; letter-spacing: 0.04em; }
+    figure { margin: 18px 0 22px; padding: 0; }
+    figcaption { color: var(--muted); font-size: 0.9em; margin-top: 6px; text-align: center; }
+    svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+    .diagram { border: 1px solid var(--line); border-radius: 8px; padding: 16px; background: var(--code); }
+    .toc { border: 1px solid var(--line); border-radius: 8px; padding: 14px 22px; background: var(--code); margin: 20px 0 28px; }
+    .toc ol { margin: 6px 0 0 18px; }
+    .toc li { margin-bottom: 2px; }
+    .toc a { color: var(--accent); text-decoration: none; }
+    small { color: var(--muted); }
+    .diagram text { font-family: ui-sans-serif, system-ui, sans-serif; }
+    .diagram .mono { font-family: ui-monospace, Menlo, monospace; }
+  </style>
+</head>
+<body>
+<main>
+
+<h1>Media attachments</h1>
+<p class="lede">Design for image (and, by extension, arbitrary file) attachments in a system that
+  now has per-workspace opt-in end-to-end encryption. 2026-06-21.</p>
+
+<div class="info">
+<strong>TL;DR.</strong> An attachment is a <em>block</em> (<code>properties.type = 'media'</code>),
+embedded into prose with the existing <code>!((id))</code> mechanism — no new reference syntax, and
+metadata rides the existing encrypted block-content columns for free. The <em>bytes</em> live in an
+object store (Supabase Storage v1), behind a <code>BlobStore</code> interface. The reshaping
+constraint is <strong>E2EE</strong>: for an encrypted workspace the server holds only ciphertext and
+never the key, so bytes are sealed client-side with the workspace key and access becomes
+<em>entirely client-side</em>. We do <strong>not</strong> write two implementations — there is one
+byte transform parameterized by mode, where plaintext is the identity case, exactly as
+<code>src/sync/transform.ts</code> already does for text. Decryption happens in the
+<strong>service worker</strong> behind a self-describing binary envelope, so the renderer stays
+mode-agnostic (<code>&lt;img src="/asset/&lt;ws&gt;/&lt;id&gt;"&gt;</code> "just works" for both modes).
+The load-bearing risk is making the SW a participant in the E2EE lock/wipe lifecycle.
+</div>
+
+<div class="toc">
+<strong>Contents</strong>
+<ol>
+  <li><a href="#scope">What we're adding, and scope</a></li>
+  <li><a href="#ground">Current state we're building on</a></li>
+  <li><a href="#asblock">The core model: an attachment is a block</a></li>
+  <li><a href="#e2ee">The constraint that reshapes everything: E2EE</a></li>
+  <li><a href="#onepath">One byte transform; plaintext is the identity case</a></li>
+  <li><a href="#bytepath">The byte path, end to end</a></li>
+  <li><a href="#sw">Service-worker decryption (the unification)</a></li>
+  <li><a href="#cache">Local cache &amp; Lock-and-Wipe participation</a></li>
+  <li><a href="#queue">Offline: the byte upload queue</a></li>
+  <li><a href="#storage">Storage layout &amp; RLS</a></li>
+  <li><a href="#renderer">The renderer &amp; capture surfaces</a></li>
+  <li><a href="#sharing">Interaction with subtree sharing</a></li>
+  <li><a href="#public">The public-sharing escape hatch</a></li>
+  <li><a href="#portability">Vendor portability (the <code>BlobStore</code> seam)</a></li>
+  <li><a href="#plan">Phased plan</a></li>
+  <li><a href="#open">Open questions</a></li>
+  <li><a href="#tradeoffs">Tradeoffs we're accepting</a></li>
+</ol>
+</div>
+
+<h2 id="scope">1. What we're adding, and scope</h2>
+
+<p>The app cannot currently insert images. We want paste / drop / file-pick of an image to render
+  inline, work offline, and sync across a user's devices — and we want the same machinery to extend
+  to PDFs, audio, video, and generic files later without a content migration.</p>
+
+<p><strong>In scope (v1):</strong> images, via paste / drop / file picker; inline render with a
+  lightbox; offline-first local caching; cross-device sync; correctness under E2EE workspaces.</p>
+
+<p><strong>Designed-for but not built (vNext):</strong> non-image file types (the model is
+  type-dispatched, so a new mime is a new renderer branch, not a schema change); thumbnails /
+  transforms; resumable uploads for large media; public sharing.</p>
+
+<p><strong>Explicitly out of scope:</strong> server-side media features for E2EE workspaces (OCR,
+  thumbnails, transcode) — the server has no key; this is the existing E2EE tradeoff
+  (<a href="./e2ee-design.html">e2ee-design.html</a> §15), inherited, not new. E2EE
+  <em>subtree</em> sharing of media (needs the deferred key hierarchy — see §12).</p>
+
+<h2 id="ground">2. Current state we're building on</h2>
+
+<p>This design is grounded in the codebase as of this writing, not the proposal that predated the
+  encryption work. What actually shipped changes the answer materially:</p>
+
+<table>
+<tr><th>Capability</th><th>Status</th><th>Consequence for this design</th></tr>
+<tr><td>Per-workspace E2EE</td>
+    <td><strong>Shipped.</strong> <code>src/sync/</code> crypto layer, migration
+      <code>20260529120000_add_e2ee_workspace_columns.sql</code>.</td>
+    <td>The dominant constraint. Bytes for an E2EE workspace must be client-side sealed; access is
+      client-side. See §4.</td></tr>
+<tr><td>Layout B (staging + observer)</td>
+    <td><strong>Shipped.</strong> <code>blocks_synced</code> staging table; a JS observer decrypts
+      and reconciles into the plaintext <code>blocks</code> table.</td>
+    <td>Establishes the pattern we copy: a mode-parameterized transform with a pluggable key lookup.
+      See §5.</td></tr>
+<tr><td>Shares + API tokens</td>
+    <td><strong>NOT shipped.</strong> <a href="./shares-and-api-tokens.html">shares-and-api-tokens.html</a>
+      is a design only — no <code>block_shares</code> / <code>effective_share_ids</code> tables exist.</td>
+    <td>Do not build on it. But keep storage paths share-ready (see §10, §12), because subtree
+      sharing is on the roadmap.</td></tr>
+<tr><td>Supabase Storage</td>
+    <td><strong>Unused.</strong> No buckets, no <code>supabase.storage.*</code>, no
+      <code>supabase/functions/</code>.</td>
+    <td>Greenfield. We add the first bucket + the first storage RLS policy.</td></tr>
+<tr><td>Image render / paste</td>
+    <td><strong>Text-only.</strong> <code>src/markdown/MarkdownImage.tsx</code> renders any
+      <code>![](url)</code> with a lightbox; paste handlers read only <code>text/plain</code>.</td>
+    <td>The lightbox is reusable. Paste/drop need a binary arm. See §11.</td></tr>
+<tr><td>Local SQLite VFS</td>
+    <td><strong>OPFS</strong> (<code>OPFSCoopSyncVFS</code> in <code>src/data/repoProvider.ts</code>).</td>
+    <td>Plaintext-derived data already lives on local disk by design (e2ee §15 #7); a decrypted-byte
+      cache sits inside that accepted posture.</td></tr>
+</table>
+
+<h2 id="asblock">3. The core model: an attachment is a block</h2>
+
+<p>An attachment is not a row in a side table. It is a <code>blocks</code> row with a type
+  discriminator and binary-pointer metadata in its properties:</p>
+
+<pre><code>// asset block (illustrative property shape)
+properties: {
+  type:        'media',
+  mime:        'image/png',
+  size:        184213,          // plaintext byte length
+  hash:        'sha256:…',      // of plaintext bytes; client-side dedup key
+  filename:    'screenshot.png',
+  width:       1280,            // optional, for layout reservation
+  height:      720,
+  status:      'uploading' | 'synced'
+}
+content: 'image: screenshot.png'   // human-readable summary</code></pre>
+
+<p>Why a block, not an <code>attachments</code> table:</p>
+<ul>
+  <li><strong>Inspectable / user-accessible</strong> — the project's standing principle. An
+    attachment shows up in the outline, the properties panel, queries, and the agent runtime like
+    any other block.</li>
+  <li><strong>Embeds, backlinks, annotations come for free.</strong> Inline placement uses the
+    existing block embed <code>!((id))</code> (<code>src/components/references/BlockEmbed.tsx</code>);
+    captions / alt-text / OCR / transcripts are <em>child blocks</em>; "what references this image?"
+    is the existing backlink machinery.</li>
+  <li><strong>Type-dispatched rendering already exists.</strong> A <code>MediaBlockRenderer</code>
+    registers via <code>blockRenderersFacet</code> with a <code>canRender</code> gate on the type
+    property — the same pattern as <code>VideoPlayerRenderer</code>. New file types are new mime
+    branches, never a schema change.</li>
+  <li><strong>Dedup within a workspace</strong> is natural: paste the same screenshot ten times into
+    a page and you get ten <code>!((id))</code> embeds of one asset block, one byte copy.</li>
+</ul>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 250" role="img" aria-label="A page block has a media child block. The media block carries type/mime/hash properties and points at an object-store path. A paragraph elsewhere embeds the media block by id.">
+  <style>
+    .n { fill: var(--code); stroke: var(--line); stroke-width: 1.4; }
+    .m { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.6; }
+    .e { fill: var(--info-soft); stroke: var(--info); stroke-width: 1.4; }
+    .lbl { font-size: 13px; fill: var(--fg); }
+    .sub { font-size: 11px; fill: var(--muted); }
+    .ed { stroke: var(--muted); stroke-width: 1.3; fill: none; }
+  </style>
+  <rect class="n" x="20" y="24" width="150" height="40" rx="6"/>
+  <text class="lbl" x="34" y="49">Page block</text>
+  <rect class="m" x="60" y="100" width="220" height="64" rx="6"/>
+  <text class="lbl" x="74" y="124">Media block (child)</text>
+  <text class="sub mono" x="74" y="142">type=media · mime · hash</text>
+  <text class="sub mono" x="74" y="156">status=synced</text>
+  <path class="ed" d="M 95 64 L 120 100"/>
+  <rect class="n" x="60" y="196" width="220" height="36" rx="6"/>
+  <text class="lbl" x="74" y="219">Caption (child of media)</text>
+  <path class="ed" d="M 170 164 L 170 196"/>
+  <rect class="e" x="470" y="100" width="270" height="64" rx="6"/>
+  <text class="lbl" x="484" y="124">Paragraph on another page</text>
+  <text class="sub mono" x="484" y="146">…see !((media-block-id)) …</text>
+  <path class="ed" d="M 470 132 C 360 132, 340 132, 282 132" stroke-dasharray="5 4"/>
+  <text class="sub" x="320" y="120">embed</text>
+  <rect class="n" x="500" y="24" width="240" height="40" rx="6"/>
+  <text class="lbl" x="514" y="42">Object store</text>
+  <text class="sub mono" x="514" y="58">&lt;ws&gt;/&lt;media-block-id&gt;</text>
+  <path class="ed" d="M 280 120 C 380 90, 420 60, 500 50"/>
+  <text class="sub" x="360" y="70">bytes</text>
+</svg>
+<figcaption>Metadata is a block (syncs encrypted via the normal path); bytes live in the object store
+  at a path derived from workspace + block id; prose embeds the block by id.</figcaption>
+</figure>
+
+<h2 id="e2ee">4. The constraint that reshapes everything: E2EE</h2>
+
+<p>For an E2EE workspace the server holds <em>only ciphertext</em> and never the key. The workspace
+  key (WK) lives as a non-extractable WebCrypto <code>CryptoKey</code> in IndexedDB
+  (<code>km-e2ee-keys</code>, keyed by <code>(user_id, workspace_id)</code> —
+  <code>src/sync/keys/keyStore.ts</code>). The server-side trigger
+  <code>blocks_require_ciphertext_for_e2ee</code> actively rejects any plaintext write to an
+  encrypted workspace's content columns.</p>
+
+<p>The E2EE design doc encrypts exactly three text columns and <strong>says nothing about binary
+  data</strong> — confirmed by inspection. So attachments are an unsolved problem that must be solved
+  <em>consistently with</em> E2EE, not bolted on beside it. Two pillars of any naïve "URL in markdown"
+  approach are dead on arrival:</p>
+
+<div class="reject">
+<strong>Signed-URL-on-render serving displayable bytes — dead for E2EE.</strong> A signed Storage URL
+returns ciphertext; the browser cannot <code>&lt;img src&gt;</code> that. Bytes must be fetched, then
+decrypted client-side with the WK before display.
+</div>
+
+<div class="reject">
+<strong>Public-bucket / public-share-URL — incompatible with E2EE.</strong> You cannot serve a
+publicly-readable image out of an encrypted workspace via RLS + signed URLs. RLS gates access to
+<em>ciphertext</em>; it cannot grant decryption. (This is just e2ee §15 #2 — "no server-side features
+for E2EE workspaces" — applied to bytes.) The escape hatch survives in a different form; see §13.
+</div>
+
+<p>What the encryption model gives us in return is also worth stating: because metadata rides the
+  encrypted <code>properties_json</code> column, an attachment's <strong>mime, filename, and hash are
+  confidential automatically</strong> on an E2EE workspace. Only the routing identifiers
+  (<code>id</code>, <code>workspace_id</code>) are in clear — exactly the columns the sync transform
+  already leaves in clear.</p>
+
+<h2 id="onepath">5. One byte transform; plaintext is the identity case</h2>
+
+<p>E2EE is opt-in, so most workspaces are plaintext. The temptation is two code paths. The codebase
+  already shows the better answer: <code>src/sync/transform.ts</code> is <em>one</em> function
+  parameterized by mode, where <code>mode === 'none'</code> is the identity transform.</p>
+
+<pre><code>// the text precedent, today
+encodeForWire(row, 'none', getCek)  // → row unchanged
+encodeForWire(row, 'e2ee', getCek)  // → seal content/properties_json/references_json</code></pre>
+
+<p>We mirror it for bytes — a new module in the same <code>src/sync/</code> seam:</p>
+
+<pre><code>encodeBytes(bytes: Uint8Array, mode: SyncMode, getCek: GetCek): Promise&lt;Uint8Array&gt;
+decodeBytes(blob:  Uint8Array, mode: SyncMode, getCek: GetCek): Promise&lt;Uint8Array&gt;
+//   mode === 'none'  → identity (return input)
+//   mode === 'e2ee'  → AES-256-GCM seal/open with the WK</code></pre>
+
+<div class="decision">
+<strong>Decision.</strong> There is one attachment implementation, not two. Everything expensive —
+the asset-as-block model, the <code>BlobStore</code>, the cache, the upload queue, dedup, the
+renderer, Lock-and-Wipe participation — is mode-agnostic and shared. Only the ~15-line
+encode/decode seam is mode-aware, and plaintext is its degenerate (identity) branch, exactly like
+<code>encodeForWire</code>.
+</div>
+
+<h3>5.1 Reusing the crypto primitives</h3>
+
+<p>The WK <code>CryptoKey</code> is AES-256-GCM and works for <code>crypto.subtle.encrypt</code> over
+  raw bytes, not just the string <code>seal</code>/<code>open</code> in
+  <code>src/sync/crypto/aead.ts</code>. So byte encryption reuses the same
+  <code>getCek(workspaceId)</code> seam the sync transform uses, with two deltas:</p>
+
+<ul>
+  <li><strong>AAD binding extends the existing pattern.</strong> Where content columns bind
+    <code>contentAad(id, workspace_id, column)</code>, asset bytes bind
+    <code>(asset_block_id, workspace_id, "asset-bytes", schema_version)</code> so a ciphertext blob
+    cannot be swapped between blocks or workspaces. (Schema version stays in the AAD for the same
+    cheap-hierarchy-upgrade reason §13 of the e2ee doc keeps it there.)</li>
+  <li><strong>A binary envelope, not the base64url text envelope.</strong> The <code>enc:v1:</code>
+    envelope is base64url (≈33% bloat) — wrong for bytes. Add a sibling
+    <strong><code>encb:v1:</code></strong> binary framing (<code>magic ‖ nonce ‖ ciphertext‖tag</code>
+    as raw bytes) sharing the nonce/tag layout. Small new module next to <code>aead.ts</code>.</li>
+</ul>
+
+<p>The envelope being <strong>self-describing</strong> is what later lets the service worker decide
+  decrypt-vs-passthrough without resolving workspace mode (§7): a blob that starts with the
+  <code>encb:v1:</code> magic needs a key; anything else is plaintext.</p>
+
+<h2 id="bytepath">6. The byte path, end to end</h2>
+
+<p>Bytes do <strong>not</strong> ride PowerSync. The asset <em>block</em> (metadata) syncs through the
+  normal Layout B path (encrypted content columns, observer-reconciled). The <em>bytes</em> take a
+  parallel path to the object store. The two arrive independently on other devices.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 820 300" role="img" aria-label="Two-lane diagram. On paste: bytes are hashed, written to the local cache, sealed, and queued for upload to Storage; in parallel the asset block is created and syncs through PowerSync. On render: the renderer requests a virtual asset URL, the service worker checks cache then fetches ciphertext, decrypts with the workspace key, and returns displayable bytes.">
+  <style>
+    .b { fill: var(--code); stroke: var(--line); stroke-width: 1.3; }
+    .acc { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; }
+    .inf { fill: var(--info-soft); stroke: var(--info); stroke-width: 1.4; }
+    .t { font-size: 12px; fill: var(--fg); }
+    .s { font-size: 10.5px; fill: var(--muted); }
+    .ar { stroke: var(--accent); stroke-width: 1.5; fill: none; marker-end: url(#ah); }
+    .ph { font-size: 11px; fill: var(--accent); font-weight: 600; }
+  </style>
+  <defs>
+    <marker id="ah" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <polygon points="0 0, 8 4, 0 8" fill="var(--accent)"/>
+    </marker>
+  </defs>
+  <text class="ph" x="20" y="22">① WRITE (paste / drop)</text>
+  <rect class="b" x="20" y="34" width="110" height="40" rx="6"/>
+  <text class="t" x="32" y="58">hash bytes</text>
+  <rect class="acc" x="150" y="34" width="120" height="40" rx="6"/>
+  <text class="t" x="162" y="52">local cache</text>
+  <text class="s" x="162" y="66">(plaintext)</text>
+  <rect class="b" x="290" y="34" width="130" height="40" rx="6"/>
+  <text class="t" x="302" y="52">encodeBytes()</text>
+  <text class="s mono" x="302" y="66">encb:v1: if e2ee</text>
+  <rect class="inf" x="440" y="34" width="150" height="40" rx="6"/>
+  <text class="t" x="452" y="52">byte upload queue</text>
+  <text class="s" x="452" y="66">→ Object store</text>
+  <path class="ar" d="M130 54 L150 54"/>
+  <path class="ar" d="M270 54 L290 54"/>
+  <path class="ar" d="M420 54 L440 54"/>
+  <rect class="b" x="290" y="100" width="130" height="38" rx="6"/>
+  <text class="t" x="302" y="123">create asset block</text>
+  <rect class="inf" x="440" y="100" width="150" height="38" rx="6"/>
+  <text class="t" x="452" y="118">PowerSync (Layout B)</text>
+  <text class="s" x="452" y="132">encrypted content cols</text>
+  <path class="ar" d="M355 74 L355 100"/>
+  <path class="ar" d="M420 119 L440 119"/>
+  <text class="ph" x="20" y="186">② READ (render on any device)</text>
+  <rect class="b" x="20" y="198" width="150" height="44" rx="6"/>
+  <text class="t" x="32" y="218">MediaBlockRenderer</text>
+  <text class="s mono" x="32" y="234">&lt;img src=/asset/ws/id&gt;</text>
+  <rect class="acc" x="200" y="198" width="150" height="44" rx="6"/>
+  <text class="t" x="212" y="218">service worker</text>
+  <text class="s" x="212" y="234">cache ▸ fetch ▸ decrypt</text>
+  <rect class="inf" x="380" y="198" width="140" height="44" rx="6"/>
+  <text class="t" x="392" y="220">Object store</text>
+  <text class="s" x="392" y="234">ciphertext blob</text>
+  <rect class="b" x="560" y="198" width="150" height="44" rx="6"/>
+  <text class="t" x="572" y="218">WK in IndexedDB</text>
+  <text class="s mono" x="572" y="234">km-e2ee-keys</text>
+  <path class="ar" d="M170 220 L200 220"/>
+  <path class="ar" d="M350 214 L380 214"/>
+  <path class="ar" d="M380 230 C 470 250, 500 240, 560 226"/>
+</svg>
+<figcaption>Metadata and bytes are independent lanes. The service worker is the single place that
+  turns a stored (possibly encrypted) blob into displayable bytes.</figcaption>
+</figure>
+
+<h2 id="sw">7. Service-worker decryption (the unification)</h2>
+
+<p>The cleanest way to keep the renderer mode-agnostic is to decrypt in the service worker. This is
+  viable — the SW global scope has <code>crypto.subtle</code>, IndexedDB, and the Cache API — and it
+  collapses the entire plaintext/E2EE branch into one place the renderer never sees.</p>
+
+<ul>
+  <li><strong>The renderer emits a stable virtual URL:</strong>
+    <code>&lt;img src="/asset/&lt;workspace_id&gt;/&lt;asset_block_id&gt;"&gt;</code>. No mode awareness,
+    no <code>createObjectURL</code> lifecycle, native <code>&lt;img&gt;</code> / <code>&lt;video&gt;</code>
+    / range-requests / <code>&lt;a download&gt;</code> all work uniformly.</li>
+  <li><strong>The SW resolves it:</strong> check Cache → on miss, fetch the stored blob → if it
+    starts with the <code>encb:v1:</code> magic, look up the WK from <code>km-e2ee-keys</code> and
+    decrypt; otherwise pass through → put the displayable bytes in Cache → respond.</li>
+  <li><strong>Mode is self-describing</strong> via the envelope, so the SW does not re-implement
+    workspace-mode resolution. It only needs the WK lookup (it has <code>workspace_id</code> from the
+    URL and <code>user_id</code> from the handshake below).</li>
+</ul>
+
+<p>The thing that actually constrains the SW approach is not decryption — it's two coordination
+  problems, and they are the real work of this design:</p>
+
+<h3>7.1 Coordination problem A — fetching private bytes needs the session</h3>
+
+<p>Storage objects are RLS-protected; reads need a bearer token, which lives in the app's supabase-js
+  session in <code>localStorage</code> — which the SW cannot read. Resolution: the app
+  <code>postMessage</code>s <code>{ userId, accessToken }</code> to the SW on
+  <code>onAuthStateChange</code> / token refresh, and the SW issues
+  <code>GET /storage/v1/object/attachments/&lt;ws&gt;/&lt;id&gt;</code> with
+  <code>Authorization: Bearer</code>. This also <strong>eliminates per-object signed URLs</strong> for
+  the in-app case (signed URLs are only needed for the logged-out public case, §13). The token expires
+  hourly; the app re-posts on refresh, and the SW must re-request on activation (it can be killed and
+  respawned at any time) — store the active <code>{ userId, accessToken }</code> in a known IndexedDB
+  key the SW re-reads on activation.</p>
+
+<h3>7.2 Coordination problem B — Lock &amp; Wipe must reach the SW</h3>
+
+<div class="warn">
+<strong>This is the load-bearing risk.</strong> If the SW caches <em>decrypted</em> bytes in the
+Cache API, those are plaintext-at-rest in a context that <code>src/sync/keys/flows/lockAndWipe.ts</code>
+does not touch today. On lock, <code>lockAndWipe</code> clears the WK (<code>clearForUser</code>) and
+nukes the OPFS DB file — it must <em>also</em> <code>postMessage</code> the SW to purge the asset
+Cache and drop the cached <code>{ userId, accessToken }</code>. Get this wrong and decrypted images
+survive a lock. This must be wired in from day one, not retrofitted, and covered by the same flavor
+of tests that already pin <code>lockAndWipe</code> behavior.
+</div>
+
+<p>Storing decrypted bytes in the Cache API is <em>consistent</em> with the accepted posture (e2ee
+  §15 #7 already accepts plaintext-derived data on local disk) — but only because, and only as long
+  as, it is wiped on lock like everything else.</p>
+
+<div class="decision">
+<strong>Decision.</strong> Decrypt in the service worker behind the self-describing
+<code>encb:v1:</code> envelope; the renderer stays mode-agnostic. The Cache API doubles as the byte
+cache. Mandatory companions: the app→SW token handshake (§7.1) and the lock→SW wipe handshake (§7.2).
+</div>
+
+<h3>7.3 The alternative, and why it loses</h3>
+
+<p>The alternative is app-thread (or Worker) decryption: the renderer fetches, decrypts via
+  <code>getCek</code> directly (zero duplication), caches plaintext in OPFS (already in
+  <code>lockAndWipe</code>), and sets an object URL. It avoids both handshakes — but it makes the
+  renderer mode-aware, forces manual object-URL lifecycle, and means native <code>&lt;img&gt;</code> /
+  <code>&lt;video&gt;</code> / range / download each get re-implemented per consumer. It only wins if
+  we decide we do not want the SW to be an E2EE-lifecycle participant. We accept that participation
+  for the unification it buys.</p>
+
+<h2 id="cache">8. Local cache &amp; Lock-and-Wipe participation</h2>
+
+<ul>
+  <li><strong>Backing store:</strong> with SW decryption, the Cache API is the natural byte cache
+    (SW-served <code>Response</code>s, native streaming). If we ever move decryption to the app
+    thread, OPFS becomes the cache instead — the choice follows the decrypt location. Either way the
+    cache is <strong>workspace-scoped</strong> so leaving / locking a workspace evicts only its
+    bytes.</li>
+  <li><strong>Eviction:</strong> soft LRU cap (≈500&nbsp;MB default). An evicted entry simply
+    round-trips to the object store on next view.</li>
+  <li><strong>Lock &amp; Wipe:</strong> the cache is a registered participant in
+    <code>lockAndWipe</code> (§7.2). On lock: purge. On per-workspace revoke/leave: purge that
+    workspace's prefix.</li>
+  <li><strong>Optimistic local-first write:</strong> on paste, the bytes are written to the cache
+    <em>before</em> upload, and the asset block is created with <code>status: 'uploading'</code>. The
+    image renders immediately from local cache; the upload drains in the background; the block flips
+    to <code>status: 'synced'</code>. Offline, it simply stays <code>uploading</code> and still
+    renders on this device.</li>
+</ul>
+
+<h2 id="queue">9. Offline: the byte upload queue</h2>
+
+<p>Block <em>metadata</em> rides PowerSync's <code>ps_crud</code> upload queue. Bytes go to the object
+  store on a different path with no such queue, so they need their own durable one. A small
+  IndexedDB-backed list of <code>{ asset_block_id, workspace_id, status }</code> whose entries drain
+  when connectivity returns, retrying with backoff. This is new infra the pre-E2EE proposal
+  under-specified; E2EE doesn't change it, but the design surfaces it clearly. Cross-device arrival
+  is naturally eventually-consistent: a peer that has the block but not yet the bytes shows the
+  "metadata present, bytes pending" state until the upload from the origin device completes.</p>
+
+<h2 id="storage">10. Storage layout &amp; RLS</h2>
+
+<p>One private bucket, <code>attachments</code>. Object path
+  <strong><code>&lt;workspace_id&gt;/&lt;asset_block_id&gt;</code></strong>. For an E2EE workspace the
+  object is the <code>encb:v1:</code> ciphertext; for a plaintext workspace it is the raw bytes
+  (identity case, §5).</p>
+
+<p>Storage RLS in v1 is a <strong>workspace-membership</strong> check on the path's first segment:</p>
+
+<pre><code>create policy "attachments read by workspace member"
+on storage.objects for select to authenticated
+using (
+  bucket_id = 'attachments'
+  and public.is_workspace_member(
+        (storage.foldername(name))[1],   -- &lt;workspace_id&gt;
+        (auth.uid())::text)
+);
+-- writes: analogous, is_workspace_writer.</code></pre>
+
+<p>For an E2EE workspace the blob is already ciphertext, so RLS here is defense-in-depth — it stops a
+  non-member from hoarding ciphertext against a future key compromise, and avoids leaking object
+  existence. For a plaintext workspace it is the actual access boundary.</p>
+
+<div class="info">
+<strong>Share-ready by construction.</strong> Keeping <code>asset_block_id</code> in the path means
+storage RLS can later be widened from "membership" to "membership <em>or</em> a share covers this
+block" by joining <code>storage.objects → blocks → effective_share_ids</code> when subtree sharing
+ships (§12). We do not build that branch now (shares aren't shipped) but the path scheme does not
+foreclose it. This is the cheap-option-value posture, not speculative building.
+</div>
+
+<p>Per the project's Supabase rule, the bucket + its RLS land in one migration with
+  <code>storage.objects</code> policies enabled; no public table is created without RLS.</p>
+
+<h2 id="renderer">11. The renderer &amp; capture surfaces</h2>
+
+<p>Packaged as one <code>attachments</code> plugin, mirroring the <code>video-player</code> plugin's
+  facet wiring:</p>
+
+<ul>
+  <li><strong><code>MediaBlockRenderer</code></strong> via <code>blockRenderersFacet</code>, with
+    <code>canRender = ({block}) =&gt; block.peek()?.properties.type === 'media'</code> and a
+    <code>priority</code> above the default. Branches on <code>mime</code>: image → the existing
+    <code>MarkdownImage</code> lightbox fed the virtual URL; later, PDF / audio / video / generic
+    file-chip.</li>
+  <li><strong>Markdown <code>img</code> override</strong> via <code>markdownExtensionsFacet</code>
+    (alongside <code>defaultMarkdownExtension.ts</code>) for any inline image whose <code>src</code>
+    is a virtual asset URL — resolve and delegate to the lightbox.</li>
+  <li><strong>Capture surfaces:</strong> a CodeMirror <code>domEventHandlers</code> extension via
+    <code>codeMirrorExtensionsFacet</code> intercepting <code>paste</code> / <code>drop</code> with
+    <code>clipboardData.files</code> / <code>dataTransfer.files</code>; a block-shell paste/drop arm
+    parallel to today's <code>text/plain</code> handlers in
+    <code>CodeMirrorContentRenderer.tsx</code> / <code>DefaultBlockRenderer.tsx</code>; and a
+    <code>/image</code> command + file-picker action through the existing action/shortcut system.</li>
+  <li><strong>On capture:</strong> client-side mime/size guard → hash → dedup lookup
+    (same-hash-in-workspace → new <code>!((existing-id))</code> embed) → otherwise create the asset
+    block as a <em>child of the containing block</em> (see §12) + write bytes to cache + enqueue
+    upload, all inside one <code>repo.tx({scope: ChangeScope.BlockDefault})</code> so the URI-insert
+    and the asset block land in the same undo bucket.</li>
+</ul>
+
+<h2 id="sharing">12. Interaction with subtree sharing</h2>
+
+<p>Subtree sharing (<a href="./shares-and-api-tokens.html">shares-and-api-tokens.html</a>) is not
+  shipped but is on the roadmap. It informs two decisions now and exposes one genuine gap.</p>
+
+<h3>12.1 Reinforces: asset block = child of the containing block</h3>
+
+<p>Subtree sharing walks <code>parent_id</code> and stamps <code>effective_share_ids</code>. If the
+  asset block is a child of the page that uses it, sharing that page's subtree automatically covers
+  the asset (its <code>effective_share_ids</code> gets stamped, and the share-aware storage RLS branch
+  grants byte access). A flat per-workspace asset container would be invisible to subtree shares. So
+  asset-as-child is not just tidy — it is what makes a shared page carry its images.</p>
+
+<h3>12.2 Reinforces: keep <code>asset_block_id</code> in the storage path</h3>
+
+<p>A subtree-share recipient is not a workspace member, so granting them byte access requires storage
+  RLS to join through to the block's share coverage (§10). The block-id-in-path keeps that join
+  possible. Design the policy as "membership today, with an explicit seam to add
+  <code>OR effective_share_ids covers this block</code>."</p>
+
+<h3>12.3 The gap: E2EE + subtree sharing is unsolved</h3>
+
+<div class="warn">
+A subtree-share recipient of an <em>E2EE</em> workspace needs a key to read anything, including asset
+bytes — but the model has exactly one WK per <em>whole</em> workspace. There is no per-subtree key.
+Granting subtree access to encrypted content requires the per-subtree key hierarchy the e2ee doc
+explicitly defers (e2ee §13). So for the foreseeable future <strong>subtree sharing is a
+plaintext-workspace feature</strong>, and media inherits that boundary. This is consistent with the
+existing tradeoff stack (e2ee §15 #2; §8.3 — E2EE sharing is out-of-band whole-workspace WK transfer).
+Do not special-case it.
+</div>
+
+<h2 id="public">13. The public-sharing escape hatch</h2>
+
+<p>We still reserve <code>properties.publicUrl</code> on asset blocks and a render-audience flag on
+  the block context (<code>'workspace'</code> member / <code>'shared'</code> subtree recipient /
+  <code>'public'</code> logged-out). But the <em>implementation</em> for a public, logged-out viewer
+  differs by mode:</p>
+
+<table>
+<tr><th>Mode</th><th>Public-share implementation</th></tr>
+<tr><td>Plaintext workspace</td>
+    <td>A public bucket copy (or long-lived signed URL) written to
+      <code>properties.publicUrl</code>; the renderer prefers it when audience is <code>'public'</code>.
+      The original signed-URL story works here.</td></tr>
+<tr><td>E2EE workspace</td>
+    <td>Either <strong>export-to-plaintext</strong> (decrypt + re-upload to a public bucket — the
+      asset deliberately <em>leaves</em> E2EE, like an export) or <strong>key-in-fragment</strong>
+      (<code>app/share#&lt;asset-key&gt;</code>; the encrypted blob is public, the client decrypts
+      from the URL fragment, which is never sent to the server). "Anyone with the link" is exactly
+      key-in-link semantics.</td></tr>
+</table>
+
+<p>Reserving the property + the audience flag costs almost nothing now and avoids a content migration
+  later. The renderer's URL resolver branches on <em>both</em> workspace mode and render audience.</p>
+
+<h2 id="portability">14. Vendor portability (the <code>BlobStore</code> seam)</h2>
+
+<p>All object-store access goes behind a ~50-line interface:</p>
+
+<pre><code>interface BlobStore {
+  put(workspaceId, assetBlockId, bytes): Promise&lt;void&gt;
+  url(workspaceId, assetBlockId): string        // the virtual /asset/… URL
+  delete(workspaceId, assetBlockId): Promise&lt;void&gt;
+}</code></pre>
+
+<p>v1 backs it with Supabase Storage. E2EE actually <em>increases</em> portability: because the
+  server is a dumb encrypted-blob store and never mediates bytes, swapping to R2 / S3 / B2 later is a
+  bytes-copy plus re-pointing one module — no auth or schema rework. We do not pre-migrate; we keep
+  the seam clean and pull the trigger if egress cost or another driver appears. (A Worker-fronted R2
+  from day one is defensible only if a Worker is being introduced for other reasons; otherwise it is
+  permanent operational surface for no present benefit.)</p>
+
+<h2 id="plan">15. Phased plan</h2>
+
+<table>
+<tr><th>Phase</th><th>Scope</th></tr>
+<tr><td>1 — crypto seam</td>
+    <td><code>encb:v1:</code> binary envelope + <code>encodeBytes</code>/<code>decodeBytes</code> in
+      <code>src/sync/</code>, reusing <code>getCek</code> and the AAD pattern. Unit tests incl. the
+      plaintext-identity case and a tamper/swap test.</td></tr>
+<tr><td>2 — storage + RLS</td>
+    <td><code>attachments</code> bucket migration; membership storage RLS; <code>BlobStore</code>
+      over Supabase Storage. Post-create RLS audit per the Supabase rule.</td></tr>
+<tr><td>3 — cache + SW</td>
+    <td>SW asset route (<code>/asset/&lt;ws&gt;/&lt;id&gt;</code>) with decrypt-or-passthrough; Cache
+      API byte cache; the app→SW token handshake and the
+      <code>lockAndWipe</code>→SW wipe handshake (with tests).</td></tr>
+<tr><td>4 — block model + renderer</td>
+    <td><code>media</code> block type; <code>MediaBlockRenderer</code> (image branch) reusing the
+      lightbox; markdown <code>img</code> override.</td></tr>
+<tr><td>5 — capture + upload queue</td>
+    <td>paste / drop / file-pick arms; dedup; optimistic write; the durable byte upload queue.</td></tr>
+<tr><td>vNext</td>
+    <td>non-image mimes; thumbnails / transforms; resumable upload; the
+      <code>effective_share_ids</code> storage-RLS branch when subtree sharing ships; public-share
+      (export / key-in-fragment).</td></tr>
+</table>
+
+<h2 id="open">16. Open questions</h2>
+<ul>
+  <li><strong>Cache backing if SW decryption is adopted:</strong> Cache API only, or Cache API +
+    OPFS for an explicit LRU index? Cache API alone is simpler; OPFS gives finer eviction control.</li>
+  <li><strong>SW token handshake robustness across account switch:</strong> a browser profile can hold
+    multiple accounts (the keyStore is shared across them); the active-user handshake must be correct
+    under switch, not just single-account. Mirror the care the keyStore's <code>clearForUser</code>
+    already takes.</li>
+  <li><strong>Max inline size + large-media story:</strong> a v1 cap (e.g. 10&nbsp;MB) with a clear
+    error, deferring resumable/tus upload to vNext. Where exactly is the cap enforced?</li>
+  <li><strong>Asset block deletion → byte GC:</strong> delete the asset block ⇒ delete the object
+    (storage cascade or an explicit step). Embeds that dangle render the existing "unresolved embed"
+    state. Orphan sweep is a vNext follow-up.</li>
+  <li><strong>Dedup scope:</strong> within-workspace only (confirmed — randomized GCM means the
+    server can't dedup anyway). Cross-workspace deliberately duplicates bytes for clean boundaries.</li>
+</ul>
+
+<h2 id="tradeoffs">17. Tradeoffs we're accepting</h2>
+<table>
+<tr><th>Choice</th><th>Cost</th><th>Why / exit</th></tr>
+<tr><td>SW is an E2EE-lifecycle participant</td>
+    <td>Two handshakes (token in, wipe out); decrypted bytes cached in a second location.</td>
+    <td>Buys a mode-agnostic renderer and native media semantics. Wipe-on-lock is mandatory and
+      tested; consistent with e2ee §15 #7.</td></tr>
+<tr><td>Bytes off the sync path</td>
+    <td>A second durable upload queue; eventual consistency between metadata and bytes.</td>
+    <td>Keeps large blobs out of SQLite/PowerSync entirely; the queue is small and self-draining.</td></tr>
+<tr><td>No server-side media features for E2EE</td>
+    <td>No server thumbnails / OCR / transcode for encrypted workspaces.</td>
+    <td>Inherited from e2ee §15 #2, not new. Client-side transforms remain possible.</td></tr>
+<tr><td>E2EE subtree-share of media unsupported</td>
+    <td>Encrypted workspaces can't subtree-share images until the key hierarchy lands.</td>
+    <td>Needs e2ee §13. Plaintext workspaces are unaffected; don't special-case.</td></tr>
+<tr><td>Supabase Storage in v1</td>
+    <td>Egress cost at scale.</td>
+    <td>Behind <code>BlobStore</code>; E2EE makes the backend a dumb blob store, so the swap is a
+      bytes-copy + one module.</td></tr>
+</table>
+
+<p><small>Grounded against: <code>src/sync/transform.ts</code>, <code>src/sync/crypto/</code>,
+  <code>src/sync/keys/</code> (incl. <code>keyStore.ts</code>, <code>flows/lockAndWipe.ts</code>),
+  <code>supabase/migrations/20260529120000_add_e2ee_workspace_columns.sql</code>,
+  <code>src/data/repoProvider.ts</code>, <code>src/components/references/BlockEmbed.tsx</code>,
+  <code>src/markdown/MarkdownImage.tsx</code>, <code>public/sw.js</code>, and the design docs
+  <a href="./e2ee-design.html">e2ee-design.html</a> /
+  <a href="./shares-and-api-tokens.html">shares-and-api-tokens.html</a>.</small></p>
+
+</main>
+</body>
+</html>
