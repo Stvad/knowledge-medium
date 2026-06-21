@@ -355,7 +355,9 @@ whichever bytes it likes) can return a stale blob that decrypts cleanly and the 
 bytes lane has no <code>updated_at</code>/monotonicity channel the text path gets from PowerSync. The
 fix is already in hand: the asset block stores <code>hash = sha256(plaintext)</code> in its
 (encrypted) <code>properties_json</code>; the read path <strong>must verify the decrypted bytes
-against that hash before caching/serving</strong>, and reject on mismatch. This also closes the
+against that hash before caching/serving</strong>, and reject on mismatch. Because the SW can't read
+the encrypted block state, the expected hash is handed to it in the request by the renderer
+(§7.1.1) — a positive check that can only fail closed, never downgrade. This also closes the
 re-upload-version question for free (a new version writes a new hash on the block, which syncs with
 its own monotonicity).
 </div>
@@ -451,19 +453,63 @@ its own monotonicity).
   <li><strong>The mode pin decides decrypt-vs-passthrough, NOT the envelope magic.</strong> This is a
     deliberate carry-over of the rule the text path already enforces (<code>src/sync/crypto/envelope.ts</code>
     / e2ee §6 rule&nbsp;2: "the prefix is a FORMAT tag, not a decrypt trigger — the durable mode pin
-    decides"). The SW reads the workspace's local mode pin (it has <code>workspace_id</code> from the
-    URL): if the workspace is <strong>E2EE-pinned, the SW <em>requires</em> a well-formed
-    <code>encb:v1:</code> envelope and decrypts</strong> — a blob that arrives <em>without</em> the
-    magic is treated as tampering and rejected, never served as plaintext. Only an
-    unpinned/plaintext workspace passes bytes through. Deciding from the self-describing magic alone
-    would re-introduce exactly the downgrade vector (hostile server strips the magic → attacker
-    plaintext reaches <code>&lt;img&gt;</code>) that the text wire-boundary was hardened against.</li>
+    decides"). The SW reads the workspace's mode pin from a <em>SW-readable</em> source (§7.1.1): if the
+    workspace is <strong>E2EE-pinned, the SW <em>requires</em> a well-formed <code>encb:v1:</code>
+    envelope and decrypts</strong> — a blob that arrives <em>without</em> the magic is treated as
+    tampering and rejected, never served as plaintext. Only an unpinned/plaintext workspace passes
+    bytes through. Deciding from the self-describing magic alone would re-introduce exactly the
+    downgrade vector (hostile server strips the magic → attacker plaintext reaches
+    <code>&lt;img&gt;</code>) that the text wire-boundary was hardened against.</li>
   <li><strong>Render gates on SW readiness (cold start).</strong> An <code>&lt;img src="/asset/…"&gt;</code>
     can fire before the app has handed the SW a token (§7.1) or before the SW has re-read its state on
     a cold respawn. The SW must not "fail open": a request with no established active user / no fresh
     unlock signal <code>respondWith</code>s a deterministic placeholder (or holds briefly on a
     readiness promise, short timeout → placeholder), never a stale cache hit and never an unauthorized
     fetch.</li>
+</ul>
+
+<h3>7.1.1 The SW needs three things the renderer/app hold — make them SW-readable</h3>
+
+<p>The URL carries only <code>workspace_id</code> and <code>asset_block_id</code>. The decrypt path
+  needs two more facts that today live where the SW <em>cannot</em> reach them — this is a real
+  data-availability requirement, not an aside:</p>
+
+<ul>
+  <li><strong>Mode pin → a SW-readable durable store (IndexedDB).</strong> Pins live in
+    <code>window.localStorage</code> (<code>src/sync/keys/modePin.ts</code>), which a service worker
+    cannot read. The SW needs a durable <strong>IndexedDB</strong> source, sharing the pin's
+    "<em>survives</em> Lock &amp; Wipe" rule (the mode must stay known after a lock so the key can be
+    re-prompted — e2ee §6). The mode is <em>authoritative</em>, so it must come from this durable pin,
+    <strong>never</strong> from a per-request claim (an app-claimed "plaintext" would be the downgrade
+    vector again). If no pin exists for the workspace yet (never validated), the SW fails closed —
+    never a magic-fallback. Two shapes, both viable:
+    <ul>
+      <li><strong>Mirror</strong> — keep localStorage authoritative for the app's <em>synchronous</em>
+        pin reads (the existing resolver API is sync), add an IDB copy written in the same operation
+        for the SW. The dual-write is <strong>safe by construction</strong>: a workspace's
+        <code>encryption_mode</code> is <em>immutable</em> (server-enforced —
+        <code>workspaces_prevent_e2ee_field_change</code> in
+        <code>…_add_e2ee_workspace_columns.sql</code>), so a stale/missing mirror can only ever mean
+        "absent → fail closed", never "wrong → downgrade". Lowest blast radius.</li>
+      <li><strong>Move</strong> — make IDB the single source of truth, with a boot-hydrated in-memory
+        cache so the app keeps synchronous reads. Cleaner (one store) but a larger change to the
+        tested <code>modePin</code> module. Prefer this only if the dual-write bookkeeping proves
+        annoying; the immutability argument makes the mirror's drift risk negligible, so the mirror is
+        the recommended v1.</li>
+    </ul></li>
+  <li><strong>Expected hash → passed in the request by the renderer.</strong> The replay/rollback
+    defense (§5.1) verifies decrypted bytes against the block's <code>hash</code>, but that hash is in
+    the block's <em>encrypted</em> <code>properties_json</code> — in app/PowerSync state the SW can't
+    read. Resolution: the renderer (which holds the decrypted block) emits the URL with the expected
+    hash, e.g. <code>/asset/&lt;ws&gt;/&lt;id&gt;?h=&lt;sha256&gt;</code>, and the SW verifies the
+    decrypted bytes against it before caching/serving. Unlike the mode, an app-passed hash is
+    <em>safe</em>: it is a positive integrity check that can only <em>reject</em> (fail closed), never
+    downgrade — a hostile server can't weaken it, and a wrong/absent hash just declines to serve from
+    that fetch. A bare navigation/download with no <code>h</code> (no renderer to add it) decrypts and
+    serves but skips the replay check — acceptable for a user-initiated download; the download action
+    should append <code>h</code> when it can.</li>
+  <li><strong>Active user + token</strong> — already covered by the §7.1 per-<code>clientId</code>
+    handshake.</li>
 </ul>
 
 <div class="warn">
@@ -598,9 +644,9 @@ cache. Mandatory companions: the app→SW token handshake (§7.1) and the lock�
     bytes.</li>
   <li><strong>Eviction:</strong> soft LRU cap (≈500&nbsp;MB default). An evicted entry simply
     round-trips to the object store on next view.</li>
-  <li><strong>Lock &amp; Wipe:</strong> the cache + SW token store are purged via the
-    <code>PENDING_WIPE</code> marker consumed at next boot (§7.2), not a runtime message. On
-    per-workspace revoke/leave: purge that workspace's prefix.</li>
+  <li><strong>Lock &amp; Wipe:</strong> the cache, the SW token store, <em>and the §9 byte-upload
+    queue store</em> are all purged via the <code>PENDING_WIPE</code> marker consumed at next boot
+    (§7.2/§9), not a runtime message. On per-workspace revoke/leave: purge that workspace's prefix.</li>
   <li><strong>Optimistic local-first write:</strong> on paste, the encoded bytes are written to the
     <em>durable upload queue's own store</em> (§9) and the display cache is warmed. The image renders
     immediately from local bytes; the upload drains in the background. Whether the bytes have uploaded
@@ -630,13 +676,15 @@ purely a display-cache concern.
 
 <h2 id="queue">9. Offline: the byte upload queue</h2>
 
-<p>Block <em>metadata</em> rides PowerSync's <code>ps_crud</code> upload queue. Bytes go to the object
-  store on a different path with no such queue, so they need their own durable one. Crucially the
-  queue <strong>owns the encoded bytes</strong>, not just a pointer: an IndexedDB/OPFS record of
+<p>Block <em>metadata</em> rides PowerSync's <code>ps_crud</code> upload queue. Bytes go through the
+  guarded upload function (§10.1) on a different path with no such queue, so they need their own
+  durable one. Crucially the queue <strong>owns the encoded bytes</strong>, not just a pointer: an
+  IndexedDB/OPFS record of
   <code>{ asset_block_id, workspace_id, status, encodedBytes }</code> (the <code>encb:v1:</code>
   payload for E2EE, raw bytes otherwise), held in a store that is <em>not</em> the evictable display
   cache, so a pending upload can never lose its source bytes to LRU eviction or an offline window
-  (the §8 hazard). Entries drain when connectivity returns, retrying with backoff; the durable copy
+  (the §8 hazard). Entries drain (to the §10.1 function) when connectivity returns, retrying with
+  backoff; the durable copy
   is deleted only on a confirmed upload, after which the bytes are purely a display-cache concern.
   This is new infra the pre-E2EE proposal under-specified; E2EE doesn't change it, but the design
   surfaces it clearly. The queue's local <code>status</code> is also the per-device source of truth
@@ -655,6 +703,18 @@ already uploaded, enqueues a delete. Without this, undo leaves an orphaned Stora
 entry that resurrects bytes for a block that no longer exists. (This is the undo case the §16 orphan
 sweep does <em>not</em> cover.)</div>
 
+<div class="warn">
+<strong>The queue store is a Lock &amp; Wipe participant too — it holds un-uploaded bytes.</strong>
+This store sits outside both the display cache and PowerSync's <code>ps_crud</code> (so the existing
+<code>flushUploadQueue</code> in <code>lockAndWipe.ts</code>, which drains only <code>ps_crud</code>,
+does <em>not</em> touch it). Left alone it would (a) keep <em>raw</em> bytes for plaintext workspaces
+on disk past a wipe, and (b) lose bytes for a synced-metadata block, stranding it as
+<code>uploading</code> forever. So the queue joins the lock flow: at lock time a best-effort drain
+(upload + confirm) like <code>flushUploadQueue</code> does for <code>ps_crud</code>, then the store is
+purged under the same per-user <code>PENDING_WIPE</code> marker consumed at next boot (§7.2). Bytes
+that couldn't upload before the wipe are lost — consistent with the destructive-by-design lock — and
+that loss is surfaced, not silent.</div>
+
 <h2 id="storage">10. Storage layout &amp; RLS</h2>
 
 <p>One private bucket, <code>attachments</code>. Object path
@@ -662,7 +722,9 @@ sweep does <em>not</em> cover.)</div>
   object is the <code>encb:v1:</code> ciphertext; for a plaintext workspace it is the raw bytes
   (identity case, §5).</p>
 
-<p>Storage RLS in v1 is a <strong>workspace-membership</strong> check on the path's first segment:</p>
+<p>Storage <strong>reads</strong> are RLS-gated by workspace membership on the path's first segment.
+  Storage <strong>writes</strong> are NOT direct — they go through the guarded upload path (§10.1);
+  the bucket grants <em>no</em> client <code>insert</code>/<code>update</code>:</p>
 
 <pre><code>create policy "attachments read by workspace member"
 on storage.objects for select to authenticated
@@ -672,7 +734,9 @@ using (
         (storage.foldername(name))[1],   -- &lt;workspace_id&gt;
         (auth.uid())::text)
 );
--- writes: analogous, private.is_workspace_writer.</code></pre>
+-- NO insert/update policy for `authenticated` on the attachments bucket:
+-- direct client writes are denied so they can't bypass the §10.1 byte guard.
+-- The upload service (service-role / signed) is the only writer.</code></pre>
 
 <div class="warn">
 <strong>The <code>private.*</code> grant is not free — verify it, don't assume parity with
@@ -696,21 +760,27 @@ query time or silently denies all reads.
 
 <p>RLS is not the ciphertext guarantee. For blocks, a server trigger <em>rejects</em> a plaintext
   write to an E2EE workspace (<code>is_enc_v1_envelope</code> shape-check), so "the server only ever
-  sees ciphertext" does not rest solely on the client upload hook. Storage has no such trigger by
-  default, so without an analog the byte invariant would rest <em>entirely</em> on client
-  correctness — a stale client, a bug in <code>encodeBytes</code>, a missed mode check, or a direct
-  authenticated write could land plaintext image bytes in an E2EE workspace's bucket.</p>
+  sees ciphertext" does not rest solely on the client upload hook. The naïve analog —
+  "<code>storage.objects</code> trigger that checks the bytes" — <strong>does not work</strong>:
+  Supabase Storage object policies/triggers see object <em>metadata</em> (path, owner, size), not the
+  <em>body bytes</em>, so they cannot inspect the envelope. A check that can read bytes has to sit in
+  code on the write path — and that code only enforces anything if it is the <em>only</em> write path.</p>
 
 <div class="decision">
-<strong>Decision: ship the upload guard.</strong> Attachments must match the block guarantee — the
-server enforces ciphertext, it is not merely a client convention. Add a Storage upload guard (a
-storage trigger or an upload-mediating Edge Function) that, for an object under an
-<strong>E2EE-workspace prefix</strong>, rejects bytes that don't begin with the <code>encb:v1:</code>
-magic + the minimum nonce(12)+tag(16) length — the binary analog of <code>is_enc_v1_envelope</code>.
-Mirror the block trigger's error discipline (a permanent SQLSTATE so a stale client quarantines the
-write rather than retrying forever). The guard can only check envelope <em>shape</em> (the server has
-no key, exactly as for blocks), but that is sufficient to keep bare plaintext out. Lands in phase&nbsp;2
-(§15) alongside the bucket + RLS migration.</div>
+<strong>Decision: a guarded upload service is the sole writer; direct client writes are denied.</strong>
+Attachments must match the block guarantee — the server enforces ciphertext, not by client
+convention. So: <strong>(1)</strong> the <code>attachments</code> bucket grants no
+<code>insert</code>/<code>update</code> to <code>authenticated</code> (§10), and <strong>(2)</strong>
+all uploads go through an upload-mediating <strong>Edge Function</strong> (holding service-role, or
+minting a one-shot signed upload) that, before accepting an object under an
+<strong>E2EE-workspace prefix</strong>, rejects bytes not beginning with the <code>encb:v1:</code>
+magic + the minimum nonce(12)+tag(16) length — the binary analog of <code>is_enc_v1_envelope</code>,
+with the same permanent-failure discipline so a stale client quarantines rather than retries forever.
+The function checks envelope <em>shape</em> only (the server has no key, exactly as for blocks), which
+is sufficient to keep bare plaintext out. The §9 byte-upload queue therefore drains <em>to this
+function</em>, not to Storage directly. Cost: every upload is one function invocation (latency +
+per-call cost); acceptable for the guarantee, and reads stay direct/RLS-gated (the hot path). Lands in
+phase&nbsp;2 (§15) with the bucket + RLS migration.</div>
 
 <div class="info">
 <strong>Share-ready by construction.</strong> Keeping <code>asset_block_id</code> in the path means
