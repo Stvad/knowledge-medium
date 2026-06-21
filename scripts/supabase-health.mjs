@@ -37,6 +37,32 @@ const EXPECTED_PUB_TABLES = ['blocks', 'workspace_members', 'workspaces']
 const EXPECTED_LOGICAL_SLOTS_MIN = 1
 const EXPECTED_LOGICAL_SLOTS_MAX = 1
 
+// --- Data-integrity (L5) detectors over blocks_history ---------------------
+// Read-only anomaly detection on the server-side change log. See
+// docs/data-integrity-defense.html §3 L5 for the design and §4 for blind
+// spots. Posture is WARN-by-default: detectors surface in the JSON snapshot
+// but only the two catastrophe tiers (durable references-strip ≥ FAIL, mass
+// deletions ≥ FAIL) push to result.failures and email. DATA_INTEGRITY_STRICT=1
+// promotes every WARN to a FAIL once the thresholds below are baselined (D2).
+//
+// These detectors read the *server*, so they are plaintext-only: in an e2ee
+// workspace `references_json`/`properties_json` are ciphertext (never `[]` /
+// never `{...}`) and in a history-trigger-off window there are no rows — both
+// are documented blind spots, not bugs.
+//
+// Thresholds are STARTING points (per actor+workspace over the window) pending
+// baselining against real traffic — keep in sync with the §3 L5 table.
+const INTEGRITY_WINDOW_MIN = 90
+const CURATED_REF_PROPS = ['next-review-date']
+const REFS_EMPTIED_WARN = 50
+const REFS_EMPTIED_FAIL = 1000
+const PROP_KEY_REMOVAL_WARN = 200
+const DELETIONS_WARN = 200
+const DELETIONS_FAIL = 2000
+const BULK_BUMP_WARN = 100
+const AT_REST_PROPREF_WARN = 100
+const DATA_INTEGRITY_STRICT = process.env.DATA_INTEGRITY_STRICT === '1'
+
 const uri = process.env.SUPABASE_POOLER_URI
 const supabaseUrl = process.env.SUPABASE_URL
 const supabaseAnonKey = process.env.SUPABASE_ANON_KEY
@@ -304,13 +330,207 @@ async function runDbChecks(client) {
   }
 }
 
+const SEV_RANK = { pass: 0, warn: 1, error: 1, fail: 2 }
+const maxStatus = (a, b) => (SEV_RANK[b] > SEV_RANK[a] ? b : a)
+
+// Decide a status for one (actor, workspace) group count and record it on the
+// shared result. STRICT promotes a WARN to a FAIL (and thus to the email
+// channel). Returns the per-group status for rollup.
+function integrityThreshold(check, label, count, { warnAt, failAt }) {
+  if (failAt != null && count >= failAt) {
+    fail(`integrity.${check}`, `${label}: ${count} >= ${failAt}`)
+    return 'fail'
+  }
+  if (warnAt != null && count >= warnAt) {
+    if (DATA_INTEGRITY_STRICT) {
+      fail(`integrity.${check}`, `${label}: ${count} >= ${warnAt} (DATA_INTEGRITY_STRICT)`)
+      return 'fail'
+    }
+    warn(`integrity.${check}`, `${label}: ${count} >= ${warnAt}`)
+    return 'warn'
+  }
+  return 'pass'
+}
+
+// L5 — blocks_history anomaly detectors. Each detector is wrapped so a SQL
+// error degrades that one detector to `error` (and a warn) without aborting the
+// rest of the probe or reading as clean. The window is a single interval shared
+// by all rate detectors so the snapshot is internally consistent.
+async function runDataIntegrityChecks(client) {
+  const integrity = { status: 'pass', window_min: INTEGRITY_WINDOW_MIN, strict: DATA_INTEGRITY_STRICT, detectors: {} }
+  result.checks.data_integrity = integrity
+  const win = [INTEGRITY_WINDOW_MIN]
+
+  const detector = async (name, fn) => {
+    try {
+      const out = await fn()
+      integrity.detectors[name] = out
+      integrity.status = maxStatus(integrity.status, out.status)
+    } catch (e) {
+      integrity.detectors[name] = { status: 'error', error: String(e?.message ?? e) }
+      integrity.status = maxStatus(integrity.status, 'error')
+      // An errored detector must not read as clean — surface it (warn, no email).
+      warn(`integrity.${name}`, `detector errored: ${e?.message ?? e}`)
+    }
+  }
+
+  // (1) Mass references-only strip — U events that emptied a non-empty ref set
+  // to `[]`, keyed on the count that is STILL empty at window end (durable), so
+  // a self-healing burst is at most a WARN, not a FAIL. (incident #1, 06-09)
+  await detector('references_emptied', async () => {
+    const rows = (await client.query(`
+      WITH ref_changes AS (
+        SELECT h.block_id, h.workspace_id, h.actor,
+               h.before_diff->>'references_json' AS before_refs,
+               h.after_diff->>'references_json'  AS after_refs
+        FROM public.blocks_history h
+        WHERE h.event_time >= now() - ($1::int * interval '1 minute')
+          AND h.op = 'U'
+          AND 'references_json' = ANY(h.changed_columns)
+      ),
+      emptied AS (
+        SELECT DISTINCT block_id, workspace_id, actor
+        FROM ref_changes
+        WHERE before_refs IS NOT NULL
+          AND before_refs NOT IN ('[]', '')
+          AND after_refs = '[]'
+      )
+      SELECT e.actor, e.workspace_id,
+             count(*)::int AS emptied,
+             count(*) FILTER (WHERE b.references_json IS NULL OR b.references_json = '[]')::int AS durable
+      FROM emptied e
+      LEFT JOIN public.blocks b ON b.id = e.block_id AND b.workspace_id = e.workspace_id
+      GROUP BY e.actor, e.workspace_id
+      ORDER BY durable DESC
+    `, win)).rows
+    let status = 'pass'
+    for (const r of rows) {
+      status = maxStatus(status, integrityThreshold('references_emptied',
+        `actor=${r.actor ?? 'null'} ws=${r.workspace_id} refs emptied-and-still-empty`,
+        r.durable, { warnAt: REFS_EMPTIED_WARN, failAt: REFS_EMPTIED_FAIL }))
+    }
+    return { status, groups: rows.map((r) => ({ actor: r.actor, workspace_id: r.workspace_id, emptied: r.emptied, durable: r.durable })) }
+  })
+
+  // (1b) References shrunk — informational only (routine link removal shrinks
+  // ref sets, so this is noisy by design). Never thresholds; a slow/partial
+  // strip is caught at rest by the curated check below, not here.
+  await detector('references_shrunk', async () => {
+    const row = (await client.query(`
+      SELECT count(*)::int AS shrunk
+      FROM public.blocks_history h
+      WHERE h.event_time >= now() - ($1::int * interval '1 minute')
+        AND h.op = 'U'
+        AND 'references_json' = ANY(h.changed_columns)
+        AND h.before_diff->>'references_json' LIKE '[%'
+        AND h.after_diff->>'references_json'  LIKE '[%'
+        AND jsonb_array_length((h.after_diff->>'references_json')::jsonb)
+          < jsonb_array_length((h.before_diff->>'references_json')::jsonb)
+    `, win)).rows[0]
+    return { status: 'pass', informational: true, shrunk: row.shrunk }
+  })
+
+  // (2) Mass property-key removal — U events where properties_json lost keys.
+  // Guarded by LIKE '{%' so e2ee ciphertext is skipped, not cast-failed.
+  await detector('property_key_removal', async () => {
+    const rows = (await client.query(`
+      SELECT h.actor, h.workspace_id, count(*)::int AS removals
+      FROM public.blocks_history h
+      WHERE h.event_time >= now() - ($1::int * interval '1 minute')
+        AND h.op = 'U'
+        AND 'properties_json' = ANY(h.changed_columns)
+        AND h.before_diff->>'properties_json' LIKE '{%'
+        AND h.after_diff->>'properties_json'  LIKE '{%'
+        AND (SELECT count(*) FROM jsonb_object_keys((h.after_diff->>'properties_json')::jsonb))
+          < (SELECT count(*) FROM jsonb_object_keys((h.before_diff->>'properties_json')::jsonb))
+      GROUP BY h.actor, h.workspace_id
+      ORDER BY removals DESC
+    `, win)).rows
+    let status = 'pass'
+    for (const r of rows) {
+      status = maxStatus(status, integrityThreshold('property_key_removal',
+        `actor=${r.actor ?? 'null'} ws=${r.workspace_id} prop-key removals`,
+        r.removals, { warnAt: PROP_KEY_REMOVAL_WARN }))
+    }
+    return { status, groups: rows.map((r) => ({ actor: r.actor, workspace_id: r.workspace_id, removals: r.removals })) }
+  })
+
+  // (3) Mass deletions — D (hard) + soft_delete per actor in window.
+  await detector('deletions', async () => {
+    const rows = (await client.query(`
+      SELECT h.actor, h.workspace_id,
+             count(*) FILTER (WHERE h.op = 'D')::int AS hard,
+             count(*) FILTER (WHERE h.semantic_op = 'soft_delete')::int AS soft,
+             count(*)::int AS total
+      FROM public.blocks_history h
+      WHERE h.event_time >= now() - ($1::int * interval '1 minute')
+        AND (h.op = 'D' OR h.semantic_op = 'soft_delete')
+      GROUP BY h.actor, h.workspace_id
+      ORDER BY total DESC
+    `, win)).rows
+    let status = 'pass'
+    for (const r of rows) {
+      status = maxStatus(status, integrityThreshold('deletions',
+        `actor=${r.actor ?? 'null'} ws=${r.workspace_id} deletions`,
+        r.total, { warnAt: DELETIONS_WARN, failAt: DELETIONS_FAIL }))
+    }
+    return { status, groups: rows.map((r) => ({ actor: r.actor, workspace_id: r.workspace_id, hard: r.hard, soft: r.soft, total: r.total })) }
+  })
+
+  // (4) Bulk updated_at-only bump — changed_columns ⊆ {updated_at,
+  // user_updated_at} with updated_at present (the recovery-touch shape). Any
+  // bulk occurrence warns; per #4 a bulk bump always deserves a human glance.
+  await detector('bulk_updated_at_bump', async () => {
+    const rows = (await client.query(`
+      SELECT h.actor, h.workspace_id, count(*)::int AS bumps
+      FROM public.blocks_history h
+      WHERE h.event_time >= now() - ($1::int * interval '1 minute')
+        AND h.op = 'U'
+        AND h.changed_columns <@ ARRAY['updated_at','user_updated_at']::text[]
+        AND 'updated_at' = ANY(h.changed_columns)
+      GROUP BY h.actor, h.workspace_id
+      ORDER BY bumps DESC
+    `, win)).rows
+    let status = 'pass'
+    for (const r of rows) {
+      status = maxStatus(status, integrityThreshold('bulk_updated_at_bump',
+        `actor=${r.actor ?? 'null'} ws=${r.workspace_id} updated_at-only bumps`,
+        r.bumps, { warnAt: BULK_BUMP_WARN }))
+    }
+    return { status, groups: rows.map((r) => ({ actor: r.actor, workspace_id: r.workspace_id, bumps: r.bumps })) }
+  })
+
+  // (5) At-rest property-ref inconsistency — curated high-value props whose
+  // value is present in properties_json but whose projected ref is absent from
+  // references_json. The proven 06-09 detection query; over the live table, so
+  // it catches durable residuals a rate detector misses. Plaintext-only.
+  await detector('at_rest_property_ref', async () => {
+    const conds = CURATED_REF_PROPS.map((_, i) =>
+      `(b.properties_json LIKE $${i * 2 + 1} AND b.references_json NOT LIKE $${i * 2 + 2})`).join(' OR ')
+    const params = CURATED_REF_PROPS.flatMap((p) => [`%"${p}"%`, `%"sourceField":"${p}"%`])
+    const rows = (await client.query(`
+      SELECT b.workspace_id, count(*)::int AS inconsistent
+      FROM public.blocks b
+      WHERE b.deleted IS NOT TRUE
+        AND (${conds})
+      GROUP BY b.workspace_id
+      ORDER BY inconsistent DESC
+    `, params)).rows
+    const total = rows.reduce((a, r) => a + r.inconsistent, 0)
+    const status = integrityThreshold('at_rest_property_ref',
+      `props=[${CURATED_REF_PROPS.join(',')}] value-present/ref-absent`,
+      total, { warnAt: AT_REST_PROPREF_WARN })
+    return { status, props: CURATED_REF_PROPS, total, by_workspace: rows }
+  })
+}
+
 function round2(n) { return Math.round(n * 100) / 100 }
 
 const client = new pg.Client({ connectionString: uri, ssl: { rejectUnauthorized: false } })
 
 try {
   await client.connect()
-  await Promise.all([runDbChecks(client), checkServiceEndpoints()])
+  await Promise.all([runDbChecks(client), runDataIntegrityChecks(client), checkServiceEndpoints()])
 } catch (e) {
   result.failures.push({ check: 'connection', msg: e.message })
 } finally {

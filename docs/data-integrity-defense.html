@@ -146,7 +146,7 @@
 
 <div class="callout tldr">
   <h4>The one thing to take away</h4>
-  <p style="margin:0">The individual bugs are <strong>already fixed</strong> (<code>c2df661e</code>, <code>21494fdb</code>, <code>979ca0fd</code>, <code>4e4037fd</code>, plus the matrix content-ref case). What we lacked — and what every incident exposed — is <strong>early detection</strong>: each corruption sat invisible until a human noticed "fewer backlinks." This document defines the layered detection/prevention/recovery system to close that gap, sized for a small coordinatable fleet, <strong>plus an explicit map of the blind spots it doesn't close yet</strong> (§4). Read-only detection is the priority; write/recovery tooling is approval-gated. <strong>Status:</strong> the client eval (L3+L4) is committed (read-only, run on demand via the bridge); the server detector (L5) is designed but <em>not yet written</em> — it would auto-run on the prod hourly cron, so it's gated on explicit sign-off.</p>
+  <p style="margin:0">The individual bugs are <strong>already fixed</strong> (<code>c2df661e</code>, <code>21494fdb</code>, <code>979ca0fd</code>, <code>4e4037fd</code>, plus the matrix content-ref case). What we lacked — and what every incident exposed — is <strong>early detection</strong>: each corruption sat invisible until a human noticed "fewer backlinks." This document defines the layered detection/prevention/recovery system to close that gap, sized for a small coordinatable fleet, <strong>plus an explicit map of the blind spots it doesn't close yet</strong> (§4). Read-only detection is the priority; write/recovery tooling is approval-gated. <strong>Status:</strong> the client eval (L3+L4) is committed (read-only, run on demand via the bridge); the server detector (L5) is now <strong>written and committed</strong> (validated against a seeded Postgres exercising every detector + the e2ee/durability guards) — it goes live on the prod hourly cron once the commit is pushed to the default branch.</p>
 </div>
 
 <h2 id="scope"><span class="num">0</span>Scope — what this is and isn't</h2>
@@ -410,7 +410,7 @@
 <p><code>ps_crud</code> membership read via <code>SELECT json_extract(data,'$.id') FROM ps_crud WHERE json_extract(data,'$.type')='blocks'</code>.</p>
 
 <h3>L5 — Server-side anomaly detection (extend the hourly probe)</h3>
-<p><code>blocks_history</code> is the forensic backbone: append-only, with <code>op</code>/<code>semantic_op</code>/<code>changed_columns</code>/<code>actor</code>/<code>event_time</code>/<code>before_diff</code>/<code>after_diff</code>. The existing hourly probe (<code>scripts/supabase-health.mjs</code>, cron <code>:17</code>) already holds a privileged pooler connection. The plan <strong>extends it</strong> with a <code>runDataIntegrityChecks()</code> pass (designed; <strong>not yet written</strong> — signatures + starting thresholds below) over a 90-minute window (overlaps the hourly cadence so no gap). These detectors read the <em>server</em>, so they are plaintext-only and see nothing in a history-trigger-off window — see §4 for those blind spots:</p>
+<p><code>blocks_history</code> is the forensic backbone: append-only, with <code>op</code>/<code>semantic_op</code>/<code>changed_columns</code>/<code>actor</code>/<code>event_time</code>/<code>before_diff</code>/<code>after_diff</code>. The existing hourly probe (<code>scripts/supabase-health.mjs</code>, cron <code>:17</code>) already holds a privileged pooler connection. It <strong>extends it</strong> with a <code>runDataIntegrityChecks()</code> pass (<strong>implemented</strong> — signatures + starting thresholds below) over a 90-minute window (overlaps the hourly cadence so no gap). These detectors read the <em>server</em>, so they are plaintext-only and see nothing in a history-trigger-off window — see §4 for those blind spots:</p>
 <table>
   <thead><tr><th>Detector</th><th>Signature</th><th>Incident</th></tr></thead>
   <tbody>
@@ -476,7 +476,7 @@
 </table>
 <div class="callout">
   <h4>Net — the honest headline</h4>
-  <p style="margin:0"><strong>As of today there is no automatic integrity detector running at all.</strong> The committed eval (L3/L4) is manual-only, and the L5 server detector is designed but unwritten (the hourly cron still does infra checks only). So "caught within hours, not a week" is the <em>goal</em>, not the current state: it becomes true for the plaintext mass-strip once L5 ships on the cron, and for the e2ee workspace / mobile / slow drip once the scheduled built-in L3 lands. Until then, the only integrity detection that exists is a manual eval someone has to remember to run.</p>
+  <p style="margin:0"><strong>No automatic integrity detector runs in prod yet.</strong> The committed eval (L3/L4) is manual-only, and the L5 server detector is now written and committed but not yet deployed — until the commit is pushed to the default branch the hourly cron still does infra checks only. So "caught within hours, not a week" is the <em>goal</em>, not the current state: it becomes true for the plaintext mass-strip the moment L5 is pushed to the cron, and for the e2ee workspace / mobile / slow drip once the scheduled built-in L3 lands. Until L5 is deployed, the only integrity detection that exists is a manual eval someone has to remember to run.</p>
 </div>
 
 <h2 id="slo"><span class="num">5</span>Convergence SLO</h2>
@@ -489,7 +489,7 @@
   <thead><tr><th>P</th><th>Item</th><th>Value</th><th>Cost</th><th>Defends</th><th>Status</th></tr></thead>
   <tbody>
     <tr><td class="p0">P0</td><td>Client consistency-check eval (L3+L4)</td><td>High — exact week's-checks, repeatable, e2ee-capable</td><td>Low — read-only eval</td><td>A·B·C·E</td><td><span class="pill done">committed</span></td></tr>
-    <tr><td class="p0">P0</td><td>Server anomaly detector in probe (L5)</td><td>High — fleet-wide (plaintext)</td><td>Low — read-only SQL on existing cron</td><td>A·C·E</td><td><span class="pill new">designed</span></td></tr>
+    <tr><td class="p0">P0</td><td>Server anomaly detector in probe (L5)</td><td>High — fleet-wide (plaintext)</td><td>Low — read-only SQL on existing cron</td><td>A·C·E</td><td><span class="pill done">committed</span> live once pushed</td></tr>
     <tr><td class="p1">P1</td><td>Baseline + tune L5 thresholds, then <code>DATA_INTEGRITY_STRICT</code></td><td>High — turns warns into real alerts</td><td>Low — one baseline read</td><td>A·C·D</td><td>after a few cron runs</td></tr>
     <tr><td class="p1">P1</td><td><code>scripts/data-integrity/</code> README + <strong>verify-before-bump pre-flight</strong> in the recovery harness (L6)</td><td>High — the actual class-D prevention (#4)</td><td>Low</td><td>D</td><td>next</td></tr>
     <tr><td class="p2">P2</td><td>Reprojection add-only + processor basis dev assertions (L2)</td><td>High — catches class A at introduction</td><td>Med — hot path, dev-flag first</td><td>A</td><td>designed</td></tr>
@@ -510,7 +510,7 @@
 
 <div class="callout decision">
   <h4>D2 · L5 alerting posture <span class="pill done">resolved</span></h4>
-  <p style="margin-bottom:0"><strong>Decision: share the infra</strong> — once written, the data-integrity detectors <em>will run</em> on the existing hourly probe's cron and use its failure-email channel (one cron, one channel; right for the small fleet). Posture stays warn-by-default with the one catastrophe hard-fail, promotable via <code>DATA_INTEGRITY_STRICT</code> (§3 L5). <strong>Calibration caveat:</strong> WARN is email-silent (snapshot-only), but for a 2-user fleet the <em>realistic</em> incident is a few-hundred-row mistake, which lands in the WARN band — so the dangerous-but-not-catastrophic middle is muted. Once the detector is built and baselined, lower the FAIL thresholds toward fleet-realistic counts (a 200-row unintended delete should page), rather than leaving them at catastrophe-only ceilings.</p>
+  <p style="margin-bottom:0"><strong>Decision: share the infra</strong> — the data-integrity detectors run on the existing hourly probe's cron (once the commit is pushed) and use its failure-email channel (one cron, one channel; right for the small fleet). Posture stays warn-by-default with the one catastrophe hard-fail, promotable via <code>DATA_INTEGRITY_STRICT</code> (§3 L5). <strong>Calibration caveat:</strong> WARN is email-silent (snapshot-only), but for a 2-user fleet the <em>realistic</em> incident is a few-hundred-row mistake, which lands in the WARN band — so the dangerous-but-not-catastrophic middle is muted. Once the detector is built and baselined, lower the FAIL thresholds toward fleet-realistic counts (a 200-row unintended delete should page), rather than leaving them at catastrophe-only ceilings.</p>
 </div>
 
 <div class="callout decision">
@@ -529,7 +529,7 @@
   <tbody>
     <tr><td>This document</td><td>—</td><td><span class="pill done">committed</span></td></tr>
     <tr><td><code>scripts/data-integrity/consistency-check.eval.js</code> — read-only client consistency + divergence suite, dry-run only (no apply path; pure detection)</td><td>L3 + L4</td><td><span class="pill done">committed</span></td></tr>
-    <tr><td><code>runDataIntegrityChecks()</code> in <code>scripts/supabase-health.mjs</code> — <code>blocks_history</code> detectors, warn-biased, <code>DATA_INTEGRITY_STRICT</code> opt-in</td><td>L5</td><td><span class="pill new">designed (signatures + thresholds in §3 L5); body not written — gated on sign-off (auto-runs on the prod cron)</span></td></tr>
+    <tr><td><code>runDataIntegrityChecks()</code> in <code>scripts/supabase-health.mjs</code> — <code>blocks_history</code> detectors, warn-biased, <code>DATA_INTEGRITY_STRICT</code> opt-in</td><td>L5</td><td><span class="pill done">written + committed</span> validated against a seeded Postgres (every detector + e2ee/durability guards); auto-runs on the prod cron once pushed</td></tr>
     <tr><td><code>scripts/data-integrity/README.md</code> — how to run + recovery conventions + verify-before-bump</td><td>L6</td><td><span class="pill new">planned (P1)</span></td></tr>
   </tbody>
 </table>
