@@ -694,21 +694,23 @@ query time or silently denies all reads.
 
 <h3>10.1 Server-side ciphertext enforcement for E2EE bytes</h3>
 
-<div class="warn">
-<strong>RLS is not the ciphertext guarantee — and there is no storage analog to
-<code>blocks_require_ciphertext_for_e2ee</code> for free.</strong> For blocks, a server trigger
-<em>rejects</em> a plaintext write to an E2EE workspace (<code>is_enc_v1_envelope</code> shape-check),
-so "the server only ever sees ciphertext" does not rest solely on the client upload hook. Storage has
-no such trigger by default, so for attachment bytes that invariant would rest <em>entirely</em> on
-client correctness — a stale client, a bug in <code>encodeBytes</code>, a missed mode check, or a
-direct authenticated write could land plaintext image bytes in an E2EE workspace's bucket. Two honest
-options, pick one explicitly: <strong>(a)</strong> add a server-side upload guard (a Storage
-trigger / Edge Function that, for objects under an E2EE workspace's prefix, rejects bytes that don't
-begin with the <code>encb:v1:</code> magic + minimum nonce/tag length — the binary analog of
-<code>is_enc_v1_envelope</code>); or <strong>(b)</strong> accept and <em>document</em> that, for
-bytes, the ciphertext guarantee is client-enforced only — a strictly weaker property than the text
-path, with the recovery path named. Recommended: (a), so attachments match the block guarantee.
-</div>
+<p>RLS is not the ciphertext guarantee. For blocks, a server trigger <em>rejects</em> a plaintext
+  write to an E2EE workspace (<code>is_enc_v1_envelope</code> shape-check), so "the server only ever
+  sees ciphertext" does not rest solely on the client upload hook. Storage has no such trigger by
+  default, so without an analog the byte invariant would rest <em>entirely</em> on client
+  correctness — a stale client, a bug in <code>encodeBytes</code>, a missed mode check, or a direct
+  authenticated write could land plaintext image bytes in an E2EE workspace's bucket.</p>
+
+<div class="decision">
+<strong>Decision: ship the upload guard.</strong> Attachments must match the block guarantee — the
+server enforces ciphertext, it is not merely a client convention. Add a Storage upload guard (a
+storage trigger or an upload-mediating Edge Function) that, for an object under an
+<strong>E2EE-workspace prefix</strong>, rejects bytes that don't begin with the <code>encb:v1:</code>
+magic + the minimum nonce(12)+tag(16) length — the binary analog of <code>is_enc_v1_envelope</code>.
+Mirror the block trigger's error discipline (a permanent SQLSTATE so a stale client quarantines the
+write rather than retrying forever). The guard can only check envelope <em>shape</em> (the server has
+no key, exactly as for blocks), but that is sufficient to keep bare plaintext out. Lands in phase&nbsp;2
+(§15) alongside the bucket + RLS migration.</div>
 
 <div class="info">
 <strong>Share-ready by construction.</strong> Keeping <code>asset_block_id</code> in the path means
@@ -946,10 +948,9 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
     <td>Closed by verifying decrypted bytes against the block's synced <code>hash</code> on read
       (§5.1) — not left as a residual.</td></tr>
 <tr><td>Server byte-ciphertext enforcement is a deliberate add</td>
-    <td>Without §10.1's upload guard, "server sees only ciphertext" rests on client correctness for
-      bytes — weaker than the block trigger.</td>
-    <td>Recommended: ship the storage upload guard (§10.1) so bytes match the block guarantee;
-      otherwise document the weaker property explicitly.</td></tr>
+    <td>An extra storage trigger / mediating Edge Function on the upload path.</td>
+    <td><strong>Decided: ship it</strong> (§10.1), so the byte ciphertext guarantee matches the block
+      trigger rather than resting on client correctness.</td></tr>
 <tr><td>Bytes off the sync path</td>
     <td>A second durable upload queue; eventual consistency between metadata and bytes; undo needs a
       byte-lane compensator (§9).</td>
