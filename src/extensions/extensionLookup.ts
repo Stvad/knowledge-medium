@@ -39,8 +39,11 @@ export const findExtensionBlock = async (
     throw new Error('findExtensionBlock requires `id` or `label`')
   }
 
-  const rows = await repo.db.getAll<{id: string, properties_json: string}>(
-    `SELECT b.id, b.properties_json
+  // Select `content` too: callers such as the agent `enable-extension`
+  // approve the block's CURRENT source (#67), and a content-less BlockData
+  // would pin the empty string instead of the real extension.
+  const rows = await repo.db.getAll<{id: string, content: string | null, properties_json: string}>(
+    `SELECT b.id, b.content, b.properties_json
        FROM blocks b
        JOIN block_types bt ON bt.block_id = b.id AND bt.workspace_id = b.workspace_id
       WHERE b.workspace_id = ? AND b.deleted = 0 AND bt.type = ?`,
@@ -50,7 +53,7 @@ export const findExtensionBlock = async (
     const properties = (() => {
       try { return JSON.parse(row.properties_json) as BlockProperties } catch { return {} }
     })()
-    return {id: row.id, workspaceId, properties} as BlockData
+    return {id: row.id, workspaceId, content: row.content ?? '', properties} as BlockData
   })
   const match = idHint
     ? candidates.find(block => block.id === idHint) ?? null

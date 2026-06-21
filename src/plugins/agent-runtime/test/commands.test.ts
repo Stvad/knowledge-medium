@@ -310,8 +310,12 @@ describe('agent runtime commands', () => {
         type: 'enable-extension',
         id: installed.id,
       }, env.context)
-      // Enabling pinned the live source on this device.
-      expect(await readApproval(installed.id)).toMatchObject({compilerVersion: '1'})
+      // Enabling pinned the live source on this device — the REAL block
+      // content, not '' (findExtensionBlock must carry `content`).
+      expect(await readApproval(installed.id)).toMatchObject({
+        compilerVersion: '1',
+        approvedSource: 'export default []',
+      })
 
       await executeCommand({
         commandId: 'uninstall-trust',
