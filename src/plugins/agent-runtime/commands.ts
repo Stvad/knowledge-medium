@@ -33,6 +33,10 @@ import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions.js'
 import { resolveAppRuntime } from '@/facets/resolveAppRuntime.js'
 import { applyToggle } from '@/facets/togglable.js'
 import { userExtensionToggle } from '@/extensions/extensionToggles.js'
+import {
+  approveExtension,
+  revokeExtensionApproval,
+} from '@/extensions/compileExtensionModule.js'
 import { findExtensionBlock } from '@/extensions/extensionLookup.js'
 import { lintExtensionSource } from './extensionLint.ts'
 import { getPluginPrefsBlock } from '@/data/stateBlocks.js'
@@ -499,6 +503,17 @@ const setExtensionEnabled = async (
     throw new Error(`No installed extension matches "${input.id ?? input.label}"`)
   }
 
+  // Enable grants device-local trust (issue #67): the bridge is an
+  // authorized local actor, so enabling (re-)approves the CURRENT source on
+  // this device, pinned to its hash. This is also how the agent ships an
+  // update — install the new source, then enable to re-pin — which is why
+  // it always re-approves rather than only-if-absent (unlike the cautious
+  // settings-UI checkbox). Disable leaves the trust grant intact and only
+  // flips intent, so it propagates across devices through the intent gate.
+  if (input.enabled) {
+    await approveExtension(found.block.id, found.block.content ?? '')
+  }
+
   const prefsBlock = await getPluginPrefsBlock(repo, workspaceId, repo.user, extensionsPrefsType)
   const current = prefsBlock.peekProperty(extensionsOverridesProp) ?? new Map<string, boolean>()
   // User-installed extensions have `defaultEnabled: false`, so the
@@ -512,6 +527,12 @@ const setExtensionEnabled = async (
 
   if (changed) {
     await prefsBlock.set(extensionsOverridesProp, next)
+  }
+  // Re-pinning an already-enabled extension (changed === false) writes no
+  // intent, so the prefs-block subscription won't fire a refresh — do it
+  // explicitly so the freshly approved source takes effect.
+  if (input.enabled && !changed) {
+    refreshAppRuntime()
   }
 
   return {id: found.block.id, label: found.label, enabled: input.enabled, changed}
@@ -541,6 +562,11 @@ const uninstallRuntimeExtension = async (
     scope: ChangeScope.BlockDefault,
     description: `agent runtime uninstall extension ${found.label ?? found.block.id}`,
   })
+
+  // Drop this device's trust grant + cached compiled output for the block
+  // (issue #67): the block is gone, so its approval row would otherwise be
+  // a true orphan. Best-effort — uninstall must not fail on a flaky delete.
+  await revokeExtensionApproval(found.block.id)
 
   refreshAppRuntime()
   return {id: found.block.id, label: found.label, removed: true}

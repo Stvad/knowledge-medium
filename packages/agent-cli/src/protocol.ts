@@ -403,15 +403,15 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'enable-extension': {
     usage: 'kmagent enable-extension <id|label>',
-    description: 'Enable an installed extension by id or label.',
+    description: 'Enable an installed extension by id or label. Sets the synced enabled intent AND approves the current source on this device (pins its hash) so it runs here. Re-run after editing the source to re-pin the new version.',
   },
   'disable-extension': {
     usage: 'kmagent disable-extension <id|label>',
-    description: 'Disable an installed extension by id or label.',
+    description: 'Disable an installed extension by id or label (clears the synced intent; the device trust grant persists for a frictionless re-enable).',
   },
   'uninstall-extension': {
     usage: 'kmagent uninstall-extension <id|label>',
-    description: 'Uninstall an extension by id or label.',
+    description: 'Uninstall an extension by id or label (deletes the block and revokes this device’s trust grant).',
   },
   'run-action': {
     usage: 'kmagent run-action <id> [depsJson]',

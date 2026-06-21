@@ -8,7 +8,7 @@ import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
-import { __setCompileImplForTest } from '@/extensions/compileExtensionModule'
+import { __setCompileImplForTest, readApproval } from '@/extensions/compileExtensionModule'
 import { actionsFacet, appMountsFacet, blockRenderersFacet } from '@/extensions/core'
 import { ActionContextTypes } from '@/shortcuts/types'
 import { createAgentRuntimeContext, executeCommand } from '../commands'
@@ -197,43 +197,52 @@ describe('agent runtime commands', () => {
   })
 
   it('enable-extension / disable-extension flip the overrides map', async () => {
-    // Install a bare extension so we have a block to toggle. reload:false
-    // keeps the test from racing with refreshAppRuntime.
-    const installed = await executeCommand({
-      commandId: 'install-toggle',
-      type: 'install-extension',
-      source: 'export default []',
-      label: 'Toggle target',
-      reload: false,
-    }, env.context) as InstallExtensionResult
+    // enable now also grants the device-local approval (#67), which would
+    // otherwise load real Babel + a blob-URL import (unsupported in jsdom),
+    // so stub the compile pipeline to a synthetic module.
+    const restore = __setCompileImplForTest(async () => ({default: []}))
+    try {
+      // Install a bare extension so we have a block to toggle. reload:false
+      // keeps the test from racing with refreshAppRuntime.
+      const installed = await executeCommand({
+        commandId: 'install-toggle',
+        type: 'install-extension',
+        source: 'export default []',
+        label: 'Toggle target',
+        reload: false,
+      }, env.context) as InstallExtensionResult
 
-    // Enable by id
-    const enableResult = await executeCommand({
-      commandId: 'enable-1',
-      type: 'enable-extension',
-      id: installed.id,
-    }, env.context) as {id: string, label: string | null, enabled: boolean, changed: boolean}
-    expect(enableResult.id).toBe(installed.id)
-    expect(enableResult.enabled).toBe(true)
-    expect(enableResult.changed).toBe(true)
+      // Enable by id
+      const enableResult = await executeCommand({
+        commandId: 'enable-1',
+        type: 'enable-extension',
+        id: installed.id,
+      }, env.context) as {id: string, label: string | null, enabled: boolean, changed: boolean}
+      expect(enableResult.id).toBe(installed.id)
+      expect(enableResult.enabled).toBe(true)
+      expect(enableResult.changed).toBe(true)
 
-    // Re-enabling is a no-op
-    const reEnable = await executeCommand({
-      commandId: 'enable-2',
-      type: 'enable-extension',
-      label: 'Toggle target',
-    }, env.context) as {changed: boolean, id: string}
-    expect(reEnable.id).toBe(installed.id)
-    expect(reEnable.changed).toBe(false)
+      // Re-enabling leaves intent unchanged (but still re-approves the
+      // current source — that's how the agent ships an update).
+      const reEnable = await executeCommand({
+        commandId: 'enable-2',
+        type: 'enable-extension',
+        label: 'Toggle target',
+      }, env.context) as {changed: boolean, id: string}
+      expect(reEnable.id).toBe(installed.id)
+      expect(reEnable.changed).toBe(false)
 
-    // Disable removes the override (back to default `false`)
-    const disableResult = await executeCommand({
-      commandId: 'disable-1',
-      type: 'disable-extension',
-      id: installed.id,
-    }, env.context) as {enabled: boolean, changed: boolean}
-    expect(disableResult.enabled).toBe(false)
-    expect(disableResult.changed).toBe(true)
+      // Disable removes the override (back to default `false`)
+      const disableResult = await executeCommand({
+        commandId: 'disable-1',
+        type: 'disable-extension',
+        id: installed.id,
+      }, env.context) as {enabled: boolean, changed: boolean}
+      expect(disableResult.enabled).toBe(false)
+      expect(disableResult.changed).toBe(true)
+    } finally {
+      restore()
+    }
   })
 
   it('enable-extension errors when no extension matches', async () => {
@@ -280,6 +289,40 @@ describe('agent runtime commands', () => {
       type: 'uninstall-extension',
       label: 'nonexistent-plugin',
     }, env.context)).rejects.toThrow(/nonexistent-plugin/)
+  })
+
+  it('enable grants a device-local approval; uninstall revokes it (#67)', async () => {
+    const restore = __setCompileImplForTest(async () => ({default: []}))
+    try {
+      const installed = await executeCommand({
+        commandId: 'install-trust',
+        type: 'install-extension',
+        source: 'export default []',
+        label: 'Trust target',
+        reload: false,
+      }, env.context) as InstallExtensionResult
+
+      // Installed but not enabled → no device-local trust yet.
+      expect(await readApproval(installed.id)).toBeUndefined()
+
+      await executeCommand({
+        commandId: 'enable-trust',
+        type: 'enable-extension',
+        id: installed.id,
+      }, env.context)
+      // Enabling pinned the live source on this device.
+      expect(await readApproval(installed.id)).toMatchObject({compilerVersion: '1'})
+
+      await executeCommand({
+        commandId: 'uninstall-trust',
+        type: 'uninstall-extension',
+        id: installed.id,
+      }, env.context)
+      // Uninstall dropped the trust grant along with the block.
+      expect(await readApproval(installed.id)).toBeUndefined()
+    } finally {
+      restore()
+    }
   })
 
   it('verify lists per-extension contribution ids (renderers, appMounts)', async () => {
