@@ -10,7 +10,7 @@
 //         only — repo.propertySchemas reflects the active workspace) PLUS a
 //         schema-independent at-rest heuristic that also catches strips of toggled-off
 //         ref props (the exact 06-09 next-review-date / SRS-off condition)
-//   - R1/R3 content-link coarse strip heuristic
+//   - R1/R3 content-link strip recompute (parser-precise: >=1 real content mark, 0 stored content refs)
 //   - L4  blocks <-> blocks_synced divergence (ps_crud-aware): stranded local-only,
 //         equal-stamp standoff, local-richer-no-pending, server-ahead-undrained
 //
@@ -364,29 +364,86 @@ try {
   skip('property_ref_at_rest', String(e))
 }
 
-// ── R1/R3: content-link coarse strip heuristic ───────────────────────────────
-// Cheap, noisy-by-design: blocks whose content has link syntax but zero refs at all.
-// False positives from code blocks / escaped brackets are expected — treat as a lead to
-// investigate, not a hard finding. (Full alias-resolving content recompute is roadmap.)
+// ── R1/R3: content-link strip recompute (parser-precise) ──────────────────────
+// Upgrade of the old LIKE heuristic: parse each candidate's content with the SAME
+// parser the references processor uses (parseReferences + parseBlockRefs), so a
+// `[[` in a code block or an `((not-a-uuid))` produces no mark — exactly as the
+// processor sees it (it uses the plain-text parser too, and parses no hashtags),
+// eliminating the heuristic's code-block / false-bracket noise. A block with >=1
+// real content mark but ZERO stored content refs (sourceField empty) is a strip:
+// content the processor WOULD project a ref from, with none stored.
+//
+// Sound without alias resolution because it keys on presence (>=1 mark vs 0 refs),
+// not per-ref identity: reconcileDerived dedups content refs by target id, so two
+// aliases that resolve to one target collapse to one ref — a per-mark count diff
+// would false-positive, the zero-check does not. The remaining cases are a strip
+// (real) or a not-yet-processed fresh block (transient) — re-run to clear the
+// latter. The full per-id alias-resolving diff (catching a PARTIAL content-ref
+// strip) needs the processor's read-only seat resolution and is deferred (§6).
 try {
-  const n = await countOf(
-    `SELECT count(*) AS n FROM blocks
-     WHERE deleted=0 AND ${wsClause('workspace_id')}
-       AND references_json='[]'
-       AND (content LIKE '%[[%' OR content LIKE '%((%')`,
-    wsParams(),
+  const { parseReferences, parseBlockRefs } = await import(
+    '@/plugins/references/referenceParser.js'
   )
-  const sample = await rows(
-    `SELECT id, substr(content,1,120) AS content_preview FROM blocks
-     WHERE deleted=0 AND ${wsClause('workspace_id')}
-       AND references_json='[]'
-       AND (content LIKE '%[[%' OR content LIKE '%((%')
-     LIMIT ${sampleLimit}`,
-    wsParams(),
-  )
-  report.checks.content_link_heuristic = { status: 'info', flagged: n, sample }
+  // Keyset-paginate (id > lastId) so the whole graph is covered in bounded
+  // memory — a single LIMIT big enough to cover a real graph would pull every
+  // content string into the live tab's heap at once (OOM risk). `contentCap` is
+  // only a pathological-size safety ceiling; it does NOT cap a normal graph.
+  const contentCap = Number.isInteger(data?.contentCap) ? data.contentCap : 1_000_000
+  const BATCH = 20000
+  let lastId = ''
+  let scanned = 0
+  let withMarks = 0
+  let strippedBlocks = 0
+  let truncated = false
+  const strippedSample = []
+  for (;;) {
+    const batch = await rows(
+      `SELECT id, content, references_json FROM blocks
+       WHERE deleted=0 AND ${wsClause('workspace_id')}
+         AND (content LIKE '%[[%' OR content LIKE '%((%')
+         AND id > ?
+       ORDER BY id LIMIT ${BATCH}`,
+      [...wsParams(), lastId],
+    )
+    if (batch.length === 0) break
+    for (const row of batch) {
+      const markCount =
+        parseReferences(row.content).length + parseBlockRefs(row.content).length
+      if (markCount === 0) continue // LIKE matched but no real mark (code/escaped/non-uuid)
+      withMarks += 1
+      let stored
+      try {
+        stored = JSON.parse(row.references_json)
+      } catch {
+        continue // malformed JSON is the index-mirror check's job
+      }
+      const contentRefs = stored.filter((r) => r && !r.sourceField)
+      if (contentRefs.length === 0) {
+        strippedBlocks += 1
+        if (strippedSample.length < sampleLimit)
+          strippedSample.push({ id: row.id, marks: markCount, content_preview: row.content.slice(0, 120) })
+      }
+    }
+    scanned += batch.length
+    lastId = batch[batch.length - 1].id
+    if (batch.length < BATCH) break
+    if (scanned >= contentCap) { truncated = true; break } // safety ceiling only
+  }
+
+  const anomalous = strippedBlocks > 0
+  // Only a safety-ceiling hit leaves part of the graph unseen → not 'ok'.
+  report.checks.content_link_recompute = {
+    status: anomalous ? 'anomaly' : truncated ? 'incomplete' : 'ok',
+    scanned,
+    truncated,
+    blocksWithMarks: withMarks,
+    strippedBlocks,
+    note: 'block has >=1 parsed content mark but zero stored content refs — a strip, or a not-yet-processed fresh block (re-run to clear the latter)',
+    strippedSample,
+  }
+  if (anomalous) report.anomalies += 1
 } catch (e) {
-  skip('content_link_heuristic', String(e))
+  skip('content_link_recompute', String(e))
 }
 
 // ── L4: blocks <-> blocks_synced divergence (ps_crud-aware) ───────────────────
