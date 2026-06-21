@@ -39,6 +39,11 @@ export interface SyncIndicatorInput {
   downloadFraction?: number | null
   errorMessage?: string | null
   lastSyncedAt?: Date
+  /** Count of checks the built-in consistency audit (L3) flagged as anomalous on
+   *  its last run. Non-zero escalates the chip to an error in settled states
+   *  (the data is structurally inconsistent even when sync is fine). Defaults to
+   *  0 so callers that don't pipe it in stay unaffected. */
+  integrityAnomalies?: number
 }
 
 export interface SyncIndicatorView {
@@ -100,7 +105,7 @@ const appendRejectedTitle = (title: string, rejectedChanges: number): string => 
   return `${title} ${formatRejectedCount(rejectedChanges)}`
 }
 
-export const getSyncIndicatorView = ({
+const baseSyncIndicatorView = ({
   localOnly,
   connected,
   connecting,
@@ -292,4 +297,25 @@ export const getSyncIndicatorView = ({
     progressPercent: null,
     spinning: true,
   }
+}
+
+export const getSyncIndicatorView = (input: SyncIndicatorInput): SyncIndicatorView => {
+  const view = baseSyncIndicatorView(input)
+  const integrityAnomalies = input.integrityAnomalies ?? 0
+  // A data-integrity anomaly is persistent and serious, but unlike a sync error
+  // it doesn't block new writes. Surface it on the chip (error tone + alert
+  // icon) only in SETTLED states: yield to a hard sync error (already error
+  // tone) and to active/transient states (spinning) so it neither clobbers
+  // progress nor fires on a mid-sync transient. Details render in the dropdown.
+  if (integrityAnomalies > 0 && view.tone !== 'error' && !view.spinning) {
+    const noun = integrityAnomalies === 1 ? 'check' : 'checks'
+    return {
+      ...view,
+      tone: 'error',
+      icon: 'alert',
+      label: 'Integrity issue',
+      title: `${integrityAnomalies} data-integrity ${noun} flagged an anomaly — see details. ${view.title}`,
+    }
+  }
+  return view
 }

@@ -96,12 +96,10 @@ import {
   RECONCILE_RESCAN_MARKER_PREFIX,
   SELECT_RECONCILE_RESCAN_MARKER_SQL,
   RECORD_RECONCILE_RESCAN_MARKER_SQL,
-  CONSISTENCY_AUDIT_MARKER_PREFIX,
-  SELECT_CONSISTENCY_AUDIT_MARKER_SQL,
-  RECORD_CONSISTENCY_AUDIT_MARKER_SQL,
 } from './internals/clientSchema'
 import { PendingIdleJobs, MarkerStore } from './internals/idleMarkerJobs'
 import { runConsistencyAudit, type ConsistencyAuditResult } from './internals/consistencyAudit'
+import { publishConsistencyAudit } from './internals/consistencyAuditStore'
 import {
   parseAliasCollisionError,
   parseParentDeletedError,
@@ -190,9 +188,12 @@ const KERNEL_PROPERTY_SCHEMA_MAP = new Map(KERNEL_PROPERTY_SCHEMAS.map(s => [s.n
  *  diagnostic dumps right after page load don't lose entries. */
 const TX_LOG_CAPACITY = 64
 // Built-in consistency audit (L3) re-runs at most once per workspace per this
-// window. Daily is plenty for the small fleet — the audit is a background smoke
-// alarm, not a live monitor, and it costs a handful of count queries per run.
-const CONSISTENCY_AUDIT_CADENCE_MS = 24 * 60 * 60 * 1000
+// window, tracked IN MEMORY per Repo instance — so it runs fresh once per page
+// session (repopulating the health indicator's store) and dedupes rapid
+// workspace switches, without a persistent marker that would skip-and-leave the
+// indicator empty after a reload. The audit is a background smoke alarm costing
+// a handful of count queries, deferred to idle.
+const CONSISTENCY_AUDIT_CADENCE_MS = 30 * 60 * 1000
 
 /** Registry key for the per-workspace undo manager when no workspace is
  *  active (issue #186). Workspace ids are UUIDs, so this sentinel can
@@ -430,9 +431,13 @@ export class Repo {
    *  `awaitReconcileRescans()`, same pattern. */
   private readonly reconcileRescanJobs = new PendingIdleJobs()
   /** In-flight built-in consistency-audit runs (L3) — drained by
-   *  `awaitConsistencyAudits()`. Cadenced via a `consistency_audit:<ws>` marker
-   *  (re-runs once the last run is older than CONSISTENCY_AUDIT_CADENCE_MS). */
+   *  `awaitConsistencyAudits()`. Cadenced via the in-memory `consistencyAuditLastRun`
+   *  map (re-runs once the last run is older than CONSISTENCY_AUDIT_CADENCE_MS). */
   private readonly consistencyAuditJobs = new PendingIdleJobs()
+  /** workspaceId → epoch ms of the last completed audit, per Repo instance.
+   *  In-memory so each page session re-runs once and repopulates the health
+   *  indicator store. */
+  private readonly consistencyAuditLastRun = new Map<string, number>()
   /** Last consistency-audit outcome + lifetime counters, surfaced through
    *  `metrics().consistencyAudit`. `lastResult` holds the full per-check counts
    *  of the most recent run (null until the first run completes). */
@@ -1828,31 +1833,30 @@ export class Repo {
   }
 
   private async runConsistencyAuditJob(workspaceId: string): Promise<void> {
-    const key = `${CONSISTENCY_AUDIT_MARKER_PREFIX}${workspaceId}`
+    // In-memory cadence gate: skip if this Repo ran it for this workspace within
+    // the window (dedupes rapid workspace switches; a new session has an empty
+    // map so it always runs once and repopulates the health-indicator store).
+    const last = this.consistencyAuditLastRun.get(workspaceId)
+    if (last !== undefined && Date.now() - last < CONSISTENCY_AUDIT_CADENCE_MS) {
+      this.consistencyAuditState.skipped += 1
+      return
+    }
     try {
-      const marker = await this.db.getOptional<{completed_at: number}>(
-        SELECT_CONSISTENCY_AUDIT_MARKER_SQL,
-        [key],
-      )
-      // Cadence gate: skip if the last run is still within the window.
-      if (marker && Date.now() - Number(marker.completed_at) < CONSISTENCY_AUDIT_CADENCE_MS) {
-        this.consistencyAuditState.skipped += 1
-        return
-      }
       const result = await runConsistencyAudit(this.db, workspaceId, Date.now())
+      this.consistencyAuditLastRun.set(workspaceId, Date.now())
       this.consistencyAuditState.runs += 1
       this.consistencyAuditState.lastError = null
       this.consistencyAuditState.lastResult = result
+      // Publish to the in-memory store the UI health indicator subscribes to.
+      publishConsistencyAudit(result)
       if (result.anomalies > 0) {
         console.warn(
           `[consistencyAudit] workspace ${workspaceId}: ${result.anomalies} anomalous check(s)`,
           result.checks,
         )
       }
-      // Marker only after a completed run — a thrown run leaves it unset so the
-      // next open retries (the audit is read-only and idempotent).
-      await this.db.execute(RECORD_CONSISTENCY_AUDIT_MARKER_SQL, [key])
     } catch (err) {
+      // No cadence stamp on failure → the next open retries (read-only, idempotent).
       const reason = err instanceof Error ? err.message : String(err)
       this.consistencyAuditState.lastError = reason
       console.error(`[consistencyAudit] workspace ${workspaceId} failed (will retry next open): ${reason}`)

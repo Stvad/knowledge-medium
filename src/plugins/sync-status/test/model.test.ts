@@ -218,4 +218,47 @@ describe('getSyncIndicatorView', () => {
       expect(errored.icon).toBe('alert')
     })
   })
+
+  describe('data-integrity anomalies', () => {
+    it('escalates a settled state to an error chip with a details hint', () => {
+      const view = getSyncIndicatorView({...baseInput, integrityAnomalies: 2})
+      expect(view.tone).toBe('error')
+      expect(view.icon).toBe('alert')
+      expect(view.label).toBe('Integrity issue')
+      expect(view.title).toContain('2 data-integrity checks')
+    })
+
+    it('uses singular phrasing for a single anomaly', () => {
+      const view = getSyncIndicatorView({...baseInput, integrityAnomalies: 1})
+      expect(view.title).toContain('1 data-integrity check ')
+    })
+
+    it('yields to a hard sync error (sync broken is more urgent)', () => {
+      const view = getSyncIndicatorView({
+        ...baseInput,
+        errorMessage: 'JWT expired',
+        integrityAnomalies: 3,
+      })
+      expect(view.state).toBe('error')
+      expect(view.label).toBe('Sync issue')
+    })
+
+    it('does not escalate active/transient states (would clobber progress / fire on a transient)', () => {
+      const view = getSyncIndicatorView({
+        ...baseInput,
+        downloading: true,
+        downloadFraction: 0.5,
+        integrityAnomalies: 3,
+      })
+      expect(view.state).toBe('downloading')
+      expect(view.spinning).toBe(true)
+      expect(view.tone).toBe('active')
+    })
+
+    it('leaves a healthy chip untouched when there are no anomalies', () => {
+      const view = getSyncIndicatorView({...baseInput, integrityAnomalies: 0})
+      expect(view.state).toBe('synced')
+      expect(view.tone).toBe('success')
+    })
+  })
 })

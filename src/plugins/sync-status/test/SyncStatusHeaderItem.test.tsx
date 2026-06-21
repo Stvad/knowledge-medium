@@ -1,5 +1,9 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  publishConsistencyAudit,
+  resetConsistencyAuditStore,
+} from '@/data/internals/consistencyAuditStore'
 import { SyncStatusHeaderItem } from '../SyncStatusHeaderItem.tsx'
 import {
   materializeQueueCountSql,
@@ -83,6 +87,7 @@ describe('SyncStatusHeaderItem', () => {
     mocks.queryCalls = []
     mocks.status = defaultStatus()
     setDeviceOnline(true)
+    resetConsistencyAuditStore()
     mocks.queryResponses = new Map([
       [rejectedCountSql, {data: [{count: 0}]}],
       [uploadQueuePreviewCountSql, {data: [{count: uploadQueueCountCap + 1}]}],
@@ -93,6 +98,7 @@ describe('SyncStatusHeaderItem', () => {
   afterEach(() => {
     cleanup()
     setDeviceOnline(true)
+    resetConsistencyAuditStore()
   })
 
   it('uses the capped queue count for the always-mounted remote indicator', () => {
@@ -298,6 +304,66 @@ describe('SyncStatusHeaderItem', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('escalates the chip to an integrity error and lists the anomalies in the details', async () => {
+    // Settled (synced) base so the integrity escalation applies, not a spinner.
+    mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
+    publishConsistencyAudit({
+      workspaceId: 'ws-1',
+      checkedAt: 0,
+      anomalies: 2,
+      checks: {
+        references_index_mirror: {
+          status: 'anomaly',
+          missingIndexRows: 3,
+          extraIndexRows: 0,
+          orphanSourceRows: 1,
+          duplicateTuples: 0,
+          malformedJson: 0,
+        },
+        property_ref_at_rest: {
+          status: 'anomaly',
+          curatedProps: ['next-review-date'],
+          findings: [{prop: 'next-review-date', valuePresentRefAbsent: 5}],
+        },
+        local_server_divergence: {
+          status: 'ok',
+          strandedLocalOnly: 0,
+          equalStampStandoff: 0,
+          localRicherNoPending: 0,
+          serverAheadUndrained: 0,
+        },
+      },
+    })
+
+    render(<SyncStatusHeaderItem/>)
+
+    const button = screen.getByRole('button')
+    expect(button.getAttribute('aria-label')).toContain('2 data-integrity checks flagged an anomaly')
+
+    fireEvent.pointerDown(button)
+    expect(await screen.findByText('Data integrity: 2 issues')).toBeInTheDocument()
+    expect(screen.getByText('References index')).toBeInTheDocument()
+    expect(screen.getByText('3 missing, 1 orphaned')).toBeInTheDocument()
+    expect(screen.getByText('Property references')).toBeInTheDocument()
+    expect(screen.getByText('next-review-date: 5')).toBeInTheDocument()
+  })
+
+  it('leaves the chip clean when the audit reports no anomalies', () => {
+    mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
+    publishConsistencyAudit({
+      workspaceId: 'ws-1',
+      checkedAt: 0,
+      anomalies: 0,
+      checks: {
+        references_index_mirror: {status: 'ok'},
+      },
+    })
+
+    render(<SyncStatusHeaderItem/>)
+
+    expect(screen.getByRole('button').getAttribute('aria-label')).not.toContain('data-integrity')
   })
 
   it('surfaces an app-update prompt with a Reload action when a new build is ready', async () => {

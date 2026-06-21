@@ -31,6 +31,8 @@ import {
   uploadQueuePreviewCountSql,
 } from './queueCounts.ts'
 import { RejectionDialog } from './RejectionDialog.tsx'
+import { useConsistencyAudit } from './useConsistencyAudit.ts'
+import type { ConsistencyAuditResult } from '@/data/internals/consistencyAudit.js'
 
 interface UploadQueueCountRow {
   count: number
@@ -147,6 +149,43 @@ function AppVersionValue() {
   )
 }
 
+// Compact per-check summaries of an audit's anomalies, for the dropdown details.
+function summarizeAuditAnomalies(
+  result: ConsistencyAuditResult,
+): {label: string; detail: string}[] {
+  const summaries: {label: string; detail: string}[] = []
+  for (const [name, check] of Object.entries(result.checks)) {
+    if (check.status !== 'anomaly') continue
+    const n = (key: string): number => Number(check[key] ?? 0)
+    if (name === 'references_index_mirror') {
+      const parts: string[] = []
+      if (n('missingIndexRows')) parts.push(`${n('missingIndexRows')} missing`)
+      if (n('extraIndexRows')) parts.push(`${n('extraIndexRows')} extra`)
+      if (n('orphanSourceRows')) parts.push(`${n('orphanSourceRows')} orphaned`)
+      if (n('duplicateTuples')) parts.push(`${n('duplicateTuples')} duplicate`)
+      if (n('malformedJson')) parts.push(`${n('malformedJson')} malformed`)
+      summaries.push({label: 'References index', detail: parts.join(', ')})
+    } else if (name === 'property_ref_at_rest') {
+      const findings = Array.isArray(check.findings)
+        ? (check.findings as {prop: string; valuePresentRefAbsent: number}[])
+        : []
+      summaries.push({
+        label: 'Property references',
+        detail: findings.map((f) => `${f.prop}: ${f.valuePresentRefAbsent}`).join(', '),
+      })
+    } else if (name === 'local_server_divergence') {
+      const parts: string[] = []
+      if (n('strandedLocalOnly')) parts.push(`${n('strandedLocalOnly')} stranded`)
+      if (n('equalStampStandoff')) parts.push(`${n('equalStampStandoff')} stalemate`)
+      if (n('localRicherNoPending')) parts.push(`${n('localRicherNoPending')} unsynced local`)
+      summaries.push({label: 'Local vs server', detail: parts.join(', ')})
+    } else {
+      summaries.push({label: name, detail: 'anomaly'})
+    }
+  }
+  return summaries
+}
+
 export function SyncStatusHeaderItem() {
   const localOnly = useIsLocalOnly()
   const status = useStatus()
@@ -161,6 +200,9 @@ export function SyncStatusHeaderItem() {
   // distinguished from a genuine error — down in SyncStatusHeaderContent.
   const localErrorMessage = rejected.error?.message ?? null
 
+  // Built-in consistency audit (L3) result — non-zero anomalies escalate the chip.
+  const audit = useConsistencyAudit()
+
   if (localOnly) {
     return (
       <SyncStatusHeaderContent
@@ -171,6 +213,7 @@ export function SyncStatusHeaderItem() {
         rejectedCount={rejectedCount}
         materializingChanges={0}
         localErrorMessage={localErrorMessage}
+        audit={audit}
       />
     )
   }
@@ -180,6 +223,7 @@ export function SyncStatusHeaderItem() {
       status={status}
       rejectedCount={rejectedCount}
       baseLocalErrorMessage={localErrorMessage}
+      audit={audit}
     />
   )
 }
@@ -188,12 +232,14 @@ interface RemoteSyncStatusHeaderContentProps {
   status: SyncStatus
   rejectedCount: number
   baseLocalErrorMessage: string | null
+  audit: ConsistencyAuditResult | null
 }
 
 function RemoteSyncStatusHeaderContent({
   status,
   rejectedCount,
   baseLocalErrorMessage,
+  audit,
 }: RemoteSyncStatusHeaderContentProps) {
   const queue = useQuery<UploadQueueCountRow>(
     uploadQueuePreviewCountSql,
@@ -229,6 +275,7 @@ function RemoteSyncStatusHeaderContent({
       rejectedCount={rejectedCount}
       materializingChanges={materializingChanges}
       localErrorMessage={queue.error?.message ?? baseLocalErrorMessage}
+      audit={audit}
     />
   )
 }
@@ -241,6 +288,7 @@ interface SyncStatusHeaderContentProps {
   rejectedCount: number
   materializingChanges: number
   localErrorMessage: string | null
+  audit: ConsistencyAuditResult | null
 }
 
 function SyncStatusHeaderContent({
@@ -251,6 +299,7 @@ function SyncStatusHeaderContent({
   rejectedCount,
   materializingChanges,
   localErrorMessage,
+  audit,
 }: SyncStatusHeaderContentProps) {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
@@ -271,6 +320,8 @@ function SyncStatusHeaderContent({
     : null
   const stableNetworkError = useStableError(networkError, networkErrorGraceMs)
   const errorMessage = localErrorMessage ?? stableNetworkError
+  const integrityAnomalies = audit?.anomalies ?? 0
+  const auditSummaries = audit && integrityAnomalies > 0 ? summarizeAuditAnomalies(audit) : []
   const view = getSyncIndicatorView({
     localOnly,
     connected: status.connected,
@@ -285,6 +336,7 @@ function SyncStatusHeaderContent({
     downloadFraction: status.downloadProgress?.downloadedFraction ?? null,
     errorMessage,
     lastSyncedAt: status.lastSyncedAt,
+    integrityAnomalies,
   })
   const Icon = iconByName[view.icon]
 
@@ -382,6 +434,24 @@ function SyncStatusHeaderContent({
                   >
                     View
                   </Button>
+                </div>
+              </div>
+            )}
+            {auditSummaries.length > 0 && (
+              <div className="border-t pt-2">
+                <div className="text-xs font-medium text-destructive">
+                  Data integrity: {integrityAnomalies} {integrityAnomalies === 1 ? 'issue' : 'issues'}
+                </div>
+                <div className="mt-1 space-y-0.5">
+                  {auditSummaries.map((s) => (
+                    <div key={s.label} className="grid grid-cols-[auto_1fr] gap-x-2 text-xs">
+                      <div className="text-muted-foreground">{s.label}</div>
+                      <div className="text-right">{s.detail || 'anomaly'}</div>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-1 text-[11px] leading-4 text-muted-foreground">
+                  Run the consistency-check eval for full details.
                 </div>
               </div>
             )}
