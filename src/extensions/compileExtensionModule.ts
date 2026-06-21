@@ -16,7 +16,9 @@ export type ExtensionModule = Record<string, unknown>
 
 export interface CompileResult {
   module: ExtensionModule
-  /** Pure SHA-256 of the block source (no compiler-version salt). */
+  /** Pure SHA-256 of the source this module was built from (no
+   *  compiler-version salt). For an approved load this is the APPROVED
+   *  source hash (the pin), not the live block content's hash. */
   contentHash: string
 }
 
@@ -111,8 +113,10 @@ const hexEncoder = (bytes: Uint8Array) =>
   Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
 
 /** Pure SHA-256 of the source. The compiler version is intentionally NOT
- *  mixed in here — see {@link COMPILER_VERSION}. */
-async function hashSource(content: string): Promise<string> {
+ *  mixed in here — see {@link COMPILER_VERSION}. This is the hash the
+ *  device-local approval pins, and what the loader compares against
+ *  `hashExtensionSource(live block.content)` to detect source drift. */
+export async function hashExtensionSource(content: string): Promise<string> {
   const data = new TextEncoder().encode(content)
   const digest = await crypto.subtle.digest('SHA-256', data)
   return hexEncoder(new Uint8Array(digest))
@@ -148,118 +152,269 @@ async function defaultInstantiateViaBlob(compiled: string): Promise<ExtensionMod
 }
 
 /**
- * Produce a module for a block, consulting the persistent compile cache
- * before reaching for Babel:
+ * Resolve a module through the in-memory L1 (content-hash) / L2 (blockId)
+ * cache, building it via `factory` only on a miss. `hashKey` is the
+ * content hash that keys L1 — for an approved load it's the APPROVED
+ * source hash (the pin), so two blocks sharing the same approved source
+ * share one module instance, and a re-resolve of an unchanged pin returns
+ * the same reference (React doesn't remount).
  *
- *   1. persistent hit (same source hash + compiler version) → rebuild
- *      from the cached JS string. **Babel is not loaded.**
- *   2. miss → transpile (loads Babel), persist the output, instantiate.
- *
- * A flaky persistent read/write must never break extension loading, so
- * both are best-effort: a failed read is treated as a miss, a failed
- * write is logged and ignored (the freshly compiled module is still
- * returned).
+ * A rejected build is dropped from BOTH layers so the next call retries
+ * rather than caching the failure forever.
  */
-async function buildModule(
-  content: string,
-  sourceHash: string,
+function resolveCachedModule(
+  cache: CompileCache,
+  hashKey: string,
   blockId: string,
-  persistent: CompiledModuleCache,
+  factory: () => Promise<ExtensionModule>,
 ): Promise<ExtensionModule> {
-  // Full test override: bypass persistence + Babel entirely.
-  if (compileImplOverride) return compileImplOverride(content)
+  // L2 hit: same block + same hash → reuse the module reference.
+  const cachedForBlock = cache.byBlock.get(blockId)
+  if (cachedForBlock?.contentHash === hashKey) return cachedForBlock.modulePromise
 
-  let cached: CompiledRecord | undefined
-  try {
-    cached = await persistent.read(blockId)
-  } catch (error) {
-    console.warn(`Extension compile cache read failed for ${blockId}`, error)
-  }
-  if (
-    cached &&
-    cached.sourceHash === sourceHash &&
-    cached.compilerVersion === COMPILER_VERSION
-  ) {
-    return instantiateImpl(cached.compiled)
-  }
-
-  const compiled = await transpileImpl(content)
-  try {
-    await persistent.write(blockId, {
-      sourceHash,
-      compiled,
-      compilerVersion: COMPILER_VERSION,
+  // L1 hit: same content as something we've built before (possibly for a
+  // different block). Extensions are values; identity follows source.
+  let modulePromise = cache.byHash.get(hashKey)
+  if (!modulePromise) {
+    modulePromise = factory()
+    cache.byHash.set(hashKey, modulePromise)
+    modulePromise.catch(() => {
+      if (cache.byHash.get(hashKey) === modulePromise) cache.byHash.delete(hashKey)
+      const l2 = cache.byBlock.get(blockId)
+      if (l2?.modulePromise === modulePromise) cache.byBlock.delete(blockId)
     })
-  } catch (error) {
-    console.warn(`Extension compile cache write failed for ${blockId}`, error)
   }
-  return instantiateImpl(compiled)
+  cache.byBlock.set(blockId, {contentHash: hashKey, modulePromise})
+  return modulePromise
 }
 
 /**
- * Compile a block's content into a module. Caches by content hash (L1)
- * and by blockId (L2) so unchanged blocks return identical module
- * references across runtime resolutions, and persists transpiled output
- * (L3, via {@link CompiledModuleCache}) so a warm boot skips Babel.
+ * Runtime shape-guard that tells a real Phase-2 approval record apart from
+ * a leftover Phase-1 (#167) compile-cache row.
  *
- * Pass a `cache` instance to scope in-memory caching (tests use this for
- * isolation), and a `persistent` instance to scope the cross-reload
- * cache. Omit either to use the process-wide singletons.
- *
- * Throws if compilation fails — caller is expected to catch and report.
+ * THIS IS A SECURITY CHECK (#67), not a defensive nicety. Phase 1 shipped
+ * the SAME `km-extension-compiled` store and auto-wrote a row
+ * `{sourceHash, compiled, compilerVersion}` on EVERY compile (implicit
+ * auto-approve), with no `approvedSource`/`approvedAt`. On every upgraded
+ * profile that store is already full of such rows. If row-presence alone
+ * counted as trust, every already-compiled extension would skip
+ * `needs-approval` and execute its cached JS with no explicit approval —
+ * defeating the gate for the entire existing fleet. A row is an approval
+ * ONLY if it carries the Phase-2 fields; legacy rows read as "no approval"
+ * and are overwritten by the next real `approveExtension`.
  */
-export async function compileExtensionModule(
-  content: string,
+const isApprovalRecord = (row: unknown): row is CompiledRecord => {
+  if (!row || typeof row !== 'object') return false
+  const r = row as Partial<CompiledRecord>
+  return (
+    typeof r.approvedSource === 'string' &&
+    typeof r.approvedAt === 'number' &&
+    typeof r.sourceHash === 'string' &&
+    typeof r.compiled === 'string' &&
+    typeof r.compilerVersion === 'string'
+  )
+}
+
+/** Three-way result of an approval lookup. The `unreadable` arm exists so
+ *  callers whose fallback is to (re-)pin LIVE source — the settings enable
+ *  path — can FAIL CLOSED on a transient store error instead of mistaking
+ *  a real pin for "never approved" and silently adopting a drifted source.
+ *  `unapproved` covers both a missing row and a rejected legacy Phase-1 row
+ *  (either is eligible for a first real approval). */
+export type ApprovalLookup =
+  | {status: 'approved', record: CompiledRecord}
+  | {status: 'unapproved'}
+  | {status: 'unreadable'}
+
+/** Distinguish "no approval" from "couldn't read the approval store". Use
+ *  this (not {@link readApproval}) anywhere the no-approval fallback is to
+ *  pin live source. */
+export async function lookupApproval(
   blockId: string,
+  persistent: CompiledModuleCache = getCompiledModuleCache(),
+): Promise<ApprovalLookup> {
+  let row: CompiledRecord | undefined
+  try {
+    row = await persistent.read(blockId)
+  } catch (error) {
+    console.warn(`Extension approval read failed for ${blockId}`, error)
+    return {status: 'unreadable'}
+  }
+  return isApprovalRecord(row) ? {status: 'approved', record: row} : {status: 'unapproved'}
+}
+
+/** Best-effort read of a block's device-local approval record. A flaky
+ *  read (or absence, or a legacy non-approval row) is reported as "no
+ *  approval", which surfaces as the cross-device "enable here?" prompt
+ *  rather than silently running anything — correct for the LOADER, which
+ *  simply declines to run on `undefined`. Callers whose no-approval
+ *  fallback is to pin live source must use {@link lookupApproval} so they
+ *  can fail closed on a transient read error. See {@link isApprovalRecord}
+ *  for why legacy rows are rejected. */
+export async function readApproval(
+  blockId: string,
+  persistent: CompiledModuleCache = getCompiledModuleCache(),
+): Promise<CompiledRecord | undefined> {
+  const lookup = await lookupApproval(blockId, persistent)
+  return lookup.status === 'approved' ? lookup.record : undefined
+}
+
+/** Best-effort write — a flaky persist must never reject the operation
+ *  that triggered it (the in-memory module is still returned/usable this
+ *  session; the next boot just re-prompts for approval). */
+async function persistApproval(
+  persistent: CompiledModuleCache,
+  blockId: string,
+  record: CompiledRecord,
+): Promise<void> {
+  try {
+    await persistent.write(blockId, record)
+  } catch (error) {
+    console.warn(`Extension approval write failed for ${blockId}`, error)
+  }
+}
+
+/**
+ * Grant (or refresh) the device-local approval for a block: transpile the
+ * source and DURABLY persist the approval row. This is the ONLY path that
+ * loads Babel and writes an approval row — the only place trust is
+ * established (#67). Callers are the settings "enable/update" control and
+ * the agent `enable-extension` command; both pass the CURRENT live
+ * `block.content` as the approved source.
+ *
+ * Deliberately DECOUPLED from running the module (#67 review):
+ *   - It does NOT instantiate. Approving a block vouches the SOURCE, not its
+ *     runtime behaviour — a module that transpiles but throws at import/eval
+ *     must NOT abort the approve/enable action. That runtime error surfaces
+ *     through the loader's `errorReporter` after intent is applied, where it
+ *     belongs (and where the row still shows in settings for recovery).
+ *   - The persist is NOT best-effort. If the trust row can't be written
+ *     (quota / private-mode / aborted tx) the approve has FAILED and throws,
+ *     so callers don't set "enabled" intent against a non-existent approval
+ *     (which would silently loop on needs-approval). Contrast the load
+ *     path's compiler-bump rewrite, which stays best-effort.
+ *
+ * Idempotent for unchanged, already-approved source (no Babel, no write).
+ * Throws if the source can't be transpiled (syntax error — nothing to pin)
+ * or the approval can't be persisted. Returns the approved source hash.
+ */
+export async function approveExtension(
+  blockId: string,
+  source: string,
+  persistent: CompiledModuleCache = getCompiledModuleCache(),
+): Promise<{contentHash: string}> {
+  const sourceHash = await hashExtensionSource(source)
+
+  // Idempotent: unchanged source already approved under the current compiler
+  // → the pin is current, nothing to do (and no Babel). `readApproval`
+  // rejects legacy Phase-1 rows, so an upgraded profile still re-approves.
+  const existing = await readApproval(blockId, persistent)
+  if (existing?.sourceHash === sourceHash && existing.compilerVersion === COMPILER_VERSION) {
+    return {contentHash: sourceHash}
+  }
+
+  // `compiled` is the pinned output. Under a full compile override (tests)
+  // there's no real transpile; store the source as a placeholder the
+  // override-aware load path ignores. A transpile failure (bad syntax)
+  // propagates — there's nothing to pin.
+  const compiled = compileImplOverride ? source : await transpileImpl(source)
+
+  // Throwing write (NOT persistApproval's swallow): a failed persist must
+  // fail the approve so the caller doesn't proceed to set intent. Written
+  // per-block directly (approval is per-block), never via the content-keyed
+  // in-memory cache.
+  await persistent.write(blockId, {
+    sourceHash,
+    approvedSource: source,
+    compiled,
+    compilerVersion: COMPILER_VERSION,
+    approvedAt: Date.now(),
+  })
+  return {contentHash: sourceHash}
+}
+
+/**
+ * Instantiate a block from its APPROVED record (the pin) — never from live
+ * content. This is the load path the runtime uses for an
+ * already-approved, enabled block: no Babel on the warm path.
+ *
+ *   - compiler matches → instantiate the pinned `compiled` string.
+ *   - compiler bumped → recompile from `approvedSource` (loads Babel) and
+ *     re-pin the fresh output. We recompile the APPROVED source, not the
+ *     live content, so a compiler bump can never become a backdoor for
+ *     drifted (un-approved) code.
+ *
+ * `contentHash` in the result is the approved hash (so callers can compare
+ * it against the live content hash to know whether an update is pending).
+ */
+export async function loadApprovedExtension(
+  blockId: string,
+  approval: CompiledRecord,
   cache: CompileCache = defaultCache,
   persistent: CompiledModuleCache = getCompiledModuleCache(),
 ): Promise<CompileResult> {
-  const contentHash = await hashSource(content)
+  const module = await resolveCachedModule(cache, approval.sourceHash, blockId, async () => {
+    if (compileImplOverride) return compileImplOverride(approval.approvedSource)
+    if (approval.compilerVersion !== COMPILER_VERSION) {
+      const compiled = await transpileImpl(approval.approvedSource)
+      // Deliberate (#67): this is the ONLY write on the load path, and it
+      // re-pins the SAME approved `sourceHash` (only the compiled output +
+      // compilerVersion change). Loading must never establish trust for a
+      // new/changed source — that is exclusively `approveExtension`'s job.
+      // Do not "optimize" by persisting live content here.
+      await persistApproval(persistent, blockId, {...approval, compiled, compilerVersion: COMPILER_VERSION})
+      return instantiateImpl(compiled)
+    }
+    return instantiateImpl(approval.compiled)
+  })
+  return {module, contentHash: approval.sourceHash}
+}
 
-  // L2 hit: same block + same content → reuse the module reference.
-  const cachedForBlock = cache.byBlock.get(blockId)
-  if (cachedForBlock?.contentHash === contentHash) {
-    const module = await cachedForBlock.modulePromise
-    return {module, contentHash}
-  }
-
-  // L1 hit: same content as something we've compiled before (possibly
-  // for a different block). Two blocks with the same source share the
-  // same module instance — extensions are values, identity follows
-  // source.
-  let modulePromise = cache.byHash.get(contentHash)
-  if (!modulePromise) {
-    modulePromise = buildModule(content, contentHash, blockId, persistent)
-    cache.byHash.set(contentHash, modulePromise)
-    // Don't poison the cache forever on a transient failure: drop the
-    // rejected promise from BOTH cache layers so the next call retries.
-    modulePromise.catch(() => {
-      if (cache.byHash.get(contentHash) === modulePromise) {
-        cache.byHash.delete(contentHash)
-      }
-      const l2 = cache.byBlock.get(blockId)
-      if (l2?.modulePromise === modulePromise) {
-        cache.byBlock.delete(blockId)
-      }
-    })
-  }
-
-  // Update L2 to point at this contentHash. Replaces any prior entry
-  // for the block (whose content has changed).
-  cache.byBlock.set(blockId, {contentHash, modulePromise})
-
-  const module = await modulePromise
+/**
+ * Compile LIVE source into a module WITHOUT persisting or requiring an
+ * approval. Used only by the agent install `--verify` path, which resolves
+ * a brand-new block's source in an isolated runtime to inspect its
+ * contributions before any approval exists. Never used on the user-facing
+ * load path — that one runs only approved, pinned output.
+ */
+export async function compileForVerification(
+  content: string,
+  blockId: string,
+  cache: CompileCache = defaultCache,
+): Promise<CompileResult> {
+  const contentHash = await hashExtensionSource(content)
+  const module = await resolveCachedModule(cache, contentHash, blockId, () =>
+    compileImplOverride ? compileImplOverride(content) : transpileImpl(content).then(instantiateImpl),
+  )
   return {module, contentHash}
 }
 
 /**
- * Drop a block's entry from L2. Use when a block is deleted so its
- * modulePromise is eligible for GC. (L1 entry under the old hash may
- * survive — that's acceptable since other blocks could share it.)
- *
- * Note: this clears only the in-memory layer. The persisted row is
- * keyed by blockId and overwritten on source change, so it's bounded;
- * wiring its deletion to extension uninstall is a Phase-2 concern.
+ * Revoke a block's device-local approval: delete the persisted row and
+ * drop the in-memory L2 entry, so the block stops running on the next
+ * resolve. Best-effort (a failed delete must not break disable/uninstall);
+ * the worst case is an orphaned row that a later re-approval overwrites or
+ * the lock & wipe clear removes.
+ */
+export async function revokeExtensionApproval(
+  blockId: string,
+  persistent: CompiledModuleCache = getCompiledModuleCache(),
+  cache: CompileCache = defaultCache,
+): Promise<void> {
+  evictBlockFromCache(blockId, cache)
+  try {
+    await persistent.delete(blockId)
+  } catch (error) {
+    console.warn(`Extension approval delete failed for ${blockId}`, error)
+  }
+}
+
+/**
+ * Drop a block's entry from the in-memory L2 cache. Use when a block is
+ * deleted/revoked so its modulePromise is eligible for GC. (The L1 entry
+ * under the old hash may survive — acceptable since other blocks could
+ * share it.) Does not touch the persisted approval; use
+ * {@link revokeExtensionApproval} for that.
  */
 export function evictBlockFromCache(
   blockId: string,

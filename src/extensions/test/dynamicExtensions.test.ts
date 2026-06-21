@@ -1,11 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions'
+import {
+  dynamicExtensionsExtension,
+  type DynamicExtensionsOptions,
+} from '@/extensions/dynamicExtensions'
 import {
   __setCompileImplForTest,
   createCompileCache,
+  hashExtensionSource,
   type CompileCache,
   type ExtensionModule,
 } from '@/extensions/compileExtensionModule'
+import {
+  InMemoryCompiledModuleCache,
+  type CompiledModuleCache,
+} from '@/extensions/compiledModuleCache'
 import {
   defineFacet,
   resolveFacetRuntime,
@@ -42,8 +50,7 @@ const blockData = (overrides: Partial<BlockData>): BlockData => ({
 })
 
 // Stub repo that just returns the supplied blocks for the
-// findExtensionBlocks query (Phase 4 chunk C migrated from
-// findBlocksByType). The query proxy is stubbed to return a handle
+// findExtensionBlocks query. The query proxy is stubbed to return a handle
 // whose `.load()` resolves to the canned block list.
 const makeRepo = (blocks: BlockData[]): Repo => ({
   query: {
@@ -56,7 +63,10 @@ const makeRepo = (blocks: BlockData[]): Repo => ({
 const enableBlocks = (blocks: readonly BlockData[]): Overrides =>
   new Map(blocks.map(block => [block.id, true]))
 
-// Stub compile that returns a canned module per block content.
+// Stub compile that returns a canned module per block content. With a
+// compile override active the loader's approved-load path runs
+// `override(approval.approvedSource)`, so the keys here are matched
+// against the APPROVED source (which `approveBlocks` pins to live content).
 const stubCompileByBlockId = (
   modulesByBlockId: Record<string, ExtensionModule>,
 ): (() => void) => {
@@ -68,14 +78,51 @@ const stubCompileByBlockId = (
 }
 
 let cache: CompileCache
+let persistent: CompiledModuleCache
 
 beforeEach(() => {
   cache = createCompileCache()
+  persistent = new InMemoryCompiledModuleCache()
 })
 
 afterEach(() => {
   vi.restoreAllMocks()
 })
+
+// Construct the loader with the per-test in-memory caches injected, so it
+// never reaches for the IndexedDB-backed singletons.
+const loadExtensions = (
+  blocks: BlockData[],
+  opts: Partial<Omit<DynamicExtensionsOptions, 'repo' | 'workspaceId'>> & {
+    repo?: Repo
+    workspaceId?: string
+  } = {},
+): AppExtension => {
+  const {repo, workspaceId, ...rest} = opts
+  return dynamicExtensionsExtension({
+    repo: repo ?? makeRepo(blocks),
+    workspaceId: workspaceId ?? 'ws-1',
+    cache,
+    persistent,
+    safeMode: false,
+    ...rest,
+  })
+}
+
+// Grant the device-local approval for each block, pinned to its CURRENT
+// content (so there's no drift). This is the gate-2 prerequisite for a
+// block to actually run.
+const approveBlocks = async (blocks: readonly BlockData[]): Promise<void> => {
+  for (const block of blocks) {
+    await persistent.write(block.id, {
+      sourceHash: await hashExtensionSource(block.content),
+      approvedSource: block.content,
+      compiled: block.content,
+      compilerVersion: '1',
+      approvedAt: 0,
+    })
+  }
+}
 
 describe('dynamicExtensionsExtension — happy paths', () => {
   it('loads a block exporting a single FacetContribution', async () => {
@@ -85,13 +132,8 @@ describe('dynamicExtensionsExtension — happy paths', () => {
     })
 
     try {
-      const ext = dynamicExtensionsExtension({
-        repo: makeRepo(blocks),
-        workspaceId: 'ws-1',
-        cache,
-        safeMode: false,
-        overrides: enableBlocks(blocks),
-      })
+      await approveBlocks(blocks)
+      const ext = loadExtensions(blocks, {overrides: enableBlocks(blocks)})
       const runtime = await resolveFacetRuntime(ext)
 
       expect(runtime.read(labelsFacet)).toEqual(['hello'])
@@ -111,13 +153,8 @@ describe('dynamicExtensionsExtension — happy paths', () => {
     })
 
     try {
-      const ext = dynamicExtensionsExtension({
-        repo: makeRepo(blocks),
-        workspaceId: 'ws-1',
-        cache,
-        safeMode: false,
-        overrides: enableBlocks(blocks),
-      })
+      await approveBlocks(blocks)
+      const ext = loadExtensions(blocks, {overrides: enableBlocks(blocks)})
       const runtime = await resolveFacetRuntime(ext)
 
       expect(runtime.read(labelsFacet)).toEqual(['a', 'b'])
@@ -137,13 +174,8 @@ describe('dynamicExtensionsExtension — happy paths', () => {
     })
 
     try {
-      const ext = dynamicExtensionsExtension({
-        repo: makeRepo(blocks),
-        workspaceId: 'ws-1',
-        cache,
-        safeMode: false,
-        overrides: enableBlocks(blocks),
-      })
+      await approveBlocks(blocks)
+      const ext = loadExtensions(blocks, {overrides: enableBlocks(blocks)})
       const runtime = await resolveFacetRuntime(ext)
 
       expect(runtime.read(labelsFacet)).toEqual(['async-a', 'async-b'])
@@ -168,11 +200,8 @@ describe('dynamicExtensionsExtension — happy paths', () => {
     const errorReporter = vi.fn()
 
     try {
-      const ext = dynamicExtensionsExtension({
-        repo: makeRepo(blocks),
-        workspaceId: 'ws-1',
-        cache,
-        safeMode: false,
+      await approveBlocks(blocks)
+      const ext = loadExtensions(blocks, {
         overrides: enableBlocks(blocks),
         errorReporter,
       })
@@ -199,13 +228,8 @@ describe('dynamicExtensionsExtension — provenance', () => {
     })
 
     try {
-      const ext = dynamicExtensionsExtension({
-        repo: makeRepo(blocks),
-        workspaceId: 'ws-1',
-        cache,
-        safeMode: false,
-        overrides: enableBlocks(blocks),
-      })
+      await approveBlocks(blocks)
+      const ext = loadExtensions(blocks, {overrides: enableBlocks(blocks)})
       const runtime = await resolveFacetRuntime(ext)
 
       const sources = runtime.contributions(labelsFacet).map(c => c.source)
@@ -236,13 +260,8 @@ describe('dynamicExtensionsExtension — provenance', () => {
     })
 
     try {
-      const ext = dynamicExtensionsExtension({
-        repo: makeRepo(blocks),
-        workspaceId: 'ws-1',
-        cache,
-        safeMode: false,
-        overrides: enableBlocks(blocks),
-      })
+      await approveBlocks(blocks)
+      const ext = loadExtensions(blocks, {overrides: enableBlocks(blocks)})
       // resolveAppRuntime (not resolveFacetRuntime) is what production
       // uses — it's the one that recurses into `enables`.
       const {resolveAppRuntime} = await import('@/facets/resolveAppRuntime.js')
@@ -261,7 +280,7 @@ describe('dynamicExtensionsExtension — provenance', () => {
   })
 })
 
-describe('dynamicExtensionsExtension — overrides-driven disable', () => {
+describe('dynamicExtensionsExtension — gate 1 (intent / overrides)', () => {
   it('leaves new user extension blocks disabled until an explicit true override exists', async () => {
     const compileImpl = vi.fn().mockImplementation(async () => ({
       default: labelsFacet.of('should-not-compile'),
@@ -270,12 +289,9 @@ describe('dynamicExtensionsExtension — overrides-driven disable', () => {
     const blocks = [blockData({id: 'new-block', content: 'src-new'})]
 
     try {
-      const ext = dynamicExtensionsExtension({
-        repo: makeRepo(blocks),
-        workspaceId: 'ws-1',
-        cache,
-        safeMode: false,
-      })
+      // Approval present, but intent absent → gate 1 still skips it.
+      await approveBlocks(blocks)
+      const ext = loadExtensions(blocks)
       const runtime = await resolveFacetRuntime(ext)
 
       expect(runtime.read(labelsFacet)).toEqual([])
@@ -290,29 +306,25 @@ describe('dynamicExtensionsExtension — overrides-driven disable', () => {
       default: labelsFacet.of(`compiled:${content}`),
     }))
     const restore = __setCompileImplForTest(compileImpl)
-    const blocks = [
-      blockData({id: 'enabled-block', content: 'src-enabled'}),
-      blockData({id: 'disabled-block', content: 'src-disabled'}),
-    ]
+    const enabled = blockData({id: 'enabled-block', content: 'src-enabled'})
+    const disabled = blockData({id: 'disabled-block', content: 'src-disabled'})
+    const blocks = [enabled, disabled]
     const overrides: Overrides = new Map([
       ['enabled-block', true],
       ['disabled-block', false],
     ])
 
     try {
-      const ext = dynamicExtensionsExtension({
-        repo: makeRepo(blocks),
-        workspaceId: 'ws-1',
-        cache,
-        safeMode: false,
-        overrides,
-      })
+      // Only the enabled block is approved; the disabled one is skipped by
+      // gate 1 before its approval/source is ever touched.
+      await approveBlocks([enabled])
+      const ext = loadExtensions(blocks, {overrides})
       const runtime = await resolveFacetRuntime(ext)
 
       expect(runtime.read(labelsFacet)).toEqual(['compiled:src-enabled'])
-      // Crucially the disabled block's content is never run through
-      // the compiler — that's what makes the toggle safe for blocks
-      // whose top-level code has side effects.
+      // Crucially the disabled block's content is never run through the
+      // compiler — that's what makes the toggle safe for blocks whose
+      // top-level code has side effects.
       const compiledContents = compileImpl.mock.calls.map(c => c[0])
       expect(compiledContents).toEqual(['src-enabled'])
     } finally {
@@ -324,9 +336,10 @@ describe('dynamicExtensionsExtension — overrides-driven disable', () => {
     const restore = stubCompileByBlockId({
       'src-on': {default: labelsFacet.of('on')},
     })
+    const onBlock = blockData({id: 'visible-on', content: 'src-on'})
     const blocks = [
       blockData({id: 'visible-disabled', content: 'src-disabled', properties: {}}),
-      blockData({id: 'visible-on', content: 'src-on'}),
+      onBlock,
     ]
     const overrides: Overrides = new Map([
       ['visible-disabled', false],
@@ -334,13 +347,8 @@ describe('dynamicExtensionsExtension — overrides-driven disable', () => {
     ])
 
     try {
-      const ext = dynamicExtensionsExtension({
-        repo: makeRepo(blocks),
-        workspaceId: 'ws-1',
-        cache,
-        safeMode: false,
-        overrides,
-      })
+      await approveBlocks([onBlock])
+      const ext = loadExtensions(blocks, {overrides})
       // Resolve the function to walk its return value.
       const factory = ext as (ctx: Record<string, unknown>) => Promise<AppExtension[]>
       const subtree = await factory({})
@@ -355,7 +363,135 @@ describe('dynamicExtensionsExtension — overrides-driven disable', () => {
       restore()
     }
   })
+})
 
+describe('dynamicExtensionsExtension — gate 2 (device-local trust / #67)', () => {
+  it('does NOT run an enabled-by-intent block that is not approved here, and reports needs-approval', async () => {
+    const compileImpl = vi.fn().mockImplementation(async () => ({
+      default: labelsFacet.of('should-not-run'),
+    }))
+    const restore = __setCompileImplForTest(compileImpl)
+    const blocks = [blockData({id: 'unapproved', content: 'src-x'})]
+    const approvalStatusReporter = vi.fn()
+
+    try {
+      // Intent true, but NO approval seeded.
+      const ext = loadExtensions(blocks, {
+        overrides: enableBlocks(blocks),
+        approvalStatusReporter,
+      })
+      const runtime = await resolveFacetRuntime(ext)
+
+      expect(runtime.read(labelsFacet)).toEqual([])
+      expect(compileImpl).not.toHaveBeenCalled()
+      expect(approvalStatusReporter).toHaveBeenCalledTimes(1)
+      const [blockId, status] = approvalStatusReporter.mock.calls[0]
+      expect(blockId).toBe('unapproved')
+      expect(status).toMatchObject({kind: 'needs-approval'})
+      expect((status as {liveHash: string}).liveHash).toBe(
+        await hashExtensionSource('src-x'),
+      )
+    } finally {
+      restore()
+    }
+  })
+
+  it('does NOT treat a legacy Phase-1 compile-cache row as approval (#67 upgrade path)', async () => {
+    const compileImpl = vi.fn().mockImplementation(async () => ({
+      default: labelsFacet.of('should-not-run'),
+    }))
+    const restore = __setCompileImplForTest(compileImpl)
+    const block = blockData({id: 'legacy', content: 'src-legacy'})
+    const approvalStatusReporter = vi.fn()
+
+    try {
+      // A row left over from Phase 1's implicit auto-approve: no
+      // approvedSource / approvedAt. Must NOT count as a trust grant.
+      await persistent.write('legacy', {
+        sourceHash: await hashExtensionSource('src-legacy'),
+        compiled: 'src-legacy',
+        compilerVersion: '1',
+      } as never)
+      const ext = loadExtensions([block], {
+        overrides: enableBlocks([block]),
+        approvalStatusReporter,
+      })
+      const runtime = await resolveFacetRuntime(ext)
+
+      expect(runtime.read(labelsFacet)).toEqual([])
+      expect(compileImpl).not.toHaveBeenCalled()
+      expect(approvalStatusReporter).toHaveBeenCalledWith(
+        'legacy',
+        expect.objectContaining({kind: 'needs-approval'}),
+      )
+    } finally {
+      restore()
+    }
+  })
+
+  it('keeps running the PINNED approved version when live source drifted, and reports update-available', async () => {
+    // override resolves both versions so we can detect which one ran.
+    const restore = __setCompileImplForTest(async (content) => {
+      if (content === 'src-old') return {default: labelsFacet.of('old')}
+      if (content === 'src-new') return {default: labelsFacet.of('new')}
+      throw new Error(`unexpected content: ${content}`)
+    })
+    const block = blockData({id: 'drifted', content: 'src-new'})
+    const approvalStatusReporter = vi.fn()
+
+    try {
+      // Approval pinned to the OLD source; live content is now src-new.
+      await persistent.write('drifted', {
+        sourceHash: await hashExtensionSource('src-old'),
+        approvedSource: 'src-old',
+        compiled: 'src-old',
+        compilerVersion: '1',
+        approvedAt: 0,
+      })
+      const ext = loadExtensions([block], {
+        overrides: enableBlocks([block]),
+        approvalStatusReporter,
+      })
+      const runtime = await resolveFacetRuntime(ext)
+
+      // The PINNED (old) version runs — never the drifted live content.
+      expect(runtime.read(labelsFacet)).toEqual(['old'])
+      expect(approvalStatusReporter).toHaveBeenCalledTimes(1)
+      const [blockId, status] = approvalStatusReporter.mock.calls[0]
+      expect(blockId).toBe('drifted')
+      expect(status).toMatchObject({
+        kind: 'update-available',
+        liveHash: await hashExtensionSource('src-new'),
+        approvedHash: await hashExtensionSource('src-old'),
+      })
+    } finally {
+      restore()
+    }
+  })
+
+  it('verifyLiveSource compiles the live source directly, bypassing the approval gate', async () => {
+    const restore = stubCompileByBlockId({
+      'src-verify': {default: labelsFacet.of('verified')},
+    })
+    const blocks = [blockData({id: 'to-verify', content: 'src-verify'})]
+    const approvalStatusReporter = vi.fn()
+
+    try {
+      // No approval seeded — verify mode runs live source anyway.
+      const ext = loadExtensions(blocks, {
+        overrides: enableBlocks(blocks),
+        verifyLiveSource: true,
+        approvalStatusReporter,
+      })
+      const runtime = await resolveFacetRuntime(ext)
+
+      expect(runtime.read(labelsFacet)).toEqual(['verified'])
+      // Verify mode never consults the approval gate, so no status report.
+      expect(approvalStatusReporter).not.toHaveBeenCalled()
+    } finally {
+      restore()
+    }
+  })
 })
 
 describe('dynamicExtensionsExtension — boundary tagging', () => {
@@ -370,13 +506,8 @@ describe('dynamicExtensionsExtension — boundary tagging', () => {
     ]
 
     try {
-      const ext = dynamicExtensionsExtension({
-        repo: makeRepo(blocks),
-        workspaceId: 'ws-1',
-        cache,
-        safeMode: false,
-        overrides: enableBlocks(blocks),
-      })
+      await approveBlocks(blocks)
+      const ext = loadExtensions(blocks, {overrides: enableBlocks(blocks)})
       const factory = ext as (ctx: Record<string, unknown>) => Promise<AppExtension[]>
       const subtree = await factory({})
 
@@ -410,11 +541,12 @@ describe('dynamicExtensionsExtension — safeMode', () => {
     const repo = {query: {findExtensionBlocks}} as unknown as Repo
 
     try {
-      const ext = dynamicExtensionsExtension({
+      // Even with approvals + intent, safe mode short-circuits to shells.
+      await approveBlocks(blocks)
+      const ext = loadExtensions(blocks, {
         repo,
-        workspaceId: 'ws-1',
-        cache,
         safeMode: true,
+        overrides: enableBlocks(blocks),
       })
       const factory = ext as (
         ctx: Record<string, unknown>,
@@ -455,11 +587,8 @@ describe('dynamicExtensionsExtension — failure isolation', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
 
     try {
-      const ext = dynamicExtensionsExtension({
-        repo: makeRepo(blocks),
-        workspaceId: 'ws-1',
-        cache,
-        safeMode: false,
+      await approveBlocks(blocks)
+      const ext = loadExtensions(blocks, {
         overrides: enableBlocks(blocks),
         errorReporter,
       })
@@ -485,11 +614,8 @@ describe('dynamicExtensionsExtension — failure isolation', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
 
     try {
-      const ext = dynamicExtensionsExtension({
-        repo: makeRepo(blocks),
-        workspaceId: 'ws-1',
-        cache,
-        safeMode: false,
+      await approveBlocks(blocks)
+      const ext = loadExtensions(blocks, {
         overrides: enableBlocks(blocks),
         errorReporter,
       })
@@ -512,12 +638,7 @@ describe('dynamicExtensionsExtension — workspace scoping', () => {
     const findExtensionBlocks = vi.fn(() => ({load: async () => []}))
     const repo = {query: {findExtensionBlocks}} as unknown as Repo
 
-    const ext = dynamicExtensionsExtension({
-      repo,
-      workspaceId: 'ws-target',
-      cache,
-      safeMode: false,
-    })
+    const ext = loadExtensions([], {repo, workspaceId: 'ws-target'})
     await resolveFacetRuntime(ext)
 
     expect(findExtensionBlocks).toHaveBeenCalledWith({workspaceId: 'ws-target'})

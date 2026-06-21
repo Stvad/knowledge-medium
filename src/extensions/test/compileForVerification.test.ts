@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   __setCompileImplForTest,
-  compileExtensionModule,
+  compileForVerification,
   createCompileCache,
   evictBlockFromCache,
   type CompileCache,
@@ -21,7 +21,7 @@ afterEach(() => {
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
 
-describe('compileExtensionModule — L1 (content-hash) cache', () => {
+describe('compileForVerification — L1 (content-hash) cache', () => {
   it('compiles only once when called twice with the same content + block', async () => {
     let count = 0
     const restore = __setCompileImplForTest(async () => {
@@ -30,8 +30,8 @@ describe('compileExtensionModule — L1 (content-hash) cache', () => {
     })
 
     try {
-      const a = await compileExtensionModule('source', 'block-1', cache)
-      const b = await compileExtensionModule('source', 'block-1', cache)
+      const a = await compileForVerification('source', 'block-1', cache)
+      const b = await compileForVerification('source', 'block-1', cache)
 
       expect(count).toBe(1)
       expect(a.module).toBe(b.module)
@@ -53,8 +53,8 @@ describe('compileExtensionModule — L1 (content-hash) cache', () => {
     })
 
     try {
-      const promiseA = compileExtensionModule('shared', 'block-1', cache)
-      const promiseB = compileExtensionModule('shared', 'block-2', cache)
+      const promiseA = compileForVerification('shared', 'block-1', cache)
+      const promiseB = compileForVerification('shared', 'block-2', cache)
 
       // Resolve and await both before asserting count, so we don't
       // depend on microtask-timing assumptions about when a parallel
@@ -84,8 +84,8 @@ describe('compileExtensionModule — L1 (content-hash) cache', () => {
     })
 
     try {
-      const a = await compileExtensionModule('same-source', 'block-A', cache)
-      const b = await compileExtensionModule('same-source', 'block-B', cache)
+      const a = await compileForVerification('same-source', 'block-A', cache)
+      const b = await compileForVerification('same-source', 'block-B', cache)
 
       expect(count).toBe(1)
       expect(a.module).toBe(b.module)
@@ -95,13 +95,13 @@ describe('compileExtensionModule — L1 (content-hash) cache', () => {
   })
 })
 
-describe('compileExtensionModule — L2 (blockId) cache', () => {
+describe('compileForVerification — L2 (blockId) cache', () => {
   it('returns the same module reference for the same block + content across calls', async () => {
     const restore = __setCompileImplForTest(async () => ({default: 'first'}))
 
     try {
-      const a = await compileExtensionModule('content', 'block-1', cache)
-      const b = await compileExtensionModule('content', 'block-1', cache)
+      const a = await compileForVerification('content', 'block-1', cache)
+      const b = await compileForVerification('content', 'block-1', cache)
       expect(a.module).toBe(b.module)
     } finally {
       restore()
@@ -112,8 +112,8 @@ describe('compileExtensionModule — L2 (blockId) cache', () => {
     const restore = __setCompileImplForTest(async (content: string) => ({source: content}))
 
     try {
-      const first = await compileExtensionModule('v1', 'block-1', cache)
-      const second = await compileExtensionModule('v2', 'block-1', cache)
+      const first = await compileForVerification('v1', 'block-1', cache)
+      const second = await compileForVerification('v2', 'block-1', cache)
 
       expect(first.module).not.toBe(second.module)
       expect(first.contentHash).not.toBe(second.contentHash)
@@ -124,7 +124,7 @@ describe('compileExtensionModule — L2 (blockId) cache', () => {
   })
 })
 
-describe('compileExtensionModule — failure handling', () => {
+describe('compileForVerification — failure handling', () => {
   it('propagates compile errors and does not poison subsequent calls', async () => {
     let attempt = 0
     const restore = __setCompileImplForTest(async () => {
@@ -136,14 +136,14 @@ describe('compileExtensionModule — failure handling', () => {
     try {
       let firstError: unknown = null
       try {
-        await compileExtensionModule('bad', 'block-1', cache)
+        await compileForVerification('bad', 'block-1', cache)
       } catch (err) {
         firstError = err
       }
       expect(firstError).toBeInstanceOf(Error)
       expect((firstError as Error).message).toBe('boom')
 
-      const retry = await compileExtensionModule('bad', 'block-1', cache)
+      const retry = await compileForVerification('bad', 'block-1', cache)
       expect(retry.module).toEqual({default: 'recovered'})
       expect(attempt).toBe(2)
     } finally {
@@ -152,7 +152,7 @@ describe('compileExtensionModule — failure handling', () => {
   })
 })
 
-describe('compileExtensionModule — eviction', () => {
+describe('compileForVerification — eviction', () => {
   it('evictBlockFromCache drops the L2 entry but keeps L1 for shared content', async () => {
     let count = 0
     const restore = __setCompileImplForTest(async () => {
@@ -161,13 +161,13 @@ describe('compileExtensionModule — eviction', () => {
     })
 
     try {
-      const a = await compileExtensionModule('source', 'block-A', cache)
+      const a = await compileForVerification('source', 'block-A', cache)
       evictBlockFromCache('block-A', cache)
 
       // Re-asking for the same block with the same content recomputes
       // the L2 entry, but L1 (keyed by hash) serves the same module —
       // so the underlying compile should not run again.
-      const aAgain = await compileExtensionModule('source', 'block-A', cache)
+      const aAgain = await compileForVerification('source', 'block-A', cache)
       expect(count).toBe(1)
       expect(aAgain.module).toBe(a.module)
     } finally {
@@ -176,7 +176,7 @@ describe('compileExtensionModule — eviction', () => {
   })
 })
 
-describe('compileExtensionModule — default Babel+blob path', () => {
+describe('compileForVerification — default Babel+blob path', () => {
   it('revokes the blob URL after the dynamic import resolves', async () => {
     const realCreate = URL.createObjectURL
     const realRevoke = URL.revokeObjectURL
@@ -202,7 +202,7 @@ describe('compileExtensionModule — default Babel+blob path', () => {
     })
 
     try {
-      await compileExtensionModule('any', 'block-1', cache)
+      await compileForVerification('any', 'block-1', cache)
       expect(created).toEqual([fakeUrl])
       expect(revoked).toEqual([fakeUrl])
     } finally {
