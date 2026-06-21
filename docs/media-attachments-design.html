@@ -440,8 +440,14 @@ its own monotonicity).
   collapses the entire plaintext/E2EE branch into one place the renderer never sees.</p>
 
 <ul>
-  <li><strong>The renderer emits a stable virtual URL:</strong>
-    <code>&lt;img src="/asset/&lt;workspace_id&gt;/&lt;asset_block_id&gt;"&gt;</code>. No mode awareness,
+  <li><strong>The renderer emits a stable virtual URL — <code>BASE_URL</code>-prefixed.</strong>
+    <code>&lt;img src="${BASE_URL}asset/&lt;workspace_id&gt;/&lt;asset_block_id&gt;"&gt;</code>, not a
+    root-absolute <code>/asset/…</code> (shorthand below). The SW registers with
+    <code>scope: import.meta.env.BASE_URL</code> (<code>src/registerServiceWorker.ts</code>), so under a
+    non-root <code>APP_BASE_PATH</code> (e.g. <code>/app/</code>) a root-absolute URL escapes the SW
+    scope entirely — the worker never sees the request, the auth/decrypt path is bypassed, and the
+    origin returns 404. Build the URL relative to <code>BASE_URL</code> and match the
+    <code>${BASE_URL}asset/…</code> route in the worker. No mode awareness,
     no <code>createObjectURL</code> lifecycle, native <code>&lt;img&gt;</code> and
     <code>&lt;a download&gt;</code> work uniformly. (<strong>Range/streaming is the exception under
     E2EE</strong> — see the note below; images and moderate files are unaffected.)</li>
@@ -770,17 +776,29 @@ query time or silently denies all reads.
 <strong>Decision: a guarded upload service is the sole writer; direct client writes are denied.</strong>
 Attachments must match the block guarantee — the server enforces ciphertext, not by client
 convention. So: <strong>(1)</strong> the <code>attachments</code> bucket grants no
-<code>insert</code>/<code>update</code> to <code>authenticated</code> (§10), and <strong>(2)</strong>
-all uploads go through an upload-mediating <strong>Edge Function</strong> (holding service-role, or
-minting a one-shot signed upload) that, before accepting an object under an
-<strong>E2EE-workspace prefix</strong>, rejects bytes not beginning with the <code>encb:v1:</code>
-magic + the minimum nonce(12)+tag(16) length — the binary analog of <code>is_enc_v1_envelope</code>,
-with the same permanent-failure discipline so a stale client quarantines rather than retries forever.
-The function checks envelope <em>shape</em> only (the server has no key, exactly as for blocks), which
-is sufficient to keep bare plaintext out. The §9 byte-upload queue therefore drains <em>to this
-function</em>, not to Storage directly. Cost: every upload is one function invocation (latency +
-per-call cost); acceptable for the guarantee, and reads stay direct/RLS-gated (the hot path). Lands in
-phase&nbsp;2 (§15) with the bucket + RLS migration.</div>
+<code>insert</code>/<code>update</code> to <code>authenticated</code> (§10); and <strong>(2)</strong>
+all uploads go through an upload-mediating <strong>Edge Function</strong> that <em>receives and
+inspects the body bytes itself</em> and then writes them with service-role. Per request it:
+<ol>
+  <li><strong>Authenticates the caller's JWT and authorizes the write</strong> — checks
+    <code>private.is_workspace_writer(&lt;workspace_id&gt;, caller)</code> and that the path's
+    workspace/asset is the intended target — <em>before</em> using the bypass-RLS credential. The
+    service-role write must re-impose the authorization that direct RLS would have enforced; otherwise
+    a read-only or recently-removed member who can invoke the function could create/replace
+    <code>&lt;ws&gt;/&lt;asset&gt;</code> bytes that <code>blocks_write</code>/storage policies deny.</li>
+  <li><strong>Inspects the bytes</strong> — for an object under an <strong>E2EE-workspace
+    prefix</strong>, rejects bodies not beginning with the <code>encb:v1:</code> magic + the minimum
+    nonce(12)+tag(16) length (the binary analog of <code>is_enc_v1_envelope</code>), with the same
+    permanent-failure discipline so a stale client quarantines rather than retries forever. Shape-only
+    (the server has no key), sufficient to keep bare plaintext out.</li>
+</ol>
+<strong>Not a signed-upload token.</strong> Minting a one-shot signed upload URL would let the client
+<code>uploadToSignedUrl</code> the body <em>directly to Storage</em>, which Supabase accepts without
+the function seeing the bytes — defeating the magic check. The body must flow <em>through</em> the
+function. The §9 byte-upload queue therefore drains <em>to this function</em>, not to Storage directly.
+Cost: every upload is one function invocation that streams the body (latency + per-call cost);
+acceptable for the guarantee, and reads stay direct/RLS-gated (the hot path). Lands in phase&nbsp;2
+(§15) with the bucket + RLS migration.</div>
 
 <div class="info">
 <strong>Share-ready by construction.</strong> Keeping <code>asset_block_id</code> in the path means
@@ -854,8 +872,9 @@ keep random ids + tolerate duplicates.
 <strong>SW route ordering.</strong> The existing <code>public/sw.js</code> fetch handler routes by
 <code>request.destination</code>, and an <code>&lt;img&gt;</code> has destination <code>'image'</code>
 — which the current handler sends to the generation <code>assetCacheFirst</code> branch. The new
-<code>/asset/&lt;ws&gt;/&lt;id&gt;</code> route must be matched <strong>before</strong> that branch,
-or the auth-first resolution in §7 is shadowed by the existing image-cache path.
+<code>${BASE_URL}asset/&lt;ws&gt;/&lt;id&gt;</code> route (base-prefixed, §7) must be matched
+<strong>before</strong> that branch, or the auth-first resolution in §7 is shadowed by the existing
+image-cache path.
 </div>
 
 <h2 id="sharing">12. Interaction with subtree sharing</h2>
@@ -964,8 +983,9 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
       <code>private</code>-schema grants / wrapper, §10); the E2EE byte-ciphertext upload guard (§10.1);
       <code>BlobStore</code> over Supabase Storage. Post-create RLS audit per the Supabase rule.</td></tr>
 <tr><td>3 — cache + SW</td>
-    <td>SW asset route (<code>/asset/&lt;ws&gt;/&lt;id&gt;</code>, ordered before the image-cache
-      branch) with mode-pin-driven decrypt-or-passthrough; user-scoped Cache; per-<code>clientId</code>
+    <td>SW asset route (<code>${BASE_URL}asset/&lt;ws&gt;/&lt;id&gt;</code>, base-prefixed and ordered
+      before the image-cache branch) with mode-pin-driven decrypt-or-passthrough; user-scoped Cache;
+      per-<code>clientId</code>
       token handshake; the marker-gated boot-time cache+token purge (§7.2) — covered by
       <code>lockAndWipe</code>-flavored tests incl. a "plaintext survives lock" regression.</td></tr>
 <tr><td>4 — block model + renderer</td>
