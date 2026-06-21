@@ -59,6 +59,12 @@ vi.mock('../RejectionDialog.tsx', () => ({
   RejectionDialog: () => null,
 }))
 
+// The component scopes the audit result to the active workspace; the published
+// test results below use workspaceId 'ws-1' to match.
+vi.mock('@/context/repo.js', () => ({
+  useRepo: () => ({activeWorkspaceId: 'ws-1'}),
+}))
+
 const rejectedCountSql = 'SELECT COUNT(*) AS count FROM ps_crud_rejected'
 
 const defaultStatus = () => ({

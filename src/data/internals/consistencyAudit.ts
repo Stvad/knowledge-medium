@@ -36,6 +36,15 @@ export interface ConsistencyAuditResult {
 // enumeration; the built-in audit only needs the known-catastrophic one.
 const CURATED_REF_PROPS = ['next-review-date']
 
+// The at-rest property-ref check is a HEURISTIC with an irreducible benign
+// baseline: an empty / cleared / suspended next-review-date value correctly
+// projects no ref, so a handful of value-present/ref-absent rows is normal, not a
+// strip. Only a CATASTROPHIC count (a mass strip like 06-09's ~10k) is an
+// anomaly — so it doesn't peg the always-on health indicator permanently red.
+// Matches the L5 server at-rest threshold; the exact per-row diff is the
+// on-demand eval's job (precise R4). Below the floor the count is still reported.
+export const AT_REST_ANOMALY_FLOOR = 100
+
 const count = async (db: AuditDb, sql: string, params: unknown[]): Promise<number> => {
   const rows = await db.getAll<{ n: number }>(sql, params)
   return Number(rows[0]?.n ?? 0)
@@ -153,7 +162,15 @@ export const runConsistencyAudit = async (
       )
       if (n > 0) findings.push({ prop: name, valuePresentRefAbsent: n })
     }
-    return { status: findings.length > 0 ? 'anomaly' : 'ok', curatedProps: CURATED_REF_PROPS, findings }
+    const total = findings.reduce((sum, f) => sum + f.valuePresentRefAbsent, 0)
+    // Anomaly only at catastrophe scale (see AT_REST_ANOMALY_FLOOR) — a small
+    // benign baseline of empty-valued props must NOT turn the health chip red.
+    return {
+      status: total >= AT_REST_ANOMALY_FLOOR ? 'anomaly' : 'ok',
+      curatedProps: CURATED_REF_PROPS,
+      findings,
+      total,
+    }
   })
 
   // L4 — blocks <-> blocks_synced divergence (ps_crud-aware). Per-client scans

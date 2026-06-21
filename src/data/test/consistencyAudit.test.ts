@@ -8,6 +8,11 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import {
+  AT_REST_ANOMALY_FLOOR,
+  runConsistencyAudit,
+  type AuditDb,
+} from '@/data/internals/consistencyAudit'
 import { Repo } from '../repo'
 
 interface Harness {
@@ -73,5 +78,31 @@ describe('repo.scheduleConsistencyAudit — built-in L3 self-audit', () => {
     const audit = env.repo.metrics().consistencyAudit
     expect(audit.runs).toBe(1) // not re-run within the cadence window
     expect(audit.skipped).toBe(1) // cadence gate hit
+  })
+})
+
+// The at-rest property-ref check has an irreducible benign baseline (empty/cleared
+// next-review-date values project no ref). It must NOT flag an anomaly below the
+// catastrophe floor, else the always-on health chip is permanently red.
+describe('runConsistencyAudit — property_ref_at_rest catastrophe floor', () => {
+  // Fake AuditDb: returns `propCount` for the property-ref count query (the only
+  // one using `properties_json LIKE`), 0 for every other check's count.
+  const fakeDb = (propCount: number): AuditDb => ({
+    getAll: async <T = Record<string, unknown>>(sql: string): Promise<T[]> =>
+      [{ n: sql.includes('properties_json LIKE') ? propCount : 0 }] as unknown as T[],
+  })
+
+  it('does not flag a small benign baseline (below the floor)', async () => {
+    const result = await runConsistencyAudit(fakeDb(1), 'ws', 0)
+    const check = result.checks.property_ref_at_rest
+    expect(check.status).toBe('ok')
+    expect(check.total).toBe(1) // reported, just not an anomaly
+    expect(result.anomalies).toBe(0)
+  })
+
+  it('flags a catastrophic count (at/above the floor)', async () => {
+    const result = await runConsistencyAudit(fakeDb(AT_REST_ANOMALY_FLOOR), 'ws', 0)
+    expect(result.checks.property_ref_at_rest.status).toBe('anomaly')
+    expect(result.anomalies).toBe(1)
   })
 })

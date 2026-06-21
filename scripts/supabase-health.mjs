@@ -11,6 +11,14 @@
 // Thresholds — keep in sync with comments in the monitoring memory note.
 
 import pg from 'pg'
+import { createHash } from 'node:crypto'
+
+// The probe's JSON snapshot is printed to stdout, which lands in a PUBLIC GitHub
+// Actions log (and the FAIL email body). `actor` (a user UUID) and `workspace_id`
+// are PII — never emit them raw. A truncated salt-free hash of a random UUID is
+// non-reversible (huge keyspace) yet stable, so the operator can still tell
+// "one actor did all of this" by hashing a known id, without leaking it.
+const redactId = (v) => (v == null ? null : createHash('sha256').update(String(v)).digest('hex').slice(0, 12))
 
 const SNAPSHOT_WARN_MB = 50
 const SNAPSHOT_FAIL_MB = 200
@@ -397,7 +405,7 @@ async function runDataIntegrityChecks(client) {
       )
       SELECT e.actor, e.workspace_id,
              count(*)::int AS emptied,
-             count(*) FILTER (WHERE b.references_json IS NULL OR b.references_json = '[]')::int AS durable
+             count(*) FILTER (WHERE b.id IS NOT NULL AND b.references_json = '[]')::int AS durable
       FROM emptied e
       LEFT JOIN public.blocks b ON b.id = e.block_id AND b.workspace_id = e.workspace_id
       GROUP BY e.actor, e.workspace_id
@@ -406,10 +414,10 @@ async function runDataIntegrityChecks(client) {
     let status = 'pass'
     for (const r of rows) {
       status = maxStatus(status, integrityThreshold('references_emptied',
-        `actor=${r.actor ?? 'null'} ws=${r.workspace_id} refs emptied-and-still-empty`,
+        `actor=${redactId(r.actor) ?? 'null'} ws=${redactId(r.workspace_id)} refs emptied-and-still-empty`,
         r.durable, { warnAt: REFS_EMPTIED_WARN, failAt: REFS_EMPTIED_FAIL }))
     }
-    return { status, groups: rows.map((r) => ({ actor: r.actor, workspace_id: r.workspace_id, emptied: r.emptied, durable: r.durable })) }
+    return { status, groups: rows.map((r) => ({ actor: redactId(r.actor), workspace_id: redactId(r.workspace_id), emptied: r.emptied, durable: r.durable })) }
   })
 
   // (1b) References shrunk — informational only (routine link removal shrinks
@@ -449,10 +457,10 @@ async function runDataIntegrityChecks(client) {
     let status = 'pass'
     for (const r of rows) {
       status = maxStatus(status, integrityThreshold('property_key_removal',
-        `actor=${r.actor ?? 'null'} ws=${r.workspace_id} prop-key removals`,
+        `actor=${redactId(r.actor) ?? 'null'} ws=${redactId(r.workspace_id)} prop-key removals`,
         r.removals, { warnAt: PROP_KEY_REMOVAL_WARN }))
     }
-    return { status, groups: rows.map((r) => ({ actor: r.actor, workspace_id: r.workspace_id, removals: r.removals })) }
+    return { status, groups: rows.map((r) => ({ actor: redactId(r.actor), workspace_id: redactId(r.workspace_id), removals: r.removals })) }
   })
 
   // (3) Mass deletions — D (hard) + soft_delete per actor in window.
@@ -471,22 +479,25 @@ async function runDataIntegrityChecks(client) {
     let status = 'pass'
     for (const r of rows) {
       status = maxStatus(status, integrityThreshold('deletions',
-        `actor=${r.actor ?? 'null'} ws=${r.workspace_id} deletions`,
+        `actor=${redactId(r.actor) ?? 'null'} ws=${redactId(r.workspace_id)} deletions`,
         r.total, { warnAt: DELETIONS_WARN, failAt: DELETIONS_FAIL }))
     }
-    return { status, groups: rows.map((r) => ({ actor: r.actor, workspace_id: r.workspace_id, hard: r.hard, soft: r.soft, total: r.total })) }
+    return { status, groups: rows.map((r) => ({ actor: redactId(r.actor), workspace_id: redactId(r.workspace_id), hard: r.hard, soft: r.soft, total: r.total })) }
   })
 
-  // (4) Bulk updated_at-only bump — changed_columns ⊆ {updated_at,
-  // user_updated_at} with updated_at present (the recovery-touch shape). Any
-  // bulk occurrence warns; per #4 a bulk bump always deserves a human glance.
+  // (4) Bulk metadata-only bump — changed_columns ⊆ {updated_at, user_updated_at,
+  // updated_by} with updated_at present (the recovery-touch shape). Includes
+  // updated_by because a recovery done the recommended way (through repo.tx)
+  // stamps it alongside updated_at/user_updated_at — without it this would only
+  // catch a raw server-side updated_at touch, not the tx path the L6 harness
+  // steers toward. Any bulk occurrence warns; per #4 it deserves a human glance.
   await detector('bulk_updated_at_bump', async () => {
     const rows = (await client.query(`
       SELECT h.actor, h.workspace_id, count(*)::int AS bumps
       FROM public.blocks_history h
       WHERE h.event_time >= now() - ($1::int * interval '1 minute')
         AND h.op = 'U'
-        AND h.changed_columns <@ ARRAY['updated_at','user_updated_at']::text[]
+        AND h.changed_columns <@ ARRAY['updated_at','user_updated_at','updated_by']::text[]
         AND 'updated_at' = ANY(h.changed_columns)
       GROUP BY h.actor, h.workspace_id
       ORDER BY bumps DESC
@@ -494,10 +505,10 @@ async function runDataIntegrityChecks(client) {
     let status = 'pass'
     for (const r of rows) {
       status = maxStatus(status, integrityThreshold('bulk_updated_at_bump',
-        `actor=${r.actor ?? 'null'} ws=${r.workspace_id} updated_at-only bumps`,
+        `actor=${redactId(r.actor) ?? 'null'} ws=${redactId(r.workspace_id)} metadata-only bumps`,
         r.bumps, { warnAt: BULK_BUMP_WARN }))
     }
-    return { status, groups: rows.map((r) => ({ actor: r.actor, workspace_id: r.workspace_id, bumps: r.bumps })) }
+    return { status, groups: rows.map((r) => ({ actor: redactId(r.actor), workspace_id: redactId(r.workspace_id), bumps: r.bumps })) }
   })
 
   // (5) At-rest property-ref inconsistency — curated high-value props whose
@@ -520,7 +531,12 @@ async function runDataIntegrityChecks(client) {
     const status = integrityThreshold('at_rest_property_ref',
       `props=[${CURATED_REF_PROPS.join(',')}] value-present/ref-absent`,
       total, { warnAt: AT_REST_PROPREF_WARN })
-    return { status, props: CURATED_REF_PROPS, total, by_workspace: rows }
+    return {
+      status,
+      props: CURATED_REF_PROPS,
+      total,
+      by_workspace: rows.map((r) => ({ workspace_id: redactId(r.workspace_id), inconsistent: r.inconsistent })),
+    }
   })
 }
 

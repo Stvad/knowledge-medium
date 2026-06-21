@@ -32,6 +32,7 @@ import {
 } from './queueCounts.ts'
 import { RejectionDialog } from './RejectionDialog.tsx'
 import { useConsistencyAudit } from './useConsistencyAudit.ts'
+import { useRepo } from '@/context/repo.js'
 import type { ConsistencyAuditResult } from '@/data/internals/consistencyAudit.js'
 
 interface UploadQueueCountRow {
@@ -201,7 +202,13 @@ export function SyncStatusHeaderItem() {
   const localErrorMessage = rejected.error?.message ?? null
 
   // Built-in consistency audit (L3) result — non-zero anomalies escalate the chip.
-  const audit = useConsistencyAudit()
+  // The store is a module global holding the LAST audited workspace's result, so
+  // on a workspace switch it can briefly hold another workspace's anomalies. Only
+  // surface a result that belongs to the active workspace.
+  const repo = useRepo()
+  const auditResult = useConsistencyAudit()
+  const audit =
+    auditResult && auditResult.workspaceId === repo.activeWorkspaceId ? auditResult : null
 
   if (localOnly) {
     return (
@@ -322,6 +329,12 @@ function SyncStatusHeaderContent({
   const errorMessage = localErrorMessage ?? stableNetworkError
   const integrityAnomalies = audit?.anomalies ?? 0
   const auditSummaries = audit && integrityAnomalies > 0 ? summarizeAuditAnomalies(audit) : []
+  // A check that threw degrades to status 'error' (not counted as an anomaly, so
+  // it doesn't redden the chip) — but surface it so a self-audit that couldn't
+  // run doesn't silently read as healthy.
+  const auditErroredChecks = audit
+    ? Object.entries(audit.checks).filter(([, c]) => c.status === 'error').map(([name]) => name)
+    : []
   const view = getSyncIndicatorView({
     localOnly,
     connected: status.connected,
@@ -453,6 +466,11 @@ function SyncStatusHeaderContent({
                 <div className="mt-1 text-[11px] leading-4 text-muted-foreground">
                   Run the consistency-check eval for full details.
                 </div>
+              </div>
+            )}
+            {auditErroredChecks.length > 0 && (
+              <div className="border-t pt-2 text-[11px] leading-4 text-muted-foreground">
+                {auditErroredChecks.length} integrity {auditErroredChecks.length === 1 ? 'check' : 'checks'} couldn't run ({auditErroredChecks.join(', ')}).
               </div>
             )}
           </div>
