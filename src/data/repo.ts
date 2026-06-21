@@ -194,6 +194,10 @@ const TX_LOG_CAPACITY = 64
 // indicator empty after a reload. The audit is a background smoke alarm costing
 // a handful of count queries, deferred to idle.
 const CONSISTENCY_AUDIT_CADENCE_MS = 30 * 60 * 1000
+// On a dirty divergence pass, wait this long and re-measure; only the settled
+// counts alarm. Long enough for an online echo round-trip / small resync to
+// drain, short enough that the on-demand run's progress toast covers it.
+const CONSISTENCY_AUDIT_DIVERGENCE_RECHECK_MS = 4000
 
 /** Registry key for the per-workspace undo manager when no workspace is
  *  active (issue #186). Workspace ids are UUIDs, so this sentinel can
@@ -1855,7 +1859,13 @@ export class Repo {
    *  Shared by the idle job (which gates on cadence first) and the on-demand
    *  action (which bypasses it). Throws on failure — callers decide how to react. */
   private async executeConsistencyAudit(workspaceId: string): Promise<ConsistencyAuditResult> {
-    const result = await runConsistencyAudit(this.db, workspaceId, Date.now())
+    const result = await runConsistencyAudit(this.db, workspaceId, Date.now(), {
+      // Debounce transient mid-sync divergence: a dirty divergence pass is
+      // re-measured after this delay and the settled counts reported, so an
+      // own-write-echo-pending / mid-resync blip doesn't alarm the indicator.
+      divergenceRecheckMs: CONSISTENCY_AUDIT_DIVERGENCE_RECHECK_MS,
+      sleep: (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)),
+    })
     this.consistencyAuditLastRun.set(workspaceId, Date.now())
     this.consistencyAuditState.runs += 1
     this.consistencyAuditState.lastError = null

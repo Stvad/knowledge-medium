@@ -125,6 +125,36 @@ describe('runConsistencyAudit — property_ref_at_rest catastrophe floor', () =>
     expect(sampleQueries).toBe(1) // ran once, because the count was > 0
   })
 
+  it('debounces transient divergence — a dirty pass that clears on recheck reports ok', async () => {
+    let strandedCountCalls = 0
+    let slept = 0
+    // The stranded COUNT query is dirty (5) on the first measure, clean (0) on
+    // the recheck; every other count is 0. Sample queries (SELECT b.id) only run
+    // for the settled state, which is clean → none.
+    const db: AuditDb = {
+      getAll: async <T = Record<string, unknown>>(sql: string): Promise<T[]> => {
+        // The stranded query is the only one with a `NOT EXISTS (… blocks_synced)`
+        // subquery (the others JOIN blocks_synced); its count is dirty then clean.
+        if (sql.includes('count(*)') && sql.includes('NOT EXISTS (SELECT 1 FROM blocks_synced')) {
+          strandedCountCalls += 1
+          return [{ n: strandedCountCalls === 1 ? 5 : 0 }] as unknown as T[]
+        }
+        return [{ n: 0 }] as unknown as T[]
+      },
+    }
+    const result = await runConsistencyAudit(db, 'ws', 0, {
+      divergenceRecheckMs: 1,
+      sleep: async () => { slept += 1 },
+    })
+    const div = result.checks.local_server_divergence
+    expect(div.status).toBe('ok') // transient cleared on recheck
+    expect(div.rechecked).toBe(true)
+    expect(div.strandedLocalOnly).toBe(0)
+    expect(slept).toBe(1)
+    expect(strandedCountCalls).toBe(2) // measured twice
+    expect(result.anomalies).toBe(0)
+  })
+
   it('does not run sample queries when a check is clean', async () => {
     let sampleQueries = 0
     const db: AuditDb = {

@@ -78,12 +78,25 @@ const EXPANDED_REF_FILTER = `
   AND (json_type(je.value,'$.sourceField') IS NULL
        OR typeof(json_extract(je.value,'$.sourceField'))='text')`
 
-/** Run the built-in consistency audit for one workspace. Pure: caller supplies
- *  `now` (epoch ms). Never throws — per-check failures are captured as `error`. */
+export interface AuditOptions {
+  /** When set (with `sleep`), the divergence check that finds anomalies on its
+   *  first pass re-measures after this delay and reports the SETTLED counts —
+   *  debouncing transient mid-sync divergence (an own write uploaded but its
+   *  server echo not yet streamed back; a mid-resync window). The point-in-time
+   *  snapshot can't otherwise tell a transient from a persistent divergence
+   *  (SLO §5). Omit to disable (the default — pure, instant, used in tests). */
+  divergenceRecheckMs?: number
+  sleep?: (ms: number) => Promise<void>
+}
+
+/** Run the built-in consistency audit for one workspace. Pure (modulo the
+ *  optional divergence-recheck sleep): caller supplies `now` (epoch ms). Never
+ *  throws — per-check failures are captured as `error`. */
 export const runConsistencyAudit = async (
   db: AuditDb,
   workspaceId: string,
   now: number,
+  opts: AuditOptions = {},
 ): Promise<ConsistencyAuditResult> => {
   const checks: Record<string, ConsistencyCheckResult> = {}
   let anomalies = 0
@@ -246,80 +259,59 @@ export const runConsistencyAudit = async (
   })
 
   // L4 — blocks <-> blocks_synced divergence (ps_crud-aware). Per-client scans
-  // miss divergence (#3, #5); this is the cross-view detector.
+  // miss divergence (#3, #5); this is the cross-view detector. Divergence is
+  // frequently a TRANSIENT mid-sync state, so a dirty first pass is re-measured
+  // after a delay (opts.divergenceRecheckMs) and the SETTLED counts are reported.
   await run('local_server_divergence', async () => {
     const pendingClause = `NOT EXISTS (
       SELECT 1 FROM ps_crud p
       WHERE json_extract(p.data,'$.type')='blocks' AND json_extract(p.data,'$.id')=b.id)`
-    const strandedLocalOnly = await count(
-      db,
-      `SELECT count(*) AS n FROM blocks b
-       WHERE b.workspace_id=? AND b.deleted=0
-         AND NOT EXISTS (SELECT 1 FROM blocks_synced bs WHERE bs.id=b.id)
-         AND ${pendingClause}`,
-      [workspaceId],
-    )
-    const equalStampStandoff = await count(
-      db,
-      `SELECT count(*) AS n FROM blocks b JOIN blocks_synced bs ON bs.id=b.id
-       WHERE b.workspace_id=? AND b.updated_at=bs.updated_at AND b.updated_at!=0
-         AND (b.content!=bs.content OR b.properties_json!=bs.properties_json
-              OR b.references_json!=bs.references_json OR b.deleted!=bs.deleted)`,
-      [workspaceId],
-    )
-    const localRicherNoPending = await count(
-      db,
-      `SELECT count(*) AS n FROM blocks b JOIN blocks_synced bs ON bs.id=b.id
-       WHERE b.workspace_id=? AND b.updated_at>bs.updated_at AND ${pendingClause}`,
-      [workspaceId],
-    )
-    const serverAheadUndrained = await count(
-      db,
-      `SELECT count(*) AS n FROM blocks b JOIN blocks_synced bs ON bs.id=b.id
-       WHERE b.workspace_id=? AND bs.updated_at>b.updated_at AND ${pendingClause}
-         AND (b.content!=bs.content OR b.properties_json!=bs.properties_json
-              OR b.references_json!=bs.references_json OR b.deleted!=bs.deleted)`,
-      [workspaceId],
-    )
+    const strandedWhere = `b.workspace_id=? AND b.deleted=0
+      AND NOT EXISTS (SELECT 1 FROM blocks_synced bs WHERE bs.id=b.id)
+      AND ${pendingClause}`
+    const standoffWhere = `b.workspace_id=? AND b.updated_at=bs.updated_at AND b.updated_at!=0
+      AND (b.content!=bs.content OR b.properties_json!=bs.properties_json
+           OR b.references_json!=bs.references_json OR b.deleted!=bs.deleted)`
+    const localRicherWhere = `b.workspace_id=? AND b.updated_at>bs.updated_at AND ${pendingClause}`
+    const serverAheadWhere = `b.workspace_id=? AND bs.updated_at>b.updated_at AND ${pendingClause}
+      AND (b.content!=bs.content OR b.properties_json!=bs.properties_json
+           OR b.references_json!=bs.references_json OR b.deleted!=bs.deleted)`
+
+    const measure = async () => ({
+      strandedLocalOnly: await count(db, `SELECT count(*) AS n FROM blocks b WHERE ${strandedWhere}`, [workspaceId]),
+      equalStampStandoff: await count(db, `SELECT count(*) AS n FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${standoffWhere}`, [workspaceId]),
+      localRicherNoPending: await count(db, `SELECT count(*) AS n FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${localRicherWhere}`, [workspaceId]),
+      serverAheadUndrained: await count(db, `SELECT count(*) AS n FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${serverAheadWhere}`, [workspaceId]),
+    })
     // stranded + standoff + local-richer are real anomalies; server-ahead is info.
-    const total = strandedLocalOnly + equalStampStandoff + localRicherNoPending
+    const anomalyTotal = (m: Awaited<ReturnType<typeof measure>>) =>
+      m.strandedLocalOnly + m.equalStampStandoff + m.localRicherNoPending
+
+    let m = await measure()
+    let rechecked = false
+    if (anomalyTotal(m) > 0 && opts.divergenceRecheckMs && opts.sleep) {
+      await opts.sleep(opts.divergenceRecheckMs)
+      m = await measure() // settled counts — a transient will have cleared
+      rechecked = true
+    }
+
     const samples: string[] = []
-    if (strandedLocalOnly > 0) {
-      addSamples(samples, await sampleIds(
-        db,
-        `SELECT b.id AS id FROM blocks b
-         WHERE b.workspace_id=? AND b.deleted=0
-           AND NOT EXISTS (SELECT 1 FROM blocks_synced bs WHERE bs.id=b.id)
-           AND ${pendingClause} LIMIT ${SAMPLE_LIMIT}`,
-        [workspaceId],
-      ))
+    if (m.strandedLocalOnly > 0) {
+      addSamples(samples, await sampleIds(db, `SELECT b.id AS id FROM blocks b WHERE ${strandedWhere} LIMIT ${SAMPLE_LIMIT}`, [workspaceId]))
     }
-    if (equalStampStandoff > 0) {
-      addSamples(samples, await sampleIds(
-        db,
-        `SELECT b.id AS id FROM blocks b JOIN blocks_synced bs ON bs.id=b.id
-         WHERE b.workspace_id=? AND b.updated_at=bs.updated_at AND b.updated_at!=0
-           AND (b.content!=bs.content OR b.properties_json!=bs.properties_json
-                OR b.references_json!=bs.references_json OR b.deleted!=bs.deleted)
-         LIMIT ${SAMPLE_LIMIT}`,
-        [workspaceId],
-      ))
+    if (m.equalStampStandoff > 0) {
+      addSamples(samples, await sampleIds(db, `SELECT b.id AS id FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${standoffWhere} LIMIT ${SAMPLE_LIMIT}`, [workspaceId]))
     }
-    if (localRicherNoPending > 0) {
-      addSamples(samples, await sampleIds(
-        db,
-        `SELECT b.id AS id FROM blocks b JOIN blocks_synced bs ON bs.id=b.id
-         WHERE b.workspace_id=? AND b.updated_at>bs.updated_at AND ${pendingClause}
-         LIMIT ${SAMPLE_LIMIT}`,
-        [workspaceId],
-      ))
+    if (m.localRicherNoPending > 0) {
+      addSamples(samples, await sampleIds(db, `SELECT b.id AS id FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${localRicherWhere} LIMIT ${SAMPLE_LIMIT}`, [workspaceId]))
     }
     return {
-      status: total > 0 ? 'anomaly' : 'ok',
-      strandedLocalOnly,
-      equalStampStandoff,
-      localRicherNoPending,
-      serverAheadUndrained,
+      status: anomalyTotal(m) > 0 ? 'anomaly' : 'ok',
+      strandedLocalOnly: m.strandedLocalOnly,
+      equalStampStandoff: m.equalStampStandoff,
+      localRicherNoPending: m.localRicherNoPending,
+      serverAheadUndrained: m.serverAheadUndrained,
+      rechecked,
       samples,
     }
   })

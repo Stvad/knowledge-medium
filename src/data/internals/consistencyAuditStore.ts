@@ -9,10 +9,10 @@
 // re-derives the current health within a few seconds of opening.
 import type { ConsistencyAuditResult } from './consistencyAudit'
 
-/** Id of the global action that runs the built-in audit on demand (registered in
- *  defaultShortcuts.ts, triggered from the command palette and the sync-status
- *  dropdown via `runActionById`). Lives here so neither caller has to import the
- *  other's module graph. */
+/** Id of the global action that runs the built-in audit on demand (registered by
+ *  the sync-status plugin in auditAction.ts, triggered from the command palette
+ *  and the sync-status dropdown via `runActionById`). Lives here so neither
+ *  caller has to import the other's module graph. */
 export const RUN_DATA_INTEGRITY_AUDIT_ACTION_ID = 'run_data_integrity_audit'
 
 let latest: ConsistencyAuditResult | null = null
