@@ -44,6 +44,15 @@ import {
  *     `defaultImpl(input)`**, so one buggy plugin can't break the verb for
  *     every other consumer. (If `defaultImpl` itself throws, `run` rejects
  *     — that's a core bug and should surface.)
+ *   - **Side-effect precondition for the fallback:** because the fallback
+ *     re-invokes `defaultImpl(input)` after the impl/decorator chain may
+ *     have *already partially run*, an `impl`/`decorator` MUST NOT commit
+ *     observable side effects before it returns — otherwise a crash
+ *     mid-effect re-runs the effect via the default (double execution).
+ *     This is trivially true for a pure decision verb like paste; a
+ *     side-effectful verb (navigate, dispatch) must keep its impl
+ *     effect-free-until-return (e.g. return a *description* of the effect
+ *     that the caller applies), or it should not rely on this fallback.
  *   - `after` is therefore **success-only**: it runs with the resolved
  *     result (including a fallback result), but not if `defaultImpl`
  *     throws. Cleanup that must always fire belongs in a decorator's
@@ -159,6 +168,13 @@ export function defineVerbFacet<Input, Result>({
       }
     }
 
+    // Resolved OUTSIDE the try so the catch's `ranBareDefault` check can see
+    // them. Safe ONLY because these reads are throw-free: the default
+    // combine just returns the array, and `implFacet`'s combine is a static
+    // `console.warn` + `values.at(-1)` (no plugin-controlled value is
+    // stringified). Any resolution-time work on plugin data that COULD throw
+    // must move inside the try (as the decorator fold did) — `read` caches
+    // only on success, so an escaping combine throw would re-throw every call.
     const impl = runtime.read(implFacet) ?? defaultImpl
     const decorators = runtime.read(decoratorsFacet)
 

@@ -404,7 +404,11 @@ export async function pasteEditModeMultilineText(
  *  paste exactly as they do to the DOM block-shell paste; keeping all
  *  clipboard paste behind this one funnel stops a new call site from
  *  silently bypassing the seam. Falls back to the raw outline paste only
- *  when no runtime is installed yet (very early boot / minimal harness). */
+ *  when no runtime is installed yet (very early boot / minimal harness).
+ *
+ *  The clipboard API read is text-only, so `PasteRequest.html` is undefined
+ *  on this surface — a format-aware override keyed on `text/html` (e.g.
+ *  CSV→table from a spreadsheet copy) fires for DOM paste but not here. */
 export async function pasteFromClipboard(
   pasteTarget: Block,
   repo: Repo,
