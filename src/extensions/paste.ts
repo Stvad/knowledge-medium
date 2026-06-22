@@ -27,7 +27,13 @@ export type PasteDecision =
  *  `shell` is a focused-but-not-editing block with no caret, so the
  *  historical behavior is to parse the clipboard as an outline. The
  *  default decision is surface-aware for exactly this single-line case;
- *  plugins also get the surface to vary their own behavior. */
+ *  plugins also get the surface to vary their own behavior.
+ *
+ *  Plugin authors: because the *default* differs by surface, a plain
+ *  single-line clipboard yields `single-block` in the `editor` but `split`
+ *  in the `shell`. An override that wants surface-uniform behavior for that
+ *  case must return its own decision rather than deferring to `next` /
+ *  `defaultPasteDecision`. */
 export type PasteSurface = 'editor' | 'shell'
 
 export interface PasteRequest {

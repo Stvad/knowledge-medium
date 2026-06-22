@@ -220,6 +220,39 @@ describe('pasteMultilineText', () => {
     expect(pasted[0]?.peek()?.content).toBe('- Alpha\n- Beta')
     expect(await childContents('root')).toEqual(['Target', '- Alpha\n- Beta', 'Sibling'])
   })
+
+  it('absorbs an asSingleBlock paste into a blank target, keeping newlines', async () => {
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('empty', '', 'root', 'a0')
+    await createBlock('next', 'Next', 'root', 'a1')
+
+    const pasted = await pasteMultilineText(
+      '- Alpha\n- Beta',
+      env.repo.block('empty'),
+      env.repo,
+      {scopeRootId: 'root', asSingleBlock: true},
+    )
+
+    expect(pasted).toHaveLength(1)
+    expect(pasted[0]?.id).toBe('empty')
+    expect(env.repo.block('empty').peek()?.content).toBe('- Alpha\n- Beta')
+    expect(await childContents('root')).toEqual(['- Alpha\n- Beta', 'Next'])
+  })
+
+  it('no-ops an asSingleBlock paste of blank text (matches the parse path)', async () => {
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('target', 'Target', 'root', 'a0')
+
+    const pasted = await pasteMultilineText(
+      '   \n  ',
+      env.repo.block('target'),
+      env.repo,
+      {scopeRootId: 'root', asSingleBlock: true},
+    )
+
+    expect(pasted).toEqual([])
+    expect(await childContents('root')).toEqual(['Target'])
+  })
 })
 
 describe('pasteEditModeMultilineText', () => {

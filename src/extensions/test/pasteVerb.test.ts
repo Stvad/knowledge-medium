@@ -19,6 +19,16 @@ describe('defaultPasteDecision', () => {
       .toEqual({kind: 'single-block'})
   })
 
+  it('honors an explicit single-block decision in the shell (single and multi line)', () => {
+    // The shell hardcodes intent 'split', so single-block here only comes
+    // from a plugin override — it must be honored verbatim regardless of
+    // line count (the cells the surface-aware fix exists to get right).
+    expect(defaultPasteDecision(request({intent: 'single-block', surface: 'shell', text: 'one line'})))
+      .toEqual({kind: 'single-block'})
+    expect(defaultPasteDecision(request({intent: 'single-block', surface: 'shell', text: 'a\nb'})))
+      .toEqual({kind: 'single-block'})
+  })
+
   it('splits a plain multiline paste into an outline', () => {
     expect(defaultPasteDecision(request({text: 'a\nb'}))).toEqual({kind: 'split'})
   })

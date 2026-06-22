@@ -244,6 +244,11 @@ export async function pasteMultilineText(
   const targetData = pasteTarget.peek() ?? await pasteTarget.load()
   if (!targetData) return []
 
+  // Blank clipboard is a no-op on both paths: `parseMarkdownToBlocks` drops
+  // all-blank input to `[]`, so `asSingleBlock` must too — otherwise it
+  // would create a whitespace-only block (or clobber a blank target).
+  if (asSingleBlock && isBlankContent(pastedText)) return []
+
   const parsed = asSingleBlock
     ? [singleParsedBlock(pastedText)]
     : parseMarkdownToBlocks(pastedText)
