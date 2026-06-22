@@ -501,7 +501,15 @@ no-overwrite precondition (reject if the object already exists). The old object 
     a cold respawn. The SW must not "fail open": a request with no established active user / no fresh
     unlock signal <code>respondWith</code>s a deterministic placeholder (or holds briefly on a
     readiness promise, short timeout → placeholder), never a stale cache hit and never an unauthorized
-    fetch.</li>
+    fetch. <strong>But the SW can only do this if it is <em>controlling the page</em></strong> — and
+    on a first production visit (or where SW registration is unavailable) it is not:
+    <code>public/sw.js</code> deliberately omits <code>clients.claim()</code>, so a fresh install
+    controls only the <em>next</em> load. An <code>${BASE_URL}asset/…</code> <code>&lt;img&gt;</code>
+    emitted while uncontrolled goes <em>straight to the origin</em> (→ 404, bypassing all of the above).
+    So the renderer must <strong>gate URL emission on <code>navigator.serviceWorker.controller</code></strong>:
+    only emit the virtual URL when a controller exists; otherwise render a placeholder (and retry once
+    controlled) or fall back to the app-thread resolve (§7.3). Don't rely on the SW catching an
+    already-dispatched request — an uncontrolled page never reaches it.</li>
 </ul>
 
 <h3>7.1.1 The SW needs three things the renderer/app hold — make them SW-readable</h3>
@@ -535,7 +543,11 @@ no-overwrite precondition (reject if the object already exists). The old object 
         to <code>defer</code> (don't materialize, re-prompt), never "plaintext". So eviction →
         <em>user re-affirms workspace status</em> → pin re-established; it can never silently downgrade.
         Preserve the existing pin semantics through the move: <em>survives</em> Lock &amp; Wipe
-        (not purged) and shared across accounts in the profile. <strong>But the in-memory fallback stays
+        (not purged) and <strong>keyed per <code>(user_id, workspace_id)</code></strong> — the IDB
+        store is <em>shared</em> across accounts in the profile but each record is per-user, exactly as
+        <code>modePin.ts</code> keys today; a workspace-only record would let account B consume account
+        A's pin for the same workspace, skipping B's own first-encounter validation and breaking the
+        per-user WK/wipe model. <strong>And the in-memory fallback stays
         plaintext-only</strong>: <code>modePin.ts</code> today falls back in-session only for a
         <em>confirmed-plaintext</em> pin and <em>throws</em> on durable-pin failure, precisely because
         E2EE needs a wipe-surviving authority. Keep that — if the durable IDB pin can't be written, an
@@ -1173,7 +1185,8 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
       of truth + boot-hydrated in-memory cache, §7.1.1), and extend that SW-readable mirror to per-asset
       <code>{asset_block_id → expected hash}</code>, written on block materialization. Then: SW asset
       route (<code>${BASE_URL}asset/&lt;ws&gt;/&lt;id&gt;</code>, clean — no <code>?h=</code>,
-      base-prefixed, ordered before the image-cache branch) with mode-pin-driven
+      base-prefixed, matched FIRST — ahead of BOTH the navigation and image-cache branches, §11) with
+      mode-pin-driven
       decrypt-or-passthrough and mirror-sourced hash verify; in-SW read cache for pin/WK/hash;
       user-scoped Cache; per-<code>clientId</code> token handshake; the marker-gated boot-time purge of
       cache + token + hash-mirror (§7.2) — covered by <code>lockAndWipe</code>-flavored tests incl. a
