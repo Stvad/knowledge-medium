@@ -950,9 +950,20 @@ does <em>not</em> touch it). Left alone it would (a) keep <em>raw</em> bytes for
 on disk past a wipe, and (b) lose bytes for a synced-metadata block, stranding it as
 <code>uploading</code> forever. So the queue joins the lock flow: at lock time a best-effort drain
 (upload + confirm) like <code>flushUploadQueue</code> does for <code>ps_crud</code>, then the store is
-purged under the same per-user <code>PENDING_WIPE</code> marker consumed at next boot (§7.2). Bytes
-that couldn't upload before the wipe are lost — consistent with the destructive-by-design lock — and
-that loss is surfaced, not silent.</div>
+purged under the same per-user <code>PENDING_WIPE</code> marker consumed at next boot (§7.2).
+<strong>Local loss isn't the whole story, though.</strong> An asset block whose <em>metadata</em>
+already synced (PowerSync up) while its <em>bytes</em> never uploaded (Storage / Edge-function down or
+rejecting) would, after the purge, strand every peer rendering a block whose
+<code>&lt;ws&gt;/&lt;asset_block_id&gt;</code> object can never exist — a permanently broken embed on
+devices that did nothing wrong. So the drain must <em>compensate</em>: for any asset block whose bytes
+are still un-confirmed at lock time, enqueue a delete of that asset block (and its embed ref) into
+<code>ps_crud</code> and let the existing <code>flushUploadQueue</code> drain it, so the server never
+keeps a block pointing at bytes this device is about to destroy and no peer holds. This rides the
+existing <code>ps_crud</code> flush and is self-consistent offline — if <code>ps_crud</code> can't
+drain, the original create never reached peers either, so the create + delete cancel locally with no
+divergence. Deleting the orphan is not extra data loss: the only bytes are being wiped regardless, so
+the choice is a clean delete vs. a dangling broken block fleet-wide. The bytes themselves are still
+lost — consistent with the destructive-by-design lock — and that loss is surfaced, not silent.</div>
 
 <h2 id="storage">10. Storage layout &amp; RLS</h2>
 
@@ -1175,10 +1186,13 @@ asset block cancels the queue entry and deletes any already-uploaded object.</di
 block in the workspace" breaks the share model: §12.1 grants byte access by walking
 <code>parent_id</code>, so an embed of an asset whose parent lives under a <em>different</em> page is
 <em>not</em> covered when you share <em>this</em> page's subtree — the recipient gets a broken image,
-and the §10 storage-RLS share branch never stamps that asset. So dedup is <strong>scoped to assets
-already under the containing subtree</strong>: reuse only an existing asset block whose
-<code>parent_id</code> chain is within (or an ancestor shared with) the current containing block;
-otherwise create a <em>fresh</em> asset block as a child here. <strong>A fresh block still uploads its
+and the §10 storage-RLS share branch never stamps that asset. So dedup is <strong>scoped to the embed's own subtree</strong>: reuse only an existing asset block that
+is a <strong>descendant of the current containing (embedding) block</strong> — never an ancestor or a
+sibling. Because a subtree share can be rooted at <em>any</em> block, down to the embedding block
+itself, only an asset inside the embed's own subtree is <em>guaranteed</em> to be stamped whenever that
+embed is shared; reusing an ancestor/sibling asset would leave it outside a child-rooted share, so
+storage RLS wouldn't cover <code>&lt;ws&gt;/&lt;asset_block_id&gt;</code> and the recipient sees a broken
+embed. Otherwise create a <em>fresh</em> asset block as a child here. <strong>A fresh block still uploads its
 own bytes.</strong> Object paths are <code>&lt;ws&gt;/&lt;asset_block_id&gt;</code> and storage
 RLS/share lookup key off that block id, so a new id is a new, currently-absent object — "reuse the
 hash" only saves re-reading/re-encoding the <em>local</em> source bytes; it must still PUT them (via
