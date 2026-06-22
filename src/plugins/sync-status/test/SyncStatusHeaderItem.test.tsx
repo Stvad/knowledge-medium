@@ -373,18 +373,14 @@ describe('SyncStatusHeaderItem', () => {
     expect(screen.getByRole('button').getAttribute('aria-label')).not.toContain('Data integrity')
   })
 
-  it('does not surface an ok-severity source in the dropdown (clean audit shows nothing)', async () => {
+  it('surfaces a sub-threshold finding as muted info without reddening the chip', async () => {
     mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
     publishConsistencyAudit({
       workspaceId: 'ws-1',
       checkedAt: 3,
-      anomalies: 0, // below the alert floor → ok, not an anomaly
+      anomalies: 0, // below the alert floor → not an anomaly, but a benign baseline
       checks: {
-        property_ref_at_rest: {
-          status: 'ok',
-          findings: [{prop: 'next-review-date', valuePresentRefAbsent: 3}],
-          total: 3,
-        },
+        property_ref_at_rest: {status: 'ok', total: 3},
       },
     })
 
@@ -394,7 +390,24 @@ describe('SyncStatusHeaderItem', () => {
     expect(button.getAttribute('aria-label')).not.toContain('Data integrity') // chip stays calm
 
     fireEvent.pointerDown(button)
-    // An 'ok' source is filtered out — no data-integrity section in the dropdown.
+    // Restored "below alert threshold" band — shown as muted info, dot not reddened.
+    expect(await screen.findByText('Data integrity: 1 below-threshold finding')).toBeInTheDocument()
+  })
+
+  it('a fully clean audit surfaces nothing in the dropdown', async () => {
+    mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
+    publishConsistencyAudit({
+      workspaceId: 'ws-1',
+      checkedAt: 4,
+      anomalies: 0,
+      checks: {references_index_mirror: {status: 'ok'}},
+    })
+
+    render(<SyncStatusHeaderItem/>)
+
+    const button = screen.getByRole('button')
+    expect(button.getAttribute('aria-label')).not.toContain('Data integrity')
+    fireEvent.pointerDown(button)
     expect(screen.queryByText(/Data integrity/)).not.toBeInTheDocument()
   })
 

@@ -44,6 +44,20 @@ describe('mapAuditToSnapshot', () => {
     expect(s.severity).toBe('warning')
     expect(s.summary).toContain("couldn't run")
   })
+  it('uses singular phrasing for a single anomaly', () => {
+    const s = mapAuditToSnapshot(result({ anomalies: 1, checks: { d: { status: 'anomaly' } } }))
+    expect(s.summary).toBe('1 issue found')
+  })
+  it('surfaces a sub-threshold ok finding as muted info (not ok, not alarming)', () => {
+    // An 'ok' check carrying a below-floor `total` (e.g. property_ref_at_rest) —
+    // the pre-seam "below alert threshold" band, restored via info severity.
+    const s = mapAuditToSnapshot(
+      result({ checks: { property_ref_at_rest: { status: 'ok', total: 3 } } }),
+    )
+    expect(s.severity).toBe('info')
+    expect(s.summary).toBe('1 below-threshold finding')
+    expect(s.detail).toContain('property_ref_at_rest: 3')
+  })
 })
 
 describe('createDataIntegrityDiagnosticSource', () => {

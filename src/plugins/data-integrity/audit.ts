@@ -177,6 +177,10 @@ export interface AuditFullDeps {
   candidateCap?: number
   /** Pathological-size ceiling for the keyset-paginated content scan (default 1M). */
   contentCap?: number
+  /** Ceiling for the keyset-paginated EXHAUSTIVE e2ee decrypt-compare (default
+   *  200k). Separate from candidateCap because the decrypt scan is bounded-memory
+   *  (paginated) while the projection scan pulls candidates into memory. */
+  decryptCap?: number
   /** Per-check sample cap for the rich diffs (default 10). */
   sampleLimit?: number
 }
@@ -571,7 +575,7 @@ const runExhaustiveE2eeDivergenceCheck = async (
     return { status: 'skipped', reason: `workspace not decryptable (materializability=${materializability})` }
   }
   const sampleLimit = full.sampleLimit ?? 10
-  const cap = full.candidateCap ?? 60000
+  const cap = full.decryptCap ?? 200000
   const BATCH = 2000
   let lastId = ''
   let scanned = 0
@@ -810,16 +814,31 @@ export const runConsistencyAudit = async (
       AND ${pendingClause}`
     // Cross-view content diff. An e2ee staging row holds `enc:v1:` ciphertext
     // while `blocks` holds decrypted plaintext, so they're never byte-equal —
-    // comparing them flags every e2ee row. So: always compare the cleartext
-    // columns (`deleted`; `updated_at` is the join key), and byte-compare the
-    // three sealed content columns ONLY when the staging value is plaintext.
-    // The decrypt spot-check below recovers content-divergence detection for
-    // e2ee rows. Shared by the standoff and server-ahead buckets.
-    const contentDiffers = `(
-      b.deleted!=bs.deleted
-      OR (${notEnc('bs.content')}
+    // comparing them flags every e2ee row. The prefix ALONE can't tell real
+    // ciphertext from a plaintext value that merely starts with `enc:v1:` (which
+    // exists on BOTH a plaintext workspace AND as a decrypted e2ee note about the
+    // format) — only the workspace's materializability can. So: when the
+    // workspace is confirmed PLAINTEXT (`copy`), byte-compare all columns
+    // unconditionally (a real divergence on a prefix-shaped plaintext value is
+    // still caught). Otherwise (e2ee, or unknown/no-deps) skip the sealed-column
+    // byte-compare for any `enc:v1:` staging row — the decrypt spot-check + the
+    // full-mode exhaustive decrypt-compare recover content detection for those.
+    // `deleted`/`updated_at` are cleartext and always compared.
+    let plaintextWorkspace = false
+    if (opts.decrypt) {
+      try {
+        plaintextWorkspace = (await opts.decrypt.getMaterializability(workspaceId)) === 'copy'
+      } catch {
+        plaintextWorkspace = false // can't confirm → treat as encrypted (safe default)
+      }
+    }
+    const sealedDiffers = plaintextWorkspace
+      ? `(b.content!=bs.content OR b.properties_json!=bs.properties_json
+          OR b.references_json!=bs.references_json)`
+      : `(${notEnc('bs.content')}
           AND (b.content!=bs.content OR b.properties_json!=bs.properties_json
-               OR b.references_json!=bs.references_json)))`
+               OR b.references_json!=bs.references_json))`
+    const contentDiffers = `(b.deleted!=bs.deleted OR ${sealedDiffers})`
     const standoffWhere = `b.workspace_id=? AND b.updated_at=bs.updated_at AND b.updated_at!=0
       AND ${contentDiffers}`
     const localRicherWhere = `b.workspace_id=? AND b.updated_at>bs.updated_at AND ${pendingClause}`

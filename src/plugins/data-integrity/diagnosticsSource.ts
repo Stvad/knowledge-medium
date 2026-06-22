@@ -29,20 +29,38 @@ const erroredChecks = (result: ConsistencyAuditResult): string[] =>
 /** Pure mapping from an audit result to a diagnostic snapshot. Anomalies are an
  *  error (redden the chip); a check that couldn't run is a warning that stays in
  *  the dropdown without alarming (matching the pre-seam behavior). */
+/** Checks that are 'ok' but still carry a benign sub-threshold signal (e.g.
+ *  `property_ref_at_rest` reporting a `total` below the alert floor). Surfaced as
+ *  muted info so the baseline stays visible in the chip without alarming —
+ *  preserving the pre-seam "below alert threshold" band. */
+const subThresholdChecks = (result: ConsistencyAuditResult): Array<{ name: string; total: number }> =>
+  Object.entries(result.checks)
+    .filter(([, c]) => c.status === 'ok' && Number(c.total) > 0)
+    .map(([name, c]) => ({ name, total: Number(c.total) }))
+
 export const mapAuditToSnapshot = (result: ConsistencyAuditResult): DiagnosticSnapshot => {
   const anomalies = result.anomalies
   const errored = erroredChecks(result)
-  const severity = anomalies > 0 ? 'error' : errored.length > 0 ? 'warning' : 'ok'
+  const subThreshold = subThresholdChecks(result)
+  const severity =
+    anomalies > 0 ? 'error' : errored.length > 0 ? 'warning' : subThreshold.length > 0 ? 'info' : 'ok'
   const summary =
     anomalies > 0
       ? `${anomalies} ${anomalies === 1 ? 'issue' : 'issues'} found`
       : errored.length > 0
         ? `${errored.length} ${errored.length === 1 ? 'check' : 'checks'} couldn't run`
-        : 'All checks passed'
+        : subThreshold.length > 0
+          ? `${subThreshold.length} below-threshold ${subThreshold.length === 1 ? 'finding' : 'findings'}`
+          : 'All checks passed'
   const detailParts: string[] = []
   const flagged = anomalousChecks(result)
   if (flagged.length) detailParts.push(flagged.join(', '))
   if (errored.length) detailParts.push(`couldn't run: ${errored.join(', ')}`)
+  // Only describe sub-threshold findings when they're the headline (no anomaly /
+  // errored check is overriding the severity) — a benign baseline, not alerting.
+  if (anomalies === 0 && errored.length === 0 && subThreshold.length) {
+    detailParts.push(subThreshold.map((s) => `${s.name}: ${s.total}`).join(', '))
+  }
   return {
     severity,
     summary,

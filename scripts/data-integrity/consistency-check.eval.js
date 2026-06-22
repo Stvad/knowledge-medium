@@ -28,6 +28,7 @@ const workspaceId = data?.workspaceId ?? (allWorkspaces ? null : repo.activeWork
 const sampleLimit = Number.isInteger(data?.sampleLimit) ? data.sampleLimit : 10
 const candidateCap = Number.isInteger(data?.candidateCap) ? data.candidateCap : 60000
 const contentCap = Number.isInteger(data?.contentCap) ? data.contentCap : 1_000_000
+const decryptCap = Number.isInteger(data?.decryptCap) ? data.decryptCap : 200_000
 
 if (!allWorkspaces && !workspaceId) {
   throw new Error(
@@ -45,8 +46,15 @@ const decrypt = syncObserverDepsFor(repo.user.id)
 
 const workspaceIds = allWorkspaces
   ? (
+      // Union across all three tables: a workspace can have surviving
+      // block_references / blocks_synced rows with no live `blocks` (all hard-
+      // deleted) — enumerating from `blocks` alone would skip its orphan/mirror
+      // checks entirely.
       await auditDb.getAll(
-        "SELECT DISTINCT workspace_id AS id FROM blocks WHERE workspace_id IS NOT NULL ORDER BY id",
+        `SELECT workspace_id AS id FROM blocks WHERE workspace_id IS NOT NULL
+         UNION SELECT workspace_id FROM block_references WHERE workspace_id IS NOT NULL
+         UNION SELECT workspace_id FROM blocks_synced WHERE workspace_id IS NOT NULL
+         ORDER BY id`,
       )
     ).map((r) => r.id)
   : [workspaceId]
@@ -73,6 +81,7 @@ for (const ws of workspaceIds) {
       activeWorkspaceId: repo.activeWorkspaceId,
       candidateCap,
       contentCap,
+      decryptCap,
       sampleLimit,
     },
   })

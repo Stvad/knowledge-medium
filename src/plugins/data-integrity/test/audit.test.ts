@@ -16,6 +16,8 @@ import {
   type DecryptSpotCheckResult,
 } from '../audit'
 import {
+  consistencyAuditEffect,
+  drainConsistencyAudits,
   isAuditDue,
   resetConsistencyAuditCadence,
   runConsistencyAuditNow,
@@ -32,6 +34,7 @@ import {
 import { encodeForWire, type Materializability } from '@/sync/transform.js'
 import { generateWorkspaceKeyBytes, importWorkspaceKey } from '@/sync/crypto/workspaceKey.js'
 import type { BlockData } from '@/data/api'
+import type { FacetRuntime } from '@/facets/facet'
 import { Repo } from '@/data/repo'
 
 interface Harness {
@@ -88,6 +91,40 @@ describe('data-integrity audit runner + cadence (schedule.ts)', () => {
     expect(isAuditDue('ws-3', Date.now())).toBe(false) // within the cadence window
     resetConsistencyAuditCadence()
     expect(isAuditDue('ws-3', Date.now())).toBe(true)
+  })
+
+  // The production trigger path: AppEffect.start → idle job → run → publish.
+  const ctx = (workspaceId: string) => ({
+    repo: env.repo,
+    workspaceId,
+    runtime: {} as FacetRuntime, // the effect ignores runtime/safeMode
+    safeMode: false,
+  })
+  // Let the deferred idle job fire (setTimeout(0) under node), then drain it.
+  const settle = async (): Promise<void> => {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await drainConsistencyAudits()
+  }
+
+  it('the scheduling effect runs one audit on workspace open and publishes it', async () => {
+    consistencyAuditEffect.start(ctx('ws-eff'))
+    await settle()
+    expect(getConsistencyAuditSnapshot()?.workspaceId).toBe('ws-eff')
+  })
+
+  it('the effect cleanup cancels a pending run before the idle job fires', async () => {
+    const cleanup = consistencyAuditEffect.start(ctx('ws-eff2'))
+    if (typeof cleanup === 'function') cleanup()
+    await settle()
+    expect(getConsistencyAuditSnapshot()).toBeNull() // never ran
+  })
+
+  it('the effect does not re-run a workspace already audited within the cadence window', async () => {
+    await runConsistencyAuditNow(env.repo, 'ws-eff3') // stamps the cadence
+    resetConsistencyAuditStore() // clear what the run published
+    consistencyAuditEffect.start(ctx('ws-eff3')) // not due → schedules nothing
+    await settle()
+    expect(getConsistencyAuditSnapshot()).toBeNull()
   })
 })
 
@@ -270,6 +307,25 @@ describe('runConsistencyAudit — e2ee encryption-awareness', () => {
     await stageCiphertext({ ...d, deleted: true }, await seal(key, d))
 
     const result = await runConsistencyAudit(sharedDb.db, WS, 0)
+    expect(result.checks.local_server_divergence.status).toBe('anomaly')
+    expect(result.checks.local_server_divergence.equalStampStandoff).toBe(1)
+  })
+
+  it('flags an equal-stamp divergence on a PLAINTEXT block whose content starts with enc:v1:', async () => {
+    // A plaintext-workspace ('copy') note that literally begins with the envelope
+    // prefix must NOT be mistaken for ciphertext-at-rest: with the workspace
+    // confirmed plaintext, the sealed-column byte-compare runs and catches a
+    // genuine divergence (the materializability-gated false-negative fix).
+    const key = await importWorkspaceKey(generateWorkspaceKeyBytes())
+    const local = block({ id: 'encp', content: 'enc:v1: my notes about the envelope format' })
+    const server = block({ id: 'encp', content: 'enc:v1: DIFFERENT server text' })
+    await seedLocal(local)
+    // Plaintext staging row (NOT sealed) — content is prefix-shaped real text.
+    await sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToRowParams(server))
+
+    const result = await runConsistencyAudit(sharedDb.db, WS, 0, {
+      decrypt: decryptDeps(key, 'copy'), // workspace confirmed plaintext
+    })
     expect(result.checks.local_server_divergence.status).toBe('anomaly')
     expect(result.checks.local_server_divergence.equalStampStandoff).toBe(1)
   })
