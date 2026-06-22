@@ -160,18 +160,19 @@ export function defineVerbFacet<Input, Result>({
     }
 
     const impl = runtime.read(implFacet) ?? defaultImpl
-
-    // `read` returns contributions ascending by precedence, so folding
-    // left wraps the lowest-precedence decorator around the impl first
-    // (innermost) and leaves the highest-precedence one outermost.
     const decorators = runtime.read(decoratorsFacet)
-    let composed: VerbImpl<Input, Result> = impl
-    for (const decorate of decorators) {
-      composed = decorate(composed)
-    }
 
     let result: Result
     try {
+      // `read` returns contributions ascending by precedence, so folding
+      // left wraps the lowest-precedence decorator around the impl first
+      // (innermost) and leaves the highest-precedence one outermost. The
+      // fold runs INSIDE the try so a decorator that throws *while wrapping*
+      // (not just when its wrapper is called) also degrades to the default.
+      let composed: VerbImpl<Input, Result> = impl
+      for (const decorate of decorators) {
+        composed = decorate(composed)
+      }
       result = await composed(input)
     } catch (error) {
       // A throwing impl/decorator is a crash, not a veto — degrade to the

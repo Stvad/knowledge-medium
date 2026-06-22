@@ -166,9 +166,9 @@ describe('defineVerbFacet', () => {
     consoleError.mockRestore()
   })
 
-  it('falls back to defaultImpl when a decorator throws', async () => {
+  it('falls back to defaultImpl when a decorator wrapper throws (at call time)', async () => {
     const verb = defineVerbFacet<number, number>({
-      id: 'test.verb.decorator-throws',
+      id: 'test.verb.decorator-call-throws',
       defaultImpl: n => n,
     })
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -179,6 +179,26 @@ describe('defineVerbFacet', () => {
     ])
 
     await expect(verb.run(runtime, 9)).resolves.toBe(9)
+    expect(consoleError).toHaveBeenCalled()
+    consoleError.mockRestore()
+  })
+
+  it('falls back to defaultImpl when a decorator throws while wrapping (at apply time)', async () => {
+    // The decorator factory itself throws when applied (building the chain),
+    // before any wrapper is called — this must still degrade to the default
+    // rather than rejecting and breaking the verb for every caller.
+    const verb = defineVerbFacet<number, number>({
+      id: 'test.verb.decorator-wrap-throws',
+      defaultImpl: n => n + 1,
+    })
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const runtime = resolveFacetRuntimeSync([
+      verb.decorator(() => {
+        throw new Error('wrap boom')
+      }),
+    ])
+
+    await expect(verb.run(runtime, 5)).resolves.toBe(6)
     expect(consoleError).toHaveBeenCalled()
     consoleError.mockRestore()
   })
