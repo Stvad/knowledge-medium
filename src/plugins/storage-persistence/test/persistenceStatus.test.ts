@@ -18,6 +18,7 @@ import {
   REQUEST_PERSISTENCE_ACTION_ID,
   persistenceDiagnosticSource,
   refreshPersistenceStatus,
+  resetPersistenceStatus,
 } from '../persistenceStatus.ts'
 
 const mockState = (state: PersistenceState) => {
@@ -26,6 +27,8 @@ const mockState = (state: PersistenceState) => {
 
 describe('persistenceDiagnosticSource', () => {
   beforeEach(() => {
+    resetPersistenceStatus()
+    h.changeListener = undefined
     vi.mocked(getPersistenceState).mockReset()
   })
 
@@ -35,7 +38,7 @@ describe('persistenceDiagnosticSource', () => {
     expect(persistenceDiagnosticSource.getSnapshot()).toBeNull()
   })
 
-  it('reports nothing on an engine without the API (Safari)', async () => {
+  it('reports nothing on an engine without the persist API', async () => {
     mockState({ supported: false, persisted: false, permission: undefined })
     await refreshPersistenceStatus()
     expect(persistenceDiagnosticSource.getSnapshot()).toBeNull()

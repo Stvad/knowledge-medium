@@ -19,20 +19,25 @@
  *     engagement, bookmarked, installed PWA, notifications permission…). A
  *     `false` here is a *silent* denial that a later call can flip to `true`
  *     as engagement grows or the app is installed.
+ *   - **Safari (17+)** behaves like Chromium here — silent, heuristic, no
+ *     prompt — so it needs no special-casing.
  *   - **Firefox** shows a permission prompt; an explicit "Block" is a durable
  *     denial, a dismissal leaves it undecided.
- *   - **Safari** lacks the API entirely (we no-op and let its platform rules
- *     apply).
+ *   - Engines that lack `persist()`/`persisted()` entirely (very old browsers)
+ *     fall out of the generic feature-detect below and no-op — again, no
+ *     per-engine branch.
  *
  * Two competing constraints follow, and we thread both:
  *   1. *Don't nag.* Re-calling `persist()` every page load would re-prompt a
  *      Firefox user who already saw the prompt. So we (a) treat a Permissions
  *      API `'denied'` state as a permanent skip — the strongest "user said no"
- *      signal — and (b) otherwise ask at most once per *browsing session*.
- *   2. *Don't permanently gate silent denials.* A Chromium silent denial
+ *      signal (in practice Firefox-only; Chromium/Safari grant silently and
+ *      never report `'denied'`) — and (b) otherwise ask at most once per
+ *      *cooldown window*, recorded origin-wide so it's shared across tabs.
+ *   2. *Don't permanently gate silent denials.* A Chromium/Safari silent denial
  *      reports `'prompt'` (never `'denied'`), so it never trips the permanent
- *      skip; and because the once-per-session guard lives in `sessionStorage`,
- *      a *new* session retries — letting persistence be granted later. (A
+ *      skip; and because the cooldown marker has an expiry, a later attempt
+ *      retries — letting persistence be granted as engagement grows. (A
  *      grant the browser makes on its own, e.g. on PWA install, is caught up
  *      front by `persisted()`.)
  *
@@ -46,26 +51,32 @@
  *   newly granted both resolve `true`).
  */
 
-// Per-session marker (sessionStorage, not localStorage) that we've already
-// asked this session — so a dismissed prompt isn't repeated on every reload,
-// while a new session still retries. Deliberately NOT permanent: a Chromium
-// silent denial must keep its retry path.
-const SESSION_ATTEMPT_KEY = 'storage.persistAttempted'
+// Origin-wide retry marker (localStorage — shared across tabs and PWA windows,
+// unlike per-tab sessionStorage) with an *expiry*. Origin-wide so a dismissed
+// Firefox prompt isn't repeated in a second tab; expiring so it isn't permanent
+// — a silent Chromium/Safari denial retries once the window lapses (engagement
+// grows over days anyway). A durable Firefox "Block" is handled separately via
+// the Permissions API `'denied'` state, which never expires here.
+const PERSIST_ATTEMPT_KEY = 'storage.persistAttemptedAt'
+const RETRY_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000 // one week
 
-const attemptedThisSession = (): boolean => {
+const attemptedWithinCooldown = (): boolean => {
   try {
-    return globalThis.sessionStorage?.getItem(SESSION_ATTEMPT_KEY) !== null
+    const raw = globalThis.localStorage?.getItem(PERSIST_ATTEMPT_KEY)
+    if (!raw) return false
+    const at = Number(raw)
+    return Number.isFinite(at) && Date.now() - at < RETRY_COOLDOWN_MS
   } catch {
     return false
   }
 }
 
-const markAttemptedThisSession = (): void => {
+const markAttempted = (): void => {
   try {
-    globalThis.sessionStorage?.setItem(SESSION_ATTEMPT_KEY, '1')
+    globalThis.localStorage?.setItem(PERSIST_ATTEMPT_KEY, String(Date.now()))
   } catch {
-    // Private-mode sessionStorage can throw; losing the guard only risks an
-    // extra (still silent on Chromium) request, never data.
+    // Private-mode storage can throw; losing the guard only risks an extra
+    // (still silent on Chromium/Safari) request, never data.
   }
 }
 
@@ -143,9 +154,10 @@ export const requestPersistentStorage = async (
   if (typeof navigator === 'undefined') return false
 
   const storage = navigator.storage
-  // Safari < 15.4 and other older engines lack the StorageManager
-  // persist/persisted methods. We can't query or request persistence there;
-  // such engines apply their own platform rules, so just no-op.
+  // Engines that lack the StorageManager persist/persisted methods (very old
+  // browsers). We can't query or request persistence there; they apply their
+  // own platform rules, so just no-op. Generic feature-detect, no per-engine
+  // branch.
   if (
     !storage ||
     typeof storage.persist !== 'function' ||
@@ -162,19 +174,20 @@ export const requestPersistentStorage = async (
 
     if (!force) {
       // Durable, explicit user denial (e.g. Firefox "Block"): never auto-retry.
-      // Chromium reports 'prompt' for a *silent* denial, so this does not gate
-      // Chromium's retry path.
+      // Chromium/Safari report 'prompt' for a *silent* denial, so this does not
+      // gate their retry path.
       if ((await queryPersistPermission()) === 'denied') {
         console.info('[storage] persistence previously denied by the user — not re-requesting')
         return false
       }
-      // Otherwise ask at most once per session, so a dismissed prompt isn't
-      // repeated on reloads. A new session retries (sessionStorage clears).
-      if (attemptedThisSession()) return false
+      // Otherwise ask at most once per cooldown window, so a dismissed prompt
+      // isn't repeated on reloads or in other tabs. The marker expires, so a
+      // later attempt retries.
+      if (attemptedWithinCooldown()) return false
     }
     // Record before requesting so even a prompt the user *dismisses* counts as
-    // this session's one attempt — the dismissal itself is the nag we avoid.
-    markAttemptedThisSession()
+    // the attempt — the dismissal itself is the nag we avoid.
+    markAttempted()
 
     const granted = await storage.persist()
     if (granted) {

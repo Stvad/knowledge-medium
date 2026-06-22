@@ -25,6 +25,9 @@ const appReloadAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
   description: 'Reload to apply the new version',
   context: ActionContextTypes.GLOBAL,
   icon: RefreshCw,
+  // Only meaningful when an update is pending — keep it out of the palette
+  // otherwise (the chip's dropdown button still dispatches it regardless).
+  isVisible: () => appUpdate.isAvailable(),
   handler: () => {
     appUpdate.reload()
   },

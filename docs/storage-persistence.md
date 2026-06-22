@@ -33,43 +33,47 @@ browsers (Firefox) — prompt the user.
 [src/requestPersistentStorage.ts](../src/requestPersistentStorage.ts), called
 once from [src/main.tsx](../src/main.tsx) at boot:
 
-1. Feature-detects `StorageManager.persist`/`persisted` (older Safari lacks
-   them; we no-op there and let the platform's own rules apply).
+1. Feature-detects `StorageManager.persist`/`persisted` (a generic check — only
+   very old engines lack them; we no-op there and let the platform's own rules
+   apply).
 2. Checks `persisted()` first, so an already-persistent origin doesn't
    re-request. This also picks up a later *browser*-driven grant — e.g.
    Chromium auto-persists on PWA install — without us asking again.
 3. If a durable **`'denied'`** Permissions API state is present
    (`persistent-storage`), skips permanently — that's an explicit user "no"
-   (Firefox "Block") we never re-prompt.
-4. Otherwise requests persistence **at most once per browsing session**
-   (guarded by a `sessionStorage` marker, `storage.persistAttempted`), and logs
-   the outcome (`granted` / `not granted` / `failed`).
+   (Firefox "Block") we never re-prompt. In practice this is Firefox-only:
+   Chromium and Safari grant silently and never report `'denied'`.
+4. Otherwise requests persistence **at most once per cooldown window** (guarded
+   by an origin-wide `localStorage` timestamp, `storage.persistAttemptedAt`,
+   currently one week), and logs the outcome (`granted` / `not granted` /
+   `failed`).
 
 ### Why this exact gating — two competing constraints
 
-The request resolves very differently per engine, which forces the design:
+The request resolves differently per engine, which forces the design:
 
-- **Chromium** never prompts; it grants silently from heuristics (engagement,
-  bookmarked, installed PWA, notifications…). A `false` is a *silent* denial
-  that a **later** call can flip to `true` as those signals change.
+- **Chromium and Safari (17+)** never prompt; they grant silently from
+  heuristics (engagement, installed PWA, notifications…). A `false` is a
+  *silent* denial that a **later** call can flip to `true` as those signals
+  change. (Safari ≥ 17 behaves like Chromium here — no special-casing.)
 - **Firefox** shows a permission prompt; "Block" is a durable denial, a
   dismissal leaves it undecided.
-- **Safari** lacks the API (we no-op).
 
 So we must satisfy both at once:
 
 - **Don't nag.** Re-calling `persist()` every reload would re-prompt a Firefox
   user. Hence the permanent skip on Permissions API `'denied'` (the strongest
-  "user said no") *and* the once-per-session guard for the undecided case
-  (covers a dismissed prompt without repeating it on reloads). The session
-  marker is written *before* the request so even a dismissal counts as that
-  session's attempt.
-- **Don't permanently gate silent denials.** A Chromium silent denial reports
-  `'prompt'`, not `'denied'`, so it never trips the permanent skip; and because
-  the session guard lives in `sessionStorage` (not `localStorage`), a **new
-  session retries** — letting persistence be granted once engagement grows.
-  This is why the marker is per-session, not per-device-forever: an earlier
-  `localStorage` version permanently blocked Chromium from ever being promoted.
+  "user said no") *and* the once-per-cooldown guard for the undecided case
+  (covers a dismissed prompt without repeating it on reloads — or in another
+  tab). The marker is written *before* the request so even a dismissal counts
+  as the attempt.
+- **Don't permanently gate silent denials.** A Chromium/Safari silent denial
+  reports `'prompt'`, not `'denied'`, so it never trips the permanent skip; and
+  because the marker **expires** (and is origin-wide `localStorage`, shared
+  across tabs, not per-tab `sessionStorage`), a later attempt retries — letting
+  persistence be granted once engagement grows. The expiry is what keeps it from
+  becoming a permanent block: an un-expiring marker would stop Chromium/Safari
+  from ever being promoted.
 
 A deliberate, user-initiated retry (a future settings affordance that can
 explain *why* first) calls `requestPersistentStorage({force: true})` to bypass
@@ -95,11 +99,19 @@ anything automatically.
 
 True differential durability needs the
 [Storage Buckets API](https://developer.mozilla.org/en-US/docs/Web/API/Storage_Buckets_API)
-(`navigator.storageBuckets.open(name, { durability, persisted })`). It lets us
-split storage into separately named buckets, each with its own persistence and
-an eviction **priority** (`durability: 'strict' | 'relaxed'`), so the browser
-sheds the relaxed display-cache bucket before touching the strict database
-bucket. That is the right primitive for "DB survives, cache is sacrificial."
+(`navigator.storageBuckets.open(name, { persisted })`). It lets us split storage
+into separately named buckets, each with its **own** `persisted` flag. Eviction
+order is governed by that flag: the browser sheds all non-persisted
+(best-effort) buckets before touching a `persisted: true` one. So we'd open the
+database/keys bucket with `persisted: true` and the media-cache bucket as
+`persisted: false` (the default) — the cache is shed first, the DB survives.
+That is the right primitive for "DB survives, cache is sacrificial."
+
+> Note: the buckets' `durability: 'strict' | 'relaxed'` option is **not** this
+> lever — it's a per-write flush-vs-buffer hint (data safety across power loss),
+> unrelated to eviction order. Eviction is controlled solely by `persisted`.
+> Conflating the two would leave the DB bucket non-persistent and just as
+> evictable as the cache — the opposite of the intent.
 
 **Is it worth pursuing now? Not yet.**
 
@@ -111,11 +123,11 @@ bucket. That is the right primitive for "DB survives, cache is sacrificial."
   too, which is strictly nicer for offline use; the only cost is that the cache
   counts against the (large) persistent quota. We have no measured eviction
   pressure today.
-- **It's additive later.** Moving the planned media cache into a `relaxed`
-  bucket is a self-contained change when the cache is built; nothing about the
-  current origin-wide request blocks it. The DB and key store stay in the
-  default (now persistent) bucket; only the new cache opts into a sacrificial
-  bucket.
+- **It's additive later.** Moving the planned media cache into a non-persisted
+  (`persisted: false`) bucket is a self-contained change when the cache is
+  built; nothing about the current origin-wide request blocks it. The DB and key
+  store stay in the default (now persistent) bucket; only the new cache opts into
+  a sacrificial bucket.
 
 **Recommendation:** origin-wide `persist()` is sufficient for now. Revisit
 Storage Buckets when (a) the media cache exists and is large enough to matter,

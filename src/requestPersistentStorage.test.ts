@@ -17,8 +17,10 @@ const setPermissionState = (state: PermissionState | undefined) => {
   Object.defineProperty(navigator, 'permissions', {configurable: true, value})
 }
 
+const ATTEMPT_KEY = 'storage.persistAttemptedAt'
+
 beforeEach(() => {
-  sessionStorage.clear()
+  localStorage.clear()
   setPermissionState(undefined)
   vi.spyOn(console, 'info').mockImplementation(() => {})
   vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -53,7 +55,7 @@ describe('requestPersistentStorage', () => {
     await expect(requestPersistentStorage()).resolves.toBe(false)
   })
 
-  it('asks only once per session, not on every reload within the session', async () => {
+  it('asks only once within the cooldown window, not on every reload/tab', async () => {
     const persist = vi.fn(async () => false)
     setStorage({persisted: vi.fn(async () => false), persist})
 
@@ -63,12 +65,13 @@ describe('requestPersistentStorage', () => {
     expect(persist).toHaveBeenCalledOnce()
   })
 
-  it('retries in a new session so a silent Chromium denial can be re-evaluated', async () => {
+  it('retries once the cooldown window lapses so a silent denial can be re-evaluated', async () => {
     const persist = vi.fn(async () => false)
     setStorage({persisted: vi.fn(async () => false), persist})
 
     await requestPersistentStorage()
-    sessionStorage.clear() // simulate a fresh browsing session
+    // Simulate the marker aging past the cooldown (origin-wide, not per-tab).
+    localStorage.setItem(ATTEMPT_KEY, String(Date.now() - 8 * 24 * 60 * 60 * 1000))
     await requestPersistentStorage()
 
     expect(persist).toHaveBeenCalledTimes(2)
@@ -80,13 +83,13 @@ describe('requestPersistentStorage', () => {
     setPermissionState('denied')
 
     await requestPersistentStorage()
-    sessionStorage.clear() // even a new session must not re-prompt a blocked user
+    localStorage.clear() // even with no marker / a new session, a blocked user isn't re-prompted
 
     await expect(requestPersistentStorage()).resolves.toBe(false)
     expect(persist).not.toHaveBeenCalled()
   })
 
-  it('re-requests when forced, bypassing both the session and permission gates', async () => {
+  it('re-requests when forced, bypassing both the cooldown and permission gates', async () => {
     const persist = vi.fn(async () => false)
     setStorage({persisted: vi.fn(async () => false), persist})
     setPermissionState('denied')

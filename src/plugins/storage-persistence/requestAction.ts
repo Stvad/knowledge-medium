@@ -11,13 +11,20 @@ import { actionsFacet } from '@/extensions/core.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { showInfo, showSuccess } from '@/utils/toast.js'
 import { getPersistenceState, requestPersistentStorage } from '@/requestPersistentStorage.js'
-import { REQUEST_PERSISTENCE_ACTION_ID, refreshPersistenceStatus } from './persistenceStatus.js'
+import {
+  REQUEST_PERSISTENCE_ACTION_ID,
+  persistenceDiagnosticSource,
+  refreshPersistenceStatus,
+} from './persistenceStatus.js'
 
 const requestPersistenceAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
   id: REQUEST_PERSISTENCE_ACTION_ID,
   description: 'Protect local data (persistent storage)',
   context: ActionContextTypes.GLOBAL,
   icon: ShieldCheck,
+  // Only surface in the palette when there's something to do (not persisted /
+  // blocked) — i.e. when the reminder is showing. The chip button bypasses this.
+  isVisible: () => persistenceDiagnosticSource.getSnapshot() !== null,
   handler: async () => {
     const granted = await requestPersistentStorage({ force: true })
     if (granted) {
@@ -30,7 +37,7 @@ const requestPersistenceAction: ActionConfig<typeof ActionContextTypes.GLOBAL> =
         )
       } else {
         showInfo(
-          'Your browser will protect this automatically as you keep using the app — or install it (browser menu → Install) to lock it in now.',
+          'Your browser will protect this automatically as you keep using the app — or install it to your home screen / dock to lock it in now.',
         )
       }
     }

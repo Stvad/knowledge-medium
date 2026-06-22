@@ -47,8 +47,8 @@ const computeSnapshot = (state: {
   persisted: boolean
   permission: PermissionState | undefined
 }): DiagnosticSnapshot | null => {
-  // Already protected, or an engine we can't query/act on (Safari, which applies
-  // its own eviction rules) → nothing actionable to nudge about.
+  // Already protected, or an engine without the persist API (very old
+  // browsers, which apply their own eviction rules) → nothing to nudge about.
   if (state.persisted || !state.supported) return null
   if (state.permission === 'denied') {
     // The user explicitly blocked it; re-requesting would no-op (the browser
@@ -88,6 +88,9 @@ const onVisibilityChange = (): void => {
   if (document.visibilityState === 'visible') void refreshPersistenceStatus()
 }
 
+// Handle to the persistence-change subscription, so stop() can release it.
+let unsubscribeChange: (() => void) | null = null
+
 const start = (): void => {
   if (started) return
   started = true
@@ -97,8 +100,27 @@ const start = (): void => {
   // The boot request (or the manual Protect action) can settle after our first
   // read — e.g. a Firefox prompt grants late; re-check when it does so the
   // nudge clears without waiting for a focus change.
-  subscribePersistenceChange(() => void refreshPersistenceStatus())
+  unsubscribeChange = subscribePersistenceChange(() => void refreshPersistenceStatus())
   void refreshPersistenceStatus()
+}
+
+const stop = (): void => {
+  if (!started) return
+  started = false
+  if (typeof document !== 'undefined') {
+    document.removeEventListener('visibilitychange', onVisibilityChange)
+  }
+  unsubscribeChange?.()
+  unsubscribeChange = null
+}
+
+/** Test-only reset of the module store (mirrors data-integrity's
+ *  resetConsistencyAuditStore). Detaches listeners and clears state. */
+export const resetPersistenceStatus = (): void => {
+  stop()
+  listeners.clear()
+  snapshot = null
+  refreshSeq = 0
 }
 
 export const persistenceDiagnosticSource: DiagnosticSourceContribution = {
@@ -109,6 +131,9 @@ export const persistenceDiagnosticSource: DiagnosticSourceContribution = {
     start()
     return () => {
       listeners.delete(listener)
+      // Last subscriber gone — detach the document/change listeners so we don't
+      // leak across plugin toggles / HMR (and so a disabled chip stops working).
+      if (listeners.size === 0) stop()
     }
   },
   getSnapshot: () => snapshot,
