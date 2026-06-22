@@ -18,7 +18,7 @@ testing:
 
 design docs (`docs/*.html`) are intent/history, not ground truth:
 - they drift; several are stale in places. CODE + TESTS are authoritative, then the load-bearing rationale in nearby code comments (which move with the code). A design doc is a dated snapshot of intent.
-- each design doc carries a status banner at the top (`Status:` + "last verified against code"). Read it first. `unverified` / `superseded` means don't rely on the doc's claims without checking the code.
+- the `docs/*.html` design docs carry a status banner at the top — an `<aside class="doc-status">` with `Status:` + "last verified against code"; `.md` design docs use a `> **Status:** …` blockquote with the same two fields. Read it first. `unverified` / `superseded` / `partially current` means don't rely on the doc's claims without checking the code. A design doc with NO banner (most `docs/*.md` predate this) is itself `unverified` — treat it that way; absence of a banner is not a sign the file is wrong.
 - before relying on a doc claim that matters to the task, confirm it's reflected in the code. If the doc describes a mechanism the code doesn't have, presume it was abandoned or never built — NOT "planned/coming" — and flag the divergence instead of designing around it.
 - when a doc contradicts the code, say so in your output and (if cheap) fix or re-stamp the doc; don't silently inherit the stale claim.
 
