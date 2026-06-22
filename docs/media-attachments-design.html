@@ -93,8 +93,9 @@ never the key, so bytes are sealed client-side with the workspace key and access
 byte transform parameterized by mode, where plaintext is the identity case, exactly as
 <code>src/sync/transform.ts</code> already does for text. Decryption happens in the
 <strong>service worker</strong> behind a self-describing binary envelope, so the renderer stays
-mode-agnostic (<code>&lt;img src="/asset/&lt;ws&gt;/&lt;id&gt;"&gt;</code> "just works" for both modes).
-The load-bearing risk is making the SW a participant in the E2EE lock/wipe lifecycle.
+mode-agnostic (<code>&lt;img src="${BASE_URL}asset/&lt;ws&gt;/&lt;id&gt;"&gt;</code> "just works" for both
+modes — base-prefixed so it stays inside the SW scope, §7). The load-bearing risk is making the SW a
+participant in the E2EE lock/wipe lifecycle.
 </div>
 
 <div class="toc">
@@ -521,8 +522,13 @@ its own monotonicity).
         to <code>defer</code> (don't materialize, re-prompt), never "plaintext". So eviction →
         <em>user re-affirms workspace status</em> → pin re-established; it can never silently downgrade.
         Preserve the existing pin semantics through the move: <em>survives</em> Lock &amp; Wipe
-        (not purged), shared across accounts in the profile, and an in-memory-only fallback when IDB is
-        unavailable (mirroring the keyStore's <code>InMemory</code> fallback).</li>
+        (not purged) and shared across accounts in the profile. <strong>But the in-memory fallback stays
+        plaintext-only</strong>: <code>modePin.ts</code> today falls back in-session only for a
+        <em>confirmed-plaintext</em> pin and <em>throws</em> on durable-pin failure, precisely because
+        E2EE needs a wipe-surviving authority. Keep that — if the durable IDB pin can't be written, an
+        E2EE create/unlock must <strong>fail</strong> (don't pin in memory), since a reload or lock
+        would lose the authority and strand the workspace in first-encounter <code>defer</code>. A
+        memory-only E2EE pin is never acceptable.</li>
     </ul></div></li>
   <li><strong>Expected hash → SW-readable metadata mirror, NOT a URL param.</strong> The
     replay/rollback defense (§5.1) verifies decrypted bytes against the block's <code>hash</code>, but
@@ -850,7 +856,26 @@ using (
 -- direct client writes are denied so they can't bypass the §10.1 byte guard.
 -- The service-role Edge Function (which receives + inspects the body) is the
 -- ONLY writer. Not a signed upload URL: uploadToSignedUrl writes direct to
--- Storage without the function seeing bytes, defeating the encb:v1: check (§10.1).</code></pre>
+-- Storage without the function seeing bytes, defeating the encb:v1: check (§10.1).
+
+-- DELETE is allowed directly for workspace writers — delete removes an object,
+-- there is no body to inspect, so the §10.1 byte guard doesn't apply and a
+-- writer-only RLS policy is sufficient (and is REQUIRED: without it BlobStore.delete()
+-- is default-denied, so §9 undo / §16 GC can't reap already-uploaded objects).
+create policy "attachments delete by workspace writer"
+on storage.objects for delete to authenticated
+using (
+  bucket_id = 'attachments'
+  and private.is_workspace_writer(
+        (storage.foldername(name))[1],   -- &lt;workspace_id&gt;
+        (auth.uid())::text)
+);</code></pre>
+
+<p>So the mutation split is: <strong>writes</strong> go through the body-inspecting Edge Function
+  (§10.1); <strong>deletes</strong> are a direct, writer-only RLS delete (no byte to inspect);
+  <strong>reads</strong> are direct, member-gated RLS. <code>BlobStore.delete()</code> (used by §9
+  undo and §16 GC) uses that delete policy — without it, already-uploaded objects would survive
+  undo/delete as orphans.</p>
 
 <div class="warn">
 <strong>The <code>private.*</code> grant is not free — verify it, don't assume parity with
@@ -945,10 +970,22 @@ foreclose it. This is the cheap-option-value posture, not speculative building.
     <code>repo.addTypeInTx(tx, id, 'media', …)</code> (the in-tx variant — the standalone
     <code>block.addType</code> wouldn't compose into the single tx; and the <code>media</code>
     <code>TypeContribution</code> must be registered via <code>typesFacet</code> first, §3, or this
-    throws) + write bytes to the durable queue
-    store + enqueue upload, all inside one <code>repo.tx({scope: ChangeScope.BlockDefault})</code> so
-    the URI-insert and the asset block land in the same undo bucket (byte-lane compensation per §9).</li>
+    throws). The asset-block create + the <code>!((id))</code> insert go in one
+    <code>repo.tx({scope: ChangeScope.BlockDefault})</code> so they share an undo bucket. The
+    <strong>byte-queue write + upload enqueue happen AFTER that tx resolves</strong>, not inside it
+    (see the box below).</li>
 </ul>
+
+<div class="warn">
+<strong>The byte queue is an external side effect — stage it post-commit.</strong>
+<code>repo.tx</code> only makes the SQLite/PowerSync writes atomic; an IDB/OPFS byte-queue write won't
+roll back if a same-tx processor or a later DB step aborts, and — worse — if the enqueue kicks off a
+drain <em>before</em> the DB commit is visible, the §9 "block still exists?" pre-PUT re-check can drop
+the bytes as a missing block, after which the metadata commit leaves peers with an asset that can
+<em>never</em> upload. So: write the queue entry and start the drain <strong>only after
+<code>repo.tx</code> resolves</strong> (or gate the drain so it can't run until the commit is visible).
+Undo still works via the §9 compensator — undo of the (committed) asset block cancels the queue entry
+and deletes any already-uploaded object.</div>
 
 <div class="warn">
 <strong>Dedup must respect the share-coverage boundary (§12).</strong> Naïve "reuse any same-hash asset
@@ -985,12 +1022,17 @@ keep random ids + tolerate duplicates.
 </div>
 
 <div class="info">
-<strong>SW route ordering.</strong> The existing <code>public/sw.js</code> fetch handler routes by
-<code>request.destination</code>, and an <code>&lt;img&gt;</code> has destination <code>'image'</code>
-— which the current handler sends to the generation <code>assetCacheFirst</code> branch. The new
-<code>${BASE_URL}asset/&lt;ws&gt;/&lt;id&gt;</code> route (base-prefixed, §7) must be matched
-<strong>before</strong> that branch, or the auth-first resolution in §7 is shadowed by the existing
-image-cache path.
+<strong>SW route ordering — the asset route must be FIRST.</strong> The existing
+<code>public/sw.js</code> fetch handler matches in order: <strong>(1) navigations</strong>
+(<code>request.mode === 'navigate'</code> <em>or</em> <code>Accept: text/html</code>) →
+<code>shellNetworkFirst</code> (returns the SPA shell), then <strong>(2) <code>isCacheableAsset</code></strong>
+(an <code>&lt;img&gt;</code> has destination <code>'image'</code>) → <code>assetCacheFirst</code>. The
+new <code>${BASE_URL}asset/&lt;ws&gt;/&lt;id&gt;</code> route (base-prefixed, §7) must be matched
+<strong>ahead of BOTH</strong> — not just the image-cache branch. An asset opened/downloaded as a
+navigation or with <code>Accept: text/html</code> (new-tab open, some download flows) would otherwise
+hit the navigation branch first and get the SPA shell instead of the bytes; an inline
+<code>&lt;img&gt;</code> would hit the image-cache branch. Put the <code>/asset/</code> match before
+the navigation check at the top of the <code>fetch</code> listener.
 </div>
 
 <h2 id="sharing">12. Interaction with subtree sharing</h2>
