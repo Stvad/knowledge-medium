@@ -10,6 +10,7 @@ const setStorage = (value: unknown) => {
 }
 
 beforeEach(() => {
+  localStorage.clear()
   vi.spyOn(console, 'info').mockImplementation(() => {})
   vi.spyOn(console, 'warn').mockImplementation(() => {})
 })
@@ -40,6 +41,28 @@ describe('requestPersistentStorage', () => {
     setStorage({persisted: vi.fn(async () => false), persist: vi.fn(async () => false)})
 
     await expect(requestPersistentStorage()).resolves.toBe(false)
+  })
+
+  it('does not re-request on a later boot after a denied attempt (no nag)', async () => {
+    const persist = vi.fn(async () => false)
+    setStorage({persisted: vi.fn(async () => false), persist})
+
+    await requestPersistentStorage()
+    await requestPersistentStorage()
+
+    // The attempt marker persists across calls, so persist() runs only once
+    // even though persisted() stays false — a denied user isn't re-prompted.
+    expect(persist).toHaveBeenCalledOnce()
+  })
+
+  it('re-requests after a denied attempt when forced (user-initiated retry)', async () => {
+    const persist = vi.fn(async () => false)
+    setStorage({persisted: vi.fn(async () => false), persist})
+
+    await requestPersistentStorage()
+    await requestPersistentStorage({force: true})
+
+    expect(persist).toHaveBeenCalledTimes(2)
   })
 
   it('no-ops on engines without the StorageManager persist API', async () => {

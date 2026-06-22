@@ -36,9 +36,26 @@ once from [src/main.tsx](../src/main.tsx) at boot:
 1. Feature-detects `StorageManager.persist`/`persisted` (older Safari lacks
    them; we no-op there and let the platform's own rules apply).
 2. Checks `persisted()` first, so an already-persistent origin doesn't
-   re-request (and we don't risk an unnecessary prompt).
-3. Otherwise calls `persist()` **once** — one attempt per page load, no nagging
-   — and logs the outcome (`granted` / `not granted` / `failed`).
+   re-request (and we don't risk an unnecessary prompt). This also picks up a
+   later *browser*-driven grant — e.g. Chromium auto-persists on PWA install —
+   without us asking again.
+3. Otherwise requests persistence **at most once ever** per device, recording
+   the attempt in `localStorage` (`storage.persistAttempted`), and logs the
+   outcome (`granted` / `not granted` / `failed`).
+
+The "once ever" (not "once per page load") matters because the request can
+**prompt**: Chromium decides silently, but **Firefox shows a permission
+prompt**, and a user who denies/dismisses it keeps `persisted() === false`.
+Re-requesting on every boot would therefore re-prompt a denied user on each
+reload — the opposite of "don't nag". So a denied origin is asked only once
+automatically; a deliberate, user-initiated retry (a future settings affordance
+that can explain *why* first) calls `requestPersistentStorage({force: true})`
+to bypass the gate. The marker is written *before* the request, so even a
+dismissed prompt counts as the one attempt.
+
+`navigator.storage.estimate()` is already used elsewhere for the
+export-space precheck ([src/utils/exportSqliteDb.ts](../src/utils/exportSqliteDb.ts));
+it's orthogonal to persistence (quota/usage reporting, not eviction policy).
 
 `navigator.storage.estimate()` is already used elsewhere for the
 export-space precheck ([src/utils/exportSqliteDb.ts](../src/utils/exportSqliteDb.ts));

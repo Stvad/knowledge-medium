@@ -1,3 +1,5 @@
+import { clientLocalSettings } from '@/utils/ClientLocalSettings.js'
+
 /**
  * Ask the browser to make this origin's storage *persistent* so it's exempt
  * from automatic eviction under storage pressure.
@@ -9,17 +11,24 @@
  * Standard that whole bucket is "best-effort" by default: the browser may
  * evict it when the device runs low on space. Losing the local SQLite DB is
  * the most painful failure — it can hold unsynced edits and local-only history
- * the server has never seen — so we ask once, at boot, for persistence.
+ * the server has never seen — so we ask once for persistence.
  *
  * `navigator.storage.persist()` is origin-wide and all-or-nothing: it makes
  * the *entire* default bucket persistent (never auto-evicted; cleared only by
  * an explicit user action like clearing site data). It may be granted silently
- * via the browser's engagement / installed-PWA heuristics, or — in some
- * browsers (e.g. Firefox) — prompt the user. We therefore:
- *   - check {@link StorageManager.persisted} first, so an origin that is
- *     already persistent doesn't re-request (and we don't risk an unnecessary
- *     prompt), and
- *   - make exactly one attempt per page load — no nagging.
+ * via the browser's engagement / installed-PWA heuristics (Chromium never
+ * prompts), or — notably on Firefox — show a permission prompt.
+ *
+ * "Don't nag" is the load-bearing constraint here. Because the request can
+ * prompt, and a denied/dismissed origin keeps `persisted() === false`, calling
+ * `persist()` on every boot would re-prompt a user who already said no. So we
+ * make the *automatic* request **at most once ever** per device:
+ *   - check {@link StorageManager.persisted} first — an already-persistent
+ *     origin needs nothing (and the browser may have auto-granted it later,
+ *     e.g. on PWA install, without us asking again); and
+ *   - otherwise request only if we haven't already recorded an attempt. A
+ *     deliberate, user-initiated retry (a future settings affordance that can
+ *     explain *why* first) passes `{force: true}` to bypass that gate.
  *
  * See `docs/storage-persistence.md` for the durability model and the (not yet
  * built) Storage Buckets API path for differential durability.
@@ -27,7 +36,14 @@
  * @returns whether storage is persistent after this call (already-granted or
  *   newly granted both resolve `true`).
  */
-export const requestPersistentStorage = async (): Promise<boolean> => {
+
+// Device-local marker that the one automatic boot request has been made, so a
+// user who denied/dismissed the prompt isn't re-prompted on every reload.
+const PERSIST_ATTEMPTED_KEY = 'storage.persistAttempted'
+
+export const requestPersistentStorage = async (
+  {force = false}: {force?: boolean} = {},
+): Promise<boolean> => {
   if (typeof navigator === 'undefined') return false
 
   const storage = navigator.storage
@@ -47,6 +63,16 @@ export const requestPersistentStorage = async (): Promise<boolean> => {
       console.info('[storage] already persistent — exempt from automatic eviction')
       return true
     }
+
+    // Honor "one attempt, don't nag": skip the automatic request if a previous
+    // boot already asked (and the browser hasn't granted it since). A
+    // user-initiated retry passes force.
+    if (!force && clientLocalSettings.has(PERSIST_ATTEMPTED_KEY)) {
+      return false
+    }
+    // Record before requesting so even a prompt the user *dismisses* counts as
+    // the one attempt — the dismissal itself is the nag we won't repeat.
+    clientLocalSettings.set(PERSIST_ATTEMPTED_KEY, true)
 
     const granted = await storage.persist()
     if (granted) {
