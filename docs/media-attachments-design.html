@@ -820,11 +820,19 @@ purely a display-cache concern.
   guarded upload function (§10.1) on a different path with no such queue, so they need their own
   durable one. Crucially the queue <strong>owns the encoded bytes</strong>, not just a pointer: an
   IndexedDB/OPFS record of
-  <code>{ asset_block_id, workspace_id, status, encodedBytes }</code> (the <code>encb:v1:</code>
-  payload for E2EE, raw bytes otherwise), held in a store that is <em>not</em> the evictable display
-  cache, so a pending upload can never lose its source bytes to LRU eviction or an offline window
-  (the §8 hazard). Entries drain (to the §10.1 function) when connectivity returns, retrying with
-  backoff; the durable copy
+  <code>{ user_id, asset_block_id, workspace_id, status, idempotencyToken, encodedBytes }</code> (the
+  <code>encb:v1:</code> payload for E2EE, raw bytes otherwise), held in a store that is <em>not</em> the
+  evictable display cache, so a pending upload can never lose its source bytes to LRU eviction or an
+  offline window (the §8 hazard). <strong>Two record fields are load-bearing and were under-specified
+  earlier:</strong> (a) the <code>idempotencyToken</code> (§10.1) must be <em>persisted in the
+  record</em> and threaded through <code>BlobStore.put</code>, so a retry <em>after a reload</em>
+  re-presents the original token — otherwise the already-written object looks like a no-token/different
+  overwrite and becomes a permanent failure; (b) the <code>user_id</code> namespaces the record (and
+  every cancel / drain / purge key), because the store is shared across accounts in the profile but
+  Lock&nbsp;&amp;&nbsp;Wipe and draining are per-user — without it, account A's lock can't tell A's
+  pending bytes from B's (purging B's, or surviving A's), and a drain could retry A's entry under B's
+  session. Entries drain (to the §10.1 function) when connectivity returns, retrying with backoff; the
+  durable copy
   is deleted only on a confirmed upload, after which the bytes are purely a display-cache concern.
   This is new infra the pre-E2EE proposal under-specified; E2EE doesn't change it, but the design
   surfaces it clearly. The queue's local <code>status</code> is also the per-device source of truth
@@ -838,10 +846,10 @@ purely a display-cache concern.
 makes the <em>DB</em> half atomic. The bytes (queue entry + any already-PUT object) are not
 transactional. So: (1) the drain step <strong>re-checks the block still exists (and is not deleted)
 before PUT</strong>, and drops the entry otherwise; (2) undo of an asset-block insert
-<strong>cancels the queue entry</strong> (keyed by <code>asset_block_id</code>) and, if the object
-already uploaded, enqueues a delete. Without this, undo leaves an orphaned Storage object and a queue
-entry that resurrects bytes for a block that no longer exists. (This is the undo case the §16 orphan
-sweep does <em>not</em> cover.)</div>
+<strong>cancels the queue entry</strong> (keyed by <code>(user_id, asset_block_id)</code>) and, if the
+object already uploaded, enqueues a delete. Without this, undo leaves an orphaned Storage object and a
+queue entry that resurrects bytes for a block that no longer exists. (This is the undo case the §16
+orphan sweep does <em>not</em> cover.)</div>
 
 <div class="warn">
 <strong>The queue store is a Lock &amp; Wipe participant too — it holds un-uploaded bytes.</strong>
@@ -1194,7 +1202,9 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
 <p>All object-store access goes behind a ~50-line interface:</p>
 
 <pre><code>interface BlobStore {
-  put(workspaceId, assetBlockId, hash, bytes): Promise&lt;void&gt;  // hash drives dedup + the SW mirror entry
+  // idempotencyToken (§9/§10.1) is persisted in the queue record and passed here so a
+  // post-reload retry re-presents it; same token on an existing object → success, not failure.
+  put(workspaceId, assetBlockId, hash, idempotencyToken, bytes): Promise&lt;void&gt;
   // The virtual URL is CLEAN — ${BASE_URL}asset/<ws>/<id>, no hash on the wire.
   // The expected hash (cache key §8 + replay check §5.1) comes from the SW-readable
   // metadata mirror (§7.1.1), never a URL param — a ?h= would leak the plaintext
