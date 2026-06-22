@@ -83,6 +83,41 @@ const queryPersistPermission = async (): Promise<PermissionState | undefined> =>
   }
 }
 
+export interface PersistenceState {
+  /** Whether this engine exposes the StorageManager persist/persisted API. */
+  supported: boolean
+  /** Whether the origin's storage is currently persistent. */
+  persisted: boolean
+  /** The `persistent-storage` permission state, when queryable. A durable
+   *  `'denied'` is an explicit user "no" (e.g. Firefox Block). */
+  permission: PermissionState | undefined
+}
+
+/** Read-only snapshot of the current persistence state, for UI that reflects
+ *  it (the status-chip reminder). Never throws; an unsupported engine reports
+ *  `{supported: false}`. Distinct from {@link requestPersistentStorage}, which
+ *  has the once-per-session request gating. */
+export const getPersistenceState = async (): Promise<PersistenceState> => {
+  if (typeof navigator === 'undefined') {
+    return { supported: false, persisted: false, permission: undefined }
+  }
+  const storage = navigator.storage
+  if (
+    !storage ||
+    typeof storage.persist !== 'function' ||
+    typeof storage.persisted !== 'function'
+  ) {
+    return { supported: false, persisted: false, permission: undefined }
+  }
+  let persisted: boolean
+  try {
+    persisted = await storage.persisted()
+  } catch {
+    persisted = false
+  }
+  return { supported: true, persisted, permission: await queryPersistPermission() }
+}
+
 export const requestPersistentStorage = async (
   {force = false}: {force?: boolean} = {},
 ): Promise<boolean> => {
