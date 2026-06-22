@@ -139,11 +139,18 @@ export {
   navigateFromGesture,
   navigateFromGlobalCommand,
   useNavigateFromGlobalCommand,
+  // The standard way to wire a clickable surface that opens a block (links,
+  // buttons, map pins, list rows) — modifier-aware, routed through the policy.
+  useOpenBlock,
+  useBlockOpener,
   type NavigateInput,
   type NavigationRequest,
   type NavigationResult,
   type NavigationGesture,
   type NavigationRole,
+  type BlockOpenerPlainClick,
+  type BlockOpenerOptions,
+  type OpenBlockContext,
 } from '@/utils/navigation.js'
 
 // --- Action / shortcut helpers ---

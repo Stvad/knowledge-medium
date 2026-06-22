@@ -60,7 +60,8 @@ interface NavigateBaseInput {
   /** Defaults to repo.activeWorkspaceId. */
   workspaceId?: string
   /** Semantic origin of this navigation — the surface or command that
-   *  triggered it (e.g. 'follow-link', 'navigator', 'zoom', 'daily-note').
+   *  triggered it (e.g. 'follow-link', 'navigator', 'zoom', 'daily-note',
+   *  'open-in-panel').
    *  Gesture navigations get it from the intent policy (the surface role);
    *  programmatic callers can set it explicitly. Lets `navigationVerb`
    *  decorators redirect/observe by source, not just by resolved target.
@@ -624,7 +625,10 @@ export const useBlockOpener = ({plainClick = 'follow-link'}: BlockOpenerOptions 
       // synchronously so the browser default (new tab) isn't prevented; the
       // rest of the policy resolves async through the intent verb. This carve-
       // out is intentionally NOT plugin-overridable — a plugin shouldn't be
-      // able to silently break "cmd-click opens a new tab".
+      // able to silently break "cmd-click opens a new tab". (Conversely, since
+      // we preventDefault here before the async policy runs, a policy that
+      // vetoes a non-native gesture — resolves to null — suppresses the href
+      // and the click no-ops; that's the intended meaning of a veto.)
       if (blockLinkClickIntent(modifiers) === 'native') return
       e.stopPropagation()
       e.preventDefault()
