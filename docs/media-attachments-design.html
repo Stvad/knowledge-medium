@@ -441,7 +441,7 @@ no-overwrite precondition (reject if the object already exists). The old object 
   <text class="ph" x="20" y="186">② READ (render on any device)</text>
   <rect class="b" x="20" y="198" width="150" height="44" rx="6"/>
   <text class="t" x="32" y="218">MediaBlockRenderer</text>
-  <text class="s mono" x="32" y="234">&lt;img src=/asset/ws/id&gt;</text>
+  <text class="s mono" x="32" y="234">${BASE_URL}asset/ws/id</text>
   <rect class="acc" x="200" y="198" width="150" height="44" rx="6"/>
   <text class="t" x="212" y="218">service worker</text>
   <text class="s" x="212" y="234">cache ▸ fetch ▸ decrypt</text>
@@ -959,11 +959,21 @@ devices that did nothing wrong. So the drain must <em>compensate</em>: for any a
 are still un-confirmed at lock time, enqueue a delete of that asset block (and its embed ref) into
 <code>ps_crud</code> and let the existing <code>flushUploadQueue</code> drain it, so the server never
 keeps a block pointing at bytes this device is about to destroy and no peer holds. This rides the
-existing <code>ps_crud</code> flush and is self-consistent offline — if <code>ps_crud</code> can't
-drain, the original create never reached peers either, so the create + delete cancel locally with no
-divergence. Deleting the orphan is not extra data loss: the only bytes are being wiped regardless, so
-the choice is a clean delete vs. a dangling broken block fleet-wide. The bytes themselves are still
-lost — consistent with the destructive-by-design lock — and that loss is surfaced, not silent.</div>
+existing <code>ps_crud</code> flush. When the create itself never reached the server (offline since
+paste) the create + delete simply cancel locally — clean. But the named scenario is the opposite: the
+create <em>already</em> synced, and the compensating delete can still fail to drain (the client goes
+offline at lock time, the request times out, or the server rejects it). Lock &amp; Wipe <strong>cannot
+block on that</strong> — it is a destruction action that must complete promptly, not wait on a
+maybe-never network round-trip — so a client-only fix is impossible in that case: the wipe proceeds and
+a synced block with no bytes survives. The <em>guarantee</em> therefore moves server-side: an
+<strong>orphan-block GC</strong> (§16) reaps any asset block whose
+<code>&lt;ws&gt;/&lt;asset_block_id&gt;</code> object never materializes within a grace window — the
+mirror of the orphan-<em>object</em> sweep. The compensating delete stays as the fast path that cleans
+the common case immediately (it usually <em>can</em> drain — the scenario's own premise is that
+PowerSync was up enough to sync the create); the GC bounds the residual broken embed to that window
+rather than leaving it forever. Deleting the orphan is not extra data loss: the only bytes are being
+wiped regardless. The bytes themselves are still lost — consistent with the destructive-by-design lock
+— and that loss is surfaced, not silent.</div>
 
 <h2 id="storage">10. Storage layout &amp; RLS</h2>
 
@@ -1392,10 +1402,14 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
     doesn't disturb B).</li>
   <li><strong>Max inline size + large-media story:</strong> a v1 cap (e.g. 10&nbsp;MB) with a clear
     error, deferring resumable/tus upload to vNext. Where exactly is the cap enforced?</li>
-  <li><strong>Asset block deletion → byte GC:</strong> delete the asset block ⇒ delete the object
-    (storage cascade or an explicit step). Embeds that dangle render the existing "unresolved embed"
-    state. The <em>undo</em> case is handled by the §9 byte-lane compensator; the broader orphan sweep
-    is a vNext follow-up.</li>
+  <li><strong>Asset block deletion → byte GC, and the two orphan directions:</strong> deleting an asset
+    block ⇒ delete the object (storage cascade or an explicit step); dangling embeds render the existing
+    "unresolved embed" state. Beyond the <em>undo</em> case (handled by the §9 byte-lane compensator), a
+    vNext orphan sweep covers <strong>both</strong> directions: orphan <em>objects</em> (a Storage object
+    with no block — e.g. an interrupted delete) and orphan <em>blocks</em> (an asset block whose object
+    never materialized within a grace window — e.g. an upload that never completed before the origin
+    device was wiped/lost, §9 Lock &amp; Wipe). The block→object grace window must be generous enough not
+    to reap a block whose origin device is merely offline and still intends to upload.</li>
   <li><strong>Cache backing:</strong> Cache API only, or Cache API + an IndexedDB LRU index for finer
     eviction? Cache API alone is simpler; the durable upload-queue store (§9) is separate from either.</li>
 </ul>
