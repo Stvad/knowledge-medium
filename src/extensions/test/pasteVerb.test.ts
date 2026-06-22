@@ -9,6 +9,7 @@ import {
 const request = (over: Partial<PasteRequest>): PasteRequest => ({
   text: '',
   intent: 'split',
+  surface: 'editor',
   ...over,
 })
 
@@ -22,9 +23,16 @@ describe('defaultPasteDecision', () => {
     expect(defaultPasteDecision(request({text: 'a\nb'}))).toEqual({kind: 'split'})
   })
 
-  it('inserts a plain single-line paste as a single block (native caret insert)', () => {
-    expect(defaultPasteDecision(request({text: 'just one line'})))
+  it('inserts a plain single-line editor paste as a single block (caret insert)', () => {
+    expect(defaultPasteDecision(request({text: 'just one line', surface: 'editor'})))
       .toEqual({kind: 'single-block'})
+  })
+
+  it('parses a plain single-line shell paste as an outline (no caret)', () => {
+    // The shell has no text caret, so single-line falls to the parse path
+    // (historical behavior) instead of a verbatim single-block insert.
+    expect(defaultPasteDecision(request({text: '- task', surface: 'shell'})))
+      .toEqual({kind: 'split'})
   })
 })
 

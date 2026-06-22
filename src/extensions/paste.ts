@@ -22,6 +22,14 @@ export type PasteDecision =
    *  block tree at the cursor. */
   | {kind: 'split'; text?: string}
 
+/** Where the paste is happening. `editor` has a text caret (in-block
+ *  editing), so a plain single-line paste lands verbatim at the caret;
+ *  `shell` is a focused-but-not-editing block with no caret, so the
+ *  historical behavior is to parse the clipboard as an outline. The
+ *  default decision is surface-aware for exactly this single-line case;
+ *  plugins also get the surface to vary their own behavior. */
+export type PasteSurface = 'editor' | 'shell'
+
 export interface PasteRequest {
   /** Clipboard `text/plain`. */
   text: string
@@ -32,6 +40,8 @@ export interface PasteRequest {
    *  (`single-block`). The paste `ClipboardEvent` carries no modifier
    *  state, so the renderer captures this on keydown. */
   intent: PasteChordIntent
+  /** The surface receiving the paste — see `PasteSurface`. */
+  surface: PasteSurface
 }
 
 /**
@@ -39,13 +49,19 @@ export interface PasteRequest {
  * paste verb:
  *   - `single-block` chord → verbatim into the current block.
  *   - plain chord with a newline → split into an outline.
- *   - plain chord, single line → single-block (an ordinary caret insert,
- *     equivalent to the browser's native paste for one line).
+ *   - plain chord, single line → `single-block` in the `editor` (a verbatim
+ *     caret insert, like the browser's native paste) but `split` in the
+ *     `shell` (no caret; parse as an outline, the historical behavior).
+ *
+ * Because the default never returns `single-block` for a single-line shell
+ * paste, the shell can honor `single-block` literally (no extra guard): the
+ * applied behavior always matches the decision, and an "always paste
+ * verbatim" plugin works on single-line shell pastes too.
  */
 export const defaultPasteDecision = (request: PasteRequest): PasteDecision => {
   if (request.intent === 'single-block') return {kind: 'single-block'}
   if (request.text.includes('\n')) return {kind: 'split'}
-  return {kind: 'single-block'}
+  return request.surface === 'editor' ? {kind: 'single-block'} : {kind: 'split'}
 }
 
 /**

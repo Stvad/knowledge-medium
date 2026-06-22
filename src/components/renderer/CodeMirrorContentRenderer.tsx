@@ -67,7 +67,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     // contributions this returns `defaultPasteDecision`, i.e. the previous
     // hardcoded behavior. `decision.text` lets an override rewrite the
     // content (e.g. CSV → markdown) before it's applied.
-    const decision = await pasteDecisionVerb.run(runtime, {text, html, intent})
+    const decision = await pasteDecisionVerb.run(runtime, {text, html, intent, surface: 'editor'})
 
     // Read the live editor state AFTER the (possibly async) decision — an
     // override may await, during which the caret/doc can move; a pre-await

@@ -484,17 +484,16 @@ export function DefaultBlockRenderer(
         text: pastedText,
         html,
         intent: 'split',
+        surface: 'shell',
       })
-      const textToPaste = decision.text ?? pastedText
-      // The shell has always pasted as an outline (markdown-parsed), so the
-      // default single-line→`single-block` decision must NOT change that
-      // (it would stop stripping bullet/heading markers). Only honor
-      // `single-block` for multiline text, where "don't split" is a
-      // meaningful, non-default override.
-      const asSingleBlock = decision.kind === 'single-block' && textToPaste.includes('\n')
-      const pasted = await pasteMultilineText(textToPaste, block, repo, {
+      // The default decision is surface-aware: a plain single-line shell
+      // paste resolves to `split` (parse as outline, the historical
+      // behavior), so `single-block` here only ever comes from an explicit
+      // override and is honored literally — the applied behavior matches
+      // the decision.
+      const pasted = await pasteMultilineText(decision.text ?? pastedText, block, repo, {
         scopeRootId,
-        asSingleBlock,
+        asSingleBlock: decision.kind === 'single-block',
       })
       if (pasted[0]) {
         void focusBlock(uiStateBlock, pasted[0].id, {renderScopeId})
