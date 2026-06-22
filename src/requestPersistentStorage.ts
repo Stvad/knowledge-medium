@@ -1,5 +1,3 @@
-import { clientLocalSettings } from '@/utils/ClientLocalSettings.js'
-
 /**
  * Ask the browser to make this origin's storage *persistent* so it's exempt
  * from automatic eviction under storage pressure.
@@ -11,24 +9,35 @@ import { clientLocalSettings } from '@/utils/ClientLocalSettings.js'
  * Standard that whole bucket is "best-effort" by default: the browser may
  * evict it when the device runs low on space. Losing the local SQLite DB is
  * the most painful failure — it can hold unsynced edits and local-only history
- * the server has never seen — so we ask once for persistence.
+ * the server has never seen — so we ask for persistence.
  *
  * `navigator.storage.persist()` is origin-wide and all-or-nothing: it makes
  * the *entire* default bucket persistent (never auto-evicted; cleared only by
- * an explicit user action like clearing site data). It may be granted silently
- * via the browser's engagement / installed-PWA heuristics (Chromium never
- * prompts), or — notably on Firefox — show a permission prompt.
+ * an explicit user action like clearing site data). How it resolves depends on
+ * the engine:
+ *   - **Chromium** never prompts — it grants silently from heuristics (site
+ *     engagement, bookmarked, installed PWA, notifications permission…). A
+ *     `false` here is a *silent* denial that a later call can flip to `true`
+ *     as engagement grows or the app is installed.
+ *   - **Firefox** shows a permission prompt; an explicit "Block" is a durable
+ *     denial, a dismissal leaves it undecided.
+ *   - **Safari** lacks the API entirely (we no-op and let its platform rules
+ *     apply).
  *
- * "Don't nag" is the load-bearing constraint here. Because the request can
- * prompt, and a denied/dismissed origin keeps `persisted() === false`, calling
- * `persist()` on every boot would re-prompt a user who already said no. So we
- * make the *automatic* request **at most once ever** per device:
- *   - check {@link StorageManager.persisted} first — an already-persistent
- *     origin needs nothing (and the browser may have auto-granted it later,
- *     e.g. on PWA install, without us asking again); and
- *   - otherwise request only if we haven't already recorded an attempt. A
- *     deliberate, user-initiated retry (a future settings affordance that can
- *     explain *why* first) passes `{force: true}` to bypass that gate.
+ * Two competing constraints follow, and we thread both:
+ *   1. *Don't nag.* Re-calling `persist()` every page load would re-prompt a
+ *      Firefox user who already saw the prompt. So we (a) treat a Permissions
+ *      API `'denied'` state as a permanent skip — the strongest "user said no"
+ *      signal — and (b) otherwise ask at most once per *browsing session*.
+ *   2. *Don't permanently gate silent denials.* A Chromium silent denial
+ *      reports `'prompt'` (never `'denied'`), so it never trips the permanent
+ *      skip; and because the once-per-session guard lives in `sessionStorage`,
+ *      a *new* session retries — letting persistence be granted later. (A
+ *      grant the browser makes on its own, e.g. on PWA install, is caught up
+ *      front by `persisted()`.)
+ *
+ * A deliberate, user-initiated retry (a future settings affordance that can
+ * explain *why* first) passes `{force: true}` to bypass both gates.
  *
  * See `docs/storage-persistence.md` for the durability model and the (not yet
  * built) Storage Buckets API path for differential durability.
@@ -37,9 +46,42 @@ import { clientLocalSettings } from '@/utils/ClientLocalSettings.js'
  *   newly granted both resolve `true`).
  */
 
-// Device-local marker that the one automatic boot request has been made, so a
-// user who denied/dismissed the prompt isn't re-prompted on every reload.
-const PERSIST_ATTEMPTED_KEY = 'storage.persistAttempted'
+// Per-session marker (sessionStorage, not localStorage) that we've already
+// asked this session — so a dismissed prompt isn't repeated on every reload,
+// while a new session still retries. Deliberately NOT permanent: a Chromium
+// silent denial must keep its retry path.
+const SESSION_ATTEMPT_KEY = 'storage.persistAttempted'
+
+const attemptedThisSession = (): boolean => {
+  try {
+    return globalThis.sessionStorage?.getItem(SESSION_ATTEMPT_KEY) !== null
+  } catch {
+    return false
+  }
+}
+
+const markAttemptedThisSession = (): void => {
+  try {
+    globalThis.sessionStorage?.setItem(SESSION_ATTEMPT_KEY, '1')
+  } catch {
+    // Private-mode sessionStorage can throw; losing the guard only risks an
+    // extra (still silent on Chromium) request, never data.
+  }
+}
+
+/** The `persistent-storage` permission state, or `undefined` when the
+ *  Permissions API can't answer for it (older Firefox, Safari). Best-effort:
+ *  used only to make a durable `'denied'` a permanent skip. */
+const queryPersistPermission = async (): Promise<PermissionState | undefined> => {
+  try {
+    const status = await navigator.permissions?.query({
+      name: 'persistent-storage' as PermissionName,
+    })
+    return status?.state
+  } catch {
+    return undefined
+  }
+}
 
 export const requestPersistentStorage = async (
   {force = false}: {force?: boolean} = {},
@@ -64,15 +106,21 @@ export const requestPersistentStorage = async (
       return true
     }
 
-    // Honor "one attempt, don't nag": skip the automatic request if a previous
-    // boot already asked (and the browser hasn't granted it since). A
-    // user-initiated retry passes force.
-    if (!force && clientLocalSettings.has(PERSIST_ATTEMPTED_KEY)) {
-      return false
+    if (!force) {
+      // Durable, explicit user denial (e.g. Firefox "Block"): never auto-retry.
+      // Chromium reports 'prompt' for a *silent* denial, so this does not gate
+      // Chromium's retry path.
+      if ((await queryPersistPermission()) === 'denied') {
+        console.info('[storage] persistence previously denied by the user — not re-requesting')
+        return false
+      }
+      // Otherwise ask at most once per session, so a dismissed prompt isn't
+      // repeated on reloads. A new session retries (sessionStorage clears).
+      if (attemptedThisSession()) return false
     }
     // Record before requesting so even a prompt the user *dismisses* counts as
-    // the one attempt — the dismissal itself is the nag we won't repeat.
-    clientLocalSettings.set(PERSIST_ATTEMPTED_KEY, true)
+    // this session's one attempt — the dismissal itself is the nag we avoid.
+    markAttemptedThisSession()
 
     const granted = await storage.persist()
     if (granted) {

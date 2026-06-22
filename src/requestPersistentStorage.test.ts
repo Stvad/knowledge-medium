@@ -4,19 +4,29 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { requestPersistentStorage } from './requestPersistentStorage'
 
 const originalStorage = navigator.storage
+const originalPermissions = navigator.permissions
 
 const setStorage = (value: unknown) => {
   Object.defineProperty(navigator, 'storage', {configurable: true, value})
 }
 
+const setPermissionState = (state: PermissionState | undefined) => {
+  const value = state === undefined
+    ? undefined
+    : {query: vi.fn(async () => ({state}))}
+  Object.defineProperty(navigator, 'permissions', {configurable: true, value})
+}
+
 beforeEach(() => {
-  localStorage.clear()
+  sessionStorage.clear()
+  setPermissionState(undefined)
   vi.spyOn(console, 'info').mockImplementation(() => {})
   vi.spyOn(console, 'warn').mockImplementation(() => {})
 })
 
 afterEach(() => {
   setStorage(originalStorage)
+  Object.defineProperty(navigator, 'permissions', {configurable: true, value: originalPermissions})
   vi.restoreAllMocks()
 })
 
@@ -43,26 +53,46 @@ describe('requestPersistentStorage', () => {
     await expect(requestPersistentStorage()).resolves.toBe(false)
   })
 
-  it('does not re-request on a later boot after a denied attempt (no nag)', async () => {
+  it('asks only once per session, not on every reload within the session', async () => {
     const persist = vi.fn(async () => false)
     setStorage({persisted: vi.fn(async () => false), persist})
 
     await requestPersistentStorage()
     await requestPersistentStorage()
 
-    // The attempt marker persists across calls, so persist() runs only once
-    // even though persisted() stays false — a denied user isn't re-prompted.
     expect(persist).toHaveBeenCalledOnce()
   })
 
-  it('re-requests after a denied attempt when forced (user-initiated retry)', async () => {
+  it('retries in a new session so a silent Chromium denial can be re-evaluated', async () => {
     const persist = vi.fn(async () => false)
     setStorage({persisted: vi.fn(async () => false), persist})
 
     await requestPersistentStorage()
-    await requestPersistentStorage({force: true})
+    sessionStorage.clear() // simulate a fresh browsing session
+    await requestPersistentStorage()
 
     expect(persist).toHaveBeenCalledTimes(2)
+  })
+
+  it('never re-requests after a durable permission denial (Firefox Block)', async () => {
+    const persist = vi.fn(async () => false)
+    setStorage({persisted: vi.fn(async () => false), persist})
+    setPermissionState('denied')
+
+    await requestPersistentStorage()
+    sessionStorage.clear() // even a new session must not re-prompt a blocked user
+
+    await expect(requestPersistentStorage()).resolves.toBe(false)
+    expect(persist).not.toHaveBeenCalled()
+  })
+
+  it('re-requests when forced, bypassing both the session and permission gates', async () => {
+    const persist = vi.fn(async () => false)
+    setStorage({persisted: vi.fn(async () => false), persist})
+    setPermissionState('denied')
+
+    await expect(requestPersistentStorage({force: true})).resolves.toBe(false)
+    expect(persist).toHaveBeenCalledOnce()
   })
 
   it('no-ops on engines without the StorageManager persist API', async () => {

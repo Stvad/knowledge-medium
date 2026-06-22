@@ -36,26 +36,44 @@ once from [src/main.tsx](../src/main.tsx) at boot:
 1. Feature-detects `StorageManager.persist`/`persisted` (older Safari lacks
    them; we no-op there and let the platform's own rules apply).
 2. Checks `persisted()` first, so an already-persistent origin doesn't
-   re-request (and we don't risk an unnecessary prompt). This also picks up a
-   later *browser*-driven grant — e.g. Chromium auto-persists on PWA install —
-   without us asking again.
-3. Otherwise requests persistence **at most once ever** per device, recording
-   the attempt in `localStorage` (`storage.persistAttempted`), and logs the
-   outcome (`granted` / `not granted` / `failed`).
+   re-request. This also picks up a later *browser*-driven grant — e.g.
+   Chromium auto-persists on PWA install — without us asking again.
+3. If a durable **`'denied'`** Permissions API state is present
+   (`persistent-storage`), skips permanently — that's an explicit user "no"
+   (Firefox "Block") we never re-prompt.
+4. Otherwise requests persistence **at most once per browsing session**
+   (guarded by a `sessionStorage` marker, `storage.persistAttempted`), and logs
+   the outcome (`granted` / `not granted` / `failed`).
 
-The "once ever" (not "once per page load") matters because the request can
-**prompt**: Chromium decides silently, but **Firefox shows a permission
-prompt**, and a user who denies/dismisses it keeps `persisted() === false`.
-Re-requesting on every boot would therefore re-prompt a denied user on each
-reload — the opposite of "don't nag". So a denied origin is asked only once
-automatically; a deliberate, user-initiated retry (a future settings affordance
-that can explain *why* first) calls `requestPersistentStorage({force: true})`
-to bypass the gate. The marker is written *before* the request, so even a
-dismissed prompt counts as the one attempt.
+### Why this exact gating — two competing constraints
 
-`navigator.storage.estimate()` is already used elsewhere for the
-export-space precheck ([src/utils/exportSqliteDb.ts](../src/utils/exportSqliteDb.ts));
-it's orthogonal to persistence (quota/usage reporting, not eviction policy).
+The request resolves very differently per engine, which forces the design:
+
+- **Chromium** never prompts; it grants silently from heuristics (engagement,
+  bookmarked, installed PWA, notifications…). A `false` is a *silent* denial
+  that a **later** call can flip to `true` as those signals change.
+- **Firefox** shows a permission prompt; "Block" is a durable denial, a
+  dismissal leaves it undecided.
+- **Safari** lacks the API (we no-op).
+
+So we must satisfy both at once:
+
+- **Don't nag.** Re-calling `persist()` every reload would re-prompt a Firefox
+  user. Hence the permanent skip on Permissions API `'denied'` (the strongest
+  "user said no") *and* the once-per-session guard for the undecided case
+  (covers a dismissed prompt without repeating it on reloads). The session
+  marker is written *before* the request so even a dismissal counts as that
+  session's attempt.
+- **Don't permanently gate silent denials.** A Chromium silent denial reports
+  `'prompt'`, not `'denied'`, so it never trips the permanent skip; and because
+  the session guard lives in `sessionStorage` (not `localStorage`), a **new
+  session retries** — letting persistence be granted once engagement grows.
+  This is why the marker is per-session, not per-device-forever: an earlier
+  `localStorage` version permanently blocked Chromium from ever being promoted.
+
+A deliberate, user-initiated retry (a future settings affordance that can
+explain *why* first) calls `requestPersistentStorage({force: true})` to bypass
+both gates.
 
 `navigator.storage.estimate()` is already used elsewhere for the
 export-space precheck ([src/utils/exportSqliteDb.ts](../src/utils/exportSqliteDb.ts));

@@ -23,9 +23,10 @@ window.ReactDOM = ReactDOM
 registerServiceWorker()
 
 // Ask the browser to keep our local-first state (SQLite DB, workspace keys)
-// exempt from automatic eviction under storage pressure. One attempt at boot;
-// it checks persisted() first and never re-requests. See
-// src/requestPersistentStorage.ts.
+// exempt from automatic eviction under storage pressure. Checks persisted()
+// first, never re-prompts a user who explicitly declined, and otherwise asks
+// at most once per session (so a silent Chromium denial still retries next
+// session). See src/requestPersistentStorage.ts.
 void requestPersistentStorage()
 
 // The ErrorBoundary lives INSIDE Login so its fallback can call useSignOut,
