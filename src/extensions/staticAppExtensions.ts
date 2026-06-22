@@ -44,6 +44,7 @@ import { srsReschedulingPlugin } from '@/plugins/srs-rescheduling'
 import { srsReviewPlugin } from '@/plugins/srs-review'
 import { todoPlugin } from '@/plugins/todo'
 import { syncStatusPlugin } from '@/plugins/sync-status'
+import { dataIntegrityPlugin } from '@/plugins/data-integrity'
 import { dbMaintenancePlugin } from '@/plugins/db-maintenance'
 import { extensionsSettingsPlugin } from '@/plugins/extensions-settings'
 import { keybindingsSettingsPlugin } from '@/plugins/keybindings-settings'
@@ -122,6 +123,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   srsReschedulingPlugin,
   srsReviewPlugin({repo}),
   syncStatusPlugin,
+  dataIntegrityPlugin({repo}),
   dbMaintenancePlugin({repo}),
   updateIndicatorPlugin,
   agentRuntimePlugin,
