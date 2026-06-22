@@ -291,11 +291,6 @@ export const useNavigate = () => {
 // Intent layer: gesture → NavigateInput (the navigation POLICY).
 // ---------------------------------------------------------------------------
 
-export interface BlockLinkClickContext {
-  blockId: string
-  workspaceId: string
-}
-
 export interface BlockLinkClickModifierState {
   shiftKey: boolean
   altKey: boolean
@@ -517,52 +512,57 @@ export const useNavigateFromGlobalCommand = () => {
   )
 }
 
+/** The probe gesture the *read* path uses to ask the intent policy "which panel
+ *  does a navigator command target right now?" — the navigator target is
+ *  block-independent in the default policy (and any sane override), so the
+ *  blockId is a neutral placeholder; only the resolved `target` is read. */
+const NAVIGATOR_TARGET_PROBE_BLOCK_ID = ''
+
+/** Resolve the live panel a navigator global command currently targets, routed
+ *  through the SAME intent policy as the write (`navigateFromGlobalCommand`), so
+ *  a plugin that redirects where global commands land (active vs main) feeds the
+ *  read too. Returns null when there's no such panel, or the policy targets a
+ *  freshly-created panel (new-panel / sidebar-stack — no existing panel to
+ *  anchor a read on). */
+const resolveGlobalCommandTargetPanel = async (
+  repo: Repo,
+  workspaceId: string,
+) => {
+  const input = await resolveNavigationIntent(repo, {
+    role: 'navigator',
+    modifiers: PLAIN_PRIMARY_CLICK,
+    blockId: NAVIGATOR_TARGET_PROBE_BLOCK_ID,
+    workspaceId,
+    viewport: currentViewport(),
+  })
+  if (!input) return null
+  const layoutSessionBlock = await resolveLayoutSessionBlock(repo, workspaceId)
+  switch (input.target) {
+    case 'active':
+      return resolveActivePanelRow(layoutSessionBlock)
+    case 'panel': {
+      const rows = await panelRowsForLayoutSession(layoutSessionBlock)
+      return rows.find(row => row.id === input.panelId) ?? null
+    }
+    case 'main':
+      return (await panelRowsForLayoutSession(layoutSessionBlock))[0] ?? null
+    case 'new-panel':
+    case 'sidebar-stack':
+      return null
+  }
+}
+
+/** The top-level block currently shown in the panel a navigator global command
+ *  targets — the anchor for read-then-navigate flows (e.g. daily-notes
+ *  prev/next day). Goes through the same policy as the navigation, so the anchor
+ *  and the destination agree even when a plugin redirects global commands. */
 export const resolveGlobalCommandTopLevelBlockId = async (
   repo: Repo,
   workspaceId = repo.activeWorkspaceId,
 ): Promise<string | null> => {
   if (!workspaceId) return null
-  const layoutSessionBlock = await resolveLayoutSessionBlock(repo, workspaceId)
-  if (isMobileViewport()) {
-    const panel = await resolveActivePanelRow(layoutSessionBlock)
-    return panel ? panelBlockId(panel) ?? null : null
-  }
-
-  const panels = await panelRowsForLayoutSession(layoutSessionBlock)
-  return panels[0] ? panelBlockId(panels[0]) ?? null : null
-}
-
-/** Standard click handler for in-document block links — wikilinks, block refs,
- *  bullets, and other anchors whose href encodes a block target. Centralises
- *  the follow-link modifier policy so individual components don't re-implement
- *  it (and drift apart). Resolves the gesture through `defaultNavigationIntent`
- *  *synchronously* — `preventDefault` must run before any await, and the default
- *  policy needs no async. (It therefore bypasses the `navigationIntentVerb`
- *  facet; surfaces that want plugin-customizable resolution use `useBlockOpener`
- *  / `useOpenBlock`, whose async path runs the verb.) Always stops propagation
- *  so a surrounding click handler doesn't swallow the navigation.
- *
- *  Link-like controls that resolve a block asynchronously should use
- *  `blockLinkClickIntent` first, then resolve the input once they have a block
- *  id. */
-export const handleBlockLinkClick = (
-  e: MouseEvent,
-  navigateFn: (input: NavigateInput) => void,
-  panelId: string | undefined,
-  {blockId, workspaceId}: BlockLinkClickContext,
-): void => {
-  e.stopPropagation()
-  const input = defaultNavigationIntent({
-    role: 'follow-link',
-    modifiers: modifiersFromMouseEvent(e),
-    panelId,
-    blockId,
-    workspaceId,
-    viewport: currentViewport(),
-  })
-  if (!input) return
-  e.preventDefault()
-  navigateFn(input)
+  const panel = await resolveGlobalCommandTargetPanel(repo, workspaceId)
+  return panel ? panelBlockId(panel) ?? null : null
 }
 
 export interface OpenBlockContext {

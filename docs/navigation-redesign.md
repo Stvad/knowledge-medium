@@ -396,11 +396,19 @@ at the policy; *what happens when we go there* at the execution verb.
    before calling `navigate()`. The native-passthrough decision (cmd/ctrl/middle
    → browser) stays a synchronous, non-overridable carve-out in the click
    handlers, since `preventDefault` must run before the async policy.
-   - Known gap (follow-up): `resolveGlobalCommandTopLevelBlockId` still applies
-     the viewport rule directly, so if a plugin redirects navigator commands at
-     the policy, that read isn't redirected with them; `handleBlockLinkClick`
-     (test-only) and quick-find's click mapping use the default matrix
-     synchronously, bypassing the policy facet.
+   - The **read** side agrees: `resolveGlobalCommandTopLevelBlockId` (the anchor
+     for daily-notes prev/next) resolves its target panel through the same policy
+     (`resolveGlobalCommandTargetPanel`, a neutral navigator probe), so a
+     redirect of where global commands land feeds both the anchor and the
+     destination. quick-find's plain-selection `jump` also routes through the
+     policy (via `navigateFromGlobalCommand`), so it's retargetable.
+   - Deliberately *not* policy-routed: quick-find's own *modifier → its
+     three-way `jump`/`stack`/`new-panel` enum* (a bespoke vocabulary +
+     keyboard convention, distinct from `NavigateInput`), and its `stack` /
+     `new-panel` dispatch (explicit panel creation, redirectable at the
+     execution verb by target/origin). The old `handleBlockLinkClick` pure
+     helper was removed (vestigial — no production caller; `useBlockOpener` is
+     the live path and its matrix is covered by `defaultNavigationIntent`).
 4. **`urlSerializerFacet`** *(TODO)* — `parse(hash) → AppState`,
    `build(state) → hash`. Pluggable URL format.
 5. **`panelHistoryFacet`** *(TODO)* — alternative history models (tree-shaped,

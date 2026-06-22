@@ -1,15 +1,12 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { MouseEvent } from 'react'
 import {
   defaultNavigationIntent,
-  handleBlockLinkClick,
   navigate,
   navigateFromGlobalCommand,
   navigationIntentVerb,
   navigationVerb,
   resolveGlobalCommandTopLevelBlockId,
-  type NavigateInput,
   type NavigationGesture,
 } from '@/utils/navigation'
 import { panelHistory } from '@/utils/panelHistory'
@@ -230,86 +227,6 @@ describe('navigateFromGlobalCommand', () => {
   })
 })
 
-describe('handleBlockLinkClick', () => {
-  const ctx = {blockId: 'b-target', workspaceId: 'w-1'}
-
-  const makeEvent = (overrides: Partial<MouseEvent> = {}): MouseEvent => {
-    const calls = {stopProp: 0, preventDefault: 0}
-    const e = {
-      shiftKey: false, metaKey: false, ctrlKey: false, altKey: false, button: 0,
-      stopPropagation: () => { calls.stopProp += 1 },
-      preventDefault: () => { calls.preventDefault += 1 },
-      ...overrides,
-    } as unknown as MouseEvent
-    ;(e as unknown as {calls: typeof calls}).calls = calls
-    return e
-  }
-
-  const callsOf = (e: MouseEvent) =>
-    (e as unknown as {calls: {stopProp: number; preventDefault: number}}).calls
-
-  it('shift-click navigates sidebar stack with sourcePanelId', () => {
-    const navigate = vi.fn<(i: NavigateInput) => void>()
-    const e = makeEvent({shiftKey: true})
-    handleBlockLinkClick(e, navigate, 'panel-a', ctx)
-    expect(navigate).toHaveBeenCalledWith({...ctx, target: 'sidebar-stack', sourcePanelId: 'panel-a', origin: 'follow-link'})
-    expect(callsOf(e)).toEqual({stopProp: 1, preventDefault: 1})
-  })
-
-  it('shift+alt-click navigates new-panel with sourcePanelId', () => {
-    const navigate = vi.fn<(i: NavigateInput) => void>()
-    const e = makeEvent({shiftKey: true, altKey: true})
-    handleBlockLinkClick(e, navigate, 'panel-a', ctx)
-    expect(navigate).toHaveBeenCalledWith({...ctx, target: 'new-panel', sourcePanelId: 'panel-a', origin: 'follow-link'})
-    expect(callsOf(e)).toEqual({stopProp: 1, preventDefault: 1})
-  })
-
-  it('alt-click navigates main panel', () => {
-    const navigate = vi.fn<(i: NavigateInput) => void>()
-    const e = makeEvent({altKey: true})
-    handleBlockLinkClick(e, navigate, 'panel-a', ctx)
-    expect(navigate).toHaveBeenCalledWith({...ctx, target: 'main', origin: 'follow-link'})
-    expect(callsOf(e)).toEqual({stopProp: 1, preventDefault: 1})
-  })
-
-  it('plain primary click navigates the current panel with panelId', () => {
-    const navigate = vi.fn<(i: NavigateInput) => void>()
-    const e = makeEvent()
-    handleBlockLinkClick(e, navigate, 'panel-a', ctx)
-    expect(navigate).toHaveBeenCalledWith({...ctx, target: 'panel', panelId: 'panel-a', origin: 'follow-link'})
-    expect(callsOf(e)).toEqual({stopProp: 1, preventDefault: 1})
-  })
-
-  it('plain primary click without panelId navigates the active panel', () => {
-    const navigate = vi.fn<(i: NavigateInput) => void>()
-    const e = makeEvent()
-    handleBlockLinkClick(e, navigate, undefined, ctx)
-    expect(navigate).toHaveBeenCalledWith({...ctx, target: 'active', origin: 'follow-link'})
-  })
-
-  it.each([
-    ['metaKey', {metaKey: true}],
-    ['ctrlKey', {ctrlKey: true}],
-    ['ctrl+shift', {ctrlKey: true, shiftKey: true}],
-    ['middle-button', {button: 1}],
-    ['right-button', {button: 2}],
-  ])('falls through to href on %s (no navigate, no preventDefault)', (_name, override) => {
-    const navigate = vi.fn<(i: NavigateInput) => void>()
-    const e = makeEvent(override as Partial<MouseEvent>)
-    handleBlockLinkClick(e, navigate, 'panel-a', ctx)
-    expect(navigate).not.toHaveBeenCalled()
-    expect(callsOf(e)).toEqual({stopProp: 1, preventDefault: 0})
-  })
-
-  it('shift+meta falls through to native behavior', () => {
-    const navigate = vi.fn<(i: NavigateInput) => void>()
-    const e = makeEvent({shiftKey: true, metaKey: true, altKey: true})
-    handleBlockLinkClick(e, navigate, 'panel-a', ctx)
-    expect(navigate).not.toHaveBeenCalled()
-    expect(callsOf(e)).toEqual({stopProp: 1, preventDefault: 0})
-  })
-})
-
 describe('defaultNavigationIntent (default policy)', () => {
   const NO_MODS = {shiftKey: false, altKey: false, metaKey: false, ctrlKey: false, button: 0}
   const gesture = (overrides: Partial<NavigationGesture> = {}): NavigationGesture => ({
@@ -503,6 +420,10 @@ describe('navigationIntentVerb (intent policy seam)', () => {
     const layoutSession = await layoutSessionBlock()
     await insertPanelRow(env.repo, layoutSession, 'b-main')
     const activePanel = await insertPanelRow(env.repo, layoutSession, 'b-side')
+
+    // The READ honors the same override: it anchors on the active panel (b-side),
+    // not main (b-main) — so read-then-navigate flows stay consistent.
+    expect(await resolveGlobalCommandTopLevelBlockId(env.repo, WS)).toBe('b-side')
 
     navigateFromGlobalCommand(env.repo, {blockId: 'b-global'})
 
