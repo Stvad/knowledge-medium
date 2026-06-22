@@ -108,8 +108,8 @@ participant in the E2EE lock/wipe lifecycle.
   <li><a href="#onepath">One byte transform; plaintext is the identity case</a></li>
   <li><a href="#bytepath">The byte path, end to end</a></li>
   <li><a href="#sw">Service-worker decryption (the unification)</a></li>
-  <li><a href="#cache">Local cache &amp; Lock-and-Wipe participation</a></li>
-  <li><a href="#queue">Offline: the byte upload queue</a></li>
+  <li><a href="#cache">Local replication: byte replica &amp; display cache</a></li>
+  <li><a href="#queue">The byte-replication subsystem (up-lane + down-lane)</a></li>
   <li><a href="#storage">Storage layout &amp; RLS</a></li>
   <li><a href="#renderer">The renderer &amp; capture surfaces</a></li>
   <li><a href="#sharing">Interaction with subtree sharing</a></li>
@@ -772,31 +772,93 @@ alternative honestly; everything below in §8–§10 is boundary-agnostic except
   not making the service worker an E2EE-lifecycle participant. Decide on that, not on the illusory
   range benefit.</p>
 
-<h2 id="cache">8. Local cache &amp; Lock-and-Wipe participation</h2>
+<h2 id="cache">8. Local replication: byte replica &amp; display cache</h2>
+
+<p>PowerSync already gives every device a full local <em>replica</em> of the block <em>rows</em>, so
+  "it's all local" already holds for metadata. Media bytes are the one thing that breaks it — they live
+  out-of-band in Storage, not in the synced DB — so for genuine offline operation they get their own
+  replication, with the same target steady state as the DB: <strong>every asset for a workspace you use
+  is on disk</strong>. We reach it by <em>eager intent, lazy timing</em> — a background, idle-priority,
+  proximity-first drip that converges on full replication, not a boot-time thundering herd. That turns
+  local bytes from a mere <em>cache</em> (lazy, fetch-on-render) into a <em>replica</em> (the same
+  relationship the DB has to the server), in two tiers:</p>
+
+<table>
+<tr><th>Tier</th><th>Contents &amp; key</th><th>Durability</th></tr>
+<tr><td><strong>Byte replica</strong></td>
+    <td>Ciphertext at rest — <code>encb:v1:</code> for E2EE, raw bytes for plaintext (identity, §5);
+      mirrors exactly what the server holds. Keyed by block id (<code>&lt;ws&gt;/&lt;id&gt;</code>, the
+      Storage path).</td>
+    <td>The offline guarantee: eagerly replicated, <code>persist()</code>-backed, evicted only under
+      genuine quota pressure and only after the DB. A <em>locked</em> E2EE device can still replicate it
+      (it stores ciphertext it can't yet read) — offline-prep before unlock, and plaintext never touches
+      durable storage.</td></tr>
+<tr><td><strong>Display cache</strong></td>
+    <td>Decrypted bytes ready for <code>&lt;img&gt;</code>, <em>derived</em> from the replica at render
+      time. Keyed <code>&lt;ws&gt;/&lt;id&gt;/&lt;hash&gt;</code> (the hash gives integrity /
+      self-invalidation, §5.1).</td>
+    <td>Genuinely throwaway — re-derive from the replica with no network. Only E2EE needs it as a
+      separate tier; for a plaintext workspace the replica bytes <em>are</em> the display bytes, so it
+      collapses to one store.</td></tr>
+</table>
+
+<p>This dissolves the durability question: don't try to make the <em>cache</em> durable — put a durable
+  <em>replica</em> underneath it. Priority under storage pressure is <strong>DB replica &gt; byte
+  replica &gt; display cache</strong>. The lever that exempts the durable tiers from best-effort
+  eviction is <strong><code>navigator.storage.persist()</code></strong>, not the store choice: the
+  Cache API is <em>not</em> the HTTP cache — it sits under the same Storage-Standard per-origin quota as
+  IndexedDB and OPFS and is evicted on identical terms, so Cache-vs-OPFS buys no durability, only
+  <code>persist()</code> does (spun out as its own investigation). The display cache is
+  <strong>preserved by default for full offline operation</strong>; eviction is graceful degradation (a
+  re-fetch + decrypt round-trip, never data loss), and a real storage contest is always won by the DB.</p>
 
 <ul>
-  <li><strong>Backing store:</strong> with SW decryption, the Cache API is the natural byte cache
-    (SW-served <code>Response</code>s, native streaming). If we ever move decryption to the app
-    thread, OPFS becomes the cache instead — the choice follows the decrypt location. The cache is
-    <strong>keyed by <code>user_id</code>, then <code>workspace_id</code>, then the content
-    <code>hash</code></strong> (<code>assets:&lt;user_id&gt;</code> →
-    <code>&lt;ws&gt;/&lt;id&gt;/&lt;hash&gt;</code>): user-scoping is the access-isolation boundary (§7),
-    workspace-scoping makes leave / lock evict only the affected bytes, and <strong>including the hash
-    is what makes a re-upload self-invalidating</strong> — an edited asset gets a new
-    <code>hash</code> (§5.1) in the SW metadata mirror (§7.1.1), so the new cache key misses and
-    triggers a fresh fetch+decrypt+verify rather than serving the stale plaintext (the old entry ages
-    out by LRU). The cache hit must match the mirror's current expected hash; never serve
-    <code>&lt;ws&gt;/&lt;id&gt;</code> bytes for a different hash.</li>
-  <li><strong>Eviction:</strong> soft LRU cap (≈500&nbsp;MB default). An evicted entry simply
-    round-trips to the object store on next view.</li>
-  <li><strong>Lock &amp; Wipe:</strong> the cache, the SW token store, <em>and the §9 byte-upload
-    queue store</em> are all purged via the <code>PENDING_WIPE</code> marker consumed at next boot
-    (§7.2/§9), not a runtime message. On per-workspace revoke/leave: purge that workspace's prefix.</li>
-  <li><strong>Optimistic local-first write:</strong> on paste, the encoded bytes are written to the
-    <em>durable upload queue's own store</em> (§9) and the display cache is warmed. The image renders
-    immediately from local bytes; the upload drains in the background. Whether the bytes have uploaded
-    yet is a <strong>per-device</strong> fact, read from the local queue — see the next point. Offline
-    it simply stays pending and still renders on this device.</li>
+  <li><strong>Backing store — secondary to the §7 decryption-boundary fork, not dictated by it.</strong>
+    The decryption boundary is the real choice; the store is a swappable detail. With SW decryption the
+    Cache API is the SW-native store (<code>cache.match → Response</code> drops straight into the fetch
+    handler); with app-thread decryption OPFS files are natural (handed to an object URL). Either path
+    <em>could</em> use OPFS for both — a SW reaches OPFS via the async API — at the cost of rebuilding
+    the <code>Response</code> by hand for no durability gain (both stores share one best-effort quota,
+    above). User-scoping (<code>assets:&lt;user_id&gt;</code>) is the access-isolation boundary (§7);
+    workspace-scoping makes leave / lock evict only the affected bytes. Because assets are
+    <strong>immutable write-once</strong> — an edit is a <em>new</em> block id at a fresh path
+    (§5.1/§10.1) — a given block id's replica bytes never change, so the display cache carries the
+    <code>hash</code> in its key (self-invalidating if a buggy path ever produced a mismatch), and a
+    fetched byte is accepted only if it matches the block's expected hash from the SW metadata mirror
+    (§7.1.1); never serve <code>&lt;ws&gt;/&lt;id&gt;</code> bytes for a different hash.</li>
+  <li><strong>Demand beats prefetch.</strong> The render path and the background replicator call the
+    <em>same</em> fetch primitive (fetch ciphertext → verify hash → store in replica) over <em>one
+    in-flight map</em>, so a demand fetch and a queued backlog item for the same asset <strong>coalesce
+    into a single download</strong> — opening a queued image satisfies its backlog entry instead of
+    racing it. Two priority lanes ride that primitive: a <strong>high-priority demand lane</strong> (the
+    user is looking at it now) that jumps ahead, and a <strong>throttled, idle, low-concurrency backlog
+    lane</strong> (the drip) deliberately slow enough never to saturate the link or starve a demand
+    fetch. So opening not-yet-replicated media triggers an immediate high-priority fetch (a brief spinner
+    if online); the only hard failure is <em>offline AND not-yet-replicated</em>.</li>
+  <li><strong>Eager replication is budgeted and scoped, or it backfires.</strong> Metadata is cheap to
+    fully replicate; media can be gigabytes, and unbounded eager replication would blow the origin quota
+    and trigger the very eviction it is meant to prevent. So the down-lane (§9) is bounded:
+    <strong>(a) scoped to active / opened workspaces</strong> (don't pull cold workspaces' bytes — the
+    same reasoning as the "don't touch unopened workspaces" sync-flood lesson); <strong>(b)
+    budget-capped</strong> — replicate eagerly up to a budget, beyond which the long tail stays
+    lazy-re-fetchable rather than quota-thrashing; <strong>(c) polite</strong> — idle / low priority,
+    viewport-proximity first, and metered / mobile aware (wifi-only or a user toggle). Reads are direct
+    RLS-gated Storage GETs (only <em>uploads</em> go through the §10.1 function), so the down-lane is
+    plain egress.</li>
+  <li><strong>Eviction:</strong> the display cache and any over-budget replica bytes carry a soft LRU
+    cap (≈500&nbsp;MB default); an evicted entry round-trips on next view (replica → re-fetch ciphertext;
+    display → re-derive locally from the replica). <em>Un-uploaded</em> replica bytes are exempt — they
+    are the only copy of those bytes anywhere (§9).</li>
+  <li><strong>Lock &amp; Wipe:</strong> the replica + display cache, the SW token store, <em>and the §9
+    byte-replication store</em> (the same durable store, §9) are all purged via the
+    <code>PENDING_WIPE</code> marker consumed at next boot (§7.2/§9), not a runtime message. On
+    per-workspace revoke/leave: purge that workspace's prefix.</li>
+  <li><strong>Optimistic local-first write:</strong> on paste, the encoded bytes are written straight to
+    the <em>durable replica</em> (the §9 up-lane's source, never the evictable display cache) and the
+    display cache is warmed. The image renders immediately from local bytes; the upload drains in the
+    background. Whether the bytes have uploaded yet is a <strong>per-device</strong> fact, read from the
+    local up-lane — see the next point. Offline it simply stays pending and still renders on this
+    device.</li>
 </ul>
 
 <div class="warn">
@@ -814,12 +876,13 @@ flag. The synced block's mere existence is the only cross-device signal needed.
 <strong>The LRU display cache must not be the only home for un-uploaded bytes.</strong> The cache is
 evictable (and capped); if a paste happens offline, or the cap is hit before the queue drains, an
 evicted entry would leave a synced asset block stuck in <code>uploading</code> forever with no bytes
-to send. So pending bytes are <strong>owned by the upload queue's durable store</strong> (§9), which
-is <em>not</em> subject to the display cache's LRU, until the upload succeeds. Only then are they
-purely a display-cache concern.
+to send. So pending bytes are <strong>owned by the durable replica store</strong> (§8/§9), which
+is <em>not</em> subject to the display cache's LRU. After upload they <em>stay</em> there as the
+replica (§8) — the display cache is only the decrypted layer derived on top, never the sole home for
+the bytes.
 </div>
 
-<h2 id="queue">9. Offline: the byte upload queue</h2>
+<h2 id="queue">9. The byte-replication subsystem (up-lane + down-lane)</h2>
 
 <p>Block <em>metadata</em> rides PowerSync's <code>ps_crud</code> upload queue. Bytes go through the
   guarded upload function (§10.1) on a different path with no such queue, so they need their own
@@ -838,7 +901,8 @@ purely a display-cache concern.
   pending bytes from B's (purging B's, or surviving A's), and a drain could retry A's entry under B's
   session. The <code>status</code> field has a lifecycle that closes the metadata-commit / byte-stage
   ordering gap (§11): <code>staged</code> (durable but <em>not</em> drainable) → <code>pending</code>
-  (drainable) → <code>uploading</code> → deleted-on-confirm. Capture writes the record as
+  (drainable) → <code>uploading</code> → uploaded (entry cleared; bytes <em>retained</em> in the
+  replica, §8). Capture writes the record as
   <code>staged</code> <em>before</em> the metadata <code>repo.tx</code>, so a committed asset block
   always has its source bytes already on disk; the post-commit step flips it to <code>pending</code>
   and arms the drain. The drain acts only on <code>pending</code>+ records, so the "block still
@@ -847,13 +911,25 @@ purely a display-cache concern.
   flip) is recovered by a <strong>boot-time reconciler</strong> that promotes any <code>staged</code>
   record whose asset block is present and committed, and reaps any <code>staged</code> record whose
   block never committed. Entries drain (to the §10.1 function) when connectivity returns, retrying with
-  backoff; the durable copy
-  is deleted only on a confirmed upload, after which the bytes are purely a display-cache concern.
+  backoff; on a confirmed upload the <em>queue entry</em> is deleted, but the <strong>bytes remain in
+  the durable replica</strong> (§8, budget-bounded) — full replication keeps them on disk for offline
+  rather than downgrading to an evictable display copy.
   This is new infra the pre-E2EE proposal under-specified; E2EE doesn't change it, but the design
   surfaces it clearly. The queue's local <code>status</code> is also the per-device source of truth
   for the "bytes pending here?" UI (§8) — there is no synced status flag. Cross-device arrival is
   naturally eventually-consistent: a peer that has the block but not yet the bytes shows the
   "metadata present, bytes pending" state until the upload from the origin device completes.</p>
+
+<p><strong>The down-lane: background replication.</strong> The queue above is the <em>up-lane</em> —
+  local bytes the server doesn't have yet. Its mirror is the <em>down-lane</em>: a background reconciler
+  that walks the <code>media</code> blocks in the local DB for active workspaces and, for any whose
+  replica bytes are absent, enqueues a fetch → hash-verify → store (the §8 budget / scope / politeness
+  rules apply). The two lanes are halves of one <strong>byte-replication subsystem</strong> over a
+  single durable byte store — the §8 <em>replica</em> — paralleling what PowerSync does for rows:
+  up-lane drains local→server, down-lane reconciles server→local, and the demand lane (§8) lets a render
+  jump the backlog. So the §9 "durable store" and the §8 "replica" are the same store, seen from the two
+  lanes; the up-lane <code>status</code> record is the per-device upload-tracking <em>over</em> that
+  store, not a second copy of the bytes.</p>
 
 <div class="warn">
 <strong>Undo / delete must compensate the byte lane.</strong> §11 puts the asset-block create + the
@@ -1275,8 +1351,15 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
 <tr><td>4 — block model + renderer</td>
     <td><code>media</code> block type; <code>MediaBlockRenderer</code> (image branch) reusing the
       lightbox; markdown <code>img</code> override.</td></tr>
-<tr><td>5 — capture + upload queue</td>
-    <td>paste / drop / file-pick arms; dedup; optimistic write; the durable byte upload queue.</td></tr>
+<tr><td>5 — capture + up-lane</td>
+    <td>paste / drop / file-pick arms; subtree-scoped dedup; optimistic write to the durable byte
+      replica (§8); the up-lane drain to §10.1 with the <code>staged → pending</code> lifecycle + boot
+      reconciler (§9).</td></tr>
+<tr><td>6 — background replication (down-lane)</td>
+    <td>the down-lane reconciler (walk active-workspace <code>media</code> blocks → fetch / verify /
+      store); the shared demand + backlog priority lanes with in-flight coalescing (§8); the replication
+      <em>budget</em> / active-workspace <em>scope</em> / <em>politeness</em> controls; and
+      <code>navigator.storage.persist()</code> so the replica isn't best-effort-evicted.</td></tr>
 <tr><td>vNext</td>
     <td>non-image mimes; thumbnails / transforms; resumable upload; the
       <code>effective_share_ids</code> storage-RLS branch when subtree sharing ships; public-share
