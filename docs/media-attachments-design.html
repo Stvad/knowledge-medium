@@ -483,7 +483,7 @@ its own monotonicity).
     self-describing magic alone would re-introduce exactly the
     downgrade vector (hostile server strips the magic → attacker plaintext reaches
     <code>&lt;img&gt;</code>) that the text wire-boundary was hardened against.</li>
-  <li><strong>Render gates on SW readiness (cold start).</strong> An <code>&lt;img src="/asset/…"&gt;</code>
+  <li><strong>Render gates on SW readiness (cold start).</strong> An <code>&lt;img src="${BASE_URL}asset/…"&gt;</code>
     can fire before the app has handed the SW a token (§7.1) or before the SW has re-read its state on
     a cold respawn. The SW must not "fail open": a request with no established active user / no fresh
     unlock signal <code>respondWith</code>s a deterministic placeholder (or holds briefly on a
