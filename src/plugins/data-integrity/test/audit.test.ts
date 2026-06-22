@@ -12,6 +12,7 @@ import {
   runConsistencyAudit,
   type AuditDb,
   type AuditDecryptDeps,
+  type AuditFullDeps,
   type DecryptSpotCheckResult,
 } from '../audit'
 import {
@@ -374,5 +375,95 @@ describe('runConsistencyAudit — e2ee encryption-awareness', () => {
     const spot = result.checks.local_server_divergence.decryptSpotCheck as DecryptSpotCheckResult
     expect(spot.status).toBe('skipped')
     expect(spot.sampled).toBe(0)
+  })
+})
+
+// `full` mode runs the deep ON-DEMAND checks the bridge eval used to reimplement.
+// These are the rich superset; the lean cadence run must NOT include them.
+describe('runConsistencyAudit — full (on-demand) deep checks', () => {
+  const WS = 'ws-full'
+  const COLS = BLOCK_STORAGE_COLUMNS.map((c) => c.name)
+  const INSERT = `INSERT INTO blocks (${COLS.join(', ')}) VALUES (${COLS.map(() => '?').join(', ')})`
+  const mk = (o: Partial<BlockData> = {}): BlockData => ({
+    id: 'b',
+    workspaceId: WS,
+    parentId: null,
+    orderKey: 'a0',
+    content: '',
+    properties: {},
+    references: [],
+    createdAt: 1,
+    updatedAt: 1,
+    userUpdatedAt: 1,
+    createdBy: 'u',
+    updatedBy: 'u',
+    deleted: false,
+    ...o,
+  })
+  const ins = (o: Partial<BlockData>) => sharedDb.db.execute(INSERT, blockToRowParams(mk(o)))
+  const FULL: AuditFullDeps = {
+    schemas: new Map(),
+    activeWorkspaceId: WS,
+    candidateCap: 100,
+    contentCap: 1000,
+    sampleLimit: 5,
+  }
+
+  it('lean run omits the deep checks; full run includes them', async () => {
+    const lean = await runConsistencyAudit(sharedDb.db, WS, 0)
+    expect(lean.checks.dangling_refs).toBeUndefined()
+    expect(lean.checks.content_link_recompute).toBeUndefined()
+    expect(lean.checks.property_ref_projection).toBeUndefined()
+
+    const full = await runConsistencyAudit(sharedDb.db, WS, 0, { full: FULL })
+    expect(full.checks.dangling_refs).toBeDefined()
+    expect(full.checks.content_link_recompute).toBeDefined()
+    expect(full.checks.property_ref_projection).toBeDefined()
+    expect(full.checks.e2ee_content_divergence).toBeDefined()
+  })
+
+  it('dangling_refs reports info for a ref whose target is missing', async () => {
+    await sharedDb.db.execute(
+      `INSERT INTO block_references (source_id, target_id, workspace_id, alias, source_field)
+       VALUES ('s', 'missing', ?, 'missing', '')`,
+      [WS],
+    )
+    const r = await runConsistencyAudit(sharedDb.db, WS, 0, { full: FULL })
+    expect(r.checks.dangling_refs.status).toBe('info')
+    expect(r.checks.dangling_refs.total).toBe(1)
+  })
+
+  it('content_link_recompute flags a strip — a content mark with no stored ref', async () => {
+    await ins({ id: 'c1', content: '[[Foo]]', references: [] })
+    const r = await runConsistencyAudit(sharedDb.db, WS, 0, { full: FULL })
+    const check = r.checks.content_link_recompute
+    expect(check.status).toBe('anomaly')
+    expect(check.strippedBlocks).toBe(1)
+  })
+
+  it('property_ref_at_rest (schema-aware) flags a value-present/ref-absent curated prop', async () => {
+    await ins({ id: 'p1', properties: { 'next-review-date': '2026-01-01' }, references: [] })
+    const r = await runConsistencyAudit(sharedDb.db, WS, 0, { full: FULL })
+    const check = r.checks.property_ref_at_rest
+    expect(check.status).toBe('anomaly')
+    expect(check.findings).toEqual([{ prop: 'next-review-date', valuePresentRefAbsent: 1 }])
+  })
+
+  it('property_ref_projection skips when no ref-typed schemas are loaded', async () => {
+    const r = await runConsistencyAudit(sharedDb.db, WS, 0, { full: FULL })
+    expect(r.checks.property_ref_projection.status).toBe('skipped')
+  })
+
+  it('property_ref_projection skips for a non-active workspace (schemas are active-only)', async () => {
+    const r = await runConsistencyAudit(sharedDb.db, 'ws-other', 0, {
+      full: { ...FULL, activeWorkspaceId: WS },
+    })
+    expect(r.checks.property_ref_projection.status).toBe('skipped')
+    expect(String(r.checks.property_ref_projection.reason)).toContain('active workspace')
+  })
+
+  it('e2ee_content_divergence skips without a key resolver', async () => {
+    const r = await runConsistencyAudit(sharedDb.db, WS, 0, { full: FULL })
+    expect(r.checks.e2ee_content_divergence.status).toBe('skipped')
   })
 })

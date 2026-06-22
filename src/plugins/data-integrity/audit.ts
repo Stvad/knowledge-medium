@@ -1,19 +1,21 @@
 // Built-in client-side consistency audit (L3 of the data-integrity defense —
-// docs/data-integrity-defense.html). The cadenced, always-on complement to the
-// on-demand bridge eval (scripts/data-integrity/consistency-check.eval.js): a
-// lean, count-only subset of the same invariants that the Repo runs on idle and
-// surfaces as a metric, so the catastrophic strip/divergence classes are caught
-// on a cadence instead of only when a human remembers to run the eval.
+// docs/data-integrity-defense.html). THE single engine for the data-integrity
+// checks: the data-integrity plugin runs the LEAN subset on an idle cadence
+// (the always-on smoke alarm), and the on-demand bridge eval
+// (scripts/data-integrity/consistency-check.eval.js) invokes this same engine
+// with `opts.full` for the rich superset — no check logic is replicated between
+// the two.
 //
 // All checks are READ-ONLY over the client SQLite (it runs on the decrypted
-// client, so unlike the server probe it covers the e2ee workspace). Almost all
-// are pure counts; the one exception is the divergence check's optional e2ee
-// decrypt spot-check, which decodes a BOUNDED sample of staging rows (the only
-// way to compare content that's ciphertext at rest) — bounded so the cadence
-// cost stays fixed regardless of graph size. Each check is isolated: a missing
-// table or malformed row degrades that one check to `error`, never crashing the
-// audit or reading as clean. The deep per-ref/sample/precise-projection diffs
-// and the FULL decrypt-compare stay in the eval — this is the smoke alarm, not
+// client, so unlike the server probe it covers the e2ee workspace). The lean
+// checks are pure counts plus a BOUNDED e2ee decrypt spot-check (so the cadence
+// cost stays fixed regardless of graph size). `full` mode adds the heavier
+// inspections — precise property-ref projection, schema-aware at-rest,
+// content-link recompute, dangling refs, and an EXHAUSTIVE keyset-paginated
+// decrypt-compare — which need the app's own projection/parser + the active
+// workspace schemas (passed in via `opts.full`). Each check is isolated: a
+// missing table or malformed row degrades that one check to `error`, never
+// crashing the audit or reading as clean. This is the smoke alarm, not
 // the full inspection.
 
 import { ENVELOPE_PREFIX } from '@/sync/crypto/envelope.js'
@@ -24,6 +26,12 @@ import {
   type GetCek,
   type GetMaterializability,
 } from '@/sync/transform.js'
+// Plugin → plugin imports (legal now the engine lives in a plugin): the deep
+// `full`-mode checks reuse the app's own projection + reference parser so they
+// see exactly what the references processor sees.
+import { isRefCodec, isRefListCodec, type AnyPropertySchema } from '@/data/api'
+import { projectPropertyReferences } from '@/plugins/references/referenceProjection.js'
+import { parseReferences, parseBlockRefs } from '@/plugins/references/referenceParser.js'
 
 /** Minimal DB surface the audit needs (a subset of the Repo's PowerSyncDb). */
 export interface AuditDb {
@@ -40,7 +48,12 @@ const isEnc = (col: string): string => `${col} LIKE '${ENVELOPE_PREFIX}%'`
 const notEnc = (col: string): string => `${col} NOT LIKE '${ENVELOPE_PREFIX}%'`
 
 export interface ConsistencyCheckResult {
-  status: 'ok' | 'anomaly' | 'error'
+  /** `anomaly` is the only status that counts toward `anomalies`. `error` = the
+   *  check threw (isolated, so it can't read as clean). `info` = a benign signal
+   *  (e.g. dangling refs). `skipped` = not applicable (e.g. precise projection
+   *  off the active workspace). `incomplete` = a capped scan didn't see the whole
+   *  workspace (raise the cap and re-run). The last three are full-mode checks. */
+  status: 'ok' | 'anomaly' | 'error' | 'info' | 'skipped' | 'incomplete'
   [key: string]: unknown
 }
 
@@ -146,6 +159,26 @@ export interface AuditOptions {
   decrypt?: AuditDecryptDeps
   /** Override the spot-check sample size (default DECRYPT_SAMPLE_LIMIT). */
   decryptSampleSize?: number
+  /** When set, run the deep ON-DEMAND checks too (precise property-ref
+   *  projection, schema-aware at-rest, content-link recompute, dangling refs,
+   *  and an EXHAUSTIVE e2ee content divergence) — the rich superset the bridge
+   *  eval used to reimplement. Omit for the lean always-on cadence run. */
+  full?: AuditFullDeps
+}
+
+/** Runtime context the deep `full`-mode checks need beyond the DB: the active
+ *  workspace's property schemas (for the precise projection) and scan caps. */
+export interface AuditFullDeps {
+  /** `repo.propertySchemas` — active-workspace-only, so the precise projection
+   *  is sound only when the audited workspace IS the active one. */
+  schemas: ReadonlyMap<string, AnyPropertySchema>
+  activeWorkspaceId: string | null
+  /** Max blocks pulled into memory for the projection candidate scan (default 60k). */
+  candidateCap?: number
+  /** Pathological-size ceiling for the keyset-paginated content scan (default 1M). */
+  contentCap?: number
+  /** Per-check sample cap for the rich diffs (default 10). */
+  sampleLimit?: number
 }
 
 interface SpotCheckRow {
@@ -294,6 +327,305 @@ const runMaterializedCiphertextCheck = async (
   return { status: confirmed > 0 ? 'anomaly' : 'ok', encPrefixed, confirmed, samples }
 }
 
+// ── Deep ON-DEMAND checks (opts.full) ────────────────────────────────────────
+// The rich superset the bridge eval used to reimplement, now in the engine so
+// the eval just invokes it. Heavier than the lean cadence checks (app-parser /
+// projection / keyset scans), so they run only in `full` mode.
+
+/** R7 — dangling refs (target missing/deleted). Benign at baseline → reported as
+ *  info (a trend signal, never an anomaly on its own). */
+const runDanglingRefsCheck = async (
+  db: AuditDb, workspaceId: string, sampleLimit: number,
+): Promise<ConsistencyCheckResult> => {
+  const byKind = await db.getAll<{ kind: string; n: number }>(
+    `SELECT CASE WHEN br.source_field='' THEN 'content' ELSE 'property' END AS kind,
+            count(*) AS n
+     FROM block_references br LEFT JOIN blocks t ON t.id=br.target_id
+     WHERE br.workspace_id=? AND (t.id IS NULL OR t.deleted=1)
+     GROUP BY kind`,
+    [workspaceId],
+  )
+  const sample = await db.getAll(
+    `SELECT br.source_id, br.target_id, br.source_field
+     FROM block_references br LEFT JOIN blocks t ON t.id=br.target_id
+     WHERE br.workspace_id=? AND (t.id IS NULL OR t.deleted=1)
+     LIMIT ${sampleLimit}`,
+    [workspaceId],
+  )
+  const total = byKind.reduce((a, r) => a + Number(r.n), 0)
+  return {
+    status: 'info',
+    total,
+    byKind: Object.fromEntries(byKind.map((r) => [r.kind, Number(r.n)])),
+    sample,
+  }
+}
+
+type StoredRef = { id?: string; alias?: string; sourceField?: string }
+const refKey = (r: { sourceField?: string; id?: string }): string => `${r.sourceField ?? ''} ${r.id ?? ''}`
+
+/** R4(1) — precise property-ref projection diff (active workspace, loaded ref
+ *  schemas): recompute expected refs via the app's projection and diff stored.
+ *  `missing` = a strip; `extra` = a value-desync (present-schema only — an
+ *  absent-schema stored ref is retained by design, so it's excluded). */
+const runPropertyRefProjectionCheck = async (
+  db: AuditDb, workspaceId: string, full: AuditFullDeps,
+): Promise<ConsistencyCheckResult> => {
+  const sampleLimit = full.sampleLimit ?? 10
+  const candidateCap = full.candidateCap ?? 60000
+  if (workspaceId !== full.activeWorkspaceId) {
+    return { status: 'skipped', reason: `precise diff needs the active workspace (schemas are active-only): audited=${workspaceId}, active=${full.activeWorkspaceId}. The at-rest heuristic still runs.` }
+  }
+  const refNames = [...full.schemas]
+    .filter(([, s]) => isRefCodec(s.codec) || isRefListCodec(s.codec))
+    .map(([name]) => name)
+  if (refNames.length === 0) {
+    return { status: 'skipped', reason: 'no ref-typed property schemas loaded in the runtime' }
+  }
+  const refNameSet = new Set(refNames)
+  const likeClause = refNames.map(() => 'properties_json LIKE ?').join(' OR ')
+  const likeParams = refNames.map((n) => `%"${n}"%`)
+  const candidates = await db.getAll<{ id: string; properties_json: string; references_json: string }>(
+    `SELECT id, properties_json, references_json FROM blocks
+     WHERE deleted=0 AND workspace_id=? AND (${likeClause})
+     LIMIT ${candidateCap + 1}`,
+    [workspaceId, ...likeParams],
+  )
+  const truncated = candidates.length > candidateCap
+  const scanned = truncated ? candidates.slice(0, candidateCap) : candidates
+
+  let blocksMissing = 0
+  let blocksExtra = 0
+  let refsMissing = 0
+  let refsExtra = 0
+  const missingSample: Array<{ id: string; missing: string[][] }> = []
+  const extraSample: Array<{ id: string; extra: string[][] }> = []
+
+  for (const row of scanned) {
+    let properties: Record<string, unknown>
+    let stored: StoredRef[]
+    try {
+      properties = JSON.parse(row.properties_json)
+      stored = JSON.parse(row.references_json)
+    } catch {
+      continue // malformed JSON is the index-mirror check's job
+    }
+    const expected = projectPropertyReferences({ properties }, full.schemas)
+    const expectedKeys = new Set(expected.map(refKey))
+    const storedPropKeys = new Set(stored.filter((r) => r && r.sourceField).map(refKey))
+    const missing = [...expectedKeys].filter((k) => !storedPropKeys.has(k))
+    // Only flag `extra` for a PRESENT schema (else the stored ref is value-tied
+    // and retained by design).
+    const extra = [
+      ...new Set(stored.filter((r) => r && r.sourceField && refNameSet.has(r.sourceField)).map(refKey)),
+    ].filter((k) => !expectedKeys.has(k))
+    if (missing.length) {
+      blocksMissing += 1
+      refsMissing += missing.length
+      if (missingSample.length < sampleLimit) missingSample.push({ id: row.id, missing: missing.map((k) => k.split(' ')) })
+    }
+    if (extra.length) {
+      blocksExtra += 1
+      refsExtra += extra.length
+      if (extraSample.length < sampleLimit) extraSample.push({ id: row.id, extra: extra.map((k) => k.split(' ')) })
+    }
+  }
+  const anomalous = blocksMissing + blocksExtra > 0
+  return {
+    status: anomalous ? 'anomaly' : truncated ? 'incomplete' : 'ok',
+    refTypedProps: refNames.length,
+    scanned: scanned.length,
+    truncated,
+    blocksMissingRefs: blocksMissing,
+    refsMissing,
+    blocksExtraRefs: blocksExtra,
+    refsExtra,
+    missingSample,
+    extraSample,
+  }
+}
+
+/** R4(2) — schema-aware at-rest heuristic: for "believed ref-typed" props NOT
+ *  covered by a loaded schema (the toggled-off-plugin / 06-09 SRS-off case),
+ *  flag value-present/ref-absent blocks. The on-demand superset of the lean
+ *  curated check; anomaly on ANY finding (the run is human-triaged). */
+const runSchemaAwareAtRestCheck = async (
+  db: AuditDb, workspaceId: string, full: AuditFullDeps,
+): Promise<ConsistencyCheckResult> => {
+  const loaded = new Set(
+    [...full.schemas].filter(([, s]) => isRefCodec(s.codec) || isRefListCodec(s.codec)).map(([name]) => name),
+  )
+  const fromIndex = (
+    await db.getAll<{ name: string }>(
+      `SELECT DISTINCT source_field AS name FROM block_references WHERE workspace_id=? AND source_field!=''`,
+      [workspaceId],
+    )
+  ).map((r) => r.name)
+  const absentNames = [...new Set([...fromIndex, ...CURATED_REF_PROPS])].filter((n) => !loaded.has(n))
+  if (absentNames.length === 0) {
+    return { status: 'ok', reason: 'every believed-ref prop has a loaded schema (covered precisely above)', findings: [] }
+  }
+  const findings: Array<{ prop: string; valuePresentRefAbsent: number }> = []
+  for (const name of absentNames) {
+    const n = await count(
+      db,
+      `SELECT count(*) AS n FROM blocks
+       WHERE deleted=0 AND workspace_id=?
+         AND properties_json LIKE '%"' || ? || '"%'
+         AND references_json NOT LIKE '%"sourceField":"' || ? || '"%'`,
+      [workspaceId, name, name],
+    )
+    if (n > 0) findings.push({ prop: name, valuePresentRefAbsent: n })
+  }
+  return {
+    status: findings.length > 0 ? 'anomaly' : 'ok',
+    note: 'heuristic (owning plugin not loaded; a small benign baseline from empty/non-uuid values is expected) — re-run the precise check with the plugin enabled to confirm',
+    uncoveredRefProps: absentNames,
+    findings,
+  }
+}
+
+/** R1/R3 — content-ref recompute: parse each block's content with the app's
+ *  reference parser and compare to stored content refs. `strippedBlocks` = marks
+ *  but zero stored refs; `staleRefBlocks` = a stored content ref whose alias the
+ *  current content lacks. Keyset-paginated for bounded memory. */
+const runContentLinkRecomputeCheck = async (
+  db: AuditDb, workspaceId: string, full: AuditFullDeps,
+): Promise<ConsistencyCheckResult> => {
+  const sampleLimit = full.sampleLimit ?? 10
+  const contentCap = full.contentCap ?? 1_000_000
+  const BATCH = 20000
+  let lastId = ''
+  let scanned = 0
+  let withMarks = 0
+  let strippedBlocks = 0
+  let staleRefBlocks = 0
+  let staleRefs = 0
+  let truncated = false
+  const strippedSample: Array<{ id: string; marks: number; content_preview: string }> = []
+  const staleSample: Array<{ id: string; stale: string[]; content_preview: string }> = []
+  for (;;) {
+    const batch = await db.getAll<{ id: string; content: string; references_json: string }>(
+      `SELECT id, content, references_json FROM blocks
+       WHERE deleted=0 AND workspace_id=?
+         AND (content LIKE '%[[%' OR content LIKE '%((%')
+         AND id > ?
+       ORDER BY id LIMIT ${BATCH}`,
+      [workspaceId, lastId],
+    )
+    if (batch.length === 0) break
+    for (const row of batch) {
+      const parsedAliases = new Set<string>([
+        ...parseReferences(row.content).map((m) => m.alias),
+        ...parseBlockRefs(row.content).map((m) => m.blockId),
+      ])
+      if (parsedAliases.size === 0) continue
+      withMarks += 1
+      let stored: StoredRef[]
+      try {
+        stored = JSON.parse(row.references_json)
+      } catch {
+        continue
+      }
+      const contentRefs = stored.filter((r) => r && !r.sourceField)
+      if (contentRefs.length === 0) {
+        strippedBlocks += 1
+        if (strippedSample.length < sampleLimit) strippedSample.push({ id: row.id, marks: parsedAliases.size, content_preview: row.content.slice(0, 120) })
+        continue
+      }
+      const stale = contentRefs.filter((r) => r.alias !== undefined && !parsedAliases.has(r.alias))
+      if (stale.length > 0) {
+        staleRefBlocks += 1
+        staleRefs += stale.length
+        if (staleSample.length < sampleLimit) staleSample.push({ id: row.id, stale: stale.map((r) => r.alias as string), content_preview: row.content.slice(0, 120) })
+      }
+    }
+    scanned += batch.length
+    lastId = batch[batch.length - 1].id
+    if (batch.length < BATCH) break
+    if (scanned >= contentCap) { truncated = true; break }
+  }
+  const anomalous = strippedBlocks > 0 || staleRefBlocks > 0
+  return {
+    status: anomalous ? 'anomaly' : truncated ? 'incomplete' : 'ok',
+    scanned,
+    truncated,
+    blocksWithMarks: withMarks,
+    strippedBlocks,
+    staleRefBlocks,
+    staleRefs,
+    strippedSample,
+    staleSample,
+  }
+}
+
+/** L4c — EXHAUSTIVE e2ee content divergence: decrypt EVERY equal-stamp e2ee
+ *  staging row (keyset-paginated) and compare to local plaintext — the full
+ *  counterpart to the bounded decrypt spot-check. Needs the WK. */
+const runExhaustiveE2eeDivergenceCheck = async (
+  db: AuditDb, workspaceId: string, deps: AuditDecryptDeps | undefined, full: AuditFullDeps,
+): Promise<ConsistencyCheckResult> => {
+  if (!deps) return { status: 'skipped', reason: 'no key resolver' }
+  const materializability = await deps.getMaterializability(workspaceId)
+  if (materializability !== 'decrypt') {
+    return { status: 'skipped', reason: `workspace not decryptable (materializability=${materializability})` }
+  }
+  const sampleLimit = full.sampleLimit ?? 10
+  const cap = full.candidateCap ?? 60000
+  const BATCH = 2000
+  let lastId = ''
+  let scanned = 0
+  let mismatches = 0
+  let undecryptable = 0
+  let truncated = false
+  const mismatchSample: string[] = []
+  for (;;) {
+    const batch = await db.getAll<{
+      id: string; workspace_id: string
+      l_content: string; l_props: string; l_refs: string
+      s_content: string; s_props: string; s_refs: string
+    }>(
+      `SELECT b.id AS id, b.workspace_id AS workspace_id,
+              b.content AS l_content, b.properties_json AS l_props, b.references_json AS l_refs,
+              bs.content AS s_content, bs.properties_json AS s_props, bs.references_json AS s_refs
+       FROM blocks b JOIN blocks_synced bs ON bs.id=b.id
+       WHERE b.workspace_id=? AND b.updated_at=bs.updated_at AND b.updated_at!=0
+         AND ${isEnc('bs.content')} AND b.id > ?
+       ORDER BY b.id LIMIT ${BATCH}`,
+      [workspaceId, lastId],
+    )
+    if (batch.length === 0) break
+    for (const r of batch) {
+      let plain
+      try {
+        plain = await decodeFromWire(
+          { id: r.id, workspace_id: r.workspace_id, content: r.s_content, properties_json: r.s_props, references_json: r.s_refs },
+          'e2ee', deps.getCek,
+        )
+      } catch {
+        undecryptable += 1
+        continue
+      }
+      if (plain.content !== r.l_content || plain.properties_json !== r.l_props || plain.references_json !== r.l_refs) {
+        mismatches += 1
+        if (mismatchSample.length < sampleLimit) mismatchSample.push(r.id)
+      }
+    }
+    scanned += batch.length
+    lastId = batch[batch.length - 1].id
+    if (batch.length < BATCH) break
+    if (scanned >= cap) { truncated = true; break }
+  }
+  return {
+    status: mismatches > 0 ? 'anomaly' : truncated ? 'incomplete' : 'ok',
+    scanned,
+    mismatches,
+    undecryptable,
+    truncated,
+    mismatchSample,
+  }
+}
+
 /** Run the built-in consistency audit for one workspace. Pure (modulo the
  *  optional divergence-recheck sleep): caller supplies `now` (epoch ms). Never
  *  throws — per-check failures are captured as `error`. */
@@ -428,9 +760,11 @@ export const runConsistencyAudit = async (
     }
   })
 
-  // R4 — curated property-ref at-rest: value present in properties_json, projected
-  // ref absent from references_json (the proven 06-09 detection query).
+  // R4 — property-ref at-rest. Full (on-demand): the schema-aware superset that
+  // also catches toggled-off ref props (and flags on any finding). Lean (cadence):
+  // the curated catastrophe detector below (value present, projected ref absent).
   await run('property_ref_at_rest', async () => {
+    if (opts.full) return runSchemaAwareAtRestCheck(db, workspaceId, opts.full)
     const findings: Array<{ prop: string; valuePresentRefAbsent: number }> = []
     const samples: string[] = []
     for (const name of CURATED_REF_PROPS) {
@@ -560,8 +894,24 @@ export const runConsistencyAudit = async (
   // plaintext path never had. Decrypt-verified (see runMaterializedCiphertextCheck)
   // so a user note that merely starts with `enc:v1:` can't false-positive.
   await run('materialized_still_ciphertext', () =>
-    runMaterializedCiphertextCheck(db, workspaceId, opts.decrypt, opts.decryptSampleSize ?? DECRYPT_SAMPLE_LIMIT),
+    runMaterializedCiphertextCheck(
+      db,
+      workspaceId,
+      opts.decrypt,
+      // On-demand: verify up to candidateCap; cadence: the bounded spot sample.
+      opts.full ? (opts.full.candidateCap ?? 60000) : (opts.decryptSampleSize ?? DECRYPT_SAMPLE_LIMIT),
+    ),
   )
+
+  // Deep ON-DEMAND checks (full mode only) — the rich superset the bridge eval
+  // used to reimplement, now run by the engine so the eval just invokes it.
+  if (opts.full) {
+    const full = opts.full
+    await run('dangling_refs', () => runDanglingRefsCheck(db, workspaceId, full.sampleLimit ?? 10))
+    await run('property_ref_projection', () => runPropertyRefProjectionCheck(db, workspaceId, full))
+    await run('content_link_recompute', () => runContentLinkRecomputeCheck(db, workspaceId, full))
+    await run('e2ee_content_divergence', () => runExhaustiveE2eeDivergenceCheck(db, workspaceId, opts.decrypt, full))
+  }
 
   return { workspaceId, checkedAt: now, anomalies, checks }
 }
