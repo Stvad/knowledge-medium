@@ -233,4 +233,22 @@ describe('defineVerbFacet', () => {
 
     await expect(verb.run(runtime, 1)).rejects.toThrow('core bug')
   })
+
+  it('falls back to defaultImpl when an impl returns a result failing validateResult', async () => {
+    // An untyped plugin can return a malformed result without throwing; with
+    // validateResult that degrades to the default instead of reaching callers.
+    const verb = defineVerbFacet<number, number>({
+      id: 'test.verb.invalid-result',
+      defaultImpl: () => 0,
+      validateResult: n => typeof n === 'number' && Number.isFinite(n),
+    })
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const runtime = resolveFacetRuntimeSync([
+      verb.impl(() => undefined as unknown as number),
+    ])
+
+    await expect(verb.run(runtime, 5)).resolves.toBe(0)
+    expect(consoleError).toHaveBeenCalled()
+    consoleError.mockRestore()
+  })
 })

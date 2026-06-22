@@ -40,10 +40,15 @@ import {
  * crash, not a veto:
  *   - before/after observers are pure and isolated — their errors are
  *     logged and swallowed so an observer can never break the verb.
- *   - a throwing impl/decorator is logged and the verb **falls back to
- *     `defaultImpl(input)`**, so one buggy plugin can't break the verb for
- *     every other consumer. (If `defaultImpl` itself throws, `run` rejects
- *     — that's a core bug and should surface.)
+ *   - a throwing impl/decorator — or, when `validateResult` is supplied, one
+ *     that returns a result failing it — is logged and the verb **falls back
+ *     to `defaultImpl(input)`**, so one buggy plugin can't break the verb for
+ *     every other consumer. Dynamic-extension code is transpiled without
+ *     type-checking and contributions are only validated as functions, so a
+ *     plugin with a missing `return` (→ `undefined`) or a malformed object
+ *     slips past unless the verb checks its result shape — supply
+ *     `validateResult` for any verb whose consumers trust the result shape.
+ *     (If `defaultImpl` itself throws, `run` rejects — a core bug to surface.)
  *   - **Side-effect precondition for the fallback:** because the fallback
  *     re-invokes `defaultImpl(input)` after the impl/decorator chain may
  *     have *already partially run*, an `impl`/`decorator` MUST NOT commit
@@ -124,9 +129,15 @@ export interface VerbFacet<Input, Result> {
 export function defineVerbFacet<Input, Result>({
   id,
   defaultImpl,
+  validateResult,
 }: {
   id: string
   defaultImpl: VerbImpl<Input, Result>
+  /** Optional runtime check on the resolved result. A result that fails it
+   *  is treated like a crash → fall back to `defaultImpl`. Supply this for
+   *  verbs whose consumers trust the result shape, since contributions are
+   *  only validated as functions, not by their return value. */
+  validateResult?: (result: Result) => boolean
 }): VerbFacet<Input, Result> {
   // Resolve the impl in `combine` (runs once per facet resolution, then
   // cached) rather than in `run` — this dedups the multiple-impl warning to
@@ -190,14 +201,21 @@ export function defineVerbFacet<Input, Result>({
         composed = decorate(composed)
       }
       result = await composed(input)
+      // A malformed (non-throwing) result is treated like a crash: an
+      // untyped plugin can return `undefined`/`{}` past the function-only
+      // contribution check, which would otherwise reach consumers (e.g.
+      // `decision.kind` read after `preventDefault`) and crash/swallow.
+      if (validateResult && !validateResult(result)) {
+        throw new Error(`[verb:${id}] impl/decorator returned an invalid result`)
+      }
     } catch (error) {
-      // A throwing impl/decorator is a crash, not a veto — degrade to the
-      // default behavior so one buggy plugin can't break the verb. If we
-      // already ran exactly the bare default, there's nothing safer to try.
+      // A throwing-or-malformed impl/decorator is a crash, not a veto —
+      // degrade to the default so one buggy plugin can't break the verb. If
+      // we already ran exactly the bare default, there's nothing safer to try.
       const ranBareDefault = impl === defaultImpl && decorators.length === 0
       if (ranBareDefault) throw error
       console.error(
-        `[verb:${id}] impl/decorator threw; falling back to defaultImpl`,
+        `[verb:${id}] impl/decorator threw or returned an invalid result; falling back to defaultImpl`,
         error,
       )
       result = await defaultImpl(input)

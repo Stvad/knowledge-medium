@@ -38,6 +38,16 @@ export {
   type VariantSelection,
 } from '@/facets/variantFacet.js'
 
+// --- Verb facet helper (observe / wrap / replace a single typed verb) ---
+export {
+  defineVerbFacet,
+  type VerbFacet,
+  type VerbImpl,
+  type VerbDecorator,
+  type VerbBefore,
+  type VerbAfter,
+} from '@/facets/verbFacet.js'
+
 // --- Blessed core facets ---
 export {
   actionTransformsFacet,
@@ -103,6 +113,16 @@ export {
 
 // --- Markdown rendering pipeline ---
 export { markdownExtensionsFacet } from '@/markdown/extensions.js'
+
+// --- Paste decision seam (override how clipboard content lands: split into
+// an outline vs drop as a single block, optionally rewriting the text) ---
+export {
+  pasteDecisionVerb,
+  defaultPasteDecision,
+  type PasteDecision,
+  type PasteRequest,
+  type PasteSurface,
+} from '@/extensions/paste.js'
 
 // --- Action / shortcut helpers ---
 export {

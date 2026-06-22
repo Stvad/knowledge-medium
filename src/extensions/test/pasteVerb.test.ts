@@ -3,6 +3,7 @@ import { resolveFacetRuntimeSync } from '@/facets/facet.ts'
 import {
   defaultPasteDecision,
   pasteDecisionVerb,
+  type PasteDecision,
   type PasteRequest,
 } from '../paste.ts'
 
@@ -81,6 +82,21 @@ describe('pasteDecisionVerb', () => {
 
     const decision = await pasteDecisionVerb.run(runtime, request({text: 'a,b\nc,d'}))
     expect(decision).toEqual({kind: 'split', text: '- a / b\n- c / d'})
+  })
+
+  it('falls back to the default when an override returns a malformed decision', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    // Untyped plugins can return undefined (missing return) or a wrong shape;
+    // both must degrade to the default rather than reaching the renderers.
+    for (const bad of [undefined, {}, {kind: 'nope'}]) {
+      const runtime = resolveFacetRuntimeSync([
+        pasteDecisionVerb.impl(() => bad as unknown as PasteDecision),
+      ])
+      await expect(pasteDecisionVerb.run(runtime, request({text: 'a\nb'})))
+        .resolves.toEqual({kind: 'split'})
+    }
+    expect(consoleError).toHaveBeenCalled()
+    consoleError.mockRestore()
   })
 
   it('falls back to the default decision when a plugin override throws', async () => {

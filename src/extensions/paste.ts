@@ -84,4 +84,11 @@ export const defaultPasteDecision = (request: PasteRequest): PasteDecision => {
 export const pasteDecisionVerb = defineVerbFacet<PasteRequest, PasteDecision>({
   id: 'core.paste-decision',
   defaultImpl: defaultPasteDecision,
+  // Guard the renderers (which read `decision.kind`/`.text` right after
+  // `preventDefault`) against an untyped plugin returning `undefined`/`{}`:
+  // an invalid shape falls back to `defaultPasteDecision`.
+  validateResult: decision =>
+    decision != null &&
+    (decision.kind === 'single-block' || decision.kind === 'split') &&
+    (decision.text === undefined || typeof decision.text === 'string'),
 })
