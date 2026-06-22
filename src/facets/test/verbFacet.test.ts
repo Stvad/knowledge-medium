@@ -153,6 +153,7 @@ describe('defineVerbFacet', () => {
     const verb = defineVerbFacet<number, number>({
       id: 'test.verb.impl-throws',
       defaultImpl: n => n + 1000,
+      onError: 'fallback',
     })
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     const runtime = resolveFacetRuntimeSync([
@@ -170,6 +171,7 @@ describe('defineVerbFacet', () => {
     const verb = defineVerbFacet<number, number>({
       id: 'test.verb.decorator-call-throws',
       defaultImpl: n => n,
+      onError: 'fallback',
     })
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     const runtime = resolveFacetRuntimeSync([
@@ -190,6 +192,7 @@ describe('defineVerbFacet', () => {
     const verb = defineVerbFacet<number, number>({
       id: 'test.verb.decorator-wrap-throws',
       defaultImpl: n => n + 1,
+      onError: 'fallback',
     })
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     const runtime = resolveFacetRuntimeSync([
@@ -207,6 +210,7 @@ describe('defineVerbFacet', () => {
     const verb = defineVerbFacet<number, number>({
       id: 'test.verb.after-on-fallback',
       defaultImpl: n => n * 2,
+      onError: 'fallback',
     })
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     const after = vi.fn()
@@ -240,6 +244,7 @@ describe('defineVerbFacet', () => {
     const verb = defineVerbFacet<number, number>({
       id: 'test.verb.invalid-result',
       defaultImpl: () => 0,
+      onError: 'fallback',
       validateResult: n => typeof n === 'number' && Number.isFinite(n),
     })
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -250,5 +255,54 @@ describe('defineVerbFacet', () => {
     await expect(verb.run(runtime, 5)).resolves.toBe(0)
     expect(consoleError).toHaveBeenCalled()
     consoleError.mockRestore()
+  })
+
+  it('rethrows and does NOT re-run the default when an impl throws (default onError)', async () => {
+    const defaultImpl = vi.fn((n: number) => n + 1000)
+    const verb = defineVerbFacet<number, number>({
+      id: 'test.verb.rethrow-impl',
+      defaultImpl,
+    })
+    const runtime = resolveFacetRuntimeSync([
+      verb.impl(() => {
+        throw new Error('plugin impl boom')
+      }),
+    ])
+
+    // Default policy is 'rethrow': the error surfaces and the default is never
+    // re-run — the safe policy for an effectful verb (no double-execution).
+    await expect(verb.run(runtime, 5)).rejects.toThrow('plugin impl boom')
+    expect(defaultImpl).not.toHaveBeenCalled()
+  })
+
+  it('rethrows when a decorator throws (default onError)', async () => {
+    const defaultImpl = vi.fn((n: number) => n)
+    const verb = defineVerbFacet<number, number>({
+      id: 'test.verb.rethrow-decorator',
+      defaultImpl,
+    })
+    const runtime = resolveFacetRuntimeSync([
+      verb.decorator(() => () => {
+        throw new Error('decorator boom')
+      }),
+    ])
+
+    await expect(verb.run(runtime, 9)).rejects.toThrow('decorator boom')
+    expect(defaultImpl).not.toHaveBeenCalled()
+  })
+
+  it('rethrows when a result fails validateResult (default onError)', async () => {
+    const defaultImpl = vi.fn(() => 0)
+    const verb = defineVerbFacet<number, number>({
+      id: 'test.verb.rethrow-invalid',
+      defaultImpl,
+      validateResult: n => typeof n === 'number' && Number.isFinite(n),
+    })
+    const runtime = resolveFacetRuntimeSync([
+      verb.impl(() => undefined as unknown as number),
+    ])
+
+    await expect(verb.run(runtime, 5)).rejects.toThrow(/invalid result/)
+    expect(defaultImpl).not.toHaveBeenCalled()
   })
 })

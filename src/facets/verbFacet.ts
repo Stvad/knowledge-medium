@@ -34,40 +34,42 @@ import {
  * contribution union. `run` resolves the four facets against a runtime and
  * executes `before → decorators(impl)(input) → after`.
  *
- * **Failure policy.** A guard ("confirm before X", "veto Y") is a
- * *decorator* that controls whether it calls `next` — i.e. it short-
- * circuits by *returning*, not by throwing. Throwing is treated as a
- * crash, not a veto:
- *   - before/after observers are pure and isolated — their errors are
- *     logged and swallowed so an observer can never break the verb.
- *   - a throwing impl/decorator — or, when `validateResult` is supplied, one
- *     that returns a result failing it — is logged and the verb **falls back
- *     to `defaultImpl(input)`**, so one buggy plugin can't break the verb for
- *     every other consumer. Dynamic-extension code is transpiled without
- *     type-checking and contributions are only validated as functions, so a
- *     plugin with a missing `return` (→ `undefined`) or a malformed object
- *     slips past unless the verb checks its result shape — supply
- *     `validateResult` for any verb whose consumers trust the result shape.
- *     (If `defaultImpl` itself throws, `run` rejects — a core bug to surface.)
- *   - **Side-effect precondition for the fallback:** because the fallback
- *     re-invokes `defaultImpl(input)` after the impl/decorator chain may
- *     have *already partially run*, an `impl`/`decorator` MUST NOT commit
- *     observable side effects before it returns — otherwise a crash
- *     mid-effect re-runs the effect via the default (double execution).
- *     This is trivially true for a pure decision verb like paste; a
- *     side-effectful verb (navigate, dispatch) must keep its impl
- *     effect-free-until-return (e.g. return a *description* of the effect
- *     that the caller applies), or it should not rely on this fallback.
- *   - `after` is therefore **success-only**: it runs with the resolved
- *     result (including a fallback result), but not if `defaultImpl`
- *     throws. Cleanup that must always fire belongs in a decorator's
- *     `try/finally` around `next`, not in an `after` observer.
+ * **Failure policy (`onError`).** A guard ("confirm before X", "veto Y") is a
+ * *decorator* that controls whether it calls `next` — i.e. it short-circuits
+ * by *returning*, not by throwing. Throwing is treated as a crash, not a veto.
+ * before/after observers are always pure and isolated — their errors are logged
+ * and swallowed so an observer can never break the verb. How a throwing (or,
+ * when `validateResult` is supplied, invalid-returning) `impl`/`decorator` is
+ * handled is set by `onError`:
+ *
+ *   - `'rethrow'` (**default**): the error is surfaced — `run` rejects, and the
+ *     default impl is **never re-executed**. This is the safe policy for an
+ *     **effectful** verb (navigate, dispatch): re-running the default after the
+ *     impl may have *already partially committed* a side effect would
+ *     double-execute it. The caller handles the rejection (e.g. logs + no-ops).
+ *   - `'fallback'`: the error is logged and the verb re-runs `defaultImpl(input)`
+ *     so one buggy plugin can't break the verb for every other consumer. Only
+ *     safe for a **pure** verb (paste's decision): the impl MUST be
+ *     effect-free-until-return, since the fallback re-invokes the default after
+ *     the chain may have partially run. (If the *bare* default itself throws,
+ *     `run` rejects either way — a core bug to surface.)
+ *
+ * Dynamic-extension code is transpiled without type-checking and contributions
+ * are only validated as functions, so a plugin with a missing `return`
+ * (→ `undefined`) or a malformed object slips past unless the verb checks its
+ * result shape — supply `validateResult` for any verb whose consumers trust it.
+ *
+ * `after` is **success-only**: it runs with the resolved result (including a
+ * `'fallback'` result) but not if `run` rejects. Cleanup that must always fire
+ * belongs in a decorator's `try/finally` around `next`, not in an `after`.
+ *
+ * **Effectful verb that still wants `'fallback'` resilience?** Model `Result`
+ * as a *deferred effect* — `impl: input => () => effect` — and have the caller
+ * run the returned thunk once. Returning a thunk is itself effect-free, so the
+ * decision phase stays fallback-safe while the effect runs exactly once.
  *
  * `run` is **async-only** — `impl`, decorators and observers may return a
- * promise, and a sync verb still pays one microtask. That's fine for an
- * async verb like paste, but a sync-ordering-sensitive home (navigation,
- * which today runs synchronously) must account for it before adopting this
- * helper. See the note in `docs/extension-seam-gaps.md`.
+ * promise, and a sync verb still pays one microtask.
  */
 export type MaybePromise<T> = T | Promise<T>
 
@@ -130,14 +132,21 @@ export function defineVerbFacet<Input, Result>({
   id,
   defaultImpl,
   validateResult,
+  onError = 'rethrow',
 }: {
   id: string
   defaultImpl: VerbImpl<Input, Result>
-  /** Optional runtime check on the resolved result. A result that fails it
-   *  is treated like a crash → fall back to `defaultImpl`. Supply this for
-   *  verbs whose consumers trust the result shape, since contributions are
-   *  only validated as functions, not by their return value. */
+  /** Optional runtime check on the resolved result. A result that fails it is
+   *  treated like a crash (handled per `onError`). Supply this for verbs whose
+   *  consumers trust the result shape, since contributions are only validated as
+   *  functions, not by their return value. */
   validateResult?: (result: Result) => boolean
+  /** What to do when an `impl`/`decorator` throws or returns an invalid result.
+   *  `'rethrow'` (default): `run` rejects, the default is never re-executed —
+   *  safe for **effectful** verbs (no double-execution). `'fallback'`: re-run
+   *  `defaultImpl` — resilient, but only safe for a **pure** verb whose impl is
+   *  effect-free-until-return. See the failure-policy note above. */
+  onError?: 'fallback' | 'rethrow'
 }): VerbFacet<Input, Result> {
   // Resolve the impl in `combine` (runs once per facet resolution, then
   // cached) rather than in `run` — this dedups the multiple-impl warning to
@@ -209,11 +218,14 @@ export function defineVerbFacet<Input, Result>({
         throw new Error(`[verb:${id}] impl/decorator returned an invalid result`)
       }
     } catch (error) {
-      // A throwing-or-malformed impl/decorator is a crash, not a veto —
-      // degrade to the default so one buggy plugin can't break the verb. If
-      // we already ran exactly the bare default, there's nothing safer to try.
+      // A throwing-or-malformed impl/decorator is a crash, not a veto. Under
+      // `'rethrow'` (default) the error is surfaced and the default is never
+      // re-run — the safe policy for an effectful verb (no double-execution).
+      // Under `'fallback'` we degrade to the default so one buggy plugin can't
+      // break a pure verb; if we already ran exactly the bare default, there's
+      // nothing safer to try.
       const ranBareDefault = impl === defaultImpl && decorators.length === 0
-      if (ranBareDefault) throw error
+      if (onError === 'rethrow' || ranBareDefault) throw error
       console.error(
         `[verb:${id}] impl/decorator threw or returned an invalid result; falling back to defaultImpl`,
         error,

@@ -84,6 +84,10 @@ export const defaultPasteDecision = (request: PasteRequest): PasteDecision => {
 export const pasteDecisionVerb = defineVerbFacet<PasteRequest, PasteDecision>({
   id: 'core.paste-decision',
   defaultImpl: defaultPasteDecision,
+  // Pure decision verb: a buggy plugin should degrade to the default decision,
+  // not break paste. Safe because `defaultPasteDecision` (and any well-behaved
+  // override) is effect-free — the renderers apply the side effect.
+  onError: 'fallback',
   // Guard the renderers (which read `decision.kind`/`.text` right after
   // `preventDefault`) against an untyped plugin returning `undefined`/`{}`:
   // an invalid shape falls back to `defaultPasteDecision`.
