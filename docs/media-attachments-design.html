@@ -579,7 +579,12 @@ no-overwrite precondition (reject if the object already exists). The old object 
 <strong>Cache the SW's IDB reads on the hot path — keyed by <code>(user_id, workspace_id)</code>.</strong>
 Both the mode-pin store and the WK store (<code>km-e2ee-keys</code>) are now SW-readable IDB, so a naïve
 handler does two async IDB opens per <code>&lt;img&gt;</code> fetch. Keep a small in-SW in-memory cache
-of <code>{ (user_id, workspace_id) → mode pin, WK handle, expected hash }</code>. <strong>The
+of <code>{ (user_id, workspace_id) → mode pin, WK handle, <em>map of</em> asset_block_id → expected
+hash }</code>. <strong>The expected hash is per-<em>asset</em>, not per-workspace</strong> — a workspace
+has many attachments, so a single <code>expected hash</code> on the workspace entry would verify (or
+key the cache for) asset B with asset A's hash → false mismatches; hold a per-<code>asset_block_id</code>
+map inside the workspace entry (or a separate <code>(user_id, asset_block_id) → hash</code> map). The
+mode pin / WK stay at <code>(user_id, workspace_id)</code>. <strong>The
 <code>user_id</code> in the key is load-bearing, not an optimization detail:</strong> the keyStore
 deliberately keys WKs by <code>(user_id, workspace_id)</code> and wipes per-user, so a
 <em>workspace-only</em> hot cache would let account A's populated WK/pin serve account B's request for
@@ -657,6 +662,22 @@ signal.)
   <code>Authorization: Bearer</code>. This also <strong>eliminates per-object signed URLs</strong> for
   the in-app case (signed URLs are only needed for the logged-out public case, §13). The token expires
   hourly; the app re-posts on refresh.</p>
+
+<div class="warn">
+<strong>This auth scheme covers controlled-tab <em>subresource</em> fetches only — not raw
+navigations.</strong> A <code>&lt;img&gt;</code>/<code>&lt;video&gt;</code> subresource carries the
+originating tab's <code>event.clientId</code>, so the per-user token lookup works. A <em>navigation</em>
+to an asset URL (new-tab open, or a download flow that navigates) may have <em>no</em> usable
+<code>clientId</code> (a fresh top-level navigation has only a not-yet-messaged
+<code>resultingClientId</code>), so there's no per-user token to attribute — and falling back to a
+global token would break the multi-account isolation this whole section preserves. So <strong>direct
+asset navigations are not a supported auth path</strong>: "download" / "open original" is an
+<em>app-mediated</em> action (the app resolves the bytes through the same path and triggers the
+download from an in-memory blob), never a raw navigation to <code>${BASE_URL}asset/…</code>. The route
+still sits ahead of the navigation branch (§11) so such a request can't return the SPA shell — but for
+a clientId-less navigation it returns a <em>placeholder/redirect into the app</em>, not bytes and not
+the shell. (If first-class direct navigations are ever wanted, they need an opaque app-minted
+capability token in the URL — deferred; the public-share path §13 is the related case.)</div>
 
 <p>Persistence across SW respawn is deliberately minimal and <strong>wipe-gated</strong>: the token
   store, if persisted at all, lives under the same per-user <code>PENDING_WIPE</code> marker the DB
@@ -956,10 +977,17 @@ inspects the body bytes itself</em> and then writes them with service-role. Per 
     nonce(12)+tag(16) length (the binary analog of <code>is_enc_v1_envelope</code>), with the same
     permanent-failure discipline so a stale client quarantines rather than retries forever. Shape-only
     (the server has no key), sufficient to keep bare plaintext out.</li>
-  <li><strong>Enforces write-once</strong> — rejects if an object already exists at
-    <code>&lt;ws&gt;/&lt;asset_block_id&gt;</code> (a no-overwrite precondition). Asset objects are
-    immutable; an edit/replacement is a <em>new</em> asset block at a fresh path (§5.1), so a stale
-    queued upload can never overwrite a newer object and strand the asset on a hash mismatch.</li>
+  <li><strong>Enforces write-once, idempotently.</strong> Asset objects are immutable; an
+    edit/replacement is a <em>new</em> asset block at a fresh path (§5.1), so a stale queued upload can
+    never overwrite a newer object and strand the asset on a hash mismatch. The guard rejects an
+    overwrite by <em>different</em> content, but must treat a re-PUT of the <em>same</em> content as
+    <strong>success, not failure</strong>: if the function wrote the object but the response was lost
+    before §9 deleted the durable queue entry, the retry would otherwise turn a completed upload into a
+    permanent queue error. So the client sends an idempotency token (e.g.
+    <code>HMAC(WK, sha256(plaintext))</code> — opaque to the server, deterministic per content, doesn't
+    leak the plaintext hash), the function stores it as object metadata, and on a PUT to an existing
+    path: same token → <code>200</code> (already done); different token → reject. (Under immutable ids
+    only the same-token retry is legitimate; a different token signals a bug/attack.)</li>
 </ol>
 <strong>Not a signed-upload token.</strong> Minting a one-shot signed upload URL would let the client
 <code>uploadToSignedUrl</code> the body <em>directly to Storage</em>, which Supabase accepts without
@@ -1064,12 +1092,15 @@ keep random ids + tolerate duplicates.
 <code>shellNetworkFirst</code> (returns the SPA shell), then <strong>(2) <code>isCacheableAsset</code></strong>
 (an <code>&lt;img&gt;</code> has destination <code>'image'</code>) → <code>assetCacheFirst</code>. The
 new <code>${BASE_URL}asset/&lt;ws&gt;/&lt;id&gt;</code> route (base-prefixed, §7) must be matched
-<strong>ahead of BOTH</strong> — not just the image-cache branch. An asset opened/downloaded as a
-navigation or with <code>Accept: text/html</code> (new-tab open, some download flows) would otherwise
-hit the navigation branch first and get the SPA shell instead of the bytes; an inline
-<code>&lt;img&gt;</code> would hit the image-cache branch. Put the <code>/asset/</code> match before
-the navigation check at the top of the <code>fetch</code> listener.
-</div>
+<strong>ahead of BOTH</strong> — not just the image-cache branch. An inline <code>&lt;img&gt;</code>
+would otherwise hit the image-cache branch; a navigation / <code>Accept: text/html</code> request
+(new-tab open) would otherwise hit the navigation branch and get the SPA shell. Put the
+<code>/asset/</code> match before the navigation check at the top of the <code>fetch</code> listener.
+What it returns differs by request: a <strong>subresource fetch with a usable
+<code>clientId</code></strong> → the (auth'd, decrypted) bytes; a <strong>clientId-less
+navigation</strong> → a <em>placeholder / redirect into the app</em> (NOT bytes — it can't be
+authorized — and NOT the SPA shell). Direct asset navigations and downloads are app-mediated, not raw
+navigations to the asset URL (§7.1).</div>
 
 <h2 id="sharing">12. Interaction with subtree sharing</h2>
 
