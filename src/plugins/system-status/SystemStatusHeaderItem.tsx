@@ -8,7 +8,6 @@ import {
   RefreshCw,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { appUpdate, useAppUpdateAvailable } from '@/appUpdate.js'
 import { appVersion } from '@/appVersion.js'
 import { useIsLocalOnly } from '@/components/Login.js'
 import { Button } from '@/components/ui/button.js'
@@ -149,7 +148,7 @@ function AppVersionValue() {
   )
 }
 
-export function SyncStatusHeaderItem() {
+export function SystemStatusHeaderItem() {
   const localOnly = useIsLocalOnly()
   const status = useStatus()
   const rejected = useQuery<UploadQueueCountRow>(
@@ -256,7 +255,6 @@ function SyncStatusHeaderContent({
 }: SyncStatusHeaderContentProps) {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
-  const updateAvailable = useAppUpdateAvailable()
   const deviceOnline = useIsDeviceOnline()
   const dataFlow = status.dataFlowStatus
   // Decide whether a sync error is worth showing. When the *device* is
@@ -284,6 +282,11 @@ function SyncStatusHeaderContent({
   const diagnosticAlert = errorDiagnostic
     ? { label: errorDiagnostic.label, summary: errorDiagnostic.snapshot.summary }
     : null
+  // A non-error diagnostic that opted into a nudge (app-update, storage
+  // persistence) shows an ambient dot — a quiet "look here" cue. An error
+  // already reddens the whole chip (diagnosticAlert), so it doesn't also dot.
+  const nudge = diagnosticItems.find((it) => it.snapshot.nudge)
+  const showStatusDot = Boolean(nudge) && !errorDiagnostic
   // Run a diagnostic's inspect action (e.g. re-run the audit + open its dialog).
   const runDiagnosticAction = (actionId: string): void => {
     try {
@@ -311,6 +314,12 @@ function SyncStatusHeaderContent({
     diagnosticAlert,
   })
   const Icon = iconByName[view.icon]
+  // Surface the nudge's one-liner (e.g. "A new version is available") on the
+  // chip itself so the dot has an accessible meaning; settled-state errors are
+  // already folded into view.title by getSyncIndicatorView.
+  const chipTitle = showStatusDot && nudge
+    ? `${view.title} — ${nudge.snapshot.summary}`
+    : view.title
 
   return (
     <>
@@ -322,11 +331,11 @@ function SyncStatusHeaderContent({
               'relative flex h-7 w-7 shrink-0 items-center justify-center rounded-md border outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring sm:h-8 sm:w-8',
               toneClass[view.tone],
             )}
-            aria-label={updateAvailable ? `${view.title} — update available` : view.title}
-            title={updateAvailable ? `${view.title} — update available` : view.title}
+            aria-label={chipTitle}
+            title={chipTitle}
           >
             <Icon className={cn('h-4 w-4', view.spinning && 'animate-spin')}/>
-            {updateAvailable && (
+            {showStatusDot && (
               <span
                 aria-hidden
                 className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-primary ring-2 ring-background"
@@ -377,21 +386,6 @@ function SyncStatusHeaderContent({
                 <AppVersionValue/>
               </div>
             </div>
-            {updateAvailable && (
-              <div className="border-t pt-2">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-xs font-medium">New version available</div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-7 text-xs"
-                    onClick={() => appUpdate.reload()}
-                  >
-                    Reload
-                  </Button>
-                </div>
-              </div>
-            )}
             {rejectedCount > 0 && (
               <div className="border-t pt-2">
                 <div className="flex items-center justify-between gap-2">
@@ -427,7 +421,7 @@ function SyncStatusHeaderContent({
                       className="h-7 shrink-0 text-xs"
                       onClick={() => runDiagnosticAction(item.snapshot.actionId!)}
                     >
-                      Inspect
+                      {item.snapshot.actionLabel ?? 'Inspect'}
                     </Button>
                   )}
                 </div>

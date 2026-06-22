@@ -187,7 +187,7 @@ describe('getUserPrefsBlock', () => {
     // Phase 2: read-only UserPrefs writes are no longer downgraded to a
     // non-uploading source. They tag source='user' and enter ps_crud
     // like any other write; the server's RLS rejection then lands in
-    // ps_crud_rejected, which the sync-status surface exposes.
+    // ps_crud_rejected, which the status surface exposes.
     const h = await createTestDb()
     const repo = new Repo({
       db: h.db,

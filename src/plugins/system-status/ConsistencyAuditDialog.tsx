@@ -1,6 +1,6 @@
 /**
  * Results view for an on-demand data-integrity audit (L3). Opened by the
- * `run_data_integrity_audit` action (command palette + sync-status dropdown
+ * `run_data_integrity_audit` action (command palette + status dropdown
  * button) via `openDialog(ConsistencyAuditDialog, {result})`.
  *
  * Shows every check that ran with its status, an exact count breakdown, and a

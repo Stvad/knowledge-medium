@@ -43,7 +43,8 @@ import { blockTaggingPlugin } from '@/plugins/block-tagging'
 import { srsReschedulingPlugin } from '@/plugins/srs-rescheduling'
 import { srsReviewPlugin } from '@/plugins/srs-review'
 import { todoPlugin } from '@/plugins/todo'
-import { syncStatusPlugin } from '@/plugins/sync-status'
+import { systemStatusPlugin } from '@/plugins/system-status'
+import { storagePersistencePlugin } from '@/plugins/storage-persistence'
 import { dataIntegrityPlugin } from '@/plugins/data-integrity'
 import { dbMaintenancePlugin } from '@/plugins/db-maintenance'
 import { extensionsSettingsPlugin } from '@/plugins/extensions-settings'
@@ -122,7 +123,8 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   extractTypePlugin,
   srsReschedulingPlugin,
   srsReviewPlugin({repo}),
-  syncStatusPlugin,
+  systemStatusPlugin,
+  storagePersistencePlugin,
   dataIntegrityPlugin({repo}),
   dbMaintenancePlugin({repo}),
   updateIndicatorPlugin,

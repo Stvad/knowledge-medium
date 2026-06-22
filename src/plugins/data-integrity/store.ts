@@ -1,5 +1,5 @@
 // In-memory observable for the latest built-in consistency-audit result (L3),
-// so the UI (the sync-status indicator) can react to it via the diagnostics seam.
+// so the UI (the status indicator) can react to it via the diagnostics seam.
 // Framework-agnostic (no React) and kernel-safe (no env globals) — the audit
 // scheduling effect publishes here on each completed run; the data-integrity
 // diagnostic source reads it.
@@ -11,8 +11,8 @@
 import type { ConsistencyAuditResult } from './audit.js'
 
 /** Id of the global action that runs the built-in audit on demand (registered by
- *  the sync-status plugin in auditAction.ts, triggered from the command palette
- *  and the sync-status dropdown via `runActionById`). Lives here so neither
+ *  the system-status plugin in auditAction.ts, triggered from the command palette
+ *  and the status dropdown via `runActionById`). Lives here so neither
  *  caller has to import the other's module graph. */
 export const RUN_DATA_INTEGRITY_AUDIT_ACTION_ID = 'run_data_integrity_audit'
 

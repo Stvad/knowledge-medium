@@ -4,7 +4,7 @@ import {
   publishConsistencyAudit,
   resetConsistencyAuditStore,
 } from '@/plugins/data-integrity/store'
-import { SyncStatusHeaderItem } from '../SyncStatusHeaderItem.tsx'
+import { SystemStatusHeaderItem } from '../SystemStatusHeaderItem.tsx'
 import {
   materializeQueueCountSql,
   uploadQueueCountCap,
@@ -15,7 +15,7 @@ import {
 const mocks = vi.hoisted(() => ({
   localOnly: false,
   updateAvailable: false,
-  reload: vi.fn(),
+  runActionById: vi.fn(),
   queryCalls: [] as Array<{sql: string, params: unknown[], options: Record<string, unknown>}>,
   queryResponses: new Map<string, {data: Array<{count: number}>, error?: Error}>(),
   status: {
@@ -50,9 +50,10 @@ vi.mock('@/components/Login.js', () => ({
   useIsLocalOnly: () => mocks.localOnly,
 }))
 
-vi.mock('@/appUpdate.js', () => ({
-  useAppUpdateAvailable: () => mocks.updateAvailable,
-  appUpdate: {reload: () => mocks.reload()},
+// The dropdown's diagnostic buttons (Inspect / Reload / Enable) dispatch by
+// action id through runActionById; assert the id rather than the side effect.
+vi.mock('@/shortcuts/runAction.js', () => ({
+  runActionById: (...args: unknown[]) => mocks.runActionById(...args),
 }))
 
 vi.mock('../RejectionDialog.tsx', () => ({
@@ -68,13 +69,30 @@ vi.mock('@/context/repo.js', () => ({
 // The chip reads the diagnostics seam via useAppRuntime; expose a runtime whose
 // diagnosticsFacet resolves to the real data-integrity source (which reads the
 // audit store these tests publish to). Exercises the real seam, not a fake.
+// A stable snapshot ref (useDiagnostics requires getSnapshot to be ref-stable).
+const updateSnapshot = {
+  severity: 'info',
+  summary: 'A new version is available',
+  actionId: 'app.reload',
+  actionLabel: 'Reload',
+  nudge: true,
+}
+
 vi.mock('@/extensions/runtimeContext.js', async () => {
   const {createDataIntegrityDiagnosticSource} = await import(
     '@/plugins/data-integrity/diagnosticsSource'
   )
   const {diagnosticsFacet} = await import('@/plugins/diagnostics/facet')
-  const source = createDataIntegrityDiagnosticSource({activeWorkspaceId: 'ws-1'})
-  const sources = new Map([[source.id, source]])
+  const dataIntegrity = createDataIntegrityDiagnosticSource({activeWorkspaceId: 'ws-1'})
+  // Mirror the real app-update diagnostic source (see appUpdateStatus.ts) so the
+  // chip exercises the generic nudge+actionLabel path, driven by mocks.updateAvailable.
+  const appUpdate = {
+    id: 'app-update',
+    label: 'App update',
+    subscribe: () => () => {},
+    getSnapshot: () => (mocks.updateAvailable ? updateSnapshot : null),
+  } as unknown as typeof dataIntegrity
+  const sources = new Map([[dataIntegrity.id, dataIntegrity], [appUpdate.id, appUpdate]])
   return {
     useAppRuntime: () => ({
       read: (facet: {id: string}) => (facet.id === diagnosticsFacet.id ? sources : new Map()),
@@ -102,11 +120,11 @@ const setDeviceOnline = (online: boolean) => {
   Object.defineProperty(navigator, 'onLine', {configurable: true, value: online})
 }
 
-describe('SyncStatusHeaderItem', () => {
+describe('SystemStatusHeaderItem', () => {
   beforeEach(() => {
     mocks.localOnly = false
     mocks.updateAvailable = false
-    mocks.reload = vi.fn()
+    mocks.runActionById = vi.fn()
     mocks.queryCalls = []
     mocks.status = defaultStatus()
     setDeviceOnline(true)
@@ -125,7 +143,7 @@ describe('SyncStatusHeaderItem', () => {
   })
 
   it('uses the capped queue count for the always-mounted remote indicator', () => {
-    render(<SyncStatusHeaderItem/>)
+    render(<SystemStatusHeaderItem/>)
 
     expect(screen.getByRole('button', {
       name: /1000\+ blocks changed, queued for upload/,
@@ -135,7 +153,7 @@ describe('SyncStatusHeaderItem', () => {
   })
 
   it('runs the exact queue count only after opening the details', async () => {
-    render(<SyncStatusHeaderItem/>)
+    render(<SystemStatusHeaderItem/>)
 
     expect(mocks.queryCalls.some(call => call.sql === uploadQueueExactCountSql)).toBe(false)
 
@@ -150,7 +168,7 @@ describe('SyncStatusHeaderItem', () => {
   it('does not watch the upload queue for the local-only header state', async () => {
     mocks.localOnly = true
 
-    render(<SyncStatusHeaderItem/>)
+    render(<SystemStatusHeaderItem/>)
 
     expect(screen.getByRole('button', {name: 'Remote sync is disabled.'})).toBeInTheDocument()
     expect(mocks.queryCalls.some(call => call.sql === uploadQueuePreviewCountSql)).toBe(false)
@@ -167,7 +185,7 @@ describe('SyncStatusHeaderItem', () => {
     mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
     mocks.queryResponses.set(materializeQueueCountSql, {data: [{count: 12_340}]})
 
-    render(<SyncStatusHeaderItem/>)
+    render(<SystemStatusHeaderItem/>)
 
     const button = screen.getByRole('button')
     expect(button.getAttribute('aria-label')).toContain('Applying 12340 blocks of synced data')
@@ -181,7 +199,7 @@ describe('SyncStatusHeaderItem', () => {
     // an unapplied staged backlog is the more important signal.
     mocks.queryResponses.set(materializeQueueCountSql, {data: [{count: 5}]})
 
-    render(<SyncStatusHeaderItem/>)
+    render(<SystemStatusHeaderItem/>)
 
     expect(screen.getByRole('button').getAttribute('aria-label'))
       .toContain('Applying 5 blocks of synced data')
@@ -190,7 +208,7 @@ describe('SyncStatusHeaderItem', () => {
   it('does not watch the materialization queue for the local-only header state', () => {
     mocks.localOnly = true
 
-    render(<SyncStatusHeaderItem/>)
+    render(<SystemStatusHeaderItem/>)
 
     expect(mocks.queryCalls.some(call => call.sql === materializeQueueCountSql)).toBe(false)
   })
@@ -209,7 +227,7 @@ describe('SyncStatusHeaderItem', () => {
     }
     mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
 
-    render(<SyncStatusHeaderItem/>)
+    render(<SystemStatusHeaderItem/>)
 
     const label = screen.getByRole('button').getAttribute('aria-label') ?? ''
     expect(label.toLowerCase()).toContain('offline')
@@ -237,7 +255,7 @@ describe('SyncStatusHeaderItem', () => {
       }
       mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
 
-      render(<SyncStatusHeaderItem/>)
+      render(<SystemStatusHeaderItem/>)
 
       // Still within the grace window — calm.
       expect(screen.getByRole('button').getAttribute('aria-label'))
@@ -268,7 +286,7 @@ describe('SyncStatusHeaderItem', () => {
       }
       mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
 
-      render(<SyncStatusHeaderItem/>)
+      render(<SystemStatusHeaderItem/>)
 
       // Immediately after the blip the indicator stays calm — no error.
       expect(screen.getByRole('button').getAttribute('aria-label'))
@@ -303,21 +321,21 @@ describe('SyncStatusHeaderItem', () => {
 
       // First occurrence rides out its grace window and surfaces.
       mocks.status = erroring
-      const {rerender} = render(<SyncStatusHeaderItem/>)
+      const {rerender} = render(<SystemStatusHeaderItem/>)
       act(() => vi.advanceTimersByTime(6_000))
       expect(screen.getByRole('button').getAttribute('aria-label'))
         .toMatch(/needs attention/i)
 
       // Error clears — indicator goes calm immediately.
       mocks.status = healthy
-      rerender(<SyncStatusHeaderItem/>)
+      rerender(<SystemStatusHeaderItem/>)
       expect(screen.getByRole('button').getAttribute('aria-label'))
         .not.toMatch(/needs attention/i)
 
       // Same error recurs: it must NOT flash instantly — the grace window
       // applies afresh (this is the regression the debounce reset guards).
       mocks.status = erroring
-      rerender(<SyncStatusHeaderItem/>)
+      rerender(<SystemStatusHeaderItem/>)
       expect(screen.getByRole('button').getAttribute('aria-label'))
         .not.toMatch(/needs attention/i)
 
@@ -343,7 +361,7 @@ describe('SyncStatusHeaderItem', () => {
       },
     })
 
-    render(<SyncStatusHeaderItem/>)
+    render(<SystemStatusHeaderItem/>)
 
     const button = screen.getByRole('button')
     // Generic diagnostics escalation: "<label>: <summary>".
@@ -368,7 +386,7 @@ describe('SyncStatusHeaderItem', () => {
       },
     })
 
-    render(<SyncStatusHeaderItem/>)
+    render(<SystemStatusHeaderItem/>)
 
     expect(screen.getByRole('button').getAttribute('aria-label')).not.toContain('Data integrity')
   })
@@ -384,7 +402,7 @@ describe('SyncStatusHeaderItem', () => {
       },
     })
 
-    render(<SyncStatusHeaderItem/>)
+    render(<SystemStatusHeaderItem/>)
 
     const button = screen.getByRole('button')
     expect(button.getAttribute('aria-label')).not.toContain('Data integrity') // chip stays calm
@@ -403,7 +421,7 @@ describe('SyncStatusHeaderItem', () => {
       checks: {references_index_mirror: {status: 'ok'}},
     })
 
-    render(<SyncStatusHeaderItem/>)
+    render(<SystemStatusHeaderItem/>)
 
     const button = screen.getByRole('button')
     expect(button.getAttribute('aria-label')).not.toContain('Data integrity')
@@ -411,19 +429,20 @@ describe('SyncStatusHeaderItem', () => {
     expect(screen.queryByText(/Data integrity/)).not.toBeInTheDocument()
   })
 
-  it('surfaces an app-update prompt with a Reload action when a new build is ready', async () => {
+  it('surfaces an app-update nudge with a Reload action when a new build is ready', async () => {
     mocks.updateAvailable = true
 
-    render(<SyncStatusHeaderItem/>)
+    render(<SystemStatusHeaderItem/>)
 
     // The header chip carries the dot, exposed to assistive tech via the label.
     expect(screen.getByRole('button').getAttribute('aria-label'))
-      .toMatch(/update available/i)
+      .toMatch(/new version is available/i)
 
     fireEvent.pointerDown(screen.getByRole('button'))
 
-    expect(await screen.findByText('New version available')).toBeInTheDocument()
+    // Rendered generically from the diagnostics seam: "<label>: <summary>".
+    expect(await screen.findByText('App update: A new version is available')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', {name: 'Reload'}))
-    expect(mocks.reload).toHaveBeenCalledTimes(1)
+    expect(mocks.runActionById).toHaveBeenCalledWith('app.reload', expect.anything())
   })
 })

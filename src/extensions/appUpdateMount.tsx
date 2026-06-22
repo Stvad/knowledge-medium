@@ -1,7 +1,7 @@
 /**
  * App-mount that surfaces "a new version is available" as a persistent
  * toast with a Reload action. Pairs with the dot + actionable row on the
- * sync-status chip (src/plugins/sync-status) — the toast is the loud,
+ * status chip (src/plugins/system-status) — the toast is the loud,
  * dismissible nudge; the chip is the quiet, always-there fallback once the
  * toast is gone.
  *
@@ -18,6 +18,10 @@ import { useEffect } from 'react'
 import { appUpdate, useAppUpdateAvailable } from '@/appUpdate.js'
 import { dismissToast, showInfo } from '@/utils/toast.js'
 import { appMountsFacet } from './core.ts'
+import {
+  appReloadActionContribution,
+  appUpdateDiagnosticContribution,
+} from './appUpdateStatus.ts'
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 
@@ -40,10 +44,14 @@ const AppUpdatePrompt = () => {
 export const appUpdatePromptExtension: AppExtension = systemToggle({
   id: 'system:app-update-prompt',
   name: 'App update prompt',
-  description: 'Toast prompting a reload when a newer app build has been deployed.',
+  description: 'Surfaces a newer app build as a reload prompt — a toast plus a quiet indicator in the status chip.',
 }).of([
   appMountsFacet.of(
     {id: 'core.app-update-prompt', component: AppUpdatePrompt},
     {source: 'core'},
   ),
+  // The chip presence (ambient dot + "Reload" row) goes through the diagnostics
+  // seam, not chip-hardcoded knowledge of appUpdate.
+  appUpdateDiagnosticContribution,
+  appReloadActionContribution,
 ])

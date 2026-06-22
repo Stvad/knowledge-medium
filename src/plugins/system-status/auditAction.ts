@@ -1,9 +1,9 @@
 /**
  * On-demand data-integrity audit (L3) as a GLOBAL action — shows in the command
  * palette ("Run data integrity audit") and is triggered by the "Re-run audit"
- * button in the sync-status dropdown (via `runActionById`).
+ * button in the status dropdown (via `runActionById`).
  *
- * Lives in the sync-status plugin (not core defaultShortcuts) so the action can
+ * Lives in the system-status plugin (not core defaultShortcuts) so the action can
  * own its results UI — a progress toast while it runs, then the
  * ConsistencyAuditDialog — without core depending on a plugin component.
  */
@@ -51,5 +51,5 @@ export const runDataIntegrityAuditAction: ActionConfig<typeof ActionContextTypes
 }
 
 export const runDataIntegrityAuditActionContribution = actionsFacet.of(runDataIntegrityAuditAction, {
-  source: 'sync-status',
+  source: 'system-status',
 })

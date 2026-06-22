@@ -1,6 +1,6 @@
 /**
  * The consistency audit's contribution to the diagnostics seam. Maps the latest
- * published `ConsistencyAuditResult` into a `DiagnosticSnapshot` the sync-status
+ * published `ConsistencyAuditResult` into a `DiagnosticSnapshot` the status
  * chip can show generically — replacing the chip's old hardcoded knowledge of
  * the audit store/shape.
  */
