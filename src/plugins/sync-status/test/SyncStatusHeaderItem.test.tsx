@@ -15,7 +15,7 @@ import {
 const mocks = vi.hoisted(() => ({
   localOnly: false,
   updateAvailable: false,
-  reload: vi.fn(),
+  runActionById: vi.fn(),
   queryCalls: [] as Array<{sql: string, params: unknown[], options: Record<string, unknown>}>,
   queryResponses: new Map<string, {data: Array<{count: number}>, error?: Error}>(),
   status: {
@@ -50,9 +50,10 @@ vi.mock('@/components/Login.js', () => ({
   useIsLocalOnly: () => mocks.localOnly,
 }))
 
-vi.mock('@/appUpdate.js', () => ({
-  useAppUpdateAvailable: () => mocks.updateAvailable,
-  appUpdate: {reload: () => mocks.reload()},
+// The dropdown's diagnostic buttons (Inspect / Reload / Enable) dispatch by
+// action id through runActionById; assert the id rather than the side effect.
+vi.mock('@/shortcuts/runAction.js', () => ({
+  runActionById: (...args: unknown[]) => mocks.runActionById(...args),
 }))
 
 vi.mock('../RejectionDialog.tsx', () => ({
@@ -68,13 +69,30 @@ vi.mock('@/context/repo.js', () => ({
 // The chip reads the diagnostics seam via useAppRuntime; expose a runtime whose
 // diagnosticsFacet resolves to the real data-integrity source (which reads the
 // audit store these tests publish to). Exercises the real seam, not a fake.
+// A stable snapshot ref (useDiagnostics requires getSnapshot to be ref-stable).
+const updateSnapshot = {
+  severity: 'info',
+  summary: 'A new version is available',
+  actionId: 'app.reload',
+  actionLabel: 'Reload',
+  nudge: true,
+}
+
 vi.mock('@/extensions/runtimeContext.js', async () => {
   const {createDataIntegrityDiagnosticSource} = await import(
     '@/plugins/data-integrity/diagnosticsSource'
   )
   const {diagnosticsFacet} = await import('@/plugins/diagnostics/facet')
-  const source = createDataIntegrityDiagnosticSource({activeWorkspaceId: 'ws-1'})
-  const sources = new Map([[source.id, source]])
+  const dataIntegrity = createDataIntegrityDiagnosticSource({activeWorkspaceId: 'ws-1'})
+  // Mirror the real app-update diagnostic source (see appUpdateStatus.ts) so the
+  // chip exercises the generic nudge+actionLabel path, driven by mocks.updateAvailable.
+  const appUpdate = {
+    id: 'app-update',
+    label: 'App update',
+    subscribe: () => () => {},
+    getSnapshot: () => (mocks.updateAvailable ? updateSnapshot : null),
+  } as unknown as typeof dataIntegrity
+  const sources = new Map([[dataIntegrity.id, dataIntegrity], [appUpdate.id, appUpdate]])
   return {
     useAppRuntime: () => ({
       read: (facet: {id: string}) => (facet.id === diagnosticsFacet.id ? sources : new Map()),
@@ -106,7 +124,7 @@ describe('SyncStatusHeaderItem', () => {
   beforeEach(() => {
     mocks.localOnly = false
     mocks.updateAvailable = false
-    mocks.reload = vi.fn()
+    mocks.runActionById = vi.fn()
     mocks.queryCalls = []
     mocks.status = defaultStatus()
     setDeviceOnline(true)
@@ -411,19 +429,20 @@ describe('SyncStatusHeaderItem', () => {
     expect(screen.queryByText(/Data integrity/)).not.toBeInTheDocument()
   })
 
-  it('surfaces an app-update prompt with a Reload action when a new build is ready', async () => {
+  it('surfaces an app-update nudge with a Reload action when a new build is ready', async () => {
     mocks.updateAvailable = true
 
     render(<SyncStatusHeaderItem/>)
 
     // The header chip carries the dot, exposed to assistive tech via the label.
     expect(screen.getByRole('button').getAttribute('aria-label'))
-      .toMatch(/update available/i)
+      .toMatch(/new version is available/i)
 
     fireEvent.pointerDown(screen.getByRole('button'))
 
-    expect(await screen.findByText('New version available')).toBeInTheDocument()
+    // Rendered generically from the diagnostics seam: "<label>: <summary>".
+    expect(await screen.findByText('App update: A new version is available')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', {name: 'Reload'}))
-    expect(mocks.reload).toHaveBeenCalledTimes(1)
+    expect(mocks.runActionById).toHaveBeenCalledWith('app.reload', expect.anything())
   })
 })

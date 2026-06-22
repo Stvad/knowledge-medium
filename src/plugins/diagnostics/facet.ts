@@ -39,8 +39,17 @@ export interface DiagnosticSnapshot {
   /** Optional richer line for the indicator dropdown. */
   detail?: string
   /** Optional global action id to run/inspect this diagnostic (e.g. open its
-   *  dialog). The indicator renders an inspect button that `runActionById`s it. */
+   *  dialog). The indicator renders a button that `runActionById`s it. */
   actionId?: string
+  /** Label for that button. Defaults to "Inspect"; a source whose action is a
+   *  fix rather than an inspection overrides it (e.g. "Reload", "Enable"). */
+  actionLabel?: string
+  /** Opt in to an ambient dot on the shared indicator (a quiet "look here"
+   *  cue, like the app-update badge). Use for an actionable nudge the user
+   *  should notice; leave off for a benign baseline that should stay in the
+   *  dropdown only (e.g. a sub-threshold finding). An `error` severity reddens
+   *  the whole chip regardless, so it doesn't need this. */
+  nudge?: boolean
 }
 
 /** A plugin's contribution to the diagnostics seam — a live store of its health.
