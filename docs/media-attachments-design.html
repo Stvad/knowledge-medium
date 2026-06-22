@@ -474,8 +474,12 @@ no-overwrite precondition (reject if the object already exists). The old object 
     scope entirely — the worker never sees the request, the auth/decrypt path is bypassed, and the
     origin returns 404. Build the URL relative to <code>BASE_URL</code> and match the
     <code>${BASE_URL}asset/…</code> route in the worker. No mode awareness,
-    no <code>createObjectURL</code> lifecycle, native <code>&lt;img&gt;</code> and
-    <code>&lt;a download&gt;</code> work uniformly. (<strong>Range/streaming is the exception under
+    no <code>createObjectURL</code> lifecycle for inline <strong>subresources</strong>
+    (<code>&lt;img&gt;</code>, <code>&lt;video&gt;</code>) from a controlled tab. A raw
+    <code>&lt;a download href="${BASE_URL}asset/…"&gt;</code> is <em>not</em> covered — a
+    download/navigation can lack a <code>clientId</code> to authorize (§7.1), so "download original" is
+    an <strong>app-mediated</strong> action (the app resolves the bytes and saves from an in-memory
+    blob), not a raw link to the asset URL. (<strong>Range/streaming is also an exception under
     E2EE</strong> — see the note below; images and moderate files are unaffected.)</li>
   <li><strong>The SW resolves it, auth-first:</strong> establish the active <code>user_id</code> (for
     the requesting client — §7.1) and the workspace's <em>mode pin</em> + WK availability
@@ -878,9 +882,12 @@ that idempotent-by-content uploads and free dedup are gone — which is the root
 and "a fresh block must re-upload" wrinkles (§11).
 <br><br>
 <strong>The alternative that fixes that: a keyed hash.</strong> Path
-<code>&lt;ws&gt;/HMAC(WK, sha256-of-plaintext)</code> restores content-addressing — deterministic
+<code>&lt;ws&gt;/HMAC(K_id, sha256-of-plaintext)</code> restores content-addressing — deterministic
 within a workspace (dedup + idempotent PUT return), unguessable to the server (no oracle), and
-distinct across workspaces (no correlation). It is genuinely the <em>better-scaling</em> design: it
+distinct across workspaces (no correlation). (<code>K_id</code> is a <em>separate HMAC-capable subkey
+derived from the WK material via HKDF at import time</em> — <em>not</em> the stored WK handle, which is
+a non-extractable AES-GCM key WebCrypto won't let you sign with; deriving the subkey while the raw
+bytes are briefly available at paste is the only window.) It is genuinely the <em>better-scaling</em> design: it
 eliminates the dedup races and duplicate-object / re-upload wrinkles entirely, and those races get
 <em>more</em> likely as device count and concurrency grow, not less. The real cost is a design
 tradeoff, not a size question: the path no longer carries the block id, so the share-RLS join needs a
@@ -983,11 +990,15 @@ inspects the body bytes itself</em> and then writes them with service-role. Per 
     overwrite by <em>different</em> content, but must treat a re-PUT of the <em>same</em> content as
     <strong>success, not failure</strong>: if the function wrote the object but the response was lost
     before §9 deleted the durable queue entry, the retry would otherwise turn a completed upload into a
-    permanent queue error. So the client sends an idempotency token (e.g.
-    <code>HMAC(WK, sha256(plaintext))</code> — opaque to the server, deterministic per content, doesn't
-    leak the plaintext hash), the function stores it as object metadata, and on a PUT to an existing
-    path: same token → <code>200</code> (already done); different token → reject. (Under immutable ids
-    only the same-token retry is legitimate; a different token signals a bug/attack.)</li>
+    permanent queue error. So the client sends an idempotency token, the function stores it as object
+    metadata, and on a PUT to an existing path: same token → <code>200</code> (already done); different
+    token → reject. The token is a <strong>per-asset random value</strong> (a UUID minted at capture,
+    carried by the queue entry so retries present the same one) — <em>not</em>
+    <code>HMAC(WK, …)</code>: the WK is a non-extractable AES-GCM <code>CryptoKey</code>
+    (<code>workspaceKey.ts</code> / <code>keyStore.ts</code>) that WebCrypto allows <em>only</em> to
+    encrypt/decrypt, never to sign/HMAC or export, so a keyed digest can't be computed from the stored
+    handle. A random token needs no key and is opaque to the server anyway. (Under immutable ids only
+    the same-token retry is legitimate; a different token to an existing path signals a bug/attack.)</li>
 </ol>
 <strong>Not a signed-upload token.</strong> Minting a one-shot signed upload URL would let the client
 <code>uploadToSignedUrl</code> the body <em>directly to Storage</em>, which Supabase accepts without
@@ -1080,9 +1091,10 @@ miss, both create an asset block, and — because the object path is <code>&lt;w
 hash. The tempting "make the id a deterministic function of <code>(workspace_id, hash)</code> so
 pastes converge" is <strong>unsafe as stated under E2EE</strong> — an id derived from the plaintext
 hash is a content oracle (the server could confirm a known image's presence by id, or correlate the
-same image across workspaces). If determinism is wanted, derive the id under the WK
-(<code>HMAC(WK, hash)</code>) so it's workspace-local and reveals nothing to the server — otherwise
-keep random ids + tolerate duplicates.
+same image across workspaces). If determinism is wanted, derive the id with a workspace HMAC subkey
+(<code>HMAC(K_id, hash)</code>, K_id derived from WK material at import — see §10; the stored AES-GCM WK
+handle itself can't sign) so it's workspace-local and reveals nothing to the server — otherwise keep
+random ids + tolerate duplicates.
 </div>
 
 <div class="info">
@@ -1319,8 +1331,9 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
   <li><strong>Content-addressing is confined to client-local use under E2EE</strong> (§10): cache,
     dedup, and integrity keep the hash; the server-visible storage path and block id do not (oracle +
     share-join). The dedup/duplicate-object friction is the price of block-id paths; a keyed hash
-    (<code>HMAC(WK, …)</code>) is the better-scaling alternative (idempotent uploads, no dedup races) at
-    the cost of an object→block mapping for shares. It's a real design fork to decide on merits —
+    (<code>HMAC(K_id, …)</code> under a WK-derived subkey, §10) is the better-scaling alternative
+    (idempotent uploads, no dedup races) at the cost of an object→block mapping for shares. It's a real
+    design fork to decide on merits —
     <em>not</em> on current fleet size; fleet size bears only on how cheap the migration to it is (§10).</li>
   <li><strong>Open: the decryption boundary.</strong> The single biggest source of genuine (not
     cosmetic) complexity is putting decryption in the <em>service worker</em> — a context that can't
