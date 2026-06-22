@@ -207,12 +207,13 @@ export class PanelHistoryStore {
 
 export const panelHistory = new PanelHistoryStore()
 
-/** The single panel-content write: point `panelId` at `blockId` and set its
- *  focus + scroll. With `state` (a back/forward or URL-reconcile restore) it
- *  replays the captured focus/scroll; without it the view is fresh — focus the
- *  new top-level, scroll to 0. Every "this panel now shows block X" path —
- *  in-panel navigate, back/forward, URL reconcile, merge retarget — funnels
- *  through here, so it's the one choke an observer would hook. Takes the
+/** Write a panel's content: point `panelId` at `blockId` and set its focus +
+ *  scroll. With `state` (a back/forward or URL-reconcile restore) it replays the
+ *  captured focus/scroll; without it the view is fresh — focus the new
+ *  top-level, scroll to 0. The single choke for content *swaps on an existing
+ *  panel row* — in-panel navigate, back/forward, URL reconcile, merge retarget;
+ *  a *newly created* row's initial content is set by `createPanelRowInTx`
+ *  instead, so a complete "observe every view" seam would hook both. Takes the
  *  caller's `tx`, so it composes inside a batch reconcile as well as a single
  *  interactive swap. */
 export const writePanelContent = async (

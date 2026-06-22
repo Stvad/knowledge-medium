@@ -363,12 +363,16 @@ seams below don't own it.
      projection URL → rows — routing it through `navigate()`, which goes rows →
      URL, would re-push history and loop) and per-panel back/forward (history
      traversal restoring a snapshot, not a "go to block" intent). Both flow
-     through `writePanelContent`, so the future observe seam there catches them.
+     through `writePanelContent` — except URL restoration that *inserts* new
+     panels, whose initial content is set by `createPanelRowInTx` (see below).
 2. **`writePanelContent(tx, panelId, blockId, state?)`** *(DONE —
-   `src/utils/panelHistory.ts`)* — the single content-write choke every "panel
-   shows block X" path funnels through (in-panel navigate, back/forward, URL
-   reconcile, merge retarget). Not yet a facet; the natural home for a future
-   `before`/`after` observe seam ("track every view, including restoration").
+   `src/utils/panelHistory.ts`)* — the single choke for content *swaps on an
+   existing panel row* (in-panel navigate, back/forward, URL reconcile, merge
+   retarget). A *newly created* row's initial content is set separately by
+   `createPanelRowInTx` (new-panel / sidebar-stack / URL-restore inserts /
+   cold-start first paint). Not yet a facet; a complete "track every view"
+   observe seam would hook both (or route `createPanelRowInTx` through
+   `writePanelContent`).
 3. **`navigationIntentFacet`** *(TODO)* — the gesture → intent policy
    `(role, modifiers, panelId, ctx) → NavigateInput | null`, replacing the
    hardcoded modifier matrix (`blockLinkClickIntent`) and the

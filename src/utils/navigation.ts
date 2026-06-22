@@ -19,8 +19,9 @@
 //   - URL-driven restoration (deep links, browser back/forward) is the inverse
 //     projection (URL → rows, in `panelLayoutProjection`); routing it through
 //     `navigate()` (rows → URL) would re-push history and loop.
-// Both still funnel through `writePanelContent` (the single content-write
-// choke), so a future observe seam there can see every view including those.
+// Both still funnel through `writePanelContent` — the single choke for content
+// swaps on existing panels (a new panel's initial content is set in
+// `createPanelRowInTx`), where a future observe seam would hook.
 import { useCallback, type MouseEvent } from 'react'
 import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
@@ -214,6 +215,8 @@ const applyNavigation = async (
  * The navigation INTENT seam. Plugins contribute:
  *   - `navigationVerb.before/after` — observe navigations (history, analytics);
  *     `after` gets the request + the `NavigationResult | null` it resolved to.
+ *     (An observer must not unconditionally call `navigate()` itself — it would
+ *     re-enter the verb and loop.)
  *   - `navigationVerb.impl` — replace navigation wholesale (`req => myNav(req)`).
  *   - `navigationVerb.decorator` — wrap it: rewrite the intent (call `next` with
  *     a changed `input`) or veto it (return `null` without calling `next`).
