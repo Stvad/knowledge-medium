@@ -124,17 +124,26 @@ export {
   type PasteSurface,
 } from '@/paste/decision.js'
 
-// --- Navigation intent seam (observe / rewrite / veto / replace "go to a
-// block" — analytics, confirm-before-leave, retarget by block type) ---
+// --- Navigation seams, two layers ---
+// Intent policy (`navigationIntentVerb`): remap the gesture→target mapping —
+// the modifier matrix, the follow-link/navigator role, or where global commands
+// land (active vs main). Execution (`navigationVerb`): observe / rewrite (by
+// target / origin / block) / veto / replace the act of going to a block —
+// analytics, confirm-before-leave, retarget by block type.
 export {
   navigationVerb,
+  navigationIntentVerb,
+  defaultNavigationIntent,
   navigate,
   useNavigate,
+  navigateFromGesture,
   navigateFromGlobalCommand,
   useNavigateFromGlobalCommand,
   type NavigateInput,
   type NavigationRequest,
   type NavigationResult,
+  type NavigationGesture,
+  type NavigationRole,
 } from '@/utils/navigation.js'
 
 // --- Action / shortcut helpers ---

@@ -145,7 +145,7 @@ export const appendTodayDailyBlockInStack = async (
   // Route through navigate() (not insertSidebarStackedPanel directly) so the
   // open is observable/interceptable via navigationVerb like every other
   // navigation; the returned panelId is where we place the cursor.
-  const dest = await navigate(repo, {target: 'sidebar-stack', blockId, workspaceId, sourcePanelId})
+  const dest = await navigate(repo, {target: 'sidebar-stack', blockId, workspaceId, sourcePanelId, origin: 'daily-note'})
 
   if (dest) {
     const cursor = content ? content.length : 0

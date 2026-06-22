@@ -2,13 +2,15 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MouseEvent } from 'react'
 import {
-  blockOpenerAction,
+  defaultNavigationIntent,
   handleBlockLinkClick,
   navigate,
   navigateFromGlobalCommand,
+  navigationIntentVerb,
   navigationVerb,
   resolveGlobalCommandTopLevelBlockId,
   type NavigateInput,
+  type NavigationGesture,
 } from '@/utils/navigation'
 import { panelHistory } from '@/utils/panelHistory'
 import { BlockCache } from '@/data/blockCache'
@@ -84,6 +86,14 @@ const currentLayoutRows = async () => {
 const currentLayoutBlockIds = async () => {
   const layoutSession = await layoutSessionBlock()
   return layoutBlockIdsFromRows(layoutSession.id, await currentLayoutRows())
+}
+
+/** Stub `window.matchMedia` so the viewport rule resolves deterministically:
+ *  `matches: true` → mobile (max-width query matches), `false` → desktop. */
+const stubViewport = (matches: boolean) => {
+  vi.stubGlobal('window', {
+    matchMedia: vi.fn().mockReturnValue({matches}),
+  })
 }
 
 describe('navigate', () => {
@@ -191,12 +201,6 @@ describe('navigate', () => {
 })
 
 describe('navigateFromGlobalCommand', () => {
-  const stubViewport = (matches: boolean) => {
-    vi.stubGlobal('window', {
-      matchMedia: vi.fn().mockReturnValue({matches}),
-    })
-  }
-
   it('routes global commands to the main panel on desktop', async () => {
     stubViewport(false)
     const layoutSession = await layoutSessionBlock()
@@ -248,7 +252,7 @@ describe('handleBlockLinkClick', () => {
     const navigate = vi.fn<(i: NavigateInput) => void>()
     const e = makeEvent({shiftKey: true})
     handleBlockLinkClick(e, navigate, 'panel-a', ctx)
-    expect(navigate).toHaveBeenCalledWith({...ctx, target: 'sidebar-stack', sourcePanelId: 'panel-a'})
+    expect(navigate).toHaveBeenCalledWith({...ctx, target: 'sidebar-stack', sourcePanelId: 'panel-a', origin: 'follow-link'})
     expect(callsOf(e)).toEqual({stopProp: 1, preventDefault: 1})
   })
 
@@ -256,7 +260,7 @@ describe('handleBlockLinkClick', () => {
     const navigate = vi.fn<(i: NavigateInput) => void>()
     const e = makeEvent({shiftKey: true, altKey: true})
     handleBlockLinkClick(e, navigate, 'panel-a', ctx)
-    expect(navigate).toHaveBeenCalledWith({...ctx, target: 'new-panel', sourcePanelId: 'panel-a'})
+    expect(navigate).toHaveBeenCalledWith({...ctx, target: 'new-panel', sourcePanelId: 'panel-a', origin: 'follow-link'})
     expect(callsOf(e)).toEqual({stopProp: 1, preventDefault: 1})
   })
 
@@ -264,7 +268,7 @@ describe('handleBlockLinkClick', () => {
     const navigate = vi.fn<(i: NavigateInput) => void>()
     const e = makeEvent({altKey: true})
     handleBlockLinkClick(e, navigate, 'panel-a', ctx)
-    expect(navigate).toHaveBeenCalledWith({...ctx, target: 'main'})
+    expect(navigate).toHaveBeenCalledWith({...ctx, target: 'main', origin: 'follow-link'})
     expect(callsOf(e)).toEqual({stopProp: 1, preventDefault: 1})
   })
 
@@ -272,7 +276,7 @@ describe('handleBlockLinkClick', () => {
     const navigate = vi.fn<(i: NavigateInput) => void>()
     const e = makeEvent()
     handleBlockLinkClick(e, navigate, 'panel-a', ctx)
-    expect(navigate).toHaveBeenCalledWith({...ctx, target: 'panel', panelId: 'panel-a'})
+    expect(navigate).toHaveBeenCalledWith({...ctx, target: 'panel', panelId: 'panel-a', origin: 'follow-link'})
     expect(callsOf(e)).toEqual({stopProp: 1, preventDefault: 1})
   })
 
@@ -280,7 +284,7 @@ describe('handleBlockLinkClick', () => {
     const navigate = vi.fn<(i: NavigateInput) => void>()
     const e = makeEvent()
     handleBlockLinkClick(e, navigate, undefined, ctx)
-    expect(navigate).toHaveBeenCalledWith({...ctx, target: 'active'})
+    expect(navigate).toHaveBeenCalledWith({...ctx, target: 'active', origin: 'follow-link'})
   })
 
   it.each([
@@ -306,43 +310,61 @@ describe('handleBlockLinkClick', () => {
   })
 })
 
-describe('blockOpenerAction', () => {
-  const ctx = {blockId: 'b-target', workspaceId: 'w-1'}
+describe('defaultNavigationIntent (default policy)', () => {
+  const NO_MODS = {shiftKey: false, altKey: false, metaKey: false, ctrlKey: false, button: 0}
+  const gesture = (overrides: Partial<NavigationGesture> = {}): NavigationGesture => ({
+    role: 'follow-link',
+    modifiers: NO_MODS,
+    panelId: 'panel-a',
+    blockId: 'b-target',
+    workspaceId: 'w-1',
+    viewport: 'desktop',
+    ...overrides,
+  })
+  const base = {blockId: 'b-target', workspaceId: 'w-1'}
 
-  it('routes plain follow-link click to the current panel', () => {
-    expect(blockOpenerAction('default', 'follow-link', 'panel-a', ctx)).toEqual({
-      kind: 'navigate',
-      input: {...ctx, target: 'panel', panelId: 'panel-a'},
+  it('plain follow-link click navigates the source panel, tagged origin', () => {
+    expect(defaultNavigationIntent(gesture())).toEqual({
+      ...base, target: 'panel', panelId: 'panel-a', origin: 'follow-link',
     })
   })
 
-  it('routes plain navigator click through the global-command path', () => {
-    expect(blockOpenerAction('default', 'navigator', 'panel-a', ctx)).toEqual({
-      kind: 'global-command',
+  it('plain follow-link click without a panel navigates the active panel', () => {
+    expect(defaultNavigationIntent(gesture({panelId: undefined}))).toEqual({
+      ...base, target: 'active', origin: 'follow-link',
     })
   })
 
-  it('routes shift-click to sidebar stack regardless of plainClick policy', () => {
-    const expected = {kind: 'navigate' as const, input: {...ctx, target: 'sidebar-stack' as const, sourcePanelId: 'panel-a'}}
-    expect(blockOpenerAction('sidebar-stack', 'follow-link', 'panel-a', ctx)).toEqual(expected)
-    expect(blockOpenerAction('sidebar-stack', 'navigator', 'panel-a', ctx)).toEqual(expected)
+  it('plain navigator click lands in the main panel on desktop', () => {
+    expect(defaultNavigationIntent(gesture({role: 'navigator'}))).toEqual({
+      ...base, target: 'main', origin: 'navigator',
+    })
   })
 
-  it('routes shift+alt-click to new-panel regardless of plainClick policy', () => {
-    const expected = {kind: 'navigate' as const, input: {...ctx, target: 'new-panel' as const, sourcePanelId: 'panel-a'}}
-    expect(blockOpenerAction('new-panel', 'follow-link', 'panel-a', ctx)).toEqual(expected)
-    expect(blockOpenerAction('new-panel', 'navigator', 'panel-a', ctx)).toEqual(expected)
+  it('plain navigator click lands in the active panel on mobile', () => {
+    expect(defaultNavigationIntent(gesture({role: 'navigator', viewport: 'mobile'}))).toEqual({
+      ...base, target: 'active', origin: 'navigator',
+    })
   })
 
-  it('routes alt-click to main regardless of plainClick policy', () => {
-    const expected = {kind: 'navigate' as const, input: {...ctx, target: 'main' as const}}
-    expect(blockOpenerAction('main', 'follow-link', 'panel-a', ctx)).toEqual(expected)
-    expect(blockOpenerAction('main', 'navigator', 'panel-a', ctx)).toEqual(expected)
+  it('shift-click stacks in the sidebar regardless of role', () => {
+    const expected = {...base, target: 'sidebar-stack', sourcePanelId: 'panel-a'}
+    expect(defaultNavigationIntent(gesture({modifiers: {...NO_MODS, shiftKey: true}})))
+      .toEqual({...expected, origin: 'follow-link'})
+    expect(defaultNavigationIntent(gesture({role: 'navigator', modifiers: {...NO_MODS, shiftKey: true}})))
+      .toEqual({...expected, origin: 'navigator'})
   })
 
-  it('returns noop for native clicks (cmd/ctrl/middle) so the browser handles it', () => {
-    expect(blockOpenerAction('native', 'follow-link', 'panel-a', ctx)).toEqual({kind: 'noop'})
-    expect(blockOpenerAction('native', 'navigator', 'panel-a', ctx)).toEqual({kind: 'noop'})
+  it('shift+alt-click opens a new panel; alt-click opens the main panel', () => {
+    expect(defaultNavigationIntent(gesture({modifiers: {...NO_MODS, shiftKey: true, altKey: true}})))
+      .toEqual({...base, target: 'new-panel', sourcePanelId: 'panel-a', origin: 'follow-link'})
+    expect(defaultNavigationIntent(gesture({modifiers: {...NO_MODS, altKey: true}})))
+      .toEqual({...base, target: 'main', origin: 'follow-link'})
+  })
+
+  it('returns null for native clicks (cmd/ctrl/middle) so the browser handles it', () => {
+    expect(defaultNavigationIntent(gesture({modifiers: {...NO_MODS, metaKey: true}}))).toBeNull()
+    expect(defaultNavigationIntent(gesture({modifiers: {...NO_MODS, button: 1}}))).toBeNull()
   })
 })
 
@@ -424,6 +446,114 @@ describe('navigationVerb (intent seam)', () => {
     // the default impl is NOT re-run — so no panel is created (no double-nav).
     expect(result).toBeNull()
     expect(await currentPanelBlockIds()).toEqual([])
+    expect(consoleError).toHaveBeenCalled()
+    consoleError.mockRestore()
+  })
+
+  it('a decorator can redirect a navigation by its origin tag', async () => {
+    // Programmatic navigations carry an `origin`; a plugin redirects a specific
+    // source (here 'zoom') without affecting other navigations — the execution-
+    // layer counterpart to customizing gestures at the intent policy.
+    const layoutSession = await layoutSessionBlock()
+    await insertPanelRow(env.repo, layoutSession, 'b-main')
+    const activePanel = await insertPanelRow(env.repo, layoutSession, 'b-side')
+    env.repo.setRuntimeContributions(navigationVerb.decoratorsFacet, 'test-nav', [
+      next => req =>
+        req.input.origin === 'zoom'
+          ? next({...req, input: {blockId: req.input.blockId, target: 'active'}})
+          : next(req),
+    ])
+
+    await navigate(env.repo, {blockId: 'b-zoomed', target: 'main', origin: 'zoom'})
+
+    await vi.waitFor(async () => {
+      // Redirected from main to the active (last) panel by the origin rule.
+      expect(await currentPanelBlockIds()).toEqual(['b-main', 'b-zoomed'])
+      expect(await currentActivePanelId()).toBe(activePanel)
+    })
+  })
+})
+
+describe('navigationIntentVerb (intent policy seam)', () => {
+  it('resolves a navigator global command to the main panel on desktop by default', async () => {
+    stubViewport(false)
+    const layoutSession = await layoutSessionBlock()
+    await insertPanelRow(env.repo, layoutSession, 'b-main')
+    await insertPanelRow(env.repo, layoutSession, 'b-side')
+
+    navigateFromGlobalCommand(env.repo, {blockId: 'b-global'})
+
+    await vi.waitFor(async () => {
+      expect(await currentPanelBlockIds()).toEqual(['b-global', 'b-side'])
+    })
+  })
+
+  it('a policy decorator redirects where global commands land (navigator → active on desktop)', async () => {
+    // The original motivating example: a plugin redirects navigator commands to
+    // the active panel even on desktop, by rewriting the policy's NavigateInput.
+    stubViewport(false)
+    env.repo.setRuntimeContributions(navigationIntentVerb.decoratorsFacet, 'test-policy', [
+      next => async gesture => {
+        const input = await next(gesture)
+        return input && gesture.role === 'navigator' && input.target === 'main'
+          ? {...input, target: 'active'}
+          : input
+      },
+    ])
+    const layoutSession = await layoutSessionBlock()
+    await insertPanelRow(env.repo, layoutSession, 'b-main')
+    const activePanel = await insertPanelRow(env.repo, layoutSession, 'b-side')
+
+    navigateFromGlobalCommand(env.repo, {blockId: 'b-global'})
+
+    await vi.waitFor(async () => {
+      expect(await currentPanelBlockIds()).toEqual(['b-main', 'b-global'])
+      expect(await currentActivePanelId()).toBe(activePanel)
+    })
+  })
+
+  it('a policy impl can replace gesture resolution wholesale', async () => {
+    stubViewport(false)
+    // Force every navigator command into a fresh side panel, ignoring viewport.
+    env.repo.setRuntimeContributions(navigationIntentVerb.implFacet, 'test-policy', [
+      gesture => ({blockId: gesture.blockId, target: 'new-panel'}),
+    ])
+    const layoutSession = await layoutSessionBlock()
+    await insertPanelRow(env.repo, layoutSession, 'b-main')
+
+    navigateFromGlobalCommand(env.repo, {blockId: 'b-global'})
+
+    await vi.waitFor(async () => {
+      expect(await currentPanelBlockIds()).toEqual(['b-main', 'b-global'])
+    })
+  })
+
+  it('a policy decorator can veto a gesture (returns null, no navigation)', async () => {
+    stubViewport(false)
+    env.repo.setRuntimeContributions(navigationIntentVerb.decoratorsFacet, 'test-policy', [
+      () => async () => null,
+    ])
+
+    const result = await navigateFromGlobalCommand(env.repo, {blockId: 'b-global'})
+
+    expect(result).toBeNull()
+    expect(await currentPanelBlockIds()).toEqual([])
+  })
+
+  it('falls back to the default policy when a plugin policy throws', async () => {
+    stubViewport(false)
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    env.repo.setRuntimeContributions(navigationIntentVerb.implFacet, 'test-policy', [
+      () => { throw new Error('buggy policy') },
+    ])
+
+    // Pure verb on onError:'fallback' → default policy still resolves the
+    // navigator command to the (empty-layout) main panel.
+    navigateFromGlobalCommand(env.repo, {blockId: 'b-global'})
+
+    await vi.waitFor(async () => {
+      expect(await currentPanelBlockIds()).toEqual(['b-global'])
+    })
     expect(consoleError).toHaveBeenCalled()
     consoleError.mockRestore()
   })

@@ -348,17 +348,27 @@ The "block shows in a custom view" case is already covered by
 `blockRenderersFacet` (`useRendererRegistry`'s `canRender`/`priority`); the nav
 seams below don't own it.
 
+The two verb seams are layered: a gesture is first resolved to a
+`NavigateInput` by the **intent policy** (`navigationIntentVerb`), then applied
+by the **execution** verb (`navigationVerb`). Customize *where a gesture lands*
+at the policy; *what happens when we go there* at the execution verb.
+
 1. **`navigationVerb`** *(DONE — `src/utils/navigation.ts`)* — the navigation
-   **intent** seam, built on `defineVerbFacet`. `navigate(repo, input)` resolves
-   the intent through it, applies the result, and returns where it landed
-   (`{panelId, blockId} | null`; never rejects). Plugins `impl` (replace
-   navigation wholesale — `req => myNav(req)`), `decorator` (rewrite the intent
-   via `next({...req, input})`, or veto by returning `null` without calling
+   **execution** seam, built on `defineVerbFacet`. `navigate(repo, input)`
+   applies the (already-resolved) `NavigateInput` through it and returns where it
+   landed (`{panelId, blockId} | null`; never rejects). Plugins `impl` (replace
+   navigation wholesale — `req => myNav(req)`), `decorator` (rewrite via
+   `next({...req, input})` — e.g. redirect by `input.origin` / `input.target` /
+   the target block's type — or veto by returning `null` without calling
    `next`), or `before`/`after` (observe — analytics, history, confirm-before-
    leave). Effectful verb on the default `onError: 'rethrow'`, so a throwing
    override fails that one navigation (logged) without re-running the default —
    no double-navigation. Covers all user-initiated intent (clicks, zoom,
-   daily-notes, commands), which now all funnel through `navigate()`.
+   daily-notes, commands), which now all funnel through `navigate()`. Every
+   `NavigateInput` can carry an **`origin`** tag (gesture navs get it from the
+   policy = the surface role; programmatic callers set it — `'zoom'`,
+   `'daily-note'`, `'open-in-panel'`), so a decorator can redirect/observe a
+   *specific source*, not just a resolved target.
    - **Not** covered, deliberately: URL-driven restoration (the inverse
      projection URL → rows — routing it through `navigate()`, which goes rows →
      URL, would re-push history and loop) and per-panel back/forward (history
@@ -373,12 +383,24 @@ seams below don't own it.
    cold-start first paint). Not yet a facet; a complete "track every view"
    observe seam would hook both (or route `createPanelRowInTx` through
    `writePanelContent`).
-3. **`navigationIntentFacet`** *(TODO)* — the gesture → intent policy
-   `(role, modifiers, panelId, ctx) → NavigateInput | null`, replacing the
-   hardcoded modifier matrix (`blockLinkClickIntent`) and the
-   `BlockOpenerPlainClick` role chosen literally at ~13 sites. Lets a plugin
-   remap modifiers (the alt-click-for-main choice above is provisional) or add
-   roles.
+3. **`navigationIntentVerb`** *(DONE — `src/utils/navigation.ts`)* — the gesture
+   → intent **policy**, a pure `defineVerbFacet` (`onError: 'fallback'`):
+   `(gesture: {role, modifiers, panelId?, blockId, workspaceId, viewport}) →
+   NavigateInput | null` (`null` = native passthrough / veto). The default impl
+   (`defaultNavigationIntent`, exported & composable) reproduces the canonical
+   modifier matrix + follow-link/navigator role + viewport rule exactly. Plugins
+   `decorator`/`impl` to remap modifiers (the alt-click-for-main choice above is
+   provisional), override the role, or **redirect where global commands land**
+   (active vs main — the original motivating example, gap N5). `useBlockOpener`,
+   `navigateFromGlobalCommand`, and `navigateFromGesture` all resolve through it
+   before calling `navigate()`. The native-passthrough decision (cmd/ctrl/middle
+   → browser) stays a synchronous, non-overridable carve-out in the click
+   handlers, since `preventDefault` must run before the async policy.
+   - Known gap (follow-up): `resolveGlobalCommandTopLevelBlockId` still applies
+     the viewport rule directly, so if a plugin redirects navigator commands at
+     the policy, that read isn't redirected with them; `handleBlockLinkClick`
+     (test-only) and quick-find's click mapping use the default matrix
+     synchronously, bypassing the policy facet.
 4. **`urlSerializerFacet`** *(TODO)* — `parse(hash) → AppState`,
    `build(state) → hash`. Pluggable URL format.
 5. **`panelHistoryFacet`** *(TODO)* — alternative history models (tree-shaped,

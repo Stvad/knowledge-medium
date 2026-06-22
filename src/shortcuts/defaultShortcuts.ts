@@ -248,7 +248,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       // Through navigate() so zoom is observable/interceptable via
       // navigationVerb; target 'panel' swaps this panel's content (the swap
       // still wraps in withMoveTransition inside navigateInPanel).
-      await navigate(repo, {target: 'panel', panelId: uiStateBlock.id, blockId: block.id})
+      await navigate(repo, {target: 'panel', panelId: uiStateBlock.id, blockId: block.id, origin: 'zoom'})
     },
     defaultBinding: {
       keys: '$mod+.',
@@ -266,7 +266,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       const parent = repo.block(topLevelBlockId).parent
       if (!parent) return
 
-      await navigate(repo, {target: 'panel', panelId: uiStateBlock.id, blockId: parent.id})
+      await navigate(repo, {target: 'panel', panelId: uiStateBlock.id, blockId: parent.id, origin: 'zoom'})
     },
     defaultBinding: {
       keys: '$mod+,',
@@ -282,6 +282,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         blockId: block.id,
         target: 'new-panel',
         sourcePanelId: uiStateBlock.id,
+        origin: 'open-in-panel',
       })
     },
     defaultBinding: {
