@@ -124,6 +124,19 @@ export {
   type PasteSurface,
 } from '@/paste/decision.js'
 
+// --- Navigation intent seam (observe / rewrite / veto / replace "go to a
+// block" — analytics, confirm-before-leave, retarget by block type) ---
+export {
+  navigationVerb,
+  navigate,
+  useNavigate,
+  navigateFromGlobalCommand,
+  useNavigateFromGlobalCommand,
+  type NavigateInput,
+  type NavigationRequest,
+  type NavigationResult,
+} from '@/utils/navigation.js'
+
 // --- Action / shortcut helpers ---
 export {
   ActionContextTypes,

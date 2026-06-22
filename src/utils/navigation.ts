@@ -1,19 +1,30 @@
-// User-intent navigation primitive. Single entry point for "go to a block"
-// and "open a block in a new panel" by mutating layout-session panel rows. The
-// panel layout projection observes those rows and keeps the URL in sync.
+// User-intent navigation. `navigate()` is the entry point for "go to a block"
+// and "open a block in a panel": it resolves the intent through
+// `navigationVerb`, then applies the result by mutating layout-session panel
+// rows (the panel layout projection observes those rows and keeps the URL in
+// sync) and returns where it landed.
 //
-// Treated as a runtime service (like Repo or AppRuntime), not a facet:
-// navigation is a fundamental action with one canonical implementation, not
-// an extensibility surface that composes contributions. If extensions
-// later need to intercept navigation (e.g. a block type that opens in a
-// custom viewer rather than as a focused block), this is where a
-// navigationInterceptorFacet would plug in — navigate() would consult
-// `runtime.read(...)` before falling through to the default URL / event
-// implementation. Keeping the API a plain function for now lets that hook
-// be added without re-plumbing call sites.
+// `navigationVerb` is the extension seam for navigation INTENT — plugins
+// observe navigations (before/after), rewrite the intent (a decorator calling
+// `next` with a changed input), veto it (return `null`), or replace it
+// wholesale (`navigationVerb.impl`). It's effectful and uses the verb's default
+// `onError: 'rethrow'`, so a throwing override fails that one navigation
+// (logged by `navigate`) without re-running the default — no double-navigation.
+//
+// Scope: the intent layer only. The lower layers are deliberately NOT routed
+// through `navigate()`:
+//   - The in-panel content swap + per-panel back/forward live in `panelHistory`
+//     (`navigateInPanel`/`goBack`/`goForward`); back/forward is history
+//     traversal restoring a snapshot, not a "go to block" intent.
+//   - URL-driven restoration (deep links, browser back/forward) is the inverse
+//     projection (URL → rows, in `panelLayoutProjection`); routing it through
+//     `navigate()` (rows → URL) would re-push history and loop.
+// Both still funnel through `writePanelContent` (the single content-write
+// choke), so a future observe seam there can see every view including those.
 import { useCallback, type MouseEvent } from 'react'
 import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
+import { defineVerbFacet } from '@/facets/verbFacet'
 import { useRepo } from '@/context/repo'
 import { useBlockContext } from '@/context/block'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
@@ -65,6 +76,23 @@ export interface NavigateSidebarStackInput extends NavigateBaseInput {
 
 export type GlobalCommandNavigateInput = NavigateBaseInput
 
+/** Where a navigation landed: the panel showing the block, and the block. The
+ *  resolved result of `navigate()` / `navigationVerb`. */
+export interface NavigationResult {
+  panelId: string
+  blockId: string
+}
+
+/** Input to `navigationVerb`: the requested navigation, the resolved workspace,
+ *  and the live repo — impls/observers need it to inspect the target block,
+ *  read prefs, or perform a fully custom navigation. */
+export interface NavigationRequest {
+  repo: Repo
+  /** `input.workspaceId ?? repo.activeWorkspaceId`, resolved once up front. */
+  workspaceId: string
+  input: NavigateInput
+}
+
 const resolveLayoutSessionBlock = async (repo: Repo, workspaceId: string) => {
   const uiState = await getUIStateBlock(repo, workspaceId, repo.user, {})
   return getLayoutSessionBlock(uiState, getLayoutSessionId())
@@ -104,31 +132,33 @@ const navigateMainPanel = async (
   repo: Repo,
   workspaceId: string,
   blockId: string,
-): Promise<void> => {
+): Promise<NavigationResult> => {
   const layoutSessionBlock = await resolveLayoutSessionBlock(repo, workspaceId)
   const panels = await panelRowsForLayoutSession(layoutSessionBlock)
   const firstPanel = panels[0]
   if (firstPanel) {
     await setActivePanel(layoutSessionBlock, firstPanel.id)
     await navigateInPanel(repo.block(firstPanel.id), blockId)
-    return
+    return {panelId: firstPanel.id, blockId}
   }
-  await insertPanelRow(repo, layoutSessionBlock, blockId)
+  const panelId = await insertPanelRow(repo, layoutSessionBlock, blockId)
+  return {panelId, blockId}
 }
 
 const navigateActivePanel = async (
   repo: Repo,
   workspaceId: string,
   blockId: string,
-): Promise<void> => {
+): Promise<NavigationResult> => {
   const layoutSessionBlock = await resolveLayoutSessionBlock(repo, workspaceId)
   const panel = await resolveActivePanelRow(layoutSessionBlock)
   if (panel) {
     await setActivePanel(layoutSessionBlock, panel.id)
     await navigateInPanel(repo.block(panel.id), blockId)
-    return
+    return {panelId: panel.id, blockId}
   }
-  await insertPanelRow(repo, layoutSessionBlock, blockId)
+  const panelId = await insertPanelRow(repo, layoutSessionBlock, blockId)
+  return {panelId, blockId}
 }
 
 const navigateExplicitPanel = async (
@@ -136,46 +166,99 @@ const navigateExplicitPanel = async (
   workspaceId: string,
   panelId: string,
   blockId: string,
-): Promise<void> => {
+): Promise<NavigationResult> => {
   await navigateInPanel(repo.block(panelId), blockId)
   void resolveLayoutSessionBlock(repo, workspaceId)
     .then(layoutSessionBlock => setActivePanel(layoutSessionBlock, panelId))
     .catch(error => {
       console.error('[navigation] Failed to mark panel active after navigation', error)
     })
+  return {panelId, blockId}
 }
 
-export const navigate = (repo: Repo, input: NavigateInput): void => {
+/** Apply a resolved navigation: the target-dispatch ladder that mutates
+ *  layout-session panel rows, returning where it landed. Re-resolves the
+ *  workspace from the (possibly rewritten) input so a resolver that retargets
+ *  workspaces still lands correctly. This is `navigationVerb`'s default impl. */
+const applyNavigation = async (
+  {repo, input}: NavigationRequest,
+): Promise<NavigationResult | null> => {
   const workspaceId = input.workspaceId ?? repo.activeWorkspaceId
-  if (!workspaceId) return
+  if (!workspaceId) return null
 
-  if (input.target === 'new-panel') {
-    void resolveLayoutSessionBlock(repo, workspaceId)
-      .then(layoutSessionBlock => insertPanelRow(repo, layoutSessionBlock, input.blockId, {
+  switch (input.target) {
+    case 'new-panel': {
+      const layoutSessionBlock = await resolveLayoutSessionBlock(repo, workspaceId)
+      const panelId = await insertPanelRow(repo, layoutSessionBlock, input.blockId, {
         afterPanelId: input.sourcePanelId,
-      }))
-    return
-  }
-
-  if (input.target === 'sidebar-stack') {
-    void resolveLayoutSessionBlock(repo, workspaceId)
-      .then(layoutSessionBlock => insertSidebarStackedPanel(repo, layoutSessionBlock, input.blockId, {
+      })
+      return {panelId, blockId: input.blockId}
+    }
+    case 'sidebar-stack': {
+      const layoutSessionBlock = await resolveLayoutSessionBlock(repo, workspaceId)
+      const panelId = await insertSidebarStackedPanel(repo, layoutSessionBlock, input.blockId, {
         sourcePanelId: input.sourcePanelId,
-      }))
-    return
+      })
+      return {panelId, blockId: input.blockId}
+    }
+    case 'main':
+      return navigateMainPanel(repo, workspaceId, input.blockId)
+    case 'active':
+      return navigateActivePanel(repo, workspaceId, input.blockId)
+    case 'panel':
+      return navigateExplicitPanel(repo, workspaceId, input.panelId, input.blockId)
   }
+}
 
-  if (input.target === 'main') {
-    void navigateMainPanel(repo, workspaceId, input.blockId)
-    return
+/**
+ * The navigation INTENT seam. Plugins contribute:
+ *   - `navigationVerb.before/after` — observe navigations (history, analytics);
+ *     `after` gets the request + the `NavigationResult | null` it resolved to.
+ *   - `navigationVerb.impl` — replace navigation wholesale (`req => myNav(req)`).
+ *   - `navigationVerb.decorator` — wrap it: rewrite the intent (call `next` with
+ *     a changed `input`) or veto it (return `null` without calling `next`).
+ * With no contributions, `run` returns `applyNavigation(request)`, so
+ * `navigate()` behaves exactly as before the seam existed. Effectful verb on the
+ * default `onError: 'rethrow'`: a throwing override fails that one navigation
+ * (logged by `navigate`), never double-applies.
+ */
+export const navigationVerb = defineVerbFacet<NavigationRequest, NavigationResult | null>({
+  id: 'core.navigate',
+  defaultImpl: applyNavigation,
+  // Untyped dynamic plugins can return `undefined`/a wrong shape; an invalid
+  // result rejects (rethrow) → `navigate` logs and resolves to null, rather
+  // than a malformed result reaching callers that read `.panelId`.
+  validateResult: result => {
+    if (result === null) return true
+    const r = result as Partial<NavigationResult>
+    return typeof r.panelId === 'string' && typeof r.blockId === 'string'
+  },
+})
+
+/** Go to a block / open it in a panel, returning where it landed (or `null` if
+ *  vetoed, no workspace, or it failed). Resolves the intent through
+ *  `navigationVerb`, then the default impl applies it. **Never rejects** —
+ *  errors are logged and become `null` — so the many fire-and-forget callers can
+ *  ignore the returned promise safely. The verb runs when a workspace resolves
+ *  and a facet runtime is installed (always in production); the early-boot /
+ *  minimal-harness path applies the default directly. */
+export const navigate = async (
+  repo: Repo,
+  input: NavigateInput,
+): Promise<NavigationResult | null> => {
+  const workspaceId = input.workspaceId ?? repo.activeWorkspaceId
+  if (!workspaceId) return null
+
+  const request: NavigationRequest = {repo, workspaceId, input}
+  const runtime = repo.facetRuntime
+  try {
+    return runtime
+      ? await navigationVerb.run(runtime, request)
+      : await applyNavigation(request)
+  } catch (error) {
+    console.error('[navigation] navigate failed', error)
+    return null
   }
-
-  if (input.target === 'active') {
-    void navigateActivePanel(repo, workspaceId, input.blockId)
-    return
-  }
-
-  void navigateExplicitPanel(repo, workspaceId, input.panelId, input.blockId)
 }
 
 export const useNavigate = () => {
@@ -186,18 +269,18 @@ export const useNavigate = () => {
 export const navigateFromGlobalCommand = (
   repo: Repo,
   input: GlobalCommandNavigateInput,
-): void => {
+): Promise<NavigationResult | null> =>
   navigate(repo, {
     ...input,
     target: isMobileViewport() ? 'active' : 'main',
   })
-}
 
 export const useNavigateFromGlobalCommand = () => {
   const repo = useRepo()
-  return useCallback((input: GlobalCommandNavigateInput) => {
-    navigateFromGlobalCommand(repo, input)
-  }, [repo])
+  return useCallback(
+    (input: GlobalCommandNavigateInput) => navigateFromGlobalCommand(repo, input),
+    [repo],
+  )
 }
 
 export const resolveGlobalCommandTopLevelBlockId = async (

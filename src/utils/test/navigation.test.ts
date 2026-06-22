@@ -6,6 +6,7 @@ import {
   handleBlockLinkClick,
   navigate,
   navigateFromGlobalCommand,
+  navigationVerb,
   resolveGlobalCommandTopLevelBlockId,
   type NavigateInput,
 } from '@/utils/navigation'
@@ -342,5 +343,88 @@ describe('blockOpenerAction', () => {
   it('returns noop for native clicks (cmd/ctrl/middle) so the browser handles it', () => {
     expect(blockOpenerAction('native', 'follow-link', 'panel-a', ctx)).toEqual({kind: 'noop'})
     expect(blockOpenerAction('native', 'navigator', 'panel-a', ctx)).toEqual({kind: 'noop'})
+  })
+})
+
+describe('navigationVerb (intent seam)', () => {
+  it('navigate() resolves to the destination {panelId, blockId}', async () => {
+    const result = await navigate(env.repo, {blockId: 'b1', target: 'main'})
+
+    expect(result?.blockId).toBe('b1')
+    expect(typeof result?.panelId).toBe('string')
+    await vi.waitFor(async () => {
+      expect(await currentPanelBlockIds()).toEqual(['b1'])
+    })
+  })
+
+  it('an impl override replaces navigation wholesale', async () => {
+    // The override returns a result without touching panels, so the default
+    // navigation is fully replaced and no panel is created.
+    env.repo.setRuntimeContributions(navigationVerb.implFacet, 'test-nav', [
+      async () => ({panelId: 'custom', blockId: 'custom'}),
+    ])
+
+    const result = await navigate(env.repo, {blockId: 'b1', target: 'main'})
+
+    expect(result).toEqual({panelId: 'custom', blockId: 'custom'})
+    expect(await currentPanelBlockIds()).toEqual([])
+  })
+
+  it('a decorator vetoes by returning null without calling next', async () => {
+    env.repo.setRuntimeContributions(navigationVerb.decoratorsFacet, 'test-nav', [
+      () => async () => null,
+    ])
+
+    const result = await navigate(env.repo, {blockId: 'b1', target: 'main'})
+
+    expect(result).toBeNull()
+    expect(await currentPanelBlockIds()).toEqual([])
+  })
+
+  it('a decorator can rewrite the intent before the default applies it', async () => {
+    env.repo.setRuntimeContributions(navigationVerb.decoratorsFacet, 'test-nav', [
+      next => req => next({...req, input: {...req.input, blockId: 'rewritten'}}),
+    ])
+
+    await navigate(env.repo, {blockId: 'b1', target: 'main'})
+
+    await vi.waitFor(async () => {
+      expect(await currentPanelBlockIds()).toEqual(['rewritten'])
+    })
+  })
+
+  it('before/after observers fire with the request and result', async () => {
+    const calls: string[] = []
+    env.repo.setRuntimeContributions(navigationVerb.beforeFacet, 'test-nav', [
+      req => { calls.push(`before:${req.input.blockId}`) },
+    ])
+    env.repo.setRuntimeContributions(navigationVerb.afterFacet, 'test-nav', [
+      (req, result) => { calls.push(`after:${req.input.blockId}:${result?.blockId}`) },
+    ])
+
+    await navigate(env.repo, {blockId: 'b1', target: 'main'})
+
+    await vi.waitFor(() => {
+      expect(calls).toContain('after:b1:b1')
+    })
+    expect(calls).toContain('before:b1')
+  })
+
+  it('a throwing override fails that navigation without re-running the default (no double-nav)', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    env.repo.setRuntimeContributions(navigationVerb.implFacet, 'test-nav', [
+      async () => {
+        throw new Error('buggy nav plugin')
+      },
+    ])
+
+    const result = await navigate(env.repo, {blockId: 'b1', target: 'main'})
+
+    // Default policy is 'rethrow': navigate() catches and resolves to null, and
+    // the default impl is NOT re-run — so no panel is created (no double-nav).
+    expect(result).toBeNull()
+    expect(await currentPanelBlockIds()).toEqual([])
+    expect(consoleError).toHaveBeenCalled()
+    consoleError.mockRestore()
   })
 })

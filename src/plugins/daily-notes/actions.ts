@@ -48,10 +48,10 @@ import { CalendarDays, CalendarPlus } from 'lucide-react'
 import { getLayoutSessionId } from '@/utils/layoutSessionId.js'
 import { parseAppHash } from '@/utils/routing.js'
 import {
+  navigate,
   navigateFromGlobalCommand,
   resolveGlobalCommandTopLevelBlockId,
 } from '@/utils/navigation.js'
-import { insertSidebarStackedPanel } from '@/utils/panelLayoutProjection.js'
 import { addDaysIso, getOrCreateDailyNote, todayIso } from './dailyNotes.ts'
 
 export const OPEN_TODAY_ACTION_ID = 'open_today'
@@ -142,14 +142,19 @@ export const appendTodayDailyBlockInStack = async (
 
   await layoutSessionBlock.load()
   const sourcePanelId = layoutSessionBlock.peekProperty(activePanelIdProp)
-  const panelId = await insertSidebarStackedPanel(repo, layoutSessionBlock, blockId, {sourcePanelId})
+  // Route through navigate() (not insertSidebarStackedPanel directly) so the
+  // open is observable/interceptable via navigationVerb like every other
+  // navigation; the returned panelId is where we place the cursor.
+  const dest = await navigate(repo, {target: 'sidebar-stack', blockId, workspaceId, sourcePanelId})
 
-  const cursor = content ? content.length : 0
-  const selection: EditorSelectionState = {blockId, start: cursor}
-  await repo.tx(async tx => {
-    await tx.setProperty(panelId, editorSelection, selection)
-    await tx.setProperty(panelId, isEditingProp, true)
-  }, {scope: ChangeScope.UiState, description: 'edit new daily block'})
+  if (dest) {
+    const cursor = content ? content.length : 0
+    const selection: EditorSelectionState = {blockId, start: cursor}
+    await repo.tx(async tx => {
+      await tx.setProperty(dest.panelId, editorSelection, selection)
+      await tx.setProperty(dest.panelId, isEditingProp, true)
+    }, {scope: ChangeScope.UiState, description: 'edit new daily block'})
+  }
 
   return blockId
 }

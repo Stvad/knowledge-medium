@@ -341,15 +341,49 @@ Callers don't talk to the projection directly — they write panel rows. The pro
 - Delete the legacy `getPanelsBlock` / `PANELS_PATH_PART` indirection if nothing reads from `ui-state/panels` anymore.
 - Confirm no panel-row writes use a non-UiState scope outside the projection.
 
-## Post-step-4: emacs-grade extensibility (separate work)
+## Navigation extensibility model
 
-In priority order (none of these block step 4):
+Navigation is a **pipeline** of distinct concerns, each wanting its own seam.
+The "block shows in a custom view" case is already covered by
+`blockRenderersFacet` (`useRendererRegistry`'s `canRender`/`priority`); the nav
+seams below don't own it.
 
-1. **`navigationFacet`** — turn `navigate(input)` into `runtime.read(navigationFacet)({...})`. Default contribution = current behavior. Plugin contributions can short-circuit (custom block-type viewers) or replace wholesale. Same `combineLastContributionResult` pattern as variants.
-2. **`urlSerializerFacet`** — `parse(hash) → AppState`, `build(state) → hash`. Pluggable URL format.
-3. **`panelHistoryFacet`** — alternative history models (tree-shaped, named bookmarks, time-travel debugger).
+1. **`navigationVerb`** *(DONE — `src/utils/navigation.ts`)* — the navigation
+   **intent** seam, built on `defineVerbFacet`. `navigate(repo, input)` resolves
+   the intent through it, applies the result, and returns where it landed
+   (`{panelId, blockId} | null`; never rejects). Plugins `impl` (replace
+   navigation wholesale — `req => myNav(req)`), `decorator` (rewrite the intent
+   via `next({...req, input})`, or veto by returning `null` without calling
+   `next`), or `before`/`after` (observe — analytics, history, confirm-before-
+   leave). Effectful verb on the default `onError: 'rethrow'`, so a throwing
+   override fails that one navigation (logged) without re-running the default —
+   no double-navigation. Covers all user-initiated intent (clicks, zoom,
+   daily-notes, commands), which now all funnel through `navigate()`.
+   - **Not** covered, deliberately: URL-driven restoration (the inverse
+     projection URL → rows — routing it through `navigate()`, which goes rows →
+     URL, would re-push history and loop) and per-panel back/forward (history
+     traversal restoring a snapshot, not a "go to block" intent). Both flow
+     through `writePanelContent`, so the future observe seam there catches them.
+2. **`writePanelContent(tx, panelId, blockId, state?)`** *(DONE —
+   `src/utils/panelHistory.ts`)* — the single content-write choke every "panel
+   shows block X" path funnels through (in-panel navigate, back/forward, URL
+   reconcile, merge retarget). Not yet a facet; the natural home for a future
+   `before`/`after` observe seam ("track every view, including restoration").
+3. **`navigationIntentFacet`** *(TODO)* — the gesture → intent policy
+   `(role, modifiers, panelId, ctx) → NavigateInput | null`, replacing the
+   hardcoded modifier matrix (`blockLinkClickIntent`) and the
+   `BlockOpenerPlainClick` role chosen literally at ~13 sites. Lets a plugin
+   remap modifiers (the alt-click-for-main choice above is provisional) or add
+   roles.
+4. **`urlSerializerFacet`** *(TODO)* — `parse(hash) → AppState`,
+   `build(state) → hash`. Pluggable URL format.
+5. **`panelHistoryFacet`** *(TODO)* — alternative history models (tree-shaped,
+   named bookmarks, time-travel debugger). The Replace seam over the in-memory
+   model in `panelHistory.ts`, and where per-panel back/forward would become
+   interceptable rather than cramming traversal into `navigate()`.
 
-The current navigation code grew before facet was the dominant idiom; once step 4 stabilizes the data flow, these retrofits are mostly mechanical (factor out, expose via runtime).
+Optional: `viewTransitionFacet` to override the hardcoded `withMoveTransition`
+crossfade in the swap path.
 
 ## Constraints / non-goals
 
