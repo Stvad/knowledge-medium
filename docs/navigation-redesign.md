@@ -214,7 +214,10 @@ Per-panel chevrons remain a separate panel-scoped affordance.
 
 ### Modifier-key policy for block link clicks (incl. "open in main")
 
-Current matrix (from `handleBlockLinkClick`):
+Matrix (original design record; now implemented by `blockLinkClickIntent` +
+`defaultNavigationIntent`, the intent-policy default — `target: 'focused'` below
+was later renamed `target: 'panel'`, and the resolver runs as the
+`navigationIntentVerb` default rather than a standalone `handleBlockLinkClick`):
 
 | Modifier | Action | Resulting `navigate()` call |
 |---|---|---|
@@ -230,7 +233,7 @@ Modifier choice: **alt-click** as default. Reasoning:
 - Cmd-click is the universal "open in new browser tab" convention; overriding it costs users that affordance for any block link in the app. High-tax override.
 - Shift is taken (new panel).
 - Alt-click currently falls through to native (which on most browsers is "save link," rarely used inside an SPA). Lowest-tax modifier to repurpose.
-- If alt-click ends up unergonomic, swapping to cmd-click is a one-line change in `handleBlockLinkClick`.
+- If alt-click ends up unergonomic, swapping to cmd-click is a one-line change in `blockLinkClickIntent` (and plugins can now remap it via `navigationIntentVerb`).
 
 Updated matrix:
 

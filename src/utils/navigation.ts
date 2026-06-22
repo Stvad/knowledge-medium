@@ -91,7 +91,12 @@ export interface NavigateSidebarStackInput extends NavigateBaseInput {
   sourcePanelId?: string
 }
 
-export type GlobalCommandNavigateInput = NavigateBaseInput
+/** Input to the navigator / global-command entry points. Deliberately only the
+ *  block (and an optional explicit workspace): the target panel is resolved by
+ *  the intent policy and `origin` is fixed to `'navigator'`, so neither is
+ *  accepted here (a `Pick`, not the full base, so a dropped field is a type
+ *  error rather than a silent no-op). */
+export type GlobalCommandNavigateInput = Pick<NavigateBaseInput, 'blockId' | 'workspaceId'>
 
 /** Where a navigation landed: the panel showing the block, and the block. The
  *  resolved result of `navigate()` / `navigationVerb`. */
@@ -414,16 +419,24 @@ export const defaultNavigationIntent = (
   }
 }
 
+const isOptionalString = (value: unknown): boolean =>
+  value === undefined || typeof value === 'string'
+
 const isNavigateInput = (value: unknown): value is NavigateInput => {
   if (typeof value !== 'object' || value === null) return false
   const v = value as Record<string, unknown>
+  // Untyped dynamic plugins can return anything; validate the fields the
+  // dispatch/execution layer actually reads, so e.g. a numeric sourcePanelId
+  // can't slip through to `insertPanelRow`.
   if (typeof v.blockId !== 'string') return false
+  if (!isOptionalString(v.workspaceId) || !isOptionalString(v.origin)) return false
   switch (v.target) {
     case 'main':
     case 'active':
+      return true
     case 'new-panel':
     case 'sidebar-stack':
-      return true
+      return isOptionalString(v.sourcePanelId)
     case 'panel':
       return typeof v.panelId === 'string'
     default:

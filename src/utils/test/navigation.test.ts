@@ -279,9 +279,14 @@ describe('defaultNavigationIntent (default policy)', () => {
       .toEqual({...base, target: 'main', origin: 'follow-link'})
   })
 
-  it('returns null for native clicks (cmd/ctrl/middle) so the browser handles it', () => {
+  it('returns null for native clicks (cmd/ctrl/middle/right) so the browser handles it', () => {
     expect(defaultNavigationIntent(gesture({modifiers: {...NO_MODS, metaKey: true}}))).toBeNull()
+    expect(defaultNavigationIntent(gesture({modifiers: {...NO_MODS, ctrlKey: true}}))).toBeNull()
     expect(defaultNavigationIntent(gesture({modifiers: {...NO_MODS, button: 1}}))).toBeNull()
+    expect(defaultNavigationIntent(gesture({modifiers: {...NO_MODS, button: 2}}))).toBeNull()
+    // a modifier that would otherwise mean "main" still defers to the browser
+    // when combined with cmd/ctrl
+    expect(defaultNavigationIntent(gesture({modifiers: {...NO_MODS, altKey: true, metaKey: true}}))).toBeNull()
   })
 })
 
