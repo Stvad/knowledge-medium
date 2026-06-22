@@ -290,7 +290,7 @@ Every gap here is one of the four missing algebras (veto, policy-override, order
 - **Algebra:** `pluginSettingsSchemaFacet` (Map keyed by pluginId; typed field descriptors `{key, type, label, default, options}`). Core renderer turns a schema into rows + storage codec. Custom editors stay possible via the existing override facet.
 
 ### I3 — App/workspace lifecycle hooks *(HIGH for the workspace half)*
-- **Where:** `src/bootstrap/workspaceBootstrap.ts:113` (fixed inline step sequence: backfills → reconcile → audit → tutorial → ensure pages → landing); `App.tsx:115`; workspace switch `WorkspaceSwitcher.tsx:60` (component-local, no hook); create notifies only via an `onCreated` prop that never reaches the extension system.
+- **Where:** `src/bootstrap/workspaceBootstrap.ts:113` (fixed inline step sequence: backfills → reconcile → tutorial → ensure pages → landing; the data-integrity audit is now scheduled by the data-integrity plugin's `AppEffect`, not inline here — see I5); `App.tsx:115`; workspace switch `WorkspaceSwitcher.tsx:60` (component-local, no hook); create notifies only via an `onCreated` prop that never reaches the extension system.
 - **Hardcoded:** no `beforeSwitch`/`afterSwitch`/`afterCreate` and no boot-phase hook. **Correctness angle:** plugins that auto-create blocks need a reliable "active workspace just changed" signal (the `repo.activeWorkspaceId` scoping rule) rather than racing the async bootstrap.
 - **Algebra:** `workspaceLifecycleFacet` (Sum `{afterCreate?, beforeSwitch?, afterSwitch?}`) + optional `bootstrapStepsFacet` (Sum phased steps). The doc correctly flags `bootApp` substrate replacement as overkill — this is the lighter infill version.
 
@@ -299,7 +299,7 @@ Every gap here is one of the four missing algebras (veto, policy-override, order
 - **Algebra:** `exportFormatsFacet` (Map by format id, `serialize(root, repo, opts) → {blob, filename, mime}`) + a lighter `referenceSyntaxFacet`. Inverse of I1 — together a symmetric import/export seam.
 
 ### I5 — Consistency / data-integrity checks *(MED)*
-- **Where:** `src/data/internals/consistencyAudit.ts` (fixed checks), scheduled at `workspaceBootstrap.ts:147`. The new diagnostics seam (commit `1bcbfd5e`, `src/plugins/diagnostics/`) gates *what surfaces to the sync chip* — it does **not** let a plugin author a new *check*.
+- **Where:** the consistency-audit checks live in `src/plugins/data-integrity/` (a fixed set), scheduled by that plugin's `AppEffect` (`schedule.ts:75`, via `appEffectsFacet`) — **not** inline in bootstrap (the comment at `workspaceBootstrap.ts:142-146` explicitly notes the audit moved to the plugin). The new diagnostics seam (commit `1bcbfd5e`, `src/plugins/diagnostics/`) gates *what surfaces to the sync chip* — it does **not** let a plugin author a new *check*.
 - **Algebra:** `consistencyChecksFacet` (Sum/Map of `{id, run(db, workspaceId) → CheckResult}`); core registers its checks at base precedence. Natural companion to the just-landed diagnostics seam.
 
 ### I6 — Upload-error classification & handling *(MED)* — `src/services/powersync.ts` (`classifyUploadError`, `recordRejectionToTable`); the existing `rejectionToastFacet` covers only *rendering*. Chain classifier + Map handlers. Realistic only for custom-backend deployments.
@@ -312,7 +312,7 @@ Every gap here is one of the four missing algebras (veto, policy-override, order
 
 1. **Build `defineVerbFacet`** (gap 0) — the missing scaffolding for #1, #2, #3, #11, #14. Emits `impl` (Replace) + `decorators` (Wrap) + `before`/`after` (Sum); runner is `before → decorators(impl)(input) → after`.
 2. **Validate it on paste** (#2) — small, typed `(input) → plan`, real demand, self-contained. Default impl reproduces today's branching exactly.
-3. **Then the navigation seam** (#1) — bigger retrofit, unlocks quick-find/modifier/per-surface targeting at once; migrate `blockClickHandlersFacet` onto it as the second validating case and extend it to cover ref clicks.
+3. **Then the navigation seam** (#1) — bigger retrofit, unlocks quick-find/modifier/per-surface targeting at once; migrate `blockClickHandlersFacet` onto it as the second validating case and extend it to cover ref clicks. **Caveat:** the verb-facet `run` is async-only (one microtask minimum), but navigation today is synchronous and some callers may depend on sync ordering (view transitions, a `mousedown` that must navigate before default scroll). Decide before adopting: either make those call sites async-tolerant, or give the helper a sync fast-path (run synchronously when no contributor returns a promise).
 4. **Action-dispatch wrap** (#3) as a `Wrap` facet — cheap path to undo/logging/guard without committing to full dispatcher substrate replacement.
 
 Two findings worth flagging beyond "missing seam," independent of any extensibility goal:
