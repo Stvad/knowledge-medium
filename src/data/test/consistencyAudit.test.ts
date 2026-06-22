@@ -12,7 +12,17 @@ import {
   AT_REST_ANOMALY_FLOOR,
   runConsistencyAudit,
   type AuditDb,
+  type AuditDecryptDeps,
+  type DecryptSpotCheckResult,
 } from '@/data/internals/consistencyAudit'
+import {
+  BLOCKS_SYNCED_RAW_TABLE,
+  BLOCK_STORAGE_COLUMNS,
+  blockToRowParams,
+} from '@/data/blockSchema'
+import { encodeForWire, type Materializability } from '@/sync/transform.js'
+import { generateWorkspaceKeyBytes, importWorkspaceKey } from '@/sync/crypto/workspaceKey.js'
+import type { BlockData } from '@/data/api'
 import { Repo } from '../repo'
 
 interface Harness {
@@ -167,5 +177,203 @@ describe('runConsistencyAudit — property_ref_at_rest catastrophe floor', () =>
     const result = await runConsistencyAudit(db, 'ws', 0)
     expect(result.anomalies).toBe(0)
     expect(sampleQueries).toBe(0) // clean path runs zero sample queries
+  })
+})
+
+// On an e2ee workspace `blocks_synced` holds `enc:v1:` ciphertext while `blocks`
+// holds decrypted plaintext, so a naive cross-view content diff flags every row.
+// These run against a real DB: the SQL must compare only cleartext columns on
+// e2ee rows, the new at-rest check must catch un-materialized ciphertext, and the
+// optional decrypt spot-check must recover content-divergence detection.
+describe('runConsistencyAudit — e2ee encryption-awareness', () => {
+  const WS = 'ws-e2ee'
+  const STAMP = 1700000000000
+  const COLUMN_NAMES = BLOCK_STORAGE_COLUMNS.map(c => c.name)
+  const INSERT_BLOCK_SQL =
+    `INSERT INTO blocks (${COLUMN_NAMES.join(', ')}) VALUES (${COLUMN_NAMES.map(() => '?').join(', ')})`
+
+  const block = (overrides: Partial<BlockData> = {}): BlockData => ({
+    id: 'b1',
+    workspaceId: WS,
+    parentId: null,
+    orderKey: 'a0',
+    content: 'hello',
+    properties: {},
+    references: [],
+    createdAt: STAMP,
+    updatedAt: STAMP,
+    userUpdatedAt: STAMP,
+    createdBy: 'user-1',
+    updatedBy: 'user-1',
+    deleted: false,
+    ...overrides,
+  })
+
+  const seal = (key: CryptoKey, d: BlockData) =>
+    encodeForWire(
+      {
+        id: d.id,
+        workspace_id: d.workspaceId,
+        content: d.content,
+        properties_json: JSON.stringify(d.properties),
+        references_json: JSON.stringify(d.references),
+      },
+      'e2ee',
+      async () => key,
+    )
+
+  // Stage a `blocks_synced` row carrying ciphertext in the three content columns.
+  const stageCiphertext = async (
+    meta: BlockData,
+    wire: { content: string; properties_json: string; references_json: string },
+  ): Promise<void> => {
+    const params = blockToRowParams(meta)
+    params[4] = wire.content
+    params[5] = wire.properties_json
+    params[6] = wire.references_json
+    await sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, params)
+  }
+
+  const seedLocal = (d: BlockData) =>
+    sharedDb.db.execute(INSERT_BLOCK_SQL, blockToRowParams(d))
+
+  const decryptDeps = (
+    key: CryptoKey,
+    materializability: Materializability,
+  ): AuditDecryptDeps => ({
+    getMaterializability: async () => materializability,
+    getCek: async () => key,
+  })
+
+  it('does NOT flag an equal-stamp e2ee row as a standoff (cleartext-only diff)', async () => {
+    const key = await importWorkspaceKey(generateWorkspaceKeyBytes())
+    const d = block({ id: 'enc1', content: 'secret note', properties: { alias: ['Secret'] } })
+    await seedLocal(d) // local plaintext
+    await stageCiphertext(d, await seal(key, d)) // server ciphertext, same stamp
+
+    // Cleartext-only (no decrypt deps): the byte-diff would have flagged this row
+    // pre-fix (plaintext != ciphertext); now it must read clean.
+    const result = await runConsistencyAudit(sharedDb.db, WS, 0)
+    const div = result.checks.local_server_divergence
+    expect(div.status).toBe('ok')
+    expect(div.equalStampStandoff).toBe(0)
+    expect(div.decryptSpotCheck).toBeUndefined() // omitted without decrypt deps
+    expect(result.anomalies).toBe(0)
+  })
+
+  it('flags a cleartext divergence (deleted differs) even on an e2ee row', async () => {
+    const key = await importWorkspaceKey(generateWorkspaceKeyBytes())
+    const d = block({ id: 'enc2', content: 'note' })
+    await seedLocal({ ...d, deleted: false })
+    // Same stamp, ciphertext content, but server says deleted — a real violation
+    // the cleartext comparison still catches.
+    await stageCiphertext({ ...d, deleted: true }, await seal(key, d))
+
+    const result = await runConsistencyAudit(sharedDb.db, WS, 0)
+    expect(result.checks.local_server_divergence.status).toBe('anomaly')
+    expect(result.checks.local_server_divergence.equalStampStandoff).toBe(1)
+  })
+
+  it('flags a local row whose content is genuine ciphertext (materialized_still_ciphertext, decrypt-verified)', async () => {
+    const key = await importWorkspaceKey(generateWorkspaceKeyBytes())
+    const d = block({ id: 'enc3', content: 'secret note' })
+    const wire = await seal(key, d)
+    // Materialization failure: ciphertext landed in `blocks.content` (props/refs
+    // stay valid JSON — the alias/types triggers reject ciphertext there).
+    await seedLocal({ ...d, content: wire.content })
+
+    const result = await runConsistencyAudit(sharedDb.db, WS, 0, {
+      decrypt: decryptDeps(key, 'decrypt'),
+    })
+    const check = result.checks.materialized_still_ciphertext
+    expect(check.status).toBe('anomaly')
+    expect(check.encPrefixed).toBe(1)
+    expect(check.confirmed).toBe(1) // content decrypts under the WK ⇒ genuine ciphertext
+    expect(check.samples).toEqual(['enc3'])
+  })
+
+  it('does NOT flag a plaintext note that merely starts with enc:v1: (decrypt-verified)', async () => {
+    const key = await importWorkspaceKey(generateWorkspaceKeyBytes())
+    // A note literally about the envelope format — plaintext content with the prefix.
+    const d = block({ id: 'enc7', content: 'enc:v1: is the envelope prefix' })
+    await seedLocal(d) // local plaintext (prefix-shaped but real text)
+    await stageCiphertext(d, await seal(key, d)) // server holds the true ciphertext
+
+    const result = await runConsistencyAudit(sharedDb.db, WS, 0, {
+      decrypt: decryptDeps(key, 'decrypt'),
+    })
+    const check = result.checks.materialized_still_ciphertext
+    expect(check.encPrefixed).toBe(1) // it IS prefix-shaped
+    expect(check.confirmed).toBe(0) // but decrypt-verify rejects it as not real ciphertext
+    expect(check.status).toBe('ok')
+    // and the spot-check sees local == decrypt(server), so divergence stays clean
+    expect(result.checks.local_server_divergence.status).toBe('ok')
+  })
+
+  it('reports the raw prefix count as info (not anomaly) without a key resolver', async () => {
+    const key = await importWorkspaceKey(generateWorkspaceKeyBytes())
+    const d = block({ id: 'enc8', content: 'note' })
+    const wire = await seal(key, d)
+    await seedLocal({ ...d, content: wire.content }) // genuine ciphertext content, but no deps
+
+    // No decrypt deps → can't confirm; the prefix count is surfaced as info.
+    const result = await runConsistencyAudit(sharedDb.db, WS, 0)
+    const check = result.checks.materialized_still_ciphertext
+    expect(check.status).toBe('ok')
+    expect(check.encPrefixed).toBe(1)
+    expect(check.confirmed).toBeNull()
+  })
+
+  it('decrypt spot-check: matching plaintext decrypts equal → ok', async () => {
+    const key = await importWorkspaceKey(generateWorkspaceKeyBytes())
+    const d = block({ id: 'enc4', content: 'secret note', properties: { alias: ['Secret'] } })
+    await seedLocal(d)
+    await stageCiphertext(d, await seal(key, d))
+
+    const result = await runConsistencyAudit(sharedDb.db, WS, 0, {
+      decrypt: decryptDeps(key, 'decrypt'),
+    })
+    const div = result.checks.local_server_divergence
+    const spot = div.decryptSpotCheck as DecryptSpotCheckResult
+    expect(div.status).toBe('ok')
+    expect(spot.status).toBe('ok')
+    expect(spot.sampled).toBe(1)
+    expect(spot.mismatches).toBe(0)
+    expect(result.anomalies).toBe(0)
+  })
+
+  it('decrypt spot-check: server plaintext differs from local at equal stamp → anomaly', async () => {
+    const key = await importWorkspaceKey(generateWorkspaceKeyBytes())
+    // Server sealed "server version"; local plaintext diverged without bumping the
+    // stamp — the e2ee analogue of equalStampStandoff, invisible to the SQL diff.
+    const server = block({ id: 'enc5', content: 'server version' })
+    const local = block({ id: 'enc5', content: 'local DIVERGED version' })
+    await seedLocal(local)
+    await stageCiphertext(server, await seal(key, server))
+
+    const result = await runConsistencyAudit(sharedDb.db, WS, 0, {
+      decrypt: decryptDeps(key, 'decrypt'),
+    })
+    const div = result.checks.local_server_divergence
+    const spot = div.decryptSpotCheck as DecryptSpotCheckResult
+    expect(div.status).toBe('anomaly')
+    expect(spot.status).toBe('anomaly')
+    expect(spot.mismatches).toBe(1)
+    expect(spot.samples).toEqual(['enc5'])
+    expect(result.anomalies).toBeGreaterThanOrEqual(1)
+  })
+
+  it('decrypt spot-check: skipped on a non-decryptable (locked/defer) workspace', async () => {
+    const key = await importWorkspaceKey(generateWorkspaceKeyBytes())
+    const d = block({ id: 'enc6', content: 'note' })
+    await seedLocal(d)
+    await stageCiphertext(d, await seal(key, d))
+
+    const result = await runConsistencyAudit(sharedDb.db, WS, 0, {
+      decrypt: decryptDeps(key, 'defer'),
+    })
+    const spot = result.checks.local_server_divergence.decryptSpotCheck as DecryptSpotCheckResult
+    expect(spot.status).toBe('skipped')
+    expect(spot.sampled).toBe(0)
   })
 })

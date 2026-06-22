@@ -13,6 +13,13 @@
 //   - R1/R3 content-link strip recompute (parser-precise: >=1 real content mark, 0 stored content refs)
 //   - L4  blocks <-> blocks_synced divergence (ps_crud-aware): stranded local-only,
 //         equal-stamp standoff, local-richer-no-pending, server-ahead-undrained
+//         (encryption-aware: the standoff/server-ahead content diff compares only
+//          cleartext columns on e2ee rows, whose staging side is `enc:v1:` ciphertext)
+//   - L4b materialized-still-ciphertext (e2ee): a live local row whose content is
+//         still an `enc:v1:` envelope (materialization never completed)
+//   - L4c e2ee content divergence (single workspace, needs the WK): decrypt every
+//         equal-stamp e2ee staging row and compare to local plaintext — the full
+//         counterpart to the always-on audit's bounded decrypt spot-check
 //
 // Run via the agent bridge (target tab must be focused/connected):
 //   yarn agent --profile <name> eval --file scripts/data-integrity/consistency-check.eval.js
@@ -473,6 +480,19 @@ try {
 const pendingClause = `NOT EXISTS (
   SELECT 1 FROM ps_crud p
   WHERE json_extract(p.data,'$.type')='blocks' AND json_extract(p.data,'$.id')=b.id)`
+// An e2ee staging row holds `enc:v1:` ciphertext while `blocks` holds decrypted
+// plaintext, so they're never byte-equal — a naive content diff flags every e2ee
+// row. So: compare cleartext columns always, byte-compare the sealed content
+// columns only when the staging value is plaintext, and recover content-divergence
+// detection for e2ee rows via the decrypt-compare pass below.
+const { ENVELOPE_PREFIX } = await import('@/sync/crypto/envelope.js')
+const notEnc = (col) => `${col} NOT LIKE '${ENVELOPE_PREFIX}%'`
+const isEnc = (col) => `${col} LIKE '${ENVELOPE_PREFIX}%'`
+const contentDiffers = `(
+  b.deleted!=bs.deleted
+  OR (${notEnc('bs.content')}
+      AND (b.content!=bs.content OR b.properties_json!=bs.properties_json
+           OR b.references_json!=bs.references_json)))`
 try {
   // (a) stranded local-only: in blocks, not in blocks_synced, nothing queued → can't sync
   const strandedLocalOnly = await countOf(
@@ -482,12 +502,11 @@ try {
        AND ${pendingClause}`,
     wsParams(),
   )
-  // (b) equal-stamp standoff (violates gate invariant R8): same nonzero stamp, differ
+  // (b) equal-stamp standoff (violates gate invariant R8): same nonzero stamp, cleartext differs
   const equalStampStandoff = await countOf(
     `SELECT count(*) AS n FROM blocks b JOIN blocks_synced bs ON bs.id=b.id
      WHERE ${wsClause('b.workspace_id')} AND b.updated_at=bs.updated_at AND b.updated_at!=0
-       AND (b.content!=bs.content OR b.properties_json!=bs.properties_json
-            OR b.references_json!=bs.references_json OR b.deleted!=bs.deleted)`,
+       AND ${contentDiffers}`,
     wsParams(),
   )
   // (c) local-richer-no-pending: local newer than server, nothing queued → at-risk (#5)
@@ -501,8 +520,7 @@ try {
   const serverAheadUndrained = await countOf(
     `SELECT count(*) AS n FROM blocks b JOIN blocks_synced bs ON bs.id=b.id
      WHERE ${wsClause('b.workspace_id')} AND bs.updated_at>b.updated_at AND ${pendingClause}
-       AND (b.content!=bs.content OR b.properties_json!=bs.properties_json
-            OR b.references_json!=bs.references_json OR b.deleted!=bs.deleted)`,
+       AND ${contentDiffers}`,
     wsParams(),
   )
 
@@ -526,7 +544,7 @@ try {
       serverAheadUndrained,
       samples: {
         equalStampStandoff: await sampleDivergence(
-          'b.updated_at=bs.updated_at AND b.updated_at!=0 AND b.content!=bs.content',
+          `b.updated_at=bs.updated_at AND b.updated_at!=0 AND ${contentDiffers}`,
         ),
         localRicherNoPending: await sampleDivergence('b.updated_at>bs.updated_at'),
       },
@@ -534,6 +552,153 @@ try {
   )
 } catch (e) {
   skip('local_server_divergence', String(e))
+}
+
+// ── L4b/L4c: e2ee checks that need the workspace key ───────────────────────────
+// Resolve the §6 key resolver once (single-workspace only — materializability is
+// per-workspace). `decryptCtx` is set iff the active workspace decrypts; else
+// `decryptReason` explains why the decrypt-backed checks are skipped.
+let decryptCtx = null
+let decryptReason = null
+if (allWorkspaces) {
+  decryptReason = 'runs per-workspace (the key resolver is per-workspace); pass a workspaceId'
+} else {
+  try {
+    const { syncObserverDepsFor } = await import('@/data/repoProvider.js')
+    const { decodeFromWire } = await import('@/sync/transform.js')
+    const { open } = await import('@/sync/crypto/aead.js')
+    const { contentAad } = await import('@/sync/crypto/aad.js')
+    const { getMaterializability, getCek } = syncObserverDepsFor(repo.user.id)
+    const materializability = await getMaterializability(workspaceId)
+    if (materializability === 'decrypt') {
+      const key = await getCek(workspaceId)
+      if (key) decryptCtx = { decodeFromWire, getCek, open, contentAad, key }
+      else decryptReason = 'workspace key not available'
+    } else {
+      decryptReason = `workspace not decryptable (materializability=${materializability})`
+    }
+  } catch (e) {
+    decryptReason = String(e)
+  }
+}
+
+// ── L4b: materialized-still-ciphertext (e2ee-only) ────────────────────────────
+// Local `blocks` must always be plaintext — the observer decrypts e2ee staging
+// rows before writing them. A live local row still carrying an `enc:v1:` envelope
+// means materialization never completed. Only `content` is checked: the
+// alias/types triggers `json_each` over properties_json/references_json, so
+// ciphertext there can't be inserted — content is the one unconstrained column.
+// The prefix alone can't confirm it (a note literally starting with `enc:v1:`
+// looks the same), so we DECRYPT-verify the content column: genuine ciphertext
+// opens under the WK, user-typed text doesn't. Without the key, info only.
+try {
+  const where = `${wsClause('b.workspace_id')} AND b.deleted=0 AND ${isEnc('b.content')}`
+  const encPrefixed = await countOf(`SELECT count(*) AS n FROM blocks b WHERE ${where}`, wsParams())
+  if (!decryptCtx) {
+    report.checks.materialized_still_ciphertext = {
+      status: 'info',
+      encPrefixed,
+      reason: decryptReason ?? 'needs the workspace key to confirm',
+    }
+  } else {
+    const cand = encPrefixed === 0
+      ? []
+      : await rows(
+          `SELECT b.id AS id, b.workspace_id AS workspace_id, b.content AS content
+           FROM blocks b WHERE ${where} LIMIT ${candidateCap}`,
+          wsParams(),
+        )
+    let confirmed = 0
+    const confirmedSample = []
+    for (const r of cand) {
+      try {
+        await decryptCtx.open(decryptCtx.key, r.content, decryptCtx.contentAad(r.id, r.workspace_id, 'content'))
+        confirmed += 1
+        if (confirmedSample.length < sampleLimit) confirmedSample.push(r.id)
+      } catch {
+        // doesn't decrypt ⇒ benign plaintext that merely starts with enc:v1:
+      }
+    }
+    record('materialized_still_ciphertext', confirmed > 0, {
+      encPrefixed,
+      confirmed,
+      note: 'confirmed = local content decrypts under the WK ⇒ genuine ciphertext in the plaintext table (a materialization failure). (encPrefixed - confirmed) = benign plaintext that merely starts with enc:v1:.',
+      confirmedSample,
+    })
+  }
+} catch (e) {
+  skip('materialized_still_ciphertext', String(e))
+}
+
+// ── L4c: e2ee content divergence — FULL decrypt-compare (single workspace) ─────
+// The on-demand counterpart to the always-on audit's bounded spot-check: the
+// cleartext-only standoff above can't compare sealed columns, so decrypt every
+// equal-stamp e2ee staging row and compare plaintext-to-plaintext. A mismatch is
+// a content edit that didn't advance the stamp (the e2ee analogue of
+// equalStampStandoff). Keyset-paginated for bounded memory; needs the workspace
+// key, so it's skipped on a plaintext/locked workspace or in all-workspaces mode.
+if (!decryptCtx) {
+  skip('e2ee_content_divergence', decryptReason ?? 'workspace not decryptable')
+} else {
+  try {
+    const { decodeFromWire, getCek } = decryptCtx
+    {
+      const decryptCap = Number.isInteger(data?.decryptCap) ? data.decryptCap : 200000
+      const BATCH = 2000
+      let lastId = ''
+      let scanned = 0
+      let mismatches = 0
+      let undecryptable = 0
+      let truncated = false
+      const mismatchSample = []
+      for (;;) {
+        const batch = await rows(
+          `SELECT b.id AS id, b.workspace_id AS workspace_id,
+                  b.content AS l_content, b.properties_json AS l_props, b.references_json AS l_refs,
+                  bs.content AS s_content, bs.properties_json AS s_props, bs.references_json AS s_refs
+           FROM blocks b JOIN blocks_synced bs ON bs.id=b.id
+           WHERE b.workspace_id=? AND b.updated_at=bs.updated_at AND b.updated_at!=0
+             AND ${isEnc('bs.content')} AND b.id > ?
+           ORDER BY b.id LIMIT ${BATCH}`,
+          [workspaceId, lastId],
+        )
+        if (batch.length === 0) break
+        for (const r of batch) {
+          let plain
+          try {
+            plain = await decodeFromWire(
+              { id: r.id, workspace_id: r.workspace_id, content: r.s_content, properties_json: r.s_props, references_json: r.s_refs },
+              'e2ee',
+              getCek,
+            )
+          } catch {
+            undecryptable += 1
+            continue
+          }
+          if (plain.content !== r.l_content || plain.properties_json !== r.l_props || plain.references_json !== r.l_refs) {
+            mismatches += 1
+            if (mismatchSample.length < sampleLimit) mismatchSample.push({ id: r.id })
+          }
+        }
+        scanned += batch.length
+        lastId = batch[batch.length - 1].id
+        if (batch.length < BATCH) break
+        if (scanned >= decryptCap) { truncated = true; break }
+      }
+      report.checks.e2ee_content_divergence = {
+        status: mismatches > 0 ? 'anomaly' : truncated ? 'incomplete' : 'ok',
+        scanned,
+        mismatches,
+        undecryptable,
+        truncated,
+        note: 'mismatches: decrypted server content != local plaintext at an equal stamp (a content edit that did not advance the stamp). undecryptable: key race / tampered row (the observer quarantines these) — info, not an anomaly.',
+        mismatchSample,
+      }
+      if (mismatches > 0) report.anomalies += 1
+    }
+  } catch (e) {
+    skip('e2ee_content_divergence', String(e))
+  }
 }
 
 return report

@@ -1865,6 +1865,11 @@ export class Repo {
       // own-write-echo-pending / mid-resync blip doesn't alarm the indicator.
       divergenceRecheckMs: CONSISTENCY_AUDIT_DIVERGENCE_RECHECK_MS,
       sleep: (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)),
+      // Pass the §6 mode/key resolver so the divergence check can decrypt-compare
+      // a bounded sample of e2ee rows (content divergence the cleartext-only SQL
+      // diff can't see). Undefined in tests / plaintext-only Repos → spot-check
+      // skipped, cleartext-only behavior preserved.
+      decrypt: this.syncObserverDeps,
     })
     this.consistencyAuditLastRun.set(workspaceId, Date.now())
     this.consistencyAuditState.runs += 1
