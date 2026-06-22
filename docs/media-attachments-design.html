@@ -364,11 +364,24 @@ bytes lane has no <code>updated_at</code>/monotonicity channel the text path get
 fix is already in hand: the asset block stores <code>hash = sha256(plaintext)</code> in its
 (encrypted) <code>properties_json</code>; the read path <strong>must verify the decrypted bytes
 against that hash before caching/serving</strong>, and reject on mismatch. Because the SW can't read
-the encrypted block state, the expected hash is handed to it in the request by the renderer
-(§7.1.1) — a positive check that can only fail closed, never downgrade. This also closes the
-re-upload-version question for free (a new version writes a new hash on the block, which syncs with
-its own monotonicity).
-</div>
+the encrypted block state, it gets the expected hash from the <strong>SW-readable metadata mirror</strong>
+(§7.1.1) — <em>not</em> from the request (an <code>&lt;img src&gt;</code> can't carry custom headers, and
+a <code>?h=</code> query param would leak the plaintext SHA-256, §7.1.1). It's a positive check that can
+only fail closed, never downgrade.</div>
+
+<div class="warn">
+<strong>Read-side fail-closed is not enough — the write lane must be monotonic too.</strong> A new hash
+makes <em>reads</em> reject stale bytes, but two uploads targeting the same
+<code>&lt;ws&gt;/&lt;asset_block_id&gt;</code> path can still race: if an asset is edited and a stale
+queued/in-flight upload lands <em>after</em> the newer one, the old body overwrites the object after the
+block's hash already advanced — then <em>every</em> reader rejects on mismatch and the asset is
+permanently broken (the newer queue entry was already confirmed and dropped). The fix is
+<strong>immutable, write-once asset objects</strong>: an edit/replacement creates a <em>new</em> asset
+block (new <code>id</code> → new path) and re-points the embed, rather than re-uploading under the
+existing id. Bytes under a given <code>asset_block_id</code> never change, so there is no same-path
+collision and no "older version" for the server to replay; the §10.1 upload guard enforces it with a
+no-overwrite precondition (reject if the object already exists). The old object orphans and is GC'd
+(§16). (Dedup still reuses an existing immutable asset block by hash — that's a read, not a rewrite.)</div>
 
 <p>The <code>encb:v1:</code> magic is a <strong>format tag, not an authorization signal.</strong>
   Whether to decrypt is decided by the workspace's mode pin (§7), exactly as the text path decides via
@@ -551,13 +564,20 @@ its own monotonicity).
 </ul>
 
 <div class="info">
-<strong>Cache the SW's IDB reads on the hot path.</strong> Both the mode-pin store and the WK store
-(<code>km-e2ee-keys</code>) are now SW-readable IDB, so a naïve handler does two async IDB opens per
-<code>&lt;img&gt;</code> fetch. Keep a small in-SW in-memory cache of <code>{ workspace_id → mode pin,
-WK handle }</code>, populated lazily and <strong>invalidated on the wipe and auth/token messages</strong>
-(the same signals that already drive §7.1/§7.2) — and on the per-workspace revoke/leave purge. The
-cache is per-SW-lifetime, so a respawn re-reads IDB once; correctness still comes from IDB + the
-invalidation signals, the cache is only to avoid per-request opens.
+<strong>Cache the SW's IDB reads on the hot path — keyed by <code>(user_id, workspace_id)</code>.</strong>
+Both the mode-pin store and the WK store (<code>km-e2ee-keys</code>) are now SW-readable IDB, so a naïve
+handler does two async IDB opens per <code>&lt;img&gt;</code> fetch. Keep a small in-SW in-memory cache
+of <code>{ (user_id, workspace_id) → mode pin, WK handle, expected hash }</code>. <strong>The
+<code>user_id</code> in the key is load-bearing, not an optimization detail:</strong> the keyStore
+deliberately keys WKs by <code>(user_id, workspace_id)</code> and wipes per-user, so a
+<em>workspace-only</em> hot cache would let account A's populated WK/pin serve account B's request for
+the same encrypted workspace — B could decrypt while B is locked or has never loaded its own WK,
+bypassing the per-user isolation. Resolve the requesting client's <code>user_id</code> (§7.1) and key
+both the cache and its invalidation by <code>(user_id, workspace_id)</code>. Populated lazily and
+<strong>invalidated on the wipe and auth/token messages</strong> (the same signals that drive
+§7.1/§7.2) — and on the per-workspace revoke/leave purge. The cache is per-SW-lifetime, so a respawn
+re-reads IDB once; correctness still comes from IDB + the invalidation signals, the cache only avoids
+per-request opens.
 </div>
 
 <div class="warn">
@@ -924,6 +944,10 @@ inspects the body bytes itself</em> and then writes them with service-role. Per 
     nonce(12)+tag(16) length (the binary analog of <code>is_enc_v1_envelope</code>), with the same
     permanent-failure discipline so a stale client quarantines rather than retries forever. Shape-only
     (the server has no key), sufficient to keep bare plaintext out.</li>
+  <li><strong>Enforces write-once</strong> — rejects if an object already exists at
+    <code>&lt;ws&gt;/&lt;asset_block_id&gt;</code> (a no-overwrite precondition). Asset objects are
+    immutable; an edit/replacement is a <em>new</em> asset block at a fresh path (§5.1), so a stale
+    queued upload can never overwrite a newer object and strand the asset on a hash mismatch.</li>
 </ol>
 <strong>Not a signed-upload token.</strong> Minting a one-shot signed upload URL would let the client
 <code>uploadToSignedUrl</code> the body <em>directly to Storage</em>, which Supabase accepts without
