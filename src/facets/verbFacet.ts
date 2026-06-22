@@ -21,8 +21,9 @@ import {
  * A verb bundles four ordinary facets, each with the algebra appropriate
  * to its role (see the algebra table in `extensibility-axes.md`):
  *
- *   - `implFacet`       — **Replace**: pick THE implementation (last-wins).
- *                         Falls back to `defaultImpl` when none registered.
+ *   - `implFacet`       — **Replace**: pick THE implementation (last-wins;
+ *                         a 2nd impl is a misconfiguration, warned once at
+ *                         resolution). Falls back to `defaultImpl`.
  *   - `decoratorsFacet` — **Wrap**: middleware. Lower precedence is
  *                         innermost (closest to the impl); higher
  *                         precedence wraps on the outside and runs first.
@@ -33,11 +34,26 @@ import {
  * contribution union. `run` resolves the four facets against a runtime and
  * executes `before → decorators(impl)(input) → after`.
  *
- * The runner is async-first: `impl`, decorators and observers may return a
- * promise. A guard ("confirm before X", "veto Y") is a *decorator* (it
- * controls whether it calls `next`); before/after are pure observers and
- * cannot change the result — their errors are isolated so an observer can
- * never break the verb.
+ * **Failure policy.** A guard ("confirm before X", "veto Y") is a
+ * *decorator* that controls whether it calls `next` — i.e. it short-
+ * circuits by *returning*, not by throwing. Throwing is treated as a
+ * crash, not a veto:
+ *   - before/after observers are pure and isolated — their errors are
+ *     logged and swallowed so an observer can never break the verb.
+ *   - a throwing impl/decorator is logged and the verb **falls back to
+ *     `defaultImpl(input)`**, so one buggy plugin can't break the verb for
+ *     every other consumer. (If `defaultImpl` itself throws, `run` rejects
+ *     — that's a core bug and should surface.)
+ *   - `after` is therefore **success-only**: it runs with the resolved
+ *     result (including a fallback result), but not if `defaultImpl`
+ *     throws. Cleanup that must always fire belongs in a decorator's
+ *     `try/finally` around `next`, not in an `after` observer.
+ *
+ * `run` is **async-only** — `impl`, decorators and observers may return a
+ * promise, and a sync verb still pays one microtask. That's fine for an
+ * async verb like paste, but a sync-ordering-sensitive home (navigation,
+ * which today runs synchronously) must account for it before adopting this
+ * helper. See the note in `docs/extension-seam-gaps.md`.
  */
 export type MaybePromise<T> = T | Promise<T>
 
@@ -61,7 +77,7 @@ export type VerbRuntime = Pick<FacetRuntime, 'read'>
 
 export interface VerbFacet<Input, Result> {
   id: string
-  implFacet: Facet<VerbImpl<Input, Result>, readonly VerbImpl<Input, Result>[]>
+  implFacet: Facet<VerbImpl<Input, Result>, VerbImpl<Input, Result> | undefined>
   decoratorsFacet: Facet<
     VerbDecorator<Input, Result>,
     readonly VerbDecorator<Input, Result>[]
@@ -103,8 +119,22 @@ export function defineVerbFacet<Input, Result>({
   id: string
   defaultImpl: VerbImpl<Input, Result>
 }): VerbFacet<Input, Result> {
-  const implFacet = defineFacet<VerbImpl<Input, Result>>({
+  // Resolve the impl in `combine` (runs once per facet resolution, then
+  // cached) rather than in `run` — this dedups the multiple-impl warning to
+  // once-per-resolution instead of once-per-call, matching the registry-
+  // facet convention (`keyedMapFacet`, `dedupById`).
+  const implFacet = defineFacet<VerbImpl<Input, Result>, VerbImpl<Input, Result> | undefined>({
     id: `${id}.impl`,
+    combine: values => {
+      if (values.length > 1) {
+        console.warn(
+          `[verb:${id}] ${values.length} impl contributions; last-wins ` +
+            '(highest precedence). Use a decorator to compose, not a second impl.',
+        )
+      }
+      return values.at(-1)
+    },
+    empty: () => undefined,
     validate: isFunction<VerbImpl<Input, Result>>,
   })
   const decoratorsFacet = defineFacet<VerbDecorator<Input, Result>>({
@@ -129,24 +159,32 @@ export function defineVerbFacet<Input, Result>({
       }
     }
 
-    const impls = runtime.read(implFacet)
-    if (impls.length > 1) {
-      console.warn(
-        `[verb:${id}] ${impls.length} impl contributions; last-wins ` +
-          '(highest precedence). Use a decorator to compose, not a second impl.',
-      )
-    }
-    const impl = impls.at(-1) ?? defaultImpl
+    const impl = runtime.read(implFacet) ?? defaultImpl
 
     // `read` returns contributions ascending by precedence, so folding
     // left wraps the lowest-precedence decorator around the impl first
     // (innermost) and leaves the highest-precedence one outermost.
+    const decorators = runtime.read(decoratorsFacet)
     let composed: VerbImpl<Input, Result> = impl
-    for (const decorate of runtime.read(decoratorsFacet)) {
+    for (const decorate of decorators) {
       composed = decorate(composed)
     }
 
-    const result = await composed(input)
+    let result: Result
+    try {
+      result = await composed(input)
+    } catch (error) {
+      // A throwing impl/decorator is a crash, not a veto — degrade to the
+      // default behavior so one buggy plugin can't break the verb. If we
+      // already ran exactly the bare default, there's nothing safer to try.
+      const ranBareDefault = impl === defaultImpl && decorators.length === 0
+      if (ranBareDefault) throw error
+      console.error(
+        `[verb:${id}] impl/decorator threw; falling back to defaultImpl`,
+        error,
+      )
+      result = await defaultImpl(input)
+    }
 
     for (const observe of runtime.read(afterFacet)) {
       try {

@@ -54,19 +54,14 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     // non-editable surface) — matches the historical single-block guard.
     if (repo.isReadOnly) return
 
-    // Latch + reset the chord intent (the paste event can't see modifiers)
-    // and capture the editor state synchronously. `preventDefault` MUST run
-    // before the async decision resolves, or the browser's native paste
-    // fires first; so we always take over the paste here and reproduce the
-    // native single-line insert ourselves for the `native` decision below.
+    // Latch + reset the chord intent — the paste event can't see modifiers,
+    // so the keydown handler latched it. `preventDefault` MUST run
+    // synchronously, before the async decision resolves, or the browser's
+    // native paste fires first; so the editor always takes over the paste.
     const intent = pasteIntentRef.current
     pasteIntentRef.current = 'split'
     const html = e.clipboardData?.getData('text/html') || undefined
     e.preventDefault()
-    const editorView = editorRef.current?.view
-    if (!editorView) return
-    const selection = editorView.state.selection.main
-    const docText = editorView.state.doc.toString()
 
     // The paste verb decides how the clipboard lands; with no plugin
     // contributions this returns `defaultPasteDecision`, i.e. the previous
@@ -74,11 +69,18 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     // content (e.g. CSV → markdown) before it's applied.
     const decision = await pasteDecisionVerb.run(runtime, {text, html, intent})
 
-    if (decision.kind !== 'split') {
-      // `single-block` and `native` both drop text into the current block
-      // verbatim; only `single-block` may carry a rewritten payload.
-      const insert = decision.kind === 'single-block' ? decision.text ?? text : text
-      const plan = planSingleBlockPaste(insert, {from: selection.from, to: selection.to})
+    // Read the live editor state AFTER the (possibly async) decision — an
+    // override may await, during which the caret/doc can move; a pre-await
+    // snapshot would clobber interim edits or dispatch a stale range.
+    const editorView = editorRef.current?.view
+    if (!editorView) return
+    const selection = editorView.state.selection.main
+
+    if (decision.kind === 'single-block') {
+      const plan = planSingleBlockPaste(decision.text ?? text, {
+        from: selection.from,
+        to: selection.to,
+      })
       editorView.dispatch({
         changes: {from: plan.from, to: plan.to, insert: plan.insert},
         selection: EditorSelection.cursor(plan.cursor),
@@ -86,8 +88,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
       return
     }
 
-    const splitText = decision.text ?? text
-    const plan = planEditModeMultilinePaste(splitText, docText, {
+    const plan = planEditModeMultilinePaste(decision.text ?? text, editorView.state.doc.toString(), {
       from: selection.from,
       to: selection.to,
     })

@@ -1,9 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { resolveFacetRuntimeSync } from '@/facets/facet.ts'
 import {
   defaultPasteDecision,
   pasteDecisionVerb,
-  type PasteDecision,
   type PasteRequest,
 } from '../paste.ts'
 
@@ -23,8 +22,9 @@ describe('defaultPasteDecision', () => {
     expect(defaultPasteDecision(request({text: 'a\nb'}))).toEqual({kind: 'split'})
   })
 
-  it('leaves a plain single-line paste to the editor', () => {
-    expect(defaultPasteDecision(request({text: 'just one line'}))).toEqual({kind: 'native'})
+  it('inserts a plain single-line paste as a single block (native caret insert)', () => {
+    expect(defaultPasteDecision(request({text: 'just one line'})))
+      .toEqual({kind: 'single-block'})
   })
 })
 
@@ -53,17 +53,32 @@ describe('pasteDecisionVerb', () => {
     const runtime = resolveFacetRuntimeSync([
       pasteDecisionVerb.decorator(next => async req => {
         if (!req.text.includes(',')) return next(req)
-        const decision = await next({...req, text: csvToMarkdown(req.text)})
-        // Carry the rewritten text forward on the decision so the editor
-        // splits the markdown, not the raw CSV.
-        return decision.kind === 'native'
-          ? decision
-          : ({...decision, text: csvToMarkdown(req.text)} as PasteDecision)
+        const rewritten = csvToMarkdown(req.text)
+        const decision = await next({...req, text: rewritten})
+        // Carry the rewritten text on the decision so the editor applies the
+        // markdown, not the raw CSV.
+        return {...decision, text: rewritten}
       }),
     ])
 
     const decision = await pasteDecisionVerb.run(runtime, request({text: 'a,b\nc,d'}))
     expect(decision).toEqual({kind: 'split', text: '- a / b\n- c / d'})
+  })
+
+  it('falls back to the default decision when a plugin override throws', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const runtime = resolveFacetRuntimeSync([
+      pasteDecisionVerb.impl(() => {
+        throw new Error('buggy paste plugin')
+      }),
+    ])
+
+    // A buggy override must not break paste: the verb degrades to the
+    // historical behavior (multiline plain text → split).
+    await expect(pasteDecisionVerb.run(runtime, request({text: 'a\nb'})))
+      .resolves.toEqual({kind: 'split'})
+    expect(consoleError).toHaveBeenCalled()
+    consoleError.mockRestore()
   })
 
   it('passes the latched single-block intent through to the default', async () => {

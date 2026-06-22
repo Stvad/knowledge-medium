@@ -6,17 +6,21 @@ import type { PasteChordIntent } from '@/utils/paste.ts'
  * historical hardcoded branching; plugins override the decision to
  * customize when pasted content splits into an outline vs lands as-is
  * (e.g. CSV → table rows, URL → titled link, source-dialect parsing).
+ *
+ * There are exactly two terminal actions — there is intentionally no
+ * "let the browser paste natively" option: the editor always takes over
+ * the paste (it must `preventDefault` synchronously, before the async
+ * decision resolves), so "native" single-line insert IS `single-block`
+ * with the raw text.
  */
 export type PasteDecision =
-  /** Drop the (optionally rewritten) text into the current block verbatim,
-   *  newlines kept — Roam's "paste as plain text". */
+  /** Drop the (optionally rewritten) text into the current block, newlines
+   *  kept. For single-line text this is an ordinary caret insert; for
+   *  multiline it's Roam's "paste as plain text". */
   | {kind: 'single-block'; text?: string}
   /** Parse the (optionally rewritten) text as markdown and split it into a
    *  block tree at the cursor. */
   | {kind: 'split'; text?: string}
-  /** Let the editor insert the text at the cursor (plain single-line
-   *  paste). No structural change. */
-  | {kind: 'native'}
 
 export interface PasteRequest {
   /** Clipboard `text/plain`. */
@@ -35,12 +39,13 @@ export interface PasteRequest {
  * paste verb:
  *   - `single-block` chord → verbatim into the current block.
  *   - plain chord with a newline → split into an outline.
- *   - plain chord, single line → native insert.
+ *   - plain chord, single line → single-block (an ordinary caret insert,
+ *     equivalent to the browser's native paste for one line).
  */
 export const defaultPasteDecision = (request: PasteRequest): PasteDecision => {
   if (request.intent === 'single-block') return {kind: 'single-block'}
   if (request.text.includes('\n')) return {kind: 'split'}
-  return {kind: 'native'}
+  return {kind: 'single-block'}
 }
 
 /**
