@@ -83,6 +83,25 @@ const queryPersistPermission = async (): Promise<PermissionState | undefined> =>
   }
 }
 
+// Fires whenever a persist() request settles and may have changed the
+// persisted state — so UI reflecting it (the status-chip reminder) can refresh
+// without waiting for the next focus check. The boot request in main.tsx is
+// fire-and-forget; on Firefox its grant can land *after* the chip first read
+// "not protected" (persist() stays pending while the prompt is open), so the
+// reminder needs this push to clear.
+const changeListeners = new Set<() => void>()
+
+/** Subscribe to persistence-state changes from a settled persist() request.
+ *  Returns an unsubscribe. */
+export const subscribePersistenceChange = (listener: () => void): (() => void) => {
+  changeListeners.add(listener)
+  return () => changeListeners.delete(listener)
+}
+
+const notifyPersistenceChange = (): void => {
+  for (const listener of changeListeners) listener()
+}
+
 export interface PersistenceState {
   /** Whether this engine exposes the StorageManager persist/persisted API. */
   supported: boolean
@@ -167,6 +186,9 @@ export const requestPersistentStorage = async (
           'site engagement grows or once the app is installed as a PWA.',
       )
     }
+    // The request settled (possibly granting) after a UI read of the old state;
+    // tell reminders to re-check.
+    notifyPersistenceChange()
     return granted
   } catch (err) {
     // Never let a storage-permission hiccup take down boot.

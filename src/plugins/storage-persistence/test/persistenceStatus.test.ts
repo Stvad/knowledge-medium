@@ -3,8 +3,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PersistenceState } from '@/requestPersistentStorage'
 
+const h = vi.hoisted(() => ({ changeListener: undefined as undefined | (() => void) }))
+
 vi.mock('@/requestPersistentStorage.js', () => ({
   getPersistenceState: vi.fn(),
+  subscribePersistenceChange: vi.fn((listener: () => void) => {
+    h.changeListener = listener
+    return () => {}
+  }),
 }))
 
 import { getPersistenceState } from '@/requestPersistentStorage.js'
@@ -51,5 +57,19 @@ describe('persistenceDiagnosticSource', () => {
     expect(snap?.summary).toMatch(/blocked/i)
     expect(snap?.actionId).toBeUndefined()
     expect(snap?.nudge).toBe(true)
+  })
+
+  it('clears the nudge when a late grant fires the persistence-change signal', async () => {
+    // Subscribing wires the source to the persistence-change signal (the
+    // Firefox late-grant path) and does the initial read.
+    mockState({ supported: true, persisted: false, permission: 'prompt' })
+    const unsub = persistenceDiagnosticSource.subscribe(() => {})
+    await vi.waitFor(() => expect(persistenceDiagnosticSource.getSnapshot()?.nudge).toBe(true))
+
+    // The boot request grants after that first read; the signal must refresh us.
+    mockState({ supported: true, persisted: true, permission: 'granted' })
+    h.changeListener?.()
+    await vi.waitFor(() => expect(persistenceDiagnosticSource.getSnapshot()).toBeNull())
+    unsub()
   })
 })

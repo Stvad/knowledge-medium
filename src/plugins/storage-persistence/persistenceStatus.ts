@@ -9,7 +9,7 @@
  * granted later — the browser auto-grants on PWA install / enough engagement —
  * so it re-checks when the tab regains focus and clears the nudge on its own.
  */
-import { getPersistenceState } from '@/requestPersistentStorage.js'
+import { getPersistenceState, subscribePersistenceChange } from '@/requestPersistentStorage.js'
 import type {
   DiagnosticSnapshot,
   DiagnosticSourceContribution,
@@ -85,6 +85,10 @@ const start = (): void => {
   if (typeof document !== 'undefined') {
     document.addEventListener('visibilitychange', onVisibilityChange)
   }
+  // The boot request (or the manual Protect action) can settle after our first
+  // read — e.g. a Firefox prompt grants late; re-check when it does so the
+  // nudge clears without waiting for a focus change.
+  subscribePersistenceChange(() => void refreshPersistenceStatus())
   void refreshPersistenceStatus()
 }
 

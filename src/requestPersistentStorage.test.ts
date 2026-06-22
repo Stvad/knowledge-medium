@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { requestPersistentStorage } from './requestPersistentStorage'
+import { requestPersistentStorage, subscribePersistenceChange } from './requestPersistentStorage'
 
 const originalStorage = navigator.storage
 const originalPermissions = navigator.permissions
@@ -99,6 +99,29 @@ describe('requestPersistentStorage', () => {
     setStorage({getDirectory: vi.fn()})
 
     await expect(requestPersistentStorage()).resolves.toBe(false)
+  })
+
+  it('notifies persistence-change subscribers when a request settles', async () => {
+    setStorage({persisted: vi.fn(async () => false), persist: vi.fn(async () => true)})
+    const listener = vi.fn()
+    const unsub = subscribePersistenceChange(listener)
+
+    await requestPersistentStorage()
+
+    // The late-grant case (Firefox prompt) relies on this to refresh the chip.
+    expect(listener).toHaveBeenCalledTimes(1)
+    unsub()
+  })
+
+  it('does not notify when no request is made (already persistent)', async () => {
+    setStorage({persisted: vi.fn(async () => true), persist: vi.fn()})
+    const listener = vi.fn()
+    const unsub = subscribePersistenceChange(listener)
+
+    await requestPersistentStorage()
+
+    expect(listener).not.toHaveBeenCalled()
+    unsub()
   })
 
   it('swallows a thrown permission error', async () => {
