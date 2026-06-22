@@ -2,7 +2,7 @@
  * "A newer build has been installed and is ready — reload to use it."
  *
  * Set by registerServiceWorker when the service worker reports an update;
- * read by the reload prompt (toast) and the sync-status chip. We never
+ * read by the reload prompt (toast) and the status chip. We never
  * reload the page on our own. The new service worker is activated in the
  * background (see registerServiceWorker), so the new build is served on the
  * *next* load whether the user clicks our Reload prompt or just reloads the
@@ -40,6 +40,6 @@ export const appUpdate = {
 }
 
 /** Reactive read of {@link appUpdate.isAvailable} for components (toast,
- *  sync-status chip). */
+ *  status chip). */
 export const useAppUpdateAvailable = (): boolean =>
   useSyncExternalStore(subscribe, isAvailable, () => false)

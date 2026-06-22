@@ -148,7 +148,7 @@ function AppVersionValue() {
   )
 }
 
-export function SyncStatusHeaderItem() {
+export function SystemStatusHeaderItem() {
   const localOnly = useIsLocalOnly()
   const status = useStatus()
   const rejected = useQuery<UploadQueueCountRow>(

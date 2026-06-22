@@ -1,7 +1,7 @@
 /**
  * App-mount that surfaces "a new version is available" as a persistent
  * toast with a Reload action. Pairs with the dot + actionable row on the
- * sync-status chip (src/plugins/sync-status) — the toast is the loud,
+ * status chip (src/plugins/system-status) — the toast is the loud,
  * dismissible nudge; the chip is the quiet, always-there fallback once the
  * toast is gone.
  *

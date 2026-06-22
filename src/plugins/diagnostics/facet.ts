@@ -1,6 +1,6 @@
 /**
  * The diagnostics seam — a generic way for plugins to surface a health signal
- * into a shared indicator (today the sync-status chip), instead of each one
+ * into a shared indicator (today the status chip), instead of each one
  * wiring a bespoke store + chip coupling (the pre-seam shape the consistency
  * audit had).
  *
