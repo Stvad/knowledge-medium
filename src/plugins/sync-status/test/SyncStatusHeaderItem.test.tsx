@@ -65,6 +65,23 @@ vi.mock('@/context/repo.js', () => ({
   useRepo: () => ({activeWorkspaceId: 'ws-1'}),
 }))
 
+// The chip reads the diagnostics seam via useAppRuntime; expose a runtime whose
+// diagnosticsFacet resolves to the real data-integrity source (which reads the
+// audit store these tests publish to). Exercises the real seam, not a fake.
+vi.mock('@/extensions/runtimeContext.js', async () => {
+  const {createDataIntegrityDiagnosticSource} = await import(
+    '@/plugins/data-integrity/diagnosticsSource'
+  )
+  const {diagnosticsFacet} = await import('@/plugins/diagnostics/facet')
+  const source = createDataIntegrityDiagnosticSource({activeWorkspaceId: 'ws-1'})
+  const sources = new Map([[source.id, source]])
+  return {
+    useAppRuntime: () => ({
+      read: (facet: {id: string}) => (facet.id === diagnosticsFacet.id ? sources : new Map()),
+    }),
+  }
+})
+
 const rejectedCountSql = 'SELECT COUNT(*) AS count FROM ps_crud_rejected'
 
 const defaultStatus = () => ({
@@ -312,55 +329,39 @@ describe('SyncStatusHeaderItem', () => {
     }
   })
 
-  it('escalates the chip to an integrity error and lists the anomalies in the details', async () => {
+  it('escalates the chip to an integrity error and names the source in the details', async () => {
     // Settled (synced) base so the integrity escalation applies, not a spinner.
     mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
     publishConsistencyAudit({
       workspaceId: 'ws-1',
-      checkedAt: 0,
+      checkedAt: 1,
       anomalies: 2,
       checks: {
-        references_index_mirror: {
-          status: 'anomaly',
-          missingIndexRows: 3,
-          extraIndexRows: 0,
-          orphanSourceRows: 1,
-          duplicateTuples: 0,
-          malformedJson: 0,
-        },
-        property_ref_at_rest: {
-          status: 'anomaly',
-          curatedProps: ['next-review-date'],
-          findings: [{prop: 'next-review-date', valuePresentRefAbsent: 5}],
-        },
-        local_server_divergence: {
-          status: 'ok',
-          strandedLocalOnly: 0,
-          equalStampStandoff: 0,
-          localRicherNoPending: 0,
-          serverAheadUndrained: 0,
-        },
+        references_index_mirror: {status: 'anomaly'},
+        property_ref_at_rest: {status: 'anomaly'},
+        local_server_divergence: {status: 'ok'},
       },
     })
 
     render(<SyncStatusHeaderItem/>)
 
     const button = screen.getByRole('button')
-    expect(button.getAttribute('aria-label')).toContain('2 data-integrity checks flagged an anomaly')
+    // Generic diagnostics escalation: "<label>: <summary>".
+    expect(button.getAttribute('aria-label')).toContain('Data integrity: 2 issues found')
 
     fireEvent.pointerDown(button)
-    expect(await screen.findByText('Data integrity: 2 issues')).toBeInTheDocument()
-    expect(screen.getByText('References index')).toBeInTheDocument()
-    expect(screen.getByText('3 missing, 1 orphaned')).toBeInTheDocument()
-    expect(screen.getByText('Property references')).toBeInTheDocument()
-    expect(screen.getByText('next-review-date: 5')).toBeInTheDocument()
+    expect(await screen.findByText('Data integrity: 2 issues found')).toBeInTheDocument()
+    // The flagged check names are the detail; the full per-check breakdown lives
+    // in the audit dialog (opened via Inspect).
+    expect(screen.getByText(/references_index_mirror/)).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: 'Inspect'})).toBeInTheDocument()
   })
 
   it('leaves the chip clean when the audit reports no anomalies', () => {
     mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
     publishConsistencyAudit({
       workspaceId: 'ws-1',
-      checkedAt: 0,
+      checkedAt: 2,
       anomalies: 0,
       checks: {
         references_index_mirror: {status: 'ok'},
@@ -369,27 +370,18 @@ describe('SyncStatusHeaderItem', () => {
 
     render(<SyncStatusHeaderItem/>)
 
-    expect(screen.getByRole('button').getAttribute('aria-label')).not.toContain('data-integrity')
+    expect(screen.getByRole('button').getAttribute('aria-label')).not.toContain('Data integrity')
   })
 
-  it('surfaces sub-threshold findings as muted info without reddening the chip', async () => {
+  it('does not surface an ok-severity source in the dropdown (clean audit shows nothing)', async () => {
     mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
     publishConsistencyAudit({
       workspaceId: 'ws-1',
-      checkedAt: 0,
+      checkedAt: 3,
       anomalies: 0, // below the alert floor → ok, not an anomaly
       checks: {
-        references_index_mirror: {
-          status: 'ok',
-          missingIndexRows: 0,
-          extraIndexRows: 0,
-          orphanSourceRows: 0,
-          duplicateTuples: 0,
-          malformedJson: 0,
-        },
         property_ref_at_rest: {
           status: 'ok',
-          curatedProps: ['next-review-date'],
           findings: [{prop: 'next-review-date', valuePresentRefAbsent: 3}],
           total: 3,
         },
@@ -399,11 +391,11 @@ describe('SyncStatusHeaderItem', () => {
     render(<SyncStatusHeaderItem/>)
 
     const button = screen.getByRole('button')
-    expect(button.getAttribute('aria-label')).not.toContain('data-integrity') // chip stays calm
+    expect(button.getAttribute('aria-label')).not.toContain('Data integrity') // chip stays calm
 
     fireEvent.pointerDown(button)
-    expect(await screen.findByText(/below alert threshold/i)).toBeInTheDocument()
-    expect(screen.getByText('next-review-date: 3')).toBeInTheDocument()
+    // An 'ok' source is filtered out — no data-integrity section in the dropdown.
+    expect(screen.queryByText(/Data integrity/)).not.toBeInTheDocument()
   })
 
   it('surfaces an app-update prompt with a Reload action when a new build is ready', async () => {

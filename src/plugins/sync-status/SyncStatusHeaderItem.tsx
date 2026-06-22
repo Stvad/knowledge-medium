@@ -31,10 +31,7 @@ import {
   uploadQueuePreviewCountSql,
 } from './queueCounts.ts'
 import { RejectionDialog } from './RejectionDialog.tsx'
-import { useConsistencyAudit } from './useConsistencyAudit.ts'
-import { useRepo } from '@/context/repo.js'
-import type { ConsistencyAuditResult } from '@/data/internals/consistencyAudit.js'
-import { RUN_DATA_INTEGRITY_AUDIT_ACTION_ID } from '@/data/internals/consistencyAuditStore.js'
+import { useDiagnostics } from '@/plugins/diagnostics/useDiagnostics.js'
 import { runActionById } from '@/shortcuts/runAction.js'
 
 interface UploadQueueCountRow {
@@ -152,54 +149,6 @@ function AppVersionValue() {
   )
 }
 
-// Compact per-check summary (counts) for the dropdown details. `detail` is ''
-// when the check found no signal (so the info band can filter those out).
-function summarizeAuditCheck(
-  name: string,
-  check: ConsistencyAuditResult['checks'][string],
-): {label: string; detail: string} {
-  const n = (key: string): number => Number(check[key] ?? 0)
-  if (name === 'references_index_mirror') {
-    const parts: string[] = []
-    if (n('missingIndexRows')) parts.push(`${n('missingIndexRows')} missing`)
-    if (n('extraIndexRows')) parts.push(`${n('extraIndexRows')} extra`)
-    if (n('orphanSourceRows')) parts.push(`${n('orphanSourceRows')} orphaned`)
-    if (n('duplicateTuples')) parts.push(`${n('duplicateTuples')} duplicate`)
-    if (n('malformedJson')) parts.push(`${n('malformedJson')} malformed`)
-    return {label: 'References index', detail: parts.join(', ')}
-  }
-  if (name === 'property_ref_at_rest') {
-    const findings = Array.isArray(check.findings)
-      ? (check.findings as {prop: string; valuePresentRefAbsent: number}[])
-      : []
-    return {
-      label: 'Property references',
-      detail: findings.map((f) => `${f.prop}: ${f.valuePresentRefAbsent}`).join(', '),
-    }
-  }
-  if (name === 'local_server_divergence') {
-    const parts: string[] = []
-    if (n('strandedLocalOnly')) parts.push(`${n('strandedLocalOnly')} stranded`)
-    if (n('equalStampStandoff')) parts.push(`${n('equalStampStandoff')} stalemate`)
-    if (n('localRicherNoPending')) parts.push(`${n('localRicherNoPending')} unsynced local`)
-    return {label: 'Local vs server', detail: parts.join(', ')}
-  }
-  return {label: name, detail: ''}
-}
-
-// Checks of a given status, summarized. 'anomaly' → the red section (all kept,
-// the chip is already red). 'ok' → the informational band, where the caller
-// filters on a non-empty `detail` to show only sub-threshold findings that
-// carry a real signal (e.g. a benign-baseline count below the alert floor).
-function summarizeAuditByStatus(
-  result: ConsistencyAuditResult,
-  status: 'anomaly' | 'ok',
-): {label: string; detail: string}[] {
-  return Object.entries(result.checks)
-    .filter(([, check]) => check.status === status)
-    .map(([name, check]) => summarizeAuditCheck(name, check))
-}
-
 export function SyncStatusHeaderItem() {
   const localOnly = useIsLocalOnly()
   const status = useStatus()
@@ -214,15 +163,6 @@ export function SyncStatusHeaderItem() {
   // distinguished from a genuine error — down in SyncStatusHeaderContent.
   const localErrorMessage = rejected.error?.message ?? null
 
-  // Built-in consistency audit (L3) result — non-zero anomalies escalate the chip.
-  // The store is a module global holding the LAST audited workspace's result, so
-  // on a workspace switch it can briefly hold another workspace's anomalies. Only
-  // surface a result that belongs to the active workspace.
-  const repo = useRepo()
-  const auditResult = useConsistencyAudit()
-  const audit =
-    auditResult && auditResult.workspaceId === repo.activeWorkspaceId ? auditResult : null
-
   if (localOnly) {
     return (
       <SyncStatusHeaderContent
@@ -233,7 +173,6 @@ export function SyncStatusHeaderItem() {
         rejectedCount={rejectedCount}
         materializingChanges={0}
         localErrorMessage={localErrorMessage}
-        audit={audit}
       />
     )
   }
@@ -243,7 +182,6 @@ export function SyncStatusHeaderItem() {
       status={status}
       rejectedCount={rejectedCount}
       baseLocalErrorMessage={localErrorMessage}
-      audit={audit}
     />
   )
 }
@@ -252,14 +190,12 @@ interface RemoteSyncStatusHeaderContentProps {
   status: SyncStatus
   rejectedCount: number
   baseLocalErrorMessage: string | null
-  audit: ConsistencyAuditResult | null
 }
 
 function RemoteSyncStatusHeaderContent({
   status,
   rejectedCount,
   baseLocalErrorMessage,
-  audit,
 }: RemoteSyncStatusHeaderContentProps) {
   const queue = useQuery<UploadQueueCountRow>(
     uploadQueuePreviewCountSql,
@@ -295,7 +231,6 @@ function RemoteSyncStatusHeaderContent({
       rejectedCount={rejectedCount}
       materializingChanges={materializingChanges}
       localErrorMessage={queue.error?.message ?? baseLocalErrorMessage}
-      audit={audit}
     />
   )
 }
@@ -308,7 +243,6 @@ interface SyncStatusHeaderContentProps {
   rejectedCount: number
   materializingChanges: number
   localErrorMessage: string | null
-  audit: ConsistencyAuditResult | null
 }
 
 function SyncStatusHeaderContent({
@@ -319,7 +253,6 @@ function SyncStatusHeaderContent({
   rejectedCount,
   materializingChanges,
   localErrorMessage,
-  audit,
 }: SyncStatusHeaderContentProps) {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
@@ -340,30 +273,25 @@ function SyncStatusHeaderContent({
     : null
   const stableNetworkError = useStableError(networkError, networkErrorGraceMs)
   const errorMessage = localErrorMessage ?? stableNetworkError
-  const integrityAnomalies = audit?.anomalies ?? 0
-  // Anomalies (>= alert threshold) redden the chip; sub-threshold 'ok' checks
-  // that still carry a signal (e.g. a benign-baseline count below the floor)
-  // surface as muted info so they're visible without alarming.
-  const auditAnomalies = audit && integrityAnomalies > 0 ? summarizeAuditByStatus(audit, 'anomaly') : []
-  const auditInfos = audit ? summarizeAuditByStatus(audit, 'ok').filter((s) => s.detail) : []
-  // A check that threw degrades to status 'error' (not counted as an anomaly, so
-  // it doesn't redden the chip) — but surface it so a self-audit that couldn't
-  // run doesn't silently read as healthy.
-  const auditErroredChecks = audit
-    ? Object.entries(audit.checks).filter(([, c]) => c.status === 'error').map(([name]) => name)
-    : []
-  const hasAuditSection =
-    auditAnomalies.length > 0 || auditInfos.length > 0 || auditErroredChecks.length > 0
-  // Re-run the built-in audit on demand via the global action (also in the
-  // command palette). The action toasts the outcome and republishes the result,
-  // so the dropdown's counts refresh in place.
-  const runAudit = (): void => {
+  // Health contributed via the diagnostics seam (the consistency audit is the
+  // first source). Only non-ok sources are worth surfacing; an 'ok' source stays
+  // silent (a clean audit shows nothing, matching the pre-seam behavior).
+  const diagnostics = useDiagnostics()
+  const diagnosticItems = diagnostics.items.filter((it) => it.snapshot.severity !== 'ok')
+  // The dot escalates only on an error-severity source; a warning (e.g. a check
+  // that couldn't run) surfaces in the dropdown without reddening the chip.
+  const errorDiagnostic = diagnosticItems.find((it) => it.snapshot.severity === 'error')
+  const diagnosticAlert = errorDiagnostic
+    ? { label: errorDiagnostic.label, summary: errorDiagnostic.snapshot.summary }
+    : null
+  // Run a diagnostic's inspect action (e.g. re-run the audit + open its dialog).
+  const runDiagnosticAction = (actionId: string): void => {
     try {
       void Promise.resolve(
-        runActionById(RUN_DATA_INTEGRITY_AUDIT_ACTION_ID, new CustomEvent('run-data-integrity-audit')),
-      ).catch((e) => console.error('Failed to run data-integrity audit', e))
+        runActionById(actionId, new CustomEvent('run-diagnostic-action')),
+      ).catch((e) => console.error('Failed to run diagnostic action', e))
     } catch (e) {
-      console.error('Failed to run data-integrity audit', e)
+      console.error('Failed to run diagnostic action', e)
     }
   }
   const view = getSyncIndicatorView({
@@ -380,7 +308,7 @@ function SyncStatusHeaderContent({
     downloadFraction: status.downloadProgress?.downloadedFraction ?? null,
     errorMessage,
     lastSyncedAt: status.lastSyncedAt,
-    integrityAnomalies,
+    diagnosticAlert,
   })
   const Icon = iconByName[view.icon]
 
@@ -481,59 +409,35 @@ function SyncStatusHeaderContent({
                 </div>
               </div>
             )}
-            {auditAnomalies.length > 0 && (
-              <div className="border-t pt-2">
-                <div className="text-xs font-medium text-destructive">
-                  Data integrity: {integrityAnomalies} {integrityAnomalies === 1 ? 'issue' : 'issues'}
-                </div>
-                <div className="mt-1 space-y-0.5">
-                  {auditAnomalies.map((s) => (
-                    <div key={s.label} className="grid grid-cols-[auto_1fr] gap-x-2 text-xs">
-                      <div className="text-muted-foreground">{s.label}</div>
-                      <div className="text-right">{s.detail || 'anomaly'}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            {auditInfos.length > 0 && (
-              <div className="border-t pt-2">
-                <div className="text-xs font-medium">Data integrity — below alert threshold</div>
-                <div className="mt-1 space-y-0.5">
-                  {auditInfos.map((s) => (
-                    <div key={s.label} className="grid grid-cols-[auto_1fr] gap-x-2 text-xs">
-                      <div className="text-muted-foreground">{s.label}</div>
-                      <div className="text-right">{s.detail}</div>
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-1 text-[11px] leading-4 text-muted-foreground">
-                  Minor / expected baseline (e.g. cleared values) — not alerting.
-                </div>
-              </div>
-            )}
-            {auditErroredChecks.length > 0 && (
-              <div className="border-t pt-2 text-[11px] leading-4 text-muted-foreground">
-                {auditErroredChecks.length} integrity {auditErroredChecks.length === 1 ? 'check' : 'checks'} couldn't run ({auditErroredChecks.join(', ')}).
-              </div>
-            )}
-            {hasAuditSection && (
-              <div className="border-t pt-2">
+            {diagnosticItems.map((item) => (
+              <div key={item.id} className="border-t pt-2">
                 <div className="flex items-center justify-between gap-2">
-                  <div className="text-[11px] leading-4 text-muted-foreground">
-                    Run the consistency-check eval for per-block detail.
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-7 text-xs"
-                    onClick={runAudit}
+                  <div
+                    className={cn(
+                      'min-w-0 text-xs font-medium',
+                      item.snapshot.severity === 'error' && 'text-destructive',
+                    )}
                   >
-                    Re-run audit
-                  </Button>
+                    {item.label}: {item.snapshot.summary}
+                  </div>
+                  {item.snapshot.actionId && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 shrink-0 text-xs"
+                      onClick={() => runDiagnosticAction(item.snapshot.actionId!)}
+                    >
+                      Inspect
+                    </Button>
+                  )}
                 </div>
+                {item.snapshot.detail && (
+                  <div className="mt-1 text-[11px] leading-4 text-muted-foreground">
+                    {item.snapshot.detail}
+                  </div>
+                )}
               </div>
-            )}
+            ))}
           </div>
         </DropdownMenuContent>
       </DropdownMenu>

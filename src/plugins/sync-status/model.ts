@@ -39,11 +39,19 @@ export interface SyncIndicatorInput {
   downloadFraction?: number | null
   errorMessage?: string | null
   lastSyncedAt?: Date
-  /** Count of checks the built-in consistency audit (L3) flagged as anomalous on
-   *  its last run. Non-zero escalates the chip to an error in settled states
-   *  (the data is structurally inconsistent even when sync is fine). Defaults to
-   *  0 so callers that don't pipe it in stay unaffected. */
-  integrityAnomalies?: number
+  /** Worst diagnostic the chip should escalate on (from the diagnostics seam):
+   *  an error-severity health signal (e.g. a consistency-audit anomaly). Present
+   *  escalates the chip to an error in settled states (the data is structurally
+   *  inconsistent even when sync is fine). Null/omitted when nothing is wrong. */
+  diagnosticAlert?: DiagnosticAlert | null
+}
+
+/** A single error-severity diagnostic worth escalating onto the chip. Generic
+ *  (contributed via the diagnostics seam) — the chip doesn't know which plugin
+ *  it came from, only the label + one-line summary to show. */
+export interface DiagnosticAlert {
+  label: string
+  summary: string
 }
 
 export interface SyncIndicatorView {
@@ -301,20 +309,20 @@ const baseSyncIndicatorView = ({
 
 export const getSyncIndicatorView = (input: SyncIndicatorInput): SyncIndicatorView => {
   const view = baseSyncIndicatorView(input)
-  const integrityAnomalies = input.integrityAnomalies ?? 0
-  // A data-integrity anomaly is persistent and serious, but unlike a sync error
-  // it doesn't block new writes. Surface it on the chip (error tone + alert
-  // icon) only in SETTLED states: yield to a hard sync error (already error
-  // tone) and to active/transient states (spinning) so it neither clobbers
-  // progress nor fires on a mid-sync transient. Details render in the dropdown.
-  if (integrityAnomalies > 0 && view.tone !== 'error' && !view.spinning) {
-    const noun = integrityAnomalies === 1 ? 'check' : 'checks'
+  const alert = input.diagnosticAlert
+  // A diagnostic alert (e.g. a data-integrity anomaly) is persistent and serious,
+  // but unlike a sync error it doesn't block new writes. Surface it on the chip
+  // (error tone + alert icon) only in SETTLED states: yield to a hard sync error
+  // (already error tone) and to active/transient states (spinning) so it neither
+  // clobbers progress nor fires on a mid-sync transient. Details render in the
+  // dropdown.
+  if (alert && view.tone !== 'error' && !view.spinning) {
     return {
       ...view,
       tone: 'error',
       icon: 'alert',
       label: 'Integrity issue',
-      title: `${integrityAnomalies} data-integrity ${noun} flagged an anomaly — see details. ${view.title}`,
+      title: `${alert.label}: ${alert.summary} — see details. ${view.title}`,
     }
   }
   return view
