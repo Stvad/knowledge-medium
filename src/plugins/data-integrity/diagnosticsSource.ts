@@ -26,9 +26,6 @@ const erroredChecks = (result: ConsistencyAuditResult): string[] =>
     .filter(([, c]) => c.status === 'error')
     .map(([name]) => name)
 
-/** Pure mapping from an audit result to a diagnostic snapshot. Anomalies are an
- *  error (redden the chip); a check that couldn't run is a warning that stays in
- *  the dropdown without alarming (matching the pre-seam behavior). */
 /** Checks that are 'ok' but still carry a benign sub-threshold signal (e.g.
  *  `property_ref_at_rest` reporting a `total` below the alert floor). Surfaced as
  *  muted info so the baseline stays visible in the chip without alarming —
@@ -38,6 +35,10 @@ const subThresholdChecks = (result: ConsistencyAuditResult): Array<{ name: strin
     .filter(([, c]) => c.status === 'ok' && Number(c.total) > 0)
     .map(([name, c]) => ({ name, total: Number(c.total) }))
 
+/** Pure mapping from an audit result to a diagnostic snapshot. Anomalies → error
+ *  (reddens the chip); a check that couldn't run → warning; a sub-threshold
+ *  baseline → info; otherwise ok. All non-error severities stay in the dropdown
+ *  without alarming the dot (matching the pre-seam behavior). */
 export const mapAuditToSnapshot = (result: ConsistencyAuditResult): DiagnosticSnapshot => {
   const anomalies = result.anomalies
   const errored = erroredChecks(result)
