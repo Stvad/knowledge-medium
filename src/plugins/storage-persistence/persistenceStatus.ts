@@ -19,6 +19,10 @@ export const REQUEST_PERSISTENCE_ACTION_ID = 'storage.requestPersistence'
 
 let snapshot: DiagnosticSnapshot | null = null
 let started = false
+// Monotonic refresh id: overlapping refreshes (the initial read vs. a
+// change-signal/focus refresh) can resolve out of order, so a stale read must
+// not clobber a newer one. The latest-*started* refresh wins.
+let refreshSeq = 0
 const listeners = new Set<() => void>()
 
 const notify = (): void => {
@@ -69,7 +73,12 @@ const computeSnapshot = (state: {
 
 /** Re-read the live persistence state and republish the snapshot when it changes. */
 export const refreshPersistenceStatus = async (): Promise<void> => {
+  const seq = ++refreshSeq
   const next = computeSnapshot(await getPersistenceState())
+  // A newer refresh started while we awaited — discard this (possibly stale)
+  // result so it can't overwrite the fresher one (e.g. the initial
+  // not-persisted read resolving after a late grant already cleared the nudge).
+  if (seq !== refreshSeq) return
   if (sameSnapshot(snapshot, next)) return
   snapshot = next
   notify()

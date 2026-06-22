@@ -59,6 +59,30 @@ describe('persistenceDiagnosticSource', () => {
     expect(snap?.nudge).toBe(true)
   })
 
+  it('discards a stale refresh that resolves after a newer one', async () => {
+    // The first (not-persisted) read is gated so it resolves LAST; the second
+    // (granted) read resolves first. The stale first must not clobber it.
+    let releaseStale = () => {}
+    const staleGate = new Promise<void>((resolve) => {
+      releaseStale = resolve
+    })
+    vi.mocked(getPersistenceState)
+      .mockImplementationOnce(async () => {
+        await staleGate
+        return { supported: true, persisted: false, permission: 'prompt' }
+      })
+      .mockImplementationOnce(async () => ({ supported: true, persisted: true, permission: 'granted' }))
+
+    const stale = refreshPersistenceStatus()
+    const fresh = refreshPersistenceStatus()
+    await fresh
+    expect(persistenceDiagnosticSource.getSnapshot()).toBeNull()
+
+    releaseStale()
+    await stale
+    expect(persistenceDiagnosticSource.getSnapshot()).toBeNull()
+  })
+
   it('clears the nudge when a late grant fires the persistence-change signal', async () => {
     // Subscribing wires the source to the persistence-change signal (the
     // Firefox late-grant path) and does the initial read.
