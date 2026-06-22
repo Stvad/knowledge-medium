@@ -749,12 +749,17 @@ alternative honestly; everything below in §8–§10 is boundary-agnostic except
     synchronously and already holds the decrypted block (so the hash is just
     <code>block.properties.hash</code>) — the §7.1.1 mirror machinery exists only because the SW can't reach
     app state.</li>
-  <li><strong>Free wipe.</strong> It can cache decrypted bytes as blobs <em>in the SQLite DB</em> (a
-    local-only table), so the existing DB-file deletion in <code>consumePendingWipe</code> takes them
-    automatically — no second store in the lock-wipe lifecycle, no marker-gated cache purge. The SW
-    can't do this: it can't open the DB (exclusive OPFS sync handle), and a SW-managed OPFS/Cache store
-    is a <em>separate</em> location that still needs its own purge (using OPFS in the SW doesn't change
-    that — only DB-blob storage rides the wipe for free).</li>
+  <li><strong>Plaintext bytes in OPFS (not SQLite, not Cache API).</strong> The app-thread path caches
+    decrypted bytes as plain <strong>OPFS files</strong> (<code>attachments/&lt;user&gt;/&lt;ws&gt;/&lt;id&gt;</code>)
+    — the store the bytes always wanted (§6/§17 keep large blobs <em>out</em> of SQLite; an earlier draft
+    wrongly floated DB-blob storage purely for a "free wipe," which both bloats the hot query DB and
+    contradicts that principle). Wipe is not a differentiator: under the coarse
+    <code>destroyAllLocalData()</code> lock, the whole OPFS tree is cleared anyway, so the attachments
+    dir goes with it for free; even under a surgical wipe it's one <code>removeEntry</code> in
+    <code>consumePendingWipe</code>. The real app-thread win here is <em>simplicity of resolution</em>:
+    the app owns the OPFS handle and the session, so fetch→decrypt→write-OPFS→object-URL is one local
+    flow with no SW cache/token/mirror lifecycle. (The SW path, by contrast, uses the Cache API as its
+    SW-native byte store — a separate lock-wipe participant.)</li>
   <li><strong>No token handshake / no per-<code>clientId</code> session</strong> — the app already has
     the Supabase session.</li>
 </ul>
