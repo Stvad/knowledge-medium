@@ -836,8 +836,18 @@ purely a display-cache concern.
   every cancel / drain / purge key), because the store is shared across accounts in the profile but
   Lock&nbsp;&amp;&nbsp;Wipe and draining are per-user — without it, account A's lock can't tell A's
   pending bytes from B's (purging B's, or surviving A's), and a drain could retry A's entry under B's
-  session. Entries drain (to the §10.1 function) when connectivity returns, retrying with backoff; the
-  durable copy
+  session. The <code>status</code> field has a lifecycle that closes the metadata-commit / byte-stage
+  ordering gap (§11): <code>staged</code> (durable but <em>not</em> drainable) → <code>pending</code>
+  (drainable) → <code>uploading</code> → deleted-on-confirm. Capture writes the record as
+  <code>staged</code> <em>before</em> the metadata <code>repo.tx</code>, so a committed asset block
+  always has its source bytes already on disk; the post-commit step flips it to <code>pending</code>
+  and arms the drain. The drain acts only on <code>pending</code>+ records, so the "block still
+  exists?" pre-PUT drop applies only <em>after</em> the commit (a post-commit deletion / undo) and
+  never to the legitimate pre-commit window. A flip that never lands (crash or throw between commit and
+  flip) is recovered by a <strong>boot-time reconciler</strong> that promotes any <code>staged</code>
+  record whose asset block is present and committed, and reaps any <code>staged</code> record whose
+  block never committed. Entries drain (to the §10.1 function) when connectivity returns, retrying with
+  backoff; the durable copy
   is deleted only on a confirmed upload, after which the bytes are purely a display-cache concern.
   This is new infra the pre-E2EE proposal under-specified; E2EE doesn't change it, but the design
   surfaces it clearly. The queue's local <code>status</code> is also the per-device source of truth
@@ -1060,20 +1070,29 @@ foreclose it. This is the cheap-option-value posture, not speculative building.
     <code>TypeContribution</code> must be registered via <code>typesFacet</code> first, §3, or this
     throws). The asset-block create + the <code>!((id))</code> insert go in one
     <code>repo.tx({scope: ChangeScope.BlockDefault})</code> so they share an undo bucket. The
-    <strong>byte-queue write + upload enqueue happen AFTER that tx resolves</strong>, not inside it
-    (see the box below).</li>
+    <strong>durable byte record is staged (non-drainable) BEFORE that tx, and the drain is armed only
+    AFTER it resolves</strong> — not inside it (see the box below).</li>
 </ul>
 
 <div class="warn">
-<strong>The byte queue is an external side effect — stage it post-commit.</strong>
-<code>repo.tx</code> only makes the SQLite/PowerSync writes atomic; an IDB/OPFS byte-queue write won't
-roll back if a same-tx processor or a later DB step aborts, and — worse — if the enqueue kicks off a
-drain <em>before</em> the DB commit is visible, the §9 "block still exists?" pre-PUT re-check can drop
-the bytes as a missing block, after which the metadata commit leaves peers with an asset that can
-<em>never</em> upload. So: write the queue entry and start the drain <strong>only after
-<code>repo.tx</code> resolves</strong> (or gate the drain so it can't run until the commit is visible).
-Undo still works via the §9 compensator — undo of the (committed) asset block cancels the queue entry
-and deletes any already-uploaded object.</div>
+<strong>Stage the byte record durably <em>before</em> the metadata tx; gate its drain on the commit.</strong>
+<code>repo.tx</code> only makes the SQLite/PowerSync writes atomic — an IDB/OPFS byte-queue write is an
+external side effect that neither joins that tx nor rolls back with it. Two failure windows have to
+close at once. <strong>(a)</strong> If the byte write happened <em>after</em> the commit and then failed
+(quota, private-mode, a store error), the metadata is already committed and syncs to peers with
+<em>no</em> durable source bytes, no per-device pending status, and nothing for the §9 compensator to
+cancel — a permanently un-uploadable asset on every peer. <strong>(b)</strong> If the enqueue instead
+kicked off a drain <em>before</em> the commit is visible, the §9 "block still exists?" pre-PUT re-check
+would drop the bytes as a missing block. The resolution closes both: <strong>write the durable byte
+record first in a non-drainable <code>staged</code> state (§9), <em>then</em> run <code>repo.tx</code>,
+<em>then</em> flip <code>staged → pending</code> and arm the drain.</strong> Because the bytes are
+staged before the commit, a committed asset block <em>always</em> has its source bytes already on disk
+— window (a) is gone (a failed stage aborts capture before any metadata commits, attaching nothing);
+because <code>staged</code> is not drainable, the drain can't race ahead of the commit — window (b) is
+gone. The post-commit flip can itself fail, but that is recoverable, not lossy: the durable
+<code>staged</code> record survives, and a boot-time reconciler (§9) promotes any <code>staged</code>
+record whose asset block did commit. Undo still works via the §9 compensator — undo of the (committed)
+asset block cancels the queue entry and deletes any already-uploaded object.</div>
 
 <div class="warn">
 <strong>Dedup must respect the share-coverage boundary (§12).</strong> Naïve "reuse any same-hash asset
@@ -1207,9 +1226,13 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
 <p>All object-store access goes behind a ~50-line interface:</p>
 
 <pre><code>interface BlobStore {
-  // idempotencyToken (§9/§10.1) is persisted in the queue record and passed here so a
-  // post-reload retry re-presents it; same token on an existing object → success, not failure.
-  put(workspaceId, assetBlockId, hash, idempotencyToken, bytes): Promise&lt;void&gt;
+  // No `hash` parameter: this seam drains to the server (the §10.1 Edge Function), and the
+  // plaintext sha256 must never reach the origin — it is the §10 content oracle. The hash lives
+  // ONLY in client-local / SW-readable paths (cache key §8, replay check §5.1, dedup §11),
+  // sourced from the encrypted properties_json + the SW metadata mirror (§7.1.1), never the wire.
+  // idempotencyToken (§9/§10.1) IS passed: it is persisted in the queue record so a post-reload
+  // retry re-presents it; same token on an existing object → success, not failure.
+  put(workspaceId, assetBlockId, idempotencyToken, bytes): Promise&lt;void&gt;
   // The virtual URL is CLEAN — ${BASE_URL}asset/<ws>/<id>, no hash on the wire.
   // The expected hash (cache key §8 + replay check §5.1) comes from the SW-readable
   // metadata mirror (§7.1.1), never a URL param — a ?h= would leak the plaintext
