@@ -12,7 +12,7 @@ import {
 import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy.js'
 import { actionsFacet } from '@/extensions/core.js'
 import { AppExtension } from '@/facets/facet.js'
-import { pasteFromClipboard } from '@/utils/paste.js'
+import { pasteFromClipboard } from '@/paste/operations.js'
 import {
   bindBlockActionContext,
   createSharedBlockActions,

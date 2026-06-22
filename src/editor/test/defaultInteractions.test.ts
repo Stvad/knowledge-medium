@@ -11,7 +11,7 @@ import type {
 import {
   blockContentPointerGestures,
   createBlockSelectionShellState,
-} from '@/extensions/defaultEditorInteractions'
+} from '../defaultInteractions'
 import { dispatchPointerAction } from '@/shortcuts/pointerAction'
 
 // All block clicks route through the unified pointer dispatcher; mock it so

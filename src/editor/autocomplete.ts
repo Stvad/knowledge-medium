@@ -13,7 +13,7 @@ import { completionKeymapWithEscapeFallthrough } from '@/utils/codemirrorComplet
 import {
   codeMirrorExtensionsFacet,
   type CodeMirrorExtensionContribution,
-} from './editor.ts'
+} from './codeMirrorExtensions.ts'
 import type { AppExtension } from '@/facets/facet.js'
 
 const editorAutocompleteContribution: CodeMirrorExtensionContribution = () => [

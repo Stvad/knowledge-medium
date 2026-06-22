@@ -14,7 +14,7 @@ import {
   ShortcutActivationContribution,
   shortcutSurfaceActivationsFacet,
 } from '@/extensions/blockInteraction.js'
-import { editorAutocompleteExtension } from '@/extensions/editorAutocomplete.js'
+import { editorAutocompleteExtension } from './autocomplete.js'
 import { AppExtension } from '@/facets/facet.js'
 import { actionsFacet } from '@/extensions/core.js'
 import { ActionContextTypes } from '@/shortcuts/types.js'

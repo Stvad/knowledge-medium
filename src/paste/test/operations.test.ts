@@ -1,17 +1,19 @@
 // @vitest-environment node
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { isCollapsedProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
+import { pasteDecisionVerb } from '../decision'
 import {
   pasteChordIntent,
   pasteEditModeMultilineText,
+  pasteFromClipboard,
   pasteMultilineText,
   planEditModeMultilinePaste,
   planSingleBlockPaste,
-} from '@/utils/paste'
+} from '../operations'
 
 const WS = 'ws-1'
 
@@ -201,6 +203,58 @@ describe('pasteMultilineText', () => {
     expect(await childContents('root')).toEqual(['Parent', 'Pasted', 'Sibling'])
     expect(await childContents('parent')).toEqual(['Old child'])
   })
+
+  it('pastes the whole text as one block when asSingleBlock is set', async () => {
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('target', 'Target', 'root', 'a0')
+    await createBlock('sibling', 'Sibling', 'root', 'a1')
+
+    const pasted = await pasteMultilineText(
+      '- Alpha\n- Beta',
+      env.repo.block('target'),
+      env.repo,
+      {scopeRootId: 'root', asSingleBlock: true},
+    )
+
+    // No markdown split, no bullet stripping — the whole clipboard becomes
+    // one block (the block-shell "single-block" override path).
+    expect(pasted).toHaveLength(1)
+    expect(pasted[0]?.peek()?.content).toBe('- Alpha\n- Beta')
+    expect(await childContents('root')).toEqual(['Target', '- Alpha\n- Beta', 'Sibling'])
+  })
+
+  it('absorbs an asSingleBlock paste into a blank target, keeping newlines', async () => {
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('empty', '', 'root', 'a0')
+    await createBlock('next', 'Next', 'root', 'a1')
+
+    const pasted = await pasteMultilineText(
+      '- Alpha\n- Beta',
+      env.repo.block('empty'),
+      env.repo,
+      {scopeRootId: 'root', asSingleBlock: true},
+    )
+
+    expect(pasted).toHaveLength(1)
+    expect(pasted[0]?.id).toBe('empty')
+    expect(env.repo.block('empty').peek()?.content).toBe('- Alpha\n- Beta')
+    expect(await childContents('root')).toEqual(['- Alpha\n- Beta', 'Next'])
+  })
+
+  it('no-ops an asSingleBlock paste of blank text (matches the parse path)', async () => {
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('target', 'Target', 'root', 'a0')
+
+    const pasted = await pasteMultilineText(
+      '   \n  ',
+      env.repo.block('target'),
+      env.repo,
+      {scopeRootId: 'root', asSingleBlock: true},
+    )
+
+    expect(pasted).toEqual([])
+    expect(await childContents('root')).toEqual(['Target'])
+  })
 })
 
 describe('pasteEditModeMultilineText', () => {
@@ -334,5 +388,54 @@ describe('planSingleBlockPaste', () => {
     const plan = planSingleBlockPaste('one\r\ntwo\rthree', {from: 2, to: 2})
     expect(plan.insert).toBe('one\ntwo\nthree')
     expect(plan.cursor).toBe(2 + 'one\ntwo\nthree'.length)
+  })
+})
+
+describe('pasteFromClipboard (shortcut/programmatic paste)', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  const stubClipboard = (text: string) =>
+    vi.stubGlobal('navigator', {clipboard: {readText: async () => text}})
+
+  it('honors a forced single-block override from the verb (no split)', async () => {
+    // The gap Codex flagged: shortcut paste used to bypass pasteDecisionVerb,
+    // so a plugin preference like "always paste verbatim" was silently
+    // ignored. It must now apply here too.
+    stubClipboard('alpha\nbeta')
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('target', 'Target', 'root', 'a0')
+    env.repo.setRuntimeContributions(pasteDecisionVerb.implFacet, 'test-paste', [
+      () => ({kind: 'single-block'}),
+    ])
+
+    const pasted = await pasteFromClipboard(env.repo.block('target'), env.repo, {scopeRootId: 'root'})
+
+    expect(pasted).toHaveLength(1)
+    expect(pasted[0]?.peek()?.content).toBe('alpha\nbeta')
+    expect(await childContents('root')).toEqual(['Target', 'alpha\nbeta'])
+  })
+
+  it('applies a verb decorator text rewrite', async () => {
+    stubClipboard('one')
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('target', 'Target', 'root', 'a0')
+    env.repo.setRuntimeContributions(pasteDecisionVerb.decoratorsFacet, 'test-paste', [
+      next => async req => ({...(await next(req)), text: `${req.text}-rewritten`}),
+    ])
+
+    const pasted = await pasteFromClipboard(env.repo.block('target'), env.repo, {scopeRootId: 'root'})
+
+    expect(pasted[0]?.peek()?.content).toBe('one-rewritten')
+  })
+
+  it('defaults to the historical outline paste with no contributions', async () => {
+    stubClipboard('- Alpha\n- Beta')
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('target', 'Target', 'root', 'a0')
+
+    await pasteFromClipboard(env.repo.block('target'), env.repo, {scopeRootId: 'root'})
+
+    // Default shell decision is `split` → markdown parsed, bullets stripped.
+    expect(await childContents('root')).toEqual(['Target', 'Alpha', 'Beta'])
   })
 })

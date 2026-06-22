@@ -12,6 +12,16 @@ export interface ParsedBlock {
   content: string
 }
 
+/** Wrap `content` verbatim as a single root `ParsedBlock` — no markdown
+ *  splitting, newlines preserved inside the one block. Used for "paste as
+ *  one block" (the block-shell paste when the decision is `single-block`).
+ *  The `orderKey` is a placeholder; insertion paths recompute it. */
+export const singleParsedBlock = (content: string): ParsedBlock => ({
+  id: uuidv4(),
+  orderKey: keyAtEnd(),
+  content,
+})
+
 export function parseMarkdownToBlocks(text: string): ParsedBlock[] {
   const lines = text.split('\n');
   const parsedBlocks: { content: string; level: number; id: string }[] = [];

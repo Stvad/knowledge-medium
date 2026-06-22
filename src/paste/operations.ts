@@ -3,9 +3,10 @@ import { Block } from '../data/block'
 import type { Repo } from '../data/repo'
 import { isCollapsedProp } from '@/data/properties.js'
 import { revealChildren } from '@/data/mutators'
-import { parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser.js'
+import { parseMarkdownToBlocks, singleParsedBlock, type ParsedBlock } from '@/utils/markdownParser.js'
 import { keysBetween } from '../data/orderKey.ts'
 import { keysImmediatelyAfter, keysImmediatelyBefore } from '../data/orderKeyPlacement.ts'
+import { pasteDecisionVerb } from './decision.js'
 
 type PastePosition = 'before' | 'after'
 type PastePlacement = 'visible' | 'sibling'
@@ -20,6 +21,10 @@ interface PasteOptions {
    *  range paste before/after the selected range unless that would
    *  leave the visible subtree. */
   placement?: PastePlacement
+  /** Treat the whole clipboard text as one block's content (newlines
+   *  kept) instead of parsing markdown into a tree. Used by the block-
+   *  shell paste when the paste decision is `single-block`. */
+  asSingleBlock?: boolean
 }
 
 interface ExistingParentInsertion {
@@ -234,12 +239,20 @@ export async function pasteMultilineText(
     position = 'after',
     scopeRootId,
     placement = 'visible',
+    asSingleBlock = false,
   }: PasteOptions = {},
 ): Promise<Block[]> {
   const targetData = pasteTarget.peek() ?? await pasteTarget.load()
   if (!targetData) return []
 
-  const parsed = parseMarkdownToBlocks(pastedText)
+  // Blank clipboard is a no-op on both paths: `parseMarkdownToBlocks` drops
+  // all-blank input to `[]`, so `asSingleBlock` must too — otherwise it
+  // would create a whitespace-only block (or clobber a blank target).
+  if (asSingleBlock && isBlankContent(pastedText)) return []
+
+  const parsed = asSingleBlock
+    ? [singleParsedBlock(pastedText)]
+    : parseMarkdownToBlocks(pastedText)
   if (parsed.length === 0) return []
 
   const parsedRoots = parsed.filter(block => !block.parentId)
@@ -382,6 +395,20 @@ export async function pasteEditModeMultilineText(
   return {pasted: rootBlocks, focusBlock, focusOffset}
 }
 
+/** Read the clipboard and paste it around `pasteTarget`. This is the
+ *  funnel for shortcut / programmatic paste (vim normal-mode, multi-select
+ *  actions) — there's no `ClipboardEvent` and no text caret.
+ *
+ *  Routed through `pasteDecisionVerb` (surface `shell`) so plugin overrides
+ *  — text rewrites, a forced single-block, observers — apply to shortcut
+ *  paste exactly as they do to the DOM block-shell paste; keeping all
+ *  clipboard paste behind this one funnel stops a new call site from
+ *  silently bypassing the seam. Falls back to the raw outline paste only
+ *  when no runtime is installed yet (very early boot / minimal harness).
+ *
+ *  The clipboard API read is text-only, so `PasteRequest.html` is undefined
+ *  on this surface — a format-aware override keyed on `text/html` (e.g.
+ *  CSV→table from a spreadsheet copy) fires for DOM paste but not here. */
 export async function pasteFromClipboard(
   pasteTarget: Block,
   repo: Repo,
@@ -389,5 +416,13 @@ export async function pasteFromClipboard(
 ): Promise<Block[]> {
   const text = await navigator.clipboard.readText()
   if (!text) return []
-  return pasteMultilineText(text, pasteTarget, repo, options)
+
+  const runtime = repo.facetRuntime
+  if (!runtime) return pasteMultilineText(text, pasteTarget, repo, options)
+
+  const decision = await pasteDecisionVerb.run(runtime, {text, intent: 'split', surface: 'shell'})
+  return pasteMultilineText(decision.text ?? text, pasteTarget, repo, {
+    ...options,
+    asSingleBlock: decision.kind === 'single-block',
+  })
 }
