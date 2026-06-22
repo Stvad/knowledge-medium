@@ -651,20 +651,42 @@ retry the wipe is gone.
   as, it is wiped on lock like everything else.</p>
 
 <div class="decision">
-<strong>Decision.</strong> Decrypt in the service worker behind the self-describing
-<code>encb:v1:</code> envelope; the renderer stays mode-agnostic. The Cache API doubles as the byte
-cache. Mandatory companions: the app→SW token handshake (§7.1) and the lock→SW wipe handshake (§7.2).
+<strong>Working choice (the boundary itself is the one open fork — §7.3, §18).</strong> Decrypt in the
+service worker behind the self-describing <code>encb:v1:</code> envelope; the renderer stays
+mode-agnostic, and the Cache API doubles as the byte cache. If kept, the mandatory companions are the
+app→SW token handshake (§7.1) and the marker-gated lock→SW wipe (§7.2). §7.3 lays out the app-thread
+alternative honestly; everything below in §8–§10 is boundary-agnostic except where it names the SW.
 </div>
 
-<h3>7.3 The alternative, and why it loses</h3>
+<h3>7.3 The open alternative: app-thread decryption</h3>
 
-<p>The alternative is app-thread (or Worker) decryption: the renderer fetches, decrypts via
-  <code>getCek</code> directly (zero duplication), caches plaintext in OPFS (already in
-  <code>lockAndWipe</code>), and sets an object URL. It avoids both handshakes — but it makes the
-  renderer mode-aware, forces manual object-URL lifecycle, and means native <code>&lt;img&gt;</code> /
-  <code>&lt;video&gt;</code> / range / download each get re-implemented per consumer. It only wins if
-  we decide we do not want the SW to be an E2EE-lifecycle participant. We accept that participation
-  for the unification it buys.</p>
+<p>The alternative is app-thread (or dedicated-Worker) decryption: the renderer fetches, decrypts via
+  <code>getCek</code> directly (zero duplication), caches plaintext, and sets an object URL. §7–§10 are
+  written for the SW path, but this fork is <strong>deliberately left open</strong> (§18) — and the
+  tally is more even than an earlier draft implied. What the app-thread path <em>avoids</em>, because
+  it runs in the context that owns app state:</p>
+<ul>
+  <li><strong>No mode-pin IDB store / no <code>?h=</code> passing.</strong> The app reads the mode pin
+    synchronously and already holds the decrypted block (so the hash is just
+    <code>block.properties.hash</code>) — the §7.1.1 machinery exists only because the SW can't reach
+    app state.</li>
+  <li><strong>Free wipe.</strong> It can cache decrypted bytes as blobs <em>in the SQLite DB</em> (a
+    local-only table), so the existing DB-file deletion in <code>consumePendingWipe</code> takes them
+    automatically — no second store in the lock-wipe lifecycle, no marker-gated cache purge. The SW
+    can't do this: it can't open the DB (exclusive OPFS sync handle), and a SW-managed OPFS/Cache store
+    is a <em>separate</em> location that still needs its own purge (using OPFS in the SW doesn't change
+    that — only DB-blob storage rides the wipe for free).</li>
+  <li><strong>No token handshake / no per-<code>clientId</code> session</strong> — the app already has
+    the Supabase session.</li>
+</ul>
+<p>What it <em>costs</em>: a mode-aware renderer and manual object-URL lifecycle (two local, well-understood
+  concerns). What it does <strong>not</strong> cost, contrary to the earlier framing: native ranges —
+  whole-blob AEAD defeats <code>Range</code>/streaming for large E2EE media <em>regardless</em> of
+  boundary (both paths must fully materialize the plaintext; the fix is chunked encryption, §7 range
+  note), so "native streaming" is not a real SW advantage. The SW path's genuine win is a single
+  mode-agnostic <code>&lt;img src&gt;</code> for plaintext and E2EE alike; the app-thread path's win is
+  not making the service worker an E2EE-lifecycle participant. Decide on that, not on the illusory
+  range benefit.</p>
 
 <h2 id="cache">8. Local cache &amp; Lock-and-Wipe participation</h2>
 
@@ -780,13 +802,20 @@ so the server never sees it. Only the server-visible path and the block id drop 
 that idempotent-by-content uploads and free dedup are gone — which is the root of the dedup/duplicate-object
 and "a fresh block must re-upload" wrinkles (§11).
 <br><br>
-<strong>Lever if that friction bites: a keyed hash.</strong> Path
+<strong>The alternative that fixes that: a keyed hash.</strong> Path
 <code>&lt;ws&gt;/HMAC(WK, sha256-of-plaintext)</code> restores content-addressing — deterministic
 within a workspace (dedup + idempotent PUT return), unguessable to the server (no oracle), and
-distinct across workspaces (no correlation). Cost: the path no longer carries the block id, so the
-share-RLS join needs a separate cleartext <code>object_key → block_id</code> mapping — which leaks the
-same object↔block association the block-id path already does, so it's no worse on that axis. Not worth
-it for the small fleet vs block-id paths + client dedup; recorded so the option isn't re-discovered.
+distinct across workspaces (no correlation). It is genuinely the <em>better-scaling</em> design: it
+eliminates the dedup races and duplicate-object / re-upload wrinkles entirely, and those races get
+<em>more</em> likely as device count and concurrency grow, not less. The real cost is a design
+tradeoff, not a size question: the path no longer carries the block id, so the share-RLS join needs a
+separate cleartext <code>object_key → block_id</code> mapping (which leaks the same object↔block
+association the block-id path already does — no worse on that axis). So it's a true fork —
+<em>block-id paths</em> buy share-join simplicity; <em>keyed-hash paths</em> buy idempotency + dedup
+that scale. v1 may ship block-id paths to move faster, but that is a deliberate design call to revisit
+on merits, <strong>explicitly not settled by current fleet size</strong> — adopting keyed-hash later
+is a storage re-key + mapping backfill, and <em>that</em> migration is the only place the small fleet
+legitimately makes it cheap. Recorded so it isn't re-discovered.
 </div>
 
 <p>Storage <strong>reads</strong> are RLS-gated by workspace membership on the path's first segment.
@@ -1158,8 +1187,10 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
     what manufactured the drift.</li>
   <li><strong>Content-addressing is confined to client-local use under E2EE</strong> (§10): cache,
     dedup, and integrity keep the hash; the server-visible storage path and block id do not (oracle +
-    share-join). The dedup/duplicate-object friction is the price; a keyed hash
-    (<code>HMAC(WK, …)</code>) is the recorded lever to buy content-addressing back if it bites.</li>
+    share-join). The dedup/duplicate-object friction is the price of block-id paths; a keyed hash
+    (<code>HMAC(WK, …)</code>) is the better-scaling alternative (idempotent uploads, no dedup races) at
+    the cost of an object→block mapping for shares. It's a real design fork to decide on merits —
+    <em>not</em> on current fleet size; fleet size bears only on how cheap the migration to it is (§10).</li>
   <li><strong>Open: the decryption boundary.</strong> The single biggest source of genuine (not
     cosmetic) complexity is putting decryption in the <em>service worker</em> — a context that can't
     read app state (→ IDB mode-pin, <code>?h=</code> hash-passing), is shared across tabs/accounts and
