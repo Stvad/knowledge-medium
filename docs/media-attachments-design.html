@@ -196,11 +196,17 @@ properties: {
 }
 content: 'image: screenshot.png'   // human-readable summary</code></pre>
 
-<p>The <code>media</code> type is <strong>registered with the type registry</strong> (a property
-  schema, as <code>video-player</code> does for its own props) so type-filtered queries, the property
-  panel, and renderer discovery all see media blocks — stamping a bare <code>properties.type</code>
-  would make them invisible to every current <code>types</code>-array consumer
-  (<code>getBlockTypes</code> / <code>hasBlockType</code> / <code>block.hasType</code>).</p>
+<p>The <code>media</code> type is <strong>registered as a <code>TypeContribution</code></strong> —
+  <code>defineBlockType({id: 'media', label, properties})</code> contributed via
+  <code>typesFacet.of(mediaType, {source: 'attachments'})</code> (the pattern daily-notes / geo /
+  block-tagging use), so type-filtered queries, the property panel, and renderer discovery all see
+  media blocks. This is <em>not</em> the same as video-player's setup, which contributes property
+  schemas + a renderer but <em>no</em> type — and a bare property schema is insufficient: the capture
+  path's <code>repo.addTypeInTx(tx, id, 'media', …)</code> looks the id up in the type registry
+  (<code>types.get(typeId)</code>) and <strong>throws unless a <code>TypeContribution</code> was
+  registered</strong> through <code>typesFacet</code>. (Stamping a bare <code>properties.type</code>
+  scalar instead would also make blocks invisible to every <code>types</code>-array consumer —
+  <code>getBlockTypes</code> / <code>hasBlockType</code> / <code>block.hasType</code>.)</p>
 
 <p>Why a block, not an <code>attachments</code> table:</p>
 <ul>
@@ -366,8 +372,13 @@ its own monotonicity).
 <p>The <code>encb:v1:</code> magic is a <strong>format tag, not an authorization signal.</strong>
   Whether to decrypt is decided by the workspace's mode pin (§7), exactly as the text path decides via
   the pin rather than the <code>enc:v1:</code> prefix (<code>envelope.ts</code> / e2ee §6 rule&nbsp;2).
-  An E2EE-pinned workspace requires the magic and treats its absence as tampering; only an unpinned
-  workspace passes bytes through.</p>
+  An E2EE-pinned workspace requires the magic and treats its absence as tampering; only a
+  <strong>plaintext-pinned</strong> workspace passes bytes through. A workspace with <em>no</em> pin
+  (never validated, or evicted) is <em>not</em> plaintext — it is the resolver's
+  <code>defer</code>/encryption-uncertain state (<code>src/sync/keys/resolver.ts</code>), so the SW
+  <strong>fails closed</strong> (placeholder), never passthrough — otherwise an encrypted workspace
+  with a missing local pin would serve attacker-controlled plaintext.</p>
+
 
 <h2 id="bytepath">6. The byte path, end to end</h2>
 
@@ -455,17 +466,20 @@ its own monotonicity).
   <li><strong>The SW resolves it, auth-first:</strong> establish the active <code>user_id</code> (for
     the requesting client — §7.1) and the workspace's <em>mode pin</em> + WK availability
     <em>before</em> consulting the cache → serve from cache only on a namespace match, a still-valid
-    session, <em>and a matching content hash</em> (the cache key includes <code>h</code>, §8) → on miss,
-    fetch the stored blob → decrypt/passthrough <em>per the mode pin</em> (below) → verify against
-    <code>h</code> (§5.1) → put the displayable bytes in the user-scoped, hash-keyed cache → respond.</li>
+    session, <em>and a matching content hash</em> (from the SW metadata mirror; the cache key includes
+    it, §8) → on miss, fetch the stored blob → decrypt/passthrough <em>per the mode pin</em> (below) →
+    verify against the mirror's expected hash (§5.1) → put the displayable bytes in the user-scoped,
+    hash-keyed cache → respond.</li>
   <li><strong>The mode pin decides decrypt-vs-passthrough, NOT the envelope magic.</strong> This is a
     deliberate carry-over of the rule the text path already enforces (<code>src/sync/crypto/envelope.ts</code>
     / e2ee §6 rule&nbsp;2: "the prefix is a FORMAT tag, not a decrypt trigger — the durable mode pin
     decides"). The SW reads the workspace's mode pin from a <em>SW-readable</em> source (§7.1.1): if the
     workspace is <strong>E2EE-pinned, the SW <em>requires</em> a well-formed <code>encb:v1:</code>
     envelope and decrypts</strong> — a blob that arrives <em>without</em> the magic is treated as
-    tampering and rejected, never served as plaintext. Only an unpinned/plaintext workspace passes
-    bytes through. Deciding from the self-describing magic alone would re-introduce exactly the
+    tampering and rejected, never served as plaintext. Only a <strong>plaintext-pinned</strong>
+    workspace passes bytes through; an unpinned / no-pin workspace is the resolver's
+    <code>defer</code> state and <strong>fails closed</strong> (not plaintext). Deciding from the
+    self-describing magic alone would re-introduce exactly the
     downgrade vector (hostile server strips the magic → attacker plaintext reaches
     <code>&lt;img&gt;</code>) that the text wire-boundary was hardened against.</li>
   <li><strong>Render gates on SW readiness (cold start).</strong> An <code>&lt;img src="/asset/…"&gt;</code>
@@ -510,20 +524,22 @@ its own monotonicity).
         (not purged), shared across accounts in the profile, and an in-memory-only fallback when IDB is
         unavailable (mirroring the keyStore's <code>InMemory</code> fallback).</li>
     </ul></div></li>
-  <li><strong>Expected hash → passed in the request by the renderer.</strong> The replay/rollback
-    defense (§5.1) verifies decrypted bytes against the block's <code>hash</code>, but that hash is in
-    the block's <em>encrypted</em> <code>properties_json</code> — in app/PowerSync state the SW can't
-    read. Resolution: the renderer (which holds the decrypted block) emits the URL with the expected
-    hash, e.g. <code>/asset/&lt;ws&gt;/&lt;id&gt;?h=&lt;sha256&gt;</code>, and the SW verifies the
-    decrypted bytes against it before caching/serving. Unlike the mode, an app-passed hash is
-    <em>safe</em>: it is a positive integrity check that can only <em>reject</em> (fail closed), never
-    downgrade — a hostile server can't weaken it, and a wrong hash just declines to serve from that
-    fetch. <strong>For an E2EE workspace a missing <code>h</code> fails closed</strong>: the server is
-    in the threat model, so a no-<code>h</code> download would let it replay an older ciphertext for the
-    same <code>&lt;ws&gt;/&lt;id&gt;</code> (GCM verifies; the SW has no hash to reject it). So the
-    download/navigation action <em>must</em> append <code>h</code> for E2EE assets (the renderer has it),
-    and the SW refuses to serve an E2EE asset without it. Only a plaintext workspace — where there is no
-    replay concern — may serve a no-<code>h</code> request.</li>
+  <li><strong>Expected hash → SW-readable metadata mirror, NOT a URL param.</strong> The
+    replay/rollback defense (§5.1) verifies decrypted bytes against the block's <code>hash</code>, but
+    that hash is in the block's <em>encrypted</em> <code>properties_json</code> — which the SW can't
+    read. An earlier draft put it in the URL (<code>?h=&lt;sha256&gt;</code>); that is
+    <strong>wrong</strong> — it leaks the plaintext SHA-256 to the origin on any SW-interception miss
+    (and misses are real: <code>public/sw.js</code> deliberately omits <code>clients.claim()</code>, so
+    a fresh install controls only the next load, and registration can be unavailable), which is exactly
+    the known-file <strong>content oracle §10 rejects</strong> and §4 promises against. Instead, the
+    app writes per-asset metadata to the <em>same SW-readable IDB mirror</em> as the mode pin
+    (§7.1.1, extended to <code>{asset_block_id → expected hash}</code>) when it materializes the block;
+    the SW reads the expected hash from there to (a) build the hash-keyed cache key (§8) and (b) verify
+    decrypted bytes before caching/serving. The URL stays clean
+    (<code>${BASE_URL}asset/&lt;ws&gt;/&lt;id&gt;</code>) — no plaintext hash ever on the wire. A
+    missing mirror entry for an E2EE asset <strong>fails closed</strong> (placeholder), never serves
+    unverified bytes — closing the same-asset replay window without the leak. The mirror holds a
+    plaintext-derived hash, so it is a Lock&nbsp;&amp;&nbsp;Wipe participant alongside the cache (§7.2).</li>
   <li><strong>Active user + token</strong> — already covered by the §7.1 per-<code>clientId</code>
     handshake.</li>
 </ul>
@@ -666,9 +682,9 @@ alternative honestly; everything below in §8–§10 is boundary-agnostic except
   tally is more even than an earlier draft implied. What the app-thread path <em>avoids</em>, because
   it runs in the context that owns app state:</p>
 <ul>
-  <li><strong>No mode-pin IDB store / no <code>?h=</code> passing.</strong> The app reads the mode pin
+  <li><strong>No mode-pin IDB store / no per-asset hash mirror.</strong> The app reads the mode pin
     synchronously and already holds the decrypted block (so the hash is just
-    <code>block.properties.hash</code>) — the §7.1.1 machinery exists only because the SW can't reach
+    <code>block.properties.hash</code>) — the §7.1.1 mirror machinery exists only because the SW can't reach
     app state.</li>
   <li><strong>Free wipe.</strong> It can cache decrypted bytes as blobs <em>in the SQLite DB</em> (a
     local-only table), so the existing DB-file deletion in <code>consumePendingWipe</code> takes them
@@ -699,10 +715,10 @@ alternative honestly; everything below in §8–§10 is boundary-agnostic except
     <code>&lt;ws&gt;/&lt;id&gt;/&lt;hash&gt;</code>): user-scoping is the access-isolation boundary (§7),
     workspace-scoping makes leave / lock evict only the affected bytes, and <strong>including the hash
     is what makes a re-upload self-invalidating</strong> — an edited asset gets a new
-    <code>hash</code> (§5.1), so the new <code>h=</code> misses the cache and triggers a fresh
-    fetch+decrypt+verify rather than serving the stale plaintext (the old entry ages out by LRU). The
-    cache hit must match the requested <code>h</code>; never serve <code>&lt;ws&gt;/&lt;id&gt;</code>
-    bytes for a different hash.</li>
+    <code>hash</code> (§5.1) in the SW metadata mirror (§7.1.1), so the new cache key misses and
+    triggers a fresh fetch+decrypt+verify rather than serving the stale plaintext (the old entry ages
+    out by LRU). The cache hit must match the mirror's current expected hash; never serve
+    <code>&lt;ws&gt;/&lt;id&gt;</code> bytes for a different hash.</li>
   <li><strong>Eviction:</strong> soft LRU cap (≈500&nbsp;MB default). An evicted entry simply
     round-trips to the object store on next view.</li>
   <li><strong>Lock &amp; Wipe:</strong> the cache, the SW token store, <em>and the §9 byte-upload
@@ -925,9 +941,11 @@ foreclose it. This is the cheap-option-value posture, not speculative building.
     <code>/image</code> command + file-picker action through the existing action/shortcut system.</li>
   <li><strong>On capture:</strong> client-side mime/size guard → hash → <em>subtree-scoped</em>
     best-effort dedup lookup (see the caveat below) → otherwise create the asset block as a
-    <em>child of the containing block</em> (see §12), registering the type with
+    <em>child of the containing block</em> (see §12), stamping the type with
     <code>repo.addTypeInTx(tx, id, 'media', …)</code> (the in-tx variant — the standalone
-    <code>block.addType</code> wouldn't compose into the single tx) + write bytes to the durable queue
+    <code>block.addType</code> wouldn't compose into the single tx; and the <code>media</code>
+    <code>TypeContribution</code> must be registered via <code>typesFacet</code> first, §3, or this
+    throws) + write bytes to the durable queue
     store + enqueue upload, all inside one <code>repo.tx({scope: ChangeScope.BlockDefault})</code> so
     the URI-insert and the asset block land in the same undo bucket (byte-lane compensation per §9).</li>
 </ul>
@@ -1055,11 +1073,12 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
 <p>All object-store access goes behind a ~50-line interface:</p>
 
 <pre><code>interface BlobStore {
-  put(workspaceId, assetBlockId, hash, bytes): Promise&lt;void&gt;
-  // The virtual URL carries the verified content hash: ${BASE_URL}asset/<ws>/<id>?h=<hash>.
-  // h= is MANDATORY for E2EE assets (§7.1.1 fail-closed) and is the cache key (§8);
-  // omitting it would force the SW to reject the URL or weaken the replay check.
-  url(workspaceId, assetBlockId, hash): string
+  put(workspaceId, assetBlockId, hash, bytes): Promise&lt;void&gt;  // hash drives dedup + the SW mirror entry
+  // The virtual URL is CLEAN — ${BASE_URL}asset/<ws>/<id>, no hash on the wire.
+  // The expected hash (cache key §8 + replay check §5.1) comes from the SW-readable
+  // metadata mirror (§7.1.1), never a URL param — a ?h= would leak the plaintext
+  // sha256 to the origin on a SW-interception miss (the §10 content oracle).
+  url(workspaceId, assetBlockId): string
   delete(workspaceId, assetBlockId): Promise&lt;void&gt;
 }</code></pre>
 
@@ -1085,12 +1104,14 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
       <code>BlobStore</code> over Supabase Storage. Post-create RLS audit per the Supabase rule.</td></tr>
 <tr><td>3 — cache + SW</td>
     <td><strong>Prereq:</strong> move <code>modePin</code> from localStorage to IndexedDB (single source
-      of truth + boot-hydrated in-memory cache, §7.1.1). Then: SW asset route
-      (<code>${BASE_URL}asset/&lt;ws&gt;/&lt;id&gt;</code>, base-prefixed and ordered before the
-      image-cache branch) with mode-pin-driven decrypt-or-passthrough; in-SW read cache for pin/WK;
-      user-scoped Cache; per-<code>clientId</code> token handshake; the marker-gated boot-time
-      cache+token purge (§7.2) — covered by <code>lockAndWipe</code>-flavored tests incl. a "plaintext
-      survives lock" regression.</td></tr>
+      of truth + boot-hydrated in-memory cache, §7.1.1), and extend that SW-readable mirror to per-asset
+      <code>{asset_block_id → expected hash}</code>, written on block materialization. Then: SW asset
+      route (<code>${BASE_URL}asset/&lt;ws&gt;/&lt;id&gt;</code>, clean — no <code>?h=</code>,
+      base-prefixed, ordered before the image-cache branch) with mode-pin-driven
+      decrypt-or-passthrough and mirror-sourced hash verify; in-SW read cache for pin/WK/hash;
+      user-scoped Cache; per-<code>clientId</code> token handshake; the marker-gated boot-time purge of
+      cache + token + hash-mirror (§7.2) — covered by <code>lockAndWipe</code>-flavored tests incl. a
+      "plaintext survives lock" regression.</td></tr>
 <tr><td>4 — block model + renderer</td>
     <td><code>media</code> block type; <code>MediaBlockRenderer</code> (image branch) reusing the
       lightbox; markdown <code>img</code> override.</td></tr>
@@ -1181,10 +1202,10 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
     the choice exists.</li>
   <li><strong>Funnel URL + mode + hash + cache-key through one asset-resolver seam.</strong> Many
     review findings were not "the design is wrong" but "a fact didn't propagate" — the base-path
-    prefix, the <code>?h=</code> hash, the mode decision, and the cache key are all facets of one
-    operation ("given an asset block + render context, produce displayable bytes"). Implement that as a
-    single named function so those parameters can't drift apart; scattering them across call sites is
-    what manufactured the drift.</li>
+    prefix, the expected-hash source (SW mirror), the mode decision, and the cache key are all facets
+    of one operation ("given an asset block + render context, produce displayable bytes"). Implement
+    that as a single named function so those parameters can't drift apart; scattering them across call
+    sites is what manufactured the drift.</li>
   <li><strong>Content-addressing is confined to client-local use under E2EE</strong> (§10): cache,
     dedup, and integrity keep the hash; the server-visible storage path and block id do not (oracle +
     share-join). The dedup/duplicate-object friction is the price of block-id paths; a keyed hash
@@ -1193,9 +1214,10 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
     <em>not</em> on current fleet size; fleet size bears only on how cheap the migration to it is (§10).</li>
   <li><strong>Open: the decryption boundary.</strong> The single biggest source of genuine (not
     cosmetic) complexity is putting decryption in the <em>service worker</em> — a context that can't
-    read app state (→ IDB mode-pin, <code>?h=</code> hash-passing), is shared across tabs/accounts and
-    respawned arbitrarily (→ per-<code>clientId</code> sessions, readiness gating), and caches
-    plaintext (→ a second store in the lock-wipe lifecycle). The app-thread-decrypt alternative (§7.3)
+    read app state (→ IDB mode-pin + per-asset hash mirror, since a <code>?h=</code> URL would leak
+    the plaintext hash), is shared across tabs/accounts and respawned arbitrarily (→
+    per-<code>clientId</code> sessions, readiness gating), and caches plaintext (→ a second store in
+    the lock-wipe lifecycle). The app-thread-decrypt alternative (§7.3)
     trades all of that for a mode-aware renderer + manual object-URL lifecycle. This choice is
     <em>deliberately left open</em> pending a focused re-evaluation; §7–§10 are written for the SW path
     but most of the data model is boundary-agnostic.</li>
