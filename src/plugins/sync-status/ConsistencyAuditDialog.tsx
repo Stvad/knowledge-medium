@@ -21,7 +21,7 @@ import type { DialogContextProps } from '@/utils/dialogs.js'
 import type {
   ConsistencyAuditResult,
   ConsistencyCheckResult,
-} from '@/data/internals/consistencyAudit.js'
+} from '@/plugins/data-integrity/audit.js'
 
 const num = (c: ConsistencyCheckResult, key: string): number => Number(c[key] ?? 0)
 const samplesOf = (c: ConsistencyCheckResult): string[] =>

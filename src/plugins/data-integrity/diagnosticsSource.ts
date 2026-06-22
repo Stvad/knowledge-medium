@@ -5,12 +5,12 @@
  * the audit store/shape.
  */
 import type { Repo } from '@/data/repo'
-import type { ConsistencyAuditResult } from '@/data/internals/consistencyAudit.js'
+import type { ConsistencyAuditResult } from './audit.js'
 import {
   RUN_DATA_INTEGRITY_AUDIT_ACTION_ID,
   getConsistencyAuditSnapshot,
   subscribeConsistencyAudit,
-} from '@/data/internals/consistencyAuditStore.js'
+} from './store.js'
 import type {
   DiagnosticSnapshot,
   DiagnosticSourceContribution,

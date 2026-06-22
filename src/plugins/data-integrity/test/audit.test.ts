@@ -1,9 +1,8 @@
 // @vitest-environment node
 /**
  * Built-in consistency audit (L3 of the data-integrity defense). Covers the
- * Repo idle-job wiring (schedule → run → metric, cadence gating) and that the
- * audit's mirror check actually catches an injected inconsistency. The check SQL
- * itself lives in src/data/internals/consistencyAudit.ts.
+ * plugin's run/publish/cadence wiring (schedule.ts) and that the engine's checks
+ * actually catch injected inconsistencies. The engine lives in ./audit.ts.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { BlockCache } from '@/data/blockCache'
@@ -14,7 +13,16 @@ import {
   type AuditDb,
   type AuditDecryptDeps,
   type DecryptSpotCheckResult,
-} from '@/data/internals/consistencyAudit'
+} from '../audit'
+import {
+  isAuditDue,
+  resetConsistencyAuditCadence,
+  runConsistencyAuditNow,
+} from '../schedule'
+import {
+  getConsistencyAuditSnapshot,
+  resetConsistencyAuditStore,
+} from '../store'
 import {
   BLOCKS_SYNCED_RAW_TABLE,
   BLOCK_STORAGE_COLUMNS,
@@ -23,7 +31,7 @@ import {
 import { encodeForWire, type Materializability } from '@/sync/transform.js'
 import { generateWorkspaceKeyBytes, importWorkspaceKey } from '@/sync/crypto/workspaceKey.js'
 import type { BlockData } from '@/data/api'
-import { Repo } from '../repo'
+import { Repo } from '@/data/repo'
 
 interface Harness {
   repo: Repo
@@ -35,31 +43,28 @@ const setup = (db: TestDb['db']): Harness => {
   return { repo, cleanup: async () => { repo.stopSyncObserver() } }
 }
 
-// Let the deferred idle run() fire (setTimeout(0) under node — no
-// requestIdleCallback) then drain the in-flight audit, mirroring the
-// scheduleReconcileRescan test's `settle`.
-const settle = async (repo: Repo): Promise<void> => {
-  await new Promise(resolve => setTimeout(resolve, 0))
-  await repo.awaitConsistencyAudits()
-}
-
 let sharedDb: TestDb
 let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
-beforeEach(async () => { await resetTestDb(sharedDb.db); env = setup(sharedDb.db) })
+beforeEach(async () => {
+  await resetTestDb(sharedDb.db)
+  // The cadence map + result store are module globals — reset them per test.
+  resetConsistencyAuditCadence()
+  resetConsistencyAuditStore()
+  env = setup(sharedDb.db)
+})
 afterEach(async () => { await env.cleanup() })
 
-describe('repo.scheduleConsistencyAudit — built-in L3 self-audit', () => {
-  it('runs on a healthy workspace and records no anomalies', async () => {
-    env.repo.scheduleConsistencyAudit('ws-1')
-    await settle(env.repo)
+describe('data-integrity audit runner + cadence (schedule.ts)', () => {
+  it('runs on a healthy workspace, returns + publishes a clean result', async () => {
+    const result = await runConsistencyAuditNow(env.repo, 'ws-1')
 
-    const audit = env.repo.metrics().consistencyAudit
-    expect(audit.runs).toBe(1)
-    expect(audit.lastResult?.workspaceId).toBe('ws-1')
-    expect(audit.lastResult?.anomalies).toBe(0)
-    expect(audit.lastResult?.checks.references_index_mirror.status).toBe('ok')
+    expect(result.workspaceId).toBe('ws-1')
+    expect(result.anomalies).toBe(0)
+    expect(result.checks.references_index_mirror.status).toBe('ok')
+    // Published to the store the diagnostics source reads.
+    expect(getConsistencyAuditSnapshot()).toBe(result)
   })
 
   it('flags a mirror anomaly — an orphan block_references row (source block gone)', async () => {
@@ -68,26 +73,20 @@ describe('repo.scheduleConsistencyAudit — built-in L3 self-audit', () => {
        VALUES ('missing-src', 'tgt', 'ws-2', 'tgt', '')`,
     )
 
-    env.repo.scheduleConsistencyAudit('ws-2')
-    await settle(env.repo)
+    const result = await runConsistencyAuditNow(env.repo, 'ws-2')
 
-    const result = env.repo.metrics().consistencyAudit.lastResult
-    expect(result?.anomalies).toBeGreaterThanOrEqual(1)
-    const mirror = result?.checks.references_index_mirror
-    expect(mirror?.status).toBe('anomaly')
-    expect(mirror?.orphanSourceRows).toBe(1)
+    expect(result.anomalies).toBeGreaterThanOrEqual(1)
+    const mirror = result.checks.references_index_mirror
+    expect(mirror.status).toBe('anomaly')
+    expect(mirror.orphanSourceRows).toBe(1)
   })
 
-  it('is cadenced — a second schedule within the window skips re-running', async () => {
-    env.repo.scheduleConsistencyAudit('ws-3')
-    await settle(env.repo)
-    expect(env.repo.metrics().consistencyAudit.runs).toBe(1)
-
-    env.repo.scheduleConsistencyAudit('ws-3')
-    await settle(env.repo)
-    const audit = env.repo.metrics().consistencyAudit
-    expect(audit.runs).toBe(1) // not re-run within the cadence window
-    expect(audit.skipped).toBe(1) // cadence gate hit
+  it('cadence gate: a workspace is not due right after a run, due again after reset', async () => {
+    expect(isAuditDue('ws-3', Date.now())).toBe(true) // never run this session
+    await runConsistencyAuditNow(env.repo, 'ws-3')
+    expect(isAuditDue('ws-3', Date.now())).toBe(false) // within the cadence window
+    resetConsistencyAuditCadence()
+    expect(isAuditDue('ws-3', Date.now())).toBe(true)
   })
 })
 

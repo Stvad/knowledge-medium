@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   publishConsistencyAudit,
   resetConsistencyAuditStore,
-} from '@/data/internals/consistencyAuditStore'
+} from '@/plugins/data-integrity/store'
 import { SyncStatusHeaderItem } from '../SyncStatusHeaderItem.tsx'
 import {
   materializeQueueCountSql,

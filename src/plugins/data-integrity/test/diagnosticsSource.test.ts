@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import type { ConsistencyAuditResult } from '@/data/internals/consistencyAudit'
+import type { ConsistencyAuditResult } from '../audit'
 import {
   publishConsistencyAudit,
   resetConsistencyAuditStore,
-} from '@/data/internals/consistencyAuditStore'
+} from '../store'
 import {
   createDataIntegrityDiagnosticSource,
   mapAuditToSnapshot,

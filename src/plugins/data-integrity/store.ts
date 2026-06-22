@@ -1,13 +1,14 @@
 // In-memory observable for the latest built-in consistency-audit result (L3),
-// so the UI (the sync-status indicator) can react to it. Framework-agnostic
-// (no React) and kernel-safe (no env globals) — the Repo audit job publishes
-// here on each completed run; a useSyncExternalStore hook reads it.
+// so the UI (the sync-status indicator) can react to it via the diagnostics seam.
+// Framework-agnostic (no React) and kernel-safe (no env globals) — the audit
+// scheduling effect publishes here on each completed run; the data-integrity
+// diagnostic source reads it.
 //
-// In-memory by design: the audit runs once per workspace per session (the Repo
-// gates re-runs with an in-memory cadence), so the store is repopulated on every
-// page load. There's no cross-reload persistence to manage — a fresh session
+// In-memory by design: the audit runs once per workspace per session (cadence-
+// gated by the scheduling effect), so the store is repopulated on every page
+// load. There's no cross-reload persistence to manage — a fresh session
 // re-derives the current health within a few seconds of opening.
-import type { ConsistencyAuditResult } from './consistencyAudit'
+import type { ConsistencyAuditResult } from './audit.js'
 
 /** Id of the global action that runs the built-in audit on demand (registered by
  *  the sync-status plugin in auditAction.ts, triggered from the command palette

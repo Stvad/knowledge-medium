@@ -16,7 +16,8 @@ import {
 } from '@/shortcuts/types.js'
 import { openDialog } from '@/utils/dialogs.js'
 import { showError, showProgress } from '@/utils/toast.js'
-import { RUN_DATA_INTEGRITY_AUDIT_ACTION_ID } from '@/data/internals/consistencyAuditStore.js'
+import { RUN_DATA_INTEGRITY_AUDIT_ACTION_ID } from '@/plugins/data-integrity/store.js'
+import { runConsistencyAuditNow } from '@/plugins/data-integrity/schedule.js'
 import { ConsistencyAuditDialog } from './ConsistencyAuditDialog.tsx'
 
 export const runDataIntegrityAuditAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
@@ -33,7 +34,7 @@ export const runDataIntegrityAuditAction: ActionConfig<typeof ActionContextTypes
     }
     const progress = showProgress('Running data integrity audit…')
     try {
-      const result = await repo.runConsistencyAuditNow(workspaceId)
+      const result = await runConsistencyAuditNow(repo, workspaceId)
       if (result.anomalies > 0) {
         progress.fail(
           `Data integrity: ${result.anomalies} ${result.anomalies === 1 ? 'issue' : 'issues'} found — see details.`,
