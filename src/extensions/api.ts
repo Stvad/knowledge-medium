@@ -122,7 +122,7 @@ export {
   type PasteDecision,
   type PasteRequest,
   type PasteSurface,
-} from '@/extensions/paste.js'
+} from '@/paste/decision.js'
 
 // --- Action / shortcut helpers ---
 export {

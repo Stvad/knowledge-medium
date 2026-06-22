@@ -5,7 +5,7 @@ import {
   pasteDecisionVerb,
   type PasteDecision,
   type PasteRequest,
-} from '../paste.ts'
+} from '../decision.ts'
 
 const request = (over: Partial<PasteRequest>): PasteRequest => ({
   text: '',

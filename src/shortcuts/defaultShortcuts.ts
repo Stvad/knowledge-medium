@@ -52,7 +52,7 @@ import {
   cursorIsAtStart,
 } from '@/utils/codemirror.js'
 import { copySelectedBlocksToClipboard } from '@/utils/copy.js'
-import { pasteFromClipboard } from '@/utils/paste.js'
+import { pasteFromClipboard } from '@/paste/operations.js'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.js'
 import { AppExtension } from '@/facets/facet.js'
 import { refreshAppRuntime } from '@/facets/runtimeEvents.js'

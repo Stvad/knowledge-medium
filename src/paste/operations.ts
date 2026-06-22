@@ -6,7 +6,7 @@ import { revealChildren } from '@/data/mutators'
 import { parseMarkdownToBlocks, singleParsedBlock, type ParsedBlock } from '@/utils/markdownParser.js'
 import { keysBetween } from '../data/orderKey.ts'
 import { keysImmediatelyAfter, keysImmediatelyBefore } from '../data/orderKeyPlacement.ts'
-import { pasteDecisionVerb } from '@/extensions/paste.js'
+import { pasteDecisionVerb } from './decision.js'
 
 type PastePosition = 'before' | 'after'
 type PastePlacement = 'visible' | 'sibling'

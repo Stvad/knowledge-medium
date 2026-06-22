@@ -21,7 +21,7 @@ import {
 
 // Vim contributes only actions/transforms now — the double-click/tap gestures
 // are recognised and dispatched by core's `blockContentPointerGestures`
-// (covered in defaultEditorInteractions.test.ts), so this suite mocks the edit
+// (covered in editor/test/defaultInteractions.test.ts), so this suite mocks the edit
 // helpers and exercises the action handler + transform directly.
 const enterEditModeForBlock = vi.hoisted(() => vi.fn())
 const focusBlockWithoutEditing = vi.hoisted(() => vi.fn())

@@ -5,7 +5,7 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { isCollapsedProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
-import { pasteDecisionVerb } from '@/extensions/paste'
+import { pasteDecisionVerb } from '../decision'
 import {
   pasteChordIntent,
   pasteEditModeMultilineText,
@@ -13,7 +13,7 @@ import {
   pasteMultilineText,
   planEditModeMultilinePaste,
   planSingleBlockPaste,
-} from '@/utils/paste'
+} from '../operations'
 
 const WS = 'ws-1'
 

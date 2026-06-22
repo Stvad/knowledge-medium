@@ -19,12 +19,12 @@ import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernel
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { BlockContextProvider } from '@/context/block'
 import { blockLayoutFacet, type BlockLayout } from '@/extensions/blockInteraction'
-import { defaultEditorInteractionExtension } from '@/extensions/defaultEditorInteractions'
+import { defaultEditorInteractionExtension } from '@/editor/defaultInteractions'
 import { resolveFacetRuntimeSync, type FacetRuntime } from '@/facets/facet'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
 import type { Block } from '@/data/block'
 import type { BlockRendererProps } from '@/types'
-import { pasteMultilineText } from '@/utils/paste'
+import { pasteMultilineText } from '@/paste/operations'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer'
 
 const repoRef = vi.hoisted(() => ({
@@ -69,7 +69,7 @@ vi.mock('@/data/globalState.ts', async () => {
   }
 })
 
-vi.mock('@/utils/paste.ts', () => ({
+vi.mock('@/paste/operations.ts', () => ({
   pasteMultilineText: vi.fn(async () => []),
   pasteFromClipboard: vi.fn(async () => []),
 }))

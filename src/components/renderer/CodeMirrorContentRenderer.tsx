@@ -11,11 +11,11 @@ import {
   pasteEditModeMultilineText,
   planEditModeMultilinePaste,
   planSingleBlockPaste,
-} from '@/utils/paste.js'
-import { pasteDecisionVerb } from '@/extensions/paste.js'
+} from '@/paste/operations.js'
+import { pasteDecisionVerb } from '@/paste/decision.js'
 import { useRepo } from '@/context/repo.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
-import { codeMirrorExtensionsFacet } from '@/extensions/editor.js'
+import { codeMirrorExtensionsFacet } from '@/editor/codeMirrorExtensions.js'
 import { createFieldCreationKeydownExtension } from './fieldCreationKeydown.js'
 import { useBlockContext } from '@/context/block.js'
 

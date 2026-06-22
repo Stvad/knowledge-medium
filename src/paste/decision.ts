@@ -1,5 +1,5 @@
 import { defineVerbFacet } from '@/facets/verbFacet.ts'
-import type { PasteChordIntent } from '@/utils/paste.ts'
+import type { PasteChordIntent } from './operations.ts'
 
 /**
  * What the editor should do with a paste. The default impl reproduces the
