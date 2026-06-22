@@ -25,6 +25,7 @@ import { useRepo } from '@/context/repo'
 import { buildAppHash } from '@/utils/routing.js'
 import { navigate, useOpenBlock } from '@/utils/navigation.js'
 import { pasteMultilineText } from '@/utils/paste.js'
+import { pasteDecisionVerb } from '@/extensions/paste.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
 import { useIsMobile } from '@/utils/react.js'
 import { ErrorBoundary } from 'react-error-boundary'
@@ -471,15 +472,35 @@ export function DefaultBlockRenderer(
 
       e.preventDefault()
       const pastedText = e.clipboardData.getData('text/plain')
+      if (!pastedText) return
+      const html = e.clipboardData.getData('text/html') || undefined
 
-      const pasted = await pasteMultilineText(pastedText, block, repo, {
+      // Block-shell paste (block focused, NOT in edit mode) has no text
+      // caret, so the chord intent is always 'split'. Routing through the
+      // verb keeps plugin overrides (text rewrites, observers, a forced
+      // single-block) consistent with the in-editor paste path. With no
+      // contributions the decision is the historical outline paste.
+      const decision = await pasteDecisionVerb.run(runtime, {
+        text: pastedText,
+        html,
+        intent: 'split',
+      })
+      const textToPaste = decision.text ?? pastedText
+      // The shell has always pasted as an outline (markdown-parsed), so the
+      // default single-line→`single-block` decision must NOT change that
+      // (it would stop stripping bullet/heading markers). Only honor
+      // `single-block` for multiline text, where "don't split" is a
+      // meaningful, non-default override.
+      const asSingleBlock = decision.kind === 'single-block' && textToPaste.includes('\n')
+      const pasted = await pasteMultilineText(textToPaste, block, repo, {
         scopeRootId,
+        asSingleBlock,
       })
       if (pasted[0]) {
         void focusBlock(uiStateBlock, pasted[0].id, {renderScopeId})
       }
     },
-    [block, blockContext.renderScopeId, repo, scopeRootId, uiStateBlock],
+    [block, blockContext.renderScopeId, repo, runtime, scopeRootId, uiStateBlock],
   )
 
   // Content slot: the content surface div + its surface props + the

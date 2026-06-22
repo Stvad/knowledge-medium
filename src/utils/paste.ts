@@ -3,7 +3,7 @@ import { Block } from '../data/block'
 import type { Repo } from '../data/repo'
 import { isCollapsedProp } from '@/data/properties.js'
 import { revealChildren } from '@/data/mutators'
-import { parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser.js'
+import { parseMarkdownToBlocks, singleParsedBlock, type ParsedBlock } from '@/utils/markdownParser.js'
 import { keysBetween } from '../data/orderKey.ts'
 import { keysImmediatelyAfter, keysImmediatelyBefore } from '../data/orderKeyPlacement.ts'
 
@@ -20,6 +20,10 @@ interface PasteOptions {
    *  range paste before/after the selected range unless that would
    *  leave the visible subtree. */
   placement?: PastePlacement
+  /** Treat the whole clipboard text as one block's content (newlines
+   *  kept) instead of parsing markdown into a tree. Used by the block-
+   *  shell paste when the paste decision is `single-block`. */
+  asSingleBlock?: boolean
 }
 
 interface ExistingParentInsertion {
@@ -234,12 +238,15 @@ export async function pasteMultilineText(
     position = 'after',
     scopeRootId,
     placement = 'visible',
+    asSingleBlock = false,
   }: PasteOptions = {},
 ): Promise<Block[]> {
   const targetData = pasteTarget.peek() ?? await pasteTarget.load()
   if (!targetData) return []
 
-  const parsed = parseMarkdownToBlocks(pastedText)
+  const parsed = asSingleBlock
+    ? [singleParsedBlock(pastedText)]
+    : parseMarkdownToBlocks(pastedText)
   if (parsed.length === 0) return []
 
   const parsedRoots = parsed.filter(block => !block.parentId)

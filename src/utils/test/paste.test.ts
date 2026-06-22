@@ -201,6 +201,25 @@ describe('pasteMultilineText', () => {
     expect(await childContents('root')).toEqual(['Parent', 'Pasted', 'Sibling'])
     expect(await childContents('parent')).toEqual(['Old child'])
   })
+
+  it('pastes the whole text as one block when asSingleBlock is set', async () => {
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('target', 'Target', 'root', 'a0')
+    await createBlock('sibling', 'Sibling', 'root', 'a1')
+
+    const pasted = await pasteMultilineText(
+      '- Alpha\n- Beta',
+      env.repo.block('target'),
+      env.repo,
+      {scopeRootId: 'root', asSingleBlock: true},
+    )
+
+    // No markdown split, no bullet stripping — the whole clipboard becomes
+    // one block (the block-shell "single-block" override path).
+    expect(pasted).toHaveLength(1)
+    expect(pasted[0]?.peek()?.content).toBe('- Alpha\n- Beta')
+    expect(await childContents('root')).toEqual(['Target', '- Alpha\n- Beta', 'Sibling'])
+  })
 })
 
 describe('pasteEditModeMultilineText', () => {

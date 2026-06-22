@@ -213,7 +213,7 @@ describe('DefaultBlockRenderer paste handling', () => {
     expect(pasteMultilineText).not.toHaveBeenCalled()
   })
 
-  it('still handles paste on the focused block shell', () => {
+  it('still handles paste on the focused block shell', async () => {
     renderBlock()
 
     const shell = document.querySelector<HTMLElement>('[data-block-id="block-1"][data-editing="false"]')
@@ -224,13 +224,15 @@ describe('DefaultBlockRenderer paste handling', () => {
       event = dispatchPaste(shell!, 'first\nsecond')
     })
 
+    // preventDefault is synchronous; the apply now runs after the async
+    // paste-verb decision, so wait for the call.
     expect(event?.defaultPrevented).toBe(true)
-    expect(pasteMultilineText).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(pasteMultilineText).toHaveBeenCalledTimes(1))
     expect(pasteMultilineText).toHaveBeenCalledWith(
       'first\nsecond',
       repo.block('block-1'),
       repo,
-      {scopeRootId: 'root'},
+      {scopeRootId: 'root', asSingleBlock: false},
     )
   })
 
