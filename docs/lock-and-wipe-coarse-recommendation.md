@@ -1,5 +1,9 @@
 # Lock & Wipe: should the selective flow become a coarse `destroyAllLocalData()`?
 
+> **Status: current** (written 2026-06-22) · recommendation/design — *not yet implemented*.
+> Code + tests are ground truth (see `AGENTS.md` → "design docs"); this proposes a direction,
+> so verify against the code before treating any "today it does X" claim as still true.
+
 Design investigation. **No code change in this doc** — it recommends a direction and
 scopes it. Grounded against `src/sync/keys/flows/lockAndWipe.ts`, `keyStore.ts`,
 `modePin.ts`, `resolver.ts`, `src/data/repoProvider.ts`, `src/utils/exportSqliteDb.ts`,
