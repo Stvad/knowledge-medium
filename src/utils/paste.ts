@@ -6,6 +6,7 @@ import { revealChildren } from '@/data/mutators'
 import { parseMarkdownToBlocks, singleParsedBlock, type ParsedBlock } from '@/utils/markdownParser.js'
 import { keysBetween } from '../data/orderKey.ts'
 import { keysImmediatelyAfter, keysImmediatelyBefore } from '../data/orderKeyPlacement.ts'
+import { pasteDecisionVerb } from '@/extensions/paste.js'
 
 type PastePosition = 'before' | 'after'
 type PastePlacement = 'visible' | 'sibling'
@@ -394,6 +395,16 @@ export async function pasteEditModeMultilineText(
   return {pasted: rootBlocks, focusBlock, focusOffset}
 }
 
+/** Read the clipboard and paste it around `pasteTarget`. This is the
+ *  funnel for shortcut / programmatic paste (vim normal-mode, multi-select
+ *  actions) — there's no `ClipboardEvent` and no text caret.
+ *
+ *  Routed through `pasteDecisionVerb` (surface `shell`) so plugin overrides
+ *  — text rewrites, a forced single-block, observers — apply to shortcut
+ *  paste exactly as they do to the DOM block-shell paste; keeping all
+ *  clipboard paste behind this one funnel stops a new call site from
+ *  silently bypassing the seam. Falls back to the raw outline paste only
+ *  when no runtime is installed yet (very early boot / minimal harness). */
 export async function pasteFromClipboard(
   pasteTarget: Block,
   repo: Repo,
@@ -401,5 +412,13 @@ export async function pasteFromClipboard(
 ): Promise<Block[]> {
   const text = await navigator.clipboard.readText()
   if (!text) return []
-  return pasteMultilineText(text, pasteTarget, repo, options)
+
+  const runtime = repo.facetRuntime
+  if (!runtime) return pasteMultilineText(text, pasteTarget, repo, options)
+
+  const decision = await pasteDecisionVerb.run(runtime, {text, intent: 'split', surface: 'shell'})
+  return pasteMultilineText(decision.text ?? text, pasteTarget, repo, {
+    ...options,
+    asSingleBlock: decision.kind === 'single-block',
+  })
 }
