@@ -236,7 +236,7 @@ content: 'image: screenshot.png'   // human-readable summary</code></pre>
   <rect class="m" x="60" y="100" width="220" height="64" rx="6"/>
   <text class="lbl" x="74" y="124">Media block (child)</text>
   <text class="sub mono" x="74" y="142">type=media · mime · hash</text>
-  <text class="sub mono" x="74" y="156">status=synced</text>
+  <text class="sub mono" x="74" y="156">(upload status: local §9)</text>
   <path class="ed" d="M 95 64 L 120 100"/>
   <rect class="n" x="60" y="196" width="220" height="36" rx="6"/>
   <text class="lbl" x="74" y="219">Caption (child of media)</text>
@@ -1026,8 +1026,11 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
 <p>All object-store access goes behind a ~50-line interface:</p>
 
 <pre><code>interface BlobStore {
-  put(workspaceId, assetBlockId, bytes): Promise&lt;void&gt;
-  url(workspaceId, assetBlockId): string        // the virtual /asset/… URL
+  put(workspaceId, assetBlockId, hash, bytes): Promise&lt;void&gt;
+  // The virtual URL carries the verified content hash: ${BASE_URL}asset/<ws>/<id>?h=<hash>.
+  // h= is MANDATORY for E2EE assets (§7.1.1 fail-closed) and is the cache key (§8);
+  // omitting it would force the SW to reject the URL or weaken the replay check.
+  url(workspaceId, assetBlockId, hash): string
   delete(workspaceId, assetBlockId): Promise&lt;void&gt;
 }</code></pre>
 
