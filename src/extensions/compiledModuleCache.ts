@@ -20,7 +20,7 @@
  * Keyed by `blockId` (globally-unique), so each block occupies exactly
  * one row, overwritten on re-approval (an explicit update). `delete`
  * revokes a single approval (disable / uninstall / remote-disable);
- * `clear` empties the whole store (§6 lock & wipe boot path).
+ * `clear` empties the whole store (currently exercised only by tests).
  *
  * Mirrors the interface + in-memory-fallback + IndexedDB pattern of
  * `sync/keys/keyStore.ts`. Unlike that store — which holds a

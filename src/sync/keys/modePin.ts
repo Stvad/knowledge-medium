@@ -7,11 +7,14 @@
  *
  *   - set once, the moment a WK first validates against the workspace's
  *     canary (→ `e2ee`) or a plaintext workspace is created/confirmed
- *     (→ `plaintext`), and locally immutable thereafter;
- *   - stored in localStorage so it SURVIVES a §6 Lock & wipe (which
- *     clears the SQLite DB and the IndexedDB workspace keys, but must
- *     leave each workspace's mode known so the wipe can't downgrade an
- *     e2ee workspace to plaintext).
+ *     (→ `plaintext`), and locally immutable thereafter — a server that
+ *     flips its `encryption_mode` flag can't silently downgrade a pinned
+ *     workspace;
+ *   - stored in localStorage, which (unlike the per-user SQLite DB,
+ *     kmp-v6-<user_id>.db) is shared across all of a profile's accounts,
+ *     so pins are keyed by user id. A full platform "clear site data"
+ *     wipe clears these too; the workspace then re-resolves its mode on
+ *     first encounter after re-login (the accepted post-wipe behavior).
  *
  * This module owns only the storage of pins, plus its own localStorage
  * key constant. Deciding *what* to pin (canary validation, first-encounter
@@ -20,10 +23,6 @@
 
 // localStorage key. Per repo convention each module owns its key
 // constants (cf. localOnly.ts, lastWorkspace.ts) using the `kmp-` prefix.
-// This deliberately lives in localStorage so it SURVIVES a §6 Lock &
-// wipe (which clears the SQLite DB and the IndexedDB workspace keys, but
-// must leave each workspace's mode known so the wipe can't downgrade).
-//
 // localStorage is shared across all accounts in a browser profile (only
 // the SQLite DB is per-user, via kmp-v6-<user_id>.db), so pins are keyed
 // by user id — otherwise a second account signing into the same profile

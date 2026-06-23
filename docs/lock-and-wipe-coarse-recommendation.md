@@ -121,7 +121,8 @@ Chromium 141):
 | Page `fetch()` of a network response | all cleared |
 | Top-level navigation to a network response | all cleared |
 
-So Chromium only honors `Clear-Site-Data` on responses that **actually came over the network**;
+So Chromium only honors `Clear-Site-Data` on responses that **actually came over the network**
+(Chromium 141; other engines unverified — only Chromium was available to the spike);
 a SW-fabricated `Response` is dropped on the floor. (Note the corrected mechanism: the
 pass-through case clears even though it unregisters *that same SW* mid-response — so the blocker
 is the network-origin requirement, **not** self-reference, as an earlier draft of this doc

@@ -1,9 +1,9 @@
 // Clear-Site-Data spike: does a service-worker-SYNTHESIZED Clear-Site-Data
 // response actually clear storage in Chromium? Contrasts SW-synthesized (A1),
 // SW pass-through of a network response (A2), plain network fetch (B), and
-// top-level navigation (C). Fully isolated: ephemeral Playwright contexts +
-// temp user-data-dir. localhost is a secure context, so SW + Clear-Site-Data
-// both work over plain HTTP.
+// top-level navigation (C). Fully isolated: each case runs in its own ephemeral
+// Playwright browser context (in-memory, no persistent profile). localhost is a
+// secure context, so SW + Clear-Site-Data both work over plain HTTP.
 const http = require('http')
 const { chromium } = require('playwright-core')
 

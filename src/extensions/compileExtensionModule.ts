@@ -393,8 +393,8 @@ export async function compileForVerification(
  * Revoke a block's device-local approval: delete the persisted row and
  * drop the in-memory L2 entry, so the block stops running on the next
  * resolve. Best-effort (a failed delete must not break disable/uninstall);
- * the worst case is an orphaned row that a later re-approval overwrites or
- * the lock & wipe clear removes.
+ * the worst case is an orphaned row that a later re-approval overwrites (or
+ * that a full "clear site data" wipe drops).
  */
 export async function revokeExtensionApproval(
   blockId: string,

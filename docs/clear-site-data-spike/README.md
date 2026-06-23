@@ -26,8 +26,8 @@ after a reload:
 | **B**  | page `fetch()` of a real network response (no SW interception) |
 | **C**  | top-level navigation to a real network response |
 
-Driven by Playwright in fully ephemeral browser contexts (throwaway profile in a
-temp dir) — it never touches a real browser profile.
+Driven by Playwright in fully ephemeral, in-memory browser contexts (one per
+case) — it never touches a real/persistent browser profile.
 
 ## Result (Chromium 141)
 

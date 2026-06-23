@@ -25,12 +25,12 @@ export interface WorkspaceKeyStore {
   get(userId: string, workspaceId: string): Promise<CryptoKey | null>
   put(userId: string, workspaceId: string, key: CryptoKey): Promise<void>
   delete(userId: string, workspaceId: string): Promise<void>
-  /** Drop every stored WK FOR THIS USER — the key-material half of a §6 Lock &
-   *  wipe. Scoped to `userId` (not the whole store) because the IndexedDB store
-   *  is shared across all accounts in the browser profile, while the wipe
-   *  marker + DB-file deletion are per-user: clearing another account's keys
-   *  would lock its e2ee workspaces without wiping its DB. (The mode pins live
-   *  elsewhere and deliberately survive.) */
+  /** Drop every stored WK FOR THIS USER. Scoped to `userId` (not the whole
+   *  store) because the IndexedDB store is shared across all accounts in the
+   *  browser profile, so clearing another account's keys would lock its e2ee
+   *  workspaces. Currently unused in-app — the per-workspace lock-&-wipe flow
+   *  that called this was removed (a full "clear site data" wipe drops the whole
+   *  store); kept as a store primitive with its own tests. */
   clearForUser(userId: string): Promise<void>
 }
 
