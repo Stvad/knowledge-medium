@@ -189,13 +189,25 @@ const navigateExplicitPanel = async (
   workspaceId: string,
   panelId: string,
   blockId: string,
-): Promise<NavigationResult> => {
+): Promise<NavigationResult | null> => {
+  // Guard against a stale `panelId` (e.g. a plugin policy resolved to a panel
+  // that no longer exists) and mark it active — but only when the layout
+  // session is reachable. The content swap below must NOT be coupled to this
+  // bookkeeping: if the session can't be resolved we still navigate (the panel
+  // block is directly addressable), preserving the long-standing resilience
+  // that a bookkeeping failure can't swallow the user-visible navigation.
+  try {
+    const layoutSessionBlock = await resolveLayoutSessionBlock(repo, workspaceId)
+    const panelRows = await panelRowsForLayoutSession(layoutSessionBlock)
+    if (!panelRows.some(row => row.id === panelId)) {
+      console.warn(`[navigation] ignoring navigation to unknown panel ${panelId}`)
+      return null
+    }
+    await setActivePanel(layoutSessionBlock, panelId)
+  } catch (error) {
+    console.error('[navigation] Failed to mark panel active after navigation', error)
+  }
   await navigateInPanel(repo.block(panelId), blockId)
-  void resolveLayoutSessionBlock(repo, workspaceId)
-    .then(layoutSessionBlock => setActivePanel(layoutSessionBlock, panelId))
-    .catch(error => {
-      console.error('[navigation] Failed to mark panel active after navigation', error)
-    })
   return {panelId, blockId}
 }
 

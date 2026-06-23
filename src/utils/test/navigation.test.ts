@@ -25,7 +25,7 @@ import {
   panelBlockIds,
 } from '@/utils/panelLayoutProjection'
 import { type User } from '@/data/api'
-import { activePanelIdProp } from '@/data/properties'
+import { activePanelIdProp, topLevelBlockIdProp } from '@/data/properties'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1', name: 'Alice'}
@@ -186,6 +186,19 @@ describe('navigate', () => {
     ])
     const rightPanel = await env.repo.block(rightPanelId).load()
     expect(rightPanel?.parentId).not.toBe(layoutSession.id)
+  })
+
+  it("target 'panel' with an unknown panelId is a no-op (no ghost write)", async () => {
+    const layoutSession = await layoutSessionBlock()
+    await insertPanelRow(env.repo, layoutSession, 'b-real')
+
+    const result = await navigate(env.repo, {blockId: 'b-x', target: 'panel', panelId: 'ghost-panel'})
+
+    expect(result).toBeNull()
+    // The live panel is untouched, and nothing was written to the ghost block.
+    expect(await currentPanelBlockIds()).toEqual(['b-real'])
+    await env.repo.load('ghost-panel')
+    expect(env.repo.block('ghost-panel').peekProperty(topLevelBlockIdProp)).toBeUndefined()
   })
 
   it('does nothing when no workspace can be resolved', async () => {
