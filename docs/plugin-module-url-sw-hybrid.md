@@ -1,7 +1,10 @@
 # Plugin module loading: stable `/module/<blockId>` URLs via an in-thread producer + service-worker cache (hybrid)
 
-> **Status: recommendation / investigation — no code change in this doc.** Recommends a direction and
-> scopes it; grounded against `src/extensions/compileExtensionModule.ts`, `compiledModuleCache.ts`,
+> **Status: recommendation / investigation.** Recommends a direction and scopes it; the one low-risk piece of
+> it — source maps + a stable `//# sourceURL` on the blob path (the §6 "do this regardless" step) — **is
+> implemented in this PR** (`defaultTranspileViaBabel`, `COMPILER_VERSION` 1→2). The SW `/module/` route is
+> **not** built (deferred per the recommendation). Grounded against `src/extensions/compileExtensionModule.ts`,
+> `compiledModuleCache.ts`,
 > `dynamicExtensions.ts`, `AppRuntimeProvider.tsx`, `src/extensions/api.ts`, `index.html` (importmap),
 > `vite.config.ts` (`preserveModules`), `vite-plugins/unifySrcJsUrls.ts`, `public/sw.js`,
 > `src/registerServiceWorker.ts`, `src/sync/transform.ts` + `src/data/internals/syncObserver/materialize.ts`
@@ -12,9 +15,9 @@
 ## TL;DR
 
 **Recommendation: keep the privileged work in-thread either way; do *not* adopt the SW `/module/` route now.
-Instead take the cheap 80% in-thread — emit source maps + a stable `//# sourceURL` on the existing blob path —
-and defer the SW route until transitive cross-plugin imports (`import "/module/<otherId>"`) are an actual
-goal.** That one capability — a plugin block importing another plugin block by a real URL — is the only thing
+Instead take the cheap 80% in-thread — emit source maps + a stable `//# sourceURL` on the existing blob path
+(done in this PR) — and defer the SW route until transitive cross-plugin imports
+(`import "${BASE_URL}module/<otherId>"`) are an actual goal.** That one capability — a plugin block importing another plugin block by a real URL — is the only thing
 blob URLs genuinely cannot do and the only thing the SW route uniquely buys. Everything else the SW route is
 sold on (module dedup/identity, recompile avoidance, "real" cache reuse) is **already handled in-thread today**
 by the in-memory `CompileCache` (dedup/identity) and the IndexedDB `CompiledModuleCache` (recompute avoidance).
@@ -181,8 +184,21 @@ const isModuleRoute = (url) => isSameOrigin(url) && url.pathname.startsWith(MODU
 if (isModuleRoute(url)) { event.respondWith(moduleCacheOnly(request)); return }
 ```
 `moduleCacheOnly` matches `km-modules` by the **full URL including `?v=`** and, on a miss, returns a clear
-error rather than hitting the network (there is no such file on the origin — GitHub Pages would 404). A miss
-should be impossible in steady state because the producer writes-then-imports; treat it as a bug signal.
+error rather than hitting the network (there is no such file on the origin — GitHub Pages would 404). A miss is
+a bug signal — but "writes-then-imports" only makes that true **per block**, not for transitive deps (see the
+pre-materialization requirement below).
+
+**Pre-materialization is mandatory for transitive imports (Codex #251).** Today the loader walks
+`extensionBlocks` *sequentially*, `await`ing `resolveBlockModule(block)` — which instantiates inline — before
+moving to the next block (`dynamicExtensions.ts:184-230`). If block A is processed before an enabled+approved
+block B and A imports `${BASE_URL}module/<B>?v=…`, only A's entry exists when the browser fetches B's URL →
+`moduleCacheOnly` misses → A's `import()` throws. So the loader must split into two phases: **(A) compile +
+`cache.put` every enabled+approved block** into `km-modules` (write-only, no `import()`), in **dependency
+order** so each dep's entry exists before any importer's; **(B) then `import()`** the entry modules. With
+phase A complete, every `${BASE_URL}module/<id>?v=…` an importer can name is already in the cache, and a miss
+really is a bug. (Cycles defeat a strict topological order — see the cycle risk in §6; disallow them or don't
+version-pin within a cycle. The uncontrolled-first-load blob path sidesteps this differently — the producer
+inlines deps as blob URLs while compiling the parent, §4.)
 
 **Route ordering — load-bearing (mirrors media §7.3's "asset route must be FIRST").** A dynamically
 `import()`ed module has `request.destination === 'script'`, so it is **already caught by `isCacheableAsset`**
@@ -274,14 +290,15 @@ cannot read the device-local approval state (`dynamicExtensions.ts` gate 2), and
 The producer *must* be in-thread; this is the whole reason the hybrid (not pure-SW) is the only viable
 SW-shaped option.
 
-### Concrete next step (low risk, high value) — do this regardless
+### Concrete next step (low risk, high value) — **done in this PR**
 
-Add to `defaultTranspileViaBabel` (`compileExtensionModule.ts:129`): `sourceMaps: 'inline'` (or a separate map),
-and append a stable `//# sourceURL=km-extension://<blockId>` to the compiled string before
-`defaultInstantiateViaBlob`. This fixes readable stack traces and breakpoints — the sharpest everyday pain —
-with **no SW, no cache, no first-load gap**, touching one file. Scope: ~1 file, a few lines; risk: negligible
-(a bad `sourceURL` only affects DevTools labels). Bump `COMPILER_VERSION` (`compileExtensionModule.ts:13`) so
-cached transpile output regenerates with the map.
+`defaultTranspileViaBabel` (`compileExtensionModule.ts`) now passes `sourceMaps: 'inline'` + `sourceFileName`
+and appends a stable `//# sourceURL=km-extension://<blockId>.tsx` (the `blockId` is threaded through
+`TranspileImpl` and the three call sites). `COMPILER_VERSION` was bumped `1` → `2` so existing map-less cached
+output regenerates. This fixes readable stack traces and breakpoints (DevTools maps frames back to the original
+TSX, named per extension) — the sharpest everyday pain — with **no SW, no cache, no first-load gap**. Risk:
+negligible (a bad `sourceURL` only affects DevTools labels). The L1 cache is content-keyed, so two
+identical-source blocks share one compiled string and thus one block's `sourceURL` — cosmetic only.
 
 ### If/when cross-plugin imports become a goal — adopt the §3 hybrid
 
@@ -290,6 +307,10 @@ Scope, in dependency order:
    JS to `km-modules` keyed `${BASE_URL}module/<blockId>?v=<approvedSourceHash>` (the pin, never live content —
    §3 / §5; the Gate-2 invariant); instantiate via the base-prefixed `${BASE_URL}module/` URL when controlled,
    else the existing blob path (§4). ~1 file.
+1a. **Split the loader into materialize-then-import** (`dynamicExtensions.ts`): the current sequential
+   walk imports each block inline, so a parent can import a not-yet-written dep (Codex #251). Phase A
+   `cache.put`s every enabled+approved block (write-only) in dependency order; phase B `import()`s the entries.
+   A real structural change to the loader loop, not just the producer.
 2. **Transitive-import hash pinning** (producer): rewrite a dep ref → `${BASE_URL}module/<dep>?v=<depApprovedHash>`
    from each dep's **approved record** (not its live DB row); unapproved deps fail closed; handle the
    blob-fallback inlining for the uncontrolled case. New, the fiddliest piece.
@@ -302,8 +323,10 @@ Scope, in dependency order:
 
 **Main risks:** (1) the first-load controller gap — a regression here breaks features, not images, so the blob
 fallback must be airtight and tested; (2) SW route ordering — a `/module/` request silently served by the
-existing asset branch yields a confusing miss; (3) transitive cache-busting — getting the `?v=` pinning wrong
-gives stale plugin code with no visible error; (4) cross-block import **cycles** — content-hash URLs make a
-cycle's URLs mutually content-dependent (a fixpoint); disallow cycles or don't version-pin within one.
+existing asset branch yields a confusing miss; (3) **materialization order** — a parent imported before its dep
+is written misses (Codex #251); the phase-A/phase-B split (step 1a) is what prevents it; (4) transitive
+cache-busting — getting the `?v=` pinning wrong gives stale plugin code with no visible error; (5) cross-block
+import **cycles** — content-hash URLs make a cycle's URLs mutually content-dependent (a fixpoint); disallow
+cycles or don't version-pin within one.
 **Not risks:** E2EE key exposure (producer is in-thread, §5) and wipe (coarse platform clear gets the cache,
 §5).
