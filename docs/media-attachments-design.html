@@ -94,8 +94,8 @@ byte transform parameterized by mode, where plaintext is the identity case, exac
 <code>src/sync/transform.ts</code> already does for text. Decryption happens in the
 <strong>service worker</strong> behind a self-describing binary envelope, so the renderer stays
 mode-agnostic (<code>&lt;img src="${BASE_URL}asset/&lt;ws&gt;/&lt;id&gt;"&gt;</code> "just works" for both
-modes — base-prefixed so it stays inside the SW scope, §7). The load-bearing risk is making the SW a
-participant in the E2EE lock/wipe lifecycle.
+modes — base-prefixed so it stays inside the SW scope, §7). The load-bearing work is the SW
+coordination it needs — a per-client session token and SW-readable mode/hash (§7).
 </div>
 
 <div class="toc">
@@ -329,7 +329,7 @@ decodeBytes(blob:  Uint8Array, mode: SyncMode, getCek: GetCek): Promise&lt;Uint8
 <div class="decision">
 <strong>Decision.</strong> There is one attachment implementation, not two. Everything expensive —
 the asset-as-block model, the <code>BlobStore</code>, the cache, the upload queue, dedup, the
-renderer, Lock-and-Wipe participation — is mode-agnostic and shared. Only the ~15-line
+renderer — is mode-agnostic and shared. Only the ~15-line
 encode/decode seam is mode-aware, and plaintext is its degenerate (identity) branch, exactly like
 <code>encodeForWire</code>.
 </div>
@@ -525,9 +525,9 @@ no-overwrite precondition (reject if the object already exists). The old object 
 <ul>
   <li><strong>Mode pin → a SW-readable durable store (IndexedDB).</strong> Pins live in
     <code>window.localStorage</code> (<code>src/sync/keys/modePin.ts</code>), which a service worker
-    cannot read. The SW needs a durable <strong>IndexedDB</strong> source, sharing the pin's
-    "<em>survives</em> Lock &amp; Wipe" rule (the mode must stay known after a lock so the key can be
-    re-prompted — e2ee §6). The mode is <em>authoritative</em>, so it must come from this durable pin,
+    cannot read. The SW needs a durable <strong>IndexedDB</strong> source (the mode must stay known
+    across reloads so an encrypted workspace re-prompts for its key rather than being misread as
+    plaintext — e2ee §6). The mode is <em>authoritative</em>, so it must come from this durable pin,
     <strong>never</strong> from a per-request claim (an app-claimed "plaintext" would be the downgrade
     vector again). If no pin exists for the workspace yet (never validated), the SW fails closed —
     never a magic-fallback.
@@ -546,18 +546,17 @@ no-overwrite precondition (reject if the object already exists). The old object 
         storage pressure (localStorage less so) — but a missing pin for an encrypted workspace resolves
         to <code>defer</code> (don't materialize, re-prompt), never "plaintext". So eviction →
         <em>user re-affirms workspace status</em> → pin re-established; it can never silently downgrade.
-        Preserve the existing pin semantics through the move: <em>survives</em> Lock &amp; Wipe
-        (not purged) and <strong>keyed per <code>(user_id, workspace_id)</code></strong> — the IDB
-        store is <em>shared</em> across accounts in the profile but each record is per-user, exactly as
-        <code>modePin.ts</code> keys today; a workspace-only record would let account B consume account
-        A's pin for the same workspace, skipping B's own first-encounter validation and breaking the
-        per-user WK/wipe model. <strong>And the in-memory fallback stays
+        Preserve the existing pin semantics through the move: <strong>keyed per
+        <code>(user_id, workspace_id)</code></strong> — the IDB store is <em>shared</em> across accounts
+        in the profile but each record is per-user, exactly as <code>modePin.ts</code> keys today; a
+        workspace-only record would let account B consume account A's pin for the same workspace,
+        skipping B's own first-encounter validation and breaking the per-user WK model. <strong>And the in-memory fallback stays
         plaintext-only</strong>: <code>modePin.ts</code> today falls back in-session only for a
         <em>confirmed-plaintext</em> pin and <em>throws</em> on durable-pin failure, precisely because
-        E2EE needs a wipe-surviving authority. Keep that — if the durable IDB pin can't be written, an
-        E2EE create/unlock must <strong>fail</strong> (don't pin in memory), since a reload or lock
-        would lose the authority and strand the workspace in first-encounter <code>defer</code>. A
-        memory-only E2EE pin is never acceptable.</li>
+        E2EE needs a reload-surviving authority. Keep that — if the durable IDB pin can't be written, an
+        E2EE create/unlock must <strong>fail</strong> (don't pin in memory), since a reload would lose
+        the authority and strand the workspace in first-encounter <code>defer</code>. A memory-only
+        E2EE pin is never acceptable.</li>
     </ul></div></li>
   <li><strong>Expected hash → SW-readable metadata mirror, NOT a URL param.</strong> The
     replay/rollback defense (§5.1) verifies decrypted bytes against the block's <code>hash</code>, but
@@ -573,8 +572,8 @@ no-overwrite precondition (reject if the object already exists). The old object 
     decrypted bytes before caching/serving. The URL stays clean
     (<code>${BASE_URL}asset/&lt;ws&gt;/&lt;id&gt;</code>) — no plaintext hash ever on the wire. A
     missing mirror entry for an E2EE asset <strong>fails closed</strong> (placeholder), never serves
-    unverified bytes — closing the same-asset replay window without the leak. The mirror holds a
-    plaintext-derived hash, so it is a Lock&nbsp;&amp;&nbsp;Wipe participant alongside the cache (§7.2).</li>
+    unverified bytes — closing the same-asset replay window without the leak. (The mirror is ordinary
+    SW-readable IDB, removed by the coarse clear-all like every other local store, §7.2.)</li>
   <li><strong>Active user + token</strong> — already covered by the §7.1 per-<code>clientId</code>
     handshake.</li>
 </ul>
@@ -590,13 +589,13 @@ key the cache for) asset B with asset A's hash → false mismatches; hold a per-
 map inside the workspace entry (or a separate <code>(user_id, asset_block_id) → hash</code> map). The
 mode pin / WK stay at <code>(user_id, workspace_id)</code>. <strong>The
 <code>user_id</code> in the key is load-bearing, not an optimization detail:</strong> the keyStore
-deliberately keys WKs by <code>(user_id, workspace_id)</code> and wipes per-user, so a
-<em>workspace-only</em> hot cache would let account A's populated WK/pin serve account B's request for
-the same encrypted workspace — B could decrypt while B is locked or has never loaded its own WK,
+deliberately keys WKs by <code>(user_id, workspace_id)</code> (shared across accounts in the profile),
+so a <em>workspace-only</em> hot cache would let account A's populated WK/pin serve account B's request
+for the same encrypted workspace — B could decrypt while B is locked or has never loaded its own WK,
 bypassing the per-user isolation. Resolve the requesting client's <code>user_id</code> (§7.1) and key
 both the cache and its invalidation by <code>(user_id, workspace_id)</code>. Populated lazily and
-<strong>invalidated on the wipe and auth/token messages</strong> (the same signals that drive
-§7.1/§7.2) — and on the per-workspace revoke/leave purge. The cache is per-SW-lifetime, so a respawn
+<strong>invalidated on auth/token messages</strong> (§7.1) and on the per-workspace revoke/leave
+purge. The cache is per-SW-lifetime, so a respawn
 re-reads IDB once; correctness still comes from IDB + the invalidation signals, the cache only avoids
 per-request opens.
 </div>
@@ -625,14 +624,14 @@ per-user bucket <code>assets:&lt;user_id&gt;</code>); (2) <strong>resolve the ac
 requesting client, not globally</strong> — a single SW serves every tab, and a browser profile can
 hold two accounts at once (the keyStore is shared across accounts), so the SW keys its session map by
 <code>event.clientId</code> → that tab's user, never a single global "active user" slot that the last
-<code>onAuthStateChange</code> wins; and (3) <strong>validate before every hit against a
-<em>push-driven</em> locked state</strong> — lock is signalled <em>to</em> the SW (§7.2), and the SW
-treats "no fresh unlock signal for this workspace" as locked, evicting rather than serving. Pulling
-"is the WK present in IndexedDB?" is not sufficient on its own: that read can be stale between a lock
-and the SW's next read, and it doesn't gate plaintext-workspace cached bytes at all. Together these
-make the §7.2 purge a backstop, not the only line of defense — but note the cross-account case is the
-subtle one (§16): the cache namespace isolates <em>reads</em>, while the per-client session keying is
-what isolates the <em>fetch token</em>.
+<code>onAuthStateChange</code> wins; and (3) <strong>validate before every hit against key/session
+state</strong> — for E2EE, treat the workspace's WK being absent from IndexedDB as locked (evict rather
+than serve). There is no in-app lock action racing the SW (destruction is the coarse clear, §7.2), so
+WK-absence is an eventually-consistent signal, made robust by the TTL revalidation below; it also
+doesn't gate plaintext-workspace cached bytes, so neither check stands alone — the revoke/leave purge +
+the TTL revalidation are the real defense. Note the cross-account case is the subtle one (§16): the
+cache namespace isolates <em>reads</em>, while the per-client session keying is what isolates the
+<em>fetch token</em>.
 </div>
 
 <div class="warn">
@@ -683,58 +682,46 @@ a clientId-less navigation it returns a <em>placeholder/redirect into the app</e
 the shell. (If first-class direct navigations are ever wanted, they need an opaque app-minted
 capability token in the URL — deferred; the public-share path §13 is the related case.)</div>
 
-<p>Persistence across SW respawn is deliberately minimal and <strong>wipe-gated</strong>: the token
-  store, if persisted at all, lives under the same per-user <code>PENDING_WIPE</code> marker the DB
-  wipe uses (§7.2), so a boot-time consumer drops it deterministically. A bearer token must never
-  outlive a lock just because a runtime <code>postMessage</code> was missed; gating it on the marker
-  (rather than only on a best-effort message) is what guarantees that.</p>
+<p>Persistence across SW respawn is deliberately minimal: the per-<code>clientId</code> token store is
+  in-memory (SW-lifetime), so a respawn simply waits for the app to re-post on the next
+  <code>onAuthStateChange</code> / refresh. A bearer token is never written to durable storage — so
+  there is nothing for the coarse clear (§7.2) to miss — and the SW drops a client's entry when that
+  client goes away.</p>
 
-<h3>7.2 Coordination problem B — Lock &amp; Wipe must reach the SW</h3>
-
-<div class="warn">
-<strong>This is the load-bearing risk — and a fire-and-forget purge does NOT close it.</strong> If the
-SW caches <em>decrypted</em> bytes in the Cache API, those are plaintext-at-rest in a context that
-<code>src/sync/keys/flows/lockAndWipe.ts</code> does not touch today. Critically, the real lock
-sequence does <em>not</em> delete the local store inline: <code>lockAndWipe</code> drops the WKs
-(<code>clearForUser</code>) and <em>arms a per-user <code>PENDING_WIPE</code> marker</em>; the caller
-(<code>src/shortcuts/defaultShortcuts.ts</code>) then immediately calls
-<code>window.location.reload()</code>, and the OPFS DB file is deleted on the <em>next boot</em> by
-<code>consumePendingWipe</code> (before the DB is opened) — precisely because an inline delete isn't
-safe. A <code>postMessage(SW, 'purge')</code> issued just before that synchronous <code>reload()</code>
-is fire-and-forget: it races the navigation, the SW need not dispatch it before the page is gone, and
-nothing keeps an idle SW alive to finish <code>caches.delete</code>. So the obvious mechanism leaves
-decrypted bytes (and the bearer token) alive past a lock.
-</div>
+<h3>7.2 Destroying local data is coarse and system-level — not an in-app wipe</h3>
 
 <div class="decision">
-<strong>Fix: gate the SW purge on the existing wipe marker, not on a message.</strong> Mirror the OPFS
-pattern that already works. Arm the asset-cache + token purge under the same per-user
-<code>PENDING_WIPE</code> marker, and have <code>consumePendingWipe</code> (which already runs at
-next boot, before the DB opens) perform <code>caches.delete('assets:&lt;userId&gt;')</code> and clear
-the SW token store. The runtime <code>postMessage</code>, if kept, is only a fast path; the marker is
-the guarantee. This must be wired in from day one and covered by the same flavor of tests that pin
-<code>lockAndWipe</code>.
-<br><br>
-<strong>And it must <em>block</em> marker-clear — it is NOT best-effort like the compiled-extension
-clear.</strong> The compiled-extension cache is non-secret, so its clear can fail-and-forget; the asset
-cache is the <em>primary plaintext store</em> for attachments (and the token store holds a live bearer
-token). So <code>consumePendingWipe</code> must clear <code>PENDING_WIPE</code> <strong>only after</strong>
-both purges succeed — if <code>caches.delete</code> or the token-store clear throws/partial-fails, keep
-the marker armed (retry next boot) or fail the boot, never proceed with the DB open. Otherwise a transient
-Cache/IDB failure on the wipe boot leaves decrypted bytes or a token alive while the marker that would
-retry the wipe is gone.
+<strong>The byte stores add no selective wipe machinery.</strong> Destroying local data is a coarse,
+all-or-nothing action — the browser's "clear all site data" (or a single
+<code>destroyAllLocalData()</code> primitive) that removes the SQLite DB, the E2EE key store, and
+<em>every</em> byte store (OPFS, IndexedDB, Cache API) in one shot. The selective per-user in-app
+Lock&nbsp;&amp;&nbsp;Wipe flow an earlier draft coordinated with — a <code>PENDING_WIPE</code> marker, a
+boot-time <code>consumePendingWipe</code> purge, an app→SW purge handshake — is being removed in favour
+of that coarse clear (tracked separately). Consequences for this design:
+<ul>
+  <li><strong>No wipe participants.</strong> The replica, display cache, upload queue, SW token store
+    and hash mirror are ordinary local storage; the coarse clear removes them with the DB and keys —
+    nothing selective to drain, mark, or purge, and no app→SW wipe coordination to get right.</li>
+  <li><strong>No "plaintext survives a lock" hazard.</strong> Decrypted bytes in the Cache API (SW path)
+    or OPFS (app-thread path) are destroyed by the same clear that removes everything else, so storing
+    them locally is consistent with the accepted posture (e2ee §15 #7) <em>without</em> a per-store wipe
+    rule to enforce.</li>
+  <li><strong>Re-securing a device is the coarse clear</strong> — it logs out every account / workspace
+    in the profile, not one. Accepted: a paranoid user would clear site data anyway, and re-affirming
+    workspace status (re-paste the WK) afterward is fine.</li>
+</ul>
+The runtime cache-hit <em>authorization</em> checks above (account switch, membership revoke, WK
+absence) are independent of destruction and stay — they gate <em>serving</em> stale bytes, which no
+amount of wiping addresses.
 </div>
-
-<p>Storing decrypted bytes in the Cache API is <em>consistent</em> with the accepted posture (e2ee
-  §15 #7 already accepts plaintext-derived data on local disk) — but only because, and only as long
-  as, it is wiped on lock like everything else.</p>
 
 <div class="decision">
 <strong>Working choice (the boundary itself is the one open fork — §7.3, §18).</strong> Decrypt in the
 service worker behind the self-describing <code>encb:v1:</code> envelope; the renderer stays
-mode-agnostic, and the Cache API doubles as the byte cache. If kept, the mandatory companions are the
-app→SW token handshake (§7.1) and the marker-gated lock→SW wipe (§7.2). §7.3 lays out the app-thread
-alternative honestly; everything below in §8–§10 is boundary-agnostic except where it names the SW.
+mode-agnostic, and the Cache API doubles as the byte cache. If kept, the mandatory companion is the
+app→SW token handshake (§7.1) — there is no longer a wipe handshake, since destruction is coarse and
+system-level (§7.2). §7.3 lays out the app-thread alternative honestly; everything below in §8–§10 is
+boundary-agnostic except where it names the SW.
 </div>
 
 <h3>7.3 The open alternative: app-thread decryption</h3>
@@ -753,13 +740,10 @@ alternative honestly; everything below in §8–§10 is boundary-agnostic except
     decrypted bytes as plain <strong>OPFS files</strong> (<code>attachments/&lt;user&gt;/&lt;ws&gt;/&lt;id&gt;</code>)
     — the store the bytes always wanted (§6/§17 keep large blobs <em>out</em> of SQLite; an earlier draft
     wrongly floated DB-blob storage purely for a "free wipe," which both bloats the hot query DB and
-    contradicts that principle). Wipe is not a differentiator: under the coarse
-    <code>destroyAllLocalData()</code> lock, the whole OPFS tree is cleared anyway, so the attachments
-    dir goes with it for free; even under a surgical wipe it's one <code>removeEntry</code> in
-    <code>consumePendingWipe</code>. The real app-thread win here is <em>simplicity of resolution</em>:
-    the app owns the OPFS handle and the session, so fetch→decrypt→write-OPFS→object-URL is one local
-    flow with no SW cache/token/mirror lifecycle. (The SW path, by contrast, uses the Cache API as its
-    SW-native byte store — a separate lock-wipe participant.)</li>
+    contradicts that principle). Destruction is not a differentiator either way now — the coarse clear
+    (§7.2) removes the OPFS tree and the Cache API alike. The real app-thread win here is
+    <em>simplicity of resolution</em>: the app owns the OPFS handle and the session, so
+    fetch→decrypt→write-OPFS→object-URL is one local flow with no SW cache/token/mirror lifecycle.</li>
   <li><strong>No token handshake / no per-<code>clientId</code> session</strong> — the app already has
     the Supabase session.</li>
 </ul>
@@ -769,7 +753,9 @@ alternative honestly; everything below in §8–§10 is boundary-agnostic except
   boundary (both paths must fully materialize the plaintext; the fix is chunked encryption, §7 range
   note), so "native streaming" is not a real SW advantage. The SW path's genuine win is a single
   mode-agnostic <code>&lt;img src&gt;</code> for plaintext and E2EE alike; the app-thread path's win is
-  not making the service worker an E2EE-lifecycle participant. Decide on that, not on the illusory
+  avoiding the SW token handshake + SW-readable mode/hash machinery (§7.1/§7.1.1) entirely. (The earlier
+  "don't make the SW a lock-wipe participant" argument is now moot — under the coarse clear there is no
+  wipe participation on either path.) Decide on that token / mode-readability axis, not on the illusory
   range benefit.</p>
 
 <h2 id="cache">8. Local replication: byte replica &amp; display cache</h2>
@@ -849,10 +835,10 @@ alternative honestly; everything below in §8–§10 is boundary-agnostic except
     cap (≈500&nbsp;MB default); an evicted entry round-trips on next view (replica → re-fetch ciphertext;
     display → re-derive locally from the replica). <em>Un-uploaded</em> replica bytes are exempt — they
     are the only copy of those bytes anywhere (§9).</li>
-  <li><strong>Lock &amp; Wipe:</strong> the replica + display cache, the SW token store, <em>and the §9
-    byte-replication store</em> (the same durable store, §9) are all purged via the
-    <code>PENDING_WIPE</code> marker consumed at next boot (§7.2/§9), not a runtime message. On
-    per-workspace revoke/leave: purge that workspace's prefix.</li>
+  <li><strong>Destroying local data:</strong> the replica, display cache, and §9 byte-replication store
+    are ordinary local storage, removed wholesale by the coarse clear-all (§7.2) — no per-store wipe
+    participation. <em>Authorization</em> is separate: on per-workspace revoke/leave, purge that
+    workspace's cache prefix (a serving-access control, not destruction).</li>
   <li><strong>Optimistic local-first write:</strong> on paste, the encoded bytes are written straight to
     the <em>durable replica</em> (the §9 up-lane's source, never the evictable display cache) and the
     display cache is warmed. The image renders immediately from local bytes; the upload drains in the
@@ -896,10 +882,10 @@ the bytes.
   record</em> and threaded through <code>BlobStore.put</code>, so a retry <em>after a reload</em>
   re-presents the original token — otherwise the already-written object looks like a no-token/different
   overwrite and becomes a permanent failure; (b) the <code>user_id</code> namespaces the record (and
-  every cancel / drain / purge key), because the store is shared across accounts in the profile but
-  Lock&nbsp;&amp;&nbsp;Wipe and draining are per-user — without it, account A's lock can't tell A's
-  pending bytes from B's (purging B's, or surviving A's), and a drain could retry A's entry under B's
-  session. The <code>status</code> field has a lifecycle that closes the metadata-commit / byte-stage
+  every cancel / drain key), because the store is shared across accounts in the profile but draining is
+  per-user — each upload rides the active user's session/token, so without the namespace a drain could
+  retry account A's entry under B's session, uploading A's bytes with B's credential or against the
+  wrong workspace membership. The <code>status</code> field has a lifecycle that closes the metadata-commit / byte-stage
   ordering gap (§11): <code>staged</code> (durable but <em>not</em> drainable) → <code>pending</code>
   (drainable) → <code>uploading</code> → uploaded (entry cleared; bytes <em>retained</em> in the
   replica, §8). Capture writes the record as
@@ -943,37 +929,18 @@ queue entry that resurrects bytes for a block that no longer exists. (This is th
 orphan sweep does <em>not</em> cover.)</div>
 
 <div class="warn">
-<strong>The queue store is a Lock &amp; Wipe participant too — it holds un-uploaded bytes.</strong>
-This store sits outside both the display cache and PowerSync's <code>ps_crud</code> (so the existing
-<code>flushUploadQueue</code> in <code>lockAndWipe.ts</code>, which drains only <code>ps_crud</code>,
-does <em>not</em> touch it). Left alone it would (a) keep <em>raw</em> bytes for plaintext workspaces
-on disk past a wipe, and (b) lose bytes for a synced-metadata block, stranding it as
-<code>uploading</code> forever. So the queue joins the lock flow: at lock time a best-effort drain
-(upload + confirm) like <code>flushUploadQueue</code> does for <code>ps_crud</code>, then the store is
-purged under the same per-user <code>PENDING_WIPE</code> marker consumed at next boot (§7.2).
-<strong>Local loss isn't the whole story, though.</strong> An asset block whose <em>metadata</em>
-already synced (PowerSync up) while its <em>bytes</em> never uploaded (Storage / Edge-function down or
-rejecting) would, after the purge, strand every peer rendering a block whose
-<code>&lt;ws&gt;/&lt;asset_block_id&gt;</code> object can never exist — a permanently broken embed on
-devices that did nothing wrong. So the drain must <em>compensate</em>: for any asset block whose bytes
-are still un-confirmed at lock time, enqueue a delete of that asset block (and its embed ref) into
-<code>ps_crud</code> and let the existing <code>flushUploadQueue</code> drain it, so the server never
-keeps a block pointing at bytes this device is about to destroy and no peer holds. This rides the
-existing <code>ps_crud</code> flush. When the create itself never reached the server (offline since
-paste) the create + delete simply cancel locally — clean. But the named scenario is the opposite: the
-create <em>already</em> synced, and the compensating delete can still fail to drain (the client goes
-offline at lock time, the request times out, or the server rejects it). Lock &amp; Wipe <strong>cannot
-block on that</strong> — it is a destruction action that must complete promptly, not wait on a
-maybe-never network round-trip — so a client-only fix is impossible in that case: the wipe proceeds and
-a synced block with no bytes survives. The <em>guarantee</em> therefore moves server-side: an
-<strong>orphan-block GC</strong> (§16) reaps any asset block whose
-<code>&lt;ws&gt;/&lt;asset_block_id&gt;</code> object never materializes within a grace window — the
-mirror of the orphan-<em>object</em> sweep. The compensating delete stays as the fast path that cleans
-the common case immediately (it usually <em>can</em> drain — the scenario's own premise is that
-PowerSync was up enough to sync the create); the GC bounds the residual broken embed to that window
-rather than leaving it forever. Deleting the orphan is not extra data loss: the only bytes are being
-wiped regardless. The bytes themselves are still lost — consistent with the destructive-by-design lock
-— and that loss is surfaced, not silent.</div>
+<strong>A synced asset block can outlive its only bytes — the server-side backstop.</strong> The byte
+stores are ordinary local storage, so the coarse clear-all (§7.2) removes the upload queue with
+everything else — there is no per-store wipe participation to coordinate, and no raw-bytes-survive-a-wipe
+hazard (plaintext bytes go with the DB). But that destruction model, like a lost / reinstalled device or
+a crash, means a device can lose its <em>un-uploaded</em> bytes while the asset block's <em>metadata</em>
+already synced (PowerSync was up; the byte upload wasn't) — leaving the server with a block whose
+<code>&lt;ws&gt;/&lt;asset_block_id&gt;</code> object can never materialize, a broken embed on peers that
+did nothing wrong. There is no reliable client-side fix at that moment (the origin device is gone or
+offline), so the guarantee is server-side: an <strong>orphan-block GC</strong> (§16) reaps any asset
+block whose object never appears within a grace window — the mirror of the orphan-<em>object</em> sweep.
+This is a general device-loss backstop, not a wipe special case; it bounds the residual broken embed to
+that window rather than leaving it forever.</div>
 
 <h2 id="storage">10. Storage layout &amp; RLS</h2>
 
@@ -1369,9 +1336,8 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
       base-prefixed, matched FIRST — ahead of BOTH the navigation and image-cache branches, §11) with
       mode-pin-driven
       decrypt-or-passthrough and mirror-sourced hash verify; in-SW read cache for pin/WK/hash;
-      user-scoped Cache; per-<code>clientId</code> token handshake; the marker-gated boot-time purge of
-      cache + token + hash-mirror (§7.2) — covered by <code>lockAndWipe</code>-flavored tests incl. a
-      "plaintext survives lock" regression.</td></tr>
+      user-scoped Cache; per-<code>clientId</code> token handshake. (No per-store wipe purge — coarse
+      clear-all handles destruction, §7.2.)</td></tr>
 <tr><td>4 — block model + renderer</td>
     <td><code>media</code> block type; <code>MediaBlockRenderer</code> (image branch) reusing the
       lightbox; markdown <code>img</code> override.</td></tr>
@@ -1397,9 +1363,8 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
   <li><strong>Multi-account profile (decided shape, needs care):</strong> the SW session map is keyed
     by <code>event.clientId</code> → that tab's user, and the cache by <code>user_id</code> (§7), so a
     concurrent second account neither reads the wrong cache nor borrows the wrong bearer token. The
-    residual work is making this correct under <em>switch</em> and under the per-user wipe — mirror the
-    care <code>keyStore.clearForUser</code> already takes (it is per-user precisely so account A's wipe
-    doesn't disturb B).</li>
+    residual work is making this correct under account <em>switch</em> — keep the per-user keying the
+    keyStore already uses, so account A's session / cache can never serve account B.</li>
   <li><strong>Max inline size + large-media story:</strong> a v1 cap (e.g. 10&nbsp;MB) with a clear
     error, deferring resumable/tus upload to vNext. Where exactly is the cap enforced?</li>
   <li><strong>Asset block deletion → byte GC, and the two orphan directions:</strong> deleting an asset
@@ -1408,8 +1373,8 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
     vNext orphan sweep covers <strong>both</strong> directions: orphan <em>objects</em> (a Storage object
     with no block — e.g. an interrupted delete) and orphan <em>blocks</em> (an asset block whose object
     never materialized within a grace window — e.g. an upload that never completed before the origin
-    device was wiped/lost, §9 Lock &amp; Wipe). The block→object grace window must be generous enough not
-    to reap a block whose origin device is merely offline and still intends to upload.</li>
+    device was cleared / lost / reinstalled, §9). The block→object grace window must be generous enough
+    not to reap a block whose origin device is merely offline and still intends to upload.</li>
   <li><strong>Cache backing:</strong> Cache API only, or Cache API + an IndexedDB LRU index for finer
     eviction? Cache API alone is simpler; the durable upload-queue store (§9) is separate from either.</li>
 </ul>
@@ -1417,11 +1382,12 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
 <h2 id="tradeoffs">17. Tradeoffs we're accepting</h2>
 <table>
 <tr><th>Choice</th><th>Cost</th><th>Why / exit</th></tr>
-<tr><td>SW is an E2EE-lifecycle participant</td>
-    <td>A per-client token handshake; decrypted bytes + token in a new (Cache API / SW) location.</td>
-    <td>Buys a mode-agnostic renderer and native media semantics. Wipe is <strong>marker-gated at
-      next boot</strong> (§7.2), not a racy runtime message; mandatory and tested (incl. a
-      "plaintext survives lock" regression). Consistent with e2ee §15 #7.</td></tr>
+<tr><td>SW decryption needs app→SW coordination</td>
+    <td>A per-client token handshake (§7.1) + SW-readable mode/hash IDB (§7.1.1); decrypted bytes in the
+      Cache API.</td>
+    <td>Buys a mode-agnostic renderer and native media semantics. Destruction is the coarse clear-all
+      (§7.2), so there is no per-store wipe to coordinate or test. Consistent with e2ee §15 #7; the
+      app-thread alternative (§7.3) trades the handshake for a mode-aware renderer.</td></tr>
 <tr><td>Storage byte-length is visible to the server</td>
     <td>Exact encrypted-object size (≈ plaintext + 28&nbsp;B) + existence/count — a stronger known-file
       fingerprint than the accepted block-metadata leak (§4).</td>
@@ -1488,8 +1454,9 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
     cosmetic) complexity is putting decryption in the <em>service worker</em> — a context that can't
     read app state (→ IDB mode-pin + per-asset hash mirror, since a <code>?h=</code> URL would leak
     the plaintext hash), is shared across tabs/accounts and respawned arbitrarily (→
-    per-<code>clientId</code> sessions, readiness gating), and caches plaintext (→ a second store in
-    the lock-wipe lifecycle). The app-thread-decrypt alternative (§7.3)
+    per-<code>clientId</code> sessions, readiness gating). It also caches plaintext, but that is no
+    longer a lifecycle cost — the coarse clear-all removes it like every other store (§7.2). The
+    app-thread-decrypt alternative (§7.3)
     trades all of that for a mode-aware renderer + manual object-URL lifecycle. This choice is
     <em>deliberately left open</em> pending a focused re-evaluation; §7–§10 are written for the SW path
     but most of the data model is boundary-agnostic.</li>
@@ -1497,9 +1464,7 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
 
 <p><small>Grounded against: <code>src/sync/transform.ts</code>, <code>src/sync/crypto/</code>
   (incl. <code>aead.ts</code>, <code>envelope.ts</code>, <code>aad.ts</code>),
-  <code>src/sync/keys/</code> (incl. <code>keyStore.ts</code>, <code>flows/lockAndWipe.ts</code>,
-  the <code>PENDING_WIPE</code> / <code>consumePendingWipe</code> path),
-  <code>src/shortcuts/defaultShortcuts.ts</code> (the lock caller),
+  <code>src/sync/keys/</code> (incl. <code>keyStore.ts</code>, <code>modePin.ts</code>),
   <code>src/data/properties.ts</code> (<code>typesProp</code> / <code>getBlockTypes</code>),
   <code>supabase/migrations/20260529120000_add_e2ee_workspace_columns.sql</code> and the consolidated
   migration's <code>private.is_workspace_member</code>/<code>is_workspace_writer</code>,
