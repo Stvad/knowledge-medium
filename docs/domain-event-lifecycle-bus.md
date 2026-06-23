@@ -22,9 +22,10 @@ the **data-layer post-commit processor** (`src/data/api/processor.ts`,
    whole processor (and a processor cannot drive React reactivity directly —
    it would have to write a row or poke a store).
 3. **Cannot be declared as "observe only, filterable."** Field-watch is by
-   field name on `blocks`, not by block *type*. "Tell me when a `todo` is
-   created" means watching `properties`/`type` and re-deriving the type inside
-   `apply`.
+   field name on `blocks`, not by block *type* membership. "Tell me when a
+   `todo` is created" means watching `properties` and re-deriving membership
+   (`getBlockTypes`) inside `apply` — and a block's `types` is a *list*, so the
+   filter is "does the list contain `todo`", not an equality check.
 4. **Post-commit, no veto, no pre-event hook.** (Veto already has a home —
    `sameTxProcessor` + `ProcessorRejection` — so this one is by design, but it
    means the processor channel is not the place for "about to navigate" or
@@ -52,14 +53,15 @@ already runs for that event.
 
 | Event | Payload (sketch) | Existing choke to emit from | Notes |
 |---|---|---|---|
-| `block:created` | `{block, type, workspaceId, txId}` | `Repo._runAndDispatch` post-commit, line ~1166 (`processorRunner.dispatch`) — the snapshots walk already classifies before/after | `before===null && after!==null`. Type read from `after.properties`/`type`. |
-| `block:updated` | `{id, before, after, changedFields, type, workspaceId, txId}` | same | `before!==null && after!==null`. `changedFields` already computable (cf. `fieldChanged` in `processorRunner.ts`). |
-| `block:deleted` | `{id, before, type, workspaceId, txId}` | same | soft-delete = `deleted` flips; hard-delete = `after===null`. |
+| `block:created` | `{block, types, workspaceId, txId}` | `Repo._runAndDispatch` post-commit, line ~1166 (`processorRunner.dispatch`) — the snapshots walk already classifies before/after | `before===null && after!==null`. `types` via `getBlockTypes(after)` — a block carries a **`types` list**, not a single type (`properties.ts:119`). |
+| `block:updated` | `{id, before, after, changedFields, types, addedTypes, removedTypes, workspaceId, txId}` | same | `before!==null && after!==null`. `changedFields` via `fieldChanged` (`processorRunner.ts`); membership deltas via the `getBlockTypes`-diff helpers (`properties.ts:260+`). |
+| `block:deleted` | `{id, before, types, workspaceId, txId}` | same | soft-delete = `deleted` flips; hard-delete = `after===null`. `types` via `getBlockTypes(before)`. |
 | `block:synced` (down-sync applied) | `{ids, workspaceId}` | `startBlocksSyncedObserver` → `applyOutcome` (`syncObserver/observer.ts:167`) — already walks materialized snapshots | distinct from the local-write `block:*` events: these are *remote* rows landing. Pairs with `invalidationRules`. |
 | `navigation:completed` | `{result: NavigationResult, input, origin}` | `navigationVerb.after` (`utils/navigation.ts:289`) — **already exists** as a Sum observer slot | bridge, don't re-emit: an internal `after` observer forwards onto the bus. |
 | `navigation:requested` (pre) | `{input}` | `navigationVerb.before` — **already exists** | optional; most demand is for `completed`. |
-| `workspace:switched` | `{previousId, workspaceId}` | `Repo.setActiveWorkspaceId` (`repo.ts:943`) — **fires nothing today** | the highest-value missing signal (see I3). One-line emit. |
-| `workspace:created` | `{workspaceId, freshlyCreated}` | `bootstrapWorkspace` (`bootstrap/workspaceBootstrap.ts:113`, has `freshlyCreated`) and/or `CreateWorkspaceDialog.onCreated` | `freshlyCreated` is already threaded through bootstrap. |
+| `workspace:ready` (a.k.a. switched-and-bootstrapped) | `{previousId, workspaceId, freshlyCreated}` | **end of `bootstrapWorkspace`** (`bootstrap/workspaceBootstrap.ts`, the `{kind:'ready'}` return) — past the access gate + bootstrap writes | the I3 lifecycle point: workspace is materializable, scoped pages exist. **Not** `setActiveWorkspaceId` — see the caveat below. |
+| `workspace:active-changed` (low-level pin) | `{previousId, workspaceId}` | `Repo.setActiveWorkspaceId` (`repo.ts:943`) — **fires nothing today** | optional/secondary: reflects the *pin*, fires early (pre-gate, pre-bootstrap). For UI that just tracks "which workspace is selected", not for auto-create handlers. |
+| `workspace:created` | `{workspaceId, freshlyCreated}` | `bootstrapWorkspace` (has `freshlyCreated`) and/or `CreateWorkspaceDialog.onCreated` | `freshlyCreated` is already threaded through bootstrap; `workspace:ready` with `freshlyCreated:true` may subsume this. |
 | `sync:status` (online/offline/synced) | `{connected, hasSynced, uploading, downloading, …}` | PowerSync status listener — already consumed by `system-status` (`SyncIndicatorInput`) | the chip already derives this; the bus would expose the *transitions* to plugins. |
 | `app:booted` | `{repo, workspaceId}` | end of `bootstrapWorkspace` / `App.tsx` post-bootstrap | one-shot per session. |
 | `runtime:swapped` | `{}` | `EffectReconciler.reconcile` warm path / `refreshAppRuntime` (`facets/runtimeEvents.ts`) | the retained CustomEvent already signals this internally; the bus is the typed plugin-facing view. |
@@ -73,8 +75,22 @@ Two structural observations from the table:
 - **The two genuinely seam-less events are the workspace ones** —
   `setActiveWorkspaceId` and workspace create notify nobody. This is exactly
   gap I3's "correctness angle": a plugin that auto-creates blocks needs a
-  reliable "active workspace just changed" signal instead of racing the async
-  bootstrap. That makes `workspace:switched` the natural thin slice (§4).
+  reliable "active workspace is ready" signal instead of racing the async
+  bootstrap.
+
+  **Timing caveat (the choke matters here).** `setActiveWorkspaceId` is the
+  *wrong* place to emit the lifecycle event, even though it's the obvious one:
+  the switcher calls it *before* the hash change (`WorkspaceSwitcher.tsx:60`),
+  and `App.tsx` calls it at line 72 — **before** the read-only resolution, the
+  §6 access gate (which may return `waiting`/`locked` and never bootstrap), and
+  `bootstrapWorkspace` (Phase 3). Emitting `workspace:ready` from there would
+  fire into a possibly-locked, un-bootstrapped workspace whose scoped pages don't
+  exist and whose workspace-scoped effects haven't mounted — i.e. it would
+  *recreate* the race I3 wants to kill. So the design splits it: the lifecycle
+  event (`workspace:ready`) fires from the **end of `bootstrapWorkspace`**
+  (post-gate, post-writes); the early setter, if it emits at all, emits a
+  distinct low-level `workspace:active-changed` pin signal that auto-create
+  handlers must *not* use. `workspace:ready` is the thin slice (§4).
 
 ---
 
@@ -185,8 +201,8 @@ export interface AppEventRegistry { /* augmented per event */ }
 //   plugins/owners declare-merge their events:
 //   declare module '@/events/registry' {
 //     interface AppEventRegistry {
-//       'workspace:switched': { previousId: string | null; workspaceId: string }
-//       'block:created': { id: string; type: string | undefined; workspaceId: string; txId: string }
+//       'workspace:ready': { previousId: string | null; workspaceId: string; freshlyCreated: boolean }
+//       'block:created': { id: string; types: readonly string[]; workspaceId: string; txId: string }
 //     }
 //   }
 
@@ -218,12 +234,22 @@ export interface AppEventBus {
   (`setActiveWorkspaceId`, the commit dispatch, the sync observer) are inside
   or owned by the Repo. Navigation/runtime emit through `repo.events` too
   (`navigate` already takes `repo`; the runtime swap path has the repo).
-- **Implementation:** `Map<eventName, CallbackSet>` — reuse `CallbackSet`
-  (already the codebase's isolated-fan-out primitive; `repo.userErrorListeners`
-  uses it). No new machinery.
-- **`emit` is fire-and-forget for the emitter.** It schedules handler delivery
-  and returns `void`; the choke (navigate, commit, switch) is never blocked on a
-  subscriber. (See delivery semantics below.)
+- **Implementation:** `Map<eventName, Set<handler>>` for *registration* (a `Set`
+  with idempotent add/remove — `CallbackSet`'s storage half is reusable here).
+  But **delivery is NOT `CallbackSet.notify`.** `notify` fans out
+  *synchronously*, returns `void`, and wraps each call in a `try/catch` that does
+  not `await` — so a `Promise`-returning handler would run un-awaited (handlers
+  overlap instead of running sequentially) and a rejected promise would escape
+  the `catch` unhandled (`callbackSet.ts:35`). The bus's contract below
+  (`void | Promise<void>` handlers, awaited + sequential + isolated) needs a
+  dedicated async fan-out loop instead: `for (const h of handlers) { try { await
+  h(payload) } catch (e) { log(e) } }` — the same loop `verbFacet` uses for its
+  before/after observers (`verbFacet.ts:197`). So: reuse the `Set` for storage,
+  write the await-loop for delivery.
+- **`emit` is fire-and-forget for the emitter.** It kicks off that async
+  delivery loop and returns `void` (the loop's promise is tracked internally, not
+  returned to the choke); the choke (navigate, commit, switch) is never blocked
+  on a subscriber. (See delivery semantics below.)
 
 ### 3.3 Subscribe — two front doors, one core
 
@@ -233,8 +259,9 @@ export interface AppEventBus {
    ```ts
    const myEffect: AppEffect = {
      id: 'my-plugin/watch-switch',
-     start: ({ repo }) => repo.events.on('workspace:switched', ({ workspaceId }) => {
-       // ensure my plugin's per-workspace block exists, etc.
+     start: ({ repo }) => repo.events.on('workspace:ready', ({ workspaceId }) => {
+       // ensure my plugin's per-workspace block exists, etc. (safe: fired
+       // post-bootstrap, so scoped pages exist and the workspace is unlocked)
      }),   // the unsubscribe IS the cleanup
    }
    ```
@@ -246,7 +273,7 @@ export interface AppEventBus {
    `useHandle` and toggle stores bridge to React:
 
    ```ts
-   useAppEvent('block:created', useCallback(({ type }) => { … }, []), { filter })
+   useAppEvent('block:created', useCallback(({ types }) => { … }, []), { filter })
    ```
 
 3. **Optional declarative sugar (`appEventSubscribersFacet`)** — a Sum facet of
@@ -264,8 +291,9 @@ export interface AppEventBus {
   down) and matches how processors/invalidation already pass `workspaceId`
   through. A subscriber that only cares about the active workspace compares
   against `repo.activeWorkspaceId` *at handler time* — and because
-  `workspace:switched` is itself an event, a stateful subscriber can track the
-  current workspace precisely instead of racing bootstrap (the I3 fix).
+  `workspace:ready` is itself an event (fired post-bootstrap), a stateful
+  subscriber can track the current workspace precisely instead of racing
+  bootstrap (the I3 fix).
 - **Runtime-swap teardown.** Subscriptions made through an AppEffect inherit the
   reconciler's guarantees: a toggled-off plugin's `on` is unsubscribed via its
   cleanup; an unchanged plugin keeps its subscription across the swap (the bus
@@ -301,6 +329,12 @@ export interface AppEventBus {
   processor is still the right tool (atomicity, ordering, the existing veto/
   same-tx options). The bus's data events are for observers that can't or
   shouldn't be processors (UI, analytics, cross-cutting services).
+- **"By type" filtering is list-membership.** A block's `types` is a list
+  (`properties.ts:119`), so `on('block:created', h, { filter: p =>
+  p.types.includes('todo') })` — not a `type === 'todo'` equality. `block:updated`
+  additionally carries `addedTypes`/`removedTypes` so a subscriber can react to a
+  block *becoming* a `todo` (the membership delta), which an equality check on a
+  single field would miss.
 
 ### 3.6 How this avoids the B3 untyped-bus relapse
 
@@ -343,16 +377,21 @@ processor just to watch `block:created`.
 
 ### 4.2 Phased plan
 
-**Phase 0 — kernel + thin slice (`workspace:switched`).** Smallest valuable
+**Phase 0 — kernel + thin slice (`workspace:ready`).** Smallest valuable
 unit, zero existing seam, real demand (I3):
-- `AppEventBus` (`Map<name, CallbackSet>`), `repo.events`, typed `AppEventRegistry`.
-- One event declared: `workspace:switched`. One emit line in
-  `setActiveWorkspaceId` (skip when id unchanged, like the toggle store's `set`).
-- `useAppEvent` hook. Tests: emit-on-switch, isolation (throwing handler), and
-  the no-op-on-same-id fence.
-- This validates the *entire* shape — registry, emit, on, hook, lifecycle —
-  against the event that has no other way to be observed and that plugins
-  demonstrably need.
+- `AppEventBus` (`Map<name, Set<handler>>` storage + the async await-loop for
+  delivery — §3.2), `repo.events`, typed `AppEventRegistry`.
+- One event declared: `workspace:ready`. One emit line at the **end of
+  `bootstrapWorkspace`** (the `{kind:'ready'}` return) — *not*
+  `setActiveWorkspaceId`, so handlers run post-gate/post-bootstrap (the timing
+  caveat in §1).
+- `useAppEvent` hook. Tests: emit-on-ready (and *not* on a `locked`/`waiting`
+  workspace), handler isolation (a throwing handler doesn't break the others or
+  the bootstrap), and async-sequential delivery (a slow handler doesn't overlap
+  the next).
+- This validates the *entire* shape — registry, emit, async delivery, on, hook,
+  lifecycle — against the event that has no other way to be observed and that
+  plugins demonstrably need.
 
 **Phase 1 — lifecycle events.** `workspace:created` (from `bootstrapWorkspace`,
 reusing `freshlyCreated`), `app:booted`, `runtime:swapped` (forward from the
@@ -374,13 +413,15 @@ benefits from the bus contract being settled first.
 
 ### 4.3 Smallest first thin slice
 
-**`workspace:switched`, emitted from `Repo.setActiveWorkspaceId`.** It is the
-single event with *no* current observability, it is one line at one choke, its
-payload is two strings, and it directly closes gap I3's correctness hole
-("plugins that auto-create blocks need a reliable active-workspace-changed
-signal rather than racing the async bootstrap"). Shipping just this proves the
-registry/emit/subscribe/hook/lifecycle end to end with minimal blast radius, and
-every later event is additive.
+**`workspace:ready`, emitted from the end of `bootstrapWorkspace`.** It is the
+single event with *no* current observability, it is one emit line at one choke
+*that fires with the right semantics* (past the access gate and bootstrap
+writes — see the §1 timing caveat for why the obvious `setActiveWorkspaceId`
+choke is wrong), and it directly closes gap I3's correctness hole ("plugins that
+auto-create blocks need a reliable active-workspace-is-ready signal rather than
+racing the async bootstrap"). Shipping just this proves the
+registry/emit/async-delivery/subscribe/hook/lifecycle end to end with minimal
+blast radius, and every later event is additive.
 
 ---
 
