@@ -127,7 +127,7 @@ describe('approveExtension + loadApprovedExtension — trust gate + L3 cache', (
       sourceHash: result.contentHash,
       approvedSource: 'SRC',
       compiled: 'transpiled:SRC',
-      compilerVersion: '2',
+      compilerVersion: '1',
     })
     expect(typeof row!.approvedAt).toBe('number')
   })
@@ -194,7 +194,7 @@ describe('approveExtension + loadApprovedExtension — trust gate + L3 cache', (
     // Re-pinned at the current compiler version (approval hash unchanged).
     expect(await persistent.read('cv-1')).toMatchObject({
       sourceHash: stored!.sourceHash,
-      compilerVersion: '2',
+      compilerVersion: '1',
       compiled: 'transpiled:SRC',
     })
   })

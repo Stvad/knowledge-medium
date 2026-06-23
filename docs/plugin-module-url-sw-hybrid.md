@@ -6,9 +6,11 @@
 > SW-coordination ones), but because it's the only thing that unlocks **transitive cross-plugin imports**, with
 > stable URLs / native (intra-realm) dedup as bonuses, on a single path with no dual blob/SW maintenance. If no,
 > keep pure in-thread (the blob path) — a SW route behind a *mandatory* fallback is only additive cost. Either
-> way, the one low-risk piece — source maps + a sanitized `//# sourceURL` on the blob path — **is already
-> implemented in this PR** (`defaultTranspileViaBabel`, `COMPILER_VERSION` 1→2). Grounded against
-> `src/extensions/compileExtensionModule.ts`, `compiledModuleCache.ts`,
+> way, the one low-risk piece — source maps + a sanitized `//# sourceURL` on the blob path — **is implemented in
+> the spun-out code PR #252** (`defaultTranspileViaBabel`, `COMPILER_VERSION` 1→2); **this is the doc-only PR**.
+> The `compileExtensionModule.ts` line citations below assume #252 is applied (it's the only file #252 touches;
+> other files' citations are unaffected). Grounded against `src/extensions/compileExtensionModule.ts`,
+> `compiledModuleCache.ts`,
 > `dynamicExtensions.ts`, `AppRuntimeProvider.tsx`, `src/extensions/api.ts`, `index.html` (importmap),
 > `vite.config.ts` (`preserveModules`), `vite-plugins/unifySrcJsUrls.ts`, `public/sw.js`,
 > `src/registerServiceWorker.ts`, `src/sync/transform.ts` + `src/data/internals/syncObserver/materialize.ts`
@@ -40,7 +42,7 @@ tier, not a new cliff; the app still boots and runs on its built-ins.
   **page-initiated `clients.claim()`** (§4), gated on the active worker matching the page build. The real payoff
   is the **capability**: transitive cross-plugin imports (no in-thread substitute), plus stable URLs and
   source-maps-via-URL, on one path with no dual maintenance.
-- **If no →** keep pure in-thread (the blob path). The source-map win is already shipped (§6); the SW route
+- **If no →** keep pure in-thread (the blob path). The source-map win shipped separately in #252 (§6); the SW route
   isn't worth building if a fallback must shadow it.
 
 Compiling **in** the SW is off the table either way (§6): the SW can't read the SQLite DB or run the trust gate,
@@ -58,7 +60,7 @@ The compile is a deliberate **two-step** pipeline (`src/extensions/compileExtens
 1. **Transpile** TS/JSX → JS string via `@babel/standalone` (`react` + `typescript` presets), dynamically
    `import()`ed so the ~0.85 MB compiler stays out of the eager startup graph (`defaultTranspileViaBabel`,
    `compileExtensionModule.ts:148`). It now also emits an inline source map + a sanitized
-   `//# sourceURL=km-extension://<blockId>.tsx` (the §6 change shipped in this PR).
+   `//# sourceURL=km-extension://<blockId>.tsx` (the §6 change, shipped in PR #252).
 2. **Instantiate** the JS string into an ESM module via a **Blob object URL** (`defaultInstantiateViaBlob`,
    `compileExtensionModule.ts:174`):
    ```ts
@@ -88,7 +90,7 @@ doesn't remount renderer modules on every `refreshAppRuntime`). Across reloads t
 Babel. So intra-session dedup *and* cross-reload recompute-avoidance already exist — just not via the browser's
 native module map.
 
-**Pain points the blob path can't fix on its own:** ~~no source maps~~ (fixed this PR, §6); **no stable module
+**Pain points the blob path can't fix on its own:** ~~no source maps~~ (fixed in PR #252, §6); **no stable module
 identity URL** (the realm's own module map is bypassed — every blob is a fresh, immediately-revoked URL);
 **no transitive plugin→plugin imports** (a blob URL is per-compile and unaddressable, so one block can't `import`
 another — confirmed: no `/module/` or cross-block refs exist anywhere in `src/`); and **broken relative imports**
@@ -119,7 +121,7 @@ which wins are real:
   - *Which hash*: it's the dependency's **approved** `sourceHash` (its Gate-2 pin), never `sha256(live content)`.
     An unapproved dep was never produced, so A's import of it **fails closed** — correct #67 behavior. Net:
     cross-block imports resolve only between blocks both *enabled* and *approved* here.
-- **Source maps / DevTools** — real, but obtainable on the blob path (shipped, §6). Not a reason to need the SW.
+- **Source maps / DevTools** — real, but obtainable on the blob path (shipped in #252, §6). Not a reason to need the SW.
 - **Native dedup/identity** — marginal over the existing in-memory `CompileCache`, and **intra-realm only**: two
   plugins in one tab importing the same `${BASE_URL}module/<C>?v=…` dedupe natively, but two *tabs* still produce
   it independently (each has its own module map + producer). Not a cross-tab win.
@@ -332,8 +334,8 @@ shadow the SW route forever (for the uncontrolled first load), the SW route is p
 worth it. That conclusion is real — but it's an argument against the *fallback*, not against the SW. Removing the
 fallback (§4) is what makes the SW path a *replacement* instead of an addition.
 
-**Keep pure in-thread (blob) — the answer if we will NOT require a SW.** Already shipped: the source-map win.
-`defaultTranspileViaBabel` now passes `sourceMaps:'inline'` + `sourceFileName` and appends a stable, **sanitized**
+**Keep pure in-thread (blob) — the answer if we will NOT require a SW.** Shipped in the spun-out code PR #252:
+the source-map win. `defaultTranspileViaBabel` now passes `sourceMaps:'inline'` + `sourceFileName` and appends a stable, **sanitized**
 `//# sourceURL=km-extension://<safeId>.tsx` (`compileExtensionModule.ts:161-168`); `blockId` is threaded through
 `TranspileImpl` and its three call sites; `COMPILER_VERSION` bumped `1`→`2` (`:15`) so map-less cached output
 regenerates. (Security: block ids are caller-suppliable plain text, so the id is restricted to `[A-Za-z0-9._-]`
