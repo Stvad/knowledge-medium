@@ -63,13 +63,12 @@ export interface CompiledModuleCache {
   read(blockId: string): Promise<CompiledRecord | undefined>
   write(blockId: string, record: CompiledRecord): Promise<void>
   delete(blockId: string): Promise<void>
-  /** Empty the whole store. Used by §6 lock & wipe's boot-time half to
-   *  drop plaintext-derived extension source that lives OUTSIDE the
-   *  per-user SQLite file. Clearing through a transaction (rather than
-   *  `deleteDatabase`) is deliberate: a delete is BLOCKED by any
-   *  concurrent connection — a sibling tab mid-reload during the wipe is
-   *  exactly that — whereas a readwrite `clear()` is not. Coarse (no
-   *  per-user/workspace dimension), but over-clearing only costs a
+  /** Empty the whole store. Currently exercised only by tests (the §6
+   *  lock-&-wipe boot path that used it was removed); kept as a store
+   *  primitive. Clearing through a transaction (rather than `deleteDatabase`)
+   *  is deliberate: a delete is BLOCKED by any concurrent connection — a
+   *  sibling tab is exactly that — whereas a readwrite `clear()` is not.
+   *  Coarse (no per-user/workspace dimension), but over-clearing only costs a
    *  recompile, never a lockout. */
   clear(): Promise<void>
 }

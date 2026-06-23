@@ -6,9 +6,11 @@
 
 > **Status: implemented** (decided 2026-06-23) · the recommendation was adopted: the selective
 > lock-&-wipe flow analyzed below has been **removed** (`lockAndWipe.ts` and its boot/cross-tab
-> wiring), and `lock_and_wipe_local_data` is now a thin **panic action** — drain unsynced uploads,
-> then guide the user to the browser/OS "clear site data" control. `flushUploadQueue` moved to
-> `src/sync/flushUploadQueue.ts`. The programmatic `Clear-Site-Data` trigger is **deferred** until
+> wiring), and `lock_and_wipe_local_data` is now a small **guidance dialog** (`WipeLocalDataDialog`)
+> — it explains how to use the browser/OS "clear site data" control (which does the actual wipe and
+> sign-out) and warns if there are still-unsynced changes. It does **not** drain uploads or sign out
+> in-app: sync runs in the background, so there's nothing to actively flush, and the platform wipe
+> signs you out. The programmatic `Clear-Site-Data` trigger is **deferred** until
 > we leave GitHub Pages (header-capable host needed — see §0.3 and the follow-up issue).
 > Last verified against code: 2026-06-23.
 > **§1–§5 below now describe code that no longer exists** — they are retained as the historical

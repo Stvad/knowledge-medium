@@ -83,10 +83,11 @@ export const confirmPlaintextForSession = (userId: string, workspaceId: string):
 }
 
 /** True if this device can durably persist mode pins (localStorage is writable).
- *  E2EE REQUIRES this — the pin is the wipe-surviving authority and the §6 gate
- *  keys off it — so the create flow preflights it rather than minting an
- *  encrypted workspace this device could never open. Plaintext doesn't need it
- *  (it has the session fallback). Probes with a temp key and cleans up. */
+ *  E2EE REQUIRES this — the pin is the durable per-(user, workspace) mode
+ *  authority and the §6 gate keys off it — so the create flow preflights it
+ *  rather than minting an encrypted workspace this device could never open.
+ *  Plaintext doesn't need it (it has the session fallback). Probes with a temp
+ *  key and cleans up. */
 export const canPersistPins = (): boolean => {
   if (!hasLocalStorage()) return false
   try {
