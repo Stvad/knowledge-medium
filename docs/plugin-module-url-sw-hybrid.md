@@ -110,19 +110,28 @@ state, the cold-start control gap) weren't worth paying. **Modules are the inver
 *fundamentally consumes a URL*, and a Blob URL is a poor one (revoked, unaddressable, no map). So the SW *can*
 genuinely pay off. But be precise about which wins are real here:
 
-- **Transitive imports — the one decisive win.** With a stable `/module/<otherId>` served by the SW, block A
-  can `import "/module/<otherId>"`. This is **impossible** with blobs. And — answering the import-maps-vs-SW-
+- **Transitive imports — the one decisive win.** With a stable `${BASE_URL}module/<otherId>` served by the SW,
+  block A can `import` block B. This is **impossible** with blobs. And — answering the import-maps-vs-SW-
   rewriting question directly — it needs **no SW URL rewriting**: bare/app specifiers (`@/…`, `react`) keep
-  resolving through the realm import map (which applies to a `/module/<id>` module exactly as it does to a blob
-  module), and `/module/<otherId>` is root-absolute so it resolves against the origin natively. The SW stays a
-  dumb cache server keyed by the full URL; it never parses or rewrites import specifiers. **The one wrinkle:**
-  cache-busting a transitive dep requires the *importing* module to name the *versioned* URL
-  (`/module/<otherId>?v=<hashOther>`), because the realm module map caches `/module/<otherId>` for the realm
-  lifetime and won't re-fetch it when the cache entry changes. The producer — which already does import
-  resolution in-thread and can read every dependency's current content hash from the DB — must therefore
-  **pin transitive `/module/<id>` specifiers to `?v=<hash>` at compile time** (a small rewrite pass, in-thread,
-  not in the SW). Import maps are an alternative (a per-generation map of `<id>` → `<id>?v=<hash>`), but a
-  document import map can't be mutated per-edit after load, so producer-side rewriting is the cleaner fit.
+  resolving through the realm import map (which applies to a `${BASE_URL}module/<id>` module exactly as it does
+  to a blob module), and the module URL is an absolute same-origin URL the SW serves natively. **It must be
+  base-prefixed (`${BASE_URL}module/<id>`), not root-absolute (`/module/<id>`)** — under a non-root
+  `APP_BASE_PATH` the SW registers with `scope: import.meta.env.BASE_URL` (`registerServiceWorker.ts:41-44`),
+  so a root-absolute `/module/…` would escape the worker's scope and never be intercepted (same base-prefix
+  rule the media design notes for `${BASE_URL}asset/…`). The SW stays a dumb cache server keyed by the full
+  URL; it never parses or rewrites import specifiers. **Two wrinkles, both resolved in-thread by the producer,
+  not the SW:**
+  - *Cache-busting* a transitive dep requires the *importing* module to name the *versioned* URL
+    (`${BASE_URL}module/<otherId>?v=<hashOther>`), because the realm module map caches the unversioned URL for
+    the realm lifetime and won't re-fetch it when the cache entry changes. So the producer **pins transitive
+    specifiers to `?v=<hash>` at compile time** (a small rewrite pass, in-thread). Import maps are an
+    alternative (a per-generation map of `<id>` → `<id>?v=<hash>`), but a document import map can't be mutated
+    per-edit after load, so producer-side rewriting is the cleaner fit.
+  - *Which hash* — it must be the dependency's **approved** `sourceHash` (its Gate-2 pin), never
+    `sha256(live block.content)`. A dep that isn't approved on this device was never written to `km-modules`
+    (the loader emitted a shell for it), so A's import of it **fails closed** — which is the correct #67
+    behavior: a plugin can't pull in unapproved/drifted code through a transitive import. Net consequence:
+    cross-block imports resolve only between blocks that are *both* enabled **and** approved here.
 - **Source maps / DevTools** — real, but **achievable without the SW** (see §6 / the recommendation): a stable
   `//# sourceURL` and `sourceMaps:true` on the *blob* path already fixes stack frames and breakpoints. The SW
   URL is a nicer anchor but not required for this win.
@@ -144,16 +153,25 @@ The hybrid keeps every privileged/expensive step in-thread and demotes the SW to
 needs app/DB state or keys.
 
 **Producer (in-thread, unchanged trust/compile core).** Extend `defaultInstantiateViaBlob`'s siblings with a
-cache-write path. On a compile (the existing approval-gated load path in `dynamicExtensions.ts` →
-`loadApprovedExtension`):
-1. Read `block.content` from the repo — **already plaintext** (decrypted in-thread by the sync observer, §5).
-2. Decrypt (if it weren't already) / decompile is already done; transpile via Babel (existing step 1),
-   **now with `sourceMaps:true`** and an inline map.
-3. Resolve + **pin transitive `/module/<dep>` specifiers to `/module/<dep>?v=<hashDep>`** (§2 wrinkle).
-4. Compute `contentHash` (already have it — it's the L1 key / approval pin).
-5. `cache.put('/module/<blockId>?v=<contentHash>', new Response(compiledJS, {headers:{'content-type':
-   'text/javascript'}}))` into a dedicated **`km-modules`** cache.
-6. Hand the realm the URL: `import('${BASE_URL}module/<blockId>?v=<contentHash>')` **when the page is
+cache-write path **inside the existing approval-gated load path** (`dynamicExtensions.ts` →
+`loadApprovedExtension`, `compileExtensionModule.ts:350`). The critical invariant: the producer operates on the
+**approved record**, never live `block.content`.
+1. **Compile the approved source, not the DB row.** As today, `loadApprovedExtension` instantiates
+   `approval.compiled` (or recompiles `approval.approvedSource` on a compiler bump) — *never* live
+   `block.content`. Live content is read **only to detect drift** (`dynamicExtensions.ts:160`); a synced edit
+   stays inert (status `update-available`) until re-approved on this device. The cache write must inherit this:
+   it writes the **approved** output, so a drifted edit can never be written to `km-modules` or imported before
+   approval (this is the #67 Gate-2 guarantee — do not "optimize" by transpiling the live row).
+2. Transpile (only on the cold/compiler-bump path) via Babel, **now with `sourceMaps:true`** and an inline map.
+3. Resolve + **pin transitive specifiers to `${BASE_URL}module/<dep>?v=<depApprovedHash>`** — keyed by each
+   dependency's **approved** `sourceHash`, not its live DB row (§2 wrinkle 2; unapproved deps fail closed).
+4. Use the **approved** `sourceHash` as `contentHash` — it's already the L1 cache key and the value
+   `loadApprovedExtension` returns as `CompileResult.contentHash` (the pin, *not* `sha256(live content)`).
+5. `cache.put('${BASE_URL}module/<blockId>?v=<approvedSourceHash>', new Response(compiledJS,
+   {headers:{'content-type':'text/javascript'}}))` into a dedicated **`km-modules`** cache. The key is
+   **base-prefixed** so it matches the import URL and stays in SW scope (Codex #251; same rule as the
+   transitive specifiers).
+6. Hand the realm the URL: `import('${BASE_URL}module/<blockId>?v=<approvedSourceHash>')` **when the page is
    controlled**, else fall back to the existing blob `import()` (§4).
 
 **SW route (serve from cache only).** A new branch in `public/sw.js`'s `fetch` handler:
@@ -177,8 +195,8 @@ cache**; (2) cacheable assets; (3) vendor; (4) passthrough.
 `?v=` entries for that block are orphaned. Two housekeeping items:
 - Add `km-modules` to **`PERSISTENT_CACHES`** (`public/sw.js:55`) so the per-deploy generation GC in `activate`
   doesn't delete it (modules version on *edit*, not on `BUILD_ID`).
-- Prune stale versions: on each producer write, delete other `/module/<blockId>?v=*` entries for that block
-  (keep current). Cheap, bounds growth. Block delete/approval-revoke
+- Prune stale versions: on each producer write, delete other `${BASE_URL}module/<blockId>?v=*` entries for that
+  block (keep current). Cheap, bounds growth. Block delete/approval-revoke
   (`revokeExtensionApproval`, `compileExtensionModule.ts:399`) should also drop the block's `km-modules`
   entries.
 
@@ -241,9 +259,9 @@ Clean, and already satisfied by the existing in-thread decryption boundary:
 pain (debugging) in-thread now; gate the SW route on a concrete need for cross-plugin imports.**
 
 Why not the full hybrid today:
-- The **only** capability the SW route uniquely unlocks is transitive `import "/module/<otherId>"` between
-  plugin blocks — which **does not exist as a feature or a request today** (no `/module/`, no cross-block
-  imports anywhere in the tree).
+- The **only** capability the SW route uniquely unlocks is transitive `import "${BASE_URL}module/<otherId>"`
+  between plugin blocks — which **does not exist as a feature or a request today** (no `module/` route, no
+  cross-block imports anywhere in the tree).
 - Its other selling points are already in-thread: dedup/identity (`CompileCache`), recompute-avoidance
   (IndexedDB `CompiledModuleCache`). Source maps are obtainable on the blob path.
 - It is **not** a replacement for the blob path — the first-load fallback (§4) forces you to keep blobs
@@ -268,11 +286,13 @@ cached transpile output regenerates with the map.
 ### If/when cross-plugin imports become a goal — adopt the §3 hybrid
 
 Scope, in dependency order:
-1. **Producer cache-write + dual instantiate** (`compileExtensionModule.ts`): write compiled JS to `km-modules`
-   keyed `/module/<blockId>?v=<contentHash>`; instantiate via the `/module/` URL when controlled, else the
-   existing blob path (§4). ~1 file.
-2. **Transitive-import hash pinning** (producer): rewrite `/module/<dep>` → `/module/<dep>?v=<hashDep>` from the
-   DB; handle the blob-fallback inlining for the uncontrolled case. New, the fiddliest piece.
+1. **Producer cache-write + dual instantiate** (`compileExtensionModule.ts`): write the **approved** compiled
+   JS to `km-modules` keyed `${BASE_URL}module/<blockId>?v=<approvedSourceHash>` (the pin, never live content —
+   §3 / §5; the Gate-2 invariant); instantiate via the base-prefixed `${BASE_URL}module/` URL when controlled,
+   else the existing blob path (§4). ~1 file.
+2. **Transitive-import hash pinning** (producer): rewrite a dep ref → `${BASE_URL}module/<dep>?v=<depApprovedHash>`
+   from each dep's **approved record** (not its live DB row); unapproved deps fail closed; handle the
+   blob-fallback inlining for the uncontrolled case. New, the fiddliest piece.
 3. **`public/sw.js`**: new `/module/` branch **before** `isCacheableAsset` (§3 ordering); add `km-modules` to
    `PERSISTENT_CACHES`; cache-only serve. ~15 lines, but the ordering is load-bearing.
 4. **GC**: prune stale `?v=*` per block on write; drop entries on `revokeExtensionApproval` / block delete.
