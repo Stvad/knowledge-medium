@@ -122,7 +122,7 @@
 <nav class="toc">
   <div class="label">Contents</div>
   <ol>
-    <li><a href="#thesis">The thesis</a></li>
+    <li><a href="#thesis">The thesis</a> <span style="color:var(--faint)">· <a href="#alternatives">1.1 Alternatives considered</a></span></li>
     <li><a href="#today">Where we are today</a></li>
     <li><a href="#gaps">The four gaps</a></li>
     <li><a href="#equation">The shape of a command (the equation)</a></li>
@@ -155,11 +155,11 @@ The higher-leverage move is to make two things <em>core foundations</em> that an
 <h3 id="alternatives">1.1 &nbsp;Alternatives considered</h3>
 <p>The verb facet's own docstring argues most seams <em>shouldn't</em> pay a four-slot structure — "reach for this only when there's one output function." So full convergence is not self-evidently right; the realistic alternatives:</p>
 <ul>
-  <li><b>(A) G1-only + keep bespoke verbs.</b> Give actions a typed <em>result</em> (G1) so imperative/surface callers stop fire-and-forgetting, and let any new interceptable behaviour keep using <code>defineVerbFacet</code> as-is. Cheapest; preserves the verb facet's selectivity. <em>Cost:</em> the "double thing" persists — every new wrappable behaviour is still a hand-wired seam, and there's no <em>uniform</em> place to observe/veto across behaviours (no app-wide command log, no one "confirm destructive" guard).</li>
+  <li><b>(A) G1-only + keep bespoke verbs.</b> Give actions a typed <em>result</em> (G1) so imperative/surface callers stop fire-and-forgetting, and let any new interceptable behaviour keep using <code>defineVerbFacet</code> as-is. Cheapest; preserves the verb facet's selectivity. <em>Cost:</em> the "double thing" persists — every new wrappable behaviour is still a hand-wired seam, and there's no <em>uniform</em> place to observe/veto across behaviours (no app-wide command log; no single sync precondition across commands). Note the delta vs (C) is smaller than it looks: an async confirm-guard is async-path-only even under (C) (<a href="#model">§5</a>), so that particular win isn't exclusive to convergence.</li>
   <li><b>(B) A lighter shared helper.</b> A thin <code>dispatchById → typed result</code> plus an opt-in per-command decorator list, without unifying the three lifecycles or the keyboard coordinator. Less risk than full convergence; <em>cost:</em> the <code>canDispatch</code> divergence and the sync/async split (<a href="#sync">§6</a>) stay unsolved, so it doesn't actually let navigate-as-command happen.</li>
   <li><b>(C) Full convergence (this proposal).</b> Worth it only if we expect several more "make behaviour X interceptable" requests <em>and</em> want cross-behaviour middleware (telemetry, command palette with real results, agent-bridge dispatch with typed returns). The bet is that we do. If we don't, (A) is the right call.</li>
 </ul>
-<p class="footnote">Decision owner: pick (A) vs (C) before building past G1. G1 is valuable under all three, so it's safe to start there regardless.</p>
+<p class="footnote"><b>Stance:</b> this proposal recommends (C), with (A) as the fallback if the "several more requests" bet doesn't materialize. G1 is valuable under all three and commits to nothing, so it's safe to start there regardless — but <em>building past G1</em> (the §9 steps, the spawned S1 + sync-path tasks) is (C)-specific work and constitutes choosing (C). The decision to make is therefore "(C) or stop at G1?", and it's owed before step 2, not deferred indefinitely.</p>
 
 <h2 id="today"><span class="num">2</span>Where we are today</h2>
 <p>We have <em>two</em> partial command systems that don't know about each other.</p>
@@ -197,7 +197,7 @@ Rewriting action <em>definitions</em> is possible — <code>actionTransformsFace
 </div>
 
 <h2 id="gaps"><span class="num">3</span>The four gaps</h2>
-<p>What separates today's <code>Action</code> from a real command, in priority order:</p>
+<p>What separates today's <code>Action</code> from a real command, ordered by <em>importance of the gap</em> (not build order — the dependency-ordered critical path is G1→G3→G4→G2, see <a href="#migration">§9</a>):</p>
 
 <div class="gap-grid">
   <div class="gap">
@@ -265,17 +265,25 @@ Rewriting action <em>definitions</em> is possible — <code>actionTransformsFace
 <h2 id="model"><span class="num">5</span>Proposed model</h2>
 <p>A sketch (illustrative, not final API) of where the pieces land:</p>
 <pre><code><span class="tok-c">// A command: a verb with identity, binding, and context/deps resolution.</span>
-interface Command&lt;Args, Result, Ctx extends ActionContextType&gt; {
+type In&lt;Args, Ctx&gt; = { args: Args; deps: DepsFor&lt;Ctx&gt;; trigger?: ActionTrigger }
+
+<span class="tok-c">// A command exposes EXACTLY ONE of run / runSync — a discriminated pair, not</span>
+<span class="tok-c">// an async fn that's "sometimes sync". This is the invariant §6 needs:</span>
+<span class="tok-c">// a command bindable to a chord/pointer MUST be synchronous, mirroring how</span>
+<span class="tok-c">// today's ActionHandlerResult forbids Promise&lt;false&gt; (types.ts).</span>
+type Command&lt;Args, Result, Ctx extends ActionContextType&gt; = Base&lt;Args, Result, Ctx&gt; &amp; (
+  | { run:     (i: In&lt;Args, Ctx&gt;) =&gt; MaybePromise&lt;Result&gt; }            <span class="tok-c">// async: dispatch() only</span>
+  | { runSync: (i: In&lt;Args, Ctx&gt;) =&gt; Result | typeof DECLINE         <span class="tok-c">// sync: chord/pointer-bindable</span>
+      defaultBinding?: ...; pointerBinding?: ...; gestureBinding?: ... }
+)
+interface Base&lt;Args, Result, Ctx&gt; {
   id: string
   context: Ctx
-  run: (i: { args: Args; deps: DepsFor&lt;Ctx&gt;; trigger?: ActionTrigger }) =&gt; MaybePromise&lt;Result&gt;
-  <span class="tok-c">// inherited, all optional — a command may have no UI binding at all</span>
-  defaultBinding?: ShortcutBindingDefaults
-  pointerBinding?: PointerBindingSpec | PointerBindingSpec[]
-  gestureBinding?: GestureBindingSpec | GestureBindingSpec[]
   canDispatch?: (deps: DepsFor&lt;Ctx&gt;) =&gt; boolean
   isVisible?: (deps: DepsFor&lt;Ctx&gt;) =&gt; boolean
 }
+<span class="tok-c">// The type forbids attaching a binding to an async-run command — so you</span>
+<span class="tok-c">// can't bind a chord to a command the coordinator can't resolve in-tick.</span>
 
 <span class="tok-c">// TWO dispatch entries, not one — see §6 for why the sync one is mandatory.</span>
 <span class="tok-c">// Async: imperative / surface callers that want a typed result.</span>
@@ -301,7 +309,11 @@ dispatchSync&lt;Args, Result&gt;(
   <li><b>Wrap</b> (decorator) — intercept a dispatch: observe args, transform them, call <code>next</code> or short-circuit (veto by returning, not throwing — same contract as verb decorators).</li>
   <li><b>Sum</b> (before/after) — pure observers; <code>after</code> sees the <code>VerbOutcome</code> (success/failure) and cannot change it.</li>
 </ul>
-<p>A wildcard id (mirroring <code>WILDCARD_ACTION_ID</code>) lets one contribution wrap <em>all</em> dispatches — e.g. a "confirm destructive commands" guard, a telemetry tap, or a command-log. The <code>onError</code> distinction carries over directly: effectful commands rethrow (no double-execution); pure ones may fall back.</p>
+<p>A wildcard id (mirroring <code>WILDCARD_ACTION_ID</code>) lets one contribution wrap <em>all</em> dispatches — a telemetry tap, a command-log, a sync precondition. The <code>onError</code> distinction carries over directly: effectful commands rethrow (no double-execution); pure ones may fall back.</p>
+<div class="callout warn">
+  <span class="label">Async middleware does not run on the sync path</span>
+  A <em>synchronous</em> wildcard (telemetry, logging, a sync veto returning <code>DECLINE</code>) runs on both faces. An <em>asynchronous</em> guard — the canonical "confirm destructive command" that <code>await</code>s a dialog (<code>openDialog</code> is promise-based) — can only run on the async <code>dispatch</code> path. So a keyboard-triggered delete (sync) would <b>bypass</b> an async confirm. This is the one place the two-tier risk is real, and the design must pick: (a) confirm-style guards are an <em>async-path capability</em>, advertised as such; or (b) a sync guard returns <code>DECLINE</code> (suppressing the action) and kicks off an async confirm that <em>re-dispatches</em> on approval — a heavier, explicit protocol. Don't advertise "one guard for every command" without choosing one.
+</div>
 <div class="callout warn">
   <span class="label">Decide before building: trust, ordering, cost</span>
   Generalizing a wildcard wrap from a handful of trusted verbs to <em>every</em> command changes the threat and performance model — this app runs untrusted user-installed extension code that can import internals and contribute to these facets:
@@ -367,9 +379,9 @@ They compose, but the boundary is sharp and easy to get wrong. The verb <code>af
 Once commands carry a typed result <em>and</em> the id-keyed middleware slots exist (G1 <b>and</b> G3 — not G1 alone, since the verb's decorators/observers need somewhere to live), the bespoke verbs have nothing left that's special. The end state:
 </p>
 <ul>
-  <li><b>Navigation folds into two commands, not one</b> (see <a href="#equation">§4</a>): <code>navigate.resolve</code> (pure intent, fallback) and <code>navigate.apply</code> (effectful execution, rethrow). Each verb's <code>impl</code>/<code>decorators</code>/<code>before</code>/<code>after</code> become generic middleware keyed by that command's id; the two parallel verbs retire. "The navigate command id" in earlier sections is shorthand for this pair.</li>
-  <li>What matters is that navigation is <em>invoked through the command pipeline</em> — not that every caller is itself a command. A DOM click handler can dispatch the navigate command (via <code>dispatchSync</code>, <a href="#sync">§6</a>); the middleware, veto, and observation then apply uniformly, which they cannot when the click calls <code>navigate()</code> directly around the bus.</li>
-  <li><code>pasteDecisionVerb</code> is pure; it either stays a pure verb or becomes a pure command (the <code>onError: 'fallback'</code> policy maps cleanly). Its dispatch must stay synchronous, which is a <em>precondition</em> handled by the <b>sync resolution path for pure verbs</b> task (<a href="#sync">§6</a>) — the fold is clean conditional on that succeeding, not unconditionally.</li>
+  <li><b>It's two of navigation's five seams, not "navigation".</b> The fold covers exactly the two verbs: <code>navigate.resolve</code> (pure intent, fallback) and <code>navigate.apply</code> (effectful execution, rethrow); each verb's <code>impl</code>/<code>decorators</code>/<code>before</code>/<code>after</code> become generic middleware keyed by that command's id, and the two parallel verbs retire. But back/forward and URL-restoration are <em>deliberately not routed through the verbs</em> ([navigation.ts:25-34], navigation-redesign.md) — they flow through <code>writePanelContent</code>, a separate un-folded seam, alongside the still-TODO <code>urlSerializerFacet</code>/<code>panelHistoryFacet</code>. <b>Consequence:</b> command-level navigation middleware sees gesture/command navigations, <em>not</em> browser-back or deep-link restoration. Don't read "the verbs retire" as "navigation is a command."</li>
+  <li><b>The sync win is narrower than "the click now goes through the bus".</b> A navigation click already goes through the bus today (<code>useBlockOpener</code> → <code>navigateFromGesture</code> → <code>navigationVerb.run</code>), so middleware on <code>navigate.apply</code> already applies. The click's only <em>synchronous</em> obligation is <code>preventDefault</code> + the native-passthrough decision — which §6 keeps as a non-overridable carve-out <em>outside</em> the bus. And <code>navigate.apply</code> is irreducibly async (<code>repo.tx</code>), so it runs via <code>dispatch</code> (async), not <code>dispatchSync</code> — relocating, not removing, the async boundary. The real gains over today are the G1/G2/G3 ones (a typed <code>Result</code> to the caller, id-keyed wildcard middleware, one registry), not "uniform middleware on the sync click".</li>
+  <li><code>pasteDecisionVerb</code> is pure; it either stays a pure verb or becomes a pure command (the <code>onError: 'fallback'</code> policy maps cleanly). Its dispatch must stay synchronous (a <code>runSync</code> command, <a href="#model">§5</a>), which is a <em>precondition</em> handled by the <b>sync resolution path for pure verbs</b> task (<a href="#sync">§6</a>) — the fold is clean conditional on that succeeding, not unconditionally.</li>
 </ul>
 <p class="footnote">The convergence tax doesn't vanish under "commands as foundation" — making a behaviour interceptable still means routing its callers through one choke. What changes is that the choke is <em>generic</em> and shared, so we pay it once for all behaviours instead of re-paying per feature.</p>
 
@@ -404,7 +416,7 @@ Once commands carry a typed result <em>and</em> the id-keyed middleware slots ex
   <li><b>Not a generic global pub/sub.</b> Commands are typed and identity-bearing; the event side is typed too (audit B3). No string-keyed <code>window</code> bus.</li>
   <li><b>Not a rendering/palette rebuild.</b> Quick-find, the eventual command palette, app-intents, the agent bridge are command <em>surfaces</em> — they consume the foundation, they aren't part of it.</li>
   <li><b>Not "build it all now."</b> G1 is independently valuable and safe to land first under any of the <a href="#alternatives">§1.1</a> options; the full convergence (and navigate-as-command) is a separate commitment gated on the §6 sync decision.</li>
-  <li><b>Not yet decided.</b> The <a href="#alternatives">(A) vs (C)</a> choice and the §6 sync-dispatch shape are open; this is a proposal to debate, not a sequencing spec to execute.</li>
+  <li><b>A recommendation, not a settled spec.</b> It recommends <a href="#alternatives">(C)</a> with (A) as fallback; the <code>dispatchSync</code>/<code>DECLINE</code> shape (<a href="#sync">§6</a>) and the async-guard protocol (<a href="#model">§5</a>) are the live design questions to settle before step 2. Debate the bet and those shapes; G1 needs no decision.</li>
 </ul>
 
 <hr class="soft">
