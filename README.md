@@ -1,8 +1,103 @@
-# Malleable Thought Medium
+# Knowledge Medium
+
+**A malleable, offline-first medium for knowledge work.**
+
+Knowledge Medium is an outliner — broadly Roam/Workflowy-like — built on a single
+idea taken further than usual: *everything is a block, and everything is an
+extension*. Your notes are blocks. The pages, daily notes, and backlinks you'd
+expect from an outliner are blocks. Your preferences, keyboard shortcuts, UI
+state, and even the renderers that draw the screen are blocks too. The app is a
+thin host that assembles itself out of those blocks at runtime — which means you
+can reshape it from inside, without forking it.
+
+It runs entirely in the browser as an installable PWA, stores everything in a
+local SQLite database for instant, offline-capable reads, and syncs across your
+devices through PowerSync + Supabase when you're online.
+
+---
+
+## What makes it different
+
+- **One universal data model.** There is exactly one node type. A single
+  `blocks` table holds pages, daily notes, todos, flashcards, places, settings,
+  and renderer source — distinguished only by their (multi-valued) `types` and
+  typed properties. Nesting, ordering (via fractional indices), references, and
+  backlinks all work the same way for every kind of block.
+
+- **The whole app is extensions.** The default block renderer, the vim plugin,
+  daily notes, find-and-replace, maps — all of it ships as facet-based
+  extensions. You can author your own: write a TS/JSX module in a block typed
+  `extension`, enable it from Extensions settings, and it's compiled and loaded
+  live (Babel-in-the-browser) with error boundaries around it. No build step, no
+  redeploy.
+
+- **State lives in the document.** Rather than hiding configuration in
+  app-specific stores, Knowledge Medium stores UI state, user preferences,
+  keyboard bindings, and block behavior *as blocks* — so your setup syncs,
+  versions, and is inspectable like any other content. Credentials and secrets
+  are the deliberate exception and stay out of the document.
+
+- **Local-first, genuinely offline.** Reads and writes hit a local SQLite
+  mirror (`wa-sqlite` in IndexedDB) first, so the app stays fast and usable with
+  no network. PowerSync streams changes to and from hosted Postgres (Supabase)
+  in the background, converging your devices when connectivity returns.
+
+- **Typed properties and user-defined types.** Properties are typed key/value
+  pairs with codecs and change-scopes; types are multi-valued and can be
+  user-defined (a type is itself just a block). This is what lets a plain
+  outline grow domain structure — tasks, spaced-repetition cards, places — without
+  schema migrations.
+
+- **Scriptable from your terminal.** A first-class runtime bridge lets coding
+  agents and scripts run commands *inside the live app* — same `Repo`, same
+  workspace, same SQLite, same resolved extensions — to query, mutate, or drive
+  the workspace programmatically.
+
+---
+
+## A tour of what's inside
+
+The fastest way to learn the app is the built-in **`[[Tutorial]]`** page, seeded
+into every fresh workspace (it links to a `[[Tutorial (no vim)]]` variant for
+mouse/arrow-key users). The highlights:
+
+- **Outlining.** Bullets are blocks; blocks nest. Fold, indent/outdent, drag,
+  zoom into any block (treat it as the root of the view), and move around with
+  vim keys or arrow keys.
+- **Pages, links & embeds.** `[[Wiki links]]` link to (or create) pages; a
+  block ref `((id))` points at one specific block anywhere; an embed `!((id))`
+  renders that block — and its children — inline.
+- **Backlinks.** Every reference is indexed, so each page shows who links to it,
+  with a grouped-references view that organizes backlinks by their surrounding
+  context.
+- **Side panels & multi-select.** Open blocks side by side, each with its own
+  focus and zoom; modifier-clicks route links into new panels or a sidebar
+  stack. Select multiple blocks and apply any block-level action at once.
+- **Search.** QuickFind matches page names first, then block content, with
+  full-text search (required words, `"exact phrases"`, `OR`, `-exclusions`) and a
+  workspace-wide find-and-replace.
+- **Daily notes.** A journal of date-titled pages is the default landing page,
+  with quick capture into today's note from anywhere.
+- **Properties & types.** Attach typed properties to any block; tag blocks with
+  built-in or user-defined types to give them behavior.
+- **Places & maps.** Real-world locations are first-class Place blocks (backed
+  by Google Places). Type `@` to drop a location, share one Place across many
+  notes, and tag any block `map` to render an inline map of every place in its
+  subtree.
+- **Tasks & spaced repetition.** Todos and SM-2.5 flashcards are just typed
+  blocks with scheduling in their properties — review cards land on the daily
+  note that's due.
+- **Roam import, themes, mobile.** Import an existing Roam graph, switch themes,
+  and use it as a touch-first PWA with a mobile keyboard toolbar and bottom nav.
+
+Everything above is an extension you can toggle, study, or replace — see the
+seeded **`[[extensions]]`** page for working examples and a renderer demo.
+
+---
 
 ## Supabase + PowerSync Setup
 
-This repo now expects:
+This repo expects:
 - Supabase hosted Postgres for the source database
 - Supabase Auth for app sessions (email OTP, with anonymous as a fallback)
 - PowerSync Cloud for syncing into local SQLite
@@ -125,11 +220,25 @@ yarn agent eval 'return { workspaceId: repo.activeWorkspaceId, user: repo.user }
 
 Available runtime-code bindings include `repo`, `db`, `runtime`, `safeMode`, `sql`, `block`, `getBlock`, `getSubtree`, `createBlock`, `updateBlock`, `installExtension`, `actions`, `renderers`, `refreshAppRuntime`, `React`, `ReactDOM`, `window`, and `document`.
 
+For an agent-facing orientation to the data model, run `yarn agent data-model`.
+
 By default the bridge uses `http://127.0.0.1:8787`. The bridge secret is stored in the local config file (`~/.config/knowledge-medium/agent-bridge.json` by default), so pairing is normally one-time per browser profile and app origin. Run `yarn agent pair-url` or foreground the relay with `yarn agent:server` to get a bridge-only pairing URL. Override the pairing target with `AGENT_RUNTIME_APP_URL`, the browser endpoint with `VITE_AGENT_RUNTIME_URL`, and the CLI endpoint with `AGENT_RUNTIME_URL`.
 
 The bridge only accepts browser origins from loopback hosts and configured app origins. Add comma-separated entries with `AGENT_RUNTIME_ALLOWED_ORIGINS`; browser origins do not include URL paths, so GitHub Pages is allowed as `https://stvad.github.io`. Detailed `/health` output requires the bridge secret header; the CLI reads the persisted local secret automatically for `yarn agent status`.
 
 ---
+
+## Development
+
+```bash
+yarn dev      # start the app (Vite)
+yarn check    # the verification gate: typecheck, lint, and tests
+yarn build    # production build
+```
+
+See [`AGENTS.md`](./AGENTS.md) for verification, testing, and contribution
+conventions, and [`docs/`](./docs) for design notes (treat these as dated
+intent — the code and tests are authoritative).
 
 ## Expanding the ESLint configuration
 
