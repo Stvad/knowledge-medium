@@ -3,6 +3,7 @@ import {
   codecs,
   CodecError,
   decodeRefListIds,
+  isEnumCodec,
   isRefCodec,
   isRefListCodec,
   type RefListCodec,
@@ -29,6 +30,49 @@ describe('codec type metadata', () => {
     expect(isRefListCodec(codecs.refList())).toBe(true)
     expect(isRefCodec(codecs.string)).toBe(false)
     expect(isRefListCodec(codecs.list(codecs.string))).toBe(false)
+  })
+})
+
+describe('enum codec', () => {
+  it('normalizes bare strings and {value,label} options', () => {
+    const bare = codecs.enum(['compact', 'cozy'])
+    expect(bare.options).toEqual([
+      {value: 'compact', label: 'compact'},
+      {value: 'cozy', label: 'cozy'},
+    ])
+    const labelled = codecs.enum([{value: 'a', label: 'Apple'}, 'b'])
+    expect(labelled.options).toEqual([
+      {value: 'a', label: 'Apple'},
+      {value: 'b', label: 'b'},
+    ])
+    expect(isEnumCodec(bare)).toBe(true)
+    expect(isEnumCodec(codecs.string)).toBe(false)
+  })
+
+  it('rejects out-of-set values on write (encode/where) but not on read', () => {
+    const codec = codecs.enum(['open', 'done'])
+    expect(codec.encode('done')).toBe('done')
+    expect(codec.where!.encode('open')).toBe('open')
+    // Cast past the compile-time literal-union guard to exercise the
+    // runtime check (the out-of-set value a hand-edit / untyped caller
+    // could pass).
+    const widened = codec as unknown as {
+      encode(v: string): string
+      where: {encode(v: string): string}
+    }
+    expect(() => widened.encode('nope')).toThrow(CodecError)
+    expect(() => widened.where.encode('nope')).toThrow(CodecError)
+  })
+
+  it('decodes leniently so a value stored before an option changed stays usable', () => {
+    const codec = codecs.enum(['open', 'done'])
+    expect(codec.decode('done')).toBe('done')
+    // A string that's no longer a valid option still decodes (the select
+    // surfaces it as unknown) rather than throwing → decode-failure.
+    expect(codec.decode('archived')).toBe('archived')
+    // A non-string is a genuine shape error.
+    expect(() => codec.decode(123)).toThrow(CodecError)
+    expect(() => codec.decode(null)).toThrow(CodecError)
   })
 })
 

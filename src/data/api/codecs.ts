@@ -205,6 +205,73 @@ const refList = (options?: RefCodecOptions): RefListCodec => {
   }
 }
 
+/** One choice in an `enum` codec — the stored `value` plus a human
+ *  `label` for the select editor. */
+export interface EnumOption<T extends string = string> {
+  readonly value: T
+  readonly label: string
+}
+
+/** A `Codec<T>` constrained to a fixed set of string `options`. The
+ *  options ride on the codec so the `enum` ValuePreset editor can render
+ *  a `<select>` from `schema.codec.options` without a per-property
+ *  component. `T` is the literal union of allowed values (inferred from
+ *  the options), so consumers keep precise typing. Queryable like any
+ *  string (carries `where`). */
+export interface EnumCodec<T extends string = string> extends Codec<T> {
+  readonly type: 'enum'
+  readonly options: readonly EnumOption<T>[]
+}
+
+const normalizeEnumOptions = <T extends string>(
+  options: readonly (T | EnumOption<T>)[],
+): readonly EnumOption<T>[] =>
+  Object.freeze(
+    options.map(option =>
+      typeof option === 'string'
+        ? {value: option, label: option}
+        : {value: option.value, label: option.label},
+    ),
+  )
+
+/** Build a codec that accepts the given string `options`. Writes are
+ *  strict — `encode` (and `where`) reject any out-of-set value, so a
+ *  hand-edit or a setProperty can't store an invalid choice. Reads are
+ *  lenient on membership: `decode` only checks the value is a string, so
+ *  a value stored *before* an option was removed/renamed still decodes
+ *  and stays editable in the select (which surfaces it as an unknown
+ *  option) instead of rendering as a decode failure / raw JSON. A
+ *  non-string is still a genuine shape error and throws.
+ *
+ *  The `const` type parameter infers `T` as the literal union from a bare
+ *  string-array call (`codecs.enum(['a', 'b'])` → `EnumCodec<'a' | 'b'>`). */
+const enumCodec = <const T extends string>(
+  options: readonly (T | EnumOption<T>)[],
+): EnumCodec<T> => {
+  const normalized = normalizeEnumOptions(options)
+  const allowed = new Set<string>(normalized.map(option => option.value))
+  const expected = `enum(${normalized.map(option => option.value).join('|')})`
+  const requireString = (value: unknown): T => {
+    if (typeof value !== 'string') throw new CodecError(expected, value)
+    return value as T
+  }
+  const requireMember = (value: unknown): T => {
+    const str = requireString(value)
+    if (!allowed.has(str)) throw new CodecError(expected, value)
+    return str
+  }
+  return {
+    type: 'enum',
+    options: normalized,
+    encode: requireMember,
+    decode: requireString,
+    where: {encode: requireMember},
+  }
+}
+
+export const isEnumCodec = (codec: unknown): codec is EnumCodec =>
+  typeof codec === 'object' && codec !== null && (codec as Codec<unknown>).type === 'enum'
+
 export const isRefCodec = (codec: unknown): codec is RefCodec =>
   typeof codec === 'object' && codec !== null && (codec as Codec<unknown>).type === 'ref'
 
@@ -311,6 +378,9 @@ export const codecs = {
    *  user-defined-properties.md "Why no codecs.optional" section. */
   date: dateCodec,
   url: urlCodec,
+  /** Fixed-set string codec; options ride on the codec for the select
+   *  editor. See `EnumCodec`. */
+  enum: enumCodec,
   list,
   ref,
   refList,
