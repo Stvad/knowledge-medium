@@ -283,6 +283,9 @@ type Command&lt;Args, Result, Ctx extends ActionContextType&gt; = Base&lt;Args, 
 interface Base&lt;Args, Result, Ctx&gt; {
   id: string
   context: Ctx
+  <span class="tok-c">// Deps-only, NOT (args) — deliberately. These run at keyboard-resolution</span>
+  <span class="tok-c">// time to pick the chord winner, before any args exist; an arg-dependent</span>
+  <span class="tok-c">// guard belongs inside run/runSync (return DECLINE), not here.</span>
   canDispatch?: (deps: DepsFor&lt;Ctx&gt;) =&gt; boolean
   isVisible?: (deps: DepsFor&lt;Ctx&gt;) =&gt; boolean
 }
@@ -313,6 +316,10 @@ dispatchSync&lt;Args, Result&gt;(
   <li><b>Wrap</b> (decorator) — intercept a dispatch: observe args, transform them, call <code>next</code> or short-circuit (veto by returning, not throwing — same contract as verb decorators).</li>
   <li><b>Sum</b> (before/after) — pure observers; <code>after</code> sees the <code>VerbOutcome</code> (success/failure) and cannot change it.</li>
 </ul>
+<div class="callout warn">
+  <span class="label">The lift is literal only for the async face</span>
+  On <code>dispatch</code> (async) this is exactly <code>defineVerbFacet.run</code>. The <b>sync face cannot reuse it</b>: <code>run</code> is async-only and <em>awaits the impl to build the <code>VerbOutcome</code></em> it hands to <code>after</code> ([verbFacet.ts:228]) — which the no-await <code>dispatchSync</code> contract forbids. So <code>dispatchSync</code> needs its own sync fold with a <em>degraded</em> middleware contract: <code>before</code>/<code>decorator</code> must be synchronous, and <code>after</code> either doesn't run on the sync path or observes invocation only (no settled outcome; a decorator's <code>try/finally</code> around <code>next</code> also can't see the async effect settle). "Generalize the verb facet" is right for the async path and a <em>separate, lighter</em> executor for the sync one — not one mechanism for both.
+</div>
 <p>A wildcard id (mirroring <code>WILDCARD_ACTION_ID</code>) lets one contribution wrap <em>all</em> dispatches — a telemetry tap, a command-log, a sync precondition. The <code>onError</code> distinction carries over directly: effectful commands rethrow (no double-execution); pure ones may fall back.</p>
 <div class="callout warn">
   <span class="label">Async middleware does not run on the sync path</span>
@@ -356,7 +363,7 @@ This is not hypothetical — the navigation work, this proposal's founding succe
     <li><b>The narrowed thesis.</b> "Imperative / surface callers become commands; the keyboard/pointer coordinator keeps its sync path and merely <em>resolves</em> a command it dispatches synchronously" — carried through to the dispatch signature, not just asserted in one line.</li>
   </ol>
 </div>
-<p class="footnote">The companion "sync resolution path for pure verbs" task addresses the same root for paste/navigation-intent. It is a <b>precondition</b> for folding any synchronous-dispatch caller onto the command pipeline — not an incidental cost.</p>
+<p class="footnote">The companion "sync resolution path for pure verbs" task is a <b>precondition</b> for folding the <em>keyboard-chord</em> pure verbs (the in-tick fall-through decision) — <b>not</b> for paste. Paste is already async-tolerant: its DOM handlers <code>preventDefault</code> eagerly and then <code>await</code> the decision (CodeMirror deliberately re-reads live editor state <em>after</em> the await), so it folds onto the async <code>dispatch</code> path unchanged. Making the paste/navigation-intent decision synchronous is an optional latency win, not a fold prerequisite.</p>
 
 <h2 id="events"><span class="num">7</span>Commands and events</h2>
 <p>The two foundations are complementary, and must not be conflated:</p>
@@ -385,7 +392,7 @@ Once commands carry a typed result <em>and</em> the id-keyed middleware slots ex
 <ul>
   <li><b>It's two of navigation's five seams, not "navigation".</b> The fold covers exactly the two verbs: <code>navigate.resolve</code> (pure intent, fallback) and <code>navigate.apply</code> (effectful execution, rethrow); each verb's <code>impl</code>/<code>decorators</code>/<code>before</code>/<code>after</code> become generic middleware keyed by that command's id, and the two parallel verbs retire. But back/forward and URL-restoration are <em>deliberately not routed through the verbs</em> ([navigation.ts:25-34], navigation-redesign.md) — they flow through <code>writePanelContent</code>, a separate un-folded seam, alongside the still-TODO <code>urlSerializerFacet</code>/<code>panelHistoryFacet</code>. <b>Consequence:</b> command-level navigation middleware sees gesture/command navigations, <em>not</em> browser-back or deep-link restoration. Don't read "the verbs retire" as "navigation is a command."</li>
   <li><b>The sync win is narrower than "the click now goes through the bus".</b> A navigation click already goes through the bus today (<code>useBlockOpener</code> → <code>navigateFromGesture</code> → <code>navigationVerb.run</code>), so middleware on <code>navigate.apply</code> already applies. The click's only <em>synchronous</em> obligation is <code>preventDefault</code> + the native-passthrough decision — which §6 keeps as a non-overridable carve-out <em>outside</em> the bus. And <code>navigate.apply</code> is irreducibly async (<code>repo.tx</code>), so it runs via <code>dispatch</code> (async), not <code>dispatchSync</code> — relocating, not removing, the async boundary. The real gains over today are the G1/G2/G3 ones (a typed <code>Result</code> to the caller, id-keyed wildcard middleware, one registry), not "uniform middleware on the sync click".</li>
-  <li><code>pasteDecisionVerb</code> is pure; it either stays a pure verb or becomes a pure command (the <code>onError: 'fallback'</code> policy maps cleanly). Its dispatch must stay synchronous (a <code>runSync</code> command, <a href="#model">§5</a>), which is a <em>precondition</em> handled by the <b>sync resolution path for pure verbs</b> task (<a href="#sync">§6</a>) — the fold is clean conditional on that succeeding, not unconditionally.</li>
+  <li><code>pasteDecisionVerb</code> is pure and is the <em>easy</em> case, not a gated one: it folds onto the <b>async</b> <code>dispatch</code> path (the <code>onError: 'fallback'</code> policy maps cleanly) because its DOM handlers already <code>preventDefault</code> eagerly and <code>await</code> the decision today. It is <em>not</em> blocked on the sync-resolution task — that gates the keyboard-chord pure verbs (<a href="#sync">§6</a>), not the paste decision.</li>
 </ul>
 <p class="footnote">The convergence tax doesn't vanish under "commands as foundation" — making a behaviour interceptable still means routing its callers through one choke. What changes is that the choke is <em>generic</em> and shared, so we pay it once for all behaviours instead of re-paying per feature.</p>
 
