@@ -313,7 +313,7 @@ describe('agent runtime commands', () => {
       // Enabling pinned the live source on this device — the REAL block
       // content, not '' (findExtensionBlock must carry `content`).
       expect(await readApproval(installed.id)).toMatchObject({
-        compilerVersion: '1',
+        compilerVersion: '2',
         approvedSource: 'export default []',
       })
 
