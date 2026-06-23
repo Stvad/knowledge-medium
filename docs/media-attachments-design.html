@@ -112,7 +112,7 @@ coordination it needs — a per-client session token and SW-readable mode/hash (
   <li><a href="#queue">The byte-replication subsystem (up-lane + down-lane)</a></li>
   <li><a href="#storage">Storage layout &amp; RLS</a></li>
   <li><a href="#renderer">The renderer &amp; capture surfaces</a></li>
-  <li><a href="#sharing">Interaction with subtree sharing</a></li>
+  <li><a href="#sharing">Subtree sharing (deferred — not a design driver)</a></li>
   <li><a href="#public">The public-sharing escape hatch</a></li>
   <li><a href="#portability">Vendor portability (the <code>BlobStore</code> seam)</a></li>
   <li><a href="#plan">Phased plan</a></li>
@@ -160,8 +160,9 @@ coordination it needs — a per-client session token and SW-readable mode/hash (
 <tr><td>Shares + API tokens</td>
     <td><strong>NOT shipped.</strong> <a href="./shares-and-api-tokens.html">shares-and-api-tokens.html</a>
       is a design only — no <code>block_shares</code> / <code>effective_share_ids</code> tables exist.</td>
-    <td>Do not build on it. But keep storage paths share-ready (see §10, §12), because subtree
-      sharing is on the roadmap.</td></tr>
+    <td>Do not build on it, and do not design around it — it is unshipped and doesn't map cleanly onto
+      the current (graph-ish, not strictly subtree) data model. Block-id storage paths keep a future
+      share-join <em>possible</em> without paying for it now (§10).</td></tr>
 <tr><td>Supabase Storage</td>
     <td><strong>Unused.</strong> No buckets, no <code>supabase.storage.*</code>, no
       <code>supabase/functions/</code>.</td>
@@ -222,10 +223,9 @@ content: 'image: screenshot.png'   // human-readable summary</code></pre>
     registers via <code>blockRenderersFacet</code> with a <code>canRender</code> gate on
     <code>block.hasType('media')</code> — the same registration pattern as
     <code>VideoPlayerRenderer</code>. New file types are new mime branches, never a schema change.</li>
-  <li><strong>Dedup within a subtree</strong> is natural: paste the same screenshot ten times into
-    a page and you get ten <code>!((id))</code> embeds of one asset block, one byte copy. (Reuse is
-    scoped to the containing subtree, not workspace-wide, to stay compatible with the §12 share
-    model — see §11.)</li>
+  <li><strong>Dedup is natural and workspace-wide</strong>: paste the same screenshot ten times
+    anywhere in a workspace and you get ten <code>!((id))</code> embeds of one asset block — one byte
+    copy, one upload (see §11).</li>
 </ul>
 
 <figure class="diagram">
@@ -953,20 +953,22 @@ that window rather than leaving it forever.</div>
 <strong>Why not content-addressed paths (and what we keep instead).</strong> An earlier (pre-E2EE)
 sketch keyed everything off <code>sha256(bytes)</code> — path, cache, dedup — which is clean because
 content-addressing makes uploads idempotent and dedup free. E2EE removes the hash from the two
-<em>server-visible</em> identifiers, for two reasons:
+<em>server-visible</em> path, primarily for one reason:
 <ul>
   <li><strong>Content oracle.</strong> A path <code>&lt;ws&gt;/&lt;sha256-of-plaintext&gt;</code> lets
     the untrusted server confirm "does this workspace contain <em>this known file</em>?" by hashing a
     candidate and probing for the object — a confidentiality break for known files.</li>
-  <li><strong>Share-RLS join.</strong> The §12 share path keys off the block id
-    (object → block → <code>effective_share_ids</code>); a hash path breaks that join.</li>
+  <li><strong>(Secondary) share-join shape.</strong> A block-id path keeps a future share-RLS join
+    (object → block) trivially possible; a raw-hash path would need a separate mapping. Minor — subtree
+    sharing is unshipped and not a design driver (§12) — but noted.</li>
 </ul>
 Hashing itself is <em>not</em> lost — it stays everywhere it's <strong>client-local</strong>: the
-cache key (<code>&lt;ws&gt;/&lt;id&gt;/&lt;hash&gt;</code>, §8), within-subtree dedup (§11), and the
+cache key (<code>&lt;ws&gt;/&lt;id&gt;/&lt;hash&gt;</code>, §8), workspace-wide dedup (§11), and the
 integrity/replay check (§5.1); and the hash lives in the <em>encrypted</em> <code>properties_json</code>
 so the server never sees it. Only the server-visible path and the block id drop it. The direct cost is
-that idempotent-by-content uploads and free dedup are gone — which is the root of the dedup/duplicate-object
-and "a fresh block must re-upload" wrinkles (§11).
+that idempotent-by-content <em>uploads</em> are gone (the server can't return "already have these bytes"
+for a re-PUT under a new id) — but workspace-wide dedup reuses the existing block + object, so the
+common "same image again" case still uploads exactly once (§11).
 <br><br>
 <strong>The alternative that fixes that: a keyed hash.</strong> Path
 <code>&lt;ws&gt;/HMAC(K_id, sha256-of-plaintext)</code> restores content-addressing — deterministic
@@ -976,12 +978,12 @@ derived from the WK material via HKDF at import time</em> — <em>not</em> the s
 a non-extractable AES-GCM key WebCrypto won't let you sign with; deriving the subkey while the raw
 bytes are briefly available at paste is the only window.) It is genuinely the <em>better-scaling</em> design: it
 eliminates the dedup races and duplicate-object / re-upload wrinkles entirely, and those races get
-<em>more</em> likely as device count and concurrency grow, not less. The real cost is a design
-tradeoff, not a size question: the path no longer carries the block id, so the share-RLS join needs a
-separate cleartext <code>object_key → block_id</code> mapping (which leaks the same object↔block
-association the block-id path already does — no worse on that axis). So it's a true fork —
-<em>block-id paths</em> buy share-join simplicity; <em>keyed-hash paths</em> buy idempotency + dedup
-that scale. v1 may ship block-id paths to move faster, but that is a deliberate design call to revisit
+<em>more</em> likely as device count and concurrency grow, not less. Its one cost — the path no longer
+carries the block id, so a future share-RLS join would need a separate <code>object_key → block_id</code>
+mapping — is now <em>minor</em>, since subtree sharing is unshipped and no longer a design driver (§12).
+So the fork is mostly <em>block-id paths</em> (simplest to ship now) vs <em>keyed-hash paths</em>
+(idempotent uploads + dedup convergence that scale). v1 may ship block-id paths to move faster, but that
+is a deliberate design call to revisit
 on merits, <strong>explicitly not settled by current fleet size</strong> — adopting keyed-hash later
 is a storage re-key + mapping backfill, and <em>that</em> migration is the only place the small fleet
 legitimately makes it cheap. Recorded so it isn't re-discovered.
@@ -1096,11 +1098,11 @@ acceptable for the guarantee, and reads stay direct/RLS-gated (the hot path). La
 (§15) with the bucket + RLS migration.</div>
 
 <div class="info">
-<strong>Share-ready by construction.</strong> Keeping <code>asset_block_id</code> in the path means
-storage RLS can later be widened from "membership" to "membership <em>or</em> a share covers this
-block" by joining <code>storage.objects → blocks → effective_share_ids</code> when subtree sharing
-ships (§12). We do not build that branch now (shares aren't shipped) but the path scheme does not
-foreclose it. This is the cheap-option-value posture, not speculative building.
+<strong>Doesn't foreclose a future share-join.</strong> Because the path carries
+<code>asset_block_id</code>, storage RLS <em>could</em> later widen from "membership" to "membership
+<em>or</em> a share covers this block" (join <code>storage.objects → blocks</code>) if subtree sharing
+is ever built (§12). We neither build nor design around that now — it is incidental option value from
+the natural block-id addressing, not a requirement.
 </div>
 
 <p>Per the project's Supabase rule, the bucket + its RLS land in one migration with
@@ -1126,9 +1128,9 @@ foreclose it. This is the cheap-option-value posture, not speculative building.
     parallel to today's <code>text/plain</code> handlers in
     <code>CodeMirrorContentRenderer.tsx</code> / <code>DefaultBlockRenderer.tsx</code>; and a
     <code>/image</code> command + file-picker action through the existing action/shortcut system.</li>
-  <li><strong>On capture:</strong> client-side mime/size guard → hash → <em>subtree-scoped</em>
-    best-effort dedup lookup (see the caveat below) → otherwise create the asset block as a
-    <em>child of the containing block</em> (see §12), stamping the type with
+  <li><strong>On capture:</strong> client-side mime/size guard → hash → <em>workspace-wide</em>
+    best-effort dedup lookup (see the caveat below) → otherwise create the asset block (placement isn't
+    load-bearing — a child of the containing block is the simple default), stamping the type with
     <code>repo.addTypeInTx(tx, id, 'media', …)</code> (the in-tx variant — the standalone
     <code>block.addType</code> wouldn't compose into the single tx; and the <code>media</code>
     <code>TypeContribution</code> must be registered via <code>typesFacet</code> first, §3, or this
@@ -1159,26 +1161,20 @@ record whose asset block did commit. Undo still works via the §9 compensator �
 asset block cancels the queue entry and deletes any already-uploaded object.</div>
 
 <div class="warn">
-<strong>Dedup must respect the share-coverage boundary (§12).</strong> Naïve "reuse any same-hash asset
-block in the workspace" breaks the share model: §12.1 grants byte access by walking
-<code>parent_id</code>, so an embed of an asset whose parent lives under a <em>different</em> page is
-<em>not</em> covered when you share <em>this</em> page's subtree — the recipient gets a broken image,
-and the §10 storage-RLS share branch never stamps that asset. So dedup is <strong>scoped to the embed's own subtree</strong>: reuse only an existing asset block that
-is a <strong>descendant of the current containing (embedding) block</strong> — never an ancestor or a
-sibling. Because a subtree share can be rooted at <em>any</em> block, down to the embedding block
-itself, only an asset inside the embed's own subtree is <em>guaranteed</em> to be stamped whenever that
-embed is shared; reusing an ancestor/sibling asset would leave it outside a child-rooted share, so
-storage RLS wouldn't cover <code>&lt;ws&gt;/&lt;asset_block_id&gt;</code> and the recipient sees a broken
-embed. Otherwise create a <em>fresh</em> asset block as a child here. <strong>A fresh block still uploads its
-own bytes.</strong> Object paths are <code>&lt;ws&gt;/&lt;asset_block_id&gt;</code> and storage
-RLS/share lookup key off that block id, so a new id is a new, currently-absent object — "reuse the
-hash" only saves re-reading/re-encoding the <em>local</em> source bytes; it must still PUT them (via
-§10.1) to the new block's path, or other devices / shared viewers 404. (A hash-addressed storage path
-would avoid the copy, but it's ruled out: under E2EE a plaintext-hash path is a content oracle, and it
-breaks the block-id share-RLS join — §11 dedup note, §10.) Cross-page reuse that deliberately crosses
-subtrees is then the same "cross-subtree embed" case §12 already calls out — resolved at share time by
-copying the referenced-but-outside asset into the shared subtree, not by a single workspace-wide asset
-block.</div>
+<strong>Dedup is workspace-wide.</strong> Reuse <em>any</em> same-hash asset block in the workspace —
+the embed is just a <code>!((id))</code> to it, wherever that asset block lives. This is the natural
+model and restores the content-addressing win the block-id path otherwise loses: a reused asset keeps
+the <em>same</em> block id and the <em>same</em> <code>&lt;ws&gt;/&lt;asset_block_id&gt;</code> object,
+so "paste the same image again" creates <strong>no new block and no new upload</strong> — only a fresh
+paste with no workspace match uploads. A deduped asset therefore has <em>multiple</em> embed referrers,
+so its lifetime rides the existing block-reference machinery (§3): GC the asset block + its object when
+the referrer count reaches zero, not when any single embed is removed — the same backlink tracking
+blocks already have, no new refcount system. <strong>We deliberately do not scope dedup to a "containing
+subtree":</strong> the data model isn't strictly tree-shaped, and subtree sharing is unshipped (§12), so
+scoping dedup to it would pay for a feature that doesn't exist and doesn't map cleanly onto today's
+blocks. If subtree sharing is ever built, retargeting a workspace-wide asset into a shared scope (e.g.
+copy under the shared root at share time) is <em>that</em> feature's job; the block-id path leaves it
+possible.</div>
 
 <div class="warn">
 <strong>Dedup is best-effort, not an invariant.</strong> The lookup reads <em>local</em> synced state,
@@ -1213,36 +1209,23 @@ navigation</strong> → a <em>placeholder / redirect into the app</em> (NOT byte
 authorized — and NOT the SPA shell). Direct asset navigations and downloads are app-mediated, not raw
 navigations to the asset URL (§7.1).</div>
 
-<h2 id="sharing">12. Interaction with subtree sharing</h2>
+<h2 id="sharing">12. Subtree sharing (deferred — not a design driver)</h2>
 
-<p>Subtree sharing (<a href="./shares-and-api-tokens.html">shares-and-api-tokens.html</a>) is not
-  shipped but is on the roadmap. It informs two decisions now and exposes one genuine gap.</p>
-
-<h3>12.1 Reinforces: asset block = child of the containing block</h3>
-
-<p>Subtree sharing walks <code>parent_id</code> and stamps <code>effective_share_ids</code>. If the
-  asset block is a child of the page that uses it, sharing that page's subtree automatically covers
-  the asset (its <code>effective_share_ids</code> gets stamped, and the share-aware storage RLS branch
-  grants byte access). A flat per-workspace asset container would be invisible to subtree shares. So
-  asset-as-child is not just tidy — it is what makes a shared page carry its images.</p>
-
-<h3>12.2 Reinforces: keep <code>asset_block_id</code> in the storage path</h3>
-
-<p>A subtree-share recipient is not a workspace member, so granting them byte access requires storage
-  RLS to join through to the block's share coverage (§10). The block-id-in-path keeps that join
-  possible. Design the policy as "membership today, with an explicit seam to add
-  <code>OR effective_share_ids covers this block</code>."</p>
-
-<h3>12.3 The gap: E2EE + subtree sharing is unsolved</h3>
+<p>Subtree sharing (<a href="./shares-and-api-tokens.html">shares-and-api-tokens.html</a>) is
+  <strong>not shipped</strong>, and it doesn't map cleanly onto the current data model — the app isn't
+  strictly tree-shaped anymore, so "share this subtree" is itself an unsolved design a future effort
+  would have to work out. So this design does <em>not</em> bend around it: dedup is workspace-wide (§11),
+  asset placement isn't share-driven, and we add no share machinery now. We also don't <em>foreclose</em>
+  it — the block-id storage path keeps a future "membership <em>or</em> a share covers this block" RLS
+  join possible (§10), and retargeting a workspace-wide asset into a shared scope (e.g. copy under the
+  shared root at share time) would be that feature's job, not ours.</p>
 
 <div class="warn">
-A subtree-share recipient of an <em>E2EE</em> workspace needs a key to read anything, including asset
-bytes — but the model has exactly one WK per <em>whole</em> workspace. There is no per-subtree key.
-Granting subtree access to encrypted content requires the per-subtree key hierarchy the e2ee doc
-explicitly defers (e2ee §13). So for the foreseeable future <strong>subtree sharing is a
-plaintext-workspace feature</strong>, and media inherits that boundary. This is consistent with the
-existing tradeoff stack (e2ee §15 #2; §8.3 — E2EE sharing is out-of-band whole-workspace WK transfer).
-Do not special-case it.
+<strong>E2EE + subtree sharing is doubly deferred.</strong> Even once sharing exists, an E2EE
+subtree-share recipient needs a key — but there is one WK per <em>whole</em> workspace and no
+per-subtree key; that needs the key hierarchy the e2ee doc defers (e2ee §13). So encrypted subtree
+sharing is a non-goal for the foreseeable future and media just inherits that boundary (consistent with
+e2ee §15 #2; E2EE sharing stays out-of-band whole-workspace WK transfer). Don't special-case it.
 </div>
 
 <h2 id="public">13. The public-sharing escape hatch</h2>
@@ -1342,7 +1325,7 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
     <td><code>media</code> block type; <code>MediaBlockRenderer</code> (image branch) reusing the
       lightbox; markdown <code>img</code> override.</td></tr>
 <tr><td>5 — capture + up-lane</td>
-    <td>paste / drop / file-pick arms; subtree-scoped dedup; optimistic write to the durable byte
+    <td>paste / drop / file-pick arms; workspace-wide dedup; optimistic write to the durable byte
       replica (§8); the up-lane drain to §10.1 with the <code>staged → pending</code> lifecycle + boot
       reconciler (§9).</td></tr>
 <tr><td>6 — background replication (down-lane)</td>
@@ -1368,7 +1351,9 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
   <li><strong>Max inline size + large-media story:</strong> a v1 cap (e.g. 10&nbsp;MB) with a clear
     error, deferring resumable/tus upload to vNext. Where exactly is the cap enforced?</li>
   <li><strong>Asset block deletion → byte GC, and the two orphan directions:</strong> deleting an asset
-    block ⇒ delete the object (storage cascade or an explicit step); dangling embeds render the existing
+    block (once its last <code>!((id))</code> referrer is gone — workspace-wide dedup means one asset can
+    have many, §11) ⇒ delete the object (storage cascade or an explicit step); dangling embeds render the
+    existing
     "unresolved embed" state. Beyond the <em>undo</em> case (handled by the §9 byte-lane compensator), a
     vNext orphan sweep covers <strong>both</strong> directions: orphan <em>objects</em> (a Storage object
     with no block — e.g. an interrupted delete) and orphan <em>blocks</em> (an asset block whose object
