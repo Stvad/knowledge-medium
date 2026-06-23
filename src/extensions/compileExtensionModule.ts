@@ -147,7 +147,17 @@ export async function hashExtensionSource(content: string): Promise<string> {
  *  they already share one module instance). */
 async function defaultTranspileViaBabel(content: string, blockId?: string): Promise<string> {
   const Babel = await import('@babel/standalone')
-  const sourceName = `${blockId ?? 'extension-block'}.tsx`
+  // SECURITY: block ids are NOT trusted input — `tx.create` accepts a
+  // caller-supplied id and ids also arrive via sync/import, all stored as
+  // plain text. A raw id with a line terminator (\n, \r, U+2028, U+2029) would
+  // break out of the `//# sourceURL` line comment appended below and inject
+  // module-level JS that runs at instantiate — code that was never in the
+  // approved `content`/`sourceHash`, defeating the #67 trust gate. Restrict the
+  // id to a safe charset before it touches emitted JS. The sourceURL is a
+  // cosmetic DevTools label, so aggressive sanitization costs nothing
+  // (legitimate nanoid/uuid ids are already within this set).
+  const safeId = (blockId ?? 'extension-block').replace(/[^A-Za-z0-9._-]/g, '_')
+  const sourceName = `${safeId}.tsx`
   const transpiled = Babel.transform(content, {
     filename: sourceName,
     sourceFileName: sourceName,
