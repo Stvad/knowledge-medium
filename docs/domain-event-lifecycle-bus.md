@@ -58,10 +58,10 @@ already runs for that event.
 | `block:deleted` | `{id, before, types, workspaceId, txId}` | same | `liveBefore && !liveAfter`. Covers **soft-delete** (`tx.delete` flips `deleted=true` on the existing row, `txEngine.ts:306` — `before`/`after` both present) *and* hard-delete (`after===null`). `types` via `getBlockTypes(before)`. |
 | `block:synced` (down-sync applied) | `{workspaceId, ids}` — **one emit per workspace** present in the window | `startBlocksSyncedObserver` → `applyOutcome` (`syncObserver/observer.ts:167`) — walks materialized snapshots | distinct from local-write `block:*`: these are *remote* rows landing. A drain window is **seq-ordered, not workspace-scoped** (`drainQueueOnce` reads `blocks_synced_changes ORDER BY seq`, `observer.ts:193`), so its `MaterializeOutcome.snapshots` can span workspaces — the bridge must **group by `after/before.workspaceId`** and emit one event per workspace, exactly as the observer already does for cycle scans (`cycleScanCandidatesByWorkspace`, `observer.ts:114`). A single `{ids, workspaceId}` payload would mislabel cross-workspace batches. Pairs with `invalidationRules`. |
 | `navigation:completed` | `{result: NavigationResult, input, origin}` | `navigationVerb.after` (`utils/navigation.ts:289`) — **already exists** as a Sum observer slot | bridge, don't re-emit: an internal `after` observer forwards onto the bus. But `after` fires for **every** outcome (`VerbOutcome<NavigationResult \| null>` — success, veto/`null`, throw), so emit `navigation:completed` **only when `outcome.ok && outcome.result !== null`**. A veto/`null`/failure becomes a separate `navigation:cancelled` (or is dropped) — never a `completed` carrying a missing/null result. |
-| `navigation:requested` (pre) | `{input}` | `navigationVerb.before` — **already exists** | optional; most demand is for `completed`. |
+| `navigation:requested` (pre) | `{input}` | `navigationVerb.before` — **already exists** | optional; most demand is for `completed`. Fires *before* resolution for every gesture, so it does **not** imply the navigation will land (it may be vetoed/`null`) — purely an "about to attempt" hook. |
 | `workspace:ready` (a.k.a. switched-and-bootstrapped) | `{previousId, workspaceId, freshlyCreated}` | **end of `bootstrapWorkspace`** (`bootstrap/workspaceBootstrap.ts`, the `{kind:'ready'}` return) — past the access gate + bootstrap writes | the I3 lifecycle point: workspace is materializable, scoped pages exist. **Not** `setActiveWorkspaceId` — see the caveat below. |
 | `workspace:active-changed` (low-level pin) | `{previousId, workspaceId}` | `Repo.setActiveWorkspaceId` (`repo.ts:943`) — **fires nothing today** | optional/secondary: reflects the *pin*, fires early (pre-gate, pre-bootstrap). For UI that just tracks "which workspace is selected", not for auto-create handlers. |
-| `workspace:created` | `{workspaceId, freshlyCreated}` | `bootstrapWorkspace` (has `freshlyCreated`) and/or `CreateWorkspaceDialog.onCreated` | `freshlyCreated` is already threaded through bootstrap; `workspace:ready` with `freshlyCreated:true` may subsume this. |
+| `workspace:created` | `{workspaceId}` | gate on `freshlyCreated` at the `bootstrapWorkspace` choke (fires per switch, but `freshlyCreated` is only true on actual creation) — **one** path | don't *also* emit from `CreateWorkspaceDialog.onCreated` (double-emit). `workspace:ready` already carries `freshlyCreated:true`, so this may be redundant — keep only if a "created but not yet landed-on" signal is genuinely needed. |
 | `sync:status` (online/offline/synced) | `{connected, hasSynced, uploading, downloading, …}` | PowerSync status listener — already consumed by `system-status` (`SyncIndicatorInput`) | the chip already derives this; the bus would expose the *transitions* to plugins. |
 | `app:booted` | `{repo, workspaceId}` | a **once-per-Repo/session latch** (or an app-mount/initial-ready point) — **not** the raw end of `bootstrapWorkspace` | one-shot per session. `resolveInitialLayout` re-runs `bootstrapWorkspace` on *every* workspace switch, so emitting from there would fire per-switch; gate behind a session latch on the Repo and leave per-workspace readiness to `workspace:ready`. |
 | `runtime:swapped` | `{}` | **after** the new runtime is installed — `AppRuntimeProvider` post `repo.setFacetRuntime(next)` (`AppRuntimeProvider.tsx:172`) + `EffectReconciler.reconcile` (`:194`) | **Not** `refreshAppRuntime` (`facets/runtimeEvents.ts`): that fires *refresh-requested* — it bumps the `useOverrides` generation *before* the async `resolveAppRuntime`, and fires even if that resolve fails — so a handler emitting there would still read the **old** facets/effects. Emit only once `next` is live. |
@@ -74,6 +74,24 @@ already runs for that event.
 flipping `false→true`, so a naïve "`before!==null && after!==null` ⇒ updated"
 rule would fire **both** `block:updated` and `block:deleted` for one deletion. The
 `deleted`-transition rows belong to `block:deleted` only.
+
+**Emit-choke contract (applies to every row).** Naming an existing choke is
+necessary but not sufficient — the emit must fire *where the event's promised
+semantics actually hold*. Four recurring obligations, each of which bit a row
+above:
+- **Fire at the point the state is true, not when it's requested.** `workspace:ready`
+  emits post-bootstrap (not at the early `setActiveWorkspaceId` pin);
+  `runtime:swapped` emits after the new runtime is installed (not at the
+  `refreshAppRuntime` request).
+- **Filter verb-observer bridges to the intended outcome.** `navigationVerb.before/
+  after` fire for vetoes/`null`/throws too, so `navigation:completed` emits only on
+  `ok && result !== null`.
+- **Gate one-shots per session.** `bootstrapWorkspace` re-runs per workspace switch,
+  so `app:booted` needs a once-per-Repo latch; per-switch readiness is
+  `workspace:ready`.
+- **Scope each payload to one workspace.** A sync drain window spans workspaces, so
+  `block:synced` emits once per workspace; the local commit choke is already
+  single-workspace (tx workspace pinning).
 
 Two structural observations from the table:
 
