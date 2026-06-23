@@ -48,27 +48,34 @@ const EXPECTED_LOGICAL_SLOTS_MAX = 1
 // --- Data-integrity (L5) detectors over blocks_history ---------------------
 // Read-only anomaly detection on the server-side change log. See
 // docs/data-integrity-defense.html §3 L5 for the design and §4 for blind
-// spots. Posture is WARN-by-default: detectors surface in the JSON snapshot
-// but only the two catastrophe tiers (durable references-strip ≥ FAIL, mass
-// deletions ≥ FAIL) push to result.failures and email. DATA_INTEGRITY_STRICT=1
-// promotes every WARN to a FAIL once the thresholds below are baselined (D2).
+// spots. Posture is WARN-by-default: every detector surfaces in the JSON
+// snapshot and, via the tail block, as a GitHub `::warning::` annotation; only
+// the catastrophe tiers (≥ FAIL) push to result.failures and exit(1) — which
+// reds the job and is the page. DATA_INTEGRITY_STRICT=1 promotes every WARN to
+// a FAIL (a migration-window toggle; leave off in steady state — `deletions`
+// reaches ~130/window in normal editing and STRICT would page on it).
 //
 // These detectors read the *server*, so they are plaintext-only: in an e2ee
 // workspace `references_json`/`properties_json` are ciphertext (never `[]` /
 // never `{...}`) and in a history-trigger-off window there are no rows — both
 // are documented blind spots, not bugs.
 //
-// Thresholds are STARTING points (per actor+workspace over the window) pending
-// baselining against real traffic — keep in sync with the §3 L5 table.
+// Thresholds (per actor+workspace over the window, except at_rest = fleet
+// total) baselined 2026-06-23 against 48h/30 cron runs on the live fleet
+// (observed per-window maxima: refs_emptied durable 0, prop_key_removal 3,
+// deletions 131, bulk_bump 12, at_rest constant 1). Calibrated so a
+// few-hundred-row mistake pages while observed-normal activity never does.
+// Keep in sync with the §3 L5 table.
 const INTEGRITY_WINDOW_MIN = 90
 const CURATED_REF_PROPS = ['next-review-date']
-const REFS_EMPTIED_WARN = 50
-const REFS_EMPTIED_FAIL = 1000
-const PROP_KEY_REMOVAL_WARN = 200
+const REFS_EMPTIED_WARN = 25
+const REFS_EMPTIED_FAIL = 300
+const PROP_KEY_REMOVAL_WARN = 50
+const PROP_KEY_REMOVAL_FAIL = 300
 const DELETIONS_WARN = 200
-const DELETIONS_FAIL = 2000
-const BULK_BUMP_WARN = 100
-const AT_REST_PROPREF_WARN = 100
+const DELETIONS_FAIL = 1000
+const BULK_BUMP_WARN = 50
+const AT_REST_PROPREF_WARN = 25
 const DATA_INTEGRITY_STRICT = process.env.DATA_INTEGRITY_STRICT === '1'
 
 const uri = process.env.SUPABASE_POOLER_URI
@@ -458,7 +465,7 @@ async function runDataIntegrityChecks(client) {
     for (const r of rows) {
       status = maxStatus(status, integrityThreshold('property_key_removal',
         `actor=${redactId(r.actor) ?? 'null'} ws=${redactId(r.workspace_id)} prop-key removals`,
-        r.removals, { warnAt: PROP_KEY_REMOVAL_WARN }))
+        r.removals, { warnAt: PROP_KEY_REMOVAL_WARN, failAt: PROP_KEY_REMOVAL_FAIL }))
     }
     return { status, groups: rows.map((r) => ({ actor: redactId(r.actor), workspace_id: redactId(r.workspace_id), removals: r.removals })) }
   })
@@ -555,9 +562,23 @@ try {
 
 console.log(JSON.stringify(result, null, 2))
 
+// WARN awareness: a warning does NOT fail the job (no page), so without this it
+// would be invisible inside the JSON above. Emit each as a GitHub `::warning::`
+// annotation (surfaces on the run page + the Actions list) plus a stderr block.
+// FAILs additionally exit(1), which reds the job — that is the actual page.
+const annotate = (kind, items) => {
+  for (const it of items) console.log(`::${kind} title=${it.check}::${it.msg}`)
+}
+if (result.warnings.length > 0) {
+  console.error('\nWARNINGS:')
+  for (const w of result.warnings) console.error(`  [${w.check}] ${w.msg}`)
+  annotate('warning', result.warnings)
+}
+
 if (result.failures.length > 0) {
   console.error('\nFAILURES:')
   for (const f of result.failures) console.error(`  [${f.check}] ${f.msg}`)
+  annotate('error', result.failures)
   process.exit(1)
 }
 process.exit(0)
