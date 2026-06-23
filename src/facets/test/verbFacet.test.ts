@@ -268,6 +268,55 @@ describe('defineVerbFacet', () => {
     expect(after).toHaveBeenCalledWith(1, {ok: false, error: boom})
   })
 
+  it('rejects with the fallback error and fires after({ok:false}) once when the fallback default throws', async () => {
+    // fallback + plugin impl throws + the defaultImpl ALSO throws: reject with
+    // the fallback error, and `after` still observes the failure exactly once.
+    const fallbackBoom = new Error('default boom')
+    const verb = defineVerbFacet<number, number>({
+      id: 'test.verb.fallback-default-throws',
+      defaultImpl: () => {
+        throw fallbackBoom
+      },
+      onError: 'fallback',
+    })
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const after = vi.fn()
+    const runtime = resolveFacetRuntimeSync([
+      verb.impl(() => {
+        throw new Error('plugin boom')
+      }),
+      verb.after(after),
+    ])
+
+    await expect(verb.run(runtime, 3)).rejects.toThrow('default boom')
+    expect(after).toHaveBeenCalledTimes(1)
+    expect(after).toHaveBeenCalledWith(3, {ok: false, error: fallbackBoom})
+    consoleError.mockRestore()
+  })
+
+  it('an after-observer that throws on a failure outcome does not mask the real rejection', async () => {
+    // The riskiest isolation path: an after-observer throwing while observing a
+    // FAILURE. Its error is swallowed; `run` still rejects with the ORIGINAL error.
+    const realError = new Error('real boom')
+    const verb = defineVerbFacet<number, number>({
+      id: 'test.verb.after-throws-on-failure',
+      defaultImpl: n => n,
+    })
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const runtime = resolveFacetRuntimeSync([
+      verb.impl(() => {
+        throw realError
+      }),
+      verb.after(() => {
+        throw new Error('observer boom')
+      }),
+    ])
+
+    await expect(verb.run(runtime, 1)).rejects.toThrow('real boom')
+    expect(consoleError).toHaveBeenCalled()
+    consoleError.mockRestore()
+  })
+
   it('rejects (no infinite fallback) when the bare default impl throws', async () => {
     const verb = defineVerbFacet<number, number>({
       id: 'test.verb.default-throws',
