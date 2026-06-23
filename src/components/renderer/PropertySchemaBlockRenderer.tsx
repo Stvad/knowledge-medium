@@ -10,6 +10,7 @@ import { ChevronDown } from 'lucide-react'
 import { useHandle } from '@/hooks/block.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { valuePresetsFacet } from '@/data/facets.js'
+import { selectablePresets } from '@/components/propertyEditors/selectablePresets.js'
 import {
   presetConfigProp,
   presetIdProp,
@@ -174,11 +175,8 @@ const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRendererProp
 
   // Hide presets that opt out of the picker (e.g. `enum`, whose options
   // can't be set here — switching a schema to it would build an empty,
-  // always-failing codec). Keep the currently-selected preset visible
-  // even if hidden, so a schema already on it still shows its type.
-  const presetEntries = Array.from(presets.values())
-    .filter(p => !p.hideFromPicker || p.id === presetId)
-    .sort((a, b) => a.label.localeCompare(b.label))
+  // always-failing codec), but keep the type a schema is already on.
+  const presetEntries = selectablePresets(presets, presetId)
 
   return (
     <div className="w-full space-y-2 py-1">

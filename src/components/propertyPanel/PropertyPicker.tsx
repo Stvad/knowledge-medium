@@ -19,6 +19,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { propertyEditorOverridesFacet, valuePresetsFacet } from '@/data/facets.js'
+import { selectablePresets } from '@/components/propertyEditors/selectablePresets.js'
 import { usePropertySchemas } from '@/hooks/propertySchemas.js'
 import type {
   AnyPropertyEditorOverride,
@@ -129,12 +130,7 @@ export function PropertyPicker({
   const uis = runtime.read(propertyEditorOverridesFacet)
   const schemas = usePropertySchemas()
 
-  const presetEntries = useMemo(
-    () => Array.from(presets.values())
-      .filter(preset => !preset.hideFromPicker)
-      .sort((a, b) => a.label.localeCompare(b.label)),
-    [presets],
-  )
+  const presetEntries = useMemo(() => selectablePresets(presets), [presets])
   const initialPresetId = useMemo(() => {
     if (presets.has(DEFAULT_PRESET_ID)) return DEFAULT_PRESET_ID
     if (presets.has(FALLBACK_PRESET_ID)) return FALLBACK_PRESET_ID

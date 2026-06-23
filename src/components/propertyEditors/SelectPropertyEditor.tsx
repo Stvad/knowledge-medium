@@ -17,10 +17,12 @@ export function SelectPropertyEditor({
   const readOnly = block instanceof Block && block.repo.isReadOnly
   const options = schema && isEnumCodec(schema.codec) ? schema.codec.options : EMPTY_OPTIONS
   const current = typeof value === 'string' ? value : ''
-  // A stored value outside the current option set (e.g. an option was
-  // removed) still needs to render rather than silently snapping to the
-  // first option, so surface it as a transient extra entry.
-  const hasCurrent = current === '' || options.some(option => option.value === current)
+  // The controlled value must always match a rendered <option>, or the
+  // browser silently shows option 0 while the real value stays put.
+  // Render an extra entry for any current value not in the set: a stale
+  // value (an option was removed) as "… (unknown)" so the user can swap
+  // it, and the unset/empty case as a "— Select —" placeholder.
+  const inOptions = options.some(option => option.value === current)
 
   return (
     <div className="flex h-7 items-center">
@@ -33,7 +35,11 @@ export function SelectPropertyEditor({
           if (!readOnly) onChange(event.target.value)
         }}
       >
-        {!hasCurrent && <option value={current}>{current} (unknown)</option>}
+        {!inOptions && (
+          <option value={current}>
+            {current === '' ? '— Select —' : `${current} (unknown)`}
+          </option>
+        )}
         {options.map(option => (
           <option key={option.value} value={option.value}>
             {option.label}
