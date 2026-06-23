@@ -227,12 +227,19 @@ const applyNavigation = async (
 
   switch (dest.kind) {
     case 'panel': {
+      // Mark the panel active as part of THIS navigation (awaited), then swap
+      // its content. Awaiting matters: a fire-and-forget active write can outlive
+      // `navigate()` and land after a subsequent navigation's active write,
+      // leaving the wrong panel active. Isolated so a layout-session failure
+      // still can't swallow the content swap below (the panel block is
+      // addressable without the session).
+      try {
+        const ls = await resolveLayoutSessionBlock(repo, workspaceId)
+        await setActivePanel(ls, dest.panelId)
+      } catch (error) {
+        console.error('[navigation] Failed to mark panel active for navigation', error)
+      }
       await navigateInPanel(repo.block(dest.panelId), blockId)
-      void resolveLayoutSessionBlock(repo, workspaceId)
-        .then(ls => setActivePanel(ls, dest.panelId))
-        .catch(error => {
-          console.error('[navigation] Failed to mark panel active after navigation', error)
-        })
       return {panelId: dest.panelId, blockId, workspaceId}
     }
     case 'create-row': {
@@ -253,9 +260,10 @@ const applyNavigation = async (
 /**
  * The navigation EXECUTION seam. Plugins contribute:
  *   - `navigationVerb.before/after` — observe navigations (history, analytics);
- *     `after` gets the request + the `NavigationResult | null` it resolved to.
- *     (An observer must not unconditionally call `navigate()` itself — it would
- *     re-enter the verb and loop.)
+ *     `after` gets the request + a `VerbOutcome<NavigationResult | null>`
+ *     (`{ok: true, result}` on success, `{ok: false, error}` on failure — it
+ *     fires for every outcome). (An observer must not unconditionally call
+ *     `navigate()` itself — it would re-enter the verb and loop.)
  *   - `navigationVerb.impl` — replace navigation wholesale (`req => myNav(req)`).
  *   - `navigationVerb.decorator` — wrap it: rewrite the intent (call `next` with
  *     a changed `input` — e.g. redirect by `input.origin` / `input.target` /

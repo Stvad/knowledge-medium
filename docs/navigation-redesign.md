@@ -399,12 +399,13 @@ at the policy; *what happens when we go there* at the execution verb.
    before calling `navigate()`. The native-passthrough decision (cmd/ctrl/middle
    → browser) stays a synchronous, non-overridable carve-out in the click
    handlers, since `preventDefault` must run before the async policy.
-   - The **read** side agrees: `resolveGlobalCommandTopLevelBlockId` (the anchor
-     for daily-notes prev/next) resolves its target panel through the same policy
-     (`resolveGlobalCommandTargetPanel`, a neutral navigator probe), so a
-     redirect of where global commands land feeds both the anchor and the
-     destination. quick-find's plain-selection `jump` also routes through the
-     policy (via `navigateFromGlobalCommand`), so it's retargetable.
+   - The **read** side agrees: `resolveGlobalCommandTarget` (the anchor for
+     daily-notes prev/next) resolves its target panel through the same policy +
+     shared `resolveDestination` (probing with a neutral navigator gesture), and
+     returns `{blockId, workspaceId}` — so a redirect of where global commands
+     land (panel *or* workspace) feeds both the anchor and the destination.
+     quick-find's plain-selection `jump` also routes through the policy (via
+     `navigateFromGlobalCommand`), so it's retargetable.
    - Deliberately *not* policy-routed: quick-find's own *modifier → its
      three-way `jump`/`stack`/`new-panel` enum* (a bespoke vocabulary +
      keyboard convention, distinct from `NavigateInput`), and its `stack` /

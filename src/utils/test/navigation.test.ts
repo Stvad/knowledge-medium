@@ -188,6 +188,20 @@ describe('navigate', () => {
     expect(rightPanel?.parentId).not.toBe(layoutSession.id)
   })
 
+  it('a navigation commits its active-panel write before resolving (no deferred write clobbers a later nav)', async () => {
+    const layoutSession = await layoutSessionBlock()
+    const mainPanel = await insertPanelRow(env.repo, layoutSession, 'b-main')
+
+    // Fully-awaited, sequential navigations: navigate the existing main panel,
+    // then open a new one. If the main nav defers its active-panel write past
+    // its own resolution, that write lands after the new panel is created and
+    // clobbers the active marker back to the main panel.
+    await navigate(env.repo, {target: 'main', blockId: 'b-main-2'})
+    const dest = await navigate(env.repo, {target: 'new-panel', blockId: 'b-new', sourcePanelId: mainPanel})
+
+    expect(await currentActivePanelId()).toBe(dest?.panelId)
+  })
+
   it("target 'panel' with an unknown panelId is a no-op (no ghost write)", async () => {
     const layoutSession = await layoutSessionBlock()
     await insertPanelRow(env.repo, layoutSession, 'b-real')
