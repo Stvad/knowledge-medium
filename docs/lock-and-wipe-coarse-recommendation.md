@@ -11,7 +11,7 @@
 > sign-out) and warns if there are still-unsynced changes. It does **not** drain uploads or sign out
 > in-app: sync runs in the background, so there's nothing to actively flush, and the platform wipe
 > signs you out. The programmatic `Clear-Site-Data` trigger is **deferred** until
-> we leave GitHub Pages (header-capable host needed — see §0.3 and the follow-up issue).
+> we leave GitHub Pages (header-capable host needed — see §0.3 and follow-up issue #245).
 > Last verified against code: 2026-06-23.
 > **§1–§5 below now describe code that no longer exists** — they are retained as the historical
 > analysis of *why* the selective/coarse flow wasn't worth keeping. Read §0 for what shipped.
@@ -62,6 +62,12 @@ unsynced work first. Mind its limits (§2a): it covers only the *active* account
 can include transactions the server **rejected** (`ps_crud_rejected`, count→0); and a
 **local-only** account has no server copy, so its wipe is unrecoverable total loss. State these
 in the confirm dialog.
+
+> **What actually shipped is narrower than this TL;DR** (see the status banner): a *guide-only*
+> dialog. It does **not** drain uploads or sign out in-app and there's **no** `/wipe` trigger —
+> background sync handles uploads, and the browser's "clear site data" does the wipe + sign-out.
+> The only thing kept from the "drain" idea is a passive read of the unsynced count
+> (`ps_crud` + `ps_crud_rejected`) to **warn** before sending the user to the platform control.
 
 ---
 

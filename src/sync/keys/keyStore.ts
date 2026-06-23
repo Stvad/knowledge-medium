@@ -118,14 +118,13 @@ export class IndexedDbWorkspaceKeyStore implements WorkspaceKeyStore {
     const transaction = db.transaction(STORE_NAME, mode)
     // Resolve on the TRANSACTION commit, not just the request's `onsuccess`. A
     // readwrite write (put/delete/clear) is only durable once the tx commits
-    // (`oncomplete`); `onsuccess` fires earlier, while the tx is still open. §6
-    // Lock & wipe reloads the page immediately after clearing keys, so without
-    // awaiting the commit the navigation can abort the not-yet-committed tx and
-    // roll the clear back — leaving the workspace keys in IndexedDB while the
-    // SQLite file is wiped, so encrypted workspaces would reopen WITHOUT
-    // re-pasting the WK (the lock silently fails). Register the completion
-    // handlers synchronously here so we can't miss an `oncomplete` that fires
-    // before we start awaiting. (Readonly txs commit trivially — harmless.)
+    // (`oncomplete`); `onsuccess` fires earlier, while the tx is still open.
+    // Callers may navigate/reload right after a clear, so without awaiting the
+    // commit the navigation can abort the not-yet-committed tx and roll the
+    // clear back — leaving workspace keys in IndexedDB that should be gone.
+    // Register the completion handlers synchronously here so we can't miss an
+    // `oncomplete` that fires before we start awaiting. (Readonly txs commit
+    // trivially — harmless.)
     const committed = new Promise<void>((resolve, reject) => {
       transaction.oncomplete = () => resolve()
       transaction.onabort = () =>
@@ -162,9 +161,9 @@ export class IndexedDbWorkspaceKeyStore implements WorkspaceKeyStore {
     const prefix = keyStoreUserPrefix(userId)
     const db = await this.openDb()
     const transaction = db.transaction(STORE_NAME, 'readwrite')
-    // Await the commit (durability), same as `tx` — Lock & wipe reloads right
-    // after this resolves; an un-committed delete would be rolled back by the
-    // navigation, leaving keys behind. Handlers registered synchronously.
+    // Await the commit (durability), same as `tx` — a caller that navigates/
+    // reloads right after this resolves could otherwise have its un-committed
+    // delete rolled back, leaving keys behind. Handlers registered synchronously.
     const committed = new Promise<void>((resolve, reject) => {
       transaction.oncomplete = () => resolve()
       transaction.onabort = () =>

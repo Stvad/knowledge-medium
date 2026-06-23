@@ -532,10 +532,10 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // Panic wipe. We can't reliably destroy origin storage from JS, and
         // can't emit a Clear-Site-Data header on GitHub Pages (a service worker
         // can't synthesize one — see docs/clear-site-data-spike/). So the dialog
-        // does what it can in-app — drain unsynced uploads + sign out — and
-        // guides the user to the browser/OS "clear site data" control, which
-        // removes the local DB from outside the page context. The dialog is the
-        // confirmation surface (nothing destructive happens until the user acts).
+        // reads this device's unsynced-change count to WARN if a wipe would lose
+        // work, then guides the user to the browser/OS "clear site data" control,
+        // which does the actual wipe + sign-out from outside the page context.
+        // (Background sync handles uploads, so there's nothing to drain here.)
         void openDialog(WipeLocalDataDialog, { userId: repo.user.id })
       },
     },
@@ -1088,7 +1088,8 @@ export function defaultActionsExtension({repo}: { repo: Repo }): AppExtension {
     name: 'Default keyboard shortcuts',
     description: 'Built-in shortcuts (Enter/Tab/Cmd+K-style). Disabling removes the default bindings; user-defined ones still work.',
     // `lock_and_wipe_local_data` opens a dialog via openDialog, which needs
-    // DialogHost mounted; pull it in here (deduped by reference, so the shared
-    // contribution is registered once across all dialog-using plugins).
+    // DialogHost mounted; pull it in here. The mount's `core.dialogs` id dedupes
+    // (dedupById), so DialogHost is registered once no matter how many
+    // dialog-using plugins contribute it.
   }).of([...actions.map(action => actionsFacet.of(action)), dialogAppMountExtension])
 }

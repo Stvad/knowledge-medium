@@ -106,7 +106,7 @@ describe('unlockWorkspaceWithKey (§8.2)', () => {
   it('re-unlocks an already-e2ee-pinned workspace idempotently (post-wipe re-paste)', async () => {
     const keyStore = new InMemoryWorkspaceKeyStore()
     const { wkString, canary } = await mintKeyAndCanary(WS)
-    setModePin(USER, WS, 'e2ee') // pin survived a Lock & wipe; key store was cleared
+    setModePin(USER, WS, 'e2ee') // workspace pinned e2ee but its WK is absent on this device
 
     const result = await unlockWorkspaceWithKey({
       userId: USER,
