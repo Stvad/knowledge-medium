@@ -36,7 +36,8 @@ new problems the selective flow avoids or handles better (§3): the open **OPFS*
 un-deletable while any sibling tab holds it — and `clear()` only papers over IndexedDB, not
 OPFS — so a profile-wide marker needs a **single well-defined consumer**, not "whichever tab
 boots first"; the **service worker** survives the reload and owns/repopulates the Cache API,
-so the wipe needs an explicit **SW unregister/purge handshake** (a page-side `caches.delete`
+so the wipe needs an explicit **SW purge handshake** — `postMessage`→ack, since bare
+`unregister()` leaves the active worker controlling the page (a page-side `caches.delete`
 can't reach it); and "run before any handle opens" is a concrete **new pre-render boot gate**,
 not a one-liner. Net: comparable complexity, re-shaped — worth doing for wins (1) and (2) and
 the one-clear-panic-action UX, eyes open.
@@ -118,12 +119,12 @@ implies:**
    (`ftm.localOnly`, `useRemoteSync:false`) has **no server copy**. For them, drain or not, a
    coarse wipe destroys everything with no re-download — and `localStorage.clear()` also drops
    the local-only opt-in. The "re-downloads from server" framing above does **not** apply.
-4. **Mid-flush reload is a harder abort than today.** The caller drains, then
-   `broadcastWipeReload` + `window.location.reload()`. If the final upload's round-trip is
-   in flight when navigation fires, it aborts. Today that's harmless (same DB re-opens, queue
-   resumes); under coarse the DB is **destroyed at next boot**, so an aborted-but-uncommitted
-   upload is gone. The drain should confirm the connector *acknowledged* the upload (not merely
-   queue-empty) before arming + reloading, or the abort window must be documented.
+
+(A *mid-flush* abort is **not** on this list: `flushUploadQueue` returns `flushed:true` only
+once `ps_crud` reaches count 0, and PowerSync deletes those rows via `complete()` *after* the
+awaited server call — so queue-empty already **is** the acknowledgement; nothing is in flight
+when the drain returns and the lock flow reloads. The only "drained but not persisted" case is
+the rejected rows of #2.)
 
 So the honest treatment is to **state these as accepted loss** in the confirm dialog
 ("erases ALL local data for every account on this device, including unsynced changes that
@@ -166,7 +167,7 @@ would carry no security weight.
 
 **Bottom line on cost:** the costs that survive scrutiny are (1) it's a logout that wipes the
 whole profile; (2) the data-loss corners in §2a (inactive accounts, rejected rows, local-only
-total loss, mid-flush abort); and (3) the re-paste-everything UX of dropping pins. All are
+total loss); and (3) the re-paste-everything UX of dropping pins. All are
 acceptable for the threat model and should be stated plainly in the confirm dialog. There is
 **no downgrade-defense cost** and therefore no required carve-out.
 
@@ -226,10 +227,15 @@ SW has dropped a token it may hold in memory or re-stash on its next fetch. The 
 §7.2 design routes the purge *through* the SW ("Lock & Wipe must reach the SW") for exactly this
 reason; a coarse page-side `caches.delete` is **not** an equivalent substitute.
 
-**This must be designed:** the coarse path must either (1) `postMessage` the SW to drop its
-caches/token and `await` an ack, or (2) `navigator.serviceWorker.getRegistrations()` →
-`unregister()` all and reload, *before* declaring the origin wiped. "`caches.delete` every
-Cache" is necessary but not sufficient for the SW participant.
+**This must be designed, and `unregister()` alone is not enough.** Per the SW spec,
+`ServiceWorkerRegistration.unregister()` only takes effect for *subsequent* navigations — the
+**active worker keeps controlling the current page** (and any in-memory bearer token) until its
+clients unload, so a bare `await unregister()` mid-sequence does **not** prove the SW dropped its
+secrets before we clear caches and remove the marker. So the coarse path must **`postMessage`
+the SW to drop its in-memory secrets + its caches and `await` an explicit ack** (the robust
+path), *or* `unregister()` **and force a controller-change / second navigation** so the active
+worker is actually discarded before the wipe is declared complete. "`caches.delete` every Cache"
+is necessary but not sufficient for the SW participant.
 
 ### 3.4 Problem C — "run before any handle opens" is a concrete new boot gate, not a settled simplification
 
@@ -249,7 +255,7 @@ thing that "looks like a one-liner" and isn't.
 
 **Lock time (page live):**
 1. Best-effort drain the active account's pending uploads — `flushUploadQueue(ps_crud)` + the
-   media byte-queue drain. Prefer confirming *acknowledged*, not just queue-empty (§2a #4).
+   media byte-queue drain. (Queue-empty already implies acknowledgement — §2a; no extra wait.)
 2. Arm **one** profile-wide marker (`kmp-destroy-all-pending`).
 3. Signal all tabs to reload (profile-wide). Pair with the §3.2 single-consumer election or
    teardown handshake so the wipe has exactly one runner.
@@ -258,8 +264,10 @@ thing that "looks like a one-liner" and isn't.
 **Next boot — at the §3.4 pre-render gate, before any store opens a handle:**
 5. If armed, and this tab won the §3.2 election: run the load-bearing destruction, each step
    leaving the marker armed on failure (retry next boot; never disarm on partial success):
-   - **SW first (§3.3):** `unregister()` all service-worker registrations (or `postMessage` +
-     await ack) so it can't repopulate caches mid-wipe;
+   - **SW first (§3.3):** `postMessage` the SW to drop its in-memory secrets + caches and
+     `await` its ack (or `unregister()` **and** force a controller-change / second navigation —
+     bare `unregister()` leaves the active worker controlling this page) so it can neither hold a
+     token nor repopulate caches mid-wipe;
    - recursively `removeEntry` the **entire OPFS root** (DB files + journal/wal/shm siblings +
      future `attachments/`), retrying on `NoModificationAllowedError`. This is still the gated
      load-bearing step (§3.1 / §3.2);
@@ -294,7 +302,8 @@ which coarse does **not** decide:
 - **§7.2 ("Lock & Wipe must reach the SW")** mandates a *marker-gated, must-block-marker-clear*
   purge of `caches.delete('assets:<userId>')` + the SW token store. A coarse boot-time nuke
   covers the **Cache/IDB storage** under one marker — **but only if it includes the SW
-  unregister/purge handshake of §3.3.** A page-side `caches.delete` alone does *not* subsume the
+  purge handshake of §3.3** (`postMessage`→ack; bare `unregister()` is insufficient). A
+  page-side `caches.delete` alone does *not* subsume the
   SW token store; that was an overstatement in an earlier draft. With the handshake, §7.2
   collapses to "covered by the coarse wipe."
 - **§8 (byte replica / display cache)** and **§9 (durable upload queue)** each carry a "this
@@ -337,7 +346,7 @@ wipe being mechanically simpler (§3).* Concretely:
 
 1. **`destroyAllLocalData()` becomes the action** behind `lock_and_wipe_local_data`: drain the
    active account (§2a), arm one profile-wide marker, elect a single consumer + signal reload
-   (§3.2), reload. Destruction at the pre-render boot gate (§3.4): SW unregister/purge (§3.3) →
+   (§3.2), reload. Destruction at the pre-render boot gate (§3.4): SW purge handshake (§3.3) →
    OPFS root → IDB `clear()` → Cache delete → storage clear last. No preserve-allowlist (§2b).
 2. **Drop the selective machinery** (per-user key scoping in the wipe path, per-user marker,
    per-user DB-file consume, compiled-cache ordering) rather than carry two flows. If product
@@ -352,13 +361,13 @@ wipe being mechanically simpler (§3).* Concretely:
 
 - **A single-consumer cross-tab election** (`navigator.locks`) or teardown handshake (§3.2), so
   one well-defined boot runs the OPFS-gated wipe.
-- **An SW unregister/purge handshake** (§3.3) — without it the Cache/token participant isn't
+- **An SW purge handshake** — `postMessage`→ack (or `unregister()` + forced controller-change);
+  bare `unregister()` is insufficient (§3.3), and without this the Cache/token participant isn't
   actually wiped.
 - **A pre-render boot gate in `main.tsx`** (§3.4) — `await consumeDestroyAll()` before
   `createRoot().render()`, ahead of the persisted-session read and the lazy IDB singletons.
 - **A current curated IDB known-list** for the Firefox `databases()` gap, or `deleteDatabase`
   + `onblocked`, so a missed store isn't a silent incomplete wipe (§3.5).
-- **Drain that confirms acknowledgement**, not just queue-empty, before reloading (§2a #4).
 
 ### Rough scope
 
@@ -437,13 +446,13 @@ export const isDestroyAllPending = (): boolean =>
 export const consumeDestroyAll = async (): Promise<boolean> => {
   if (!isDestroyAllPending()) return false
 
-  // 0. SW FIRST (§3.3): a page-side caches.delete can't reach the SW's in-memory state and the
-  //    SW repopulates caches by serving the boot page. Unregister (or postMessage+ack) so it
-  //    stops controlling this origin before we clear caches.
-  if ('serviceWorker' in navigator) {
-    const regs = await navigator.serviceWorker.getRegistrations()
-    await Promise.all(regs.map(r => r.unregister()))
-  }
+  // 0. SW FIRST (§3.3): a page-side caches.delete can't reach the SW's in-memory state, and the
+  //    SW repopulates caches by serving the boot page. unregister() is NOT enough on its own —
+  //    per spec it only affects subsequent navigations, so the active worker keeps controlling
+  //    THIS page (and any in-memory token) until it unloads. So message the SW to drop its
+  //    secrets + caches and await an ack; unregister() + a forced controller-change is the
+  //    alternative. (Sketch shows the ack path; the SW side must implement the handler.)
+  await purgeServiceWorker() // postMessage({type:'wipe'}) → await {type:'wiped'} ack, with timeout
 
   // 1. OPFS tree — STILL the gated load-bearing step. clear() (step 2) does NOT help here: a
   //    sibling tab that hasn't released its sqlite handle blocks removeEntry exactly as today,
