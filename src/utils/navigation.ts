@@ -190,24 +190,26 @@ const navigateExplicitPanel = async (
   panelId: string,
   blockId: string,
 ): Promise<NavigationResult | null> => {
-  // Guard against a stale `panelId` (e.g. a plugin policy resolved to a panel
-  // that no longer exists) and mark it active — but only when the layout
-  // session is reachable. The content swap below must NOT be coupled to this
-  // bookkeeping: if the session can't be resolved we still navigate (the panel
-  // block is directly addressable), preserving the long-standing resilience
-  // that a bookkeeping failure can't swallow the user-visible navigation.
-  try {
-    const layoutSessionBlock = await resolveLayoutSessionBlock(repo, workspaceId)
-    const panelRows = await panelRowsForLayoutSession(layoutSessionBlock)
-    if (!panelRows.some(row => row.id === panelId)) {
-      console.warn(`[navigation] ignoring navigation to unknown panel ${panelId}`)
-      return null
-    }
-    await setActivePanel(layoutSessionBlock, panelId)
-  } catch (error) {
-    console.error('[navigation] Failed to mark panel active after navigation', error)
+  // Guard against a stale/fabricated panelId (e.g. a plugin policy resolved to
+  // a panel that no longer exists): refuse rather than write content onto a
+  // non-existent block. `repo.exists` is cache-first and counts soft-deleted
+  // rows as missing, so a live panel always passes — including one not yet
+  // reflected in the projected layout subtree — while a deleted/unknown id is
+  // caught. Checking block existence (not layout-row membership) keeps the swap
+  // decoupled from the layout projection, so this can't false-negative a real
+  // panel under a stale subtree read.
+  if (!(await repo.exists(panelId))) {
+    console.warn(`[navigation] ignoring navigation to unknown panel ${panelId}`)
+    return null
   }
   await navigateInPanel(repo.block(panelId), blockId)
+  // Best-effort active-panel bookkeeping — deliberately fire-and-forget so a
+  // layout-session failure can't swallow the already-applied navigation.
+  void resolveLayoutSessionBlock(repo, workspaceId)
+    .then(layoutSessionBlock => setActivePanel(layoutSessionBlock, panelId))
+    .catch(error => {
+      console.error('[navigation] Failed to mark panel active after navigation', error)
+    })
   return {panelId, blockId}
 }
 

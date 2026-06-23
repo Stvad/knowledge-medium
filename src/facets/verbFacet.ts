@@ -52,7 +52,8 @@ import {
  *     safe for a **pure** verb (paste's decision): the impl MUST be
  *     effect-free-until-return, since the fallback re-invokes the default after
  *     the chain may have partially run. (If the *bare* default itself throws,
- *     `run` rejects either way — a core bug to surface.)
+ *     or the fallback default returns a result failing `validateResult`, `run`
+ *     rejects either way — a core bug to surface.)
  *
  * Dynamic-extension code is transpiled without type-checking and contributions
  * are only validated as functions, so a plugin with a missing `return`
@@ -231,6 +232,13 @@ export function defineVerbFacet<Input, Result>({
         error,
       )
       result = await defaultImpl(input)
+      // The fallback result is validated too — `validateResult` guards THE
+      // result, not just a plugin's. A core default that returns an invalid
+      // shape is a bug to surface (same stance as a throwing bare default:
+      // there's nothing safer to fall back to).
+      if (validateResult && !validateResult(result)) {
+        throw new Error(`[verb:${id}] defaultImpl returned an invalid result`, {cause: error})
+      }
     }
 
     for (const observe of runtime.read(afterFacet)) {

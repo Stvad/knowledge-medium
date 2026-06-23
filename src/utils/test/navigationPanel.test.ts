@@ -39,6 +39,7 @@ describe('navigate explicit panel', () => {
       activeWorkspaceId: 'workspace',
       user: {id: 'user-1', name: 'Alice'},
       block: vi.fn(),
+      exists: vi.fn(async () => true),
       tx: vi.fn(async (
         fn: (tx: {setProperty: (blockId: string, schema: {name: string}, value: unknown) => Promise<void>}) => Promise<void>,
       ) => {
