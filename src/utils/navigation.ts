@@ -14,9 +14,10 @@
 // `navigate(repo, input)` is the execution entry: it runs `navigationVerb` and
 // returns the resolved destination. It **never rejects** (errors are logged →
 // `null`), so the many fire-and-forget callers can ignore the promise. Gesture
-// surfaces resolve a `NavigateInput` through the intent policy first
-// (`useBlockOpener`, `navigateFromGlobalCommand`, `navigateFromGesture`), then
-// hand it to `navigate`. Every `NavigateInput` can carry an `origin` tag so
+// surfaces (`useBlockOpener`, `navigateFromGlobalCommand`) resolve a
+// `NavigateInput` through the intent policy first — both via the shared
+// `navigateFromGesture` helper — then hand it to `navigate`. Every
+// `NavigateInput` can carry an `origin` tag so
 // execution-layer decorators can redirect/observe by source, not just by the
 // resolved target — gesture navigations get it from the policy (the surface
 // role); programmatic callers set it explicitly.
@@ -393,7 +394,7 @@ const PLAIN_PRIMARY_CLICK: BlockLinkClickModifierState = {
   button: 0,
 }
 
-export const modifiersFromMouseEvent = (e: MouseEvent): BlockLinkClickModifierState => ({
+const modifiersFromMouseEvent = (e: MouseEvent): BlockLinkClickModifierState => ({
   shiftKey: e.shiftKey,
   altKey: e.altKey,
   metaKey: e.metaKey,

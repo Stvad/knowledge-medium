@@ -247,7 +247,9 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
       // Through navigate() so zoom is observable/interceptable via
       // navigationVerb; target 'panel' swaps this panel's content (the swap
-      // still wraps in withMoveTransition inside navigateInPanel).
+      // still wraps in withMoveTransition inside navigateInPanel) and marks this
+      // panel active (it's the one being interacted with) — a benign addition
+      // over the old direct navigateInPanel.
       await navigate(repo, {target: 'panel', panelId: uiStateBlock.id, blockId: block.id, origin: 'zoom'})
     },
     defaultBinding: {

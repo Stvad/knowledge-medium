@@ -322,7 +322,7 @@ Callers don't talk to the projection directly — they write panel rows. The pro
 
 - `navigate({target: 'new-panel', sourcePanelId})`: insert a new panel row at `sourceIndex + 1` (UiState scope). Observer classifies as insert → push. Drop `dispatchEvent('open-panel')` from `navigation.ts`; drop `'open-panel'` CustomEvent listener from `LayoutRenderer`.
 - `handleClose` in `PanelRenderer`: stays as-is (UiState delete of the panel row). Observer classifies as delete → push.
-- `navigate({target: 'focused', panelId})` for a side panel: updates the panel row's `topLevelBlockIdProp`. Observer classifies as URL-changed → push (browser back undoes the link click).
+- `navigate({target: 'focused', panelId})` for a side panel (the target was later renamed `'panel'` — this section predates the rename): updates the panel row's `topLevelBlockIdProp`. Observer classifies as URL-changed → push (browser back undoes the link click).
 - Workspace switch: existing path writes `#<new-wsId>` to URL via `location.hash =` (or its `writeAppHash` wrapper). The inbound side of the projection (`applyCurrentUrl`) handles bare `#<wsId>` by either restoring prior `(layoutSessionId, wsId)` rows or, if none exist, deferring to the landing layer to fill in the daily note (see "Workspace switch + default landing" above). App.tsx's eager daily-note rewrite in `getInitialBlock` is removed in this step.
 - Cmd-[/], forward/back mouse: keep bound to `history.back/forward()` — gets the right semantics for free now that browser history tracks panel layout.
 
