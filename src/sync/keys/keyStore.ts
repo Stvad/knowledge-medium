@@ -25,12 +25,12 @@ export interface WorkspaceKeyStore {
   get(userId: string, workspaceId: string): Promise<CryptoKey | null>
   put(userId: string, workspaceId: string, key: CryptoKey): Promise<void>
   delete(userId: string, workspaceId: string): Promise<void>
-  /** Drop every stored WK FOR THIS USER — the key-material half of a §6 Lock &
-   *  wipe. Scoped to `userId` (not the whole store) because the IndexedDB store
-   *  is shared across all accounts in the browser profile, while the wipe
-   *  marker + DB-file deletion are per-user: clearing another account's keys
-   *  would lock its e2ee workspaces without wiping its DB. (The mode pins live
-   *  elsewhere and deliberately survive.) */
+  /** Drop every stored WK FOR THIS USER. Scoped to `userId` (not the whole
+   *  store) because the IndexedDB store is shared across all accounts in the
+   *  browser profile, so clearing another account's keys would lock its e2ee
+   *  workspaces. Currently unused in-app — the per-workspace lock-&-wipe flow
+   *  that called this was removed (a full "clear site data" wipe drops the whole
+   *  store); kept as a store primitive with its own tests. */
   clearForUser(userId: string): Promise<void>
 }
 
@@ -118,14 +118,13 @@ export class IndexedDbWorkspaceKeyStore implements WorkspaceKeyStore {
     const transaction = db.transaction(STORE_NAME, mode)
     // Resolve on the TRANSACTION commit, not just the request's `onsuccess`. A
     // readwrite write (put/delete/clear) is only durable once the tx commits
-    // (`oncomplete`); `onsuccess` fires earlier, while the tx is still open. §6
-    // Lock & wipe reloads the page immediately after clearing keys, so without
-    // awaiting the commit the navigation can abort the not-yet-committed tx and
-    // roll the clear back — leaving the workspace keys in IndexedDB while the
-    // SQLite file is wiped, so encrypted workspaces would reopen WITHOUT
-    // re-pasting the WK (the lock silently fails). Register the completion
-    // handlers synchronously here so we can't miss an `oncomplete` that fires
-    // before we start awaiting. (Readonly txs commit trivially — harmless.)
+    // (`oncomplete`); `onsuccess` fires earlier, while the tx is still open.
+    // Callers may navigate/reload right after a clear, so without awaiting the
+    // commit the navigation can abort the not-yet-committed tx and roll the
+    // clear back — leaving workspace keys in IndexedDB that should be gone.
+    // Register the completion handlers synchronously here so we can't miss an
+    // `oncomplete` that fires before we start awaiting. (Readonly txs commit
+    // trivially — harmless.)
     const committed = new Promise<void>((resolve, reject) => {
       transaction.oncomplete = () => resolve()
       transaction.onabort = () =>
@@ -162,9 +161,9 @@ export class IndexedDbWorkspaceKeyStore implements WorkspaceKeyStore {
     const prefix = keyStoreUserPrefix(userId)
     const db = await this.openDb()
     const transaction = db.transaction(STORE_NAME, 'readwrite')
-    // Await the commit (durability), same as `tx` — Lock & wipe reloads right
-    // after this resolves; an un-committed delete would be rolled back by the
-    // navigation, leaving keys behind. Handlers registered synchronously.
+    // Await the commit (durability), same as `tx` — a caller that navigates/
+    // reloads right after this resolves could otherwise have its un-committed
+    // delete rolled back, leaving keys behind. Handlers registered synchronously.
     const committed = new Promise<void>((resolve, reject) => {
       transaction.oncomplete = () => resolve()
       transaction.onabort = () =>

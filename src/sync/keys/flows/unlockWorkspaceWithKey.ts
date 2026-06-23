@@ -11,8 +11,8 @@
  *   - first encounter on a new device / accepted invite (the key-required
  *     branch (a), or the quarantine branch (b) where pasting a valid WK defeats
  *     a server downgrade lie — §6 rule 3);
- *   - re-unlocking a workspace already pinned `e2ee` whose WK was dropped by a
- *     §6 Lock & wipe (the pin survives; re-pinning the same value is a no-op).
+ *   - re-unlocking a workspace already pinned `e2ee` whose WK is absent on this
+ *     device (re-pinning the same value is a no-op).
  *
  * Pure of UI and DB: the canary comes in as a string and the key store is
  * injected. The caller (Phase E UI) supplies `workspaces.wk_canary` and, on

@@ -6,8 +6,6 @@ import 'fake-indexeddb/auto'
 
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import {
-  clearCompiledModuleCache,
-  getCompiledModuleCache,
   IndexedDbCompiledModuleCache,
   InMemoryCompiledModuleCache,
   type CompiledModuleCache,
@@ -86,21 +84,6 @@ describe('CompiledModuleCache stores', () => {
     // same named DB — the row must still be there.
     const reader = new IndexedDbCompiledModuleCache()
     expect(await reader.read('reload-block')).toMatchObject({compiled: 'PERSISTED'})
-  })
-
-  it('clearCompiledModuleCache empties the store via a connection (§6 lock & wipe, boot)', async () => {
-    // Operates on the process singleton (IndexedDB-backed in this file).
-    const cache = getCompiledModuleCache()
-    await cache.write('wipe-a', record({compiled: 'A'}))
-    await cache.write('wipe-b', record({compiled: 'B'}))
-
-    await clearCompiledModuleCache()
-
-    expect(await cache.read('wipe-a')).toBeUndefined()
-    expect(await cache.read('wipe-b')).toBeUndefined()
-    // Store is still usable (clear empties rows, doesn't drop the store).
-    await cache.write('wipe-c', record({compiled: 'C'}))
-    expect(await cache.read('wipe-c')).toMatchObject({compiled: 'C'})
   })
 })
 

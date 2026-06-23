@@ -1,0 +1,5 @@
+# This spike is standalone — `npm install playwright-core` here (per README)
+# creates these; keep them out of the repo.
+node_modules/
+package.json
+package-lock.json

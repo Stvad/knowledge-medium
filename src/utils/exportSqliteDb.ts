@@ -281,21 +281,6 @@ const removeEntryIfExists = async (
   }
 }
 
-/**
- * Delete a user's PowerSync SQLite DB file (and its journal/WAL/shm siblings)
- * from OPFS. Used by the §6 Lock & wipe boot path, which runs this BEFORE
- * PowerSync opens the file — wa-sqlite must not be holding an OPFS sync-access
- * handle on a file being removed. Missing entries are treated as already-gone
- * (success), so a partial prior wipe converges on the next boot.
- */
-export async function removeOpfsDbFile(dbFilename: string): Promise<void> {
-  const root = await navigator.storage.getDirectory()
-  await removeEntryIfExists(root, dbFilename)
-  for (const suffix of DB_FILE_SIBLING_SUFFIXES) {
-    await removeEntryIfExists(root, dbFilename + suffix)
-  }
-}
-
 const tempOpfsFilename = (dbFilename: string, purpose: string): string =>
   `.${dbFilename}.${purpose}-${Date.now()}-${randomId()}.tmp`
 
