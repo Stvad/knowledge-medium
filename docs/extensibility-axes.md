@@ -55,7 +55,9 @@ navigation.beforeFacet       // Sum    — observers run before
 navigation.afterFacet        // Sum    — observers run after
 
 // Runner:
-navigation.run(runtime, input)  // before → decorators(impl)(input) → after
+navigation.run(runtime, input)      // async: before → decorators(impl)(input) → after
+navigation.runSync(runtime, input)  // sync twin for PURE verbs (decide at a DOM
+                                    // boundary); async contributions fall back
 ```
 
 The intent is encoded by *which facet you contribute to*. No new tagged-union contribution machinery — each slot is an ordinary facet with the algebra appropriate to it, just bundled at definition time.

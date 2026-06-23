@@ -5,7 +5,7 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { isCollapsedProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
-import { pasteDecisionVerb } from '../decision'
+import { pasteDecisionVerb, type PasteDecision } from '../decision'
 import {
   pasteChordIntent,
   pasteEditModeMultilineText,
@@ -420,7 +420,8 @@ describe('pasteFromClipboard (shortcut/programmatic paste)', () => {
     await createBlock('root', 'Root', null, 'a0')
     await createBlock('target', 'Target', 'root', 'a0')
     env.repo.setRuntimeContributions(pasteDecisionVerb.decoratorsFacet, 'test-paste', [
-      next => async req => ({...(await next(req)), text: `${req.text}-rewritten`}),
+      // Synchronous — the decision is resolved via `runSync`.
+      next => req => ({...(next(req) as PasteDecision), text: `${req.text}-rewritten`}),
     ])
 
     const pasted = await pasteFromClipboard(env.repo.block('target'), env.repo, {scopeRootId: 'root'})

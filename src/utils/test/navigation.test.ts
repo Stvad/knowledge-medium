@@ -7,6 +7,7 @@ import {
   navigationIntentVerb,
   navigationVerb,
   resolveGlobalCommandTarget,
+  type NavigateInput,
   type NavigationGesture,
 } from '@/utils/navigation'
 import { panelHistory } from '@/utils/panelHistory'
@@ -459,25 +460,31 @@ describe('navigationIntentVerb (intent policy seam)', () => {
     })
   })
 
-  it('carries the gesture workspace when the policy omits one (active switch mid-resolution)', async () => {
-    stubViewport(false)
-    // A policy impl that (a) flips the active workspace mid-resolution and
-    // (b) returns an input WITHOUT a workspaceId. The nav must still land in the
-    // workspace captured when the gesture started (WS), not the newly-active one.
-    env.repo.setRuntimeContributions(navigationIntentVerb.implFacet, 'test-policy', [
-      gesture => {
-        env.repo.setActiveWorkspaceId('ws-other')
-        return {blockId: gesture.blockId, target: 'main'}
+  it('a policy decorator can override native passthrough (cmd-click → in-app navigation)', () => {
+    // `defaultNavigationIntent` returns null for a cmd/ctrl/middle click (native
+    // passthrough — let the browser open a new tab). Because `useBlockOpener`
+    // now gates `preventDefault` on the RESOLVED intent (no hardcoded native
+    // pre-check), a policy that maps that null to a concrete `NavigateInput`
+    // makes native passthrough plugin-overridable.
+    env.repo.setRuntimeContributions(navigationIntentVerb.decoratorsFacet, 'test-policy', [
+      next => gesture => {
+        const resolved = next(gesture) as NavigateInput | null
+        return resolved ?? {blockId: gesture.blockId, target: 'main'}
       },
     ])
+    const runtime = env.repo.facetRuntime!
+    const cmdClick: NavigationGesture = {
+      role: 'follow-link',
+      modifiers: {shiftKey: false, altKey: false, metaKey: true, ctrlKey: false, button: 0},
+      blockId: 'b-cmd',
+      workspaceId: WS,
+      viewport: 'desktop',
+    }
 
-    await navigateFromGlobalCommand(env.repo, {blockId: 'b-ws'})
-
-    // currentPanelBlockIds resolves WS's layout session — passing proves the
-    // nav landed in WS despite the active workspace flip + the omitted workspaceId.
-    await vi.waitFor(async () => {
-      expect(await currentPanelBlockIds()).toEqual(['b-ws'])
-    })
+    // Default policy → null (native); the decorator overrides it to an in-app nav.
+    expect(defaultNavigationIntent(cmdClick)).toBeNull()
+    expect(navigationIntentVerb.runSync(runtime, cmdClick))
+      .toEqual({blockId: 'b-cmd', target: 'main'})
   })
 
   it('the read probe honors a policy-retargeted workspace (read/write aligned)', async () => {
@@ -491,8 +498,9 @@ describe('navigationIntentVerb (intent policy seam)', () => {
     // anchor on that retargeted workspace, matching where the write would land
     // (otherwise daily-note prev/next anchors on the wrong workspace).
     env.repo.setRuntimeContributions(navigationIntentVerb.decoratorsFacet, 'test-policy', [
-      next => async gesture => {
-        const input = await next(gesture)
+      next => gesture => {
+        // Synchronous now — the intent verb is resolved via `runSync`.
+        const input = next(gesture) as NavigateInput | null
         return input && gesture.role === 'navigator' ? {...input, workspaceId: 'ws-2'} : input
       },
     ])
@@ -509,8 +517,8 @@ describe('navigationIntentVerb (intent policy seam)', () => {
     // the active panel even on desktop, by rewriting the policy's NavigateInput.
     stubViewport(false)
     env.repo.setRuntimeContributions(navigationIntentVerb.decoratorsFacet, 'test-policy', [
-      next => async gesture => {
-        const input = await next(gesture)
+      next => gesture => {
+        const input = next(gesture) as NavigateInput | null
         return input && gesture.role === 'navigator' && input.target === 'main'
           ? {...input, target: 'active'}
           : input
@@ -551,7 +559,7 @@ describe('navigationIntentVerb (intent policy seam)', () => {
   it('a policy decorator can veto a gesture (returns null, no navigation)', async () => {
     stubViewport(false)
     env.repo.setRuntimeContributions(navigationIntentVerb.decoratorsFacet, 'test-policy', [
-      () => async () => null,
+      () => () => null,
     ])
 
     const result = await navigateFromGlobalCommand(env.repo, {blockId: 'b-global'})

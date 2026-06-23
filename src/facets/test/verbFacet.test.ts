@@ -397,3 +397,190 @@ describe('defineVerbFacet', () => {
     expect(defaultImpl).not.toHaveBeenCalled()
   })
 })
+
+describe('defineVerbFacet runSync', () => {
+  it('runs the default impl synchronously when nothing is contributed', () => {
+    const verb = defineVerbFacet<number, number>({
+      id: 'test.sync.default',
+      defaultImpl: n => n + 1,
+    })
+    const runtime = resolveFacetRuntimeSync([])
+
+    expect(verb.runSync(runtime, 1)).toBe(2)
+  })
+
+  it('folds decorators over the impl, lower precedence innermost (same order as run)', () => {
+    const verb = defineVerbFacet<string, string>({
+      id: 'test.sync.decorators',
+      defaultImpl: s => s,
+    })
+    const runtime = resolveFacetRuntimeSync([
+      verb.decorator(next => s => `${next(s)}|low`, {precedence: 1}),
+      verb.decorator(next => s => `${next(s)}|high`, {precedence: 2}),
+    ])
+
+    expect(verb.runSync(runtime, 'x')).toBe('x|low|high')
+  })
+
+  it('impl replaces the default; a decorator can veto without calling next', () => {
+    const impl = vi.fn((n: number) => n)
+    const verb = defineVerbFacet<number, number>({
+      id: 'test.sync.veto',
+      defaultImpl: impl,
+    })
+    const runtime = resolveFacetRuntimeSync([
+      verb.decorator(() => () => -1),
+    ])
+
+    expect(verb.runSync(runtime, 5)).toBe(-1)
+    expect(impl).not.toHaveBeenCalled()
+  })
+
+  it('runs before/after observers in order with the input and result', () => {
+    const verb = defineVerbFacet<number, number>({
+      id: 'test.sync.observers',
+      defaultImpl: n => n * 2,
+    })
+    const calls: string[] = []
+    const runtime = resolveFacetRuntimeSync([
+      verb.before(input => { calls.push(`before:${input}`) }),
+      verb.after((input, outcome) => {
+        calls.push(`after:${input}:${outcome.ok ? outcome.result : 'err'}`)
+      }),
+    ])
+
+    expect(verb.runSync(runtime, 4)).toBe(8)
+    expect(calls).toEqual(['before:4', 'after:4:8'])
+  })
+
+  it('falls back to the sync default when a contribution returns a promise (fallback)', () => {
+    const verb = defineVerbFacet<number, number>({
+      id: 'test.sync.promise-fallback',
+      defaultImpl: n => n + 1000,
+      onError: 'fallback',
+    })
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const runtime = resolveFacetRuntimeSync([
+      // An async (promise-returning) impl violates the sync contract.
+      verb.impl(async n => n),
+    ])
+
+    expect(verb.runSync(runtime, 5)).toBe(1005)
+    expect(consoleError).toHaveBeenCalled()
+    consoleError.mockRestore()
+  })
+
+  it('a promise-returning decorator also violates the contract and falls back', () => {
+    const verb = defineVerbFacet<number, number>({
+      id: 'test.sync.promise-decorator',
+      defaultImpl: n => n + 1,
+      onError: 'fallback',
+    })
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const runtime = resolveFacetRuntimeSync([
+      verb.decorator(() => async n => n),
+    ])
+
+    expect(verb.runSync(runtime, 5)).toBe(6)
+    expect(consoleError).toHaveBeenCalled()
+    consoleError.mockRestore()
+  })
+
+  it('throws (no default re-run) when a contribution returns a promise under rethrow', () => {
+    const defaultImpl = vi.fn((n: number) => n)
+    const verb = defineVerbFacet<number, number>({
+      id: 'test.sync.promise-rethrow',
+      defaultImpl,
+    })
+    const runtime = resolveFacetRuntimeSync([
+      verb.impl(async n => n),
+    ])
+
+    expect(() => verb.runSync(runtime, 5)).toThrow(/synchronous contributions/)
+    expect(defaultImpl).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the default when a sync impl throws (fallback)', () => {
+    const verb = defineVerbFacet<number, number>({
+      id: 'test.sync.impl-throws',
+      defaultImpl: n => n + 1000,
+      onError: 'fallback',
+    })
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const runtime = resolveFacetRuntimeSync([
+      verb.impl(() => { throw new Error('boom') }),
+    ])
+
+    expect(verb.runSync(runtime, 5)).toBe(1005)
+    consoleError.mockRestore()
+  })
+
+  it('rethrows when a sync impl throws and does not re-run the default (default onError)', () => {
+    const defaultImpl = vi.fn((n: number) => n + 1000)
+    const verb = defineVerbFacet<number, number>({
+      id: 'test.sync.impl-rethrows',
+      defaultImpl,
+    })
+    const runtime = resolveFacetRuntimeSync([
+      verb.impl(() => { throw new Error('plugin boom') }),
+    ])
+
+    expect(() => verb.runSync(runtime, 5)).toThrow('plugin boom')
+    expect(defaultImpl).not.toHaveBeenCalled()
+  })
+
+  it('falls back when a result fails validateResult', () => {
+    const verb = defineVerbFacet<number, number>({
+      id: 'test.sync.invalid-result',
+      defaultImpl: () => 0,
+      onError: 'fallback',
+      validateResult: n => typeof n === 'number' && Number.isFinite(n),
+    })
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const runtime = resolveFacetRuntimeSync([
+      verb.impl(() => undefined as unknown as number),
+    ])
+
+    expect(verb.runSync(runtime, 5)).toBe(0)
+    consoleError.mockRestore()
+  })
+
+  it('isolates a throwing observer; an async observer is fire-and-forget, never gating the result', async () => {
+    const verb = defineVerbFacet<number, number>({
+      id: 'test.sync.observer-isolation',
+      defaultImpl: n => n,
+    })
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const after = vi.fn()
+    const runtime = resolveFacetRuntimeSync([
+      verb.before(() => { throw new Error('sync observer boom') }),
+      // An async before-observer is allowed but must NOT gate the sync result;
+      // its eventual rejection is swallowed (not an unhandled rejection).
+      verb.before(async () => { throw new Error('async observer reject') }),
+      verb.after(after),
+    ])
+
+    expect(verb.runSync(runtime, 7)).toBe(7)
+    expect(after).toHaveBeenCalledWith(7, {ok: true, result: 7})
+    expect(consoleError).toHaveBeenCalled()
+    // Let the async observer's rejection settle so its handler runs.
+    await Promise.resolve()
+    consoleError.mockRestore()
+  })
+
+  it('runs after-observers with the error outcome before throwing under rethrow', () => {
+    const boom = new Error('boom')
+    const verb = defineVerbFacet<number, number>({
+      id: 'test.sync.after-on-rethrow',
+      defaultImpl: n => n,
+    })
+    const after = vi.fn()
+    const runtime = resolveFacetRuntimeSync([
+      verb.impl(() => { throw boom }),
+      verb.after(after),
+    ])
+
+    expect(() => verb.runSync(runtime, 1)).toThrow('boom')
+    expect(after).toHaveBeenCalledWith(1, {ok: false, error: boom})
+  })
+})

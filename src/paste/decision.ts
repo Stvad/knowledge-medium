@@ -9,9 +9,9 @@ import type { PasteChordIntent } from './operations.ts'
  *
  * There are exactly two terminal actions — there is intentionally no
  * "let the browser paste natively" option: the editor always takes over
- * the paste (it must `preventDefault` synchronously, before the async
- * decision resolves), so "native" single-line insert IS `single-block`
- * with the raw text.
+ * the paste (it `preventDefault`s synchronously, and the decision resolves
+ * synchronously too — see `runSync`), so "native" single-line insert IS
+ * `single-block` with the raw text.
  */
 export type PasteDecision =
   /** Drop the (optionally rewritten) text into the current block, newlines
@@ -36,13 +36,12 @@ export type PasteDecision =
  *  `defaultPasteDecision`. */
 export type PasteSurface = 'editor' | 'shell'
 
-/** Caret/selection on the editor surface at paste time, snapshotted
- *  synchronously before the (possibly async) decision — an override may
- *  await, during which the live caret/doc can move, so the decision must
- *  key on the paste-time snapshot, not a later read. Present only on the
+/** Caret/selection on the editor surface at paste time. The decision is
+ *  resolved synchronously (`runSync`), so an override sees the live paste-time
+ *  caret and has no opportunity to move it mid-decision. Present only on the
  *  `editor` surface (see the `surface ⟺ caret` invariant on `PasteRequest`).
- *  Lets overrides vary by position (e.g. title line 1 vs body line 2+)
- *  without re-deriving it from the DOM. */
+ *  Lets overrides vary by position (e.g. title line 1 vs body line 2+) without
+ *  re-deriving it from the DOM. */
 export interface PasteCaret {
   /** 1-based line of the caret WITHIN the block's editor document
    *  (`doc.lineAt(from).number`). A block is usually one logical line but
@@ -106,8 +105,13 @@ export const defaultPasteDecision = (request: PasteRequest): PasteDecision => {
  *   - `pasteDecisionVerb.decorator(fn)` — wrap it (e.g. rewrite CSV →
  *     markdown then defer to `next`),
  *   - `pasteDecisionVerb.before/after`  — observe pastes.
- * With no contributions, `run` returns `defaultPasteDecision`, so the
- * editor behaves exactly as before the seam existed.
+ * With no contributions the decision is `defaultPasteDecision`, so the editor
+ * behaves exactly as before the seam existed. Call sites resolve it with
+ * `runSync` (the decision is pure and is needed at the synchronous
+ * `preventDefault` boundary), so `impl`/`decorator` contributions must be
+ * **synchronous** — an async one violates the contract and falls back to
+ * `defaultPasteDecision` (these are pure policy with no I/O; async before/after
+ * observers are still fine, they're fire-and-forget).
  */
 export const pasteDecisionVerb = defineVerbFacet<PasteRequest, PasteDecision>({
   id: 'core.paste-decision',
