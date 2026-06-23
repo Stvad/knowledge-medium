@@ -81,7 +81,7 @@ describe('navigate explicit panel', () => {
     })
     await vi.waitFor(() => {
       expect(consoleError).toHaveBeenCalledWith(
-        '[navigation] Failed to mark panel active for navigation',
+        '[navigation] Failed to mark panel active after navigation',
         expect.any(Error),
       )
     })

@@ -71,6 +71,12 @@ interface NavigateBaseInput {
 
 export interface NavigatePanelInput extends NavigateBaseInput {
   target: 'panel'
+  /** Must be an existing **panel** block. The execution guard only checks the
+   *  block exists (cache-first, so a live-but-not-yet-projected panel still
+   *  passes) — NOT that it's a panel — so passing a non-panel block id would
+   *  write panel props onto it. In practice `panelId` always comes from a
+   *  rendered panel (`useBlockContext().panelId` / the zoom panel's UiState
+   *  block); callers must not pass an arbitrary content block. */
   panelId: string
 }
 
@@ -227,19 +233,20 @@ const applyNavigation = async (
 
   switch (dest.kind) {
     case 'panel': {
-      // Mark the panel active as part of THIS navigation (awaited), then swap
-      // its content. Awaiting matters: a fire-and-forget active write can outlive
-      // `navigate()` and land after a subsequent navigation's active write,
-      // leaving the wrong panel active. Isolated so a layout-session failure
-      // still can't swallow the content swap below (the panel block is
-      // addressable without the session).
+      // Swap the panel's content first (the primary, user-visible effect), then
+      // mark it active. Both are AWAITED as part of THIS navigation: a
+      // fire-and-forget active write can outlive `navigate()` and land after a
+      // later navigation's active write, leaving the wrong panel active. Marking
+      // active is failure-isolated AND comes after the swap, so neither a
+      // layout-session failure nor a swap failure can leave a panel marked
+      // active without its content actually swapped.
+      await navigateInPanel(repo.block(dest.panelId), blockId)
       try {
         const ls = await resolveLayoutSessionBlock(repo, workspaceId)
         await setActivePanel(ls, dest.panelId)
       } catch (error) {
-        console.error('[navigation] Failed to mark panel active for navigation', error)
+        console.error('[navigation] Failed to mark panel active after navigation', error)
       }
-      await navigateInPanel(repo.block(dest.panelId), blockId)
       return {panelId: dest.panelId, blockId, workspaceId}
     }
     case 'create-row': {
