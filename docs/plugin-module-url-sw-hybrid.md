@@ -1,52 +1,61 @@
-# Plugin module loading: stable `/module/<blockId>` URLs via an in-thread producer + service-worker cache (hybrid)
+# Plugin module loading: stable `/module/<blockId>` URLs via an in-thread producer + an on-demand service worker
 
-> **Status: recommendation / investigation.** Recommends a direction and scopes it; the one low-risk piece of
-> it — source maps + a stable `//# sourceURL` on the blob path (the §6 "do this regardless" step) — **is
-> implemented in this PR** (`defaultTranspileViaBabel`, `COMPILER_VERSION` 1→2). The SW `/module/` route is
-> **not** built (deferred per the recommendation). Grounded against `src/extensions/compileExtensionModule.ts`,
-> `compiledModuleCache.ts`,
+> **Status: recommendation / investigation.** The decision hinge is **"are we willing to require a controlling
+> service worker for *user* extensions?"** If yes, adopt the single-path, on-demand SW↔main design below — it's a
+> genuine *simplification* (no blob path, no module cache, no GC, no pre-materialization) that unlocks stable
+> URLs / native dedup / transitive cross-plugin imports. If no, keep pure in-thread (the blob path) — a SW route
+> behind a *mandatory* fallback is only additive cost. Either way, the one low-risk piece — source maps + a
+> sanitized `//# sourceURL` on the blob path — **is already implemented in this PR** (`defaultTranspileViaBabel`,
+> `COMPILER_VERSION` 1→2). Grounded against `src/extensions/compileExtensionModule.ts`, `compiledModuleCache.ts`,
 > `dynamicExtensions.ts`, `AppRuntimeProvider.tsx`, `src/extensions/api.ts`, `index.html` (importmap),
 > `vite.config.ts` (`preserveModules`), `vite-plugins/unifySrcJsUrls.ts`, `public/sw.js`,
 > `src/registerServiceWorker.ts`, `src/sync/transform.ts` + `src/data/internals/syncObserver/materialize.ts`
 > (in-thread decryption), `docs/lock-and-wipe-coarse-recommendation.md` (coarse platform wipe), and the
-> media-attachments design (PR #230) §7.3 / §18 (the in-thread/SW decryption fork — the direct analog;
-> external PR, that doc isn't in this repo tree, so its §-refs aren't locally verifiable).
+> media-attachments design (PR #230) §7.3 / §18 (the in-thread/SW decryption fork — the direct analog; external
+> PR, that doc isn't in this repo tree, so its §-refs aren't locally verifiable).
 > Last verified against code: 2026-06-23.
 
 ## TL;DR
 
-**Recommendation: keep the privileged work in-thread either way; do *not* adopt the SW `/module/` route now.
-Instead take the cheap 80% in-thread — emit source maps + a stable `//# sourceURL` on the existing blob path
-(done in this PR) — and defer the SW route until transitive cross-plugin imports
-(`import "${BASE_URL}module/<otherId>"`) are an actual goal.** That one capability — a plugin block importing another plugin block by a real URL — is the only thing
-blob URLs genuinely cannot do and the only thing the SW route uniquely buys. Everything else the SW route is
-sold on (module dedup/identity, recompile avoidance, "real" cache reuse) is **already handled in-thread today**
-by the in-memory `CompileCache` (dedup/identity) and the IndexedDB `CompiledModuleCache` (recompute avoidance).
-The SW route adds a real, persistent maintenance surface — a new `public/sw.js` branch with strict ordering, a
-new versioned module cache with its own GC, a transitive-import hash-rewriting pass in the producer, and a
-**mandatory blob fallback you have to keep anyway** for the uncontrolled first load — in exchange for stable
-URLs we can approximate without it.
+**The earlier "is the SW worth the additive cost?" framing was rigged** — it compared pure in-thread against the
+*worst* version of the SW path (a SW route bolted on top of a **mandatory** blob fallback you keep forever). The
+real choice is a single yes/no:
 
-If cross-plugin module composition *is* on the roadmap, the hybrid in this doc is the right shape for it, and
-§3–§5 are the build plan. Compiling **in** the SW is off the table (§6): the SW cannot read the SQLite DB or
-the device-local approval state, and putting E2EE keys in the SW is a non-starter.
+**Are we willing to require a controlling service worker for *user* extensions?** This is reasonable here
+because the `/module/` path only ever affects **user-authored extension blocks** — the built-in plugins are
+ordinary bundled ES modules that never touch it (§4.3) — and the SW-unavailable environments (private mode,
+no-storage, policy-blocked) are *already* a broken tier for this local-first app (no persistent SQLite, no
+IndexedDB, no Cache). "Custom extensions also sit out when storage/SW is unavailable" is consistent with that
+tier, not a new cliff; the app still boots and runs on its built-ins.
+
+- **If yes →** adopt a **single-path, on-demand** design: the in-thread producer stays exactly as today
+  (decrypt-already-done → approval-gate → compile), the SW is a **dumb on-demand proxy** that asks the producer
+  for a module's bytes when the browser fetches `/module/<id>` (§3). This **deletes** the blob path, the module
+  Cache store, its GC, *and* the pre-materialization/topological phase. First-visit control is handled by
+  **page-initiated `clients.claim()`** (§4), which threads the version-skew needle. Net new SW surface: *a route
+  + a message handler + a claim handler.* This is **simpler than today's blob path** and unlocks stable URLs,
+  native module dedup, transitive cross-plugin imports, and real source maps — unconditionally.
+- **If no →** keep pure in-thread (the blob path). The source-map win is already shipped (§6); the SW route
+  isn't worth building if a fallback must shadow it.
+
+Compiling **in** the SW is off the table either way (§6): the SW can't read the SQLite DB or run the trust gate,
+and must never hold E2EE keys — which is exactly why the *producer* must stay in-thread and the SW must call
+*it*.
 
 ---
 
 ## 1. Current mechanism
 
-Plugin code lives in blocks of `type: 'extension'`. The loader walks them, and for each enabled+approved block
-compiles its source and reads `module.default` as an `AppExtension`
-(`src/extensions/dynamicExtensions.ts:220`). The compile is a deliberate **two-step** pipeline
-(`src/extensions/compileExtensionModule.ts`):
+Plugin code lives in blocks of `type: 'extension'`. The loader walks them and, for each enabled+approved block,
+compiles its source and reads `module.default` as an `AppExtension` (`src/extensions/dynamicExtensions.ts:220`).
+The compile is a deliberate **two-step** pipeline (`src/extensions/compileExtensionModule.ts`):
 
-1. **Transpile** TS/JSX → JS string via `@babel/standalone` (`react` + `typescript` presets),
-   dynamically `import()`ed so the ~0.85 MB compiler stays out of the eager startup graph
-   (`defaultTranspileViaBabel`, `compileExtensionModule.ts:148`). It originally passed **no `sourceMaps` /
-   `//# sourceURL`** — the source of the debugging pain in the bullets below, now fixed by the §6 change in
-   this PR (it passes `sourceMaps: 'inline'` + a sanitized `//# sourceURL`).
-2. **Instantiate** the JS string into an ESM module via a **Blob object URL**
-   (`defaultInstantiateViaBlob`, `compileExtensionModule.ts:174`):
+1. **Transpile** TS/JSX → JS string via `@babel/standalone` (`react` + `typescript` presets), dynamically
+   `import()`ed so the ~0.85 MB compiler stays out of the eager startup graph (`defaultTranspileViaBabel`,
+   `compileExtensionModule.ts:148`). It now also emits an inline source map + a sanitized
+   `//# sourceURL=km-extension://<blockId>.tsx` (the §6 change shipped in this PR).
+2. **Instantiate** the JS string into an ESM module via a **Blob object URL** (`defaultInstantiateViaBlob`,
+   `compileExtensionModule.ts:174`):
    ```ts
    const blob = new Blob([compiled], {type: 'text/javascript'})
    const blobUrl = URL.createObjectURL(blob)
@@ -54,282 +63,263 @@ compiles its source and reads `module.default` as an `AppExtension`
    finally { URL.revokeObjectURL(blobUrl) }   // revoked immediately after import resolves
    ```
 
-So today's answer to "Blob URL? dynamic import? eval?" is: **dynamic `import()` of a Blob object URL**, no
-`eval`, no SW.
+So today: **dynamic `import()` of a Blob object URL**, no `eval`, no SW.
 
-**How inter-module imports resolve.** Not relatively — through the **realm-global import map** in
-`index.html:37`:
+**Inter-module imports resolve through the realm-global import map** in `index.html:37`
+(`"react"`/`"react-dom"` → esm.sh, `"@/"` → `"./src/"`), *not* relatively. An import map is keyed to the
+*document/realm*, not the importer's URL, and its relative address values (`./src/`) resolve against the
+**document** base — which is why a Blob module can `import {…} from '@/extensions/api.js'`
+(`src/extensions/exampleExtensions.ts:208`) and get **the same module instance the app uses**. In prod those land
+on *stable* unhashed URLs because the Vite build uses `preserveModules:true` + `entryFileNames:'[name].js'`
+(`vite.config.ts:138-142`); `vite-plugins/unifySrcJsUrls.ts` makes dev match by rewriting `/src/foo.tsx`→`.js`
+(otherwise every `createContext`/store singleton duplicates — the `useRepo must be used within a RepoContext`
+bug).
 
-```jsonc
-"imports": {
-  "react": "https://esm.sh/react@19.2.6?dev", "react/": ".../",
-  "react-dom": "...", "react-dom/": ".../",
-  "@/": "./src/"
-}
-```
+**What is and isn't deduped today (the SW path is often mis-sold here).** Module *identity* is not left to the
+blob URL: `resolveCachedModule` (`compileExtensionModule.ts:197`) is a hand-rolled L1(content-hash→module) /
+L2(blockId→{hash,promise}) cache — identical source → one instance, unchanged block → same reference (so React
+doesn't remount renderer modules on every `refreshAppRuntime`). Across reloads the IndexedDB `CompiledModuleCache`
+(`km-extension-compiled`, `compiledModuleCache.ts:100`) persists the **transpiled string** so a warm boot skips
+Babel. So intra-session dedup *and* cross-reload recompute-avoidance already exist — just not via the browser's
+native module map.
 
-An import map is keyed to the *document/realm*, not to the importer's URL, and its relative address values
-(`./src/`) resolve against the **document** base URL, not the importer's. That is exactly why a Blob module can
-do `import {blockRenderersFacet} from '@/extensions/api.js'` (the example extensions do —
-`src/extensions/exampleExtensions.ts:208`) and get **the same module instance the app uses**: `@/` → `./src/` →
-`https://origin/src/extensions/api.js`, a normal app asset. In prod this lands on a *stable* URL because the
-Vite build uses `preserveModules:true` with `entryFileNames:'[name].js'` (`vite.config.ts:138-142`) — unhashed
-module URLs the import map can name. In dev, `vite-plugins/unifySrcJsUrls.ts` rewrites `/src/foo.tsx` → `.js` so
-kernel-imported and extension-imported copies of a module collapse to one module-map entry (otherwise every
-`createContext`/store singleton duplicates — the `useRepo must be used within a RepoContext` class of bug).
+**Pain points the blob path can't fix on its own:** ~~no source maps~~ (fixed this PR, §6); **no stable module
+identity URL** (the realm's own module map is bypassed — every blob is a fresh, immediately-revoked URL);
+**no transitive plugin→plugin imports** (a blob URL is per-compile and unaddressable, so one block can't `import`
+another — confirmed: no `/module/` or cross-block refs exist anywhere in `src/`); and **broken relative imports**
+(a non-mapped `./foo` resolves against the `blob:` base → fails).
 
-**What is and isn't deduped today (important — the SW route is often mis-sold here).** Module *identity* is not
-left to the blob URL. `resolveCachedModule` (`compileExtensionModule.ts:197`) is a hand-rolled
-L1 (content-hash → module promise) / L2 (blockId → {hash, promise}) cache: two blocks with identical source
-share one module instance, and re-resolving an unchanged block returns the *same reference* (critical so React
-doesn't unmount/remount renderer modules on every `refreshAppRuntime`). Across reloads, the IndexedDB
-`CompiledModuleCache` (`km-extension-compiled`, `compiledModuleCache.ts:100`) persists the **transpiled
-string** so a warm boot skips Babel entirely. So intra-session dedup *and* cross-reload recompute-avoidance
-already exist — just not via the browser's native module map.
+## 2. What stable URLs buy (and what they don't)
 
-**Concrete pain points (the baseline that motivated this investigation):**
+`import()` *fundamentally consumes a URL*, and a Blob URL is a poor one (revoked, unaddressable). This is the
+inverse of media (PR #230 §7.3/§18), where the app-thread path won because `<img>` accepts a Blob, so the SW's
+one trick — a stable URL — bought nothing. For modules the stable URL is the whole point. But be precise about
+which wins are real:
 
-- **No source maps / unusable stack frames** — *the one pain this PR fixes (§6)*. Step 1 originally emitted no
-  map and step 2's URL is `blob:<uuid>` that is **revoked the instant the import resolves**: a throw surfaced as
-  `blob:…:line:col` against a URL that no longer exists — no breakpoints, no original TSX. It was the sharpest
-  everyday pain and purely a function of the blob path; the §6 change adds an inline source map + stable
-  `//# sourceURL`.
-- **No stable module identity URL.** The realm's own module map is bypassed (every blob is a fresh, immediately
-  revoked URL). Dedup works only because of the *parallel* hand-rolled `CompileCache`; any code path that
-  imports a module URL without going through it gets a distinct instance.
-- **No transitive plugin→plugin imports.** There is **no facility today for one extension block to import
-  another** (`grep` for `/module/` is empty; cross-block refs don't exist). Authors can import `@/…` and bare
-  esm.sh specifiers, but block B cannot `import` block A. A blob URL is per-compile and unaddressable, so
-  there's nothing to import *by*.
-- **Broken relative imports.** A non-mapped relative specifier (`import './util.js'`) resolves against the
-  importer base = the `blob:` URL → fails. Authors must use `@/…` or bare specifiers.
-- **"No cache reuse" is only half-true.** Module *instances* never survive a reload regardless of mechanism;
-  the *transpile* is already reused across reloads via IndexedDB. So the cache-reuse argument for the SW is
-  weaker than it sounds (see §2).
+- **Transitive imports — the one decisive win.** A stable `${BASE_URL}module/<otherId>` lets block A `import`
+  block B. **Impossible** with blobs. It needs **no SW URL rewriting**: bare/app specifiers (`@/…`, `react`) keep
+  resolving through the realm import map (which applies to a `${BASE_URL}module/<id>` module exactly as to a blob
+  module), and the module URL is an absolute same-origin URL. **It must be base-prefixed
+  (`${BASE_URL}module/<id>`), never root-absolute `/module/<id>`** — under a non-root `APP_BASE_PATH` the SW
+  registers with `scope: import.meta.env.BASE_URL` (`registerServiceWorker.ts:41-44`), so a root-absolute path
+  escapes scope. Two wrinkles, both resolved **in-thread by the producer**, never the SW:
+  - *Cache-busting*: the importing module must name the **versioned** URL `${BASE_URL}module/<otherId>?v=<hashB>`
+    (the realm module map caches the unversioned URL for the realm lifetime). The producer pins transitive
+    specifiers to `?v=<hash>` at compile time — a cheap rewrite that needs only each dep's **approved**
+    `sourceHash` (a record lookup, no compile).
+  - *Which hash*: it's the dependency's **approved** `sourceHash` (its Gate-2 pin), never `sha256(live content)`.
+    An unapproved dep was never produced, so A's import of it **fails closed** — correct #67 behavior. Net:
+    cross-block imports resolve only between blocks both *enabled* and *approved* here.
+- **Source maps / DevTools** — real, but obtainable on the blob path (shipped, §6). Not a reason to need the SW.
+- **Native dedup/identity** — marginal over the existing in-memory `CompileCache`; matters mainly for *shared*
+  transitive deps (two plugins importing the same `${BASE_URL}module/<C>?v=…` dedupe natively).
+- **Cache reuse** — a non-argument: the producer must run in-thread every boot regardless (decrypt + approval +
+  compile), so there's no "serve a module without the producer." Recompute is already avoided by IndexedDB.
 
-## 2. What stable URLs actually buy (and what they don't)
+**Net:** the only thing stable URLs buy with no in-thread substitute is **transitive plugin→plugin imports**.
+Everything else is already handled in-thread.
 
-The JS loader's need for *real* URLs is genuine and is where modules differ from media. In the
-media-attachments analysis (PR #230 §7.3 / §18) the app-thread path won because **`<img>` accepts a Blob
-(object URL)** — the SW's one trick, a stable URL, buys almost nothing, so the SW's costs (can't read app/DB
-state, the cold-start control gap) weren't worth paying. **Modules are the inverse**: `import()`
-*fundamentally consumes a URL*, and a Blob URL is a poor one (revoked, unaddressable, no map). So the SW *can*
-genuinely pay off. But be precise about which wins are real here:
+## 3. The design — SW-required, single-path, on-demand (if adopted)
 
-- **Transitive imports — the one decisive win.** With a stable `${BASE_URL}module/<otherId>` served by the SW,
-  block A can `import` block B. This is **impossible** with blobs. And — answering the import-maps-vs-SW-
-  rewriting question directly — it needs **no SW URL rewriting**: bare/app specifiers (`@/…`, `react`) keep
-  resolving through the realm import map (which applies to a `${BASE_URL}module/<id>` module exactly as it does
-  to a blob module), and the module URL is an absolute same-origin URL the SW serves natively. **It must be
-  base-prefixed (`${BASE_URL}module/<id>`), not root-absolute (`/module/<id>`)** — under a non-root
-  `APP_BASE_PATH` the SW registers with `scope: import.meta.env.BASE_URL` (`registerServiceWorker.ts:41-44`),
-  so a root-absolute `/module/…` would escape the worker's scope and never be intercepted (same base-prefix
-  rule the media design notes for `${BASE_URL}asset/…`). The SW stays a dumb cache server keyed by the full
-  URL; it never parses or rewrites import specifiers. **Two wrinkles, both resolved in-thread by the producer,
-  not the SW:**
-  - *Cache-busting* a transitive dep requires the *importing* module to name the *versioned* URL
-    (`${BASE_URL}module/<otherId>?v=<hashOther>`), because the realm module map caches the unversioned URL for
-    the realm lifetime and won't re-fetch it when the cache entry changes. So the producer **pins transitive
-    specifiers to `?v=<hash>` at compile time** (a small rewrite pass, in-thread). Import maps are an
-    alternative (a per-generation map of `<id>` → `<id>?v=<hash>`), but a document import map can't be mutated
-    per-edit after load, so producer-side rewriting is the cleaner fit.
-  - *Which hash* — it must be the dependency's **approved** `sourceHash` (its Gate-2 pin), never
-    `sha256(live block.content)`. A dep that isn't approved on this device was never written to `km-modules`
-    (the loader emitted a shell for it), so A's import of it **fails closed** — which is the correct #67
-    behavior: a plugin can't pull in unapproved/drifted code through a transitive import. Net consequence:
-    cross-block imports resolve only between blocks that are *both* enabled **and** approved here.
-- **Source maps / DevTools** — real, but **achievable without the SW** (see §6 / the recommendation): a stable
-  `//# sourceURL` and `sourceMaps:true` on the *blob* path already fixes stack frames and breakpoints. The SW
-  URL is a nicer anchor but not required for this win.
-- **Native module dedup/identity** — marginal over today. The in-memory `CompileCache` already gives one
-  instance per content hash; the browser doing it via the module map is tidier and removes the parallel cache,
-  but it is not a new capability for the single-loader path. It *does* matter for shared transitive deps (two
-  plugins importing the same `/module/<C>?v=…` dedupe natively).
-- **Cache reuse** — weakest argument. Because the producer must run in-thread on every boot anyway (decrypt +
-  approval-gate + compile), the SW can never serve `/module/<id>` *before* the producer writes it that session.
-  The Cache-API copy is a per-URL **handoff buffer to get a URL**, not an independent cache that saves work —
-  recompute is already avoided by IndexedDB. Don't credit perf to the SW route.
+The cleanest shape is **not** "producer writes a module Cache and the SW serves from it." It's the SW as a
+**pure on-demand proxy to the in-thread producer**, which deletes the most machinery.
 
-**Net:** stable URLs materially beat Blob URLs for modules in exactly one way that has no in-thread substitute —
-**transitive plugin→plugin imports**. Source maps and dedup are obtainable more cheaply.
+### 3.1 On-demand SW↔main proxy (no module cache, no GC)
 
-## 3. The hybrid design, end-to-end (if adopted)
+- **SW** `fetch` for `${BASE_URL}module/<id>?v=<hash>`: `event.respondWith()` a promise that `postMessage`s the
+  **requesting client** (`event.clientId` → `clients.get(...)`) over a `MessageChannel` — "produce `<id>@<hash>`"
+  — and returns the reply bytes as a `new Response(js, {headers:{'content-type':'text/javascript'}})`. Routing by
+  `event.clientId` is what makes this multi-tab-correct: each tab is its own client and answers for its own
+  imports.
+- **Main thread**: a `navigator.serviceWorker` message handler that runs the **existing** producer
+  (`loadApprovedExtension`, `compileExtensionModule.ts:382` — approval-gated, content already plaintext, transpile
+  only on a cold/compiler-bump miss) and replies over the port with the compiled string.
 
-The hybrid keeps every privileged/expensive step in-thread and demotes the SW to a cache server, so it never
-needs app/DB state or keys.
+This **deletes** the whole `km-modules` Cache store, the `PERSISTENT_CACHES` change, the versioned-key writes, and
+the GC/prune. The "cache" is just the browser's realm module map (keyed by URL) — exactly the dedup we want. The
+in-thread produce-dedup/coalescing cache (`CompileCache.byHash`, an in-flight `Promise<Module>`) stays — the
+module map dedupes *imports of a URL*, but only an in-thread guard stops the producer from re-running Babel /
+coalesces two concurrent produces of the same hash (the URL doesn't exist yet while producing).
 
-**Producer (in-thread, unchanged trust/compile core).** Extend `defaultInstantiateViaBlob`'s siblings with a
-cache-write path **inside the existing approval-gated load path** (`dynamicExtensions.ts` →
-`loadApprovedExtension`, `compileExtensionModule.ts:382`). The critical invariant: the producer operates on the
-**approved record**, never live `block.content`.
-1. **Compile the approved source, not the DB row.** As today, `loadApprovedExtension` instantiates
-   `approval.compiled` (or recompiles `approval.approvedSource` on a compiler bump) — *never* live
-   `block.content`. Live content is read **only to detect drift** (`dynamicExtensions.ts:160`); a synced edit
-   stays inert (status `update-available`) until re-approved on this device. The cache write must inherit this:
-   it writes the **approved** output, so a drifted edit can never be written to `km-modules` or imported before
-   approval (this is the #67 Gate-2 guarantee — do not "optimize" by transpiling the live row).
-2. Transpile (only on the cold/compiler-bump path) via Babel, **now with `sourceMaps:true`** and an inline map.
-3. Resolve + **pin transitive specifiers to `${BASE_URL}module/<dep>?v=<depApprovedHash>`** — keyed by each
-   dependency's **approved** `sourceHash`, not its live DB row (§2 wrinkle 2; unapproved deps fail closed).
-4. Use the **approved** `sourceHash` as `contentHash` — it's already the L1 cache key and the value
-   `loadApprovedExtension` returns as `CompileResult.contentHash` (the pin, *not* `sha256(live content)`).
-5. `cache.put('${BASE_URL}module/<blockId>?v=<approvedSourceHash>', new Response(compiledJS,
-   {headers:{'content-type':'text/javascript'}}))` into a dedicated **`km-modules`** cache. The key is
-   **base-prefixed** so it matches the import URL and stays in SW scope (Codex #251; same rule as the
-   transitive specifiers).
-6. Hand the realm the URL: `import('${BASE_URL}module/<blockId>?v=<approvedSourceHash>')` **when the page is
-   controlled**, else fall back to the existing blob `import()` (§4).
+**No deadlock**, despite "main asks main": the page's `import()` is async (a pending promise, not a blocked event
+loop) and the SW is a separate thread, so main's message handler is free to answer while its own `import()` is
+outstanding.
 
-**SW route (serve from cache only).** A new branch in `public/sw.js`'s `fetch` handler:
-```js
-const isModuleRoute = (url) => isSameOrigin(url) && url.pathname.startsWith(MODULE_PREFIX) // `${base}module/`
-// ...inside fetch handler, BEFORE isCacheableAsset:
-if (isModuleRoute(url)) { event.respondWith(moduleCacheOnly(request)); return }
-```
-`moduleCacheOnly` matches `km-modules` by the **full URL including `?v=`** and, on a miss, returns a clear
-error rather than hitting the network (there is no such file on the origin — GitHub Pages would 404). A miss is
-a bug signal — but "writes-then-imports" only makes that true **per block**, not for transitive deps (see the
-pre-materialization requirement below).
+**Offline-safe**: modules are *only ever* requested by a live page (unlike `<img>` or navigations), so the
+producer is always present to answer. A cold offline start works — the IndexedDB approval record is offline, and
+`@babel/standalone` is already precached for cold compiles (`public/sw.js` `PRECACHE_LAZY_ASSETS`).
 
-**Pre-materialization is mandatory for transitive imports (Codex #251).** Today the loader walks
-`extensionBlocks` *sequentially*, `await`ing `resolveBlockModule(block)` — which instantiates inline — before
-moving to the next block (`dynamicExtensions.ts:184-230`). If block A is processed before an enabled+approved
-block B and A imports `${BASE_URL}module/<B>?v=…`, only A's entry exists when the browser fetches B's URL →
-`moduleCacheOnly` misses → A's `import()` throws. So the loader must split into two phases: **(A) compile +
-`cache.put` every enabled+approved block** into `km-modules` (write-only, no `import()`), in **dependency
-order** so each dep's entry exists before any importer's; **(B) then `import()`** the entry modules. With
-phase A complete, every `${BASE_URL}module/<id>?v=…` an importer can name is already in the cache, and a miss
-really is a bug. (Cycles defeat a strict topological order — see the cycle risk in §6; disallow them or don't
-version-pin within a cycle. The uncontrolled-first-load blob path sidesteps this differently — the producer
-inlines deps as blob URLs while compiling the parent, §4.)
+**Plaintext-at-rest is *better* than the cache variant**: the compiled bytes never sit in a Cache — they transit
+the message port and live only in the realm module map (memory, gone on reload). (The pre-existing IDB approval
+store already holds plaintext `compiled`; nothing new.) See §5.
 
-**Route ordering — load-bearing (mirrors media §7.3's "asset route must be FIRST").** A dynamically
-`import()`ed module has `request.destination === 'script'`, so it is **already caught by `isCacheableAsset`**
-(`public/sw.js:212` lists `'script'`), which serves from this generation's `km-assets-*`/`km-shell-*` →
-miss → network → `Response.error()`. The `/module/` branch **must be inserted before** the `isCacheableAsset`
-branch or the module route never runs. Order becomes: (1) navigations → shell; (1.5) **`/module/` → module
-cache**; (2) cacheable assets; (3) vendor; (4) passthrough.
+### 3.2 Why pre-materialization dissolves
 
-**Cache + invalidation.** Because the URL is content-hashed, an edit produces a *new* URL → new entry; old
-`?v=` entries for that block are orphaned. Two housekeeping items:
-- Add `km-modules` to **`PERSISTENT_CACHES`** (`public/sw.js:55`) so the per-deploy generation GC in `activate`
-  doesn't delete it (modules version on *edit*, not on `BUILD_ID`).
-- Prune stale versions: on each producer write, delete other `${BASE_URL}module/<blockId>?v=*` entries for that
-  block (keep current). Cheap, bounds growth. Block delete/approval-revoke
-  (`revokeExtensionApproval`, `compileExtensionModule.ts:431`) should also drop the block's `km-modules`
-  entries.
+With a producer-writes-Cache design, the loader would have to write a dep *before* a parent imports it — and
+since the loader walks blocks **sequentially**, instantiating inline (`dynamicExtensions.ts:184-230`), a parent
+processed first would import a not-yet-written dep and miss. That forced a topological "materialize-then-import"
+phase.
 
-## 4. The first-load / controller-readiness gap (the sharpest issue)
+On-demand makes that requirement **vanish**. When A imports `${BASE_URL}module/<B>?v=<hashB>`, the browser
+fetches it, the SW asks main, and **main produces B right then** (it has B's approved record). Production is
+**demand-driven by the real import graph**, in dependency order automatically — you can't request B's bytes
+before the browser asks for them. The only thing compiling A needs of B is B's approved *hash* (to mint the URL),
+which is a cheap record lookup, not a compile — so there's no ordering constraint left at all. (Import **cycles**
+remain a content-hash fixpoint hazard — disallow them or don't version-pin within a cycle.)
 
-Plugins load at **startup** (`AppRuntimeProvider.tsx:134` resolves the dynamic-extensions runtime in an effect
-right after mount), which is exactly when a freshly-registered SW may **not yet control the page**.
-`public/sw.js` **deliberately omits `clients.claim()`** (`public/sw.js:13`, header comment) — a fresh install
-`skipWaiting()`s to control the *next* load but **leaves the current first-visit page uncontrolled for its
-whole lifetime**. `registerServiceWorker.ts` only registers; `navigator.serviceWorker.controller` is null on a
-first visit. So on first load, `import('${BASE_URL}module/<id>?v=…')` goes **around the SW → 404 → the import
-throws → the feature breaks** (a module failure breaks a plugin, not just a lazy image — much worse than the
-media case).
+### 3.3 Route + ordering — load-bearing (mirrors media §7.3's "asset route must be FIRST")
 
-This is the same hazard the media doc flags ("Render gates on SW readiness… `public/sw.js` deliberately omits
-`clients.claim()`"). Evaluated options:
+A dynamically `import()`ed module has `request.destination === 'script'`, so it is **already caught by
+`isCacheableAsset`** (`public/sw.js:212` lists `'script'`) → served from this generation's caches → miss →
+network → `Response.error()`. The new `/module/` branch **must be inserted before** `isCacheableAsset`, matched by
+`url.pathname.startsWith(MODULE_PREFIX)` where `MODULE_PREFIX = ${base}module/`. Order: (1) navigations → shell;
+(1.5) **`/module/` → on-demand proxy**; (2) cacheable assets; (3) vendor; (4) passthrough.
 
-- **Gate plugin init on `navigator.serviceWorker.controller` — rejected.** Because there's no `clients.claim()`,
-  a true first visit is *never* controlled until a reload. Gating would mean **plugins simply don't load on
-  first visit**, which is unacceptable for a feature. Forcing a one-time reload on first activation is ugly and
-  the existing update-prompt machinery doesn't even fire on first install (no prior controller —
-  `registerServiceWorker.ts:52` guards on `controller`).
-- **Adding `clients.claim()` — rejected.** It's omitted *on purpose* to prevent mid-session version skew
-  (header comment, `public/sw.js:13-21`); claim is realm-global so you can't scope it to just `/module/`.
-  Reintroducing it to serve modules would regress the generation-pinning design.
-- **Blob `import()` fallback on the uncontrolled load — recommended.** The producer already holds the compiled
-  JS string in hand (it just wrote it to the cache), so when `!navigator.serviceWorker.controller` it
-  instantiates via the **existing** `defaultInstantiateViaBlob` path instead of the `/module/` URL. Essentially
-  free, reuses today's code. Caveat: a blob-instantiated module that does `import "${BASE_URL}module/<otherId>"` would
-  still hit the network → 404; so in fallback mode the producer must **also inline/rewrite transitive deps to
-  blob URLs** (it is compiling them and has their bytes), accepting that on the *first uncontrolled load only*
-  you lose native dedup for shared deps. That degradation is transitional (next load is controlled) and
-  acceptable.
+### 3.4 Versioned URLs vs. "reload to apply" — a dial
 
-**The fallback is mandatory, and that is itself an argument against the route:** you must keep the entire blob
-path alive forever for first-load, so the SW route is *additive* complexity, never a replacement.
+`?v=<hash>` exists so an edited+re-approved plugin gets a *new* URL → new module (today's blob path gives this via
+a fresh blob per changed hash, picked up live by `refreshAppRuntime` without a reload). Keep `?v=` to preserve
+that live-refresh behavior. **Or** accept "**reload to apply** a plugin edit" — then drop `?v=` and use bare
+`${BASE_URL}module/<id>`, since a reload gives a fresh module map. Given approval is already a deliberate,
+infrequent action, "reload to apply" is a defensible simplification; default to keeping `?v=` unless that UX
+change is wanted.
 
-## 5. E2EE interaction
+## 4. First-load control — page-initiated claim, and dropping the fallback
 
-Clean, and already satisfied by the existing in-thread decryption boundary:
+Plugins load at **startup**, exactly when a freshly-registered SW may not yet control the page. `public/sw.js`
+**deliberately omits `clients.claim()`** (`public/sw.js:13`, and the closing note at `:191`) — a fresh install
+`skipWaiting()`s (`:160`) to control the *next* load but leaves the current first-visit page uncontrolled for its
+lifetime. So a first-visit `import("${BASE_URL}module/<id>")` goes around the SW → 404 → the plugin breaks (a
+*feature*, not an image). This is the same hazard the media doc flags.
 
-- **Keys never reach the SW.** Block content is decrypted **in-thread** by the sync observer:
-  `materializeStagingRows` runs `decodeFromWire` (`src/sync/transform.ts:112`, called at `materialize.ts:314`)
-  in the page/worker context and upserts **plaintext** into the local `blocks` table (`materialize.ts:365`). The
-  loader reads `block.content` (`dynamicExtensions.ts:160`) and never sees ciphertext. So the producer trivially "decrypts
-  in-thread" — it doesn't even do the decryption; it consumes already-decrypted content. The SW gets only the
-  compiled output. No `getCek`, no `km-e2ee-keys`, no mode pin in the SW — none of the SW-readable-state
-  machinery the media SW-path needed (§7.1.1 there) applies, because the producer, not the SW, does the
-  privileged work.
-- **The Cache holds plaintext compiled JS — acceptable now.** Destruction is the coarse platform "clear site
-  data" wipe (`WipeLocalDataDialog`, `docs/lock-and-wipe-coarse-recommendation.md` §0.1): the browser's origin
-  wipe clears the **Cache API and OPFS** along with everything else, atomically, outside the page/SW context.
-  So `km-modules` needs **no bespoke Lock-&-Wipe participant wiring** — it's wiped like every other store. This
-  is exactly the media doc's "No 'plaintext survives a lock' hazard… destruction is coarse" reasoning (§18),
-  and it's why the hybrid doesn't reintroduce an app→SW purge handshake.
+### 4.1 Page-initiated claim (not activate-time claim)
 
-## 6. Recommendation
+The naive fix — `clients.claim()` in `activate` — reintroduces version skew, because `activate` runs on **every
+deploy** and would grab long-open pages that already loaded the *old* generation, then serve them a *new*-gen lazy
+chunk. The right move claims only the pages that **need** it — freshly-navigated uncontrolled ones, which loaded
+the **current** generation from the network and are therefore skew-safe:
 
-**Adopt: keep the privileged work pure in-thread; do not build the SW `/module/` route yet. Capture the main
-pain (debugging) in-thread now; gate the SW route on a concrete need for cross-plugin imports.**
+- SW: `addEventListener('message', e => { if (e.data === 'CLAIM') self.clients.claim() })` — and **no** claim in
+  `activate`.
+- Bootstrap: if `!navigator.serviceWorker.controller`, `await navigator.serviceWorker.ready`, `postMessage('CLAIM')`,
+  await one `controllerchange`, *then* resolve the dynamic-extension subtree.
 
-Why not the full hybrid today:
-- The **only** capability the SW route uniquely unlocks is transitive `import "${BASE_URL}module/<otherId>"`
-  between plugin blocks — which **does not exist as a feature or a request today** (no `module/` route, no
-  cross-block imports anywhere in the tree).
-- Its other selling points are already in-thread: dedup/identity (`CompileCache`), recompute-avoidance
-  (IndexedDB `CompiledModuleCache`). Source maps are obtainable on the blob path.
-- It is **not** a replacement for the blob path — the first-load fallback (§4) forces you to keep blobs
-  forever — so it's pure additive surface: a `public/sw.js` branch with strict ordering, a versioned cache with
-  its own GC and revoke-time cleanup, and a producer-side transitive-hash rewriting pass.
+This threads the needle: a first-visit page asks and is claimed (skew-safe — it loaded the current gen); a
+long-open page across a deploy is **already controlled**, so it never enters the ask-path and keeps its generation
+until reload (the property the no-`claim()` design protects, preserved); the controller guard at
+`registerServiceWorker.ts:52` is unaffected.
 
-**Compiling in the SW — reject outright.** The SW cannot read the SQLite DB (the `OPFSCoopSyncVFS` sync access
-handles are dedicated-worker-only, and PowerSync's multi-tab SharedWorker is internal/unreachable from a SW),
-cannot read the device-local approval state (`dynamicExtensions.ts` gate 2), and must never hold E2EE keys.
-The producer *must* be in-thread; this is the whole reason the hybrid (not pure-SW) is the only viable
-SW-shaped option.
+### 4.2 Why this can drop the fallback entirely
 
-### Concrete next step (low risk, high value) — **done in this PR**
+Gate **only the dynamic (user) extension resolve** on control — not the whole app. This fits the existing
+**two-stage cold start**: `AppRuntimeProvider.tsx:114-182` commits the sync `baseRuntime` (kernel + **static**
+plugins) immediately and paints, then resolves `dynamicExtensionsExtension` in a later effect and swaps it in. So
+user extensions *already* arrive late by design — making them wait for `controllerchange` delays only their
+appearance, never app paint. Minimize even that by keeping the SW's `install` `waitUntil` slim so `activate` +
+claim fires in tens of ms rather than after a full precache.
 
-`defaultTranspileViaBabel` (`compileExtensionModule.ts`) now passes `sourceMaps: 'inline'` + `sourceFileName`
-and appends a stable `//# sourceURL=km-extension://<blockId>.tsx` (the `blockId` is threaded through
-`TranspileImpl` and the three call sites). `COMPILER_VERSION` was bumped `1` → `2` so existing map-less cached
-output regenerates. This fixes readable stack traces and breakpoints (DevTools maps frames back to the original
-TSX, named per extension) — the sharpest everyday pain — with **no SW, no cache, no first-load gap**. Risk:
-negligible (a bad `sourceURL` only affects DevTools labels). The L1 cache is content-keyed, so two
-identical-source blocks share one compiled string and thus one block's `sourceURL` — cosmetic only.
+The honest residual cost is therefore **first-visit latency**, not dropped functionality — and it's absorbed by
+the architecture above. Remaining edges, all acceptable under "require SW for user extensions":
 
-### If/when cross-plugin imports become a goal — adopt the §3 hybrid
+- **Hard reload** (Shift+Reload loads uncontrolled by the browser's choice): page-initiated claim *recovers*
+  control post-load (you can't *prevent* the uncontrolled load). **Verify empirically** whether `clients.claim()`
+  reliably takes a hard-reloaded client; if some engine refuses, that one forced-refresh load runs without user
+  extensions until the next normal navigation — minor, not a reason to keep a blob path.
+- **SW genuinely unavailable** (private mode / policy / unsupported / registration failure): user extensions
+  don't load; the app still boots and runs on its built-ins. We **decide not to support** custom extensions in
+  this already-degraded tier rather than maintain a parallel blob path for it (optionally surface a one-time
+  "custom extensions need a service worker" notice).
 
-Scope, in dependency order:
-1. **Producer cache-write + dual instantiate** (`compileExtensionModule.ts`): write the **approved** compiled
-   JS to `km-modules` keyed `${BASE_URL}module/<blockId>?v=<approvedSourceHash>` (the pin, never live content —
-   §3 / §5; the Gate-2 invariant); instantiate via the base-prefixed `${BASE_URL}module/` URL when controlled,
-   else the existing blob path (§4). ~1 file.
-1a. **Split the loader into materialize-then-import** (`dynamicExtensions.ts`): the current sequential
-   walk imports each block inline, so a parent can import a not-yet-written dep (Codex #251). Phase A
-   `cache.put`s every enabled+approved block (write-only) in dependency order; phase B `import()`s the entries.
-   A real structural change to the loader loop, not just the producer.
+### 4.3 Why "require SW" is scoped, not reckless
+
+Requiring a SW would be reckless if the **core app** depended on `/module/`. It doesn't: only user-authored
+`type:'extension'` **blocks** compile through this path. The built-in plugins (`staticAppExtensions` — daily-notes,
+backlinks, command-palette, …) are ordinary ES modules in the app bundle, imported through the normal module graph
++ import map, never Babel/blob/`/module/`. So "require SW" degrades exactly one non-core feature, in exactly the
+tier that's already degraded.
+
+## 5. E2EE
+
+Already satisfied by the existing in-thread decryption boundary, and *strengthened* by the on-demand variant:
+
+- **Keys never reach the SW.** Block content is decrypted **in-thread** by the sync observer: `materializeStagingRows`
+  runs `decodeFromWire` (`src/sync/transform.ts:112`, called at `materialize.ts:314`) in the page/worker context
+  and upserts **plaintext** into the local `blocks` table (`materialize.ts:365`). The loader reads `block.content`
+  (`dynamicExtensions.ts:160`) and never sees ciphertext. So the producer consumes already-decrypted content; the
+  SW gets only the compiled output, over the message port. No `getCek`, no `km-e2ee-keys`, no mode pin in the SW —
+  none of the SW-readable-state machinery the media SW-path needed (its §7.1.1) applies, because the producer
+  (main), not the SW, does the privileged work.
+- **No plaintext at rest in a Cache.** Under the on-demand variant the compiled bytes never land in a Cache at all
+  — they transit the port and live only in the realm module map (memory). Were a producer-writes-Cache variant
+  chosen instead, the plaintext compiled JS in that Cache would still be acceptable: the coarse platform "clear
+  site data" wipe (`WipeLocalDataDialog`, `docs/lock-and-wipe-coarse-recommendation.md` §0.1) clears the Cache API
+  and OPFS atomically, outside the page/SW context — no bespoke Lock-&-Wipe participant. (The IndexedDB approval
+  store already holds plaintext `compiled` today; unchanged.)
+
+## 6. Alternatives considered, and the recommendation
+
+**Compile *in* the SW — rejected.** The SW can't read the SQLite DB (the `OPFSCoopSyncVFS` sync access handles are
+dedicated-worker-only; PowerSync's multi-tab SharedWorker is internal/unreachable from a SW), can't run the
+device-local approval gate (`dynamicExtensions.ts:146-172`), and must never hold E2EE keys. The producer *must* be
+in-thread — which is the whole reason the SW must call *it* (§3).
+
+**Have the SW read the `km-extension-compiled` IndexedDB store directly — rejected.** The SW *can* read IndexedDB
+(unlike the SQLite DB), and the records are plaintext, so this is tempting. But it doesn't pay off: (1) it doesn't
+fix the first-load gap (that's about *control*, upstream of which store the SW reads); (2) the SW can't keep a
+record *current* — a `COMPILER_VERSION` bump recompiles from `approvedSource` via Babel
+(`loadApprovedExtension`), which the SW shouldn't run, so it would serve stale-compiler output (and the raw record
+lacks the transitive-URL rewriting); (3) it would turn the SW back into a second producer that must understand the
+approval schema yet *can't* do the compile half. On-demand SW↔main gets the same "no separate cache" benefit
+while keeping the producer the single source of truth.
+
+**Producer-writes-Cache + a mandatory blob fallback — rejected as the rigged comparison.** If a blob fallback must
+shadow the SW route forever (for the uncontrolled first load), the SW route is pure *additive* cost and isn't
+worth it. That conclusion is real — but it's an argument against the *fallback*, not against the SW. Removing the
+fallback (§4) is what makes the SW path a *replacement* instead of an addition.
+
+**Keep pure in-thread (blob) — the answer if we will NOT require a SW.** Already shipped: the source-map win.
+`defaultTranspileViaBabel` now passes `sourceMaps:'inline'` + `sourceFileName` and appends a stable, **sanitized**
+`//# sourceURL=km-extension://<safeId>.tsx` (`compileExtensionModule.ts:161-168`); `blockId` is threaded through
+`TranspileImpl` and its three call sites; `COMPILER_VERSION` bumped `1`→`2` (`:15`) so map-less cached output
+regenerates. (Security: block ids are caller-suppliable plain text, so the id is restricted to `[A-Za-z0-9._-]`
+before it touches emitted JS — a line terminator would otherwise break out of the `//# sourceURL` comment and
+inject module-level code, bypassing the #67 gate.) This fixes the sharpest everyday pain with no SW, no cache, no
+first-load gap.
+
+### Recommendation
+
+**Decide the hinge first: will we require a controlling service worker for user extensions?**
+
+- **Yes → build the §3/§4 design.** It is a *simplification*, not an addition: single path (no blob), no module
+  Cache, no GC, no pre-materialization (§3.2), and it unlocks stable URLs, native dedup, and the one capability
+  with no in-thread substitute — **transitive cross-plugin imports**. Net SW surface is a route + a message
+  handler + a claim handler; the producer is unchanged.
+- **No → stop at the shipped source-map change.** Don't build a SW route that a fallback must shadow.
+
+Given user extensions are non-core and SW-unavailable is already a broken tier (§4.3), requiring a SW for them is
+a reasonable line — so I lean **yes**, conditional on the team accepting that scope and on the §4.1 hard-reload
+claim behavior verifying out.
+
+### Scope, if adopted (in dependency order)
+
+1. **Producer message handler** (`compileExtensionModule.ts` / a small `extensions/moduleHost.ts`): on
+   `{id, hash}` run `loadApprovedExtension` and reply with the compiled string. Reuses the existing producer.
 2. **Transitive-import hash pinning** (producer): rewrite a dep ref → `${BASE_URL}module/<dep>?v=<depApprovedHash>`
-   from each dep's **approved record** (not its live DB row); unapproved deps fail closed; handle the
-   blob-fallback inlining for the uncontrolled case. New, the fiddliest piece.
-3. **`public/sw.js`**: new `/module/` branch **before** `isCacheableAsset` (§3 ordering); add `km-modules` to
-   `PERSISTENT_CACHES`; cache-only serve. ~15 lines, but the ordering is load-bearing.
-4. **GC**: prune stale `?v=*` per block on write; drop entries on `revokeExtensionApproval` / block delete.
-5. **Tests**: route-ordering (a `/module/` request isn't swallowed by the asset branch), miss behavior,
-   controlled-vs-uncontrolled instantiation fork, transitive `?v=` pinning, stale-version prune. The coarse
-   wipe already covers `km-modules` (§5) — no Lock-&-Wipe test needed.
+   from each dep's **approved record** (cheap lookup, no compile); unapproved deps fail closed. The fiddliest
+   piece; also defines the authoring specifier for "import another block."
+3. **`public/sw.js`**: new `/module/` branch **before** `isCacheableAsset` (§3.3) that proxies to the requesting
+   client via `MessageChannel`; add the `CLAIM` message handler (§4.1); remove nothing else.
+4. **Bootstrap gate** (`AppRuntimeProvider` / `registerServiceWorker`): page-initiated claim, then gate the
+   **dynamic** resolve on `controllerchange` (§4.2); slim the `install` `waitUntil` so claim is fast.
+5. **Tests**: route ordering (a `/module/` request isn't swallowed by the asset branch); the SW↔main produce
+   round-trip (incl. `event.clientId` routing and a missing-client timeout); page-initiated claim → `controllerchange`
+   gating; transitive `?v=` pinning from the approved hash + unapproved-dep fail-closed; cycle handling. No
+   module-Cache / Lock-&-Wipe tests (there's no module cache).
 
-**Main risks:** (1) the first-load controller gap — a regression here breaks features, not images, so the blob
-fallback must be airtight and tested; (2) SW route ordering — a `/module/` request silently served by the
-existing asset branch yields a confusing miss; (3) **materialization order** — a parent imported before its dep
-is written misses (Codex #251); the phase-A/phase-B split (step 1a) is what prevents it; (4) transitive
-cache-busting — getting the `?v=` pinning wrong gives stale plugin code with no visible error; (5) cross-block
-import **cycles** — content-hash URLs make a cycle's URLs mutually content-dependent (a fixpoint); disallow
-cycles or don't version-pin within one.
-**Not risks:** E2EE key exposure (producer is in-thread, §5) and wipe (coarse platform clear gets the cache,
-§5).
+**Main risks:** (1) the first-load control handshake — a regression breaks user-extension load, so the
+claim→`controllerchange` gate and its timeout must be solid; (2) SW route ordering — a `/module/` request silently
+served by the asset branch yields a confusing miss; (3) `clients.claim()` on a **hard reload** — empirically
+unverified, the one open question on dropping the fallback; (4) transitive cache-busting / cycles — wrong `?v=`
+pinning gives stale plugin code, cycles need an explicit rule. **Not risks:** E2EE key exposure (producer
+in-thread, §5), plaintext-at-rest (on-demand keeps none; coarse wipe covers the Cache variant), and
+pre-materialization ordering (dissolved, §3.2).
