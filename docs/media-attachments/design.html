@@ -364,7 +364,9 @@ encode/decode seam is mode-aware, and plaintext is its degenerate (identity) bra
     <code>(content_hash, workspace_id, "asset-bytes", schema_version)</code> — the <em>content hash</em>,
     not a block id, because the object is content-addressed and shared by every block carrying those
     bytes (§10); binding one block id would stop a co-referencing block from opening it. The content
-    hash still prevents cross-content / cross-workspace swaps. (Schema version stays in the AAD for the
+    hash still prevents cross-content / cross-workspace swaps — and it is the <em>same</em>
+    <code>sha256(plaintext)</code> stored as <code>block.properties.hash</code> and checked on read (§5.1),
+    so the AAD term and the read-side check stay one identical hash. (Schema version stays in the AAD for the
     same cheap-hierarchy-upgrade reason §13 of the e2ee doc keeps it there.)</li>
   <li><strong>A binary envelope, not the base64url text envelope.</strong> The <code>enc:v1:</code>
     envelope is base64url (≈33% bloat) — wrong for bytes. Add a sibling
@@ -548,8 +550,9 @@ amount of wiping addresses.
 handshake, the SW-readable mode/hash mirror, per-<code>clientId</code> sessions, controller gating — is
 coordination the SW incurs <em>only</em> to buy one thing: a uniform mode-agnostic
 <code>&lt;img src&gt;</code>. The in-thread path (§7.3) gives that up for a small renderer mode-branch
-and pays none of the tax. See §7.3 for the full tally and §18 for the decision record. §8–§10 below are
-boundary-agnostic except where they name the SW.
+and pays none of the tax. See §7.3 for the full tally, §18 for the design-notes recap, and
+<a href="./rejected-sw-decryption-boundary.html">rejected-sw-decryption-boundary.html</a> for the full
+decision record. §8–§10 below are boundary-agnostic except where they name the SW.
 </div>
 
 <h3>7.3 The chosen approach: in-thread decryption</h3>
@@ -561,12 +564,14 @@ boundary-agnostic except where they name the SW.
   What it avoids:</p>
 <ul>
   <li><strong>No mode-pin IDB store / no per-asset hash mirror.</strong> The app reads the mode pin
-    synchronously and already holds the decrypted block (so the hash is just
+    synchronously (WK-presence then resolves on the already-async render path, via
+    <code>getMaterializability</code>) and already holds the decrypted block (so the hash is just
     <code>block.properties.hash</code>) — the §7.1 mirror machinery exists only because the SW can't reach
     app state.</li>
   <li><strong>Plaintext bytes in OPFS (not SQLite, not Cache API).</strong> The app-thread path caches
-    decrypted bytes as plain <strong>OPFS files</strong> (<code>attachments/&lt;user&gt;/&lt;ws&gt;/&lt;content-key&gt;</code>)
-    — the store the bytes always wanted (§6/§17 keep large blobs <em>out</em> of SQLite; an earlier draft
+    decrypted bytes as plain <strong>OPFS files</strong> (<code>assets/&lt;user&gt;/&lt;ws&gt;/&lt;content-key&gt;</code>
+    — local <code>assets</code> tree, distinct from the remote <code>attachments</code> bucket)
+    — the store the bytes always wanted (§8/§17 keep large blobs <em>out</em> of SQLite; an earlier draft
     wrongly floated DB-blob storage purely for a "free wipe," which both bloats the hot query DB and
     contradicts that principle). Destruction is not a differentiator either way now — the coarse clear
     (§7.2) removes the OPFS tree and the Cache API alike. The real app-thread win here is
@@ -729,9 +734,11 @@ investigation).
     are ordinary local storage, removed wholesale by the coarse clear-all (§7.2) — no per-store wipe
     participation. <em>Authorization</em> is separate: on per-workspace revoke/leave, purge that
     workspace's cache prefix (a serving-access control, not destruction) — and because a purge can race
-    or miss, bound cached-entry authority with a short freshness TTL after which the in-thread resolver
-    re-validates via the RLS-gated Storage <code>GET</code> (§7.3); for E2EE, WK-absence counts as
-    locked. The TTL revalidation, not the purge, is what closes the plaintext-removal window.</li>
+    or miss, bound cached-entry authority with a short freshness TTL (minutes-scale) after which the
+    in-thread resolver re-validates via the RLS-gated Storage <code>GET</code> (§7.3); for E2EE, WK-absence
+    counts as locked. The TTL revalidation, not the purge, is what <strong>bounds</strong> the
+    plaintext-removal window — a removed member's already-cached plaintext can still be served until the TTL
+    lapses, so the window is shrunk to the TTL, not eliminated.</li>
   <li><strong>Optimistic local-first write:</strong> on paste, the encoded bytes are written straight to
     the <em>durable replica</em> (the §9 up-lane's source, never the evictable display cache) and the
     display cache is warmed. The image renders immediately from local bytes; the upload drains in the
@@ -764,8 +771,10 @@ if it fails, or <code>persist()</code> is denied so the write lands in best-effo
 rather than committing metadata over evictable bytes; the §11 staged-before-tx ordering catches a
 <em>thrown</em> stage, not a silently non-durable one. (2) Because un-uploaded bytes are the only copy
 (and thus exempt from eviction), the budget must constrain <em>intake</em>, not retention — when pending
-bytes would exceed a safety budget, apply backpressure at paste (&quot;uploads pending — reconnect or
-free space&quot;) rather than accepting bytes you might have to evict.
+bytes would exceed a safety budget, apply backpressure at paste (&quot;uploads pending — reconnect to drain
+them, or discard a pending attachment to reclaim its space&quot;) rather than accepting bytes you might have
+to evict. Note ordinary eviction can't relieve this state — un-uploaded bytes are the only copy and are
+eviction-exempt — so the only offline release valve is the user deliberately abandoning a pending attachment.
 </div>
 
 <h2 id="queue">9. The byte-replication subsystem (up-lane + down-lane)</h2>
@@ -798,6 +807,13 @@ free space&quot;) rather than accepting bytes you might have to evict.
   absent block means truly-absent (not merely not-yet-loaded — otherwise it would reap the only durable
   copy of a committed-and-synced block's un-uploaded bytes). It then promotes any <code>staged</code>
   record whose asset block is present, and reaps one whose block is absent <em>past that checkpoint</em>.
+  <strong>That presence test is scoped to the record's own <code>user_id</code></strong>: the up-lane store is
+  shared across the profile's accounts (above), and the hydrated DB belongs to the <em>active</em> account — so a
+  record is reap-eligible only against the DB hydrated for <em>its own</em> account, and only once <em>that</em>
+  account's PowerSync has settled. Without this per-<code>user_id</code> gate (not just a global one), switching
+  from account B to account A would find B's not-yet-synced block &quot;absent&quot; in A's DB and reap the only
+  durable copy of B's un-uploaded bytes — manufacturing the very &quot;synced block outlives its bytes&quot; loss
+  this lane exists to prevent.
   To shrink the inferred set to the genuine crash window, a <em>caught</em> tx rollback also stamps the
   record <code>staged → reapable</code> directly, and records carry a session/generation stamp so a
   reaper never races an in-flight capture. Entries drain (to the §10.1 function) when connectivity returns, retrying with
@@ -835,7 +851,9 @@ lands second owns cleanup: a confirm that finds the entry <code>undone</code> en
 itself. <strong>Redo</strong> re-stages from the retained replica bytes (the replica is <em>not</em>
 dropped on undo), re-uploading if the object was already deleted. Without this, undo leaves an orphaned
 Storage object and a queue entry that resurrects bytes for a deleted block. (The §16 orphan-object sweep
-covers it only as a slow backstop.)</div>
+covers it only as a slow backstop — and is the <em>intended</em> terminal owner when the device is cleared
+or lost after undo tombstones the entry but before the object-delete drains: the local tombstone goes with
+the wiped store, so it is not the sole cleanup authority.)</div>
 
 <div class="warn">
 <strong>A synced asset block can outlive its only bytes — the server-side backstop.</strong> The byte
@@ -885,15 +903,31 @@ correlation). A <strong>plaintext</strong> workspace has no secret to protect, s
 <ul>
   <li><strong><code>K_id</code> is an HMAC subkey derived from the WK material via HKDF at import
     time</strong> — <em>not</em> the stored WK handle, which is a non-extractable AES-GCM key WebCrypto
-    won't sign with. The raw key bytes are briefly in scope at unlock/create
+    won't sign with. Concretely <code>K_id = HKDF-SHA256(ikm = raw WK bytes, salt = &quot;&quot;, info =
+    &quot;km/asset-content-key/v1&quot;, L = 32)</code>, imported non-extractable as <code>{name:'HMAC',
+    hash:'SHA-256'}</code> and used at <strong>full length</strong> (path-encoded, never truncated —
+    truncation only invites two plaintexts to collide on one path; harmless to confidentiality since the
+    read check holds the full <code>sha256</code>, but a needless self-inflicted DoS). The empty salt is
+    safe (the WK is already 32 uniform bytes); the <code>info</code> label is <em>not</em> optional — it
+    domain-separates this derivation from any <em>other</em> future WK-derived key (the deferred §12 /
+    e2ee §13 key hierarchy, the §13 per-asset share key), exactly as <code>aad.ts</code> domain-separates
+    the canary from content columns. The raw key bytes are briefly in scope at unlock/create
     (<code>parseWorkspaceKey</code> / <code>importWorkspaceKey</code>) before the non-extractable import;
     that is the only window to derive <code>K_id</code> — and the WK bytes are <strong>zeroed right
-    after import</strong> (<code>createEncryptedWorkspace.ts</code>), so <code>K_id</code> can't be
-    re-derived on a later reload. It must therefore be <strong>persisted</strong> as its own
+    after import</strong> (<code>createEncryptedWorkspace.ts</code>; the <em>unlock</em> path
+    <code>unlockWorkspaceWithKey.ts</code> must add the same derive-then-zero step it lacks today), so
+    <code>K_id</code> can't be re-derived on a later reload. It must therefore be <strong>persisted</strong> as its own
     non-extractable HMAC <code>CryptoKey</code> in the keyStore (keyed <code>(user_id, workspace_id)</code>
     beside the WK handle), derived once at import/unlock. That adds a second stored key handle but no
     WK-exposure widening — it can't recover the WK, and lives in the same IndexedDB the model already
     trusts.</li>
+  <li><strong>Migration: existing E2EE devices have no <code>K_id</code> yet.</strong> A workspace
+    unlocked before this feature ships holds a non-extractable WK handle but never derived
+    <code>K_id</code> (the raw bytes are long since zeroed, and a non-extractable AES-GCM key can't be
+    HKDF'd or exported). Such a device must <strong>re-paste the WK once</strong> (or re-unlock) to
+    populate <code>K_id</code>; until it does, media on that device is <em>fail-closed</em>
+    (broken-image placeholder, never plaintext) while text keeps working. Cheap for the small coordinated
+    fleet, but a named step — not a silent break.</li>
   <li><strong>What this removes</strong> (vs a block-id path): the idempotency token (§9/§10.1), the
     write-once monotonicity rule (§5.1), and duplicate-object GC (§11) — the path <em>is</em> the
     idempotency key and the immutability guarantee. Fewer moving parts, not just better scaling.</li>
@@ -1002,8 +1036,14 @@ inspects the body bytes itself</em> and then writes them with service-role. Per 
     re-PUT no-ops at the existing path), so two things are required: the function must persist
     <strong>atomically</strong> (reject an incomplete body, so a partial upload can't win the path), and a
     writer that hash-verify-rejects an object it <em>can</em> verify may <strong>delete it</strong> (the
-    §10 writer-delete RLS) and re-upload — the correction path for a poisoned or corrupt path. This member
-    poisoning surface is new under content-addressing; see §17.</li>
+    §10 writer-delete RLS) and re-upload — the correction path for an <em>accidentally</em> corrupt path (a
+    truncated or mis-PUT body). Against an <em>active</em> member-poisoner, though, this delete-then-re-PUT
+    does <strong>not</strong> terminate — the poisoner re-occupies the freed path between the writer's delete
+    and re-PUT — so a member who wants to deny one known asset can deny it indefinitely; and because dedup is
+    workspace-wide (§11) one poisoned path breaks <em>every</em> embed of that image at once. That is inside
+    the &quot;members trusted for content correctness&quot; boundary, but it is a terminal, content-targeted
+    grief primitive the block-id path lacked. This member poisoning surface is new under content-addressing;
+    see §17.</li>
 </ol>
 <strong>Not a signed-upload token.</strong> Minting a one-shot signed upload URL would let the client
 <code>uploadToSignedUrl</code> the body <em>directly to Storage</em>, which Supabase accepts without
@@ -1263,12 +1303,18 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
     can be undone/restored; and <code>blocks_history</code> (the device-loss-resistant PITR substrate)
     still references H. So object GC must (a) run only on a <strong>settled-synced</strong> workspace (the
     §9 hydration gate), (b) sit behind a <strong>grace window</strong> like block GC — never a live
-    zero-crossing, (c) count <em>live + within-retention soft-deleted</em> blocks, and (d) be
-    <strong>recoverable by re-upload</strong> from any device still holding the bytes, since the
-    cross-device-unsynced race can't be fully closed from one view. <strong>Open:</strong> whether a
-    history/PITR <em>restore</em> recovers media bytes (then gate object GC on the PITR horizon) or media
-    is an explicit PITR carve-out — decide before building object GC. v1 errs toward <em>retention</em>
-    (storage is cheap; a stranded live image is not). Dangling embeds render the existing
+    zero-crossing, (c) count <em>every</em> live <strong>or</strong> soft-deleted block <em>and</em> every
+    <code>blocks_history</code> reference to the hash — and note the code has <strong>no</strong> soft-delete
+    retention/purge or <code>blocks_history</code> horizon today (soft-deletes are kept indefinitely, history
+    is append-only), so the refcount is effectively <em>reference-permanent</em> in v1 and object GC
+    essentially never fires for a hash any block or history row ever carried; that <em>is</em> the intended
+    err-toward-retention posture, not a bug — and (d) be <strong>recoverable by re-upload</strong> from any
+    device still holding the bytes, since the cross-device-unsynced race can't be fully closed from one view.
+    <strong>Open:</strong> <em>if</em> a soft-delete retention horizon or history pruning is ever added,
+    object GC must gate on it — and on whether a history/PITR <em>restore</em> is meant to recover media
+    bytes (else media is an explicit PITR carve-out); decide that <em>when</em> the horizon is introduced.
+    Today there is no horizon to gate on, and v1 errs toward <em>retention</em> (storage is cheap; a stranded
+    live image is not). Dangling embeds render the existing
     &quot;unresolved embed&quot; state. Beyond the <em>undo</em> case (handled by the §9 byte-lane compensator), a
     vNext orphan sweep covers <strong>both</strong> directions, but they are <em>not</em> symmetric: orphan
     <em>objects</em> (a Storage object with no block — e.g. an interrupted delete) are auto-deletable;
@@ -1315,14 +1361,21 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
       WK bytes are zeroed post-import, so it can't be re-derived).</td>
     <td><strong>Chosen (§10):</strong> uploads are idempotent and object dedup is an invariant — removes
       the idempotency token, the write-once-race rule, and duplicate-object GC. Mapping cost is zero
-      today (sharing unshipped, §12). Block dedup stays best-effort but produces no duplicate objects.</td></tr>
+      today (sharing unshipped, §12). Block dedup stays best-effort but produces no duplicate objects. The
+      content-path oracle is closed only under <code>K_id</code> secrecy — <code>K_id</code> is static and
+      never rotated, so a <code>K_id</code> compromise (e.g. via the softer-CSP §13 share page) reopens the
+      known-file oracle <em>retroactively</em> for that workspace; an accepted residual, bounded by
+      <code>K_id</code> being a non-extractable handle that never widens WK exposure.</td></tr>
 <tr><td>First-write-wins is poisonable by a member</td>
     <td>Any member can compute <code>HMAC(K_id, sha256(x))</code> and pre-occupy a content path with
       garbage; first-write-wins then silently no-ops the honest upload of that exact content → a
       workspace-wide broken image. A terminal, content-targeted primitive the block-id path lacked.</td>
     <td>Accepted &amp; named: read-side hash-verify (§5.1) makes it fail-closed (broken image, never
-      spoofed content); the server (no <code>K_id</code>) can't do it; recovery is a writer delete +
-      re-upload (§10.1). Members are inside the content-correctness trust boundary, and the server-side
+      spoofed content); the server (no <code>K_id</code>) can't do it; a writer delete + re-upload corrects
+      an <em>accidentally</em> corrupt path but does <strong>not</strong> terminate against an <em>active</em>
+      poisoner (who re-occupies the freed path), so a member can permanently DoS a known asset — and
+      workspace-wide dedup makes that break every embed of it at once (§10.1). Members are inside the
+      content-correctness trust boundary, and the server-side
       &quot;verify body matches path&quot; defense is foreclosed (the guard has no key).</td></tr>
 <tr><td>Concurrent offline replace of one embed</td>
     <td>Two devices replacing the same image offline each mint a new immutable asset block; on reconnect
