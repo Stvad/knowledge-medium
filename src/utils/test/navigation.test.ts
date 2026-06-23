@@ -9,6 +9,7 @@ import {
   navigateFromGlobalCommand,
   navigationIntentVerb,
   navigationVerb,
+  openBlockFromEvent,
   PASSTHROUGH,
   resolveGlobalCommandTarget,
   SUPPRESS,
@@ -645,5 +646,72 @@ describe('applyNavigationDecision (DOM routing)', () => {
     await vi.waitFor(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-go'])
     })
+  })
+})
+
+describe('openBlockFromEvent (useBlockOpener wiring)', () => {
+  // Exercises the opener-click logic end to end (gesture build → resolve →
+  // applyNavigationDecision) without a React render — the most user-facing path
+  // the PR touches, otherwise only covered piecewise.
+  const fakeMouseEvent = (
+    mods: Partial<{shiftKey: boolean; altKey: boolean; metaKey: boolean; ctrlKey: boolean; button: number}> = {},
+  ) => ({
+    shiftKey: false, altKey: false, metaKey: false, ctrlKey: false, button: 0,
+    ...mods,
+    stopPropagation: vi.fn(),
+    preventDefault: vi.fn(),
+  })
+  type OpenerEvent = Parameters<typeof openBlockFromEvent>[1]
+
+  it('plain follow-link click owns the event and navigates', async () => {
+    const e = fakeMouseEvent()
+    openBlockFromEvent(env.repo, e as unknown as OpenerEvent, {blockId: 'b-open', workspaceId: WS})
+    expect(e.preventDefault).toHaveBeenCalled()
+    expect(e.stopPropagation).toHaveBeenCalled()
+    await vi.waitFor(async () => {
+      expect(await currentPanelBlockIds()).toEqual(['b-open'])
+    })
+  })
+
+  it('cmd-click is native passthrough — not prevented, no in-app navigation', async () => {
+    const e = fakeMouseEvent({metaKey: true})
+    openBlockFromEvent(env.repo, e as unknown as OpenerEvent, {blockId: 'b-cmd', workspaceId: WS})
+    expect(e.preventDefault).not.toHaveBeenCalled()
+    expect(e.stopPropagation).not.toHaveBeenCalled()
+    expect(await currentPanelBlockIds()).toEqual([])
+  })
+
+  it('a vetoing policy suppresses: prevents the default but does not navigate', async () => {
+    env.repo.setRuntimeContributions(navigationIntentVerb.decoratorsFacet, 'test-policy', [
+      () => () => SUPPRESS,
+    ])
+    const e = fakeMouseEvent()
+    openBlockFromEvent(env.repo, e as unknown as OpenerEvent, {blockId: 'b-veto', workspaceId: WS})
+    expect(e.preventDefault).toHaveBeenCalled()
+    expect(await currentPanelBlockIds()).toEqual([])
+  })
+
+  it('a policy can override native passthrough into an in-app navigation', async () => {
+    env.repo.setRuntimeContributions(navigationIntentVerb.decoratorsFacet, 'test-policy', [
+      next => gesture => {
+        const decision = next(gesture) as NavigationDecision
+        return decision.kind === 'passthrough'
+          ? goTo({blockId: gesture.blockId, target: 'active'})
+          : decision
+      },
+    ])
+    const e = fakeMouseEvent({metaKey: true})
+    openBlockFromEvent(env.repo, e as unknown as OpenerEvent, {blockId: 'b-cmd-nav', workspaceId: WS})
+    expect(e.preventDefault).toHaveBeenCalled()
+    await vi.waitFor(async () => {
+      expect(await currentPanelBlockIds()).toEqual(['b-cmd-nav'])
+    })
+  })
+
+  it('no-ops when no workspace can be resolved', () => {
+    env.repo.setActiveWorkspaceId(null)
+    const e = fakeMouseEvent()
+    openBlockFromEvent(env.repo, e as unknown as OpenerEvent, {blockId: 'b-x'})
+    expect(e.preventDefault).not.toHaveBeenCalled()
   })
 })

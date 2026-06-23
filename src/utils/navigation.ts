@@ -738,6 +738,33 @@ export const useOpenBlock = (
   )
 }
 
+/** The opener-click logic behind `useBlockOpener`/`useOpenBlock`, factored out
+ *  of the hook so it's exercisable without a React render: build the gesture
+ *  from the event, resolve the full plugin-customized decision SYNCHRONOUSLY,
+ *  then let the single applier route it — `passthrough` lets the browser handle
+ *  the href (cmd-click new tab, …); `navigate`/`suppress` means we own the click.
+ *  Because the native-vs-veto distinction is the policy's `NavigationDecision`
+ *  (not a hardcoded pre-check), native passthrough is plugin-overridable: a
+ *  policy can turn a cmd-click into an in-app navigation, or a plain click into
+ *  a passthrough. No-ops when no workspace can be resolved. */
+export const openBlockFromEvent = (
+  repo: Repo,
+  e: MouseEvent,
+  {blockId, workspaceId}: OpenBlockContext,
+  {plainClick = 'follow-link', panelId}: {plainClick?: BlockOpenerPlainClick; panelId?: string} = {},
+): void => {
+  const resolvedWorkspaceId = workspaceId ?? repo.activeWorkspaceId
+  if (!resolvedWorkspaceId) return
+  applyNavigationDecision(repo, e, resolveNavigationIntent(repo, {
+    role: plainClick,
+    modifiers: modifiersFromMouseEvent(e),
+    panelId,
+    blockId,
+    workspaceId: resolvedWorkspaceId,
+    viewport: currentViewport(),
+  }))
+}
+
 /** Returns an opener `(event, {blockId, workspaceId?}) => void` for places
  *  that resolve the target block from the event (lists, breadcrumbs, map
  *  markers rendered in a loop). Single subscription per component instead
@@ -746,25 +773,8 @@ export const useBlockOpener = ({plainClick = 'follow-link'}: BlockOpenerOptions 
   const repo = useRepo()
   const {panelId} = useBlockContext()
   return useCallback(
-    (e: MouseEvent, {blockId, workspaceId}: OpenBlockContext) => {
-      const resolvedWorkspaceId = workspaceId ?? repo.activeWorkspaceId
-      if (!resolvedWorkspaceId) return
-      // Resolve the full, plugin-customized decision SYNCHRONOUSLY, then let the
-      // single applier route it: `passthrough` → let the browser handle the href
-      // (cmd-click new tab, …); `navigate`/`suppress` → we own the click. Because
-      // the native-vs-veto distinction is the policy's `NavigationDecision` (not
-      // a hardcoded pre-check), native passthrough is plugin-overridable: a
-      // policy can turn a cmd-click into an in-app navigation, or a plain click
-      // into a passthrough.
-      applyNavigationDecision(repo, e, resolveNavigationIntent(repo, {
-        role: plainClick,
-        modifiers: modifiersFromMouseEvent(e),
-        panelId,
-        blockId,
-        workspaceId: resolvedWorkspaceId,
-        viewport: currentViewport(),
-      }))
-    },
+    (e: MouseEvent, target: OpenBlockContext) =>
+      openBlockFromEvent(repo, e, target, {plainClick, panelId}),
     [repo, panelId, plainClick],
   )
 }
