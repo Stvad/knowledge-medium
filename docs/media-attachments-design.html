@@ -81,6 +81,14 @@
 <p class="lede">Design for image (and, by extension, arbitrary file) attachments in a system that
   now has per-workspace opt-in end-to-end encryption. 2026-06-21.</p>
 
+<aside class="doc-status" style="border:1px solid var(--line); border-left:3px solid var(--info); background:var(--info-soft); border-radius:0 6px 6px 0; padding:8px 14px; margin:12px 0 18px; font-size:0.9em;">
+<strong>Status:</strong> design — not yet implemented (no <code>src/</code> code yet); last verified
+against code 2026-06-23 (a grounding pass found zero wrong code claims). Treat as current intent. The
+least-settled part is the byte-lane lifecycle / failure-recovery machinery (§8–§9, §16): the happy path
+and the crypto / threat model are solid; the recovery edges are where the spec is still hardening. The
+block-id vs keyed-hash storage path (§10) is an open design fork.
+</aside>
+
 <div class="info">
 <strong>TL;DR.</strong> An attachment is a <em>block</em> carrying the registered <code>media</code>
 type (in the <code>types</code> array, via <code>typesProp</code>),
@@ -599,9 +607,11 @@ capability token in the URL — deferred; the public-share path §13 is the rela
     vector again). If no pin exists for the workspace yet (never validated), the SW fails closed —
     never a magic-fallback.
     <div class="decision" style="margin-top:8px">
-    <strong>Decision: move the pin to IndexedDB as the single source of truth</strong> (not a
-    localStorage mirror) — one store, no dual-write bookkeeping. The <code>modePin</code> module's
-    backing changes from localStorage to IDB; both the app and the SW read the same store.
+    <strong>(Rejected-path detail.) The SW path would have required moving the pin to IndexedDB</strong>
+    as the single source of truth (not a localStorage mirror) so the SW could read it. <em>The chosen
+    in-thread path needs none of this — it reads the existing localStorage pin synchronously (§7.3).</em>
+    Kept only as rejected-alternative analysis: the <code>modePin</code> backing would change from
+    localStorage to IDB, both app and SW reading the same store.
     <ul>
       <li><strong>Async is a non-issue</strong> because the app keeps a <em>boot-hydrated in-memory
         cache</em>: at data-layer init (where the keyStore / DB already open) load all pins — a handful,
@@ -808,7 +818,9 @@ boundary-agnostic except where they name the SW.
     namespaced by <code>user_id</code> (account isolation); on workspace leave/revoke its prefix is
     purged (primary, but can race / miss); and — the backstop that actually closes the
     <em>plaintext</em>-removal window — a cached entry past a short freshness TTL is re-validated by
-    re-issuing the RLS-gated Storage <code>GET</code> (403 for a removed member) before serving. For
+    re-issuing the RLS-gated Storage <code>GET</code> (403 for a removed member) before serving — that
+    revalidation GET must hit the <em>origin</em> (auth-bearing, non-cacheable, and the private bucket
+    sets no public <code>cacheControl</code>) so a CDN <code>200</code> can't mask the 403. For
     E2EE, WK-absence is treated as locked (evict rather than serve). These are the same guarantees the
     rejected SW path stated for the Cache API (the §7.1.1 cache-auth boxes), now for the in-thread OPFS
     cache.</li>
@@ -823,8 +835,8 @@ to buy exactly one benefit; in-thread pays two small local concerns and avoids a
     per-<code>clientId</code> sessions + per-user cache keying, because one SW is shared across all
     tabs/accounts of the origin; and the controller-readiness / route-ordering / clientId-less-navigation
     lifecycle (§7, §11). The in-thread context has none of these — it reads the mode pin synchronously
-    and already holds the decrypted block (the hash is <code>block.properties.hash</code>), so the
-    mirror simply doesn't exist.</li>
+    (resolving WK-presence on the already-async render path) and already holds the decrypted block (the
+    hash is <code>block.properties.hash</code>), so the mirror simply doesn't exist.</li>
   <li><strong>The SW's one benefit is weak here:</strong> a uniform <code>&lt;img src&gt;</code> across
     modes. But <code>&lt;img&gt;</code> takes an object URL just fine, so in-thread reproduces the result
     with a one-line mode branch; the SW's interception isn't even fully uniform (clientId-less
@@ -960,7 +972,14 @@ evicted entry would leave a synced asset block stuck in <code>uploading</code> f
 to send. So pending bytes are <strong>owned by the durable replica store</strong> (§8/§9), which
 is <em>not</em> subject to the display cache's LRU. After upload they <em>stay</em> there as the
 replica (§8) — the display cache is only the decrypted layer derived on top, never the sole home for
-the bytes.
+the bytes. Two corollaries: (1) the durable-replica write at capture must <em>actually</em> be durable —
+if it fails, or <code>persist()</code> is denied so the write lands in best-effort storage, capture
+<strong>fails with a clear error</strong> (&quot;can't attach — local storage is full or not durable&quot;)
+rather than committing metadata over evictable bytes; the §11 staged-before-tx ordering catches a
+<em>thrown</em> stage, not a silently non-durable one. (2) Because un-uploaded bytes are the only copy
+(and thus exempt from eviction), the budget must constrain <em>intake</em>, not retention — when pending
+bytes would exceed a safety budget, apply backpressure at paste (&quot;uploads pending — reconnect or
+free space&quot;) rather than accepting bytes you might have to evict.
 </div>
 
 <h2 id="queue">9. The byte-replication subsystem (up-lane + down-lane)</h2>
@@ -989,9 +1008,14 @@ the bytes.
   and arms the drain. The drain acts only on <code>pending</code>+ records, so the "block still
   exists?" pre-PUT drop applies only <em>after</em> the commit (a post-commit deletion / undo) and
   never to the legitimate pre-commit window. A flip that never lands (crash or throw between commit and
-  flip) is recovered by a <strong>boot-time reconciler</strong> that promotes any <code>staged</code>
-  record whose asset block is present and committed, and reaps any <code>staged</code> record whose
-  block never committed. Entries drain (to the §10.1 function) when connectivity returns, retrying with
+  flip) is recovered by a <strong>boot-time reconciler</strong> — but its commit-vs-rollback test must
+  not misread a not-yet-hydrated DB: it runs <em>after</em> PowerSync reports initial sync settled, so an
+  absent block means truly-absent (not merely not-yet-loaded — otherwise it would reap the only durable
+  copy of a committed-and-synced block's un-uploaded bytes). It then promotes any <code>staged</code>
+  record whose asset block is present, and reaps one whose block is absent <em>past that checkpoint</em>.
+  To shrink the inferred set to the genuine crash window, a <em>caught</em> tx rollback also stamps the
+  record <code>staged → reapable</code> directly, and records carry a session/generation stamp so a
+  reaper never races an in-flight capture. Entries drain (to the §10.1 function) when connectivity returns, retrying with
   backoff; on a confirmed upload the <em>queue entry</em> is deleted, but the <strong>bytes remain in
   the durable replica</strong> (§8, budget-bounded) — full replication keeps them on disk for offline
   rather than downgrading to an evictable display copy.
@@ -1017,11 +1041,16 @@ the bytes.
 <code>!((id))</code> insert in one <code>repo.tx</code> so they share an undo bucket — but that only
 makes the <em>DB</em> half atomic. The bytes (queue entry + any already-PUT object) are not
 transactional. So: (1) the drain step <strong>re-checks the block still exists (and is not deleted)
-before PUT</strong>, and drops the entry otherwise; (2) undo of an asset-block insert
-<strong>cancels the queue entry</strong> (keyed by <code>(user_id, asset_block_id)</code>) and, if the
-object already uploaded, enqueues a delete. Without this, undo leaves an orphaned Storage object and a
-queue entry that resurrects bytes for a block that no longer exists. (This is the undo case the §16
-orphan sweep does <em>not</em> cover.)</div>
+before PUT</strong>, and drops the entry otherwise; (2) undo <strong>tombstones the queue entry</strong>
+(<code>undone</code>, keyed by <code>(user_id, asset_block_id)</code>) rather than hard-cancelling.
+A snapshot-then-act compensator has a TOCTOU hole — the in-flight PUT can <em>confirm between</em> the
+undo's status read and the cancel, so it sees <code>uploading</code>, skips the delete, and orphans the
+just-uploaded object. With a tombstone, both sides consult it and whichever of {upload-confirm, undo}
+lands second owns cleanup: a confirm that finds the entry <code>undone</code> enqueues the object delete
+itself. <strong>Redo</strong> re-stages from the retained replica bytes (the replica is <em>not</em>
+dropped on undo), re-uploading if the object was already deleted. Without this, undo leaves an orphaned
+Storage object and a queue entry that resurrects bytes for a deleted block. (The §16 orphan-object sweep
+covers it only as a slow backstop.)</div>
 
 <div class="warn">
 <strong>A synced asset block can outlive its only bytes — the server-side backstop.</strong> The byte
@@ -1032,10 +1061,20 @@ a crash, means a device can lose its <em>un-uploaded</em> bytes while the asset 
 already synced (PowerSync was up; the byte upload wasn't) — leaving the server with a block whose
 <code>&lt;ws&gt;/&lt;asset_block_id&gt;</code> object can never materialize, a broken embed on peers that
 did nothing wrong. There is no reliable client-side fix at that moment (the origin device is gone or
-offline), so the guarantee is server-side: an <strong>orphan-block GC</strong> (§16) reaps any asset
-block whose object never appears within a grace window — the mirror of the orphan-<em>object</em> sweep.
-This is a general device-loss backstop, not a wipe special case; it bounds the residual broken embed to
-that window rather than leaving it forever.</div>
+offline) — but the handling must <strong>not</strong> be a destructive server-side reap of the block.
+Block deletion is a subtree-aware soft-delete (<code>src/data/mutators.ts</code>), so reaping the asset
+block would <em>cascade-delete the user-authored caption / alt-text / transcript children</em> — turning
+a missing image into lost text — and elapsed time alone can't distinguish &quot;author offline, still
+intends to upload&quot; from &quot;author gone forever&quot;. So instead: (a) while a <code>staged</code>
+/<code>pending</code> up-lane entry exists, the origin refreshes a tiny server-side <strong>upload-intent
+marker</strong> (a non-byte write), so a device returning from offline re-asserts intent before any
+window matters; (b) a peer that has the block but not the object runs a <em>bounded</em> down-lane retry,
+then surfaces a terminal <strong>&quot;image not yet uploaded by its author&quot;</strong> state (not an
+indefinite spinner, and it stops re-hitting Storage with 404s); (c) the embed <strong>self-heals</strong>
+if the origin ever uploads. Automatic destruction is reserved for orphan <em>objects</em> (bytes with no
+block — safe to delete); an orphan <em>block</em> is never auto-deleted (its children are real content),
+so the only unrecoverable case — origin gone before upload — is honestly shown as unavailable, never
+papered over by deleting user content.</div>
 
 <h2 id="storage">10. Storage layout &amp; RLS</h2>
 
@@ -1264,8 +1303,11 @@ the <em>same</em> block id and the <em>same</em> <code>&lt;ws&gt;/&lt;asset_bloc
 so "paste the same image again" creates <strong>no new block and no new upload</strong> — only a fresh
 paste with no workspace match uploads. A deduped asset therefore has <em>multiple</em> embed referrers,
 so its lifetime rides the existing block-reference machinery (§3): GC the asset block + its object when
-the referrer count reaches zero, not when any single embed is removed — the same backlink tracking
-blocks already have, no new refcount system. <strong>We deliberately do not scope dedup to a "containing
+the referrer count reaches zero, not when any single embed is removed. But <strong>never reap on the
+live zero-crossing</strong> — moving an embed (cut then paste), or a cross-device add that hasn't synced
+yet, transiently drops the count to zero and would reap an asset about to be re-referenced. Reap only
+assets that stay referrer-less <em>past a grace window</em>, behind the same deferred sweep as orphan
+objects (§16), preserving any child content. No new refcount system — just no synchronous reap. <strong>We deliberately do not scope dedup to a "containing
 subtree":</strong> the data model isn't strictly tree-shaped, and subtree sharing is unshipped (§12), so
 scoping dedup to it would pay for a feature that doesn't exist and doesn't map cleanly onto today's
 blocks. If subtree sharing is ever built, retargeting a workspace-wide asset into a shared scope (e.g.
@@ -1392,8 +1434,9 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
       <code>BlobStore</code> over Supabase Storage. Post-create RLS audit per the Supabase rule.</td></tr>
 <tr><td>3 — cache + resolver (in-thread)</td>
     <td>An in-thread asset resolver: fetch ciphertext (RLS-gated Storage <code>GET</code> with the app's
-      session) → decrypt / passthrough / fail-closed per the synchronously-read three-valued
-      materializability (not two-valued <code>getMode</code>; §7.3) → verify against the block's
+      session) → decrypt / passthrough / fail-closed per the three-valued materializability (pin read is
+      sync, WK-presence resolves on the async render path; not two-valued <code>getMode</code>; §7.3) →
+      verify against the block's
       <code>hash</code> (§5.1) → write plaintext to the OPFS byte cache → hand <code>&lt;img&gt;</code> an
       object URL (revoke on unmount). No SW route, token handshake, IDB hash mirror, or
       per-<code>clientId</code> session — those were the rejected SW path (§7.1–§7.2 / §7.3). Destruction
@@ -1430,11 +1473,14 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
     have many, §11) ⇒ delete the object (storage cascade or an explicit step); dangling embeds render the
     existing
     "unresolved embed" state. Beyond the <em>undo</em> case (handled by the §9 byte-lane compensator), a
-    vNext orphan sweep covers <strong>both</strong> directions: orphan <em>objects</em> (a Storage object
-    with no block — e.g. an interrupted delete) and orphan <em>blocks</em> (an asset block whose object
-    never materialized within a grace window — e.g. an upload that never completed before the origin
-    device was cleared / lost / reinstalled, §9). The block→object grace window must be generous enough
-    not to reap a block whose origin device is merely offline and still intends to upload.</li>
+    vNext orphan sweep covers <strong>both</strong> directions, but they are <em>not</em> symmetric: orphan
+    <em>objects</em> (a Storage object with no block — e.g. an interrupted delete) are auto-deletable;
+    orphan <em>blocks</em> (an asset block whose object never materialized — e.g. an upload that never
+    completed before the origin device was cleared / lost / reinstalled) are <strong>never</strong>
+    auto-deleted — their caption/transcript children are real content and a block delete cascades (§9),
+    and elapsed time can't tell an offline-but-intending author from a gone one. The block direction is
+    handled by the §9 upload-intent marker + the peer's bounded &quot;not yet uploaded by its
+    author&quot; terminal state, with removal left to the user — not a timed server reap.</li>
 </ul>
 
 <h2 id="tradeoffs">17. Tradeoffs we're accepting</h2>
@@ -1469,6 +1515,12 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
     <td>Concurrent same-hash pastes can produce duplicate objects (§11).</td>
     <td>GC tolerates multiple blocks per hash; WK-keyed deterministic ids are the only safe
       convergence option (a plaintext-hash id would be a content oracle).</td></tr>
+<tr><td>Concurrent offline replace of one embed</td>
+    <td>Two devices replacing the same image offline each mint a new immutable asset block; on reconnect
+      the embed pointer (plain block content) resolves last-writer-wins, so one replacement is silently
+      dropped (its orphaned asset is GC'd).</td>
+    <td>Accepted &amp; named (not hidden): no byte corruption — immutability holds; only the
+      <em>pointer</em> is LWW. A merge-surfacing / both-render variant is a vNext product call.</td></tr>
 <tr><td>No server-side media features for E2EE</td>
     <td>No server thumbnails / OCR / transcode for encrypted workspaces.</td>
     <td>Inherited from e2ee §15 #2, not new. Client-side transforms remain possible.</td></tr>
