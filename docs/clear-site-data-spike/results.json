@@ -1,0 +1,172 @@
+{
+  "chromium": "141.0.7390.37",
+  "base": "http://127.0.0.1:33539",
+  "cases": {
+    "A1_sw_synth": {
+      "name": "A1_sw_synth",
+      "sw": {
+        "controlled": true,
+        "scope": "http://127.0.0.1:33539/"
+      },
+      "before": {
+        "localStorage": true,
+        "sessionStorage": true,
+        "cookie": true,
+        "indexedDB": true,
+        "cacheStorage": true,
+        "opfs": true,
+        "swRegistered": true,
+        "swControlled": true
+      },
+      "after": {
+        "localStorage": true,
+        "sessionStorage": true,
+        "cookie": true,
+        "indexedDB": true,
+        "cacheStorage": true,
+        "opfs": true,
+        "swRegistered": true,
+        "swControlled": true
+      },
+      "diff": {
+        "localStorage": "kept",
+        "sessionStorage": "kept",
+        "cookie": "kept",
+        "indexedDB": "kept",
+        "cacheStorage": "kept",
+        "opfs": "kept",
+        "swRegistered": "kept"
+      },
+      "triggerResult": {
+        "status": 200,
+        "csdHeader": null,
+        "body": "sw-synth-clear"
+      },
+      "consoleErrors": []
+    },
+    "A2_sw_passthrough": {
+      "name": "A2_sw_passthrough",
+      "sw": {
+        "controlled": true,
+        "scope": "http://127.0.0.1:33539/"
+      },
+      "before": {
+        "localStorage": true,
+        "sessionStorage": true,
+        "cookie": true,
+        "indexedDB": true,
+        "cacheStorage": true,
+        "opfs": true,
+        "swRegistered": true,
+        "swControlled": true
+      },
+      "after": {
+        "localStorage": false,
+        "sessionStorage": false,
+        "cookie": false,
+        "indexedDB": false,
+        "cacheStorage": false,
+        "opfs": false,
+        "swRegistered": false,
+        "swControlled": false
+      },
+      "diff": {
+        "localStorage": "CLEARED",
+        "sessionStorage": "CLEARED",
+        "cookie": "CLEARED",
+        "indexedDB": "CLEARED",
+        "cacheStorage": "CLEARED",
+        "opfs": "CLEARED",
+        "swRegistered": "CLEARED"
+      },
+      "triggerResult": {
+        "status": 200,
+        "csdHeader": null,
+        "body": "network-clear"
+      },
+      "consoleErrors": []
+    },
+    "B_network_fetch": {
+      "name": "B_network_fetch",
+      "sw": {
+        "controlled": true,
+        "scope": "http://127.0.0.1:33539/"
+      },
+      "before": {
+        "localStorage": true,
+        "sessionStorage": true,
+        "cookie": true,
+        "indexedDB": true,
+        "cacheStorage": true,
+        "opfs": true,
+        "swRegistered": true,
+        "swControlled": true
+      },
+      "after": {
+        "localStorage": false,
+        "sessionStorage": false,
+        "cookie": false,
+        "indexedDB": false,
+        "cacheStorage": false,
+        "opfs": false,
+        "swRegistered": false,
+        "swControlled": false
+      },
+      "diff": {
+        "localStorage": "CLEARED",
+        "sessionStorage": "CLEARED",
+        "cookie": "CLEARED",
+        "indexedDB": "CLEARED",
+        "cacheStorage": "CLEARED",
+        "opfs": "CLEARED",
+        "swRegistered": "CLEARED"
+      },
+      "triggerResult": {
+        "status": 200,
+        "csdHeader": null,
+        "body": "network-clear"
+      },
+      "consoleErrors": []
+    },
+    "C_network_navigate": {
+      "name": "C_network_navigate",
+      "sw": {
+        "controlled": true,
+        "scope": "http://127.0.0.1:33539/"
+      },
+      "before": {
+        "localStorage": true,
+        "sessionStorage": true,
+        "cookie": true,
+        "indexedDB": true,
+        "cacheStorage": true,
+        "opfs": true,
+        "swRegistered": true,
+        "swControlled": true
+      },
+      "after": {
+        "localStorage": false,
+        "sessionStorage": false,
+        "cookie": false,
+        "indexedDB": false,
+        "cacheStorage": false,
+        "opfs": false,
+        "swRegistered": false,
+        "swControlled": false
+      },
+      "diff": {
+        "localStorage": "CLEARED",
+        "sessionStorage": "CLEARED",
+        "cookie": "CLEARED",
+        "indexedDB": "CLEARED",
+        "cacheStorage": "CLEARED",
+        "opfs": "CLEARED",
+        "swRegistered": "CLEARED"
+      },
+      "triggerResult": {
+        "status": 200
+      },
+      "consoleErrors": []
+    }
+  }
+}

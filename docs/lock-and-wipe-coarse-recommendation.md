@@ -104,11 +104,24 @@ redirects to the logged-out app. One click, browser-grade, none of the §3 machi
 
 ### 0.3 Hosting reality (today) and what to actually build
 
-The catch: the `Clear-Site-Data` header must come from **our** origin's response, and the app
-is served from **GitHub Pages** (static — no custom response headers). A service-worker–
-synthesized `Clear-Site-Data` is unreliable and self-referential (it would unregister the SW
-emitting it), so it's not a dependable substitute. There is also **no JS API** to open the
-browser's clear-data UI from a page.
+The catch: the `Clear-Site-Data` header must come from a **network response on our origin**,
+and the app is served from **GitHub Pages** (static — no custom response headers). A service
+worker can't paper over that. This was **verified by spike** (`docs/clear-site-data-spike/`,
+Chromium 141):
+
+| How the header is delivered | Result |
+| --- | --- |
+| SW *synthesizes* it (`new Response('', {headers:{'Clear-Site-Data':…}})`) | **ignored — nothing cleared** |
+| SW *passes through* a network response (`respondWith(fetch('/wipe'))`) | all cleared |
+| Page `fetch()` of a network response | all cleared |
+| Top-level navigation to a network response | all cleared |
+
+So Chromium only honors `Clear-Site-Data` on responses that **actually came over the network**;
+a SW-fabricated `Response` is dropped on the floor. (Note the corrected mechanism: the
+pass-through case clears even though it unregisters *that same SW* mid-response — so the blocker
+is the network-origin requirement, **not** self-reference, as an earlier draft of this doc
+guessed. But pass-through still needs **our origin's server** to emit the header, which GH Pages
+won't.) There is also **no JS API** to open the browser's clear-data UI from a page.
 
 So:
 - **Now (GitHub Pages):** the in-app action **guides** the user to the browser's clear-site-data
@@ -128,7 +141,8 @@ enumeration, no SW handshake, no boot gate — the browser owns all of that.
 
 Build the JS enumeration wipe (selective or coarse, §3) **only** if both hold: (a) the panic
 action must *save unsynced work and then* destroy local in the same gesture, **and** (b) you
-can't emit `Clear-Site-Data` (stuck on header-less hosting, SW path unverified). Absent both,
+can't emit `Clear-Site-Data` (stuck on header-less hosting — the SW-synthesized substitute does
+**not** work, see §0.3). Absent both,
 delegate. §1–§5 below are the cost analysis that sets that bar — read them as *why not to
 hand-roll*, not as the build plan.
 
