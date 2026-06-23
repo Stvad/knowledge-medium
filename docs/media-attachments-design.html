@@ -278,9 +278,15 @@ content: 'image: screenshot.png'   // human-readable summary</code></pre>
   approach are dead on arrival:</p>
 
 <div class="reject">
-<strong>Signed-URL-on-render serving displayable bytes — dead for E2EE.</strong> A signed Storage URL
-returns ciphertext; the browser cannot <code>&lt;img src&gt;</code> that. Bytes must be fetched, then
-decrypted client-side with the WK before display.
+<strong>A signed Storage URL handed straight to <code>&lt;img src&gt;</code> — dead for E2EE.</strong>
+The object is ciphertext, so the browser can't render it directly; the bytes have to be fetched and
+<em>decrypted client-side with the WK</em> first. Note what this does <em>not</em> kill: signed URLs as
+a <em>fetch</em> mechanism are fine — what's dead is using one as the <em>render</em> URL. The fix is a
+<strong>proxy</strong> that does the fetch+decrypt and serves displayable bytes behind a stable virtual
+URL (<code>${BASE_URL}asset/&lt;ws&gt;/&lt;id&gt;</code>): the service worker (§7) or the app thread
+(§7.3). The byte fetch inside that proxy could use a signed URL <em>or</em> a bearer-token
+<code>GET</code> — §7.1 picks the bearer token and drops per-object signed URLs for the in-app case. So
+<code>&lt;img src&gt;</code> works again; it just points at the virtual URL, never the raw object.
 </div>
 
 <div class="reject">
