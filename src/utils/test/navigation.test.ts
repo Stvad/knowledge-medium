@@ -445,6 +445,27 @@ describe('navigationIntentVerb (intent policy seam)', () => {
     })
   })
 
+  it('carries the gesture workspace when the policy omits one (active switch mid-resolution)', async () => {
+    stubViewport(false)
+    // A policy impl that (a) flips the active workspace mid-resolution and
+    // (b) returns an input WITHOUT a workspaceId. The nav must still land in the
+    // workspace captured when the gesture started (WS), not the newly-active one.
+    env.repo.setRuntimeContributions(navigationIntentVerb.implFacet, 'test-policy', [
+      gesture => {
+        env.repo.setActiveWorkspaceId('ws-other')
+        return {blockId: gesture.blockId, target: 'main'}
+      },
+    ])
+
+    await navigateFromGlobalCommand(env.repo, {blockId: 'b-ws'})
+
+    // currentPanelBlockIds resolves WS's layout session — passing proves the
+    // nav landed in WS despite the active workspace flip + the omitted workspaceId.
+    await vi.waitFor(async () => {
+      expect(await currentPanelBlockIds()).toEqual(['b-ws'])
+    })
+  })
+
   it('a policy decorator redirects where global commands land (navigator → active on desktop)', async () => {
     // The original motivating example: a plugin redirects navigator commands to
     // the active panel even on desktop, by rewriting the policy's NavigateInput.

@@ -514,7 +514,12 @@ export const navigateFromGesture = async (
     input = defaultNavigationIntent(gesture)
   }
   if (!input) return null
-  return navigate(repo, input)
+  // Carry the gesture's captured workspace when the policy didn't set one
+  // (a plugin policy may omit it). The policy resolution is async, so letting
+  // `navigate()` recapture `repo.activeWorkspaceId` could land in a workspace
+  // the user switched to *during* resolution instead of the one that
+  // originated the gesture. A policy that explicitly sets `workspaceId` wins.
+  return navigate(repo, input.workspaceId ? input : {...input, workspaceId: gesture.workspaceId})
 }
 
 /** Navigate from a global command (command palette, shortcut, navigator-role
