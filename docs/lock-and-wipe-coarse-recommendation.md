@@ -34,12 +34,13 @@ What it is **not** is a free simplification of the *destruction mechanics*. A co
 profile-wide, logged-out wipe re-shapes the selective flow's per-store wipe wiring into three
 new problems the selective flow avoids or handles better (§3): the open **OPFS** file is still
 un-deletable while any sibling tab holds it — and `clear()` only papers over IndexedDB, not
-OPFS — so a profile-wide marker needs a **single well-defined consumer**, not "whichever tab
-boots first"; the **service worker** survives the reload and owns/repopulates the Cache API,
-so the wipe needs an explicit **SW purge handshake** — `postMessage`→ack, since bare
-`unregister()` leaves the active worker controlling the page (a page-side `caches.delete`
-can't reach it); and "run before any handle opens" is a concrete **new pre-render boot gate**,
-not a one-liner. Net: comparable complexity, re-shaped — worth doing for wins (1) and (2) and
+OPFS — so it needs an **exclusive barrier over live DB handles** (a single-consumer election
+alone doesn't release a frozen sibling's handle); the **service worker** survives the reload and
+owns/repopulates the Cache API, so the wipe needs an explicit **SW purge handshake** —
+`postMessage`→ack, since bare `unregister()` leaves the active worker controlling the page (a
+page-side `caches.delete` can't reach it); and "run before any handle opens" needs an
+**import-minimal boot entrypoint** (a plain async IIFE doesn't work — ESM evaluates static
+imports first, and `supabase.ts` builds an auth client at module load), not a one-liner. Net: comparable complexity, re-shaped — worth doing for wins (1) and (2) and
 the one-clear-panic-action UX, eyes open.
 
 Keep regardless of coarse-vs-selective: the **best-effort upload drain** before the wipe
@@ -209,11 +210,18 @@ reloads (a frozen background tab, a `beforeunload` prompt). Retries exhaust → 
 half-done, marker still armed. `clear()` does **not** help here — OPFS is the load-bearing step
 and is blocked exactly as today.
 
-**This must be designed, not assumed away.** Options: (a) elect a single consumer via
-`navigator.locks` (only the lock holder runs `consumeDestroyAll`; others just wait/reload), or
-(b) a teardown **handshake** — every tab acks "handle released" before any tab wipes — rather
-than a fire-and-forget broadcast. The doc must stop implying `clear()` makes the cross-tab
-block go away; it removes the IDB half only.
+**This must be designed, not assumed away — and election alone is not enough.** A
+`navigator.locks` election only *chooses* which boot tab runs `consumeDestroyAll`; it does
+**not** make an already-loaded sibling **release** its wa-sqlite OPFS handle. A tab can win the
+election while a frozen background tab — or one stuck in a `beforeunload` prompt — still holds
+the DB, so `removeEntry` exhausts its retries and wedges the marker anyway. The real requirement
+is an **exclusive barrier over the live DB handles**: every tab that opens the DB holds a
+*shared* lock for the DB's lifetime, and the wiper must acquire that lock **exclusively** —
+which by construction can't succeed until every holder has released (i.e. torn down its
+wa-sqlite worker). Equivalently, an explicit teardown **ack handshake** where every live tab
+confirms "handle released" before any tab wipes. Election picks the runner; the barrier/ack is
+what actually guarantees no live sibling handle remains. (And `clear()` still removes only the
+IDB half — OPFS is the gated step.)
 
 ### 3.3 Problem B — the service worker survives the reload and repopulates the Cache API
 
@@ -243,13 +251,23 @@ Today's consume survives only because it lives *inside* `ensurePowerSyncReady` (
 post-login, under React Suspense), so "before this user's DB opens" is automatic. `src/main.tsx`
 is **fully synchronous** — `registerServiceWorker()` then `createRoot(...).render(...)` with no
 async gate. A profile-wide, pre-login consume requires a **new awaited boot gate before
-`render`** (e.g. an async IIFE: `await consumeDestroyAll()` then `createRoot().render(...)`),
-and it must run **before** anything that opens a handle at module-eval/first-render time — in
-particular before `Login`'s persisted-session read and before the first
-`getWorkspaceKeyStore()` / `getCompiledModuleCache()` (lazy-open singletons). The
-`isDestroyAllPending()` short-circuit keeps the cold-boot common case cheap. This is doable, but
-it is **the load-bearing structural change**, not a one-liner — and it's exactly the kind of
-thing that "looks like a one-liner" and isn't.
+`render`** — but **an async IIFE in the current `main.tsx` is not enough.** ES modules evaluate
+*all* static imports before the module body runs, and `main.tsx` statically imports `Login` →
+`src/services/supabase.ts`, which builds `createClient(…, {persistSession:true,
+autoRefreshToken:true, detectSessionInUrl:true})` **at module load** (`supabase.ts:9-17`). So by
+the time the IIFE's `await consumeDestroyAll()` runs, the Supabase auth client has already
+rehydrated the persisted session into memory (and may auto-refresh / detect a URL session) —
+leaving the supposedly logged-out wipe with a **live in-memory session that can render or
+reconnect even after `localStorage.clear()`**. The same hazard applies to any lazy singleton
+(`getWorkspaceKeyStore()` / `getCompiledModuleCache()`) whose module-eval touches storage.
+
+So the gate needs an **import-minimal entrypoint**: a tiny entry that statically imports *only*
+`consumeDestroyAll` (and what it needs), `await`s it, and **dynamically `import()`s the real
+app afterward** — so nothing that touches storage/auth is statically evaluated ahead of the
+wipe. (The alternative — an audited guarantee that *no* static import touches storage at
+eval time — fails today, because `supabase.ts` does.) The `isDestroyAllPending()` short-circuit
+keeps the cold-boot common case cheap. This is **the load-bearing structural change**, not a
+one-liner — and it's exactly the kind of thing that "looks like a one-liner" and isn't.
 
 ### 3.5 The minimal sequence (with the three problems addressed)
 
@@ -257,12 +275,13 @@ thing that "looks like a one-liner" and isn't.
 1. Best-effort drain the active account's pending uploads — `flushUploadQueue(ps_crud)` + the
    media byte-queue drain. (Queue-empty already implies acknowledgement — §2a; no extra wait.)
 2. Arm **one** profile-wide marker (`kmp-destroy-all-pending`).
-3. Signal all tabs to reload (profile-wide). Pair with the §3.2 single-consumer election or
-   teardown handshake so the wipe has exactly one runner.
+3. Signal all tabs to reload (profile-wide). Pair with the §3.2 **exclusive DB-handle barrier**
+   (or teardown ack handshake) so the wipe has exactly one runner *and* no live sibling handle.
 4. `window.location.reload()`.
 
 **Next boot — at the §3.4 pre-render gate, before any store opens a handle:**
-5. If armed, and this tab won the §3.2 election: run the load-bearing destruction, each step
+5. If armed, and this tab holds the §3.2 exclusive DB-handle barrier (so no live sibling handle
+   remains): run the load-bearing destruction, each step
    leaving the marker armed on failure (retry next boot; never disarm on partial success):
    - **SW first (§3.3):** `postMessage` the SW to drop its in-memory secrets + caches and
      `await` its ack (or `unregister()` **and** force a controller-change / second navigation —
@@ -283,8 +302,9 @@ thing that "looks like a one-liner" and isn't.
 
 What genuinely simplifies vs. today: no `dbFilenameForUser` threading, no per-user key scoping,
 no compiled-cache "clear after the file delete" ordering *for the single-tab case*. What does
-**not** collapse: the OPFS open-handle gating (now a cross-tab election), the SW participant
-(now a handshake), and the boot placement (now a real gate). Honest tally: coarse trades
+**not** collapse: the OPFS open-handle gating (now a cross-tab DB-handle barrier), the SW
+participant (now a handshake), and the boot placement (now a real import-minimal gate). Honest
+tally: coarse trades
 per-store wipe wiring for SW + cross-tab + boot-gate wiring — comparable, not free.
 
 ---
@@ -345,8 +365,8 @@ security/selectivity collapse (§1/§2b) and the media-participant subsumption (
 wipe being mechanically simpler (§3).* Concretely:
 
 1. **`destroyAllLocalData()` becomes the action** behind `lock_and_wipe_local_data`: drain the
-   active account (§2a), arm one profile-wide marker, elect a single consumer + signal reload
-   (§3.2), reload. Destruction at the pre-render boot gate (§3.4): SW purge handshake (§3.3) →
+   active account (§2a), arm one profile-wide marker, signal reload + acquire the §3.2 exclusive
+   DB-handle barrier, reload. Destruction at the §3.4 import-minimal gate: SW purge handshake (§3.3) →
    OPFS root → IDB `clear()` → Cache delete → storage clear last. No preserve-allowlist (§2b).
 2. **Drop the selective machinery** (per-user key scoping in the wipe path, per-user marker,
    per-user DB-file consume, compiled-cache ordering) rather than carry two flows. If product
@@ -359,13 +379,17 @@ wipe being mechanically simpler (§3).* Concretely:
 
 ### Required design work (the part that isn't free)
 
-- **A single-consumer cross-tab election** (`navigator.locks`) or teardown handshake (§3.2), so
-  one well-defined boot runs the OPFS-gated wipe.
+- **An exclusive barrier over live DB handles**, not just a single-consumer election (§3.2):
+  every tab holds a shared `navigator.locks` lock for the DB's lifetime and the wiper acquires
+  it exclusively (or a teardown ack handshake). Election alone picks a runner but doesn't make a
+  frozen / `beforeunload`-stuck sibling release its OPFS handle.
 - **An SW purge handshake** — `postMessage`→ack (or `unregister()` + forced controller-change);
   bare `unregister()` is insufficient (§3.3), and without this the Cache/token participant isn't
   actually wiped.
-- **A pre-render boot gate in `main.tsx`** (§3.4) — `await consumeDestroyAll()` before
-  `createRoot().render()`, ahead of the persisted-session read and the lazy IDB singletons.
+- **An import-minimal boot entrypoint** (§3.4), not just an async IIFE: statically import only
+  `consumeDestroyAll`, `await` it, then **dynamically `import()`** the app — because static
+  imports (incl. `supabase.ts`'s `createClient(persistSession:true)` at module load) evaluate
+  before any IIFE body and would rehydrate an auth session into memory ahead of the wipe.
 - **A current curated IDB known-list** for the Firefox `databases()` gap, or `deleteDatabase`
   + `onblocked`, so a missed store isn't a silent incomplete wipe (§3.5).
 
@@ -387,8 +411,8 @@ wipe being mechanically simpler (§3).* Concretely:
   wiring (export/import still use them).
 - **Keep:** `flushUploadQueue` (and `UploadQueueProbe`/`FlushResult`) — the data-loss guard,
   orthogonal to coarse-vs-selective. The cross-tab reload signal stays but becomes profile-wide
-  (drop the per-user match in `onWipeReload`, `App.tsx:264`) **and** gains the single-consumer
-  election (§3.2) — that's a behavior change, not a no-op.
+  (drop the per-user match in `onWipeReload`, `App.tsx:264`) **and** gains the §3.2 DB-handle
+  barrier — that's a behavior change, not a no-op.
 
 ### Test implications
 
@@ -399,10 +423,11 @@ wipe being mechanically simpler (§3).* Concretely:
     the assertion (`consumeDestroyAll` clears `kmp-e2ee-mode:*` too).
   - `consumePendingWipe` block — **replaced** by `consumeDestroyAll` tests: SW purge invoked
     before storage steps; OPFS retry on `NoModificationAllowedError`; IDB via `clear()` (or a
-    `deleteDatabase`+`onblocked` test proving the marker stays armed); a **cross-tab election**
-    test (a second "tab" holding the lock/handle does not get a half-wipe); marker stays armed
-    on any incomplete step; storage cleared **last**.
-  - cross-tab block — now also asserts single-consumer election, not just reload fan-out.
+    `deleteDatabase`+`onblocked` test proving the marker stays armed); a **DB-handle barrier**
+    test (a second "tab" still holding the lock/handle blocks the wipe — no half-wipe — until it
+    releases); marker stays armed on any incomplete step; storage cleared **last**.
+  - cross-tab block — now also asserts the DB-handle barrier (a live sibling handle blocks the
+    wipe), not just reload fan-out.
 - **Media design's `lockAndWipe`-flavored tests (§7.2 / §15 phase 3):** collapse to one
   `consumeDestroyAll` test ("SW purged + Cache + IDB + OPFS cleared") **including the SW
   handshake** — that, not a page-side `caches.delete` assertion, is the real "plaintext survives
@@ -413,7 +438,7 @@ wipe being mechanically simpler (§3).* Concretely:
 - **Resolved: no security carve-out** — pins carry no security weight post-rollout-removal
   (§2b). A pin carve-out remains available *purely* as a UX softener for the re-paste-everything
   cost; product has accepted that cost, so default to dropping pins.
-- **Open (engineering, not policy):** the §3 mechanics — single-consumer election shape, SW
+- **Open (engineering, not policy):** the §3 mechanics — the DB-handle barrier / teardown-ack shape, SW
   handshake vs unregister, and the exact boot-gate placement — are real design choices that
   must be settled before implementation. They don't change the recommendation; they're why "as
   written, coarse is not yet a drop-in simplification."
@@ -423,7 +448,7 @@ wipe being mechanically simpler (§3).* Concretely:
 ## Appendix — prototype sketch (feasibility, not wired in)
 
 Illustrative, not production code. It shows the *destruction* primitives are reachable; it does
-**not** show the §3 orchestration (single-consumer election, SW handshake, the `main.tsx` boot
+**not** show the §3 orchestration (the DB-handle barrier, SW handshake, the `main.tsx` boot
 gate), which is the part that needs real design. Portability caveats: `indexedDB.databases()`
 exists on Chromium/WebKit but **not Firefox** (hence the known-list fallback), and OPFS
 `FileSystemDirectoryHandle.entries()` async iteration has uneven support and isn't in the lib
@@ -442,7 +467,7 @@ export const destroyAllLocalData = (): void => {
 export const isDestroyAllPending = (): boolean =>
   localStorage.getItem(DESTROY_ALL_MARKER) === '1'
 
-// ── Next boot, at the pre-render gate (§3.4), and only if this tab won the §3.2 election. ──
+// ── Next boot, at the §3.4 import-minimal gate, holding the §3.2 exclusive DB-handle barrier. ──
 export const consumeDestroyAll = async (): Promise<boolean> => {
   if (!isDestroyAllPending()) return false
 
@@ -456,7 +481,8 @@ export const consumeDestroyAll = async (): Promise<boolean> => {
 
   // 1. OPFS tree — STILL the gated load-bearing step. clear() (step 2) does NOT help here: a
   //    sibling tab that hasn't released its sqlite handle blocks removeEntry exactly as today,
-  //    which is why §3.2's single-consumer election must guarantee no live sibling here. Throws
+  //    which is why §3.2's exclusive DB-handle barrier (not election alone) must guarantee no
+  //    live sibling here. Throws
   //    after retries → marker stays armed (step 4 not reached) → retry next boot.
   await withRetry(async () => {
     const root = await navigator.storage.getDirectory()
@@ -488,6 +514,6 @@ export const consumeDestroyAll = async (): Promise<boolean> => {
 
 What the sketch confirms: the destruction needs *no per-user input* and *no allowlist*, and the
 enumeration APIs are reachable (with the Firefox/OPFS caveats above). What it deliberately omits
-is exactly what §3 shows is not free — the single-consumer election, the SW handshake placement,
+is exactly what §3 shows is not free — the DB-handle barrier, the SW handshake placement,
 and the pre-render boot gate. Those are the difference between "the primitives exist" and "the
 coarse wipe is safe to ship."
