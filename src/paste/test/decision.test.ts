@@ -1,18 +1,25 @@
 import { describe, expect, it, vi } from 'vitest'
 import { resolveFacetRuntimeSync } from '@/facets/facet.ts'
+import type { PasteChordIntent } from '../operations.ts'
 import {
   defaultPasteDecision,
   pasteDecisionVerb,
+  type PasteCaret,
   type PasteDecision,
   type PasteRequest,
+  type PasteSurface,
 } from '../decision.ts'
 
-const request = (over: Partial<PasteRequest>): PasteRequest => ({
-  text: '',
-  intent: 'split',
-  surface: 'editor',
-  ...over,
-})
+// `editor` requests carry a caret (union invariant); tests that don't care
+// about position get a default first-line caret so cases stay terse.
+const request = (
+  over: {text?: string; intent?: PasteChordIntent; surface?: PasteSurface; caret?: PasteCaret} = {},
+): PasteRequest => {
+  const {text = '', intent = 'split', surface = 'editor', caret} = over
+  return surface === 'shell'
+    ? {text, intent, surface}
+    : {text, intent, surface, caret: caret ?? {line: 1, lineCount: 1, from: 0, to: 0}}
+}
 
 describe('defaultPasteDecision', () => {
   it('drops a single-block chord into the current block verbatim', () => {

@@ -36,7 +36,37 @@ export type PasteDecision =
  *  `defaultPasteDecision`. */
 export type PasteSurface = 'editor' | 'shell'
 
-export interface PasteRequest {
+/** Caret/selection on the editor surface at paste time, snapshotted
+ *  synchronously before the (possibly async) decision — an override may
+ *  await, during which the live caret/doc can move, so the decision must
+ *  key on the paste-time snapshot, not a later read. Present only on the
+ *  `editor` surface (see the `surface ⟺ caret` invariant on `PasteRequest`).
+ *  Lets overrides vary by position (e.g. title line 1 vs body line 2+)
+ *  without re-deriving it from the DOM. */
+export interface PasteCaret {
+  /** 1-based line of the caret WITHIN the block's editor document
+   *  (`doc.lineAt(from).number`). A block is usually one logical line but
+   *  keeps newlines after a single-block paste, so this can exceed 1. This
+   *  is an editor-doc line, NOT an outline position. */
+  line: number
+  /** Total lines in the block's editor document (`doc.lines`); `line ===
+   *  lineCount` ⟺ caret on the last line. */
+  lineCount: number
+  /** Selection range as character offsets in the block's editor document;
+   *  `from === to` for a bare caret with no selection. */
+  from: number
+  to: number
+}
+
+/** A paste to decide on. Modeled as a discriminated union on `surface` so
+ *  the invariant `surface === 'editor' ⟺ caret is present` is enforced by
+ *  the type, not by convention: the `editor` surface always has a text
+ *  caret, the `shell` (focused-but-not-editing block, or programmatic /
+ *  vim paste) never does. Overrides narrow on `surface` to read `caret`. */
+export type PasteRequest = PasteRequestBase &
+  ({surface: 'editor'; caret: PasteCaret} | {surface: 'shell'; caret?: undefined})
+
+interface PasteRequestBase {
   /** Clipboard `text/plain`. */
   text: string
   /** Clipboard `text/html`, if any — lets format-aware overrides inspect
@@ -46,8 +76,6 @@ export interface PasteRequest {
    *  (`single-block`). The paste `ClipboardEvent` carries no modifier
    *  state, so the renderer captures this on keydown. */
   intent: PasteChordIntent
-  /** The surface receiving the paste — see `PasteSurface`. */
-  surface: PasteSurface
 }
 
 /**
