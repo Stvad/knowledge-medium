@@ -18,7 +18,7 @@ import {
   preserveHashQueryParams,
   type LayoutSlot,
 } from '@/utils/routing'
-import { panelHistory } from '@/utils/panelHistory'
+import { panelHistory, writePanelContent } from '@/utils/panelHistory'
 import { CallbackSet } from '@/utils/callbackSet'
 import { outlineRenderScopeId } from '@/utils/renderScope'
 
@@ -472,12 +472,7 @@ export const reconcilePanelRows = async (
             }, blockId)
             : null
           panelHistory.enqueueRestore(slot.row.id, restored?.state)
-          await tx.setProperty(slot.row.id, topLevelBlockIdProp, blockId)
-          await tx.setProperty(slot.row.id, focusedBlockLocationProp, restored?.state?.focusedLocation ?? {
-            blockId,
-            renderScopeId: outlineRenderScopeId(blockId),
-          })
-          await tx.setProperty(slot.row.id, scrollTopProp, restored?.state?.scrollTop ?? 0)
+          await writePanelContent(tx, slot.row.id, blockId, restored?.state)
         }
       }
     }
@@ -515,12 +510,7 @@ export const retargetPanelBlockIds = async (
         state: panelHistory.snapshot(row.id),
       }, toId)
       panelHistory.enqueueRestore(row.id, restored?.state)
-      await tx.setProperty(row.id, topLevelBlockIdProp, toId)
-      await tx.setProperty(row.id, focusedBlockLocationProp, restored?.state?.focusedLocation ?? {
-        blockId: toId,
-        renderScopeId: outlineRenderScopeId(toId),
-      })
-      await tx.setProperty(row.id, scrollTopProp, restored?.state?.scrollTop ?? 0)
+      await writePanelContent(tx, row.id, toId, restored?.state)
     }
   }, {scope: ChangeScope.UiState, description: 'retarget merged panels'})
 }

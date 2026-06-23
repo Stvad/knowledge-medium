@@ -46,6 +46,7 @@ export {
   type VerbDecorator,
   type VerbBefore,
   type VerbAfter,
+  type VerbOutcome,
 } from '@/facets/verbFacet.js'
 
 // --- Blessed core facets ---
@@ -123,6 +124,38 @@ export {
   type PasteRequest,
   type PasteSurface,
 } from '@/paste/decision.js'
+
+// --- Navigation seams, two layers ---
+// Intent policy (`navigationIntentVerb`): remap the gesture→target mapping —
+// the modifier matrix, the follow-link/navigator role, or where global commands
+// land (active vs main). Execution (`navigationVerb`): observe / rewrite (by
+// target / origin / block) / veto / replace the act of going to a block —
+// analytics, confirm-before-leave, retarget by block type.
+export {
+  navigationVerb,
+  navigationIntentVerb,
+  defaultNavigationIntent,
+  navigate,
+  useNavigate,
+  navigateFromGesture,
+  navigateFromGlobalCommand,
+  useNavigateFromGlobalCommand,
+  // The standard way to wire a clickable surface that opens a block (links,
+  // buttons, map pins, list rows) — modifier-aware, routed through the policy.
+  useOpenBlock,
+  useBlockOpener,
+  type NavigateInput,
+  type ResolvedNavigateInput,
+  type GlobalCommandNavigateInput,
+  type NavigationRequest,
+  type NavigationResult,
+  type NavigationGesture,
+  type NavigationRole,
+  type NavigationViewport,
+  type BlockOpenerPlainClick,
+  type BlockOpenerOptions,
+  type OpenBlockContext,
+} from '@/utils/navigation.js'
 
 // --- Action / shortcut helpers ---
 export {

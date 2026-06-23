@@ -214,7 +214,10 @@ Per-panel chevrons remain a separate panel-scoped affordance.
 
 ### Modifier-key policy for block link clicks (incl. "open in main")
 
-Current matrix (from `handleBlockLinkClick`):
+Matrix (original design record; now implemented by `blockLinkClickIntent` +
+`defaultNavigationIntent`, the intent-policy default — `target: 'focused'` below
+was later renamed `target: 'panel'`, and the resolver runs as the
+`navigationIntentVerb` default rather than a standalone `handleBlockLinkClick`):
 
 | Modifier | Action | Resulting `navigate()` call |
 |---|---|---|
@@ -230,7 +233,7 @@ Modifier choice: **alt-click** as default. Reasoning:
 - Cmd-click is the universal "open in new browser tab" convention; overriding it costs users that affordance for any block link in the app. High-tax override.
 - Shift is taken (new panel).
 - Alt-click currently falls through to native (which on most browsers is "save link," rarely used inside an SPA). Lowest-tax modifier to repurpose.
-- If alt-click ends up unergonomic, swapping to cmd-click is a one-line change in `handleBlockLinkClick`.
+- If alt-click ends up unergonomic, swapping to cmd-click is a one-line change in `blockLinkClickIntent` (and plugins can now remap it via `navigationIntentVerb`).
 
 Updated matrix:
 
@@ -319,7 +322,7 @@ Callers don't talk to the projection directly — they write panel rows. The pro
 
 - `navigate({target: 'new-panel', sourcePanelId})`: insert a new panel row at `sourceIndex + 1` (UiState scope). Observer classifies as insert → push. Drop `dispatchEvent('open-panel')` from `navigation.ts`; drop `'open-panel'` CustomEvent listener from `LayoutRenderer`.
 - `handleClose` in `PanelRenderer`: stays as-is (UiState delete of the panel row). Observer classifies as delete → push.
-- `navigate({target: 'focused', panelId})` for a side panel: updates the panel row's `topLevelBlockIdProp`. Observer classifies as URL-changed → push (browser back undoes the link click).
+- `navigate({target: 'focused', panelId})` for a side panel (the target was later renamed `'panel'` — this section predates the rename): updates the panel row's `topLevelBlockIdProp`. Observer classifies as URL-changed → push (browser back undoes the link click).
 - Workspace switch: existing path writes `#<new-wsId>` to URL via `location.hash =` (or its `writeAppHash` wrapper). The inbound side of the projection (`applyCurrentUrl`) handles bare `#<wsId>` by either restoring prior `(layoutSessionId, wsId)` rows or, if none exist, deferring to the landing layer to fill in the daily note (see "Workspace switch + default landing" above). App.tsx's eager daily-note rewrite in `getInitialBlock` is removed in this step.
 - Cmd-[/], forward/back mouse: keep bound to `history.back/forward()` — gets the right semantics for free now that browser history tracks panel layout.
 
@@ -341,15 +344,84 @@ Callers don't talk to the projection directly — they write panel rows. The pro
 - Delete the legacy `getPanelsBlock` / `PANELS_PATH_PART` indirection if nothing reads from `ui-state/panels` anymore.
 - Confirm no panel-row writes use a non-UiState scope outside the projection.
 
-## Post-step-4: emacs-grade extensibility (separate work)
+## Navigation extensibility model
 
-In priority order (none of these block step 4):
+Navigation is a **pipeline** of distinct concerns, each wanting its own seam.
+The "block shows in a custom view" case is already covered by
+`blockRenderersFacet` (`useRendererRegistry`'s `canRender`/`priority`); the nav
+seams below don't own it.
 
-1. **`navigationFacet`** — turn `navigate(input)` into `runtime.read(navigationFacet)({...})`. Default contribution = current behavior. Plugin contributions can short-circuit (custom block-type viewers) or replace wholesale. Same `combineLastContributionResult` pattern as variants.
-2. **`urlSerializerFacet`** — `parse(hash) → AppState`, `build(state) → hash`. Pluggable URL format.
-3. **`panelHistoryFacet`** — alternative history models (tree-shaped, named bookmarks, time-travel debugger).
+The two verb seams are layered: a gesture is first resolved to a
+`NavigateInput` by the **intent policy** (`navigationIntentVerb`), then applied
+by the **execution** verb (`navigationVerb`). Customize *where a gesture lands*
+at the policy; *what happens when we go there* at the execution verb.
 
-The current navigation code grew before facet was the dominant idiom; once step 4 stabilizes the data flow, these retrofits are mostly mechanical (factor out, expose via runtime).
+1. **`navigationVerb`** *(DONE — `src/utils/navigation.ts`)* — the navigation
+   **execution** seam, built on `defineVerbFacet`. `navigate(repo, input)`
+   applies the (already-resolved) `NavigateInput` through it and returns where it
+   landed (`{panelId, blockId} | null`; never rejects). Plugins `impl` (replace
+   navigation wholesale — `req => myNav(req)`), `decorator` (rewrite via
+   `next({...req, input})` — e.g. redirect by `input.origin` / `input.target` /
+   the target block's type — or veto by returning `null` without calling
+   `next`), or `before`/`after` (observe — analytics, history, confirm-before-
+   leave). Effectful verb on the default `onError: 'rethrow'`, so a throwing
+   override fails that one navigation (logged) without re-running the default —
+   no double-navigation. Covers all user-initiated intent (clicks, zoom,
+   daily-notes, commands), which now all funnel through `navigate()`. Every
+   `NavigateInput` can carry an **`origin`** tag (gesture navs get it from the
+   policy = the surface role; programmatic callers set it — `'zoom'`,
+   `'daily-note'`, `'open-in-panel'`), so a decorator can redirect/observe a
+   *specific source*, not just a resolved target.
+   - **Not** covered, deliberately: URL-driven restoration (the inverse
+     projection URL → rows — routing it through `navigate()`, which goes rows →
+     URL, would re-push history and loop) and per-panel back/forward (history
+     traversal restoring a snapshot, not a "go to block" intent). Both flow
+     through `writePanelContent` — except URL restoration that *inserts* new
+     panels, whose initial content is set by `createPanelRowInTx` (see below).
+2. **`writePanelContent(tx, panelId, blockId, state?)`** *(DONE —
+   `src/utils/panelHistory.ts`)* — the single choke for content *swaps on an
+   existing panel row* (in-panel navigate, back/forward, URL reconcile, merge
+   retarget). A *newly created* row's initial content is set separately by
+   `createPanelRowInTx` (new-panel / sidebar-stack / URL-restore inserts /
+   cold-start first paint). Not yet a facet; a complete "track every view"
+   observe seam would hook both (or route `createPanelRowInTx` through
+   `writePanelContent`).
+3. **`navigationIntentVerb`** *(DONE — `src/utils/navigation.ts`)* — the gesture
+   → intent **policy**, a pure `defineVerbFacet` (`onError: 'fallback'`):
+   `(gesture: {role, modifiers, panelId?, blockId, workspaceId, viewport}) →
+   NavigateInput | null` (`null` = native passthrough / veto). The default impl
+   (`defaultNavigationIntent`, exported & composable) reproduces the canonical
+   modifier matrix + follow-link/navigator role + viewport rule exactly. Plugins
+   `decorator`/`impl` to remap modifiers (the alt-click-for-main choice above is
+   provisional), override the role, or **redirect where global commands land**
+   (active vs main — the original motivating example, gap N5). `useBlockOpener`,
+   `navigateFromGlobalCommand`, and `navigateFromGesture` all resolve through it
+   before calling `navigate()`. The native-passthrough decision (cmd/ctrl/middle
+   → browser) stays a synchronous, non-overridable carve-out in the click
+   handlers, since `preventDefault` must run before the async policy.
+   - The **read** side agrees: `resolveGlobalCommandTarget` (the anchor for
+     daily-notes prev/next) resolves its target panel through the same policy +
+     shared `resolveDestination` (probing with a neutral navigator gesture), and
+     returns `{blockId, workspaceId}` — so a redirect of where global commands
+     land (panel *or* workspace) feeds both the anchor and the destination.
+     quick-find's plain-selection `jump` also routes through the policy (via
+     `navigateFromGlobalCommand`), so it's retargetable.
+   - Deliberately *not* policy-routed: quick-find's own *modifier → its
+     three-way `jump`/`stack`/`new-panel` enum* (a bespoke vocabulary +
+     keyboard convention, distinct from `NavigateInput`), and its `stack` /
+     `new-panel` dispatch (explicit panel creation, redirectable at the
+     execution verb by target/origin). The old `handleBlockLinkClick` pure
+     helper was removed (vestigial — no production caller; `useBlockOpener` is
+     the live path and its matrix is covered by `defaultNavigationIntent`).
+4. **`urlSerializerFacet`** *(TODO)* — `parse(hash) → AppState`,
+   `build(state) → hash`. Pluggable URL format.
+5. **`panelHistoryFacet`** *(TODO)* — alternative history models (tree-shaped,
+   named bookmarks, time-travel debugger). The Replace seam over the in-memory
+   model in `panelHistory.ts`, and where per-panel back/forward would become
+   interceptable rather than cramming traversal into `navigate()`.
+
+Optional: `viewTransitionFacet` to override the hardcoded `withMoveTransition`
+crossfade in the swap path.
 
 ## Constraints / non-goals
 

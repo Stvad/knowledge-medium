@@ -63,7 +63,6 @@ import {
   navigate,
   navigateFromGlobalCommand,
 } from '@/utils/navigation.js'
-import { navigateInPanel } from '@/utils/panelHistory.js'
 import {
   deletePanelRow,
   panelBlockId,
@@ -246,8 +245,12 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     description: 'Zoom into focused block',
     icon: ZoomIn,
     handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
-      // navigateInPanel wraps in withMoveTransition internally.
-      await navigateInPanel(uiStateBlock, block.id)
+      // Through navigate() so zoom is observable/interceptable via
+      // navigationVerb; target 'panel' swaps this panel's content (the swap
+      // still wraps in withMoveTransition inside navigateInPanel) and marks this
+      // panel active (it's the one being interacted with) — a benign addition
+      // over the old direct navigateInPanel.
+      await navigate(repo, {target: 'panel', panelId: uiStateBlock.id, blockId: block.id, origin: 'zoom'})
     },
     defaultBinding: {
       keys: '$mod+.',
@@ -265,7 +268,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       const parent = repo.block(topLevelBlockId).parent
       if (!parent) return
 
-      await navigateInPanel(uiStateBlock, parent.id)
+      await navigate(repo, {target: 'panel', panelId: uiStateBlock.id, blockId: parent.id, origin: 'zoom'})
     },
     defaultBinding: {
       keys: '$mod+,',
@@ -281,6 +284,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         blockId: block.id,
         target: 'new-panel',
         sourcePanelId: uiStateBlock.id,
+        origin: 'open-in-panel',
       })
     },
     defaultBinding: {
