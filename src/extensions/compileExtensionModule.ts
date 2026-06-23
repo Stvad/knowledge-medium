@@ -10,7 +10,9 @@ import {
 // `compilerVersion`, NOT folded into the source hash — a compiler bump
 // must invalidate cached *output* without looking like a *source*
 // change (which Phase 2 / #67 would treat as needing re-approval).
-const COMPILER_VERSION = '1'
+// '2': transpile now emits an inline source map + a stable `//# sourceURL`
+// (debuggable extensions). Bumping regenerates older map-less cached output.
+const COMPILER_VERSION = '2'
 
 export type ExtensionModule = Record<string, unknown>
 
@@ -73,7 +75,10 @@ const defaultCache = createCompileCache()
 // ──────────────────────────────────────────────────────────────────────
 
 export type CompileImpl = (content: string) => Promise<ExtensionModule>
-export type TranspileImpl = (content: string) => Promise<string>
+// `blockId` is threaded so the transpiled output can carry a stable,
+// per-block `//# sourceURL` (readable name in DevTools / stack traces).
+// Optional so existing 1-arg test overrides stay assignable.
+export type TranspileImpl = (content: string, blockId?: string) => Promise<string>
 export type InstantiateImpl = (compiled: string) => Promise<ExtensionModule>
 
 let compileImplOverride: CompileImpl | null = null
@@ -125,15 +130,42 @@ export async function hashExtensionSource(content: string): Promise<string> {
 /** Transpile TS/JSX source to JS. Babel is loaded with a dynamic
  *  `import()` so `@babel/standalone` (~0.85 MB gz) leaves the eager
  *  startup preload set (#167) — it's fetched/evaluated only here, on a
- *  genuine compile-cache miss. */
-async function defaultTranspileViaBabel(content: string): Promise<string> {
+ *  genuine compile-cache miss.
+ *
+ *  Two debuggability additions (COMPILER_VERSION 2):
+ *   - `sourceMaps: 'inline'` + `sourceFileName` embeds a base64 source map
+ *     (with the original TSX in `sourcesContent`) so DevTools maps stack
+ *     frames / breakpoints back to the author's source, not the transpiled
+ *     JS.
+ *   - a trailing `//# sourceURL` names the in-memory script. The blob URL is
+ *     revoked the instant the import resolves, so without this a throw shows
+ *     `blob:<uuid>` with no name; the sourceURL survives revocation and, when
+ *     `blockId` is known, identifies *which* extension a frame came from.
+ *  Note: the L1 cache is keyed by content hash, so two blocks with identical
+ *  source share one compiled string — the sourceURL then carries whichever
+ *  block compiled first. Cosmetic only (identical-source extensions are rare;
+ *  they already share one module instance). */
+async function defaultTranspileViaBabel(content: string, blockId?: string): Promise<string> {
   const Babel = await import('@babel/standalone')
+  // SECURITY: block ids are NOT trusted input — `tx.create` accepts a
+  // caller-supplied id and ids also arrive via sync/import, all stored as
+  // plain text. A raw id with a line terminator (\n, \r, U+2028, U+2029) would
+  // break out of the `//# sourceURL` line comment appended below and inject
+  // module-level JS that runs at instantiate — code that was never in the
+  // approved `content`/`sourceHash`, defeating the #67 trust gate. Restrict the
+  // id to a safe charset before it touches emitted JS. The sourceURL is a
+  // cosmetic DevTools label, so aggressive sanitization costs nothing
+  // (legitimate nanoid/uuid ids are already within this set).
+  const safeId = (blockId ?? 'extension-block').replace(/[^A-Za-z0-9._-]/g, '_')
+  const sourceName = `${safeId}.tsx`
   const transpiled = Babel.transform(content, {
-    filename: 'extension-block.tsx',
+    filename: sourceName,
+    sourceFileName: sourceName,
+    sourceMaps: 'inline',
     presets: ['react', 'typescript'],
   }).code
   if (!transpiled) throw new Error('Transpiled extension code is empty')
-  return transpiled
+  return `${transpiled}\n//# sourceURL=km-extension://${sourceName}`
 }
 
 /** Build an ESM module from already-transpiled JS via a blob URL. This
@@ -317,7 +349,7 @@ export async function approveExtension(
   // there's no real transpile; store the source as a placeholder the
   // override-aware load path ignores. A transpile failure (bad syntax)
   // propagates — there's nothing to pin.
-  const compiled = compileImplOverride ? source : await transpileImpl(source)
+  const compiled = compileImplOverride ? source : await transpileImpl(source, blockId)
 
   // Throwing write (NOT persistApproval's swallow): a failed persist must
   // fail the approve so the caller doesn't proceed to set intent. Written
@@ -356,7 +388,7 @@ export async function loadApprovedExtension(
   const module = await resolveCachedModule(cache, approval.sourceHash, blockId, async () => {
     if (compileImplOverride) return compileImplOverride(approval.approvedSource)
     if (approval.compilerVersion !== COMPILER_VERSION) {
-      const compiled = await transpileImpl(approval.approvedSource)
+      const compiled = await transpileImpl(approval.approvedSource, blockId)
       // Deliberate (#67): this is the ONLY write on the load path, and it
       // re-pins the SAME approved `sourceHash` (only the compiled output +
       // compilerVersion change). Loading must never establish trust for a
@@ -384,7 +416,7 @@ export async function compileForVerification(
 ): Promise<CompileResult> {
   const contentHash = await hashExtensionSource(content)
   const module = await resolveCachedModule(cache, contentHash, blockId, () =>
-    compileImplOverride ? compileImplOverride(content) : transpileImpl(content).then(instantiateImpl),
+    compileImplOverride ? compileImplOverride(content) : transpileImpl(content, blockId).then(instantiateImpl),
   )
   return {module, contentHash}
 }
