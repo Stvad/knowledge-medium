@@ -371,10 +371,12 @@ whichever bytes it likes) can return a stale blob that decrypts cleanly and the 
 bytes lane has no <code>updated_at</code>/monotonicity channel the text path gets from PowerSync. The
 fix is already in hand: the asset block stores <code>hash = sha256(plaintext)</code> in its
 (encrypted) <code>properties_json</code>; the read path <strong>must verify the decrypted bytes
-against that hash before caching/serving</strong>, and reject on mismatch. Because the SW can't read
-the encrypted block state, it gets the expected hash from the <strong>SW-readable metadata mirror</strong>
-(§7.1.1) — <em>not</em> from the request (an <code>&lt;img src&gt;</code> can't carry custom headers, and
-a <code>?h=</code> query param would leak the plaintext SHA-256, §7.1.1). It's a positive check that can
+against that hash before caching/serving</strong>, and reject on mismatch. In the chosen
+<strong>in-thread</strong> path (§7.3) the resolver already holds the decrypted block, so the expected
+hash is just <code>block.properties.hash</code> — no extra plumbing. (The rejected SW path couldn't read
+the encrypted block state, so it would have needed an <strong>SW-readable metadata mirror</strong>,
+§7.1.1 — <em>not</em> a request param: an <code>&lt;img src&gt;</code> can't carry custom headers, and a
+<code>?h=</code> query param would leak the plaintext SHA-256.) Either way it's a positive check that can
 only fail closed, never downgrade.</div>
 
 <div class="warn">
@@ -397,9 +399,13 @@ no-overwrite precondition (reject if the object already exists). The old object 
   An E2EE-pinned workspace requires the magic and treats its absence as tampering; only a
   <strong>plaintext-pinned</strong> workspace passes bytes through. A workspace with <em>no</em> pin
   (never validated, or evicted) is <em>not</em> plaintext — it is the resolver's
-  <code>defer</code>/encryption-uncertain state (<code>src/sync/keys/resolver.ts</code>), so the SW
-  <strong>fails closed</strong> (placeholder), never passthrough — otherwise an encrypted workspace
-  with a missing local pin would serve attacker-controlled plaintext.</p>
+  <code>defer</code>/encryption-uncertain state (<code>src/sync/keys/resolver.ts</code>), so the read
+  path <strong>fails closed</strong> (placeholder), never passthrough — otherwise an encrypted workspace
+  with a missing local pin would serve attacker-controlled plaintext. The decode decision is therefore
+  <em>three-valued</em> — decrypt (E2EE + WK) / passthrough (plaintext-pinned) / fail-closed (E2EE
+  without WK, or no/uncertain pin) — and the in-thread resolver must drive it from that three-valued
+  materializability (<code>getMaterializability</code>), <em>not</em> the two-valued
+  <code>SyncMode</code>/<code>getMode</code> the upload direction uses (§7.3).</p>
 
 
 <h2 id="bytepath">6. The byte path, end to end</h2>
@@ -537,6 +543,46 @@ keeps that analysis, but the verdict is in-thread — see §7.3 / §18.)
     already-dispatched request — an uncontrolled page never reaches it.</li>
 </ul>
 
+<p>The thing that actually constrains the SW approach is not decryption — it's two coordination
+  problems, and they are the real work of this design:</p>
+
+<h3>7.1 Coordination problem A — fetching private bytes needs the session</h3>
+
+<p>Storage objects are RLS-protected; reads need a bearer token, which lives in the app's supabase-js
+  session in <code>localStorage</code> — which the SW cannot read. Resolution: each app client
+  <code>postMessage</code>s <code>{ userId, accessToken }</code> to the SW on
+  <code>onAuthStateChange</code> / token refresh, the SW records it <strong>keyed by the sender's
+  <code>client.id</code></strong> (not a single global slot — see the cross-account defense above),
+  and on a fetch the SW looks up the session for that request's <code>event.clientId</code> and issues
+  <code>GET /storage/v1/object/attachments/&lt;ws&gt;/&lt;id&gt;</code> with
+  <code>Authorization: Bearer</code>. This also <strong>eliminates per-object signed URLs</strong> for
+  the in-app case (signed URLs are only needed for the logged-out public case, §13). Signed URLs would
+  not be cheaper anyway: minting one needs the user's JWT (which <em>is</em> this handshake), or the app
+  must push per-object expiring URLs to the SW — heavier than one hourly-refreshed bearer token. The
+  token expires hourly; the app re-posts on refresh.</p>
+
+<div class="warn">
+<strong>This auth scheme covers controlled-tab <em>subresource</em> fetches only — not raw
+navigations.</strong> A <code>&lt;img&gt;</code>/<code>&lt;video&gt;</code> subresource carries the
+originating tab's <code>event.clientId</code>, so the per-user token lookup works. A <em>navigation</em>
+to an asset URL (new-tab open, or a download flow that navigates) may have <em>no</em> usable
+<code>clientId</code> (a fresh top-level navigation has only a not-yet-messaged
+<code>resultingClientId</code>), so there's no per-user token to attribute — and falling back to a
+global token would break the multi-account isolation this whole section preserves. So <strong>direct
+asset navigations are not a supported auth path</strong>: "download" / "open original" is an
+<em>app-mediated</em> action (the app resolves the bytes through the same path and triggers the
+download from an in-memory blob), never a raw navigation to <code>${BASE_URL}asset/…</code>. The route
+still sits ahead of the navigation branch (§11) so such a request can't return the SPA shell — but for
+a clientId-less navigation it returns a <em>placeholder/redirect into the app</em>, not bytes and not
+the shell. (If first-class direct navigations are ever wanted, they need an opaque app-minted
+capability token in the URL — deferred; the public-share path §13 is the related case.)</div>
+
+<p>Persistence across SW respawn is deliberately minimal: the per-<code>clientId</code> token store is
+  in-memory (SW-lifetime), so a respawn simply waits for the app to re-post on the next
+  <code>onAuthStateChange</code> / refresh. A bearer token is never written to durable storage — so
+  there is nothing for the coarse clear (§7.2) to miss — and the SW drops a client's entry when that
+  client goes away.</p>
+
 <h3>7.1.1 The SW needs three things the renderer/app hold — make them SW-readable</h3>
 
 <p>The URL carries only <code>workspace_id</code> and <code>asset_block_id</code>. The decrypt path
@@ -671,46 +717,6 @@ closes the plaintext-removal window. (E2EE leans on the same shape, with key-abs
 signal.)
 </div>
 
-<p>The thing that actually constrains the SW approach is not decryption — it's two coordination
-  problems, and they are the real work of this design:</p>
-
-<h3>7.1 Coordination problem A — fetching private bytes needs the session</h3>
-
-<p>Storage objects are RLS-protected; reads need a bearer token, which lives in the app's supabase-js
-  session in <code>localStorage</code> — which the SW cannot read. Resolution: each app client
-  <code>postMessage</code>s <code>{ userId, accessToken }</code> to the SW on
-  <code>onAuthStateChange</code> / token refresh, the SW records it <strong>keyed by the sender's
-  <code>client.id</code></strong> (not a single global slot — see the cross-account defense above),
-  and on a fetch the SW looks up the session for that request's <code>event.clientId</code> and issues
-  <code>GET /storage/v1/object/attachments/&lt;ws&gt;/&lt;id&gt;</code> with
-  <code>Authorization: Bearer</code>. This also <strong>eliminates per-object signed URLs</strong> for
-  the in-app case (signed URLs are only needed for the logged-out public case, §13). Signed URLs would
-  not be cheaper anyway: minting one needs the user's JWT (which <em>is</em> this handshake), or the app
-  must push per-object expiring URLs to the SW — heavier than one hourly-refreshed bearer token. The
-  token expires hourly; the app re-posts on refresh.</p>
-
-<div class="warn">
-<strong>This auth scheme covers controlled-tab <em>subresource</em> fetches only — not raw
-navigations.</strong> A <code>&lt;img&gt;</code>/<code>&lt;video&gt;</code> subresource carries the
-originating tab's <code>event.clientId</code>, so the per-user token lookup works. A <em>navigation</em>
-to an asset URL (new-tab open, or a download flow that navigates) may have <em>no</em> usable
-<code>clientId</code> (a fresh top-level navigation has only a not-yet-messaged
-<code>resultingClientId</code>), so there's no per-user token to attribute — and falling back to a
-global token would break the multi-account isolation this whole section preserves. So <strong>direct
-asset navigations are not a supported auth path</strong>: "download" / "open original" is an
-<em>app-mediated</em> action (the app resolves the bytes through the same path and triggers the
-download from an in-memory blob), never a raw navigation to <code>${BASE_URL}asset/…</code>. The route
-still sits ahead of the navigation branch (§11) so such a request can't return the SPA shell — but for
-a clientId-less navigation it returns a <em>placeholder/redirect into the app</em>, not bytes and not
-the shell. (If first-class direct navigations are ever wanted, they need an opaque app-minted
-capability token in the URL — deferred; the public-share path §13 is the related case.)</div>
-
-<p>Persistence across SW respawn is deliberately minimal: the per-<code>clientId</code> token store is
-  in-memory (SW-lifetime), so a respawn simply waits for the app to re-post on the next
-  <code>onAuthStateChange</code> / refresh. A bearer token is never written to durable storage — so
-  there is nothing for the coarse clear (§7.2) to miss — and the SW drops a client's entry when that
-  client goes away.</p>
-
 <h3>7.2 Destroying local data is coarse and system-level — not an in-app wipe</h3>
 
 <div class="decision">
@@ -781,6 +787,32 @@ boundary-agnostic except where they name the SW.
   (<code>createObjectURL</code>/<code>revokeObjectURL</code>) — two local, well-understood concerns. Note
   OPFS is <em>not</em> URL-addressable, so <code>&lt;img&gt;</code> needs an object URL either way; a
   path-like stable URL is the <em>only</em> thing the SW route would have added.</p>
+
+<p><strong>Three properties the in-thread path must carry explicitly.</strong> They held in the SW
+  analysis above, but the chosen path is where they ship, so they are restated here rather than left in
+  the rejected framing:</p>
+<ul>
+  <li><strong>Fail-closed decode, not two-way.</strong> The resolver decides per a <em>three-valued</em>
+    materializability — decrypt (E2EE + WK present) / passthrough (plaintext-pinned) /
+    <strong>fail-closed placeholder</strong> (E2EE without WK, or an unpinned / <code>defer</code>
+    workspace) — read from <code>getMaterializability</code> (<code>src/sync/keys/resolver.ts</code>),
+    <em>never</em> the two-valued <code>SyncMode</code>/<code>getMode</code> the upload path uses.
+    Driving the read direction off <code>getMode</code> (which collapses unpinned → <code>none</code>)
+    would pass attacker-controlled bytes through to <code>&lt;img&gt;</code> for an E2EE workspace whose
+    pin was evicted — the exact downgrade §5.1 / e2ee §6 rule&nbsp;2 forbid.</li>
+  <li><strong>Hash mismatch is hard-fail.</strong> On a mismatch against
+    <code>block.properties.hash</code> (§5.1) the resolver <em>discards</em> the bytes — never writes
+    them to the OPFS display cache — and renders the broken-asset placeholder; unverified bytes are
+    never served or cached.</li>
+  <li><strong>Cached bytes are not an independent authority.</strong> The OPFS display cache is
+    namespaced by <code>user_id</code> (account isolation); on workspace leave/revoke its prefix is
+    purged (primary, but can race / miss); and — the backstop that actually closes the
+    <em>plaintext</em>-removal window — a cached entry past a short freshness TTL is re-validated by
+    re-issuing the RLS-gated Storage <code>GET</code> (403 for a removed member) before serving. For
+    E2EE, WK-absence is treated as locked (evict rather than serve). These are the same guarantees the
+    rejected SW path stated for the Cache API (the §7.1.1 cache-auth boxes), now for the in-thread OPFS
+    cache.</li>
+</ul>
 
 <div class="decision">
 <strong>Why in-thread wins the tally.</strong> The SW concentrates ~5 distinct coordination mechanisms
@@ -898,7 +930,10 @@ investigation).
   <li><strong>Destroying local data:</strong> the replica, display cache, and §9 byte-replication store
     are ordinary local storage, removed wholesale by the coarse clear-all (§7.2) — no per-store wipe
     participation. <em>Authorization</em> is separate: on per-workspace revoke/leave, purge that
-    workspace's cache prefix (a serving-access control, not destruction).</li>
+    workspace's cache prefix (a serving-access control, not destruction) — and because a purge can race
+    or miss, bound cached-entry authority with a short freshness TTL after which the in-thread resolver
+    re-validates via the RLS-gated Storage <code>GET</code> (§7.3); for E2EE, WK-absence counts as
+    locked. The TTL revalidation, not the purge, is what closes the plaintext-removal window.</li>
   <li><strong>Optimistic local-first write:</strong> on paste, the encoded bytes are written straight to
     the <em>durable replica</em> (the §9 up-lane's source, never the evictable display cache) and the
     display cache is warmed. The image renders immediately from local bytes; the upload drains in the
@@ -1177,11 +1212,12 @@ the natural block-id addressing, not a requirement.
   <li><strong><code>MediaBlockRenderer</code></strong> via <code>blockRenderersFacet</code>, with
     <code>canRender = ({block}) =&gt; block.hasType('media')</code> and a
     <code>priority</code> above the default. Branches on <code>mime</code>: image → the existing
-    <code>MarkdownImage</code> lightbox fed the virtual URL; later, PDF / audio / video / generic
+    <code>MarkdownImage</code> lightbox fed the object URL the in-thread resolver produces (§7.3); later, PDF / audio / video / generic
     file-chip.</li>
   <li><strong>Markdown <code>img</code> override</strong> via <code>markdownExtensionsFacet</code>
     (alongside <code>defaultMarkdownExtension.ts</code>) for any inline image whose <code>src</code>
-    is a virtual asset URL — resolve and delegate to the lightbox.</li>
+    is an asset reference (an app-internal sentinel, not an SW-intercepted URL) — route it through the
+    in-thread resolver (§7.3) to an object URL and delegate to the lightbox.</li>
   <li><strong>Capture surfaces:</strong> a CodeMirror <code>domEventHandlers</code> extension via
     <code>codeMirrorExtensionsFacet</code> intercepting <code>paste</code> / <code>drop</code> with
     <code>clipboardData.files</code> / <code>dataTransfer.files</code>; a block-shell paste/drop arm
@@ -1252,23 +1288,6 @@ handle itself can't sign) so it's workspace-local and reveals nothing to the ser
 random ids + tolerate duplicates.
 </div>
 
-<div class="info">
-<strong>SW route ordering — the asset route must be FIRST.</strong> The existing
-<code>public/sw.js</code> fetch handler matches in order: <strong>(1) navigations</strong>
-(<code>request.mode === 'navigate'</code> <em>or</em> <code>Accept: text/html</code>) →
-<code>shellNetworkFirst</code> (returns the SPA shell), then <strong>(2) <code>isCacheableAsset</code></strong>
-(an <code>&lt;img&gt;</code> has destination <code>'image'</code>) → <code>assetCacheFirst</code>. The
-new <code>${BASE_URL}asset/&lt;ws&gt;/&lt;id&gt;</code> route (base-prefixed, §7) must be matched
-<strong>ahead of BOTH</strong> — not just the image-cache branch. An inline <code>&lt;img&gt;</code>
-would otherwise hit the image-cache branch; a navigation / <code>Accept: text/html</code> request
-(new-tab open) would otherwise hit the navigation branch and get the SPA shell. Put the
-<code>/asset/</code> match before the navigation check at the top of the <code>fetch</code> listener.
-What it returns differs by request: a <strong>subresource fetch with a usable
-<code>clientId</code></strong> → the (auth'd, decrypted) bytes; a <strong>clientId-less
-navigation</strong> → a <em>placeholder / redirect into the app</em> (NOT bytes — it can't be
-authorized — and NOT the SPA shell). Direct asset navigations and downloads are app-mediated, not raw
-navigations to the asset URL (§7.1).</div>
-
 <h2 id="sharing">12. Subtree sharing (deferred — not a design driver)</h2>
 
 <p>Subtree sharing (<a href="./shares-and-api-tokens.html">shares-and-api-tokens.html</a>) is
@@ -1338,15 +1357,15 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
 <pre><code>interface BlobStore {
   // No `hash` parameter: this seam drains to the server (the §10.1 Edge Function), and the
   // plaintext sha256 must never reach the origin — it is the §10 content oracle. The hash lives
-  // ONLY in client-local / SW-readable paths (cache key §8, replay check §5.1, dedup §11),
-  // sourced from the encrypted properties_json + the SW metadata mirror (§7.1.1), never the wire.
-  // idempotencyToken (§9/§10.1) IS passed: it is persisted in the queue record so a post-reload
-  // retry re-presents it; same token on an existing object → success, not failure.
+  // ONLY in client-local paths (cache key §8, replay check §5.1, dedup §11),
+  // sourced from the encrypted properties_json (in-thread, the resolver holds the decrypted
+  // block), never the wire. idempotencyToken (§9/§10.1) IS passed: it is persisted in the queue
+  // record so a post-reload retry re-presents it; same token on an existing object → success.
   put(workspaceId, assetBlockId, idempotencyToken, bytes): Promise&lt;void&gt;
-  // The virtual URL is CLEAN — ${BASE_URL}asset/<ws>/<id>, no hash on the wire.
-  // The expected hash (cache key §8 + replay check §5.1) comes from the SW-readable
-  // metadata mirror (§7.1.1), never a URL param — a ?h= would leak the plaintext
-  // sha256 to the origin on a SW-interception miss (the §10 content oracle).
+  // The fetch URL (RLS-gated Storage GET target) is CLEAN — no hash on the wire.
+  // The expected hash (cache key §8 + replay check §5.1) comes from block.properties.hash
+  // (the in-thread resolver holds the decrypted block), never a URL param — a ?h= would
+  // leak the plaintext sha256 to the origin (the §10 content oracle).
   url(workspaceId, assetBlockId): string
   delete(workspaceId, assetBlockId): Promise&lt;void&gt;
 }</code></pre>
@@ -1373,7 +1392,8 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
       <code>BlobStore</code> over Supabase Storage. Post-create RLS audit per the Supabase rule.</td></tr>
 <tr><td>3 — cache + resolver (in-thread)</td>
     <td>An in-thread asset resolver: fetch ciphertext (RLS-gated Storage <code>GET</code> with the app's
-      session) → decrypt-or-passthrough per the synchronously-read mode pin → verify against the block's
+      session) → decrypt / passthrough / fail-closed per the synchronously-read three-valued
+      materializability (not two-valued <code>getMode</code>; §7.3) → verify against the block's
       <code>hash</code> (§5.1) → write plaintext to the OPFS byte cache → hand <code>&lt;img&gt;</code> an
       object URL (revoke on unmount). No SW route, token handshake, IDB hash mirror, or
       per-<code>clientId</code> session — those were the rejected SW path (§7.1–§7.2 / §7.3). Destruction
@@ -1398,13 +1418,11 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
 
 <h2 id="open">16. Open questions</h2>
 <ul>
-  <li><strong>Cache backing if SW decryption is adopted:</strong> Cache API only, or Cache API +
-    OPFS for an explicit LRU index? Cache API alone is simpler; OPFS gives finer eviction control.</li>
-  <li><strong>Multi-account profile (decided shape, needs care):</strong> the SW session map is keyed
-    by <code>event.clientId</code> → that tab's user, and the cache by <code>user_id</code> (§7), so a
-    concurrent second account neither reads the wrong cache nor borrows the wrong bearer token. The
-    residual work is making this correct under account <em>switch</em> — keep the per-user keying the
-    keyStore already uses, so account A's session / cache can never serve account B.</li>
+  <li><strong>Multi-account profile (decided shape, needs care):</strong> in-thread, each tab already
+    owns its own Supabase session, so there is no shared-SW session slot to mis-key. The residual work is
+    scoping the OPFS display cache by <code>user_id</code> and preserving the keyStore's
+    <code>(user_id, workspace_id)</code> keying under an account <em>switch</em>, so account A's cache /
+    keys can never serve account B (§7.3).</li>
   <li><strong>Max inline size + large-media story:</strong> a v1 cap (e.g. 10&nbsp;MB) with a clear
     error, deferring resumable/tus upload to vNext. Where exactly is the cap enforced?</li>
   <li><strong>Asset block deletion → byte GC, and the two orphan directions:</strong> deleting an asset
@@ -1417,8 +1435,6 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
     never materialized within a grace window — e.g. an upload that never completed before the origin
     device was cleared / lost / reinstalled, §9). The block→object grace window must be generous enough
     not to reap a block whose origin device is merely offline and still intends to upload.</li>
-  <li><strong>Cache backing:</strong> Cache API only, or Cache API + an IndexedDB LRU index for finer
-    eviction? Cache API alone is simpler; the durable upload-queue store (§9) is separate from either.</li>
 </ul>
 
 <h2 id="tradeoffs">17. Tradeoffs we're accepting</h2>
