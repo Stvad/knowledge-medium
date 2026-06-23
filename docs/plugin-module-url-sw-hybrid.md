@@ -144,7 +144,9 @@ The cleanest shape is **not** "producer writes a module Cache and the SW serves 
   §4 hard-reload claim; it's the linchpin). Define the failure outcomes so a bad produce degrades to a per-block
   shell, never an app throw: **no client** (`clients.get` → `undefined`, client closed) → `503`; **producer
   throws** (syntax error) or **port timeout** → `500`/`503`; **unapproved** never reaches here (the loader doesn't
-  mint the URL — fail-closed). Each surfaces as an `import()` rejection caught per-block (`dynamicExtensions.ts:211-229`).
+  mint the URL — fail-closed). Each surfaces as an `import()` rejection caught per-block (`dynamicExtensions.ts:211-229`)
+  — though **verify** that a non-OK `Response` (a `500`/`503`, vs. a `Response.error()`/network failure) reliably
+  rejects a module `import()` across target engines (same empirical-check class as `event.clientId` above).
   `/module/` bytes are trusted via the in-thread approval gate, not SRI.
 - **Main thread**: a `navigator.serviceWorker` message handler that produces the **bytes** — a *new*
   approval-gated helper, **not** `loadApprovedExtension` (`compileExtensionModule.ts:382`), which *instantiates* a
@@ -162,10 +164,11 @@ URL doesn't exist yet while producing).
 **No hard deadlock, but state why precisely.** The page-`import()`-vs-SW leg is safe (the page's `import()` is an
 async pending promise, not a blocked event loop; the SW is a separate thread). The subtler leg: on a cold/bump
 produce the helper does `import('@babel/standalone')` (`compileExtensionModule.ts:149`) — a `script` fetch that
-itself routes through the SW's `isCacheableAsset` branch. That resolves only because Babel is a **cache hit**
-(precached), not a second produce round-trip — so the no-deadlock claim rests on *that*, and the `respondWith`
-promise must carry a **bounded timeout** so a stuck produce fails the import (→ shell) rather than hanging it
-forever.
+itself routes through the SW's `isCacheableAsset` branch. That's safe regardless of cache state: a **hit** serves
+Babel from cache, and even a **miss** falls through to a plain network fetch (`assetCacheFirst`, `sw.js:242-245`),
+*not* a second produce round-trip — so the two legs never wait on each other. The remaining requirement is just
+liveness: the `respondWith` promise must carry a **bounded timeout** so a stuck produce (e.g. an offline cold
+compile with Babel absent) fails the import (→ shell) rather than hanging it forever.
 
 **Offline cold-compile depends on Babel being precached** (`@babel/standalone/babel.js` in `PRECACHE_LAZY_ASSETS`,
 injected by `scripts/inject-sw-build-id.mjs`). This is in tension with §4.2's "slim the `install` `waitUntil`":
