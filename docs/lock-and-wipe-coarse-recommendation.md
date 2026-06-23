@@ -1,4 +1,8 @@
-# Lock & Wipe: should the selective flow become a coarse `destroyAllLocalData()`?
+# Lock & Wipe: selective flow, coarse `destroyAllLocalData()`, or delegate to the platform?
+
+> **Answer: delegate to the platform (§0).** Neither the selective flow nor a hand-rolled coarse
+> wipe is worth building; the browser's own origin wipe is more complete and avoids the §3
+> mechanics. Build only a thin panic action in front of it.
 
 > **Status: current** (written 2026-06-22) · recommendation/design — *not yet implemented*.
 > Last verified against code: 2026-06-22.
@@ -14,45 +18,125 @@ scopes it. Grounded against `src/sync/keys/flows/lockAndWipe.ts`, `keyStore.ts`,
 
 > **Update (post-review):** rollout pinning has been **removed** from the codebase
 > (`workspaceAccess.ts`: "no server-trusting rollout seed anymore"), and product accepts that a
-> user re-confirms each workspace's mode after a wipe. That deletes the only security reason for
-> preserving the mode pins, so the recommendation is **fully coarse — no preserve-allowlist.** A
-> second adversarial-review pass then established that the *destruction mechanics* are not the
-> free simplification an earlier draft implied (service-worker survival, a cross-tab OPFS race,
-> and a real boot gate); §3 / §5 now cost those honestly.
+> user re-confirms each workspace's mode after a wipe — so the mode pins carry no security weight
+> and a full nuke is acceptable. A second adversarial-review pass then showed the *destruction
+> mechanics* of a hand-rolled coarse wipe are **not** free (service-worker survival, a cross-tab
+> OPFS race, a real boot gate; §3). **Final decision (supersedes the "build coarse" framing
+> below): don't hand-roll a wipe — delegate to the platform's "clear site data" (§0).** Lock &
+> Wipe becomes a *panic* action that drains unsynced uploads (best-effort) and hands off to the
+> browser's own origin wipe. §1–§5 are retained as the supporting analysis — i.e. *why* a
+> hand-rolled selective/coarse wipe isn't worth building — not as the recommendation.
 
 ## TL;DR
 
-**Recommend: replace the selective flow with a coarse `destroyAllLocalData()` as the single
-"panic / lock this device" action, clearing the entire origin with no carve-out — but on the
-strength of two specific wins, not because the wipe itself is simpler.** The wins are real:
-(1) the *security / selectivity* model collapses — rollout pinning is gone and post-wipe
-re-confirmation is accepted, so the mode pins **and** all per-user scoping can go (§1 / §2b);
-and (2) it subsumes the *storage* of every "Lock & Wipe participant" the media-attachments
-design otherwise wires by hand (§4).
+**Recommend: don't hand-roll a wipe — delegate to the platform's "clear site data" (§0).**
+A full nuke is the accepted behavior (a *panic* option; no selective/per-user preservation is
+needed — §1/§2), and the browser's own origin wipe is *more complete* than anything we can
+write: it runs **outside** the page/service-worker context, so it's structurally immune to the
+three problems that make a hand-rolled `destroyAllLocalData()` costly (the cross-tab OPFS race,
+the surviving service worker, and the pre-render boot gate — §3). Hand-rolling the wipe is, to a
+real degree, fighting the platform.
 
-What it is **not** is a free simplification of the *destruction mechanics*. A coarse,
-profile-wide, logged-out wipe re-shapes the selective flow's per-store wipe wiring into three
-new problems the selective flow avoids or handles better (§3): the open **OPFS** file is still
-un-deletable while any sibling tab holds it — and `clear()` only papers over IndexedDB, not
-OPFS — so it needs an **exclusive barrier over live DB handles** (a single-consumer election
-alone doesn't release a frozen sibling's handle); the **service worker** survives the reload and
-owns/repopulates the Cache API, so the wipe needs an explicit **SW purge handshake** —
-`postMessage`→ack, since bare `unregister()` leaves the active worker controlling the page (a
-page-side `caches.delete` can't reach it); and "run before any handle opens" needs an
-**import-minimal boot entrypoint** (a plain async IIFE doesn't work — ESM evaluates static
-imports first, and `supabase.ts` builds an auth client at module load), not a one-liner. Net: comparable complexity, re-shaped — worth doing for wins (1) and (2) and
-the one-clear-panic-action UX, eyes open.
+So Lock & Wipe becomes a thin **panic action**: confirm → (optionally) drain unsynced uploads →
+hand off to the platform wipe. The hand-off is either:
+- **trigger** it, if we serve the app from a header-capable origin: a `/wipe` route returns
+  `Clear-Site-Data: "*"` and the browser wipes the origin in one click (§0.2); or
+- **guide** the user to the browser's built-in clear-site-data control, when we can't set the
+  header (today, on GitHub Pages — §0.3). There is no JS API to open that UI, so "redirect"
+  means concise, browser-specific instructions.
 
-Keep regardless of coarse-vs-selective: the **best-effort upload drain** before the wipe
-(`flushUploadQueue` for `ps_crud`, plus the media byte-queue drain). Mind its limits (§2a): it
-covers only the *active* account; `flushed:true` can include transactions the server
-**rejected** (moved to `ps_crud_rejected`, count→0), which the wipe then destroys; and a
-**local-only** account has no server copy to re-download — for it a coarse wipe is unrecoverable
-total loss. State these in the confirm dialog rather than implying the drain protects everyone.
+Build the JS enumeration wipe (selective **or** coarse) only as a **last resort** — if you both
+need *save-then-wipe* and can't emit `Clear-Site-Data`. §1–§5 below explain why that bar is
+high.
+
+The one piece worth keeping from the old flow regardless: the **best-effort upload drain**
+(`flushUploadQueue` for `ps_crud`, plus the media byte-queue) — the platform wipe can't save
+unsynced work first. Mind its limits (§2a): it covers only the *active* account; `flushed:true`
+can include transactions the server **rejected** (`ps_crud_rejected`, count→0); and a
+**local-only** account has no server copy, so its wipe is unrecoverable total loss. State these
+in the confirm dialog.
+
+---
+
+## 0. Recommended approach: delegate to the platform
+
+The whole investigation below converges on coarse ≈ "wipe the origin and log out." Once you're
+there, the honest next question is: *why hand-roll that when the platform already does it?*
+
+### 0.1 The platform already does a more complete wipe than we can
+
+Every browser ships an origin wipe ("Clear site data" / "Cookies and site data → Remove"), and
+every OS ships an app-data clear (Android Settings → App → Storage → Clear data; an installed
+PWA exposes its own "Clear data"). These clear **everything** for the origin — localStorage,
+sessionStorage, IndexedDB, the Cache API, service workers, cookies, **and OPFS** — atomically.
+
+Crucially, they run **outside the page and service-worker context**, which is exactly why they
+dodge the three hard problems a hand-rolled wipe hits (§3):
+- no **cross-tab OPFS race** — the browser tears down all the origin's workers/handles itself;
+- no **surviving service worker** — the browser unregisters it; our page-side `caches.delete`
+  can't (§3.3);
+- no **boot-gate / import-order** hazard — there's no page code racing storage it lives inside
+  (§3.4).
+
+So the platform wipe isn't a weaker substitute for `destroyAllLocalData()`; it's a *stronger*
+one. Hand-rolling is fighting the platform.
+
+### 0.2 `Clear-Site-Data` — the one way to *trigger* it from the app, and why it's safe
+
+`Clear-Site-Data` is an HTTP **response** header. When the browser receives a response carrying
+e.g. `Clear-Site-Data: "*"` (or specific buckets `"cache"`, `"cookies"`, `"storage"`,
+`"executionContexts"`), it clears that data **for the responding origin only**.
+
+It is **not** a "wipe the whole device" power, and that scoping is the load-bearing safety
+property:
+- **Same-origin only.** A response from origin X can only clear X's data. A hostile site cannot
+  return a header that wipes another site's data or the whole browser. (`"storage"` is the
+  bucket that takes IndexedDB / Cache / service workers / **OPFS**.)
+- **No new privilege.** An origin can already delete its own storage from its own JavaScript
+  (`localStorage.clear()`, `indexedDB.deleteDatabase()`, …). `Clear-Site-Data` is just an
+  atomic, complete way to clear *its own* footprint — including bits JS can't cleanly reach,
+  like unregistering its own SW. Same power, cleaner mechanism.
+- **HTTPS / secure-context only.**
+
+The trigger pattern: a dedicated path on our origin (e.g. `/wipe`) responds with
+`Clear-Site-Data: "*"`; the app navigates there, the browser wipes the origin, and the response
+redirects to the logged-out app. One click, browser-grade, none of the §3 machinery.
+
+### 0.3 Hosting reality (today) and what to actually build
+
+The catch: the `Clear-Site-Data` header must come from **our** origin's response, and the app
+is served from **GitHub Pages** (static — no custom response headers). A service-worker–
+synthesized `Clear-Site-Data` is unreliable and self-referential (it would unregister the SW
+emitting it), so it's not a dependable substitute. There is also **no JS API** to open the
+browser's clear-data UI from a page.
+
+So:
+- **Now (GitHub Pages):** the in-app action **guides** the user to the browser's clear-site-data
+  control (concise, browser-specific instructions; link to the OS/PWA "Clear data" where
+  applicable). Best-effort, but honest and zero-maintenance.
+- **If/when served from a header-capable origin** (a small edge function, or a CDN/host that
+  allows response headers, or putting GH Pages behind one): add the `/wipe` route from §0.2 for
+  a true one-click trigger. This is the recommended target.
+
+**What to build is therefore thin** and has no destruction code of its own:
+`lock_and_wipe_local_data` → confirm (state the §2a data-loss costs) → *optionally*
+`flushUploadQueue` (the one thing the platform can't do — save unsynced work first) →
+**trigger `Clear-Site-Data` if available, else show the guide.** No OPFS walk, no IDB
+enumeration, no SW handshake, no boot gate — the browser owns all of that.
+
+### 0.4 When (and only when) to hand-roll
+
+Build the JS enumeration wipe (selective or coarse, §3) **only** if both hold: (a) the panic
+action must *save unsynced work and then* destroy local in the same gesture, **and** (b) you
+can't emit `Clear-Site-Data` (stuck on header-less hosting, SW path unverified). Absent both,
+delegate. §1–§5 below are the cost analysis that sets that bar — read them as *why not to
+hand-roll*, not as the build plan.
 
 ---
 
 ## 1. What's selective today, and which reasons still matter
+> *(Background / cost analysis. The recommendation is §0; §1–§5 explain why hand-rolling a
+> selective or coarse wipe isn't worth it versus delegating to the platform.)*
 
 `lockAndWipe` (lock time) + `consumePendingWipe` (next boot) deliberately scope or preserve
 six things. Enumerated, with the reason and whether it still holds:
@@ -357,12 +441,16 @@ boundary concern.
 
 ---
 
-## 5. Recommendation
+## 5. Fallback design: if you must hand-roll the wipe
 
-**Replace the selective flow with a coarse `destroyAllLocalData()` as the single "lock & wipe
-this device" action — clearing the whole origin, no carve-out** — *on the strength of the
-security/selectivity collapse (§1/§2b) and the media-participant subsumption (§4), not on the
-wipe being mechanically simpler (§3).* Concretely:
+> **The recommendation is §0 (delegate to the platform).** This section is retained only for the
+> §0.4 last-resort case — you need *save-then-wipe in one gesture* **and** can't emit
+> `Clear-Site-Data`. If you do delegate, build only the thin §0.3 action (confirm → optional
+> `flushUploadQueue` → trigger-or-guide) and ignore the machinery below.
+
+If you genuinely must hand-roll: a coarse `destroyAllLocalData()` beats the selective flow —
+*on the strength of the security/selectivity collapse (§1/§2b) and the media-participant
+subsumption (§4), not on the wipe being mechanically simpler (§3).* Concretely:
 
 1. **`destroyAllLocalData()` becomes the action** behind `lock_and_wipe_local_data`: drain the
    active account (§2a), arm one profile-wide marker, signal reload + acquire the §3.2 exclusive
