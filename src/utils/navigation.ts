@@ -541,7 +541,10 @@ export const useNavigateFromGlobalCommand = () => {
 /** The probe gesture the *read* path uses to ask the intent policy "which panel
  *  does a navigator command target right now?" — the navigator target is
  *  block-independent in the default policy (and any sane override), so the
- *  blockId is a neutral placeholder; only the resolved `target` is read. */
+ *  blockId is a neutral placeholder; only the resolved `target` is read.
+ *  Expressing a query as a fake gesture is a known smell — tracked in #242 for a
+ *  first-class block-free "navigator target" query if a block-dependent
+ *  navigator policy ever becomes a real use case. */
 const NAVIGATOR_TARGET_PROBE_BLOCK_ID = ''
 
 /** Resolve the live panel a navigator global command currently targets, routed
