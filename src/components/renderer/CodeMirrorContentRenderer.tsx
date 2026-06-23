@@ -56,41 +56,35 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
 
     // Latch + reset the chord intent — the paste event can't see modifiers,
     // so the keydown handler latched it. `preventDefault` MUST run
-    // synchronously, before the async decision resolves, or the browser's
-    // native paste fires first; so the editor always takes over the paste.
+    // synchronously or the browser's native paste fires first; the editor
+    // always takes over the paste.
     const intent = pasteIntentRef.current
     pasteIntentRef.current = 'split'
     const html = e.clipboardData?.getData('text/html') || undefined
     e.preventDefault()
 
-    // Snapshot the caret synchronously, BEFORE the async decision: an
-    // override may key on the paste-time position (e.g. title line 1 vs
-    // body line 2+), and an override may await, during which the caret/doc
-    // can move. This is deliberately a SEPARATE read from the post-decision
-    // `selection` below — that one drives the dispatch against the live doc;
-    // this one is the immutable decision input.
-    const caretView = editorRef.current?.view
-    if (!caretView) return
-    const caretSelection = caretView.state.selection.main
+    // Read the live editor state once: the decision is SYNCHRONOUS (`runSync`),
+    // so it resolves before any `await` below and the caret it keys on can't
+    // move between this read and the dispatch. (When the decision was async this
+    // had to be split into a pre-decision caret snapshot + a post-decision
+    // re-read, because an override could await and move the caret mid-flight.)
+    const editorView = editorRef.current?.view
+    if (!editorView) return
+    const selection = editorView.state.selection.main
     const caret = {
-      line: caretView.state.doc.lineAt(caretSelection.from).number,
-      lineCount: caretView.state.doc.lines,
-      from: caretSelection.from,
-      to: caretSelection.to,
+      line: editorView.state.doc.lineAt(selection.from).number,
+      lineCount: editorView.state.doc.lines,
+      from: selection.from,
+      to: selection.to,
     }
 
     // The paste verb decides how the clipboard lands; with no plugin
     // contributions this returns `defaultPasteDecision`, i.e. the previous
-    // hardcoded behavior. `decision.text` lets an override rewrite the
-    // content (e.g. CSV → markdown) before it's applied.
-    const decision = await pasteDecisionVerb.run(runtime, {text, html, intent, surface: 'editor', caret})
-
-    // Read the live editor state AFTER the (possibly async) decision — an
-    // override may await, during which the caret/doc can move; a pre-await
-    // snapshot would clobber interim edits or dispatch a stale range.
-    const editorView = editorRef.current?.view
-    if (!editorView) return
-    const selection = editorView.state.selection.main
+    // hardcoded behavior. It's a pure, synchronous policy — an override may key
+    // on the paste-time position (title line 1 vs body line 2+) but must decide
+    // synchronously. `decision.text` lets it rewrite the content (e.g. CSV →
+    // markdown) before it's applied.
+    const decision = pasteDecisionVerb.runSync(runtime, {text, html, intent, surface: 'editor', caret})
 
     if (decision.kind === 'single-block') {
       const plan = planSingleBlockPaste(decision.text ?? text, {

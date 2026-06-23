@@ -479,8 +479,10 @@ export function DefaultBlockRenderer(
       // caret, so the chord intent is always 'split'. Routing through the
       // verb keeps plugin overrides (text rewrites, observers, a forced
       // single-block) consistent with the in-editor paste path. With no
-      // contributions the decision is the historical outline paste.
-      const decision = await pasteDecisionVerb.run(runtime, {
+      // contributions the decision is the historical outline paste. The
+      // decision is a pure, synchronous policy (`runSync`) — the clipboard text
+      // is already in hand, so nothing to await before deciding.
+      const decision = pasteDecisionVerb.runSync(runtime, {
         text: pastedText,
         html,
         intent: 'split',

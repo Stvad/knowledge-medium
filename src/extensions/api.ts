@@ -135,6 +135,11 @@ export {
   navigationVerb,
   navigationIntentVerb,
   defaultNavigationIntent,
+  // Build/transform an intent policy's `NavigationDecision`.
+  goTo,
+  PASSTHROUGH,
+  SUPPRESS,
+  mapNavigate,
   navigate,
   useNavigate,
   navigateFromGesture,
@@ -144,7 +149,11 @@ export {
   // buttons, map pins, list rows) — modifier-aware, routed through the policy.
   useOpenBlock,
   useBlockOpener,
+  // Route a resolved decision onto a click (gate `preventDefault`) — for custom
+  // surfaces that resolve the gesture themselves.
+  applyNavigationDecision,
   type NavigateInput,
+  type NavigationDecision,
   type ResolvedNavigateInput,
   type GlobalCommandNavigateInput,
   type NavigationRequest,

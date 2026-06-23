@@ -74,10 +74,64 @@ import {
  * run the returned thunk once. Returning a thunk is itself effect-free, so the
  * decision phase stays fallback-safe while the effect runs exactly once.
  *
- * `run` is **async-only** — `impl`, decorators and observers may return a
- * promise, and a sync verb still pays one microtask.
+ * `run` (async) and `runSync` (sync) share ONE core — `before →
+ * decorators(impl)(input) → settle → after → (re)throw`. They differ only in a
+ * small strategy: how observers are invoked (awaited vs fire-and-forget) and
+ * how the impl's (possibly promised) result is *settled* into the validated
+ * outcome. The onError / fallback / validate policy lives in the core once, so
+ * it can't drift between the runners (or a future mode).
+ *
+ * `run` is **async**: `impl`, decorators and observers may return a promise and
+ * it awaits the chain, so even an all-sync verb pays one microtask.
+ *
+ * `runSync` is the synchronous counterpart, for a verb whose result-determining
+ * contributions (impl + decorators) are synchronous. It folds the same
+ * decorators, fires the same observers (one returning a promise is fire-and-
+ * forget — it never gates the result), re-validates, and returns the result
+ * directly with no microtask. Two sync modes, fixed at definition time by the
+ * `Result` type:
+ *   - **decision** (default): a promise from a result-determining contribution
+ *     is a contract violation, handled exactly like a throw — per `onError`
+ *     (`'fallback'` re-runs the synchronous `defaultImpl`; `'rethrow'` throws).
+ *     This is right for a **pure decision** verb whose `Result` is a plain value
+ *     (paste/nav-intent), where an async contribution is a bug.
+ *   - **passthrough** (`syncResultMayBePromise: true`): a promised result is a
+ *     *legitimate* `Result`, returned **verbatim, un-awaited** — for a verb
+ *     whose `Result` itself includes a promise the caller fire-and-forgets (e.g.
+ *     an action handler returning `void | false | Promise<void>`). Only the sync
+ *     path consults the flag; the async `run` awaits everything regardless.
+ *     Passthrough is a **`runSync`-only** contract: the verb does NOT await or
+ *     catch the returned promise, so its eventual **rejection is the caller's**
+ *     to handle (`void Promise.resolve(result).catch(…)`) — `onError` / fallback
+ *     and `after`'s `{ok:false}` cover only *synchronous* throws / invalid
+ *     results, never the async rejection (`after` sees `{ok:true}` for a result
+ *     that later rejects). Don't also call `run` on a passthrough verb expecting
+ *     parity: `run` awaits, so it validates the *resolved* value and surfaces a
+ *     rejection — not equivalent to `runSync`.
+ *
+ * Reach for `runSync` only when the decision is needed at a synchronous boundary
+ * (e.g. a DOM `preventDefault`); `run` stays correct for verbs that legitimately
+ * await downstream.
  */
 export type MaybePromise<T> = T | Promise<T>
+
+/** Thenable check. A result-determining contribution that returns one under
+ *  `runSync`'s default (decision) mode has gone async, violating the
+ *  synchronous contract. Robust to primitives/null (optional chaining
+ *  short-circuits). */
+const isThenable = (value: unknown): value is PromiseLike<unknown> =>
+  typeof (value as {then?: unknown} | null | undefined)?.then === 'function'
+
+/** Sequence `step` after a possibly-promised `value`: synchronous when `value`
+ *  isn't a promise (so `runSync` pays no microtask), chained when it is (so
+ *  `run` awaits). A throw in `step` surfaces as a sync throw or a rejection
+ *  respectively — exactly how the verb's final re-throw should land in each
+ *  mode. This is the one seam that lets `run` and `runSync` share a core. */
+const andThen = <A, B>(
+  value: MaybePromise<A>,
+  step: (value: A) => MaybePromise<B>,
+): MaybePromise<B> =>
+  isThenable(value) ? (value as Promise<A>).then(step) : step(value as A)
 
 export type VerbImpl<Input, Result> = (input: Input) => MaybePromise<Result>
 
@@ -140,6 +194,17 @@ export interface VerbFacet<Input, Result> {
   /** Resolve the four facets against `runtime` and run the verb:
    *  `before → decorators(impl)(input) → after`. */
   run: (runtime: VerbRuntime, input: Input) => Promise<Result>
+
+  /** Resolve the four facets against `runtime` and run the verb
+   *  **synchronously** — the same `before → decorators(impl)(input) → after`,
+   *  but without awaiting. By default (decision mode) every result-determining
+   *  contribution (impl + decorators) must be synchronous: one that returns a
+   *  promise violates the contract and is handled per `onError` (like a throw).
+   *  With `syncResultMayBePromise` (passthrough mode) a promised result is a
+   *  legitimate value, returned verbatim and un-awaited. before/after observers
+   *  may always be async — they fire-and-forget and never gate the result. For
+   *  verbs needed at a synchronous boundary; use `run` to await downstream. */
+  runSync: (runtime: VerbRuntime, input: Input) => Result
 }
 
 export function defineVerbFacet<Input, Result>({
@@ -147,13 +212,17 @@ export function defineVerbFacet<Input, Result>({
   defaultImpl,
   validateResult,
   onError = 'rethrow',
+  syncResultMayBePromise = false,
 }: {
   id: string
   defaultImpl: VerbImpl<Input, Result>
   /** Optional runtime check on the resolved result. A result that fails it is
    *  treated like a crash (handled per `onError`). Supply this for verbs whose
    *  consumers trust the result shape, since contributions are only validated as
-   *  functions, not by their return value. */
+   *  functions, not by their return value. NB for a `syncResultMayBePromise`
+   *  (passthrough) verb this runs on DIFFERENT values by runner: the un-awaited
+   *  promise under `runSync`, but the resolved value under `run` — so it must
+   *  accept both forms (typically: allow a thenable). */
   validateResult?: (result: Result) => boolean
   /** What to do when an `impl`/`decorator` throws or returns an invalid result.
    *  `'rethrow'` (default): `run` rejects, the default is never re-executed —
@@ -161,6 +230,19 @@ export function defineVerbFacet<Input, Result>({
    *  `defaultImpl` — resilient, but only safe for a **pure** verb whose impl is
    *  effect-free-until-return. See the failure-policy note above. */
   onError?: 'fallback' | 'rethrow'
+  /** Selects `runSync`'s **passthrough** mode (default `false` = decision mode).
+   *  Set it ONLY when the verb's `Result` legitimately includes a promise that
+   *  the caller fire-and-forgets (e.g. an action handler returning
+   *  `void | false | Promise<void>`): then `runSync` returns a promised result
+   *  verbatim instead of treating it as a sync-contract violation. Leave it
+   *  `false` for a pure **decision** verb whose `Result` is a plain value, where
+   *  an async contribution really is a bug. The async `run` never consults it.
+   *  This is a **`runSync`-only** contract: the verb neither awaits nor catches
+   *  the returned promise, so its eventual rejection is the caller's to handle
+   *  (`void Promise.resolve(result).catch(…)`); `onError` / fallback and `after`
+   *  cover only synchronous throws / invalid results, never the async rejection
+   *  (`after` sees `{ok:true}` for a result that later rejects). */
+  syncResultMayBePromise?: boolean
 }): VerbFacet<Input, Result> {
   // Resolve the impl in `combine` (runs once per facet resolution, then
   // cached) rather than in `run` — this dedups the multiple-impl warning to
@@ -193,92 +275,200 @@ export function defineVerbFacet<Input, Result>({
     validate: isFunction<VerbAfter<Input, Result>>,
   })
 
-  const run = async (runtime: VerbRuntime, input: Input): Promise<Result> => {
-    for (const observe of runtime.read(beforeFacet)) {
+  // ── Shared runner core ──────────────────────────────────────────────────
+  // `run` and `runSync` are thin shells over `runCore`, which holds the whole
+  // `before → fold(decorators, impl) → settle → validate → after → (re)throw`
+  // skeleton — including the onError/fallback/validate policy — exactly once. A
+  // `RunStrategy` injects the only two things that actually differ: how
+  // observers are invoked, and how a (possibly-promised) result is *settled*.
+  type Outcome = VerbOutcome<Result>
+
+  interface RunStrategy {
+    /** Invoke a phase's observers. async: await each sequentially. sync: call
+     *  each and fire-and-forget any promise it returns (never gates the
+     *  result). Observer errors are isolated either way. */
+    observe: <F>(
+      observers: readonly F[],
+      invoke: (observer: F) => MaybePromise<void>,
+      phase: 'before' | 'after',
+    ) => MaybePromise<void>
+    /** Run `produce` (the decorator fold + impl call) and hand its result to
+     *  `validate` — the one injected seam. `produce`/`validate` throwing (and,
+     *  async, a rejected result) all route to `onError`, which is total. */
+    settleResult: (
+      produce: () => MaybePromise<Result>,
+      validate: (result: Result) => Outcome,
+      onError: (error: unknown) => MaybePromise<Outcome>,
+    ) => MaybePromise<Outcome>
+  }
+
+  const asyncStrategy: RunStrategy = {
+    observe: async (observers, invoke, phase) => {
+      for (const observer of observers) {
+        try {
+          await invoke(observer)
+        } catch (error) {
+          console.error(`[verb:${id}] ${phase}-observer threw`, error)
+        }
+      }
+    },
+    // await the result, then validate; a rejected result and a validate-throw
+    // both route to onError.
+    settleResult: async (produce, validate, onError) => {
       try {
-        await observe(input)
+        return validate(await produce())
       } catch (error) {
-        console.error(`[verb:${id}] before-observer threw`, error)
+        return onError(error)
+      }
+    },
+  }
+
+  const observeSync: RunStrategy['observe'] = (observers, invoke, phase) => {
+    for (const observer of observers) {
+      try {
+        const maybe = invoke(observer)
+        if (isThenable(maybe)) {
+          maybe.then(undefined, error =>
+            console.error(`[verb:${id}] ${phase}-observer (async) rejected`, error))
+        }
+      } catch (error) {
+        console.error(`[verb:${id}] ${phase}-observer threw`, error)
       }
     }
+  }
 
-    // Resolved OUTSIDE the try so the catch's `ranBareDefault` check can see
-    // them. Safe ONLY because these reads are throw-free: the default
-    // combine just returns the array, and `implFacet`'s combine is a static
-    // `console.warn` + `values.at(-1)` (no plugin-controlled value is
-    // stringified). Any resolution-time work on plugin data that COULD throw
-    // must move inside the try (as the decorator fold did) — `read` caches
-    // only on success, so an escaping combine throw would re-throw every call.
-    const impl = runtime.read(implFacet) ?? defaultImpl
-    const decorators = runtime.read(decoratorsFacet)
-
-    // Compute the outcome WITHOUT throwing, so `after` can observe every
-    // outcome (success, fallback, failure) before we (re)throw at the end.
-    let outcome: VerbOutcome<Result>
+  // decision mode: a promised result means a contribution went async, violating
+  // the sync contract — treat it like a crash so `onError` decides.
+  const settleResultSyncStrict: RunStrategy['settleResult'] = (produce, validate, onError) => {
     try {
-      // `read` returns contributions ascending by precedence, so folding
-      // left wraps the lowest-precedence decorator around the impl first
-      // (innermost) and leaves the highest-precedence one outermost. The
-      // fold runs INSIDE the try so a decorator that throws *while wrapping*
-      // (not just when its wrapper is called) also degrades to the default.
-      let composed: VerbImpl<Input, Result> = impl
-      for (const decorate of decorators) {
-        composed = decorate(composed)
+      const result = produce()
+      if (isThenable(result)) {
+        // We discard the promise and fall back. Attach a handler first so that
+        // an async contribution which also REJECTS is logged (like a rejecting
+        // async observer) rather than surfacing as an unhandled rejection — the
+        // contract violation itself is handled by the throw → onError below.
+        result.then(undefined, error =>
+          console.error(`[verb:${id}] discarded async contribution (runSync contract violation) rejected`, error))
+        throw new Error(
+          `[verb:${id}] runSync requires synchronous contributions, but the impl/decorator returned a promise`,
+        )
       }
-      const result = await composed(input)
-      // A malformed (non-throwing) result is treated like a crash: an
-      // untyped plugin can return `undefined`/`{}` past the function-only
-      // contribution check, which would otherwise reach consumers (e.g.
-      // `decision.kind` read after `preventDefault`) and crash/swallow.
+      return validate(result as Result)
+    } catch (error) {
+      return onError(error)
+    }
+  }
+
+  // passthrough mode (`syncResultMayBePromise`): a promised result is a
+  // legitimate `Result`, validated and returned verbatim, never awaited.
+  const settleResultSyncPassthrough: RunStrategy['settleResult'] = (produce, validate, onError) => {
+    try {
+      return validate(produce() as Result)
+    } catch (error) {
+      return onError(error)
+    }
+  }
+
+  const syncStrategy: RunStrategy = {
+    observe: observeSync,
+    settleResult: syncResultMayBePromise ? settleResultSyncPassthrough : settleResultSyncStrict,
+  }
+
+  const runCore = (
+    runtime: VerbRuntime,
+    input: Input,
+    strategy: RunStrategy,
+  ): MaybePromise<Result> => {
+    const validate = (result: Result): Outcome => {
+      // A malformed (non-throwing) result is treated like a crash: an untyped
+      // plugin can return `undefined`/`{}` past the function-only contribution
+      // check, which would otherwise reach consumers (e.g. `decision.kind` read
+      // after `preventDefault`) and crash/swallow.
       if (validateResult && !validateResult(result)) {
         throw new Error(`[verb:${id}] impl/decorator returned an invalid result`)
       }
-      outcome = {ok: true, result}
-    } catch (error) {
-      // A throwing-or-malformed impl/decorator is a crash, not a veto. Under
-      // `'rethrow'` (default) the error is surfaced and the default is never
-      // re-run — the safe policy for an effectful verb (no double-execution).
-      // Under `'fallback'` we degrade to the default so one buggy plugin can't
-      // break a pure verb; if we already ran exactly the bare default, there's
-      // nothing safer to try.
-      const ranBareDefault = impl === defaultImpl && decorators.length === 0
-      if (onError === 'rethrow' || ranBareDefault) {
-        outcome = {ok: false, error}
-      } else {
-        console.error(
-          `[verb:${id}] impl/decorator threw or returned an invalid result; falling back to defaultImpl`,
-          error,
-        )
-        try {
-          const result = await defaultImpl(input)
-          // The fallback result is validated too — `validateResult` guards THE
-          // result, not just a plugin's. A core default that returns an invalid
-          // shape is a bug to surface (same stance as a throwing bare default:
-          // there's nothing safer to fall back to).
-          if (validateResult && !validateResult(result)) {
-            throw new Error(`[verb:${id}] defaultImpl returned an invalid result`, {cause: error})
-          }
-          outcome = {ok: true, result}
-        } catch (fallbackError) {
-          outcome = {ok: false, error: fallbackError}
+      return {ok: true, result}
+    }
+
+    // before → … . `andThen` keeps this synchronous under `runSync` (observe
+    // returns void) and awaited under `run` (observe returns a promise).
+    return andThen(
+      strategy.observe(runtime.read(beforeFacet), observer => observer(input), 'before'),
+      () => {
+        // Resolved AFTER before-observers (matching the original order) and
+        // OUTSIDE settleResult's try: these reads are throw-free (the default
+        // combine returns the array; `implFacet`'s is a static warn + `at(-1)`),
+        // so a bad combine would surface rather than silently fall back, and the
+        // `ranBareDefault` check can see them.
+        const impl = runtime.read(implFacet) ?? defaultImpl
+        const decorators = runtime.read(decoratorsFacet)
+        const ranBareDefault = impl === defaultImpl && decorators.length === 0
+
+        const onFailure = (error: unknown): MaybePromise<Outcome> => {
+          // A throwing/malformed/contract-violating impl/decorator is a crash,
+          // not a veto. Under `'rethrow'` (or once we've run exactly the bare
+          // default) surface it; under `'fallback'` re-run the default through
+          // the SAME strategy, so the sync/async + validate rules apply
+          // identically. A buggy plugin then can't break a pure verb.
+          if (onError === 'rethrow' || ranBareDefault) return {ok: false, error}
+          console.error(
+            `[verb:${id}] impl/decorator threw, returned an invalid result, or violated the sync contract; falling back to defaultImpl`,
+            error,
+          )
+          return strategy.settleResult(
+            () => defaultImpl(input),
+            result => {
+              // The fallback result is validated too — a core default returning
+              // an invalid shape is a bug to surface (same stance as a throwing
+              // bare default: nothing safer to fall back to).
+              if (validateResult && !validateResult(result)) {
+                throw new Error(`[verb:${id}] defaultImpl returned an invalid result`, {cause: error})
+              }
+              return {ok: true, result}
+            },
+            // The bare default already ran — nothing safer remains, so a
+            // fallback failure becomes the surfaced outcome.
+            fallbackError => ({ok: false, error: fallbackError}),
+          )
         }
-      }
-    }
 
-    // `after` runs for EVERY outcome (success or failure) — before the rethrow —
-    // so balanced before/after observers stay symmetric. Observer errors are
-    // isolated so they can't break the verb (or mask the real outcome).
-    for (const observe of runtime.read(afterFacet)) {
-      try {
-        await observe(input, outcome)
-      } catch (error) {
-        console.error(`[verb:${id}] after-observer threw`, error)
-      }
-    }
+        // Compute the outcome WITHOUT throwing, so `after` can observe every
+        // outcome (success, fallback, failure) before we (re)throw. The fold
+        // runs inside `produce` (i.e. inside settleResult's try) so a decorator
+        // that throws *while wrapping* also degrades, not just one that throws
+        // when its wrapper is called.
+        const outcome = strategy.settleResult(
+          () => {
+            // `read` returns contributions ascending by precedence, so folding
+            // left wraps the lowest-precedence decorator innermost and leaves
+            // the highest-precedence one outermost.
+            let composed: VerbImpl<Input, Result> = impl
+            for (const decorate of decorators) composed = decorate(composed)
+            return composed(input)
+          },
+          validate,
+          onFailure,
+        )
 
-    if (!outcome.ok) throw outcome.error
-    return outcome.result
+        // `after` runs for EVERY outcome — before the rethrow — so balanced
+        // before/after observers stay symmetric. Observer errors are isolated.
+        return andThen(outcome, settled =>
+          andThen(
+            strategy.observe(runtime.read(afterFacet), observer => observer(input, settled), 'after'),
+            () => {
+              if (!settled.ok) throw settled.error
+              return settled.result
+            },
+          ))
+      },
+    )
   }
+
+  const run = async (runtime: VerbRuntime, input: Input): Promise<Result> =>
+    runCore(runtime, input, asyncStrategy)
+
+  const runSync = (runtime: VerbRuntime, input: Input): Result =>
+    runCore(runtime, input, syncStrategy) as Result
 
   return {
     id,
@@ -291,5 +481,6 @@ export function defineVerbFacet<Input, Result>({
     before: (fn, options) => beforeFacet.of(fn, options),
     after: (fn, options) => afterFacet.of(fn, options),
     run,
+    runSync,
   }
 }

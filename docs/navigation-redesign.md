@@ -389,16 +389,24 @@ at the policy; *what happens when we go there* at the execution verb.
 3. **`navigationIntentVerb`** *(DONE — `src/utils/navigation.ts`)* — the gesture
    → intent **policy**, a pure `defineVerbFacet` (`onError: 'fallback'`):
    `(gesture: {role, modifiers, panelId?, blockId, workspaceId, viewport}) →
-   NavigateInput | null` (`null` = native passthrough / veto). The default impl
-   (`defaultNavigationIntent`, exported & composable) reproduces the canonical
-   modifier matrix + follow-link/navigator role + viewport rule exactly. Plugins
-   `decorator`/`impl` to remap modifiers (the alt-click-for-main choice above is
-   provisional), override the role, or **redirect where global commands land**
-   (active vs main — the original motivating example, gap N5). `useBlockOpener`,
-   `navigateFromGlobalCommand`, and `navigateFromGesture` all resolve through it
-   before calling `navigate()`. The native-passthrough decision (cmd/ctrl/middle
-   → browser) stays a synchronous, non-overridable carve-out in the click
-   handlers, since `preventDefault` must run before the async policy.
+   NavigationDecision`, a tagged union — `{kind:'navigate', input}` |
+   `{kind:'passthrough'}` (let the browser handle the href) | `{kind:'suppress'}`
+   (veto, no-op). Resolved **synchronously** via the verb's `runSync` (the policy
+   is pure, no I/O), so a click surface can gate `preventDefault` on the result.
+   The default impl (`defaultNavigationIntent`, exported & composable) reproduces
+   the canonical modifier matrix + follow-link/navigator role + viewport rule
+   exactly. Plugins `decorator`/`impl` to remap modifiers (the alt-click-for-main
+   choice above is provisional), override the role, **redirect where global
+   commands land** (active vs main — the original motivating example, gap N5), or
+   flip a gesture between in-app navigation and native passthrough (helpers
+   `goTo`/`PASSTHROUGH`/`SUPPRESS`/`mapNavigate`). `useBlockOpener`,
+   `navigateFromGlobalCommand`, and `navigateFromGesture` all resolve through it;
+   click surfaces route the decision through `applyNavigationDecision` (the one
+   place that gates `preventDefault`), commands hand a `navigate` decision's input
+   to `navigate()`. Native passthrough (cmd/ctrl/middle → browser) is therefore
+   **plugin-overridable** — it's the policy's `passthrough` outcome, not a
+   hardcoded carve-out in the handlers (synchronous resolution is what makes this
+   possible; the earlier async design required the non-overridable carve-out).
    - The **read** side agrees: `resolveGlobalCommandTarget` (the anchor for
      daily-notes prev/next) resolves its target panel through the same policy +
      shared `resolveDestination` (probing with a neutral navigator gesture), and
