@@ -130,7 +130,9 @@ export function PropertyPicker({
   const schemas = usePropertySchemas()
 
   const presetEntries = useMemo(
-    () => Array.from(presets.values()).sort((a, b) => a.label.localeCompare(b.label)),
+    () => Array.from(presets.values())
+      .filter(preset => !preset.hideFromPicker)
+      .sort((a, b) => a.label.localeCompare(b.label)),
     [presets],
   )
   const initialPresetId = useMemo(() => {
