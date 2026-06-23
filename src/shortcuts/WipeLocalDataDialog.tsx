@@ -16,6 +16,12 @@ export interface WipeLocalDataDialogProps {
   userId: string
 }
 
+// Server-rejected edits live here (the upload handler records them then completes
+// the tx, so they DON'T show in the live upload-queue count) — but they exist
+// only on this device, so a wipe destroys them. Created via CREATE TABLE IF NOT
+// EXISTS in clientSchema.ts; query mirrors system-status's rejected-count read.
+const REJECTED_COUNT_SQL = 'SELECT COUNT(*) AS count FROM ps_crud_rejected'
+
 // Per-browser steps for the "clear site data" control. We can't open this UI
 // from a page (no JS API) and can't emit a Clear-Site-Data header on GitHub
 // Pages — a service worker can't synthesize one either (verified:
@@ -59,18 +65,27 @@ export const WipeLocalDataDialog = ({
   userId,
   cancel,
 }: WipeLocalDataDialogProps & DialogContextProps<void>) => {
-  // null while we read the count; a number once known. Local SQLite read, no
-  // network — safe to do even offline.
+  // null while we read the count; a number once known. Local SQLite reads, no
+  // network — safe even offline. Counts both the live upload queue AND
+  // server-rejected rows: both are local-only changes a wipe would destroy.
   const [unsynced, setUnsynced] = useState<number | null>(null)
 
   useEffect(() => {
     let cancelled = false
     void (async () => {
       try {
-        const { count } = await getPowerSyncDb(userId).getUploadQueueStats()
-        if (!cancelled) setUnsynced(count)
+        const db = getPowerSyncDb(userId)
+        const { count: queued } = await db.getUploadQueueStats()
+        let rejected = 0
+        try {
+          const row = await db.get<{ count: number }>(REJECTED_COUNT_SQL)
+          rejected = Number(row?.count ?? 0)
+        } catch {
+          // table absent / unreadable — ignore, just don't count rejected.
+        }
+        if (!cancelled) setUnsynced(queued + rejected)
       } catch {
-        // best-effort: if we can't read the queue, just skip the warning.
+        // best-effort: if we can't read at all, just skip the warning.
       }
     })()
     return () => {
@@ -97,9 +112,10 @@ export const WipeLocalDataDialog = ({
         <div className="space-y-4 text-sm">
           {unsynced != null && unsynced > 0 && (
             <p className="text-destructive">
-              You have {unsynced} change(s) that haven’t synced to the server yet. They
-              sync automatically while you’re online — wait for that (or reconnect, if
-              you’re offline) before wiping, or they’ll be lost.
+              You have {unsynced} local change(s) that aren’t synced to the server.
+              Clearing the data permanently deletes anything not synced — there’s no undo.
+              If you’re online with sync enabled, let it finish syncing first (changes made
+              in local-only mode, or rejected by the server, can’t sync and will be lost).
             </p>
           )}
 
