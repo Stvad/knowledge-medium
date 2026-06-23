@@ -4,10 +4,15 @@
 > wipe is worth building; the browser's own origin wipe is more complete and avoids the §3
 > mechanics. Build only a thin panic action in front of it.
 
-> **Status: current** (written 2026-06-22) · recommendation/design — *not yet implemented*.
-> Last verified against code: 2026-06-22.
-> Code + tests are ground truth (see `AGENTS.md` → "design docs"); this proposes a direction,
-> so verify against the code before treating any "today it does X" claim as still true.
+> **Status: implemented** (decided 2026-06-23) · the recommendation was adopted: the selective
+> lock-&-wipe flow analyzed below has been **removed** (`lockAndWipe.ts` and its boot/cross-tab
+> wiring), and `lock_and_wipe_local_data` is now a thin **panic action** — drain unsynced uploads,
+> then guide the user to the browser/OS "clear site data" control. `flushUploadQueue` moved to
+> `src/sync/flushUploadQueue.ts`. The programmatic `Clear-Site-Data` trigger is **deferred** until
+> we leave GitHub Pages (header-capable host needed — see §0.3 and the follow-up issue).
+> Last verified against code: 2026-06-23.
+> **§1–§5 below now describe code that no longer exists** — they are retained as the historical
+> analysis of *why* the selective/coarse flow wasn't worth keeping. Read §0 for what shipped.
 
 Design investigation. **No code change in this doc** — it recommends a direction and
 scopes it. Grounded against `src/sync/keys/flows/lockAndWipe.ts`, `keyStore.ts`,

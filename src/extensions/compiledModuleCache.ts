@@ -198,25 +198,3 @@ export const createCompiledModuleCache = (): CompiledModuleCache => {
 let sharedCache: CompiledModuleCache | null = null
 export const getCompiledModuleCache = (): CompiledModuleCache =>
   (sharedCache ??= createCompiledModuleCache())
-
-/**
- * Empty the compiled-module store, best-effort and never-rejecting. Used
- * by §6 lock & wipe's boot-time half (`consumePendingWipe`) to remove
- * plaintext-derived extension source that lives OUTSIDE the per-user
- * SQLite file the wipe deletes.
- *
- * Goes through the cache's `clear()` (a readwrite transaction) rather than
- * `indexedDB.deleteDatabase`: a database delete is blocked by any
- * concurrent connection — a sibling tab still mid-reload during the wipe
- * is exactly that — and could silently no-op, whereas a `clear()` tx
- * isn't blocked by other connections. Swallows any error: a derived cache
- * must never strand the boot or the wipe (the load-bearing plaintext
- * removal is the SQLite file delete).
- */
-export const clearCompiledModuleCache = async (): Promise<void> => {
-  try {
-    await getCompiledModuleCache().clear()
-  } catch (error) {
-    console.warn('Failed to clear compiled-extension cache', error)
-  }
-}

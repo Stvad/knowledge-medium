@@ -78,12 +78,27 @@ import {
   importRawSqliteDb,
   rawSqliteDbExportFilename,
 } from '@/utils/exportSqliteDb.js'
-import { broadcastWipeReload, flushUploadQueue, lockAndWipe } from '@/sync/keys/flows/lockAndWipe.js'
-import { getWorkspaceKeyStore } from '@/sync/keys/keyStore.js'
+import { flushUploadQueue } from '@/sync/flushUploadQueue.js'
 import { getPowerSyncDb } from '@/data/repoProvider.js'
 import { focusPropertyRow } from '@/utils/propertyNavigation.js'
 import { reloadInSafeMode } from '@/utils/safeMode.js'
 import { outlineRenderScopeId } from '@/utils/renderScope.js'
+
+// Cross-browser guidance shown by `lock_and_wipe_local_data`. We can't open the
+// browser's clear-data UI from a page (no JS API) and can't emit a
+// Clear-Site-Data header on GitHub Pages, so the panic wipe hands off to the
+// platform's own control with concise steps. See docs/clear-site-data-spike/.
+const WIPE_LOCAL_DATA_INSTRUCTIONS =
+  'To finish, clear this app\'s site data in your browser:\n\n' +
+  '• Chrome / Edge: click the icon left of the address bar → Site settings → ' +
+  '"Delete data" (or Settings → Privacy and security → Site settings → this site → Delete data).\n' +
+  '• Firefox: Settings → Privacy & Security → Cookies and Site Data → Manage Data → ' +
+  'select this site → Remove Selected.\n' +
+  '• Safari: Settings → Privacy → Manage Website Data → select this site → Remove.\n' +
+  '• Installed app (iOS / Android / desktop PWA): OS app settings → Storage → ' +
+  'Clear data, or remove and reinstall the app.\n\n' +
+  'This clears everything for this site and signs you out. Synced data ' +
+  're-downloads when you sign back in.'
 
 const splitCodeMirrorBlockAtCursor = async (
   block: Block,
@@ -526,23 +541,32 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     },
     {
       id: 'lock_and_wipe_local_data',
-      description: 'Lock & wipe local data on this device',
+      description: 'Wipe all local data on this device',
       context: ActionContextTypes.GLOBAL,
       handler: async () => {
-        // §6 Lock & wipe: drop every workspace key and erase this device's
-        // local DB. Deliberate and user-only — never triggered automatically.
+        // Panic wipe. We DON'T hand-roll the destruction — we delegate it to the
+        // browser/OS "clear site data" control, which clears the whole origin
+        // (OPFS DB, all IndexedDB, Cache API, localStorage, the service worker)
+        // from OUTSIDE the page context. That's both more complete and more
+        // robust than anything we can do from JS (no cross-tab OPFS handle race,
+        // no surviving service worker, no pre-render boot gate). We can't trigger
+        // it programmatically on GitHub Pages — a Clear-Site-Data response header
+        // needs a header-capable origin, and a service worker can't synthesize
+        // one (verified: docs/clear-site-data-spike/). So we only (a) drain
+        // unsynced uploads first — the one thing the platform can't do — then
+        // (b) guide the user to the control.
         const ok = window.confirm(
-          'Lock & wipe local data on THIS device?\n\n' +
-          'This erases ALL locally stored data and removes every encryption key from ' +
-          'this device. Encrypted workspaces will require re-pasting their workspace key ' +
-          'to reopen — make sure you have it saved.\n\n' +
-          'Anything already synced to the server re-downloads; anything not synced ' +
-          '(or that only exists on this device) is permanently lost. You stay signed ' +
-          'in. The page reloads.',
+          'Wipe ALL local data for this app on THIS device?\n\n' +
+          'This is a full reset: it clears the local database, every encryption ' +
+          'key, and signs you out. Anything already synced to the server ' +
+          're-downloads when you sign back in; anything not synced (or that only ' +
+          'exists on this device) is permanently lost.\n\n' +
+          'First we\'ll try to save any unsynced changes, then show you how to ' +
+          'clear the data.',
         )
         if (!ok) return
 
-        const banner = showProgress('Flushing unsynced changes…')
+        const banner = showProgress('Saving unsynced changes…')
         try {
           // Drain pending uploads first so unsynced edits aren't lost. If they
           // can't flush (offline / sync stuck / local-only), let the user decide
@@ -553,27 +577,20 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           if (!flushed) {
             const proceed = window.confirm(
               `${remaining} change(s) haven't been saved to the server yet.\n\n` +
-              'Proceed and PERMANENTLY LOSE those changes?\n' +
-              'Cancel to keep your data — you can retry once they have synced.',
+              'Continue anyway? Those changes are lost once you clear the data.\n' +
+              'Cancel to keep them — you can retry once they have synced.',
             )
             if (!proceed) {
-              banner.done('Lock & wipe cancelled — your data is unchanged')
+              banner.done('Wipe cancelled — your data is unchanged')
               return
             }
           }
 
-          banner.update('Wiping local data — reloading…')
-          await lockAndWipe({ userId: repo.user.id, keyStore: getWorkspaceKeyStore() })
-          // Reload every other same-user tab too (multi-tab): otherwise they
-          // keep the wiped plaintext in memory and hold the OPFS DB handle open,
-          // blocking the boot-time file delete. Then reload self — the armed
-          // marker makes the next boot delete the DB file before PowerSync
-          // reopens it.
-          broadcastWipeReload(repo.user.id)
-          window.location.reload()
+          banner.done('Ready — follow the steps to clear this app\'s data')
+          window.alert(WIPE_LOCAL_DATA_INSTRUCTIONS)
         } catch (err) {
-          console.error('[lock-and-wipe] failed:', err)
-          banner.fail(`Lock & wipe failed: ${err instanceof Error ? err.message : String(err)}`)
+          console.error('[wipe-local-data] failed to prepare:', err)
+          banner.fail(`Couldn't prepare the wipe: ${err instanceof Error ? err.message : String(err)}`)
         }
       },
     },

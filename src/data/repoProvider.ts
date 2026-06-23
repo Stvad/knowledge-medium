@@ -34,9 +34,6 @@ import { createPowerSyncConnector, hasRemoteSyncConfig } from '@/services/powers
 import { createSyncResolver, type SyncResolver } from '@/sync/keys/resolver.js'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore.js'
 import type { MaterializeDeps } from '@/data/internals/syncObserver/materialize.js'
-import { consumePendingWipe } from '@/sync/keys/flows/lockAndWipe.js'
-import { clearCompiledModuleCache } from '@/extensions/compiledModuleCache.js'
-import { removeOpfsDbFile } from '@/utils/exportSqliteDb.js'
 import {
   BLOCKS_SYNCED_RAW_TABLE,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
@@ -194,19 +191,6 @@ export const ensurePowerSyncReady = async (
   useRemoteSync: boolean = hasRemoteSyncConfig,
 ) => {
   await assertOpfsAvailable()
-
-  // §6 Lock & wipe — second half. If a wipe was armed in a prior session, delete
-  // this user's DB file NOW, before getPowerSyncDb/init opens it (wa-sqlite must
-  // not hold an OPFS sync-access handle on a file being removed). A fresh init
-  // then recreates an empty DB and re-syncs; e2ee workspaces re-enter their
-  // locked state (their WKs were dropped at lock time) since the mode pins
-  // survive the wipe. Runs before any DB handle exists for this user. Also drops
-  // the compiled-extension cache (a separate IndexedDB store of plaintext-derived
-  // source that the file delete wouldn't touch) — at this boot point no compile
-  // has run, so nothing can re-populate it.
-  await consumePendingWipe(userId, removeOpfsDbFile, dbFilenameForUser, {
-    clearCompiledCache: clearCompiledModuleCache,
-  })
 
   const db = getPowerSyncDb(userId)
 
