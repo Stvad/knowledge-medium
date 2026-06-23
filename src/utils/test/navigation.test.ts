@@ -356,7 +356,10 @@ describe('navigationVerb (intent seam)', () => {
       req => { calls.push(`before:${req.input.blockId}`) },
     ])
     env.repo.setRuntimeContributions(navigationVerb.afterFacet, 'test-nav', [
-      (req, result) => { calls.push(`after:${req.input.blockId}:${result?.blockId}`) },
+      (req, outcome) => {
+        const landed = outcome.ok ? outcome.result?.blockId : 'err'
+        calls.push(`after:${req.input.blockId}:${landed}`)
+      },
     ])
 
     await navigate(env.repo, {blockId: 'b1', target: 'main'})

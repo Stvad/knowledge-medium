@@ -46,6 +46,7 @@ export {
   type VerbDecorator,
   type VerbBefore,
   type VerbAfter,
+  type VerbOutcome,
 } from '@/facets/verbFacet.js'
 
 // --- Blessed core facets ---

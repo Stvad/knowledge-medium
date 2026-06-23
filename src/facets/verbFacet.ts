@@ -28,7 +28,8 @@ import {
  *                         innermost (closest to the impl); higher
  *                         precedence wraps on the outside and runs first.
  *   - `beforeFacet`     — **Sum**: observers run before the impl.
- *   - `afterFacet`      — **Sum**: observers run after, with the result.
+ *   - `afterFacet`      — **Sum**: observers run after, with the outcome
+ *                         (success or failure — see the `after` note below).
  *
  * Intent is encoded by *which slot you contribute to* — there's no tagged
  * contribution union. `run` resolves the four facets against a runtime and
@@ -60,9 +61,13 @@ import {
  * (→ `undefined`) or a malformed object slips past unless the verb checks its
  * result shape — supply `validateResult` for any verb whose consumers trust it.
  *
- * `after` is **success-only**: it runs with the resolved result (including a
- * `'fallback'` result) but not if `run` rejects. Cleanup that must always fire
- * belongs in a decorator's `try/finally` around `next`, not in an `after`.
+ * `after` runs for **every outcome** — it receives a `VerbOutcome`: `{ok: true,
+ * result}` on success (including a `'fallback'` result) or `{ok: false, error}`
+ * on failure, fired just before `run` rejects. Since `before` always runs too,
+ * balanced before/after observers (timing, logging, counters) stay symmetric.
+ * `after` only *observes*, though — it can't change the result or stop the
+ * rejection; cleanup that must mutate the flow belongs in a decorator's
+ * `try/finally` around `next`. An observer that throws is logged and swallowed.
  *
  * **Effectful verb that still wants `'fallback'` resilience?** Model `Result`
  * as a *deferred effect* — `impl: input => () => effect` — and have the caller
@@ -82,9 +87,17 @@ export type VerbDecorator<Input, Result> = (
 
 export type VerbBefore<Input> = (input: Input) => MaybePromise<void>
 
+/** The result of a verb run, handed to `after`-observers. `after` runs for
+ *  EVERY outcome, so the observer must discriminate on `ok`:
+ *    - `{ok: true, result}`  — succeeded (including a `'fallback'` result)
+ *    - `{ok: false, error}`  — failed; `run` is about to reject with `error` */
+export type VerbOutcome<Result> =
+  | {ok: true; result: Result}
+  | {ok: false; error: unknown}
+
 export type VerbAfter<Input, Result> = (
   input: Input,
-  result: Result,
+  outcome: VerbOutcome<Result>,
 ) => MaybePromise<void>
 
 /** The slice of `FacetRuntime` a verb needs — just `read`. Keeps `run`
@@ -199,7 +212,9 @@ export function defineVerbFacet<Input, Result>({
     const impl = runtime.read(implFacet) ?? defaultImpl
     const decorators = runtime.read(decoratorsFacet)
 
-    let result: Result
+    // Compute the outcome WITHOUT throwing, so `after` can observe every
+    // outcome (success, fallback, failure) before we (re)throw at the end.
+    let outcome: VerbOutcome<Result>
     try {
       // `read` returns contributions ascending by precedence, so folding
       // left wraps the lowest-precedence decorator around the impl first
@@ -210,7 +225,7 @@ export function defineVerbFacet<Input, Result>({
       for (const decorate of decorators) {
         composed = decorate(composed)
       }
-      result = await composed(input)
+      const result = await composed(input)
       // A malformed (non-throwing) result is treated like a crash: an
       // untyped plugin can return `undefined`/`{}` past the function-only
       // contribution check, which would otherwise reach consumers (e.g.
@@ -218,6 +233,7 @@ export function defineVerbFacet<Input, Result>({
       if (validateResult && !validateResult(result)) {
         throw new Error(`[verb:${id}] impl/decorator returned an invalid result`)
       }
+      outcome = {ok: true, result}
     } catch (error) {
       // A throwing-or-malformed impl/decorator is a crash, not a veto. Under
       // `'rethrow'` (default) the error is surfaced and the default is never
@@ -226,30 +242,42 @@ export function defineVerbFacet<Input, Result>({
       // break a pure verb; if we already ran exactly the bare default, there's
       // nothing safer to try.
       const ranBareDefault = impl === defaultImpl && decorators.length === 0
-      if (onError === 'rethrow' || ranBareDefault) throw error
-      console.error(
-        `[verb:${id}] impl/decorator threw or returned an invalid result; falling back to defaultImpl`,
-        error,
-      )
-      result = await defaultImpl(input)
-      // The fallback result is validated too — `validateResult` guards THE
-      // result, not just a plugin's. A core default that returns an invalid
-      // shape is a bug to surface (same stance as a throwing bare default:
-      // there's nothing safer to fall back to).
-      if (validateResult && !validateResult(result)) {
-        throw new Error(`[verb:${id}] defaultImpl returned an invalid result`, {cause: error})
+      if (onError === 'rethrow' || ranBareDefault) {
+        outcome = {ok: false, error}
+      } else {
+        console.error(
+          `[verb:${id}] impl/decorator threw or returned an invalid result; falling back to defaultImpl`,
+          error,
+        )
+        try {
+          const result = await defaultImpl(input)
+          // The fallback result is validated too — `validateResult` guards THE
+          // result, not just a plugin's. A core default that returns an invalid
+          // shape is a bug to surface (same stance as a throwing bare default:
+          // there's nothing safer to fall back to).
+          if (validateResult && !validateResult(result)) {
+            throw new Error(`[verb:${id}] defaultImpl returned an invalid result`, {cause: error})
+          }
+          outcome = {ok: true, result}
+        } catch (fallbackError) {
+          outcome = {ok: false, error: fallbackError}
+        }
       }
     }
 
+    // `after` runs for EVERY outcome (success or failure) — before the rethrow —
+    // so balanced before/after observers stay symmetric. Observer errors are
+    // isolated so they can't break the verb (or mask the real outcome).
     for (const observe of runtime.read(afterFacet)) {
       try {
-        await observe(input, result)
+        await observe(input, outcome)
       } catch (error) {
         console.error(`[verb:${id}] after-observer threw`, error)
       }
     }
 
-    return result
+    if (!outcome.ok) throw outcome.error
+    return outcome.result
   }
 
   return {

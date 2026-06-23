@@ -117,11 +117,11 @@ describe('defineVerbFacet', () => {
       verb.before(input => {
         calls.push(`before2:${input}`)
       }),
-      verb.after((input, result) => {
-        calls.push(`after1:${input}:${result}`)
+      verb.after((input, outcome) => {
+        calls.push(`after1:${input}:${outcome.ok ? outcome.result : 'err'}`)
       }),
-      verb.after((input, result) => {
-        calls.push(`after2:${input}:${result}`)
+      verb.after((input, outcome) => {
+        calls.push(`after2:${input}:${outcome.ok ? outcome.result : 'err'}`)
       }),
     ])
 
@@ -144,7 +144,7 @@ describe('defineVerbFacet', () => {
     ])
 
     await expect(verb.run(runtime, 7)).resolves.toBe(7)
-    expect(after).toHaveBeenCalledWith(7, 7)
+    expect(after).toHaveBeenCalledWith(7, {ok: true, result: 7})
     expect(consoleError).toHaveBeenCalled()
     consoleError.mockRestore()
   })
@@ -222,7 +222,7 @@ describe('defineVerbFacet', () => {
     ])
 
     await expect(verb.run(runtime, 4)).resolves.toBe(8)
-    expect(after).toHaveBeenCalledWith(4, 8)
+    expect(after).toHaveBeenCalledWith(4, {ok: true, result: 8})
     consoleError.mockRestore()
   })
 
@@ -247,23 +247,25 @@ describe('defineVerbFacet', () => {
     consoleError.mockRestore()
   })
 
-  it('does NOT run after-observers when run rejects under rethrow', async () => {
-    // `after` is success-only: a crashed (rethrow) navigation/paste is invisible
-    // to after-observers — failure observation belongs in a decorator try/finally.
+  it('runs after-observers with the error outcome when run rejects under rethrow', async () => {
+    // `after` observes EVERY outcome: a crashed (rethrow) run still fires `after`
+    // with {ok: false, error} just before rejecting — so before/after stay
+    // symmetric and failures are observable without a decorator try/finally.
+    const boom = new Error('boom')
     const verb = defineVerbFacet<number, number>({
-      id: 'test.verb.after-skipped-on-rethrow',
+      id: 'test.verb.after-on-rethrow',
       defaultImpl: n => n,
     })
     const after = vi.fn()
     const runtime = resolveFacetRuntimeSync([
       verb.impl(() => {
-        throw new Error('boom')
+        throw boom
       }),
       verb.after(after),
     ])
 
     await expect(verb.run(runtime, 1)).rejects.toThrow('boom')
-    expect(after).not.toHaveBeenCalled()
+    expect(after).toHaveBeenCalledWith(1, {ok: false, error: boom})
   })
 
   it('rejects (no infinite fallback) when the bare default impl throws', async () => {
