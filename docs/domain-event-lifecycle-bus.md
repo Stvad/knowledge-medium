@@ -335,6 +335,23 @@ export interface AppEventBus {
   additionally carries `addedTypes`/`removedTypes` so a subscriber can react to a
   block *becoming* a `todo` (the membership delta), which an equality check on a
   single field would miss.
+- **Sticky ("current-state") events replay the last value on subscribe.** A small
+  set of events describe *current state* rather than a transient occurrence —
+  `workspace:ready` (current workspace), `app:booted`, the latest `sync:status`.
+  For these the bus retains the last payload and, when a handler subscribes,
+  invokes it immediately with that retained value (if any) before any future
+  live emit. This is **not** a niceties feature — it's required for correctness
+  on the cold-start path: `bootstrapWorkspace` resolves (and would emit
+  `workspace:ready`) *before* `AppRuntimeProvider` mounts and registers
+  AppEffects (its reconcile runs in a `useEffect`, `AppRuntimeProvider.tsx:184`),
+  so an AppEffect subscriber would otherwise **miss** the one-shot emit and the
+  thin slice wouldn't actually close I3. Sticky replay closes that gap (and also
+  serves plugins that load mid-session). Transient events (`block:*`,
+  `navigation:*`, `workspace:active-changed`) are **not** sticky — replaying a
+  past block-create to a late subscriber would be wrong. Because a sticky handler
+  can receive the replayed value *and* a subsequent live emit, sticky-event
+  handlers must be **idempotent** — which auto-create handlers already are (they
+  check existence before writing).
 
 ### 3.6 How this avoids the B3 untyped-bus relapse
 
@@ -385,13 +402,19 @@ unit, zero existing seam, real demand (I3):
   `bootstrapWorkspace`** (the `{kind:'ready'}` return) — *not*
   `setActiveWorkspaceId`, so handlers run post-gate/post-bootstrap (the timing
   caveat in §1).
+- **`workspace:ready` is sticky** (§3.5): the bus retains the last payload and
+  replays it on subscribe. This is mandatory for the slice to work — on cold
+  start the emit happens *before* `AppRuntimeProvider` registers AppEffects, so
+  without sticky replay the auto-create effect would never see it. So Phase 0
+  must include the sticky-replay mechanism, not just plain fan-out.
 - `useAppEvent` hook. Tests: emit-on-ready (and *not* on a `locked`/`waiting`
   workspace), handler isolation (a throwing handler doesn't break the others or
-  the bootstrap), and async-sequential delivery (a slow handler doesn't overlap
-  the next).
-- This validates the *entire* shape — registry, emit, async delivery, on, hook,
-  lifecycle — against the event that has no other way to be observed and that
-  plugins demonstrably need.
+  the bootstrap), async-sequential delivery (a slow handler doesn't overlap the
+  next), and **the cold-start replay** (an effect that subscribes *after* the
+  emit still receives the retained `workspace:ready`).
+- This validates the *entire* shape — registry, emit, async delivery, sticky
+  replay, on, hook, lifecycle — against the event that has no other way to be
+  observed and that plugins demonstrably need.
 
 **Phase 1 — lifecycle events.** `workspace:created` (from `bootstrapWorkspace`,
 reusing `freshlyCreated`), `app:booted`, `runtime:swapped` (forward from the
@@ -419,9 +442,12 @@ single event with *no* current observability, it is one emit line at one choke
 writes — see the §1 timing caveat for why the obvious `setActiveWorkspaceId`
 choke is wrong), and it directly closes gap I3's correctness hole ("plugins that
 auto-create blocks need a reliable active-workspace-is-ready signal rather than
-racing the async bootstrap"). Shipping just this proves the
-registry/emit/async-delivery/subscribe/hook/lifecycle end to end with minimal
-blast radius, and every later event is additive.
+racing the async bootstrap"). It does require the **sticky-replay** mechanism in
+the same slice (the cold-start emit precedes AppEffect registration — §3.5/§4.2),
+so Phase 0 is "bus kernel + sticky events + one event," not the bare fan-out.
+Shipping just this proves the registry/emit/async-delivery/sticky-replay/
+subscribe/hook/lifecycle end to end with minimal blast radius, and every later
+event is additive.
 
 ---
 
@@ -436,10 +462,14 @@ blast radius, and every later event is additive.
 - **Should `block:*` events ever be awaited by the committer?** Proposed no
   (fire-and-forget). If a future use case needs "tx isn't done until observers
   ran," that's a processor, not the bus — keep the line bright.
-- **Replay / late-subscribe for one-shot events** (`app:booted` after a plugin
-  loads late). Probably expose the last value for a small set of "sticky" events
-  (`app:booted`, current `sync:status`, current workspace) rather than a general
-  replay buffer. Revisit in Phase 1.
+- **Replay / late-subscribe for current-state events.** *Decided* (§3.5):
+  current-state events (`workspace:ready`, `app:booted`, latest `sync:status`)
+  are **sticky** — the bus retains the last value and replays it on subscribe —
+  because the cold-start emit precedes AppEffect registration, so plain fan-out
+  would drop it. `workspace:ready` brings sticky into Phase 0. Still open: the
+  exact opt-in API (a per-event `sticky: true` flag in the registry vs. a
+  hardcoded set) and whether `sync:status` should be sticky-per-field; settle
+  when Phase 2 adds it.
 - **Declarative facet vs AppEffect-only.** Start AppEffect-only; add
   `appEventSubscribersFacet` only on demand, and if added, dedup-by-id +
   live-handle re-subscribe like the projector services.
