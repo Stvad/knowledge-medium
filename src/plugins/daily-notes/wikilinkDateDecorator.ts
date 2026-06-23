@@ -59,7 +59,12 @@ const rescheduleButton = ({
     'button',
     {
       'aria-label': 'Reschedule date',
-      className: 'mr-1 inline-flex h-4 w-4 translate-y-[2px] items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+      // align-middle (vertical-align) centers the icon against the date
+      // text by the font's x-height, so it stays centered at any font
+      // size — including the 1.5rem top-level/title rendering. A fixed
+      // translate-y nudge only lined up at body size and floated high on
+      // larger titles.
+      className: 'mr-1 inline-flex h-4 w-4 align-middle items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
       'data-block-interaction': 'ignore',
       onClick: (event: MouseEvent<HTMLButtonElement>) => {
         event.preventDefault()
