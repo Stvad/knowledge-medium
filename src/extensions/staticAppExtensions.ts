@@ -52,6 +52,7 @@ import { keybindingsSettingsPlugin } from '@/plugins/keybindings-settings'
 import { colemakKeybindingsPlugin } from '@/plugins/colemak-keybindings'
 import { extractTypePlugin } from '@/plugins/extract-type'
 import { birthdayPlugin } from '@/plugins/birthday'
+import { characterCounterPlugin } from '@/plugins/character-counter'
 import type { AppExtension } from '@/facets/facet.js'
 
 export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
@@ -109,6 +110,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   videoPlayerPlugin,
   referencesPlugin,
   geoPlugin,
+  characterCounterPlugin,
   aliasPlugin,
   mergeBlocksPlugin,
   // The backlinks-view coordinator reads variants registered by
