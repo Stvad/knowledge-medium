@@ -53,9 +53,9 @@ already runs for that event.
 
 | Event | Payload (sketch) | Existing choke to emit from | Notes |
 |---|---|---|---|
-| `block:created` | `{block, types, workspaceId, txId}` | `Repo._runAndDispatch` post-commit, line ~1166 (`processorRunner.dispatch`) — the snapshots walk already classifies before/after | `before===null && after!==null`. `types` via `getBlockTypes(after)` — a block carries a **`types` list**, not a single type (`properties.ts:119`). |
-| `block:updated` | `{id, before, after, changedFields, types, addedTypes, removedTypes, workspaceId, txId}` | same | `before!==null && after!==null`. `changedFields` via `fieldChanged` (`processorRunner.ts`); membership deltas via the `getBlockTypes`-diff helpers (`properties.ts:260+`). |
-| `block:deleted` | `{id, before, types, workspaceId, txId}` | same | soft-delete = `deleted` flips; hard-delete = `after===null`. `types` via `getBlockTypes(before)`. |
+| `block:created` | `{block, types, workspaceId, txId}` | `Repo._runAndDispatch` post-commit, line ~1166 (`processorRunner.dispatch`) — the snapshots walk already classifies before/after | `!liveBefore && liveAfter` (insert *or* un-delete). `types` via `getBlockTypes(after)` — a block carries a **`types` list**, not a single type (`properties.ts:119`). |
+| `block:updated` | `{id, before, after, changedFields, types, addedTypes, removedTypes, workspaceId, txId}` | same | `liveBefore && liveAfter && content changed`. `changedFields` via `fieldChanged` (`processorRunner.ts`); membership deltas via the `getBlockTypes`-diff helpers (`properties.ts:260+`). |
+| `block:deleted` | `{id, before, types, workspaceId, txId}` | same | `liveBefore && !liveAfter`. Covers **soft-delete** (`tx.delete` flips `deleted=true` on the existing row, `txEngine.ts:306` — `before`/`after` both present) *and* hard-delete (`after===null`). `types` via `getBlockTypes(before)`. |
 | `block:synced` (down-sync applied) | `{ids, workspaceId}` | `startBlocksSyncedObserver` → `applyOutcome` (`syncObserver/observer.ts:167`) — already walks materialized snapshots | distinct from the local-write `block:*` events: these are *remote* rows landing. Pairs with `invalidationRules`. |
 | `navigation:completed` | `{result: NavigationResult, input, origin}` | `navigationVerb.after` (`utils/navigation.ts:289`) — **already exists** as a Sum observer slot | bridge, don't re-emit: an internal `after` observer forwards onto the bus. |
 | `navigation:requested` (pre) | `{input}` | `navigationVerb.before` — **already exists** | optional; most demand is for `completed`. |
@@ -64,7 +64,16 @@ already runs for that event.
 | `workspace:created` | `{workspaceId, freshlyCreated}` | `bootstrapWorkspace` (has `freshlyCreated`) and/or `CreateWorkspaceDialog.onCreated` | `freshlyCreated` is already threaded through bootstrap; `workspace:ready` with `freshlyCreated:true` may subsume this. |
 | `sync:status` (online/offline/synced) | `{connected, hasSynced, uploading, downloading, …}` | PowerSync status listener — already consumed by `system-status` (`SyncIndicatorInput`) | the chip already derives this; the bus would expose the *transitions* to plugins. |
 | `app:booted` | `{repo, workspaceId}` | end of `bootstrapWorkspace` / `App.tsx` post-bootstrap | one-shot per session. |
-| `runtime:swapped` | `{}` | `EffectReconciler.reconcile` warm path / `refreshAppRuntime` (`facets/runtimeEvents.ts`) | the retained CustomEvent already signals this internally; the bus is the typed plugin-facing view. |
+| `runtime:swapped` | `{}` | **after** the new runtime is installed — `AppRuntimeProvider` post `repo.setFacetRuntime(next)` (`AppRuntimeProvider.tsx:172`) + `EffectReconciler.reconcile` (`:194`) | **Not** `refreshAppRuntime` (`facets/runtimeEvents.ts`): that fires *refresh-requested* — it bumps the `useOverrides` generation *before* the async `resolveAppRuntime`, and fires even if that resolve fails — so a handler emitting there would still read the **old** facets/effects. Emit only once `next` is live. |
+
+**The three `block:*` events are mutually exclusive** — define `live ≡ present &&
+!deleted`, and classify each changed row as exactly one of created
+(`!liveBefore && liveAfter`), deleted (`liveBefore && !liveAfter`), or updated
+(`liveBefore && liveAfter && content changed`). This is the only way to honor the
+"exactly once" contract (§3.5): a soft delete keeps the row present with `deleted`
+flipping `false→true`, so a naïve "`before!==null && after!==null` ⇒ updated"
+rule would fire **both** `block:updated` and `block:deleted` for one deletion. The
+`deleted`-transition rows belong to `block:deleted` only.
 
 Two structural observations from the table:
 
@@ -318,9 +327,18 @@ export interface AppEventBus {
   in `sameTxProcessor`; pre-decision interception stays in verb `decorators`.
   This is the single most important boundary: the bus is *notification*, which
   is why it can be fire-and-forget and why it's safe for any plugin to listen.
-- **Ordering across events is the emit order;** within an event it's
-  registration/precedence order. No cross-event ordering guarantees (don't build
-  a dependency graph — if you need "B after A," subscribe B to A's effect).
+- **Per-emit ordering only — no cross-event ordering guarantee.** Handlers for a
+  single `emit` run in registration/precedence order. But because `emit` returns
+  `void` and each call starts its *own* async delivery loop, a slow handler in
+  one emit lets a later emit's handlers run (and finish) first — emits can
+  interleave/overtake. This is deliberate: serializing all emits through one
+  internal promise queue would let a single slow observer head-of-line-block the
+  entire stream, including unrelated events. So the bus does **not** promise that
+  `block:created` for tx A is fully delivered before `block:created` for tx B; it
+  only promises each event's own handlers run in order. If a consumer needs "B
+  after A," subscribe B's handler to A (or chain inside the handler) — don't rely
+  on emit order. (A future per-event opt-in "serialized" mode could be added if a
+  real ordering need appears, but the default stays non-blocking.)
 - **Data events are bridged, not double-emitted.** `block:created/updated/deleted`
   are emitted by *one* internal post-commit hook reading the same snapshots the
   processor runner already has, so they fire exactly once per committed tx and
@@ -417,8 +435,10 @@ unit, zero existing seam, real demand (I3):
   observed and that plugins demonstrably need.
 
 **Phase 1 — lifecycle events.** `workspace:created` (from `bootstrapWorkspace`,
-reusing `freshlyCreated`), `app:booted`, `runtime:swapped` (forward from the
-existing `refreshAppRuntime` signal). Turns the bus into the "lifecycle hook"
+reusing `freshlyCreated`), `app:booted`, `runtime:swapped` (emitted *after*
+`AppRuntimeProvider` installs the new runtime — not the early
+`refreshAppRuntime` refresh-requested signal; see the inventory caveat). Turns
+the bus into the "lifecycle hook"
 surface I3/§6 calls for. Add the declarative `appEventSubscribersFacet` here
 only if a plugin wants config-style subscription.
 
