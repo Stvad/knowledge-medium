@@ -562,10 +562,10 @@ const NAVIGATOR_TARGET_PROBE_BLOCK_ID = ''
 
 /** Resolve the live panel a navigator global command currently targets, routed
  *  through the SAME intent policy as the write (`navigateFromGlobalCommand`), so
- *  a plugin that redirects where global commands land (active vs main) feeds the
- *  read too. Returns null when there's no such panel, or the policy targets a
- *  freshly-created panel (new-panel / sidebar-stack — no existing panel to
- *  anchor a read on). */
+ *  a plugin that redirects where global commands land (active vs main, or even a
+ *  different workspace) feeds the read too. Returns null when there's no such
+ *  panel, or the policy targets a freshly-created panel (new-panel /
+ *  sidebar-stack — no existing panel to anchor a read on). */
 const resolveGlobalCommandTargetPanel = async (
   repo: Repo,
   workspaceId: string,
@@ -578,7 +578,11 @@ const resolveGlobalCommandTargetPanel = async (
     viewport: currentViewport(),
   })
   if (!input) return null
-  const layoutSessionBlock = await resolveLayoutSessionBlock(repo, workspaceId)
+  // Resolve the layout from the policy-retargeted workspace when it sets one,
+  // mirroring the write path (`navigateFromGesture` → `navigate`) — otherwise a
+  // policy that retargets the workspace would make the read anchor on the gesture
+  // workspace while the navigation lands in the retargeted one.
+  const layoutSessionBlock = await resolveLayoutSessionBlock(repo, input.workspaceId ?? workspaceId)
   switch (input.target) {
     case 'active':
       return resolveActivePanelRow(layoutSessionBlock)

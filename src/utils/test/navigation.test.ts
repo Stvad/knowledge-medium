@@ -466,6 +466,29 @@ describe('navigationIntentVerb (intent policy seam)', () => {
     })
   })
 
+  it('the read probe honors a policy-retargeted workspace (read/write aligned)', async () => {
+    stubViewport(false)
+    // Seed a main panel in each workspace via navigate (creates each layout
+    // session properly). WS shows b-ws1; ws-2 shows b-ws2.
+    await navigate(env.repo, {target: 'main', blockId: 'b-ws1', workspaceId: WS})
+    await navigate(env.repo, {target: 'main', blockId: 'b-ws2', workspaceId: 'ws-2'})
+
+    // Policy retargets navigator gestures to ws-2; the read-side probe must
+    // anchor on that retargeted workspace, matching where the write would land
+    // (otherwise daily-note prev/next anchors on the wrong workspace).
+    env.repo.setRuntimeContributions(navigationIntentVerb.decoratorsFacet, 'test-policy', [
+      next => async gesture => {
+        const input = await next(gesture)
+        return input && gesture.role === 'navigator' ? {...input, workspaceId: 'ws-2'} : input
+      },
+    ])
+
+    // Reads from ws-2 (the retargeted workspace), not WS's b-ws1.
+    await vi.waitFor(async () => {
+      expect(await resolveGlobalCommandTopLevelBlockId(env.repo, WS)).toBe('b-ws2')
+    })
+  })
+
   it('a policy decorator redirects where global commands land (navigator → active on desktop)', async () => {
     // The original motivating example: a plugin redirects navigator commands to
     // the active panel even on desktop, by rewriting the policy's NavigateInput.
