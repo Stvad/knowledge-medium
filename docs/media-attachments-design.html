@@ -85,8 +85,7 @@
 <strong>Status:</strong> design — not yet implemented (no <code>src/</code> code yet); last verified
 against code 2026-06-23 (a grounding pass found zero wrong code claims). Treat as current intent. The
 least-settled part is the byte-lane lifecycle / failure-recovery machinery (§8–§9, §16): the happy path
-and the crypto / threat model are solid; the recovery edges are where the spec is still hardening. The
-block-id vs keyed-hash storage path (§10) is an open design fork.
+and the crypto / threat model are solid; the recovery edges are where the spec is still hardening.
 </aside>
 
 <div class="info">
@@ -94,7 +93,8 @@ block-id vs keyed-hash storage path (§10) is an open design fork.
 type (in the <code>types</code> array, via <code>typesProp</code>),
 embedded into prose with the existing <code>!((id))</code> mechanism — no new reference syntax, and
 metadata rides the existing encrypted block-content columns for free. The <em>bytes</em> live in an
-object store (Supabase Storage v1), behind a <code>BlobStore</code> interface. The reshaping
+object store (Supabase Storage v1) behind a <code>BlobStore</code> interface, content-addressed by a
+per-workspace keyed hash so uploads are idempotent and object dedup is an invariant (§10). The reshaping
 constraint is <strong>E2EE</strong>: for an encrypted workspace the server holds only ciphertext and
 never the key, so bytes are sealed client-side with the workspace key and access becomes
 <em>entirely client-side</em>. We do <strong>not</strong> write two implementations — there is one
@@ -264,7 +264,7 @@ content: 'image: screenshot.png'   // human-readable summary</code></pre>
   <text class="sub" x="320" y="120">embed</text>
   <rect class="n" x="500" y="24" width="240" height="40" rx="6"/>
   <text class="lbl" x="514" y="42">Object store</text>
-  <text class="sub mono" x="514" y="58">&lt;ws&gt;/&lt;media-block-id&gt;</text>
+  <text class="sub mono" x="514" y="58">&lt;ws&gt;/HMAC(K_id, hash)</text>
   <path class="ed" d="M 280 120 C 380 90, 420 60, 500 50"/>
   <text class="sub" x="360" y="70">bytes</text>
 </svg>
@@ -360,9 +360,11 @@ encode/decode seam is mode-aware, and plaintext is its degenerate (identity) bra
 <ul>
   <li><strong>AAD binding extends the existing pattern.</strong> Where content columns bind
     <code>contentAad(id, workspace_id, column)</code>, asset bytes bind
-    <code>(asset_block_id, workspace_id, "asset-bytes", schema_version)</code> so a ciphertext blob
-    cannot be swapped between blocks or workspaces. (Schema version stays in the AAD for the same
-    cheap-hierarchy-upgrade reason §13 of the e2ee doc keeps it there.)</li>
+    <code>(content_hash, workspace_id, "asset-bytes", schema_version)</code> — the <em>content hash</em>,
+    not a block id, because the object is content-addressed and shared by every block carrying those
+    bytes (§10); binding one block id would stop a co-referencing block from opening it. The content
+    hash still prevents cross-content / cross-workspace swaps. (Schema version stays in the AAD for the
+    same cheap-hierarchy-upgrade reason §13 of the e2ee doc keeps it there.)</li>
   <li><strong>A binary envelope, not the base64url text envelope.</strong> The <code>enc:v1:</code>
     envelope is base64url (≈33% bloat) — wrong for bytes. Add a sibling
     <strong><code>encb:v1:</code></strong> binary framing (<code>magic ‖ nonce ‖ ciphertext‖tag</code>
@@ -371,11 +373,11 @@ encode/decode seam is mode-aware, and plaintext is its degenerate (identity) bra
 
 <div class="warn">
 <strong>The AAD does not bind freshness — verify the content hash on read.</strong> Every AAD term
-(<code>asset_block_id</code>, <code>workspace_id</code>, the literal, schema version) and the storage
-path are <em>stable across an asset's whole life</em>. AAD stops cross-block / cross-workspace swaps,
-but it does <em>not</em> stop a <strong>rollback/replay of an older ciphertext for the same
-<code>asset_block_id</code></strong>: an untrusted server (in scope per e2ee §2 — it may serve
-whichever bytes it likes) can return a stale blob that decrypts cleanly and the GCM tag verifies. The
+(the <code>content_hash</code>, <code>workspace_id</code>, the literal, schema version) and the
+content-addressed storage path are <em>fixed by the bytes themselves</em>. AAD stops cross-content /
+cross-workspace swaps, but it does <em>not</em> stop an untrusted server (in scope per e2ee §2 — it may
+serve whichever bytes it likes) from returning <strong>arbitrary or stale bytes for a requested content
+path</strong> that happen to decrypt cleanly and pass the GCM tag. The
 bytes lane has no <code>updated_at</code>/monotonicity channel the text path gets from PowerSync. The
 fix is already in hand: the asset block stores <code>hash = sha256(plaintext)</code> in its
 (encrypted) <code>properties_json</code>; the read path <strong>must verify the decrypted bytes
@@ -388,18 +390,16 @@ the encrypted block state, so it would have needed an <strong>SW-readable metada
 only fail closed, never downgrade.</div>
 
 <div class="warn">
-<strong>Read-side fail-closed is not enough — the write lane must be monotonic too.</strong> A new hash
-makes <em>reads</em> reject stale bytes, but two uploads targeting the same
-<code>&lt;ws&gt;/&lt;asset_block_id&gt;</code> path can still race: if an asset is edited and a stale
-queued/in-flight upload lands <em>after</em> the newer one, the old body overwrites the object after the
-block's hash already advanced — then <em>every</em> reader rejects on mismatch and the asset is
-permanently broken (the newer queue entry was already confirmed and dropped). The fix is
-<strong>immutable, write-once asset objects</strong>: an edit/replacement creates a <em>new</em> asset
-block (new <code>id</code> → new path) and re-points the embed, rather than re-uploading under the
-existing id. Bytes under a given <code>asset_block_id</code> never change, so there is no same-path
-collision and no "older version" for the server to replay; the §10.1 upload guard enforces it with a
-no-overwrite precondition (reject if the object already exists). The old object orphans and is GC'd
-(§16). (Dedup still reuses an existing immutable asset block by hash — that's a read, not a rewrite.)</div>
+<strong>Content-addressing makes the write lane intrinsically immutable — no monotonicity machinery.</strong>
+Because the path is derived from the bytes (<code>&lt;ws&gt;/HMAC(K_id, sha256)</code> for E2EE, §10),
+different content lands at a <em>different</em> path and identical content at the <em>same</em> one — so
+the &quot;two uploads race at one path / a stale upload overwrites a newer object&quot; hazard simply
+does not exist, and there is no &quot;older version&quot; for the server to replay. An edit is new bytes
+→ a new content path → a new asset block; the old object becomes unreferenced and is GC'd (§16).
+<strong>First-write-wins at a path is the entire rule</strong> (§10.1) — a block-id path needed an
+immutability rule + a no-overwrite precondition + an idempotency token to reach the same place; the
+content-addressed path gets it for free. (Dedup reuses an existing asset block by hash — a read, not a
+rewrite.)</div>
 
 <p>The <code>encb:v1:</code> magic is a <strong>format tag, not an authorization signal.</strong>
   Whether to decrypt is decided by the workspace's mode pin (§7), exactly as the text path decides via
@@ -782,7 +782,7 @@ boundary-agnostic except where they name the SW.
     <code>block.properties.hash</code>) — the §7.1.1 mirror machinery exists only because the SW can't reach
     app state.</li>
   <li><strong>Plaintext bytes in OPFS (not SQLite, not Cache API).</strong> The app-thread path caches
-    decrypted bytes as plain <strong>OPFS files</strong> (<code>attachments/&lt;user&gt;/&lt;ws&gt;/&lt;id&gt;</code>)
+    decrypted bytes as plain <strong>OPFS files</strong> (<code>attachments/&lt;user&gt;/&lt;ws&gt;/&lt;content-key&gt;</code>)
     — the store the bytes always wanted (§6/§17 keep large blobs <em>out</em> of SQLite; an earlier draft
     wrongly floated DB-blob storage purely for a "free wipe," which both bloats the hot query DB and
     contradicts that principle). Destruction is not a differentiator either way now — the coarse clear
@@ -878,16 +878,16 @@ investigation).
 <tr><th>Tier</th><th>Contents &amp; key</th><th>Durability</th></tr>
 <tr><td><strong>Byte replica</strong></td>
     <td>Ciphertext at rest — <code>encb:v1:</code> for E2EE, raw bytes for plaintext (identity, §5);
-      mirrors exactly what the server holds. Keyed by block id (<code>&lt;ws&gt;/&lt;id&gt;</code>, the
-      Storage path).</td>
+      mirrors exactly what the server holds. Keyed by the content-addressed Storage path
+      (<code>&lt;ws&gt;/&lt;content-key&gt;</code>, §10).</td>
     <td>The offline guarantee: eagerly replicated, <code>persist()</code>-backed, evicted only under
       genuine quota pressure and only after the DB. A <em>locked</em> E2EE device can still replicate it
       (it stores ciphertext it can't yet read) — offline-prep before unlock, and plaintext never touches
       durable storage.</td></tr>
 <tr><td><strong>Display cache</strong></td>
     <td>Decrypted bytes ready for <code>&lt;img&gt;</code>, <em>derived</em> from the replica at render
-      time. Keyed <code>&lt;ws&gt;/&lt;id&gt;/&lt;hash&gt;</code> (the hash gives integrity /
-      self-invalidation, §5.1).</td>
+      time. Keyed by the same content path (<code>&lt;ws&gt;/&lt;content-key&gt;</code>; the content
+      key already encodes the hash, giving integrity / self-invalidation, §5.1).</td>
     <td>Genuinely throwaway — re-derive from the replica with no network. Only E2EE needs it as a
       separate tier; for a plaintext workspace the replica bytes <em>are</em> the display bytes, so it
       collapses to one store.</td></tr>
@@ -909,13 +909,12 @@ investigation).
     files are the natural fit (read the file → object URL → <code>&lt;img&gt;</code>). (The rejected SW
     path would have used the Cache API as its SW-native store instead — same bytes, different shell.)
     User-scoping (<code>assets:&lt;user_id&gt;</code>) is the access-isolation boundary (§7);
-    workspace-scoping makes leave / lock evict only the affected bytes. Because assets are
-    <strong>immutable write-once</strong> — an edit is a <em>new</em> block id at a fresh path
-    (§5.1/§10.1) — a given block id's replica bytes never change, so the display cache carries the
-    <code>hash</code> in its key (self-invalidating if a buggy path ever produced a mismatch), and a
-    fetched byte is accepted only if it matches the block's expected <code>hash</code> (read directly
-    from the decrypted block in-thread); never serve <code>&lt;ws&gt;/&lt;id&gt;</code> bytes for a
-    different hash.</li>
+    workspace-scoping makes leave / lock evict only the affected bytes. Because the object is
+    <strong>content-addressed</strong> (§10) it is immutable by construction — an edit is new content at
+    a new path, so a given content key's bytes never change; the cache carries the content key (which
+    encodes the <code>hash</code>) so a fetched byte is accepted only if it matches the block's expected
+    <code>hash</code> (read directly from the decrypted block in-thread); never serve a content object's
+    bytes for a different hash.</li>
   <li><strong>Demand beats prefetch.</strong> The render path and the background replicator call the
     <em>same</em> fetch primitive (fetch ciphertext → verify hash → store in replica) over <em>one
     in-flight map</em>, so a demand fetch and a queued backlog item for the same asset <strong>coalesce
@@ -988,18 +987,17 @@ free space&quot;) rather than accepting bytes you might have to evict.
   guarded upload function (§10.1) on a different path with no such queue, so they need their own
   durable one. Crucially the queue <strong>owns the encoded bytes</strong>, not just a pointer: an
   IndexedDB/OPFS record of
-  <code>{ user_id, asset_block_id, workspace_id, status, idempotencyToken, encodedBytes }</code> (the
+  <code>{ user_id, asset_block_id, workspace_id, status, encodedBytes }</code> (the
   <code>encb:v1:</code> payload for E2EE, raw bytes otherwise), held in a store that is <em>not</em> the
   evictable display cache, so a pending upload can never lose its source bytes to LRU eviction or an
-  offline window (the §8 hazard). <strong>Two record fields are load-bearing and were under-specified
-  earlier:</strong> (a) the <code>idempotencyToken</code> (§10.1) must be <em>persisted in the
-  record</em> and threaded through <code>BlobStore.put</code>, so a retry <em>after a reload</em>
-  re-presents the original token — otherwise the already-written object looks like a no-token/different
-  overwrite and becomes a permanent failure; (b) the <code>user_id</code> namespaces the record (and
+  offline window (the §8 hazard). <strong>The <code>user_id</code> field is load-bearing</strong>: it namespaces the record (and
   every cancel / drain key), because the store is shared across accounts in the profile but draining is
   per-user — each upload rides the active user's session/token, so without the namespace a drain could
   retry account A's entry under B's session, uploading A's bytes with B's credential or against the
-  wrong workspace membership. The <code>status</code> field has a lifecycle that closes the metadata-commit / byte-stage
+  wrong workspace membership. The upload target is the <em>content-addressed</em> path
+  (<code>&lt;ws&gt;/HMAC(K_id, hash)</code>, §10) computed from the block's hash — so a retry, even
+  after a reload, re-PUTs to the same path and is first-write-wins idempotent (§10.1); no random
+  idempotency token is needed (that was the block-id path's workaround). The <code>status</code> field has a lifecycle that closes the metadata-commit / byte-stage
   ordering gap (§11): <code>staged</code> (durable but <em>not</em> drainable) → <code>pending</code>
   (drainable) → <code>uploading</code> → uploaded (entry cleared; bytes <em>retained</em> in the
   replica, §8). Capture writes the record as
@@ -1059,7 +1057,7 @@ everything else — there is no per-store wipe participation to coordinate, and 
 hazard (plaintext bytes go with the DB). But that destruction model, like a lost / reinstalled device or
 a crash, means a device can lose its <em>un-uploaded</em> bytes while the asset block's <em>metadata</em>
 already synced (PowerSync was up; the byte upload wasn't) — leaving the server with a block whose
-<code>&lt;ws&gt;/&lt;asset_block_id&gt;</code> object can never materialize, a broken embed on peers that
+content-addressed object can never materialize, a broken embed on peers that
 did nothing wrong. There is no reliable client-side fix at that moment (the origin device is gone or
 offline) — but the handling must <strong>not</strong> be a destructive server-side reap of the block.
 Block deletion is a subtree-aware soft-delete (<code>src/data/mutators.ts</code>), so reaping the asset
@@ -1079,48 +1077,37 @@ papered over by deleting user content.</div>
 <h2 id="storage">10. Storage layout &amp; RLS</h2>
 
 <p>One private bucket, <code>attachments</code>. Object path
-  <strong><code>&lt;workspace_id&gt;/&lt;asset_block_id&gt;</code></strong> — block-id-addressed, NOT
-  content-hash-addressed. For an E2EE workspace the object is the <code>encb:v1:</code> ciphertext;
-  for a plaintext workspace it is the raw bytes (identity case, §5).</p>
+  <strong><code>&lt;workspace_id&gt;/&lt;content-key&gt;</code></strong> — <em>content-addressed</em>:
+  <code>content-key = HMAC(K_id, sha256(plaintext))</code> for an E2EE workspace, plain
+  <code>sha256(bytes)</code> for a plaintext one. For E2EE the object is the <code>encb:v1:</code>
+  ciphertext; for plaintext, the raw bytes (identity case, §5). Content-addressing makes uploads
+  idempotent and object dedup an <em>invariant</em>; the per-workspace HMAC key is what keeps it from
+  becoming a content oracle (below).</p>
 
 <div class="info">
-<strong>Why not content-addressed paths (and what we keep instead).</strong> An earlier (pre-E2EE)
-sketch keyed everything off <code>sha256(bytes)</code> — path, cache, dedup — which is clean because
-content-addressing makes uploads idempotent and dedup free. E2EE removes the hash from the two
-<em>server-visible</em> path, primarily for one reason:
+<strong>Why a <em>keyed</em> content hash (and what it buys).</strong> Content-addressing is the design
+we want — it makes uploads idempotent (same bytes → same path → a re-PUT is a no-op) and dedup an
+invariant rather than a race. The only thing that rules out a <em>raw</em> <code>sha256(plaintext)</code>
+path under E2EE is the <strong>content oracle</strong>: <code>&lt;ws&gt;/&lt;sha256-of-plaintext&gt;</code>
+would let the untrusted server confirm &quot;does this workspace contain <em>this known file</em>?&quot;
+by hashing a candidate and probing for the object. The fix is to <em>key</em> the hash:
+<code>&lt;ws&gt;/HMAC(K_id, sha256(plaintext))</code> is deterministic within a workspace (idempotent +
+dedup), unguessable to the server (no oracle), and distinct across workspaces (no cross-workspace
+correlation). A <strong>plaintext</strong> workspace has no secret to protect, so it uses the raw
+<code>sha256(bytes)</code> — the server already holds those bytes.
 <ul>
-  <li><strong>Content oracle.</strong> A path <code>&lt;ws&gt;/&lt;sha256-of-plaintext&gt;</code> lets
-    the untrusted server confirm "does this workspace contain <em>this known file</em>?" by hashing a
-    candidate and probing for the object — a confidentiality break for known files.</li>
-  <li><strong>(Secondary) share-join shape.</strong> A block-id path keeps a future share-RLS join
-    (object → block) trivially possible; a raw-hash path would need a separate mapping. Minor — subtree
-    sharing is unshipped and not a design driver (§12) — but noted.</li>
+  <li><strong><code>K_id</code> is an HMAC subkey derived from the WK material via HKDF at import
+    time</strong> — <em>not</em> the stored WK handle, which is a non-extractable AES-GCM key WebCrypto
+    won't sign with. The raw key bytes are briefly in scope at unlock/create
+    (<code>parseWorkspaceKey</code> / <code>importWorkspaceKey</code>) before the non-extractable import;
+    that is the only window to derive <code>K_id</code>, so derive both there.</li>
+  <li><strong>What this removes</strong> (vs a block-id path): the idempotency token (§9/§10.1), the
+    write-once monotonicity rule (§5.1), and duplicate-object GC (§11) — the path <em>is</em> the
+    idempotency key and the immutability guarantee. Fewer moving parts, not just better scaling.</li>
+  <li><strong>Its one cost</strong> — the path no longer carries the block id, so a future share-RLS
+    join (object → block) needs a separate <code>content_key → block</code> mapping (§10.1). Zero today:
+    subtree sharing is unshipped and not a design driver (§12).</li>
 </ul>
-Hashing itself is <em>not</em> lost — it stays everywhere it's <strong>client-local</strong>: the
-cache key (<code>&lt;ws&gt;/&lt;id&gt;/&lt;hash&gt;</code>, §8), workspace-wide dedup (§11), and the
-integrity/replay check (§5.1); and the hash lives in the <em>encrypted</em> <code>properties_json</code>
-so the server never sees it. Only the server-visible path and the block id drop it. The direct cost is
-that idempotent-by-content <em>uploads</em> are gone (the server can't return "already have these bytes"
-for a re-PUT under a new id) — but workspace-wide dedup reuses the existing block + object, so the
-common "same image again" case still uploads exactly once (§11).
-<br><br>
-<strong>The alternative that fixes that: a keyed hash.</strong> Path
-<code>&lt;ws&gt;/HMAC(K_id, sha256-of-plaintext)</code> restores content-addressing — deterministic
-within a workspace (dedup + idempotent PUT return), unguessable to the server (no oracle), and
-distinct across workspaces (no correlation). (<code>K_id</code> is a <em>separate HMAC-capable subkey
-derived from the WK material via HKDF at import time</em> — <em>not</em> the stored WK handle, which is
-a non-extractable AES-GCM key WebCrypto won't let you sign with; deriving the subkey while the raw
-bytes are briefly available at paste is the only window.) It is genuinely the <em>better-scaling</em> design: it
-eliminates the dedup races and duplicate-object / re-upload wrinkles entirely, and those races get
-<em>more</em> likely as device count and concurrency grow, not less. Its one cost — the path no longer
-carries the block id, so a future share-RLS join would need a separate <code>object_key → block_id</code>
-mapping — is now <em>minor</em>, since subtree sharing is unshipped and no longer a design driver (§12).
-So the fork is mostly <em>block-id paths</em> (simplest to ship now) vs <em>keyed-hash paths</em>
-(idempotent uploads + dedup convergence that scale). v1 may ship block-id paths to move faster, but that
-is a deliberate design call to revisit
-on merits, <strong>explicitly not settled by current fleet size</strong> — adopting keyed-hash later
-is a storage re-key + mapping backfill, and <em>that</em> migration is the only place the small fleet
-legitimately makes it cheap. Recorded so it isn't re-discovered.
 </div>
 
 <p>Storage <strong>reads</strong> are RLS-gated by workspace membership on the path's first segment.
@@ -1197,31 +1184,28 @@ all uploads go through an upload-mediating <strong>Edge Function</strong> that <
 inspects the body bytes itself</em> and then writes them with service-role. Per request it:
 <ol>
   <li><strong>Authenticates the caller's JWT and authorizes the write</strong> — checks
-    <code>private.is_workspace_writer(&lt;workspace_id&gt;, caller)</code> and that the path's
-    workspace/asset is the intended target — <em>before</em> using the bypass-RLS credential. The
-    service-role write must re-impose the authorization that direct RLS would have enforced; otherwise
-    a read-only or recently-removed member who can invoke the function could create/replace
-    <code>&lt;ws&gt;/&lt;asset&gt;</code> bytes that <code>blocks_write</code>/storage policies deny.</li>
+    <code>private.is_workspace_writer(&lt;workspace_id&gt;, caller)</code> for the path's first segment
+    — <em>before</em> using the bypass-RLS credential. The service-role write must re-impose the
+    authorization that direct RLS would have enforced; otherwise a read-only or recently-removed member
+    who can invoke the function could write <code>&lt;ws&gt;/&lt;content-key&gt;</code> bytes that
+    <code>blocks_write</code> / storage policies deny.</li>
   <li><strong>Inspects the bytes</strong> — for an object under an <strong>E2EE-workspace
     prefix</strong>, rejects bodies not beginning with the <code>encb:v1:</code> magic + the minimum
     nonce(12)+tag(16) length (the binary analog of <code>is_enc_v1_envelope</code>), with the same
     permanent-failure discipline so a stale client quarantines rather than retries forever. Shape-only
     (the server has no key), sufficient to keep bare plaintext out.</li>
-  <li><strong>Enforces write-once, idempotently.</strong> Asset objects are immutable; an
-    edit/replacement is a <em>new</em> asset block at a fresh path (§5.1), so a stale queued upload can
-    never overwrite a newer object and strand the asset on a hash mismatch. The guard rejects an
-    overwrite by <em>different</em> content, but must treat a re-PUT of the <em>same</em> content as
-    <strong>success, not failure</strong>: if the function wrote the object but the response was lost
-    before §9 deleted the durable queue entry, the retry would otherwise turn a completed upload into a
-    permanent queue error. So the client sends an idempotency token, the function stores it as object
-    metadata, and on a PUT to an existing path: same token → <code>200</code> (already done); different
-    token → reject. The token is a <strong>per-asset random value</strong> (a UUID minted at capture,
-    carried by the queue entry so retries present the same one) — <em>not</em>
-    <code>HMAC(WK, …)</code>: the WK is a non-extractable AES-GCM <code>CryptoKey</code>
-    (<code>workspaceKey.ts</code> / <code>keyStore.ts</code>) that WebCrypto allows <em>only</em> to
-    encrypt/decrypt, never to sign/HMAC or export, so a keyed digest can't be computed from the stored
-    handle. A random token needs no key and is opaque to the server anyway. (Under immutable ids only
-    the same-token retry is legitimate; a different token to an existing path signals a bug/attack.)</li>
+  <li><strong>Enforces write-once by content-addressing — no token.</strong> The path <em>is</em> the
+    content key (§10), so an honest client's path uniquely identifies its bytes and an edit is
+    automatically a <em>different</em> path: there is no same-path overwrite race and no &quot;older
+    version&quot; to strand the asset. The guard is therefore trivial — a PUT to a <em>new</em> path
+    writes; a PUT to an <em>existing</em> path is <strong>first-write-wins success</strong>
+    (<code>200</code>), never an overwrite. The path doubles as the idempotency key: if the function
+    wrote the object but the response was lost before §9 cleared the queue entry, the retry finds the
+    object present and returns success — so no random idempotency token is needed (the block-id path
+    needed one precisely because its path did <em>not</em> encode content). The guard can't verify the
+    body <em>matches</em> the content key (it has no key, sees only ciphertext) and doesn't need to: a
+    member who mis-PUTs garbage to a path is caught by the read-side hash check (§5.1), and the untrusted
+    server can't compute a path at all.</li>
 </ol>
 <strong>Not a signed-upload token.</strong> Minting a one-shot signed upload URL would let the client
 <code>uploadToSignedUrl</code> the body <em>directly to Storage</em>, which Supabase accepts without
@@ -1232,11 +1216,12 @@ acceptable for the guarantee, and reads stay direct/RLS-gated (the hot path). La
 (§15) with the bucket + RLS migration.</div>
 
 <div class="info">
-<strong>Doesn't foreclose a future share-join.</strong> Because the path carries
-<code>asset_block_id</code>, storage RLS <em>could</em> later widen from "membership" to "membership
-<em>or</em> a share covers this block" (join <code>storage.objects → blocks</code>) if subtree sharing
-is ever built (§12). We neither build nor design around that now — it is incidental option value from
-the natural block-id addressing, not a requirement.
+<strong>Share-join needs a small mapping under content-addressing.</strong> The path carries a
+<em>content key</em>, not <code>asset_block_id</code>, so a future share-RLS widening (&quot;membership
+<em>or</em> a share covers this block&quot;, join <code>storage.objects → blocks</code>) would need a
+separate <code>content_key → block(s)</code> mapping. That cost is <em>zero today</em> — subtree sharing
+is unshipped and not a design driver (§12) — and is the deliberate, minor price of content-addressing's
+idempotent uploads + invariant dedup.
 </div>
 
 <p>Per the project's Supabase rule, the bucket + its RLS land in one migration with
@@ -1298,10 +1283,11 @@ asset block cancels the queue entry and deletes any already-uploaded object.</di
 <div class="warn">
 <strong>Dedup is workspace-wide.</strong> Reuse <em>any</em> same-hash asset block in the workspace —
 the embed is just a <code>!((id))</code> to it, wherever that asset block lives. This is the natural
-model and restores the content-addressing win the block-id path otherwise loses: a reused asset keeps
-the <em>same</em> block id and the <em>same</em> <code>&lt;ws&gt;/&lt;asset_block_id&gt;</code> object,
-so "paste the same image again" creates <strong>no new block and no new upload</strong> — only a fresh
-paste with no workspace match uploads. A deduped asset therefore has <em>multiple</em> embed referrers,
+model and rides content-addressing directly: a reused asset keeps the <em>same</em> block id and the
+<em>same</em> content-addressed object, so "paste the same image again" creates <strong>no new block and
+no new upload</strong> — and even a fresh paste that <em>misses</em> the block lookup still lands on the
+same content-addressed object (§10), so it never produces a duplicate upload, only at worst a duplicate
+block (next box). A deduped asset therefore has <em>multiple</em> embed referrers,
 so its lifetime rides the existing block-reference machinery (§3): GC the asset block + its object when
 the referrer count reaches zero, not when any single embed is removed. But <strong>never reap on the
 live zero-crossing</strong> — moving an embed (cut then paste), or a cross-device add that hasn't synced
@@ -1311,23 +1297,21 @@ objects (§16), preserving any child content. No new refcount system — just no
 subtree":</strong> the data model isn't strictly tree-shaped, and subtree sharing is unshipped (§12), so
 scoping dedup to it would pay for a feature that doesn't exist and doesn't map cleanly onto today's
 blocks. If subtree sharing is ever built, retargeting a workspace-wide asset into a shared scope (e.g.
-copy under the shared root at share time) is <em>that</em> feature's job; the block-id path leaves it
-possible.</div>
+copy under the shared root at share time) is <em>that</em> feature's job; the content-addressed path
+leaves it possible (via the §10.1 <code>content_key → block</code> mapping).</div>
 
 <div class="warn">
-<strong>Dedup is best-effort, not an invariant.</strong> The lookup reads <em>local</em> synced state,
-so two devices (or two tabs, or an offline-then-reconnect) pasting the same image concurrently both
-miss, both create an asset block, and — because the object path is <code>&lt;ws&gt;/&lt;asset_block_id&gt;</code>
-— produce <strong>two Storage objects</strong> for identical bytes. The server can't break the tie
-(randomized GCM ⇒ no ciphertext dedup; <code>hash</code> is inside encrypted
-<code>properties_json</code>). So: state dedup as best-effort and make GC tolerate multiple blocks per
-hash. The tempting "make the id a deterministic function of <code>(workspace_id, hash)</code> so
-pastes converge" is <strong>unsafe as stated under E2EE</strong> — an id derived from the plaintext
-hash is a content oracle (the server could confirm a known image's presence by id, or correlate the
-same image across workspaces). If determinism is wanted, derive the id with a workspace HMAC subkey
-(<code>HMAC(K_id, hash)</code>, K_id derived from WK material at import — see §10; the stored AES-GCM WK
-handle itself can't sign) so it's workspace-local and reveals nothing to the server — otherwise keep
-random ids + tolerate duplicates.
+<strong>Object dedup is an invariant; only <em>block</em> dedup is best-effort.</strong> Because the
+object path is content-addressed (<code>HMAC(K_id, sha256)</code>, §10), concurrent pastes of the same
+image — two devices, two tabs, offline-then-reconnect — all compute the <em>same</em> path and converge
+on <strong>one</strong> Storage object (the PUT is first-write-wins idempotent, §10.1); there are no
+duplicate objects to reconcile, even though GCM is randomized (the path is keyed off the
+<em>plaintext</em> hash the client holds, not the ciphertext). What can still diverge is the
+<em>block</em>: the dedup lookup reads local synced state, so concurrent pastes may create two
+<code>media</code> blocks that both reference that one object. Harmless — both render, both verify
+against the same content, and object GC is content-reference-counted (delete the object when no block
+in the workspace carries its hash, §16), so a duplicate block costs nothing and resolves as sync
+converges. No duplicate-object GC, no idempotency token, no &quot;tolerate multiple objects per hash.&quot;
 </div>
 
 <h2 id="sharing">12. Subtree sharing (deferred — not a design driver)</h2>
@@ -1337,8 +1321,9 @@ random ids + tolerate duplicates.
   strictly tree-shaped anymore, so "share this subtree" is itself an unsolved design a future effort
   would have to work out. So this design does <em>not</em> bend around it: dedup is workspace-wide (§11),
   asset placement isn't share-driven, and we add no share machinery now. We also don't <em>foreclose</em>
-  it — the block-id storage path keeps a future "membership <em>or</em> a share covers this block" RLS
-  join possible (§10), and retargeting a workspace-wide asset into a shared scope (e.g. copy under the
+  it — the content-addressed storage path keeps a future "membership <em>or</em> a share covers this
+  block" RLS join possible (via a §10.1 <code>content_key → block</code> mapping), and retargeting a
+  workspace-wide asset into a shared scope (e.g. copy under the
   shared root at share time) would be that feature's job, not ours.</p>
 
 <div class="warn">
@@ -1397,19 +1382,16 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
 <p>All object-store access goes behind a ~50-line interface:</p>
 
 <pre><code>interface BlobStore {
-  // No `hash` parameter: this seam drains to the server (the §10.1 Edge Function), and the
-  // plaintext sha256 must never reach the origin — it is the §10 content oracle. The hash lives
-  // ONLY in client-local paths (cache key §8, replay check §5.1, dedup §11),
-  // sourced from the encrypted properties_json (in-thread, the resolver holds the decrypted
-  // block), never the wire. idempotencyToken (§9/§10.1) IS passed: it is persisted in the queue
-  // record so a post-reload retry re-presents it; same token on an existing object → success.
-  put(workspaceId, assetBlockId, idempotencyToken, bytes): Promise&lt;void&gt;
-  // The fetch URL (RLS-gated Storage GET target) is CLEAN — no hash on the wire.
-  // The expected hash (cache key §8 + replay check §5.1) comes from block.properties.hash
-  // (the in-thread resolver holds the decrypted block), never a URL param — a ?h= would
-  // leak the plaintext sha256 to the origin (the §10 content oracle).
-  url(workspaceId, assetBlockId): string
-  delete(workspaceId, assetBlockId): Promise&lt;void&gt;
+  // The object is addressed by a per-workspace CONTENT KEY, not the block id:
+  //   contentKey = HMAC(K_id, sha256(plaintext))  (E2EE) | sha256(bytes) (plaintext), §10.
+  // The resolver computes it (it holds K_id + the plaintext hash from the decrypted
+  // block); BlobStore just routes bytes to <ws>/<contentKey>. No idempotency token —
+  // the content path IS the idempotency key: a re-PUT to an existing path is
+  // first-write-wins success (§10.1). The plaintext sha256 never reaches the origin
+  // as such: for E2EE the wire path is the HMAC, unguessable without K_id (no oracle, §10).
+  put(workspaceId, contentKey, bytes): Promise&lt;void&gt;
+  url(workspaceId, contentKey): string
+  delete(workspaceId, contentKey): Promise&lt;void&gt;
 }</code></pre>
 
 <p>v1 backs it with Supabase Storage. E2EE actually <em>increases</em> portability: because the
@@ -1470,8 +1452,9 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
     error, deferring resumable/tus upload to vNext. Where exactly is the cap enforced?</li>
   <li><strong>Asset block deletion → byte GC, and the two orphan directions:</strong> deleting an asset
     block (once its last <code>!((id))</code> referrer is gone — workspace-wide dedup means one asset can
-    have many, §11) ⇒ delete the object (storage cascade or an explicit step); dangling embeds render the
-    existing
+    have many, §11) ⇒ delete the object <em>only when no block in the workspace still carries its content
+    hash</em> (object GC is content-reference-counted — one content-addressed object may back several
+    blocks, §11); dangling embeds render the existing
     "unresolved embed" state. Beyond the <em>undo</em> case (handled by the §9 byte-lane compensator), a
     vNext orphan sweep covers <strong>both</strong> directions, but they are <em>not</em> symmetric: orphan
     <em>objects</em> (a Storage object with no block — e.g. an interrupted delete) are auto-deletable;
@@ -1498,8 +1481,8 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
     <td><strong>New</strong> accepted leak, outside the e2ee §15 set. Size-bucket padding if the threat
       model later cares.</td></tr>
 <tr><td>Byte AAD doesn't bind freshness</td>
-    <td>An untrusted server can replay an older ciphertext for the same asset (no PowerSync
-      monotonicity on the byte lane).</td>
+    <td>An untrusted server can serve arbitrary or stale bytes for a requested content path (no
+      PowerSync monotonicity on the byte lane).</td>
     <td>Closed by verifying decrypted bytes against the block's synced <code>hash</code> on read
       (§5.1) — not left as a residual.</td></tr>
 <tr><td>Server byte-ciphertext enforcement is a deliberate add</td>
@@ -1511,10 +1494,13 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
     <td>A second durable upload queue; eventual consistency between metadata and bytes; undo needs a
       byte-lane compensator (§9).</td>
     <td>Keeps large blobs out of SQLite/PowerSync entirely; the queue is small and self-draining.</td></tr>
-<tr><td>Dedup is best-effort</td>
-    <td>Concurrent same-hash pastes can produce duplicate objects (§11).</td>
-    <td>GC tolerates multiple blocks per hash; WK-keyed deterministic ids are the only safe
-      convergence option (a plaintext-hash id would be a content oracle).</td></tr>
+<tr><td>Content-addressed storage path (keyed-hash)</td>
+    <td>Path is <code>HMAC(K_id, sha256)</code> (E2EE) / <code>sha256</code> (plaintext), not the block
+      id, so a future share-RLS join needs a small <code>content_key → block</code> mapping, and
+      <code>K_id</code> must be HKDF-derived from WK material at import.</td>
+    <td><strong>Chosen (§10):</strong> uploads are idempotent and object dedup is an invariant — removes
+      the idempotency token, the write-once-race rule, and duplicate-object GC. Mapping cost is zero
+      today (sharing unshipped, §12). Block dedup stays best-effort but produces no duplicate objects.</td></tr>
 <tr><td>Concurrent offline replace of one embed</td>
     <td>Two devices replacing the same image offline each mint a new immutable asset block; on reconnect
       the embed pointer (plain block content) resolves last-writer-wins, so one replacement is silently
@@ -1553,13 +1539,14 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
     of one operation ("given an asset block + render context, produce displayable bytes"). Implement
     that as a single named function so those parameters can't drift apart; scattering them across call
     sites is what manufactured the drift.</li>
-  <li><strong>Content-addressing is confined to client-local use under E2EE</strong> (§10): cache,
-    dedup, and integrity keep the hash; the server-visible storage path and block id do not (oracle +
-    share-join). The dedup/duplicate-object friction is the price of block-id paths; a keyed hash
-    (<code>HMAC(K_id, …)</code> under a WK-derived subkey, §10) is the better-scaling alternative
-    (idempotent uploads, no dedup races) at the cost of an object→block mapping for shares. It's a real
-    design fork to decide on merits —
-    <em>not</em> on current fleet size; fleet size bears only on how cheap the migration to it is (§10).</li>
+  <li><strong>Content-addressing is the storage path, keyed for E2EE</strong> (§10): the object lives
+    at <code>HMAC(K_id, sha256)</code> (E2EE) / <code>sha256</code> (plaintext), so uploads are
+    idempotent and object dedup is an invariant — and the per-workspace HMAC keeps the server from
+    probing it as a content oracle. This is the simpler-correct choice, not merely the better-scaling
+    one: it <em>removes</em> the idempotency token, the write-once monotonicity rule, and duplicate-object
+    GC a block-id path would have needed (an earlier draft deferred keyed-hash as &quot;scale-only&quot; —
+    it isn't; it's fewer moving parts). The one cost — an <code>object→block</code> mapping if
+    subtree-share RLS is ever built — is zero today (§12).</li>
   <li><strong>Decided: in-thread decryption (§7.3).</strong> The single biggest source of genuine (not
     cosmetic) complexity was putting decryption in the <em>service worker</em> — a context that can't
     read app state (→ IDB mode-pin + per-asset hash mirror) and is shared across tabs/accounts and
