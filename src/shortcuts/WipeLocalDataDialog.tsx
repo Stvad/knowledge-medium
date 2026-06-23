@@ -20,9 +20,17 @@ export interface WipeLocalDataDialogProps {
 
 type FlushState =
   | { status: 'flushing' }
-  | { status: 'flushed' }
-  | { status: 'unflushed'; remaining: number }
+  // `remaining`: live upload-queue rows that didn't drain (offline / sync off /
+  // server stuck). `rejected`: rows in ps_crud_rejected — edits the server
+  // permanently refused, which still exist ONLY on this device. flushUploadQueue
+  // can report flushed:true with rejected rows present (it only watches the live
+  // queue count), so we surface them separately or "saved" would be a lie.
+  | { status: 'done'; remaining: number; rejected: number }
   | { status: 'error'; message: string }
+
+// Created via CREATE TABLE IF NOT EXISTS in clientSchema.ts, so it exists after
+// init; query mirrors system-status's rejected-count read.
+const REJECTED_COUNT_SQL = 'SELECT COUNT(*) AS count FROM ps_crud_rejected'
 
 // Per-browser steps for the "clear site data" control. We can't open this UI
 // from a page (no JS API) and can't emit a Clear-Site-Data header on GitHub
@@ -74,9 +82,17 @@ export const WipeLocalDataDialog = ({
     let cancelled = false
     void (async () => {
       try {
-        const { flushed, remaining } = await flushUploadQueue(getPowerSyncDb(userId))
+        const db = getPowerSyncDb(userId)
+        const { remaining } = await flushUploadQueue(db)
+        let rejected = 0
+        try {
+          const row = await db.get<{ count: number }>(REJECTED_COUNT_SQL)
+          rejected = Number(row?.count ?? 0)
+        } catch {
+          // best-effort: a missing/unreadable table shouldn't block the dialog.
+        }
         if (cancelled) return
-        setFlush(flushed ? { status: 'flushed' } : { status: 'unflushed', remaining })
+        setFlush({ status: 'done', remaining, rejected })
       } catch (err) {
         if (cancelled) return
         setFlush({ status: 'error', message: err instanceof Error ? err.message : String(err) })
@@ -122,13 +138,20 @@ export const WipeLocalDataDialog = ({
           {flush.status === 'flushing' && (
             <p className="text-muted-foreground">Saving unsynced changes…</p>
           )}
-          {flush.status === 'flushed' && (
+          {flush.status === 'done' && flush.remaining === 0 && flush.rejected === 0 && (
             <p className="text-muted-foreground">Unsynced changes saved.</p>
           )}
-          {flush.status === 'unflushed' && (
+          {flush.status === 'done' && flush.remaining > 0 && (
             <p className="text-destructive">
               {flush.remaining} change(s) haven’t been copied off this device yet (you may
               be offline, or syncing is off) — they’ll be lost when you clear the data.
+            </p>
+          )}
+          {flush.status === 'done' && flush.rejected > 0 && (
+            <p className="text-destructive">
+              {flush.rejected} change(s) were rejected by the server and exist only on this
+              device — clearing the data deletes them permanently. Review them from the sync
+              status indicator before continuing if you need them.
             </p>
           )}
           {flush.status === 'error' && (
@@ -159,7 +182,12 @@ export const WipeLocalDataDialog = ({
           <Button variant="ghost" onClick={() => cancel()} disabled={signingOut}>
             Cancel
           </Button>
-          <Button onClick={handleSignOutAndReload} disabled={signingOut}>
+          {/* Disabled until the flush settles, so clicking through doesn't abort
+              an in-progress save and then wipe the edits it was rescuing. */}
+          <Button
+            onClick={handleSignOutAndReload}
+            disabled={signingOut || flush.status === 'flushing'}
+          >
             {signingOut ? 'Signing out…' : 'Sign out & reload'}
           </Button>
         </DialogFooter>
