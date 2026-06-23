@@ -100,6 +100,14 @@ import {
  *     whose `Result` itself includes a promise the caller fire-and-forgets (e.g.
  *     an action handler returning `void | false | Promise<void>`). Only the sync
  *     path consults the flag; the async `run` awaits everything regardless.
+ *     Passthrough is a **`runSync`-only** contract: the verb does NOT await or
+ *     catch the returned promise, so its eventual **rejection is the caller's**
+ *     to handle (`void Promise.resolve(result).catch(…)`) — `onError` / fallback
+ *     and `after`'s `{ok:false}` cover only *synchronous* throws / invalid
+ *     results, never the async rejection (`after` sees `{ok:true}` for a result
+ *     that later rejects). Don't also call `run` on a passthrough verb expecting
+ *     parity: `run` awaits, so it validates the *resolved* value and surfaces a
+ *     rejection — not equivalent to `runSync`.
  *
  * Reach for `runSync` only when the decision is needed at a synchronous boundary
  * (e.g. a DOM `preventDefault`); `run` stays correct for verbs that legitimately
@@ -211,7 +219,10 @@ export function defineVerbFacet<Input, Result>({
   /** Optional runtime check on the resolved result. A result that fails it is
    *  treated like a crash (handled per `onError`). Supply this for verbs whose
    *  consumers trust the result shape, since contributions are only validated as
-   *  functions, not by their return value. */
+   *  functions, not by their return value. NB for a `syncResultMayBePromise`
+   *  (passthrough) verb this runs on DIFFERENT values by runner: the un-awaited
+   *  promise under `runSync`, but the resolved value under `run` — so it must
+   *  accept both forms (typically: allow a thenable). */
   validateResult?: (result: Result) => boolean
   /** What to do when an `impl`/`decorator` throws or returns an invalid result.
    *  `'rethrow'` (default): `run` rejects, the default is never re-executed —
@@ -225,7 +236,12 @@ export function defineVerbFacet<Input, Result>({
    *  `void | false | Promise<void>`): then `runSync` returns a promised result
    *  verbatim instead of treating it as a sync-contract violation. Leave it
    *  `false` for a pure **decision** verb whose `Result` is a plain value, where
-   *  an async contribution really is a bug. The async `run` never consults it. */
+   *  an async contribution really is a bug. The async `run` never consults it.
+   *  This is a **`runSync`-only** contract: the verb neither awaits nor catches
+   *  the returned promise, so its eventual rejection is the caller's to handle
+   *  (`void Promise.resolve(result).catch(…)`); `onError` / fallback and `after`
+   *  cover only synchronous throws / invalid results, never the async rejection
+   *  (`after` sees `{ok:true}` for a result that later rejects). */
   syncResultMayBePromise?: boolean
 }): VerbFacet<Input, Result> {
   // Resolve the impl in `combine` (runs once per facet resolution, then

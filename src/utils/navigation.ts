@@ -454,10 +454,11 @@ export type NavigationDecision =
 
 /** Build a `navigate` decision. */
 export const goTo = (input: NavigateInput): NavigationDecision => ({kind: 'navigate', input})
-/** Decline the event — let the browser handle the native default (href). */
-export const PASSTHROUGH: NavigationDecision = {kind: 'passthrough'}
-/** Own the event and no-op (veto). */
-export const SUPPRESS: NavigationDecision = {kind: 'suppress'}
+/** Decline the event — let the browser handle the native default (href).
+ *  Frozen: it's a shared public-API singleton; a consumer must not mutate it. */
+export const PASSTHROUGH: NavigationDecision = Object.freeze({kind: 'passthrough'})
+/** Own the event and no-op (veto). Frozen — shared public-API singleton. */
+export const SUPPRESS: NavigationDecision = Object.freeze({kind: 'suppress'})
 
 /** Transform only the `navigate` case of a decision, passing `passthrough` /
  *  `suppress` through untouched — the ergonomic way for a plugin decorator to
