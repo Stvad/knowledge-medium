@@ -108,7 +108,7 @@ export function BulletDot({withChildrenIndicator = false}: { withChildrenIndicat
   return (
     <span
       className={`bullet h-1.5 w-1.5 rounded-full bg-muted-foreground/80 mx-auto` +
-        (withChildrenIndicator ? 'bullet-with-children border-4 border-solid border-border box-content' : '')}/>
+        (withChildrenIndicator ? ' bullet-with-children border-4 border-solid border-border box-content' : '')}/>
   )
 }
 
