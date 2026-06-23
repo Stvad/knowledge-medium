@@ -21,7 +21,7 @@ import {
 } from '@/shortcuts/types.js'
 import { extendSelectionDown } from '@/shortcuts/blockActions.js'
 import { EXTEND_BLOCK_SELECTION_ACTION_ID } from '@/extensions/blockSelectionAction.js'
-import { getSpatialNavigationActionDecorators } from '@/plugins/spatial-navigation/actions.js'
+import { getSpatialNavigationDispatchDecorators } from '@/plugins/spatial-navigation/actions.js'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1'}
@@ -95,14 +95,21 @@ const buildPanelDom = (instances: Array<{blockId: string; renderScopeId: string}
   document.body.appendChild(panel)
 }
 
+// The spatial behaviour is now an action-dispatch decorator, so build a handler
+// that runs the decorator's `wrap` with the base handler as `next` — exactly
+// what `invokeAction` does at dispatch time.
 const decorateAction = <T extends typeof ActionContextTypes.NORMAL_MODE | typeof ActionContextTypes.MULTI_SELECT_MODE>(
   action: ActionConfig<T>,
 ): ActionConfig<T> => {
-  const decorator = getSpatialNavigationActionDecorators().find(candidate =>
+  const decorator = getSpatialNavigationDispatchDecorators().find(candidate =>
     candidate.actionId === action.id && candidate.context === action.context,
   )
   if (!decorator) throw new Error(`Missing spatial decorator for ${action.context}:${action.id}`)
-  return decorator.apply(action as ActionConfig) as ActionConfig<T>
+  return {
+    ...action,
+    handler: ((deps, trigger, dispatch) =>
+      decorator.wrap(deps, trigger, action.handler as ActionConfig['handler'], dispatch)) as ActionConfig<T>['handler'],
+  }
 }
 
 let sharedDb: TestDb
@@ -258,12 +265,16 @@ describe('spatial navigation selection actions', () => {
 
 describe('spatial navigation shift-click selection', () => {
   const decoratePointerSelection = (action: ActionConfig): ActionConfig => {
-    const transform = getSpatialNavigationActionDecorators().find(candidate =>
+    const decorator = getSpatialNavigationDispatchDecorators().find(candidate =>
       candidate.actionId === EXTEND_BLOCK_SELECTION_ACTION_ID &&
       candidate.context === ActionContextTypes.BLOCK_POINTER,
     )
-    if (!transform) throw new Error('Missing spatial shift-click transform')
-    return transform.apply(action) as ActionConfig
+    if (!decorator) throw new Error('Missing spatial shift-click decorator')
+    return {
+      ...action,
+      handler: (deps, trigger, dispatch) =>
+        decorator.wrap(deps, trigger, action.handler, dispatch),
+    }
   }
 
   const blockNavItem = (blockId: string): HTMLElement => {

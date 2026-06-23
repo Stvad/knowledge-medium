@@ -182,6 +182,21 @@ export {
   getActiveActionById,
   getEffectiveActions,
 } from '@/shortcuts/effectiveActions.js'
+// --- Action-dispatch seam ---
+// Middleware around action INVOCATION (observe / guard-veto / wrap / globally
+// redirect a command as it runs) — distinct from `actionTransformsFacet`, which
+// rewrites action DEFINITIONS at compile time. Built on `defineVerbFacet`'s
+// passthrough sync runner. Contribute `actionDispatchWrap({actionId, context?,
+// wrap})` for a per-action handler wrap, or `actionDispatchVerb.before/after`
+// observers for telemetry. See `docs/action-dispatch-seam.md`.
+export {
+  actionDispatchVerb,
+  actionDispatchWrap,
+  invokeAction,
+  type ActionInvocation,
+  type ActionDispatchDecorator,
+  type ActionHandlerWrap,
+} from '@/shortcuts/actionDispatch.js'
 export {
   bindBlockActionContext,
   createSharedBlockActions,

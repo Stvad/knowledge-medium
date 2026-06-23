@@ -37,6 +37,10 @@ describe('@/extensions/api — public surface', () => {
     'bindBlockActionContext',
     'createSharedBlockActions',
     'getEffectiveActions',
+    // Action-dispatch seam
+    'invokeAction',
+    'actionDispatchVerb',
+    'actionDispatchWrap',
     // Block / data primitives
     'Block',
     'Repo',

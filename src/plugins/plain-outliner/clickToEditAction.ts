@@ -21,8 +21,8 @@ export const ENTER_BLOCK_EDIT_MODE_ACTION_ID = 'block.enter-edit-mode'
  *
  * Lives in the `block-pointer` context: never keyboard-active, dispatched only
  * via the pointer path with the clicked block's deps supplied. Vim normal mode
- * decorates it (an `ActionTransform`) to focus-without-editing, the same way it
- * used to win the `blockClickHandlersFacet` last-contribution race.
+ * decorates it (via the action-dispatch seam) to focus-without-editing, the same
+ * way it used to win the `blockClickHandlersFacet` last-contribution race.
  */
 export const enterBlockEditModeOnClickAction: ActionConfig<typeof ActionContextTypes.BLOCK_POINTER> = {
   id: ENTER_BLOCK_EDIT_MODE_ACTION_ID,
