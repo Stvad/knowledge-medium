@@ -584,3 +584,73 @@ describe('defineVerbFacet runSync', () => {
     expect(after).toHaveBeenCalledWith(1, {ok: false, error: boom})
   })
 })
+
+describe('defineVerbFacet runSync passthrough (syncResultMayBePromise)', () => {
+  // Models the action-dispatch verb's result type: a handler may return nothing,
+  // `false` (decline sentinel), or a `Promise<void>` the caller fire-and-forgets.
+  type DispatchResult = void | false | Promise<void>
+
+  it('returns a promise result verbatim, un-awaited (not a contract violation)', async () => {
+    const order: string[] = []
+    const verb = defineVerbFacet<number, DispatchResult>({
+      id: 'test.passthrough.promise',
+      defaultImpl: () => {
+        order.push('handler-sync')
+        return Promise.resolve().then(() => { order.push('handler-async') })
+      },
+      syncResultMayBePromise: true,
+    })
+    const runtime = resolveFacetRuntimeSync([])
+
+    const result = verb.runSync(runtime, 1)
+    // The promise is returned verbatim — runSync does NOT await it (decision mode
+    // would have thrown "requires synchronous contributions" instead).
+    expect(result).toBeInstanceOf(Promise)
+    expect(order).toEqual(['handler-sync'])
+    await result
+    expect(order).toEqual(['handler-sync', 'handler-async'])
+  })
+
+  it('lets a synchronous false (decline sentinel) survive untouched', () => {
+    const verb = defineVerbFacet<number, DispatchResult>({
+      id: 'test.passthrough.false',
+      defaultImpl: () => false,
+      syncResultMayBePromise: true,
+    })
+    const runtime = resolveFacetRuntimeSync([])
+
+    expect(verb.runSync(runtime, 1)).toBe(false)
+  })
+
+  it('folds decorators and runs before/after observers around a promise result', () => {
+    const order: string[] = []
+    const verb = defineVerbFacet<number, DispatchResult>({
+      id: 'test.passthrough.decorate',
+      defaultImpl: () => Promise.resolve(),
+      syncResultMayBePromise: true,
+    })
+    const runtime = resolveFacetRuntimeSync([
+      verb.before(() => { order.push('before') }),
+      verb.decorator(next => n => { order.push('decorator'); return next(n) }),
+      verb.after((_input, outcome) => { order.push(`after:${outcome.ok}`) }),
+    ])
+
+    const result = verb.runSync(runtime, 1)
+    expect(result).toBeInstanceOf(Promise)
+    expect(order).toEqual(['before', 'decorator', 'after:true'])
+  })
+
+  it('rethrows a synchronous throw from the handler (passthrough + rethrow)', () => {
+    const verb = defineVerbFacet<number, DispatchResult>({
+      id: 'test.passthrough.throw',
+      defaultImpl: () => { throw new Error('handler boom') },
+      syncResultMayBePromise: true,
+      onError: 'rethrow',
+    })
+    const runtime = resolveFacetRuntimeSync([])
+
+    // A synchronous throw still surfaces synchronously (the dispatch loop catches
+    // only the async rejection of a returned promise, not a sync handler throw).
+    expect(() => verb.runSync(runtime, 1)).toThrow('handler boom')
+  })
+})
