@@ -343,6 +343,12 @@ export function defineVerbFacet<Input, Result>({
     try {
       const result = produce()
       if (isThenable(result)) {
+        // We discard the promise and fall back. Attach a handler first so that
+        // an async contribution which also REJECTS is logged (like a rejecting
+        // async observer) rather than surfacing as an unhandled rejection — the
+        // contract violation itself is handled by the throw → onError below.
+        result.then(undefined, error =>
+          console.error(`[verb:${id}] discarded async contribution (runSync contract violation) rejected`, error))
         throw new Error(
           `[verb:${id}] runSync requires synchronous contributions, but the impl/decorator returned a promise`,
         )

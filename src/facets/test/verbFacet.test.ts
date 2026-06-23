@@ -470,6 +470,30 @@ describe('defineVerbFacet runSync', () => {
     consoleError.mockRestore()
   })
 
+  it('handles (does not leak) a rejecting async contribution in decision mode, and falls back', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const verb = defineVerbFacet<number, number>({
+      id: 'test.sync.async-rejects',
+      defaultImpl: n => n + 1,
+      onError: 'fallback',
+    })
+    const runtime = resolveFacetRuntimeSync([
+      verb.impl(async () => { throw new Error('async contribution boom') }),
+    ])
+
+    // The async contribution violates the sync contract → fall back to default.
+    expect(verb.runSync(runtime, 5)).toBe(6)
+    // Its discarded promise's rejection must be handled (logged), not left to
+    // surface as an unhandled rejection. The handler runs on the next microtask.
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining('discarded async contribution'),
+      expect.any(Error),
+    )
+    consoleError.mockRestore()
+  })
+
   it('a promise-returning decorator also violates the contract and falls back', () => {
     const verb = defineVerbFacet<number, number>({
       id: 'test.sync.promise-decorator',
