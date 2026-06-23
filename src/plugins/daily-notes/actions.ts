@@ -147,7 +147,13 @@ export const appendTodayDailyBlockInStack = async (
   // navigation; the returned panelId is where we place the cursor.
   const dest = await navigate(repo, {target: 'sidebar-stack', blockId, workspaceId, sourcePanelId, origin: 'daily-note'})
 
-  if (dest) {
+  // Only drop into edit mode when the navigation actually landed on the block
+  // we just created. A navigationVerb decorator can retarget the open to a
+  // different block; in that case the cursor (sized to our content) and the
+  // selection (pointing at our blockId) don't belong to the panel's displayed
+  // block, so we leave the panel as the decorator placed it rather than writing
+  // a mismatched selection. The created block still exists either way.
+  if (dest && dest.blockId === blockId) {
     const cursor = content ? content.length : 0
     const selection: EditorSelectionState = {blockId, start: cursor}
     await repo.tx(async tx => {

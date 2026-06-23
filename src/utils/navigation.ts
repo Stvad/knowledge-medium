@@ -215,13 +215,18 @@ const navigateExplicitPanel = async (
 }
 
 /** Apply a resolved navigation: the target-dispatch ladder that mutates
- *  layout-session panel rows, returning where it landed. Re-resolves the
- *  workspace from the (possibly rewritten) input so a resolver that retargets
- *  workspaces still lands correctly. This is `navigationVerb`'s default impl. */
+ *  layout-session panel rows, returning where it landed. This is
+ *  `navigationVerb`'s default impl. Resolves the workspace as
+ *  `input.workspaceId ?? requestWorkspaceId` — the request's workspace was
+ *  captured up front in `navigate()`, so it's used in preference to a fresh
+ *  `repo.activeWorkspaceId` read: an async before-observer/decorator may have
+ *  let the user switch workspaces between the originating click and here, and
+ *  the navigation must land in the workspace that started it. A decorator can
+ *  still retarget by explicitly setting `input.workspaceId`. */
 const applyNavigation = async (
-  {repo, input}: NavigationRequest,
+  {repo, workspaceId: requestWorkspaceId, input}: NavigationRequest,
 ): Promise<NavigationResult | null> => {
-  const workspaceId = input.workspaceId ?? repo.activeWorkspaceId
+  const workspaceId = input.workspaceId ?? requestWorkspaceId
   if (!workspaceId) return null
 
   switch (input.target) {

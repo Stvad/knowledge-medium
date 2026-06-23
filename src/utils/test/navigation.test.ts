@@ -410,6 +410,25 @@ describe('navigationVerb (intent seam)', () => {
       expect(await currentActivePanelId()).toBe(activePanel)
     })
   })
+
+  it('lands in the workspace captured at call time even if the active workspace changes mid-flight', async () => {
+    // A before-observer flips the active workspace (simulating the user
+    // switching workspaces while an async observer/confirmation runs). The
+    // navigation must still land in the workspace that originated it (captured
+    // up front in navigate()), not the newly-active one.
+    env.repo.setRuntimeContributions(navigationVerb.beforeFacet, 'test-nav', [
+      () => { env.repo.setActiveWorkspaceId('ws-other') },
+    ])
+
+    // No workspaceId on the input → captured from repo.activeWorkspaceId (WS).
+    await navigate(env.repo, {blockId: 'b-captured', target: 'main'})
+
+    // currentPanelBlockIds resolves WS's layout session — so this passing proves
+    // the nav landed in WS, not the flipped 'ws-other'.
+    await vi.waitFor(async () => {
+      expect(await currentPanelBlockIds()).toEqual(['b-captured'])
+    })
+  })
 })
 
 describe('navigationIntentVerb (intent policy seam)', () => {
