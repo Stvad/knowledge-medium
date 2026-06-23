@@ -698,12 +698,18 @@ capability token in the URL — deferred; the public-share path §13 is the rela
 
 <div class="decision">
 <strong>The byte stores add no selective wipe machinery.</strong> Destroying local data is a coarse,
-all-or-nothing action — the browser's "clear all site data" (or a single
-<code>destroyAllLocalData()</code> primitive) that removes the SQLite DB, the E2EE key store, and
-<em>every</em> byte store (OPFS, IndexedDB, Cache API) in one shot. The selective per-user in-app
-Lock&nbsp;&amp;&nbsp;Wipe flow an earlier draft coordinated with — a <code>PENDING_WIPE</code> marker, a
-boot-time <code>consumePendingWipe</code> purge, an app→SW purge handshake — is being removed in favour
-of that coarse clear (tracked separately). Consequences for this design:
+all-or-nothing action delegated to the <em>platform</em>: the browser's own "clear site data" wipes the
+whole origin — SQLite DB, E2EE keys, and <em>every</em> byte store (OPFS, IndexedDB, Cache API) — in one
+shot. <strong>This shipped on master (2026-06-23):</strong> the selective per-user in-app
+Lock&nbsp;&amp;&nbsp;Wipe flow (a <code>PENDING_WIPE</code> marker, a boot-time
+<code>consumePendingWipe</code> purge, an app→SW purge handshake) was <em>removed</em>, and
+<code>lock_and_wipe_local_data</code> is now a thin guidance dialog (<code>WipeLocalDataDialog</code>)
+that hands off to the platform control and warns on unsynced changes. The team deliberately did
+<em>not</em> hand-roll a coarse <code>destroyAllLocalData()</code> either — the platform wipe runs
+<em>outside</em> the page/SW context, so it sidesteps the cross-tab OPFS race, the surviving service
+worker, and the pre-render boot gate a hand-rolled wipe would each have to solve (and a SW can't even
+synthesize a <code>Clear-Site-Data</code> header — Chromium ignores it; a programmatic trigger is
+deferred until the app leaves GitHub Pages, issue&nbsp;#245). Consequences for this design:
 <ul>
   <li><strong>No wipe participants.</strong> The replica, display cache, upload queue, SW token store
     and hash mirror are ordinary local storage; the coarse clear removes them with the DB and keys —
