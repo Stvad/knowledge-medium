@@ -365,8 +365,8 @@ encode/decode seam is mode-aware, and plaintext is its degenerate (identity) bra
     not a block id, because the object is content-addressed and shared by every block carrying those
     bytes (§10); binding one block id would stop a co-referencing block from opening it. The content
     hash still prevents cross-content / cross-workspace swaps — and it is the <em>same</em>
-    <code>sha256(plaintext)</code> stored as <code>block.properties.hash</code> and checked on read (§5.1),
-    so the AAD term and the read-side check stay one identical hash. (Schema version stays in the AAD for the
+    <code>sha256(plaintext)</code> stored as <code>block.properties.hash</code> and checked on read (the
+    warn box below), so the AAD term and the read-side check stay one identical hash. (Schema version stays in the AAD for the
     same cheap-hierarchy-upgrade reason §13 of the e2ee doc keeps it there.)</li>
   <li><strong>A binary envelope, not the base64url text envelope.</strong> The <code>enc:v1:</code>
     envelope is base64url (≈33% bloat) — wrong for bytes. Add a sibling
@@ -813,7 +813,8 @@ eviction-exempt — so the only offline release valve is the user deliberately a
   account's PowerSync has settled. Without this per-<code>user_id</code> gate (not just a global one), switching
   from account B to account A would find B's not-yet-synced block &quot;absent&quot; in A's DB and reap the only
   durable copy of B's un-uploaded bytes — manufacturing the very &quot;synced block outlives its bytes&quot; loss
-  this lane exists to prevent.
+  this lane exists to prevent. A profile account that is never re-opened simply leaves its records inert —
+  they keep their bytes and neither drain nor reap, costing bounded storage, never loss.
   To shrink the inferred set to the genuine crash window, a <em>caught</em> tx rollback also stamps the
   record <code>staged → reapable</code> directly, and records carry a session/generation stamp so a
   reaper never races an in-flight capture. Entries drain (to the §10.1 function) when connectivity returns, retrying with
@@ -1314,7 +1315,9 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
     object GC must gate on it — and on whether a history/PITR <em>restore</em> is meant to recover media
     bytes (else media is an explicit PITR carve-out); decide that <em>when</em> the horizon is introduced.
     Today there is no horizon to gate on, and v1 errs toward <em>retention</em> (storage is cheap; a stranded
-    live image is not). Dangling embeds render the existing
+    live image is not). The accepted cost is monotonic Storage growth: an object stays referenced (so
+    un-reclaimed) as long as <em>any</em> soft-deleted block or <code>blocks_history</code> row carries its
+    hash — which today is forever — so per-workspace object Storage only grows over v1's life. Dangling embeds render the existing
     &quot;unresolved embed&quot; state. Beyond the <em>undo</em> case (handled by the §9 byte-lane compensator), a
     vNext orphan sweep covers <strong>both</strong> directions, but they are <em>not</em> symmetric: orphan
     <em>objects</em> (a Storage object with no block — e.g. an interrupted delete) are auto-deletable;
@@ -1363,9 +1366,11 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
       the idempotency token, the write-once-race rule, and duplicate-object GC. Mapping cost is zero
       today (sharing unshipped, §12). Block dedup stays best-effort but produces no duplicate objects. The
       content-path oracle is closed only under <code>K_id</code> secrecy — <code>K_id</code> is static and
-      never rotated, so a <code>K_id</code> compromise (e.g. via the softer-CSP §13 share page) reopens the
-      known-file oracle <em>retroactively</em> for that workspace; an accepted residual, bounded by
-      <code>K_id</code> being a non-extractable handle that never widens WK exposure.</td></tr>
+      never rotated, so its compromise reopens the known-file oracle <em>retroactively</em> for that
+      workspace. Because <code>K_id</code> is a <em>non-extractable</em> handle its raw bytes never leak, so
+      the residual is narrow: an attacker who can execute script inside the authenticated origin (XSS or a
+      malicious extension) could <em>use</em> the handle to compute content paths and probe for known files,
+      but cannot exfiltrate <code>K_id</code> itself or widen WK exposure. An accepted residual.</td></tr>
 <tr><td>First-write-wins is poisonable by a member</td>
     <td>Any member can compute <code>HMAC(K_id, sha256(x))</code> and pre-occupy a content path with
       garbage; first-write-wins then silently no-ops the honest upload of that exact content → a
