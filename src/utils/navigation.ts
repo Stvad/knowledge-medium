@@ -1,13 +1,14 @@
 // User-intent navigation, in two layers — each an extension seam:
 //
 //   1. INTENT POLICY (`navigationIntentVerb`): resolves a *gesture* (a click's
-//      role + modifiers, or a global command) into a `NavigateInput` (which
-//      block, which target panel) or `null` (no-op / let the browser handle the
-//      href). Pure and **synchronous** — resolved via the verb's `runSync`, so a
-//      gesture surface can decide `preventDefault` from the result before
-//      yielding; plugins remap the modifier matrix, override the
-//      follow-link/navigator role, or redirect where global commands land
-//      (active vs main) by decorating/replacing it.
+//      role + modifiers, or a global command) into a `NavigationDecision` —
+//      `navigate` (which block, which target panel), `passthrough` (let the
+//      browser handle the href), or `suppress` (veto, no-op). Pure and
+//      **synchronous** — resolved via the verb's `runSync`, so a gesture surface
+//      can decide `preventDefault` from the decision before yielding; plugins
+//      remap the modifier matrix, override the follow-link/navigator role,
+//      redirect where global commands land (active vs main), or flip a gesture
+//      between in-app navigation and native passthrough by decorating/replacing it.
 //   2. EXECUTION (`navigationVerb`): applies a `NavigateInput` — the layout
 //      mutation that shows the block — and returns where it landed. Effectful;
 //      plugins observe (before/after), rewrite (by target / origin / block),
@@ -16,14 +17,15 @@
 // `navigate(repo, input)` is the execution entry: it runs `navigationVerb` and
 // returns the resolved destination. It **never rejects** (errors are logged →
 // `null`), so the many fire-and-forget callers can ignore the promise. Gesture
-// surfaces resolve a `NavigateInput` through the intent policy first
-// (synchronously — see `resolveNavigationIntent`): `useBlockOpener` resolves
-// inline so it can gate `preventDefault` on the result, while
-// `navigateFromGlobalCommand` goes through the shared `navigateFromGesture`
-// helper — then both hand the result to `navigate`. Every `NavigateInput` can
-// carry an `origin` tag so execution-layer decorators can redirect/observe by
-// source, not just by the resolved target — gesture navigations get it from the
-// policy (the surface role); programmatic callers set it explicitly.
+// surfaces resolve a `NavigationDecision` through the intent policy first
+// (synchronously — see `resolveNavigationIntent`): a click surface routes the
+// decision through `applyNavigationDecision` (the one place that gates
+// `preventDefault`), while `navigateFromGlobalCommand` goes through the shared
+// `navigateFromGesture` helper — both hand a `navigate` decision's input to
+// `navigate`. Every `NavigateInput` can carry an `origin` tag so execution-layer
+// decorators can redirect/observe by source, not just by the resolved target —
+// gesture navigations get it from the policy (the surface role); programmatic
+// callers set it explicitly.
 //
 // Scope: the lower layers are deliberately NOT routed through this module:
 //   - The in-panel content swap + per-panel back/forward live in `panelHistory`
@@ -433,34 +435,70 @@ const modifiersFromMouseEvent = (e: MouseEvent): BlockLinkClickModifierState => 
 
 const currentViewport = (): NavigationViewport => (isMobileViewport() ? 'mobile' : 'desktop')
 
+/** The outcome of resolving a gesture through the intent policy — the three
+ *  terminal things a clickable surface can do, as a tagged union so every
+ *  consumer discriminates exhaustively (no overloaded `null`/sentinel):
+ *    - `navigate`    — go in-app: the surface owns the event and runs `navigate`.
+ *    - `passthrough` — decline the event: let the browser act on its native
+ *      default (follow the `<a href>` — cmd-click new tab, plain follow). NOT an
+ *      in-app navigation; it deliberately does NOT go through `navigate()`
+ *      (which is rows→URL and would re-push history / loop — see module header).
+ *    - `suppress`    — veto: the surface owns the event and no-ops.
+ *  Separating `passthrough` from `suppress` is what makes BOTH directions
+ *  plugin-overridable — a policy can turn a cmd-click into an in-app navigation
+ *  (`navigate`) or a plain click into a browser passthrough (`passthrough`). */
+export type NavigationDecision =
+  | {kind: 'navigate'; input: NavigateInput}
+  | {kind: 'passthrough'}
+  | {kind: 'suppress'}
+
+/** Build a `navigate` decision. */
+export const goTo = (input: NavigateInput): NavigationDecision => ({kind: 'navigate', input})
+/** Decline the event — let the browser handle the native default (href). */
+export const PASSTHROUGH: NavigationDecision = {kind: 'passthrough'}
+/** Own the event and no-op (veto). */
+export const SUPPRESS: NavigationDecision = {kind: 'suppress'}
+
+/** Transform only the `navigate` case of a decision, passing `passthrough` /
+ *  `suppress` through untouched — the ergonomic way for a plugin decorator to
+ *  tweak the resolved `NavigateInput` (`f` returning `null` becomes a veto). */
+export const mapNavigate = (
+  decision: NavigationDecision,
+  f: (input: NavigateInput) => NavigateInput | null,
+): NavigationDecision => {
+  if (decision.kind !== 'navigate') return decision
+  const next = f(decision.input)
+  return next ? goTo(next) : SUPPRESS
+}
+
 /** The default navigation policy: pure, synchronous, reproducing the canonical
- *  modifier matrix + follow-link/navigator role + viewport rule. Returns the
- *  `NavigateInput` to execute, or `null` for a native passthrough (cmd / ctrl /
- *  middle-click → let the browser handle the href). The resolved input carries
- *  `origin: role` so execution-layer decorators can tell follow-link clicks
- *  from navigator commands. Composable: a plugin policy can call this and tweak
- *  the result. */
+ *  modifier matrix + follow-link/navigator role + viewport rule. Returns a
+ *  `navigate` decision (whose input carries `origin: role` so execution-layer
+ *  decorators can tell follow-link clicks from navigator commands), or
+ *  `PASSTHROUGH` for a native gesture (cmd / ctrl / middle-click → let the
+ *  browser handle the href). Composable: a plugin policy can call this and
+ *  `mapNavigate` the result. */
 export const defaultNavigationIntent = (
   gesture: NavigationGesture,
-): NavigateInput | null => {
+): NavigationDecision => {
   const {role, modifiers, panelId, blockId, workspaceId, viewport} = gesture
   const base = {blockId, workspaceId, origin: role}
   switch (blockLinkClickIntent(modifiers)) {
     case 'native':
-      return null
+      return PASSTHROUGH
     case 'new-panel':
-      return {...base, target: 'new-panel', sourcePanelId: panelId}
+      return goTo({...base, target: 'new-panel', sourcePanelId: panelId})
     case 'sidebar-stack':
-      return {...base, target: 'sidebar-stack', sourcePanelId: panelId}
+      return goTo({...base, target: 'sidebar-stack', sourcePanelId: panelId})
     case 'main':
-      return {...base, target: 'main'}
+      return goTo({...base, target: 'main'})
     case 'default':
       if (role === 'navigator') {
-        return {...base, target: viewport === 'mobile' ? 'active' : 'main'}
+        return goTo({...base, target: viewport === 'mobile' ? 'active' : 'main'})
       }
-      return panelId
+      return goTo(panelId
         ? {...base, target: 'panel', panelId}
-        : {...base, target: 'active'}
+        : {...base, target: 'active'})
   }
 }
 
@@ -489,14 +527,29 @@ const isNavigateInput = (value: unknown): value is NavigateInput => {
   }
 }
 
+const isNavigationDecision = (value: unknown): value is NavigationDecision => {
+  if (typeof value !== 'object' || value === null) return false
+  const v = value as {kind?: unknown; input?: unknown}
+  switch (v.kind) {
+    case 'passthrough':
+    case 'suppress':
+      return true
+    case 'navigate':
+      return isNavigateInput(v.input)
+    default:
+      return false
+  }
+}
+
 /**
  * The navigation INTENT seam (policy). Plugins contribute to remap the
- * gesture→target mapping:
+ * gesture→target mapping, returning a `NavigationDecision`:
  *   - `navigationIntentVerb.impl` — replace resolution wholesale.
  *   - `navigationIntentVerb.decorator` — wrap it: remap the modifier matrix,
- *     override the follow-link/navigator role, or redirect where global
- *     commands land (the original motivating example: active vs main) by
- *     calling `next(gesture)` and tweaking the returned `NavigateInput`.
+ *     override the follow-link/navigator role, redirect where global commands
+ *     land (active vs main), or flip a gesture between in-app navigation and
+ *     native passthrough — call `next(gesture)` and reshape via `mapNavigate`
+ *     (tweak the input) or by returning `PASSTHROUGH` / `SUPPRESS` / `goTo(…)`.
  *   - `navigationIntentVerb.before/after` — observe gestures.
  * Pure verb on `onError: 'fallback'`: a throwing/invalid plugin policy falls
  * back to `defaultNavigationIntent`, so one buggy policy can't break navigation.
@@ -504,34 +557,65 @@ const isNavigateInput = (value: unknown): value is NavigateInput => {
  * gate `preventDefault` on the result — so contributions must be **synchronous**;
  * an `impl`/`decorator` that returns a promise violates the contract and falls
  * back to `defaultNavigationIntent` (async before/after observers are fine —
- * they're fire-and-forget). The resolved `NavigateInput | null` is handed to
- * `navigate()` (execution).
+ * they're fire-and-forget). The resolved `NavigationDecision` is routed by the
+ * surface (`applyNavigationDecision` for clicks) or, for navigate, by `navigate()`.
  */
-export const navigationIntentVerb = defineVerbFacet<NavigationGesture, NavigateInput | null>({
+export const navigationIntentVerb = defineVerbFacet<NavigationGesture, NavigationDecision>({
   id: 'core.navigation-intent',
   defaultImpl: defaultNavigationIntent,
   onError: 'fallback',
-  validateResult: result => result === null || isNavigateInput(result),
+  validateResult: isNavigationDecision,
 })
 
-/** Resolve a gesture into a `NavigateInput | null` through the intent policy,
+/** Resolve a gesture into a `NavigationDecision` through the intent policy,
  *  **synchronously** — so a gesture surface can gate `preventDefault` on the
  *  result before yielding. **Never throws**: `runSync` already falls back to
  *  `defaultNavigationIntent` for a buggy plugin policy (`onError: 'fallback'`);
  *  the try/catch here guards the verb machinery itself. The early-boot /
- *  minimal-harness path (no runtime) applies the default policy directly. */
+ *  minimal-harness path (no runtime) applies the default policy directly.
+ *
+ *  Carries the gesture's captured workspace into a `navigate` decision that
+ *  omitted one (a plugin policy may), so it lands in the workspace the gesture
+ *  originated in — even if a policy mutated the active workspace synchronously
+ *  during resolution. Centralized here so every consumer (clicks + commands)
+ *  inherits it; a policy that sets `workspaceId` wins. */
 const resolveNavigationIntent = (
   repo: Repo,
   gesture: NavigationGesture,
-): NavigateInput | null => {
+): NavigationDecision => {
   const runtime = repo.facetRuntime
-  if (!runtime) return defaultNavigationIntent(gesture)
-  try {
-    return navigationIntentVerb.runSync(runtime, gesture)
-  } catch (error) {
-    console.error('[navigation] intent resolution failed', error)
-    return defaultNavigationIntent(gesture)
+  let decision: NavigationDecision
+  if (!runtime) {
+    decision = defaultNavigationIntent(gesture)
+  } else {
+    try {
+      decision = navigationIntentVerb.runSync(runtime, gesture)
+    } catch (error) {
+      console.error('[navigation] intent resolution failed', error)
+      decision = defaultNavigationIntent(gesture)
+    }
   }
+  return decision.kind === 'navigate' && !decision.input.workspaceId
+    ? goTo({...decision.input, workspaceId: gesture.workspaceId})
+    : decision
+}
+
+/** Apply a resolved decision to the click that produced it — the single place
+ *  that maps an intent outcome onto DOM event handling, so no clickable surface
+ *  re-implements the native-vs-veto distinction:
+ *    - `passthrough` → decline the event; the browser follows the href.
+ *    - `navigate` / `suppress` → own the event (`stopPropagation` +
+ *      `preventDefault`); `navigate` then fires the in-app navigation,
+ *      `suppress` is a veto no-op. */
+export const applyNavigationDecision = (
+  repo: Repo,
+  e: MouseEvent,
+  decision: NavigationDecision,
+): void => {
+  if (decision.kind === 'passthrough') return
+  e.stopPropagation()
+  e.preventDefault()
+  if (decision.kind === 'navigate') void navigate(repo, decision.input)
 }
 
 /** Resolve a gesture through the intent policy, then execute it. The single
@@ -544,14 +628,11 @@ export const navigateFromGesture = async (
   repo: Repo,
   gesture: NavigationGesture,
 ): Promise<NavigationResult | null> => {
-  const input = resolveNavigationIntent(repo, gesture)
-  if (!input) return null
-  // No post-resolution workspace recapture: the default policy already carries
-  // `gesture.workspaceId` into the resolved input, and `navigate()` pins it at
-  // entry (re-reading the active workspace only if a plugin policy dropped it).
-  // Synchronous resolution leaves no window for the active workspace to drift
-  // between the gesture and `navigate()`, so the old mitigation is gone.
-  return navigate(repo, input)
+  // Command surfaces have no DOM event to gate, so only the `navigate` decision
+  // does anything here; `passthrough` / `suppress` resolve to no navigation.
+  // (`resolveNavigationIntent` has already carried the gesture workspace.)
+  const decision = resolveNavigationIntent(repo, gesture)
+  return decision.kind === 'navigate' ? navigate(repo, decision.input) : null
 }
 
 /** Navigate from a global command (command palette, shortcut, navigator-role
@@ -606,16 +687,17 @@ export const resolveGlobalCommandTarget = async (
   workspaceId = repo.activeWorkspaceId,
 ): Promise<{blockId: string; workspaceId: string} | null> => {
   if (!workspaceId) return null
-  const input = resolveNavigationIntent(repo, {
+  const decision = resolveNavigationIntent(repo, {
     role: 'navigator',
     modifiers: PLAIN_PRIMARY_CLICK,
     blockId: NAVIGATOR_TARGET_PROBE_BLOCK_ID,
     workspaceId,
     viewport: currentViewport(),
   })
-  if (!input) return null
+  // Only an in-app navigation has a panel to anchor on; passthrough/suppress don't.
+  if (decision.kind !== 'navigate') return null
   // Honor a policy-retargeted workspace; fall back to the probe workspace.
-  const resolved: ResolvedNavigateInput = {...input, workspaceId: input.workspaceId ?? workspaceId}
+  const resolved: ResolvedNavigateInput = {...decision.input, workspaceId: decision.input.workspaceId ?? workspaceId}
   const dest = await resolveDestination(repo, resolved)
   // Only an existing-panel destination has a current block to anchor on;
   // create-row/create-stack would open a fresh panel.
@@ -666,28 +748,21 @@ export const useBlockOpener = ({plainClick = 'follow-link'}: BlockOpenerOptions 
     (e: MouseEvent, {blockId, workspaceId}: OpenBlockContext) => {
       const resolvedWorkspaceId = workspaceId ?? repo.activeWorkspaceId
       if (!resolvedWorkspaceId) return
-      // Resolve the full, plugin-customized intent SYNCHRONOUSLY, then decide
-      // `preventDefault` from the result:
-      //   - `null` → native passthrough (cmd / ctrl / middle-click) OR a policy
-      //     veto: we don't own this click, so return WITHOUT preventing and let
-      //     the browser handle the href.
-      //   - non-null → we own it: stop propagation, preventDefault, and fire the
-      //     async navigation.
-      // Because native passthrough now falls out of the resolved intent being
-      // `null` (not a hardcoded pre-check), it's plugin-overridable — a policy
-      // can turn a cmd-click into an in-app navigation, or vice versa.
-      const input = resolveNavigationIntent(repo, {
+      // Resolve the full, plugin-customized decision SYNCHRONOUSLY, then let the
+      // single applier route it: `passthrough` → let the browser handle the href
+      // (cmd-click new tab, …); `navigate`/`suppress` → we own the click. Because
+      // the native-vs-veto distinction is the policy's `NavigationDecision` (not
+      // a hardcoded pre-check), native passthrough is plugin-overridable: a
+      // policy can turn a cmd-click into an in-app navigation, or a plain click
+      // into a passthrough.
+      applyNavigationDecision(repo, e, resolveNavigationIntent(repo, {
         role: plainClick,
         modifiers: modifiersFromMouseEvent(e),
         panelId,
         blockId,
         workspaceId: resolvedWorkspaceId,
         viewport: currentViewport(),
-      })
-      if (!input) return
-      e.stopPropagation()
-      e.preventDefault()
-      void navigate(repo, input)
+      }))
     },
     [repo, panelId, plainClick],
   )

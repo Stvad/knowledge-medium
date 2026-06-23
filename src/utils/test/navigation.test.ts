@@ -1,13 +1,18 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  applyNavigationDecision,
   defaultNavigationIntent,
+  goTo,
+  mapNavigate,
   navigate,
   navigateFromGlobalCommand,
   navigationIntentVerb,
   navigationVerb,
+  PASSTHROUGH,
   resolveGlobalCommandTarget,
-  type NavigateInput,
+  SUPPRESS,
+  type NavigationDecision,
   type NavigationGesture,
 } from '@/utils/navigation'
 import { panelHistory } from '@/utils/panelHistory'
@@ -269,52 +274,52 @@ describe('defaultNavigationIntent (default policy)', () => {
   const base = {blockId: 'b-target', workspaceId: 'w-1'}
 
   it('plain follow-link click navigates the source panel, tagged origin', () => {
-    expect(defaultNavigationIntent(gesture())).toEqual({
+    expect(defaultNavigationIntent(gesture())).toEqual(goTo({
       ...base, target: 'panel', panelId: 'panel-a', origin: 'follow-link',
-    })
+    }))
   })
 
   it('plain follow-link click without a panel navigates the active panel', () => {
-    expect(defaultNavigationIntent(gesture({panelId: undefined}))).toEqual({
+    expect(defaultNavigationIntent(gesture({panelId: undefined}))).toEqual(goTo({
       ...base, target: 'active', origin: 'follow-link',
-    })
+    }))
   })
 
   it('plain navigator click lands in the main panel on desktop', () => {
-    expect(defaultNavigationIntent(gesture({role: 'navigator'}))).toEqual({
+    expect(defaultNavigationIntent(gesture({role: 'navigator'}))).toEqual(goTo({
       ...base, target: 'main', origin: 'navigator',
-    })
+    }))
   })
 
   it('plain navigator click lands in the active panel on mobile', () => {
-    expect(defaultNavigationIntent(gesture({role: 'navigator', viewport: 'mobile'}))).toEqual({
+    expect(defaultNavigationIntent(gesture({role: 'navigator', viewport: 'mobile'}))).toEqual(goTo({
       ...base, target: 'active', origin: 'navigator',
-    })
+    }))
   })
 
   it('shift-click stacks in the sidebar regardless of role', () => {
-    const expected = {...base, target: 'sidebar-stack', sourcePanelId: 'panel-a'}
+    const expected = {...base, target: 'sidebar-stack' as const, sourcePanelId: 'panel-a'}
     expect(defaultNavigationIntent(gesture({modifiers: {...NO_MODS, shiftKey: true}})))
-      .toEqual({...expected, origin: 'follow-link'})
+      .toEqual(goTo({...expected, origin: 'follow-link'}))
     expect(defaultNavigationIntent(gesture({role: 'navigator', modifiers: {...NO_MODS, shiftKey: true}})))
-      .toEqual({...expected, origin: 'navigator'})
+      .toEqual(goTo({...expected, origin: 'navigator'}))
   })
 
   it('shift+alt-click opens a new panel; alt-click opens the main panel', () => {
     expect(defaultNavigationIntent(gesture({modifiers: {...NO_MODS, shiftKey: true, altKey: true}})))
-      .toEqual({...base, target: 'new-panel', sourcePanelId: 'panel-a', origin: 'follow-link'})
+      .toEqual(goTo({...base, target: 'new-panel', sourcePanelId: 'panel-a', origin: 'follow-link'}))
     expect(defaultNavigationIntent(gesture({modifiers: {...NO_MODS, altKey: true}})))
-      .toEqual({...base, target: 'main', origin: 'follow-link'})
+      .toEqual(goTo({...base, target: 'main', origin: 'follow-link'}))
   })
 
-  it('returns null for native clicks (cmd/ctrl/middle/right) so the browser handles it', () => {
-    expect(defaultNavigationIntent(gesture({modifiers: {...NO_MODS, metaKey: true}}))).toBeNull()
-    expect(defaultNavigationIntent(gesture({modifiers: {...NO_MODS, ctrlKey: true}}))).toBeNull()
-    expect(defaultNavigationIntent(gesture({modifiers: {...NO_MODS, button: 1}}))).toBeNull()
-    expect(defaultNavigationIntent(gesture({modifiers: {...NO_MODS, button: 2}}))).toBeNull()
+  it('passes through native clicks (cmd/ctrl/middle/right) so the browser handles them', () => {
+    expect(defaultNavigationIntent(gesture({modifiers: {...NO_MODS, metaKey: true}}))).toEqual(PASSTHROUGH)
+    expect(defaultNavigationIntent(gesture({modifiers: {...NO_MODS, ctrlKey: true}}))).toEqual(PASSTHROUGH)
+    expect(defaultNavigationIntent(gesture({modifiers: {...NO_MODS, button: 1}}))).toEqual(PASSTHROUGH)
+    expect(defaultNavigationIntent(gesture({modifiers: {...NO_MODS, button: 2}}))).toEqual(PASSTHROUGH)
     // a modifier that would otherwise mean "main" still defers to the browser
     // when combined with cmd/ctrl
-    expect(defaultNavigationIntent(gesture({modifiers: {...NO_MODS, altKey: true, metaKey: true}}))).toBeNull()
+    expect(defaultNavigationIntent(gesture({modifiers: {...NO_MODS, altKey: true, metaKey: true}}))).toEqual(PASSTHROUGH)
   })
 })
 
@@ -461,15 +466,18 @@ describe('navigationIntentVerb (intent policy seam)', () => {
   })
 
   it('a policy decorator can override native passthrough (cmd-click → in-app navigation)', () => {
-    // `defaultNavigationIntent` returns null for a cmd/ctrl/middle click (native
-    // passthrough — let the browser open a new tab). Because `useBlockOpener`
-    // now gates `preventDefault` on the RESOLVED intent (no hardcoded native
-    // pre-check), a policy that maps that null to a concrete `NavigateInput`
-    // makes native passthrough plugin-overridable.
+    // The default policy returns PASSTHROUGH for a cmd/ctrl/middle click (let the
+    // browser open a new tab). Because the surface routes the policy's
+    // `NavigationDecision` (no hardcoded native pre-check), a policy that maps
+    // PASSTHROUGH to a `navigate` decision makes native passthrough overridable.
     env.repo.setRuntimeContributions(navigationIntentVerb.decoratorsFacet, 'test-policy', [
       next => gesture => {
-        const resolved = next(gesture) as NavigateInput | null
-        return resolved ?? {blockId: gesture.blockId, target: 'main'}
+        // `next` is typed MaybePromise (the verb API), but runSync resolves it
+        // synchronously, so this decorator may treat it as sync.
+        const decision = next(gesture) as NavigationDecision
+        return decision.kind === 'passthrough'
+          ? goTo({blockId: gesture.blockId, target: 'main'})
+          : decision
       },
     ])
     const runtime = env.repo.facetRuntime!
@@ -481,10 +489,32 @@ describe('navigationIntentVerb (intent policy seam)', () => {
       viewport: 'desktop',
     }
 
-    // Default policy → null (native); the decorator overrides it to an in-app nav.
-    expect(defaultNavigationIntent(cmdClick)).toBeNull()
+    // Default policy → passthrough (native); the decorator overrides it to in-app.
+    expect(defaultNavigationIntent(cmdClick)).toEqual(PASSTHROUGH)
     expect(navigationIntentVerb.runSync(runtime, cmdClick))
-      .toEqual({blockId: 'b-cmd', target: 'main'})
+      .toEqual(goTo({blockId: 'b-cmd', target: 'main'}))
+  })
+
+  it('carries the gesture workspace into a navigate decision that omitted one (sync active switch)', async () => {
+    stubViewport(false)
+    // A policy impl that flips the active workspace synchronously during
+    // resolution and returns a navigate WITHOUT a workspaceId. The navigation
+    // must still land in the workspace the gesture captured (WS), not the
+    // flipped one — `resolveNavigationIntent` carries it.
+    env.repo.setRuntimeContributions(navigationIntentVerb.implFacet, 'test-policy', [
+      gesture => {
+        env.repo.setActiveWorkspaceId('ws-other')
+        return goTo({blockId: gesture.blockId, target: 'main'})
+      },
+    ])
+
+    await navigateFromGlobalCommand(env.repo, {blockId: 'b-ws'})
+
+    // currentPanelBlockIds resolves WS's layout session — passing proves the nav
+    // landed in WS despite the active flip and the omitted workspaceId.
+    await vi.waitFor(async () => {
+      expect(await currentPanelBlockIds()).toEqual(['b-ws'])
+    })
   })
 
   it('the read probe honors a policy-retargeted workspace (read/write aligned)', async () => {
@@ -498,11 +528,9 @@ describe('navigationIntentVerb (intent policy seam)', () => {
     // anchor on that retargeted workspace, matching where the write would land
     // (otherwise daily-note prev/next anchors on the wrong workspace).
     env.repo.setRuntimeContributions(navigationIntentVerb.decoratorsFacet, 'test-policy', [
-      next => gesture => {
-        // Synchronous now — the intent verb is resolved via `runSync`.
-        const input = next(gesture) as NavigateInput | null
-        return input && gesture.role === 'navigator' ? {...input, workspaceId: 'ws-2'} : input
-      },
+      next => gesture =>
+        mapNavigate(next(gesture) as NavigationDecision, input =>
+          gesture.role === 'navigator' ? {...input, workspaceId: 'ws-2'} : input),
     ])
 
     // Reads from ws-2 (the retargeted workspace), not WS's b-ws1 — and returns
@@ -517,12 +545,11 @@ describe('navigationIntentVerb (intent policy seam)', () => {
     // the active panel even on desktop, by rewriting the policy's NavigateInput.
     stubViewport(false)
     env.repo.setRuntimeContributions(navigationIntentVerb.decoratorsFacet, 'test-policy', [
-      next => gesture => {
-        const input = next(gesture) as NavigateInput | null
-        return input && gesture.role === 'navigator' && input.target === 'main'
-          ? {...input, target: 'active'}
-          : input
-      },
+      next => gesture =>
+        mapNavigate(next(gesture) as NavigationDecision, input =>
+          gesture.role === 'navigator' && input.target === 'main'
+            ? {...input, target: 'active'}
+            : input),
     ])
     const layoutSession = await layoutSessionBlock()
     await insertPanelRow(env.repo, layoutSession, 'b-main')
@@ -544,7 +571,7 @@ describe('navigationIntentVerb (intent policy seam)', () => {
     stubViewport(false)
     // Force every navigator command into a fresh side panel, ignoring viewport.
     env.repo.setRuntimeContributions(navigationIntentVerb.implFacet, 'test-policy', [
-      gesture => ({blockId: gesture.blockId, target: 'new-panel'}),
+      gesture => goTo({blockId: gesture.blockId, target: 'new-panel'}),
     ])
     const layoutSession = await layoutSessionBlock()
     await insertPanelRow(env.repo, layoutSession, 'b-main')
@@ -556,10 +583,10 @@ describe('navigationIntentVerb (intent policy seam)', () => {
     })
   })
 
-  it('a policy decorator can veto a gesture (returns null, no navigation)', async () => {
+  it('a policy decorator can veto a gesture (SUPPRESS, no navigation)', async () => {
     stubViewport(false)
     env.repo.setRuntimeContributions(navigationIntentVerb.decoratorsFacet, 'test-policy', [
-      () => () => null,
+      () => () => SUPPRESS,
     ])
 
     const result = await navigateFromGlobalCommand(env.repo, {blockId: 'b-global'})
@@ -584,5 +611,39 @@ describe('navigationIntentVerb (intent policy seam)', () => {
     })
     expect(consoleError).toHaveBeenCalled()
     consoleError.mockRestore()
+  })
+})
+
+describe('applyNavigationDecision (DOM routing)', () => {
+  // The single place that gates `preventDefault` for a clickable surface. A fake
+  // event with spied stopPropagation/preventDefault lets the node-env suite cover
+  // the native-vs-veto distinction that `useBlockOpener` delegates here.
+  const fakeClick = () => ({stopPropagation: vi.fn(), preventDefault: vi.fn()})
+  type ClickArg = Parameters<typeof applyNavigationDecision>[1]
+
+  it('passthrough: declines the event so the browser follows the href', async () => {
+    const e = fakeClick()
+    applyNavigationDecision(env.repo, e as unknown as ClickArg, PASSTHROUGH)
+    expect(e.preventDefault).not.toHaveBeenCalled()
+    expect(e.stopPropagation).not.toHaveBeenCalled()
+    expect(await currentPanelBlockIds()).toEqual([])
+  })
+
+  it('suppress (veto): owns the event and no-ops — href is suppressed, no navigation', async () => {
+    const e = fakeClick()
+    applyNavigationDecision(env.repo, e as unknown as ClickArg, SUPPRESS)
+    expect(e.preventDefault).toHaveBeenCalled()
+    expect(e.stopPropagation).toHaveBeenCalled()
+    expect(await currentPanelBlockIds()).toEqual([])
+  })
+
+  it('navigate: owns the event and runs the in-app navigation', async () => {
+    const e = fakeClick()
+    applyNavigationDecision(env.repo, e as unknown as ClickArg, goTo({blockId: 'b-go', target: 'main', workspaceId: WS}))
+    expect(e.preventDefault).toHaveBeenCalled()
+    expect(e.stopPropagation).toHaveBeenCalled()
+    await vi.waitFor(async () => {
+      expect(await currentPanelBlockIds()).toEqual(['b-go'])
+    })
   })
 })
