@@ -146,7 +146,7 @@ all in one context; the renderer is mode-aware (plaintext → a direct <code>&lt
 
 <p><strong>Explicitly out of scope:</strong> server-side media features for E2EE workspaces (OCR,
   thumbnails, transcode) — the server has no key; this is the existing E2EE tradeoff
-  (<a href="./e2ee-design.html">e2ee-design.html</a> §15), inherited, not new. E2EE
+  (<a href="../e2ee-design.html">e2ee-design.html</a> §15), inherited, not new. E2EE
   <em>subtree</em> sharing of media (needs the deferred key hierarchy — see §12).</p>
 
 <h2 id="ground">2. Current state we're building on</h2>
@@ -167,7 +167,7 @@ all in one context; the renderer is mode-aware (plaintext → a direct <code>&lt
     <td>Establishes the pattern we copy: a mode-parameterized transform with a pluggable key lookup.
       See §5.</td></tr>
 <tr><td>Shares + API tokens</td>
-    <td><strong>NOT shipped.</strong> <a href="./shares-and-api-tokens.html">shares-and-api-tokens.html</a>
+    <td><strong>NOT shipped.</strong> <a href="../shares-and-api-tokens.html">shares-and-api-tokens.html</a>
       is a design only — no <code>block_shares</code> / <code>effective_share_ids</code> tables exist.</td>
     <td>Do not build on it, and do not design around it — it is unshipped and doesn't map cleanly onto
       the current (graph-ish, not strictly subtree) data model. Block-id storage paths keep a future
@@ -269,7 +269,8 @@ content: 'image: screenshot.png'   // human-readable summary</code></pre>
   <text class="sub" x="360" y="70">bytes</text>
 </svg>
 <figcaption>Metadata is a block (syncs encrypted via the normal path); bytes live in the object store
-  at a path derived from workspace + block id; prose embeds the block by id.</figcaption>
+  at a content-addressed path (<code>&lt;ws&gt;/HMAC(K_id, hash)</code> for E2EE); prose embeds the
+  block by id.</figcaption>
 </figure>
 
 <h2 id="e2ee">4. The constraint that reshapes everything: E2EE</h2>
@@ -384,8 +385,9 @@ fix is already in hand: the asset block stores <code>hash = sha256(plaintext)</c
 against that hash before caching/serving</strong>, and reject on mismatch. In the chosen
 <strong>in-thread</strong> path (§7.3) the resolver already holds the decrypted block, so the expected
 hash is just <code>block.properties.hash</code> — no extra plumbing. (The rejected SW path couldn't read
-the encrypted block state, so it would have needed an <strong>SW-readable metadata mirror</strong>,
-§7.1.1 — <em>not</em> a request param: an <code>&lt;img src&gt;</code> can't carry custom headers, and a
+the encrypted block state, so it would have needed an <strong>SW-readable metadata mirror</strong>
+(<a href="./rejected-sw-decryption-boundary.html">rejected-sw doc</a>) — <em>not</em> a request param:
+an <code>&lt;img src&gt;</code> can't carry custom headers, and a
 <code>?h=</code> query param would leak the plaintext SHA-256.) Either way it's a positive check that can
 only fail closed, never downgrade.</div>
 
@@ -485,247 +487,30 @@ rewrite.)</div>
 
 <div class="decision">
 <strong>Decision: decrypt in-thread (§7.3), not in the service worker.</strong> The byte cache is OPFS
-+ object URLs; the renderer carries a small mode branch. The SW machinery documented in
-<strong>§7.1–§7.2</strong> below — the token handshake, the SW-readable mode-pin + per-asset hash
-mirror, per-<code>clientId</code> sessions, controller-readiness gating — is <em>not built</em>; it is
-retained as the analyzed-and-rejected alternative, because it is the cost side of the decision.
-<strong>§7.3</strong> is the chosen path and the full tally; <strong>§8–§10</strong> are
-boundary-agnostic except where they name the SW. (Earlier drafts led with the SW path; this section
-keeps that analysis, but the verdict is in-thread — see §7.3 / §18.)
++ object URLs; the renderer carries a small mode branch. The service-worker variant — which would make
+<code>&lt;img src&gt;</code> uniform across modes at the cost of an app→SW token handshake, an
+SW-readable mode-pin + per-asset hash mirror, per-<code>clientId</code> sessions, and controller gating
+— was analyzed and <strong>rejected</strong>; the full analysis is preserved as the decision record in
+<a href="./rejected-sw-decryption-boundary.html">rejected-sw-decryption-boundary.html</a> (summarized in
+§7.1). §7.2 (destroying local data) and §8–§10 are boundary-agnostic; §7.3 is the chosen path and the
+full tally (see also §18).
 </div>
 
-<p>The case <em>for</em> the SW was that it keeps the renderer mode-agnostic: decrypt in the worker and
-  <code>&lt;img src="${BASE_URL}asset/…"&gt;</code> "just works" for plaintext and E2EE alike. It is
-  viable — the SW global scope has <code>crypto.subtle</code>, IndexedDB, and the Cache API. What sinks
-  it is not feasibility but the coordination tax of putting the decryptor in a context that can't read
-  app state and is shared across tabs:</p>
+<h3>7.1 The rejected alternative: a service-worker decryption boundary</h3>
 
-<ul>
-  <li><strong>The renderer emits a stable virtual URL — <code>BASE_URL</code>-prefixed.</strong>
-    <code>&lt;img src="${BASE_URL}asset/&lt;workspace_id&gt;/&lt;asset_block_id&gt;"&gt;</code>, not a
-    root-absolute <code>/asset/…</code> (shorthand below). The SW registers with
-    <code>scope: import.meta.env.BASE_URL</code> (<code>src/registerServiceWorker.ts</code>), so under a
-    non-root <code>APP_BASE_PATH</code> (e.g. <code>/app/</code>) a root-absolute URL escapes the SW
-    scope entirely — the worker never sees the request, the auth/decrypt path is bypassed, and the
-    origin returns 404. Build the URL relative to <code>BASE_URL</code> and match the
-    <code>${BASE_URL}asset/…</code> route in the worker. No mode awareness,
-    no <code>createObjectURL</code> lifecycle for inline <strong>subresources</strong>
-    (<code>&lt;img&gt;</code>, <code>&lt;video&gt;</code>) from a controlled tab. A raw
-    <code>&lt;a download href="${BASE_URL}asset/…"&gt;</code> is <em>not</em> covered — a
-    download/navigation can lack a <code>clientId</code> to authorize (§7.1), so "download original" is
-    an <strong>app-mediated</strong> action (the app resolves the bytes and saves from an in-memory
-    blob), not a raw link to the asset URL. (<strong>Range/streaming is also an exception under
-    E2EE</strong> — see the note below; images and moderate files are unaffected.)</li>
-  <li><strong>The SW resolves it, auth-first:</strong> establish the active <code>user_id</code> (for
-    the requesting client — §7.1) and the workspace's <em>mode pin</em> + WK availability
-    <em>before</em> consulting the cache → serve from cache only on a namespace match, a still-valid
-    session, <em>and a matching content hash</em> (from the SW metadata mirror; the cache key includes
-    it, §8) → on miss, fetch the stored blob → decrypt/passthrough <em>per the mode pin</em> (below) →
-    verify against the mirror's expected hash (§5.1) → put the displayable bytes in the user-scoped,
-    hash-keyed cache → respond.</li>
-  <li><strong>The mode pin decides decrypt-vs-passthrough, NOT the envelope magic.</strong> This is a
-    deliberate carry-over of the rule the text path already enforces (<code>src/sync/crypto/envelope.ts</code>
-    / e2ee §6 rule&nbsp;2: "the prefix is a FORMAT tag, not a decrypt trigger — the durable mode pin
-    decides"). The SW reads the workspace's mode pin from a <em>SW-readable</em> source (§7.1.1): if the
-    workspace is <strong>E2EE-pinned, the SW <em>requires</em> a well-formed <code>encb:v1:</code>
-    envelope and decrypts</strong> — a blob that arrives <em>without</em> the magic is treated as
-    tampering and rejected, never served as plaintext. Only a <strong>plaintext-pinned</strong>
-    workspace passes bytes through; an unpinned / no-pin workspace is the resolver's
-    <code>defer</code> state and <strong>fails closed</strong> (not plaintext). Deciding from the
-    self-describing magic alone would re-introduce exactly the
-    downgrade vector (hostile server strips the magic → attacker plaintext reaches
-    <code>&lt;img&gt;</code>) that the text wire-boundary was hardened against.</li>
-  <li><strong>Render gates on SW readiness (cold start).</strong> An <code>&lt;img src="${BASE_URL}asset/…"&gt;</code>
-    can fire before the app has handed the SW a token (§7.1) or before the SW has re-read its state on
-    a cold respawn. The SW must not "fail open": a request with no established active user / no fresh
-    unlock signal <code>respondWith</code>s a deterministic placeholder (or holds briefly on a
-    readiness promise, short timeout → placeholder), never a stale cache hit and never an unauthorized
-    fetch. <strong>But the SW can only do this if it is <em>controlling the page</em></strong> — and
-    on a first production visit (or where SW registration is unavailable) it is not:
-    <code>public/sw.js</code> deliberately omits <code>clients.claim()</code>, so a fresh install
-    controls only the <em>next</em> load. An <code>${BASE_URL}asset/…</code> <code>&lt;img&gt;</code>
-    emitted while uncontrolled goes <em>straight to the origin</em> (→ 404, bypassing all of the above).
-    So the renderer must <strong>gate URL emission on <code>navigator.serviceWorker.controller</code></strong>:
-    only emit the virtual URL when a controller exists; otherwise render a placeholder (and retry once
-    controlled) or fall back to the app-thread resolve (§7.3). Don't rely on the SW catching an
-    already-dispatched request — an uncontrolled page never reaches it.</li>
-</ul>
-
-<p>The thing that actually constrains the SW approach is not decryption — it's two coordination
-  problems, and they are the real work of this design:</p>
-
-<h3>7.1 Coordination problem A — fetching private bytes needs the session</h3>
-
-<p>Storage objects are RLS-protected; reads need a bearer token, which lives in the app's supabase-js
-  session in <code>localStorage</code> — which the SW cannot read. Resolution: each app client
-  <code>postMessage</code>s <code>{ userId, accessToken }</code> to the SW on
-  <code>onAuthStateChange</code> / token refresh, the SW records it <strong>keyed by the sender's
-  <code>client.id</code></strong> (not a single global slot — see the cross-account defense above),
-  and on a fetch the SW looks up the session for that request's <code>event.clientId</code> and issues
-  <code>GET /storage/v1/object/attachments/&lt;ws&gt;/&lt;id&gt;</code> with
-  <code>Authorization: Bearer</code>. This also <strong>eliminates per-object signed URLs</strong> for
-  the in-app case (signed URLs are only needed for the logged-out public case, §13). Signed URLs would
-  not be cheaper anyway: minting one needs the user's JWT (which <em>is</em> this handshake), or the app
-  must push per-object expiring URLs to the SW — heavier than one hourly-refreshed bearer token. The
-  token expires hourly; the app re-posts on refresh.</p>
-
-<div class="warn">
-<strong>This auth scheme covers controlled-tab <em>subresource</em> fetches only — not raw
-navigations.</strong> A <code>&lt;img&gt;</code>/<code>&lt;video&gt;</code> subresource carries the
-originating tab's <code>event.clientId</code>, so the per-user token lookup works. A <em>navigation</em>
-to an asset URL (new-tab open, or a download flow that navigates) may have <em>no</em> usable
-<code>clientId</code> (a fresh top-level navigation has only a not-yet-messaged
-<code>resultingClientId</code>), so there's no per-user token to attribute — and falling back to a
-global token would break the multi-account isolation this whole section preserves. So <strong>direct
-asset navigations are not a supported auth path</strong>: "download" / "open original" is an
-<em>app-mediated</em> action (the app resolves the bytes through the same path and triggers the
-download from an in-memory blob), never a raw navigation to <code>${BASE_URL}asset/…</code>. The route
-still sits ahead of the navigation branch (§11) so such a request can't return the SPA shell — but for
-a clientId-less navigation it returns a <em>placeholder/redirect into the app</em>, not bytes and not
-the shell. (If first-class direct navigations are ever wanted, they need an opaque app-minted
-capability token in the URL — deferred; the public-share path §13 is the related case.)</div>
-
-<p>Persistence across SW respawn is deliberately minimal: the per-<code>clientId</code> token store is
-  in-memory (SW-lifetime), so a respawn simply waits for the app to re-post on the next
-  <code>onAuthStateChange</code> / refresh. A bearer token is never written to durable storage — so
-  there is nothing for the coarse clear (§7.2) to miss — and the SW drops a client's entry when that
-  client goes away.</p>
-
-<h3>7.1.1 The SW needs three things the renderer/app hold — make them SW-readable</h3>
-
-<p>The URL carries only <code>workspace_id</code> and <code>asset_block_id</code>. The decrypt path
-  needs two more facts that today live where the SW <em>cannot</em> reach them — this is a real
-  data-availability requirement, not an aside:</p>
-
-<ul>
-  <li><strong>Mode pin → a SW-readable durable store (IndexedDB).</strong> Pins live in
-    <code>window.localStorage</code> (<code>src/sync/keys/modePin.ts</code>), which a service worker
-    cannot read. The SW needs a durable <strong>IndexedDB</strong> source (the mode must stay known
-    across reloads so an encrypted workspace re-prompts for its key rather than being misread as
-    plaintext — e2ee §6). The mode is <em>authoritative</em>, so it must come from this durable pin,
-    <strong>never</strong> from a per-request claim (an app-claimed "plaintext" would be the downgrade
-    vector again). If no pin exists for the workspace yet (never validated), the SW fails closed —
-    never a magic-fallback.
-    <div class="decision" style="margin-top:8px">
-    <strong>(Rejected-path detail.) The SW path would have required moving the pin to IndexedDB</strong>
-    as the single source of truth (not a localStorage mirror) so the SW could read it. <em>The chosen
-    in-thread path needs none of this — it reads the existing localStorage pin synchronously (§7.3).</em>
-    Kept only as rejected-alternative analysis: the <code>modePin</code> backing would change from
-    localStorage to IDB, both app and SW reading the same store.
-    <ul>
-      <li><strong>Async is a non-issue</strong> because the app keeps a <em>boot-hydrated in-memory
-        cache</em>: at data-layer init (where the keyStore / DB already open) load all pins — a handful,
-        one per workspace — into an in-memory map, and the app's synchronous <code>getModePin</code>
-        reads off that map. Writes are write-through (sync map + async IDB) and are rare (only on mode
-        establishment / key validation), so async IDB never touches the hot read path. The SW reads IDB
-        directly, but its fetch handler is already async (and the §7.1.1 in-SW cache below amortizes it).</li>
-      <li><strong>Durability downgrade is acceptable and fails closed.</strong> IDB is evictable under
-        storage pressure (localStorage less so) — but a missing pin for an encrypted workspace resolves
-        to <code>defer</code> (don't materialize, re-prompt), never "plaintext". So eviction →
-        <em>user re-affirms workspace status</em> → pin re-established; it can never silently downgrade.
-        Preserve the existing pin semantics through the move: <strong>keyed per
-        <code>(user_id, workspace_id)</code></strong> — the IDB store is <em>shared</em> across accounts
-        in the profile but each record is per-user, exactly as <code>modePin.ts</code> keys today; a
-        workspace-only record would let account B consume account A's pin for the same workspace,
-        skipping B's own first-encounter validation and breaking the per-user WK model. <strong>And the in-memory fallback stays
-        plaintext-only</strong>: <code>modePin.ts</code> today falls back in-session only for a
-        <em>confirmed-plaintext</em> pin and <em>throws</em> on durable-pin failure, precisely because
-        E2EE needs a reload-surviving authority. Keep that — if the durable IDB pin can't be written, an
-        E2EE create/unlock must <strong>fail</strong> (don't pin in memory), since a reload would lose
-        the authority and strand the workspace in first-encounter <code>defer</code>. A memory-only
-        E2EE pin is never acceptable.</li>
-    </ul></div></li>
-  <li><strong>Expected hash → SW-readable metadata mirror, NOT a URL param.</strong> The
-    replay/rollback defense (§5.1) verifies decrypted bytes against the block's <code>hash</code>, but
-    that hash is in the block's <em>encrypted</em> <code>properties_json</code> — which the SW can't
-    read. An earlier draft put it in the URL (<code>?h=&lt;sha256&gt;</code>); that is
-    <strong>wrong</strong> — it leaks the plaintext SHA-256 to the origin on any SW-interception miss
-    (and misses are real: <code>public/sw.js</code> deliberately omits <code>clients.claim()</code>, so
-    a fresh install controls only the next load, and registration can be unavailable), which is exactly
-    the known-file <strong>content oracle §10 rejects</strong> and §4 promises against. Instead, the
-    app writes per-asset metadata to the <em>same SW-readable IDB mirror</em> as the mode pin
-    (§7.1.1, extended to <code>{asset_block_id → expected hash}</code>) when it materializes the block;
-    the SW reads the expected hash from there to (a) build the hash-keyed cache key (§8) and (b) verify
-    decrypted bytes before caching/serving. The URL stays clean
-    (<code>${BASE_URL}asset/&lt;ws&gt;/&lt;id&gt;</code>) — no plaintext hash ever on the wire. A
-    missing mirror entry for an E2EE asset <strong>fails closed</strong> (placeholder), never serves
-    unverified bytes — closing the same-asset replay window without the leak. (The mirror is ordinary
-    SW-readable IDB, removed by the coarse clear-all like every other local store, §7.2.)</li>
-  <li><strong>Active user + token</strong> — already covered by the §7.1 per-<code>clientId</code>
-    handshake.</li>
-</ul>
-
-<div class="info">
-<strong>Cache the SW's IDB reads on the hot path — keyed by <code>(user_id, workspace_id)</code>.</strong>
-Both the mode-pin store and the WK store (<code>km-e2ee-keys</code>) are now SW-readable IDB, so a naïve
-handler does two async IDB opens per <code>&lt;img&gt;</code> fetch. Keep a small in-SW in-memory cache
-of <code>{ (user_id, workspace_id) → mode pin, WK handle, <em>map of</em> asset_block_id → expected
-hash }</code>. <strong>The expected hash is per-<em>asset</em>, not per-workspace</strong> — a workspace
-has many attachments, so a single <code>expected hash</code> on the workspace entry would verify (or
-key the cache for) asset B with asset A's hash → false mismatches; hold a per-<code>asset_block_id</code>
-map inside the workspace entry (or a separate <code>(user_id, asset_block_id) → hash</code> map). The
-mode pin / WK stay at <code>(user_id, workspace_id)</code>. <strong>The
-<code>user_id</code> in the key is load-bearing, not an optimization detail:</strong> the keyStore
-deliberately keys WKs by <code>(user_id, workspace_id)</code> (shared across accounts in the profile),
-so a <em>workspace-only</em> hot cache would let account A's populated WK/pin serve account B's request
-for the same encrypted workspace — B could decrypt while B is locked or has never loaded its own WK,
-bypassing the per-user isolation. Resolve the requesting client's <code>user_id</code> (§7.1) and key
-both the cache and its invalidation by <code>(user_id, workspace_id)</code>. Populated lazily and
-<strong>invalidated on auth/token messages</strong> (§7.1) and on the per-workspace revoke/leave
-purge. The cache is per-SW-lifetime, so a respawn
-re-reads IDB once; correctness still comes from IDB + the invalidation signals, the cache only avoids
-per-request opens.
-</div>
-
-<div class="warn">
-<strong>Whole-blob AEAD ≠ native range/streaming for E2EE.</strong> The <code>encb:v1:</code>
-envelope is a single AES-GCM seal over the whole byte array, and a GCM ciphertext byte range cannot
-be decrypted independently. So an E2EE <code>&lt;video&gt;</code> (or any <code>Range</code> request)
-cannot stream a slice: the SW would have to fetch+decrypt the <em>entire</em> object and synthesize a
-<code>206</code> from the plaintext — fine for images and moderate files, but it defeats true
-streaming for large video. Two honest paths, both vNext: the SW fully materializes + serves
-synthesized ranges (simple, no streaming), or large media uses a <strong>chunked</strong> envelope
-(per-chunk nonce/tag, range maps to chunk boundaries) designed before relying on streaming
-<code>&lt;video&gt;</code>. v1 images don't hit this; the doc just must not <em>promise</em> native
-ranges under E2EE. (Plaintext workspaces keep native ranges — the object is the raw bytes.)
-</div>
-
-<div class="warn">
-<strong>Cache hits must be authorized, and the cache key must be user-scoped.</strong> Decrypted
-bytes in the Cache API are not themselves access-controlled, so a cache key of
-<code>/asset/&lt;ws&gt;/&lt;id&gt;</code> alone would let a later request return previously-decrypted
-bytes <em>without</em> re-checking the active session or key — bypassing Storage RLS and key
-availability across an account switch, a workspace revoke/leave, or a purge that missed an entry.
-Three defenses, all required: (1) <strong>namespace the cache by <code>user_id</code></strong> (a
-per-user bucket <code>assets:&lt;user_id&gt;</code>); (2) <strong>resolve the active user per
-requesting client, not globally</strong> — a single SW serves every tab, and a browser profile can
-hold two accounts at once (the keyStore is shared across accounts), so the SW keys its session map by
-<code>event.clientId</code> → that tab's user, never a single global "active user" slot that the last
-<code>onAuthStateChange</code> wins; and (3) <strong>validate before every hit against key/session
-state</strong> — for E2EE, treat the workspace's WK being absent from IndexedDB as locked (evict rather
-than serve). There is no in-app lock action racing the SW (destruction is the coarse clear, §7.2), so
-WK-absence is an eventually-consistent signal, made robust by the TTL revalidation below; it also
-doesn't gate plaintext-workspace cached bytes, so neither check stands alone — the revoke/leave purge +
-the TTL revalidation are the real defense. Note the cross-account case is the subtle one (§16): the
-cache namespace isolates <em>reads</em>, while the per-client session keying is what isolates the
-<em>fetch token</em>.
-</div>
-
-<div class="warn">
-<strong>Membership revocation needs the same backstop as lock — especially for plaintext.</strong> The
-locked-state check above is the E2EE arm; the symmetric hazard is a user <em>removed from a workspace
-server-side</em> (by another admin), with no local signal. For a <strong>plaintext</strong> workspace
-— where §10 says RLS <em>is</em> the access boundary — a stale cache hit in <code>assets:&lt;user_id&gt;</code>
-would keep serving bytes after removal if the revoke-purge is delayed or misses an entry, because a
-cache hit never goes back through Storage RLS. So a cache hit must <em>never</em> be treated as an
-independent authority: (a) <strong>purge the workspace's cache prefix on leave/revoke</strong> (primary,
-but it can race / miss); and (b) <strong>bound cache authority</strong> — give cached entries a short
-freshness TTL after which the SW re-validates access (cheapest: re-issue the RLS-gated Storage
-<code>GET</code>, which 403s for a removed member, before serving a stale-past-TTL hit). The membership
-signal is not locally authoritative, so the TTL-bounded revalidation — not just the purge — is what
-closes the plaintext-removal window. (E2EE leans on the same shape, with key-absence as the faster
-signal.)
-</div>
+<p>The other boundary considered was decrypting in a <strong>service worker</strong>, so that
+  <code>&lt;img src="${BASE_URL}asset/…"&gt;</code> would be uniform across plaintext and E2EE. It is
+  feasible (the SW scope has <code>crypto.subtle</code>, IndexedDB, the Cache API) but was
+  <strong>rejected</strong>: it concentrates ~5 boundary-artifact coordination mechanisms — an app→SW
+  token handshake, an SW-readable mode-pin + per-asset hash mirror (the SW can't read the DB),
+  per-<code>clientId</code> sessions + per-user cache keying (one SW serves every tab/account), and a
+  controller-readiness / route-ordering / clientId-less-navigation lifecycle — to buy one benefit that
+  <code>&lt;img&gt;</code> doesn't need, since it takes an object URL. The in-thread path (§7.3) pays
+  none of that. The <strong>full</strong> coordination-tax analysis — the four request mechanics, the
+  two coordination problems, the SW-readable-facts requirement, and the Cache-API authorization boxes —
+  is preserved as the decision record in
+  <a href="./rejected-sw-decryption-boundary.html"><strong>rejected-sw-decryption-boundary.html</strong></a>.
+  The chosen path follows in §7.3.</p>
 
 <h3>7.2 Destroying local data is coarse and system-level — not an in-app wipe</h3>
 
@@ -744,18 +529,16 @@ worker, and the pre-render boot gate a hand-rolled wipe would each have to solve
 synthesize a <code>Clear-Site-Data</code> header — Chromium ignores it; a programmatic trigger is
 deferred until the app leaves GitHub Pages, issue&nbsp;#245). Consequences for this design:
 <ul>
-  <li><strong>No wipe participants.</strong> The replica, display cache, upload queue, SW token store
-    and hash mirror are ordinary local storage; the coarse clear removes them with the DB and keys —
+  <li><strong>No wipe participants.</strong> The replica, display cache, and upload queue are ordinary local storage; the coarse clear removes them with the DB and keys —
     nothing selective to drain, mark, or purge, and no app→SW wipe coordination to get right.</li>
-  <li><strong>No "plaintext survives a lock" hazard.</strong> Decrypted bytes in the Cache API (SW path)
-    or OPFS (app-thread path) are destroyed by the same clear that removes everything else, so storing
+  <li><strong>No "plaintext survives a lock" hazard.</strong> Decrypted bytes in OPFS are destroyed by the same clear that removes everything else, so storing
     them locally is consistent with the accepted posture (e2ee §15 #7) <em>without</em> a per-store wipe
     rule to enforce.</li>
   <li><strong>Re-securing a device is the coarse clear</strong> — it logs out every account / workspace
     in the profile, not one. Accepted: a paranoid user would clear site data anyway, and re-affirming
     workspace status (re-paste the WK) afterward is fine.</li>
 </ul>
-The runtime cache-hit <em>authorization</em> checks above (account switch, membership revoke, WK
+The runtime cache-hit <em>authorization</em> checks (§7.3, §8 — account switch, membership revoke, WK
 absence) are independent of destruction and stay — they gate <em>serving</em> stale bytes, which no
 amount of wiping addresses.
 </div>
@@ -779,7 +562,7 @@ boundary-agnostic except where they name the SW.
 <ul>
   <li><strong>No mode-pin IDB store / no per-asset hash mirror.</strong> The app reads the mode pin
     synchronously and already holds the decrypted block (so the hash is just
-    <code>block.properties.hash</code>) — the §7.1.1 mirror machinery exists only because the SW can't reach
+    <code>block.properties.hash</code>) — the §7.1 mirror machinery exists only because the SW can't reach
     app state.</li>
   <li><strong>Plaintext bytes in OPFS (not SQLite, not Cache API).</strong> The app-thread path caches
     decrypted bytes as plain <strong>OPFS files</strong> (<code>attachments/&lt;user&gt;/&lt;ws&gt;/&lt;content-key&gt;</code>)
@@ -822,7 +605,8 @@ boundary-agnostic except where they name the SW.
     revalidation GET must hit the <em>origin</em> (auth-bearing, non-cacheable, and the private bucket
     sets no public <code>cacheControl</code>) so a CDN <code>200</code> can't mask the 403. For
     E2EE, WK-absence is treated as locked (evict rather than serve). These are the same guarantees the
-    rejected SW path stated for the Cache API (the §7.1.1 cache-auth boxes), now for the in-thread OPFS
+    rejected SW path stated for the Cache API (the Cache-API authorization boxes in the rejected-SW
+    doc), now for the in-thread OPFS
     cache.</li>
 </ul>
 
@@ -831,7 +615,7 @@ boundary-agnostic except where they name the SW.
 to buy exactly one benefit; in-thread pays two small local concerns and avoids all of them.
 <ul>
   <li><strong>SW-only costs, each a boundary artifact:</strong> the app→SW token handshake (§7.1); the
-    SW-readable mode-pin + per-asset hash mirror, because the SW can't read the DB (§7.1.1);
+    SW-readable mode-pin + per-asset hash mirror, because the SW can't read the DB (§7.1);
     per-<code>clientId</code> sessions + per-user cache keying, because one SW is shared across all
     tabs/accounts of the origin; and the controller-readiness / route-ordering / clientId-less-navigation
     lifecycle (§7, §11). The in-thread context has none of these — it reads the mode pin synchronously
@@ -937,7 +721,10 @@ investigation).
   <li><strong>Eviction:</strong> the display cache and any over-budget replica bytes carry a soft LRU
     cap (≈500&nbsp;MB default); an evicted entry round-trips on next view (replica → re-fetch ciphertext;
     display → re-derive locally from the replica). <em>Un-uploaded</em> replica bytes are exempt — they
-    are the only copy of those bytes anywhere (§9).</li>
+    are the only copy of those bytes anywhere (§9). Cap and exemption are evaluated <em>per content key,
+    not per block</em>: one object can back several blocks (§11), so deleting one of them must
+    <strong>not</strong> evict the shared local entry while another local block still carries that hash —
+    local replica/display eviction rides the same content-refcount as object GC (§16).</li>
   <li><strong>Destroying local data:</strong> the replica, display cache, and §9 byte-replication store
     are ordinary local storage, removed wholesale by the coarse clear-all (§7.2) — no per-store wipe
     participation. <em>Authorization</em> is separate: on per-workspace revoke/leave, purge that
@@ -1100,7 +887,13 @@ correlation). A <strong>plaintext</strong> workspace has no secret to protect, s
     time</strong> — <em>not</em> the stored WK handle, which is a non-extractable AES-GCM key WebCrypto
     won't sign with. The raw key bytes are briefly in scope at unlock/create
     (<code>parseWorkspaceKey</code> / <code>importWorkspaceKey</code>) before the non-extractable import;
-    that is the only window to derive <code>K_id</code>, so derive both there.</li>
+    that is the only window to derive <code>K_id</code> — and the WK bytes are <strong>zeroed right
+    after import</strong> (<code>createEncryptedWorkspace.ts</code>), so <code>K_id</code> can't be
+    re-derived on a later reload. It must therefore be <strong>persisted</strong> as its own
+    non-extractable HMAC <code>CryptoKey</code> in the keyStore (keyed <code>(user_id, workspace_id)</code>
+    beside the WK handle), derived once at import/unlock. That adds a second stored key handle but no
+    WK-exposure widening — it can't recover the WK, and lives in the same IndexedDB the model already
+    trusts.</li>
   <li><strong>What this removes</strong> (vs a block-id path): the idempotency token (§9/§10.1), the
     write-once monotonicity rule (§5.1), and duplicate-object GC (§11) — the path <em>is</em> the
     idempotency key and the immutability guarantee. Fewer moving parts, not just better scaling.</li>
@@ -1203,9 +996,14 @@ inspects the body bytes itself</em> and then writes them with service-role. Per 
     wrote the object but the response was lost before §9 cleared the queue entry, the retry finds the
     object present and returns success — so no random idempotency token is needed (the block-id path
     needed one precisely because its path did <em>not</em> encode content). The guard can't verify the
-    body <em>matches</em> the content key (it has no key, sees only ciphertext) and doesn't need to: a
-    member who mis-PUTs garbage to a path is caught by the read-side hash check (§5.1), and the untrusted
-    server can't compute a path at all.</li>
+    body <em>matches</em> the content key (it has no key, sees only ciphertext): a member who mis-PUTs
+    garbage to a path, or a truncated PUT, is caught by the read-side hash check (§5.1) — it fails closed,
+    never serves corruption. But first-write-wins makes a bad first write <em>terminal</em> (the honest
+    re-PUT no-ops at the existing path), so two things are required: the function must persist
+    <strong>atomically</strong> (reject an incomplete body, so a partial upload can't win the path), and a
+    writer that hash-verify-rejects an object it <em>can</em> verify may <strong>delete it</strong> (the
+    §10 writer-delete RLS) and re-upload — the correction path for a poisoned or corrupt path. This member
+    poisoning surface is new under content-addressing; see §17.</li>
 </ol>
 <strong>Not a signed-upload token.</strong> Minting a one-shot signed upload URL would let the client
 <code>uploadToSignedUrl</code> the body <em>directly to Storage</em>, which Supabase accepts without
@@ -1309,14 +1107,15 @@ duplicate objects to reconcile, even though GCM is randomized (the path is keyed
 <em>plaintext</em> hash the client holds, not the ciphertext). What can still diverge is the
 <em>block</em>: the dedup lookup reads local synced state, so concurrent pastes may create two
 <code>media</code> blocks that both reference that one object. Harmless — both render, both verify
-against the same content, and object GC is content-reference-counted (delete the object when no block
-in the workspace carries its hash, §16), so a duplicate block costs nothing and resolves as sync
+against the same content, and object GC is content-reference-counted but <em>conservative</em> —
+deferred, hydration-gated, counting live + recently-deleted blocks, and recoverable (§16) — so a
+duplicate block costs nothing and resolves as sync
 converges. No duplicate-object GC, no idempotency token, no &quot;tolerate multiple objects per hash.&quot;
 </div>
 
 <h2 id="sharing">12. Subtree sharing (deferred — not a design driver)</h2>
 
-<p>Subtree sharing (<a href="./shares-and-api-tokens.html">shares-and-api-tokens.html</a>) is
+<p>Subtree sharing (<a href="../shares-and-api-tokens.html">shares-and-api-tokens.html</a>) is
   <strong>not shipped</strong>, and it doesn't map cleanly onto the current data model — the app isn't
   strictly tree-shaped anymore, so "share this subtree" is itself an unsolved design a future effort
   would have to work out. So this design does <em>not</em> bend around it: dedup is workspace-wide (§11),
@@ -1361,7 +1160,11 @@ crypto seals bytes with the WK <em>directly</em> — there is no per-asset key i
 naïve "put the decrypt key in the fragment" would put the <em>WK</em> in a URL, exposing the
 <em>entire workspace</em>, not one image. Key-in-fragment therefore requires its own step: generate a
 one-off key, re-encrypt the bytes under it, upload that to a <em>public</em> bucket, and put only that
-per-asset key in the fragment. The WK never leaves the device (preserving the e2ee §5 invariant).
+per-asset key in the fragment. The WK never leaves the device (preserving the e2ee §5 invariant). The
+share producer must also <strong>hash-verify the source object against <code>block.properties.hash</code>
+before re-encrypting</strong> — a public viewer has no block hash to check (the §5.1 read-side check
+lives in the authenticated app), so a poisoned or corrupt object (§10.1/§17) must not be laundered into
+a public artifact.
 </div>
 
 <div class="warn">
@@ -1450,12 +1253,23 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
     keys can never serve account B (§7.3).</li>
   <li><strong>Max inline size + large-media story:</strong> a v1 cap (e.g. 10&nbsp;MB) with a clear
     error, deferring resumable/tus upload to vNext. Where exactly is the cap enforced?</li>
-  <li><strong>Asset block deletion → byte GC, and the two orphan directions:</strong> deleting an asset
-    block (once its last <code>!((id))</code> referrer is gone — workspace-wide dedup means one asset can
-    have many, §11) ⇒ delete the object <em>only when no block in the workspace still carries its content
-    hash</em> (object GC is content-reference-counted — one content-addressed object may back several
-    blocks, §11); dangling embeds render the existing
-    "unresolved embed" state. Beyond the <em>undo</em> case (handled by the §9 byte-lane compensator), a
+  <li><strong>Asset block deletion → byte GC (must be conservative under content-addressing):</strong>
+    because one content-addressed object may back several blocks (§11), deleting a block does <em>not</em>
+    delete the object. Object GC is <strong>content-reference-counted</strong>, but the refcount can only
+    be evaluated <em>client-side</em> against one device's <em>local</em> view (the hash is in encrypted
+    <code>properties_json</code> — the server can't read it). A naive &quot;no live block carries hash H →
+    delete&quot; loses live data three ways: a not-yet-synced block on another device still needs H; a
+    <em>soft-deleted</em> block (delete is a tombstone — <code>mutators.ts</code> — that still carries H)
+    can be undone/restored; and <code>blocks_history</code> (the device-loss-resistant PITR substrate)
+    still references H. So object GC must (a) run only on a <strong>settled-synced</strong> workspace (the
+    §9 hydration gate), (b) sit behind a <strong>grace window</strong> like block GC — never a live
+    zero-crossing, (c) count <em>live + within-retention soft-deleted</em> blocks, and (d) be
+    <strong>recoverable by re-upload</strong> from any device still holding the bytes, since the
+    cross-device-unsynced race can't be fully closed from one view. <strong>Open:</strong> whether a
+    history/PITR <em>restore</em> recovers media bytes (then gate object GC on the PITR horizon) or media
+    is an explicit PITR carve-out — decide before building object GC. v1 errs toward <em>retention</em>
+    (storage is cheap; a stranded live image is not). Dangling embeds render the existing
+    &quot;unresolved embed&quot; state. Beyond the <em>undo</em> case (handled by the §9 byte-lane compensator), a
     vNext orphan sweep covers <strong>both</strong> directions, but they are <em>not</em> symmetric: orphan
     <em>objects</em> (a Storage object with no block — e.g. an interrupted delete) are auto-deletable;
     orphan <em>blocks</em> (an asset block whose object never materialized — e.g. an upload that never
@@ -1497,10 +1311,19 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
 <tr><td>Content-addressed storage path (keyed-hash)</td>
     <td>Path is <code>HMAC(K_id, sha256)</code> (E2EE) / <code>sha256</code> (plaintext), not the block
       id, so a future share-RLS join needs a small <code>content_key → block</code> mapping, and
-      <code>K_id</code> must be HKDF-derived from WK material at import.</td>
+      <code>K_id</code> must be HKDF-derived from WK material at import <em>and persisted</em> (the raw
+      WK bytes are zeroed post-import, so it can't be re-derived).</td>
     <td><strong>Chosen (§10):</strong> uploads are idempotent and object dedup is an invariant — removes
       the idempotency token, the write-once-race rule, and duplicate-object GC. Mapping cost is zero
       today (sharing unshipped, §12). Block dedup stays best-effort but produces no duplicate objects.</td></tr>
+<tr><td>First-write-wins is poisonable by a member</td>
+    <td>Any member can compute <code>HMAC(K_id, sha256(x))</code> and pre-occupy a content path with
+      garbage; first-write-wins then silently no-ops the honest upload of that exact content → a
+      workspace-wide broken image. A terminal, content-targeted primitive the block-id path lacked.</td>
+    <td>Accepted &amp; named: read-side hash-verify (§5.1) makes it fail-closed (broken image, never
+      spoofed content); the server (no <code>K_id</code>) can't do it; recovery is a writer delete +
+      re-upload (§10.1). Members are inside the content-correctness trust boundary, and the server-side
+      &quot;verify body matches path&quot; defense is foreclosed (the guard has no key).</td></tr>
 <tr><td>Concurrent offline replace of one embed</td>
     <td>Two devices replacing the same image offline each mint a new immutable asset block; on reconnect
       the embed pointer (plain block content) resolves last-writer-wins, so one replacement is silently
@@ -1567,8 +1390,8 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
   migration's <code>private.is_workspace_member</code>/<code>is_workspace_writer</code>,
   <code>src/data/repoProvider.ts</code>, <code>src/components/references/BlockEmbed.tsx</code>,
   <code>src/markdown/MarkdownImage.tsx</code>, <code>public/sw.js</code>, and the design docs
-  <a href="./e2ee-design.html">e2ee-design.html</a> /
-  <a href="./shares-and-api-tokens.html">shares-and-api-tokens.html</a>. Revised after an adversarial
+  <a href="../e2ee-design.html">e2ee-design.html</a> /
+  <a href="../shares-and-api-tokens.html">shares-and-api-tokens.html</a>. Revised after an adversarial
   review pass (SW lifecycle, threat-model, and factual-grounding lenses).</small></p>
 
 </main>
