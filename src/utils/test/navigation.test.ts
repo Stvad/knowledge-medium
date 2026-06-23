@@ -6,7 +6,7 @@ import {
   navigateFromGlobalCommand,
   navigationIntentVerb,
   navigationVerb,
-  resolveGlobalCommandTopLevelBlockId,
+  resolveGlobalCommandTarget,
   type NavigationGesture,
 } from '@/utils/navigation'
 import { panelHistory } from '@/utils/panelHistory'
@@ -222,7 +222,7 @@ describe('navigateFromGlobalCommand', () => {
     await vi.waitFor(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-global', 'b-side'])
     })
-    expect(await resolveGlobalCommandTopLevelBlockId(env.repo, WS)).toBe('b-global')
+    expect((await resolveGlobalCommandTarget(env.repo, WS))?.blockId).toBe('b-global')
   })
 
   it('routes global commands to the active panel on mobile', async () => {
@@ -236,7 +236,7 @@ describe('navigateFromGlobalCommand', () => {
     await vi.waitFor(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-main', 'b-global'])
     })
-    expect(await resolveGlobalCommandTopLevelBlockId(env.repo, WS)).toBe('b-global')
+    expect((await resolveGlobalCommandTarget(env.repo, WS))?.blockId).toBe('b-global')
   })
 })
 
@@ -318,12 +318,12 @@ describe('navigationVerb (intent seam)', () => {
     // The override returns a result without touching panels, so the default
     // navigation is fully replaced and no panel is created.
     env.repo.setRuntimeContributions(navigationVerb.implFacet, 'test-nav', [
-      async () => ({panelId: 'custom', blockId: 'custom'}),
+      async () => ({panelId: 'custom', blockId: 'custom', workspaceId: 'custom'}),
     ])
 
     const result = await navigate(env.repo, {blockId: 'b1', target: 'main'})
 
-    expect(result).toEqual({panelId: 'custom', blockId: 'custom'})
+    expect(result).toEqual({panelId: 'custom', blockId: 'custom', workspaceId: 'custom'})
     expect(await currentPanelBlockIds()).toEqual([])
   })
 
@@ -398,7 +398,7 @@ describe('navigationVerb (intent seam)', () => {
     env.repo.setRuntimeContributions(navigationVerb.decoratorsFacet, 'test-nav', [
       next => req =>
         req.input.origin === 'zoom'
-          ? next({...req, input: {blockId: req.input.blockId, target: 'active'}})
+          ? next({...req, input: {...req.input, target: 'active'}})
           : next(req),
     ])
 
@@ -483,9 +483,10 @@ describe('navigationIntentVerb (intent policy seam)', () => {
       },
     ])
 
-    // Reads from ws-2 (the retargeted workspace), not WS's b-ws1.
+    // Reads from ws-2 (the retargeted workspace), not WS's b-ws1 — and returns
+    // the resolved workspace so callers validate/create against ws-2, not WS.
     await vi.waitFor(async () => {
-      expect(await resolveGlobalCommandTopLevelBlockId(env.repo, WS)).toBe('b-ws2')
+      expect(await resolveGlobalCommandTarget(env.repo, WS)).toEqual({blockId: 'b-ws2', workspaceId: 'ws-2'})
     })
   })
 
@@ -507,7 +508,7 @@ describe('navigationIntentVerb (intent policy seam)', () => {
 
     // The READ honors the same override: it anchors on the active panel (b-side),
     // not main (b-main) — so read-then-navigate flows stay consistent.
-    expect(await resolveGlobalCommandTopLevelBlockId(env.repo, WS)).toBe('b-side')
+    expect((await resolveGlobalCommandTarget(env.repo, WS))?.blockId).toBe('b-side')
 
     navigateFromGlobalCommand(env.repo, {blockId: 'b-global'})
 

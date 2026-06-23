@@ -50,7 +50,7 @@ import { parseAppHash } from '@/utils/routing.js'
 import {
   navigate,
   navigateFromGlobalCommand,
-  resolveGlobalCommandTopLevelBlockId,
+  resolveGlobalCommandTarget,
 } from '@/utils/navigation.js'
 import { addDaysIso, getOrCreateDailyNote, todayIso } from './dailyNotes.ts'
 
@@ -83,27 +83,40 @@ const findContainingDailyNoteIso = async (
   return null
 }
 
-/** Resolve the ISO date of the daily note currently visible in the
- *  primary (or active, on mobile) panel. Returns null when the panel's
- *  top-level block isn't a daily note or no panel is open. Used by both
- *  the prev/next offset actions and the date picker to open with the
- *  correct month + selected day. */
+/** The daily note currently visible in the panel a navigator command targets,
+ *  with the workspace it lives in. Goes through the same policy + destination
+ *  resolution as the navigation, so it validates the visible block against the
+ *  workspace that block actually lives in (not the caller's argument) — keeping
+ *  the anchor consistent with where prev/next will create + open. Returns null
+ *  when the visible block isn't a daily note or no panel is open. */
+const resolveCurrentDailyNote = async (
+  repo: Repo,
+  workspaceId: string,
+): Promise<{iso: string; workspaceId: string} | null> => {
+  const target = await resolveGlobalCommandTarget(repo, workspaceId)
+  if (!target) return null
+  const iso = await findContainingDailyNoteIso(repo, target.blockId, target.workspaceId)
+  return iso ? {iso, workspaceId: target.workspaceId} : null
+}
+
+/** Resolve just the ISO date of the currently-visible daily note — for the date
+ *  picker, which only needs the month/day to open on. */
 export const resolveCurrentDailyNoteIso = async (
   repo: Repo,
   workspaceId: string,
-): Promise<string | null> => {
-  const topLevelBlockId = await resolveGlobalCommandTopLevelBlockId(repo, workspaceId)
-  if (!topLevelBlockId) return null
-  return findContainingDailyNoteIso(repo, topLevelBlockId, workspaceId)
-}
+): Promise<string | null> => (await resolveCurrentDailyNote(repo, workspaceId))?.iso ?? null
 
 const openDailyNoteByOffset = async (repo: Repo, offsetDays: number) => {
   const route = parseAppHash(window.location.hash)
-  const workspaceId = route.workspaceId ?? repo.activeWorkspaceId
-  if (!workspaceId) return
+  const fallbackWorkspaceId = route.workspaceId ?? repo.activeWorkspaceId
+  if (!fallbackWorkspaceId) return
 
-  const currentIso = await resolveCurrentDailyNoteIso(repo, workspaceId)
-  const targetIso = addDaysIso(currentIso ?? todayIso(), offsetDays)
+  // Anchor on the currently-visible daily note AND its workspace, so under a
+  // policy that retargets the workspace we create + open the offset note in the
+  // same workspace the navigation lands in (not the command's workspace).
+  const current = await resolveCurrentDailyNote(repo, fallbackWorkspaceId)
+  const workspaceId = current?.workspaceId ?? fallbackWorkspaceId
+  const targetIso = addDaysIso(current?.iso ?? todayIso(), offsetDays)
   const note = await getOrCreateDailyNote(repo, workspaceId, targetIso)
   navigateFromGlobalCommand(repo, {blockId: note.id, workspaceId})
 }

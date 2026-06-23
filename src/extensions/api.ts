@@ -145,6 +145,7 @@ export {
   useOpenBlock,
   useBlockOpener,
   type NavigateInput,
+  type ResolvedNavigateInput,
   type GlobalCommandNavigateInput,
   type NavigationRequest,
   type NavigationResult,

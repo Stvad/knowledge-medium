@@ -41,11 +41,10 @@ import { useBlockContext } from '@/context/block'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
 import { navigateInPanel } from './panelHistory'
 import { getLayoutSessionId } from '@/utils/layoutSessionId'
-import { activePanelIdProp } from '@/data/properties'
+import { activePanelIdProp, topLevelBlockIdProp } from '@/data/properties'
 import {
   insertPanelRow,
   insertSidebarStackedPanel,
-  panelBlockId,
   panelRowsInLayoutOrder,
 } from '@/utils/panelLayoutProjection'
 
@@ -100,21 +99,33 @@ export interface NavigateSidebarStackInput extends NavigateBaseInput {
  *  error rather than a silent no-op). */
 export type GlobalCommandNavigateInput = Pick<NavigateBaseInput, 'blockId' | 'workspaceId'>
 
-/** Where a navigation landed: the panel showing the block, and the block. The
- *  resolved result of `navigate()` / `navigationVerb`. */
+/** A `NavigateInput` with the workspace resolved to a concrete id — the form
+ *  that flows through the execution pipeline. The workspace is resolved exactly
+ *  once, at the entry (`navigate` / `navigateFromGesture`); everything
+ *  downstream reads `input.workspaceId` and never re-reads
+ *  `repo.activeWorkspaceId`, so an async observer/decorator plus a mid-flight
+ *  workspace switch can't change where the navigation lands. A decorator can
+ *  still retarget by setting `input.workspaceId`. */
+export type ResolvedNavigateInput = NavigateInput & {workspaceId: string}
+
+/** Where a navigation landed: the panel showing the block, the block, and the
+ *  workspace it landed in — the resolved result of `navigate()` /
+ *  `navigationVerb`, and the source of truth callers should read (rather than
+ *  re-deriving from the request they submitted, which a decorator may have
+ *  rewritten). */
 export interface NavigationResult {
   panelId: string
   blockId: string
+  workspaceId: string
 }
 
-/** Input to `navigationVerb`: the requested navigation, the resolved workspace,
- *  and the live repo — impls/observers need it to inspect the target block,
- *  read prefs, or perform a fully custom navigation. */
+/** Input to `navigationVerb`: the resolved navigation (workspace already pinned
+ *  into `input.workspaceId`) and the live repo — impls/observers need the repo
+ *  to inspect the target block, read prefs, or perform a fully custom
+ *  navigation. */
 export interface NavigationRequest {
   repo: Repo
-  /** `input.workspaceId ?? repo.activeWorkspaceId`, resolved once up front. */
-  workspaceId: string
-  input: NavigateInput
+  input: ResolvedNavigateInput
 }
 
 const resolveLayoutSessionBlock = async (repo: Repo, workspaceId: string) => {
@@ -152,104 +163,90 @@ const resolveActivePanelRow = async (
   return panelRows.find(row => row.id === activePanelId) ?? panelRows.at(-1) ?? null
 }
 
-const navigateMainPanel = async (
+/** Where a resolved navigation should go: an existing panel to swap, or a fresh
+ *  panel to create. The single decision both the WRITE (`applyNavigation`) and
+ *  the READ (`resolveGlobalCommandTarget`) share, so they can't drift — every
+ *  target→panel + workspace rule lives here once. `null` = refused (a stale
+ *  explicit panelId). */
+type NavDestination =
+  | {kind: 'panel'; workspaceId: string; panelId: string}
+  | {kind: 'create-row'; workspaceId: string; afterPanelId?: string}
+  | {kind: 'create-stack'; workspaceId: string; sourcePanelId?: string}
+  | null
+
+const resolveDestination = async (
   repo: Repo,
-  workspaceId: string,
-  blockId: string,
-): Promise<NavigationResult> => {
-  const layoutSessionBlock = await resolveLayoutSessionBlock(repo, workspaceId)
-  const panels = await panelRowsForLayoutSession(layoutSessionBlock)
-  const firstPanel = panels[0]
-  if (firstPanel) {
-    await setActivePanel(layoutSessionBlock, firstPanel.id)
-    await navigateInPanel(repo.block(firstPanel.id), blockId)
-    return {panelId: firstPanel.id, blockId}
-  }
-  const panelId = await insertPanelRow(repo, layoutSessionBlock, blockId)
-  return {panelId, blockId}
-}
-
-const navigateActivePanel = async (
-  repo: Repo,
-  workspaceId: string,
-  blockId: string,
-): Promise<NavigationResult> => {
-  const layoutSessionBlock = await resolveLayoutSessionBlock(repo, workspaceId)
-  const panel = await resolveActivePanelRow(layoutSessionBlock)
-  if (panel) {
-    await setActivePanel(layoutSessionBlock, panel.id)
-    await navigateInPanel(repo.block(panel.id), blockId)
-    return {panelId: panel.id, blockId}
-  }
-  const panelId = await insertPanelRow(repo, layoutSessionBlock, blockId)
-  return {panelId, blockId}
-}
-
-const navigateExplicitPanel = async (
-  repo: Repo,
-  workspaceId: string,
-  panelId: string,
-  blockId: string,
-): Promise<NavigationResult | null> => {
-  // Guard against a stale/fabricated panelId (e.g. a plugin policy resolved to
-  // a panel that no longer exists): refuse rather than write content onto a
-  // non-existent block. `repo.exists` is cache-first and counts soft-deleted
-  // rows as missing, so a live panel always passes — including one not yet
-  // reflected in the projected layout subtree — while a deleted/unknown id is
-  // caught. Checking block existence (not layout-row membership) keeps the swap
-  // decoupled from the layout projection, so this can't false-negative a real
-  // panel under a stale subtree read.
-  if (!(await repo.exists(panelId))) {
-    console.warn(`[navigation] ignoring navigation to unknown panel ${panelId}`)
-    return null
-  }
-  await navigateInPanel(repo.block(panelId), blockId)
-  // Best-effort active-panel bookkeeping — deliberately fire-and-forget so a
-  // layout-session failure can't swallow the already-applied navigation.
-  void resolveLayoutSessionBlock(repo, workspaceId)
-    .then(layoutSessionBlock => setActivePanel(layoutSessionBlock, panelId))
-    .catch(error => {
-      console.error('[navigation] Failed to mark panel active after navigation', error)
-    })
-  return {panelId, blockId}
-}
-
-/** Apply a resolved navigation: the target-dispatch ladder that mutates
- *  layout-session panel rows, returning where it landed. This is
- *  `navigationVerb`'s default impl. Resolves the workspace as
- *  `input.workspaceId ?? requestWorkspaceId` — the request's workspace was
- *  captured up front in `navigate()`, so it's used in preference to a fresh
- *  `repo.activeWorkspaceId` read: an async before-observer/decorator may have
- *  let the user switch workspaces between the originating click and here, and
- *  the navigation must land in the workspace that started it. A decorator can
- *  still retarget by explicitly setting `input.workspaceId`. */
-const applyNavigation = async (
-  {repo, workspaceId: requestWorkspaceId, input}: NavigationRequest,
-): Promise<NavigationResult | null> => {
-  const workspaceId = input.workspaceId ?? requestWorkspaceId
-  if (!workspaceId) return null
-
+  input: ResolvedNavigateInput,
+): Promise<NavDestination> => {
+  const {workspaceId} = input
   switch (input.target) {
-    case 'new-panel': {
-      const layoutSessionBlock = await resolveLayoutSessionBlock(repo, workspaceId)
-      const panelId = await insertPanelRow(repo, layoutSessionBlock, input.blockId, {
-        afterPanelId: input.sourcePanelId,
-      })
-      return {panelId, blockId: input.blockId}
-    }
-    case 'sidebar-stack': {
-      const layoutSessionBlock = await resolveLayoutSessionBlock(repo, workspaceId)
-      const panelId = await insertSidebarStackedPanel(repo, layoutSessionBlock, input.blockId, {
-        sourcePanelId: input.sourcePanelId,
-      })
-      return {panelId, blockId: input.blockId}
-    }
-    case 'main':
-      return navigateMainPanel(repo, workspaceId, input.blockId)
-    case 'active':
-      return navigateActivePanel(repo, workspaceId, input.blockId)
+    case 'new-panel':
+      return {kind: 'create-row', workspaceId, afterPanelId: input.sourcePanelId}
+    case 'sidebar-stack':
+      return {kind: 'create-stack', workspaceId, sourcePanelId: input.sourcePanelId}
     case 'panel':
-      return navigateExplicitPanel(repo, workspaceId, input.panelId, input.blockId)
+      // Guard a stale/fabricated panelId via block existence (NOT layout-row
+      // membership): `repo.exists` is cache-first and treats soft-deletes as
+      // missing, so a live panel always passes — including one not yet in the
+      // projected subtree — while a deleted/unknown id is refused, decoupled
+      // from the layout projection.
+      return (await repo.exists(input.panelId))
+        ? {kind: 'panel', workspaceId, panelId: input.panelId}
+        : null
+    case 'main': {
+      const ls = await resolveLayoutSessionBlock(repo, workspaceId)
+      const panels = await panelRowsForLayoutSession(ls)
+      return panels[0]
+        ? {kind: 'panel', workspaceId, panelId: panels[0].id}
+        : {kind: 'create-row', workspaceId}
+    }
+    case 'active': {
+      const ls = await resolveLayoutSessionBlock(repo, workspaceId)
+      const panel = await resolveActivePanelRow(ls)
+      return panel
+        ? {kind: 'panel', workspaceId, panelId: panel.id}
+        : {kind: 'create-row', workspaceId}
+    }
+  }
+}
+
+/** Apply a resolved navigation by mutating layout-session panel rows, returning
+ *  where it landed. `navigationVerb`'s default impl. The "where does this go"
+ *  decision is `resolveDestination` (shared with the read path); this is just
+ *  the effect. The workspace comes from the resolved input — never a fresh
+ *  `repo.activeWorkspaceId` read — so an async observer/decorator can't move the
+ *  landing. Active-panel bookkeeping is fire-and-forget so a layout-session
+ *  failure can't swallow the already-applied content swap. */
+const applyNavigation = async (
+  {repo, input}: NavigationRequest,
+): Promise<NavigationResult | null> => {
+  const dest = await resolveDestination(repo, input)
+  if (!dest) return null
+  const {workspaceId} = dest
+  const {blockId} = input
+
+  switch (dest.kind) {
+    case 'panel': {
+      await navigateInPanel(repo.block(dest.panelId), blockId)
+      void resolveLayoutSessionBlock(repo, workspaceId)
+        .then(ls => setActivePanel(ls, dest.panelId))
+        .catch(error => {
+          console.error('[navigation] Failed to mark panel active after navigation', error)
+        })
+      return {panelId: dest.panelId, blockId, workspaceId}
+    }
+    case 'create-row': {
+      const ls = await resolveLayoutSessionBlock(repo, workspaceId)
+      const panelId = await insertPanelRow(repo, ls, blockId, {afterPanelId: dest.afterPanelId})
+      return {panelId, blockId, workspaceId}
+    }
+    case 'create-stack': {
+      const ls = await resolveLayoutSessionBlock(repo, workspaceId)
+      const panelId = await insertSidebarStackedPanel(repo, ls, blockId, {
+        sourcePanelId: dest.sourcePanelId,
+      })
+      return {panelId, blockId, workspaceId}
+    }
   }
 }
 
@@ -278,7 +275,9 @@ export const navigationVerb = defineVerbFacet<NavigationRequest, NavigationResul
   validateResult: result => {
     if (result === null) return true
     const r = result as Partial<NavigationResult>
-    return typeof r.panelId === 'string' && typeof r.blockId === 'string'
+    return typeof r.panelId === 'string'
+      && typeof r.blockId === 'string'
+      && typeof r.workspaceId === 'string'
   },
 })
 
@@ -296,7 +295,9 @@ export const navigate = async (
   const workspaceId = input.workspaceId ?? repo.activeWorkspaceId
   if (!workspaceId) return null
 
-  const request: NavigationRequest = {repo, workspaceId, input}
+  // Pin the workspace into the input ONCE here (the entry boundary) → the
+  // pipeline reads `input.workspaceId` and never re-reads `repo.activeWorkspaceId`.
+  const request: NavigationRequest = {repo, input: {...input, workspaceId}}
   const runtime = repo.facetRuntime
   try {
     return runtime
@@ -560,16 +561,20 @@ export const useNavigateFromGlobalCommand = () => {
  *  navigator policy ever becomes a real use case. */
 const NAVIGATOR_TARGET_PROBE_BLOCK_ID = ''
 
-/** Resolve the live panel a navigator global command currently targets, routed
- *  through the SAME intent policy as the write (`navigateFromGlobalCommand`), so
- *  a plugin that redirects where global commands land (active vs main, or even a
- *  different workspace) feeds the read too. Returns null when there's no such
- *  panel, or the policy targets a freshly-created panel (new-panel /
- *  sidebar-stack — no existing panel to anchor a read on). */
-const resolveGlobalCommandTargetPanel = async (
+/** Where a navigator global command currently anchors: the block shown in the
+ *  panel it targets, AND the workspace that panel lives in. The anchor for
+ *  read-then-navigate flows (e.g. daily-notes prev/next day). Routed through the
+ *  SAME policy + `resolveDestination` as the write, so the anchor and the
+ *  eventual navigation agree even when a policy retargets the panel (active vs
+ *  main) or the workspace — and it returns the resolved `workspaceId` so callers
+ *  validate/create against the workspace the block actually lives in, not the
+ *  one they passed in. `null` when there's no existing panel to anchor on (the
+ *  target would create a fresh panel) or no workspace. */
+export const resolveGlobalCommandTarget = async (
   repo: Repo,
-  workspaceId: string,
-) => {
+  workspaceId = repo.activeWorkspaceId,
+): Promise<{blockId: string; workspaceId: string} | null> => {
+  if (!workspaceId) return null
   const input = await resolveNavigationIntent(repo, {
     role: 'navigator',
     modifiers: PLAIN_PRIMARY_CLICK,
@@ -578,37 +583,15 @@ const resolveGlobalCommandTargetPanel = async (
     viewport: currentViewport(),
   })
   if (!input) return null
-  // Resolve the layout from the policy-retargeted workspace when it sets one,
-  // mirroring the write path (`navigateFromGesture` → `navigate`) — otherwise a
-  // policy that retargets the workspace would make the read anchor on the gesture
-  // workspace while the navigation lands in the retargeted one.
-  const layoutSessionBlock = await resolveLayoutSessionBlock(repo, input.workspaceId ?? workspaceId)
-  switch (input.target) {
-    case 'active':
-      return resolveActivePanelRow(layoutSessionBlock)
-    case 'panel': {
-      const rows = await panelRowsForLayoutSession(layoutSessionBlock)
-      return rows.find(row => row.id === input.panelId) ?? null
-    }
-    case 'main':
-      return (await panelRowsForLayoutSession(layoutSessionBlock))[0] ?? null
-    case 'new-panel':
-    case 'sidebar-stack':
-      return null
-  }
-}
-
-/** The top-level block currently shown in the panel a navigator global command
- *  targets — the anchor for read-then-navigate flows (e.g. daily-notes
- *  prev/next day). Goes through the same policy as the navigation, so the anchor
- *  and the destination agree even when a plugin redirects global commands. */
-export const resolveGlobalCommandTopLevelBlockId = async (
-  repo: Repo,
-  workspaceId = repo.activeWorkspaceId,
-): Promise<string | null> => {
-  if (!workspaceId) return null
-  const panel = await resolveGlobalCommandTargetPanel(repo, workspaceId)
-  return panel ? panelBlockId(panel) ?? null : null
+  // Honor a policy-retargeted workspace; fall back to the probe workspace.
+  const resolved: ResolvedNavigateInput = {...input, workspaceId: input.workspaceId ?? workspaceId}
+  const dest = await resolveDestination(repo, resolved)
+  // Only an existing-panel destination has a current block to anchor on;
+  // create-row/create-stack would open a fresh panel.
+  if (dest?.kind !== 'panel') return null
+  await repo.load(dest.panelId)
+  const blockId = repo.block(dest.panelId).peekProperty(topLevelBlockIdProp)
+  return typeof blockId === 'string' ? {blockId, workspaceId: dest.workspaceId} : null
 }
 
 export interface OpenBlockContext {
