@@ -9,7 +9,8 @@
 > `vite.config.ts` (`preserveModules`), `vite-plugins/unifySrcJsUrls.ts`, `public/sw.js`,
 > `src/registerServiceWorker.ts`, `src/sync/transform.ts` + `src/data/internals/syncObserver/materialize.ts`
 > (in-thread decryption), `docs/lock-and-wipe-coarse-recommendation.md` (coarse platform wipe), and the
-> media-attachments design (PR #230) §7.3 / §18 (the in-thread/SW decryption fork — the direct analog).
+> media-attachments design (PR #230) §7.3 / §18 (the in-thread/SW decryption fork — the direct analog;
+> external PR, that doc isn't in this repo tree, so its §-refs aren't locally verifiable).
 > Last verified against code: 2026-06-23.
 
 ## TL;DR
@@ -36,15 +37,16 @@ the device-local approval state, and putting E2EE keys in the SW is a non-starte
 
 Plugin code lives in blocks of `type: 'extension'`. The loader walks them, and for each enabled+approved block
 compiles its source and reads `module.default` as an `AppExtension`
-(`src/extensions/dynamicExtensions.ts:125`). The compile is a deliberate **two-step** pipeline
+(`src/extensions/dynamicExtensions.ts:220`). The compile is a deliberate **two-step** pipeline
 (`src/extensions/compileExtensionModule.ts`):
 
 1. **Transpile** TS/JSX → JS string via `@babel/standalone` (`react` + `typescript` presets),
    dynamically `import()`ed so the ~0.85 MB compiler stays out of the eager startup graph
-   (`defaultTranspileViaBabel`, `compileExtensionModule.ts:129`). **No `sourceMaps`, no `//# sourceURL`** is
-   passed — this is the source of the debugging pain below.
+   (`defaultTranspileViaBabel`, `compileExtensionModule.ts:148`). It originally passed **no `sourceMaps` /
+   `//# sourceURL`** — the source of the debugging pain in the bullets below, now fixed by the §6 change in
+   this PR (it passes `sourceMaps: 'inline'` + a sanitized `//# sourceURL`).
 2. **Instantiate** the JS string into an ESM module via a **Blob object URL**
-   (`defaultInstantiateViaBlob`, `compileExtensionModule.ts:142`):
+   (`defaultInstantiateViaBlob`, `compileExtensionModule.ts:174`):
    ```ts
    const blob = new Blob([compiled], {type: 'text/javascript'})
    const blobUrl = URL.createObjectURL(blob)
@@ -77,7 +79,7 @@ kernel-imported and extension-imported copies of a module collapse to one module
 `createContext`/store singleton duplicates — the `useRepo must be used within a RepoContext` class of bug).
 
 **What is and isn't deduped today (important — the SW route is often mis-sold here).** Module *identity* is not
-left to the blob URL. `resolveCachedModule` (`compileExtensionModule.ts:165`) is a hand-rolled
+left to the blob URL. `resolveCachedModule` (`compileExtensionModule.ts:197`) is a hand-rolled
 L1 (content-hash → module promise) / L2 (blockId → {hash, promise}) cache: two blocks with identical source
 share one module instance, and re-resolving an unchanged block returns the *same reference* (critical so React
 doesn't unmount/remount renderer modules on every `refreshAppRuntime`). Across reloads, the IndexedDB
@@ -85,12 +87,13 @@ doesn't unmount/remount renderer modules on every `refreshAppRuntime`). Across r
 string** so a warm boot skips Babel entirely. So intra-session dedup *and* cross-reload recompute-avoidance
 already exist — just not via the browser's native module map.
 
-**Concrete pain points that remain:**
+**Concrete pain points (the baseline that motivated this investigation):**
 
-- **No source maps / unusable stack frames.** Step 1 emits no map and step 2's URL is `blob:<uuid>` that is
-  **revoked the instant the import resolves**. A throw inside plugin code surfaces as `blob:…:line:col`
-  against a URL that no longer exists — no breakpoints, no original TSX. This is the sharpest everyday pain and
-  it is purely a function of the blob path.
+- **No source maps / unusable stack frames** — *the one pain this PR fixes (§6)*. Step 1 originally emitted no
+  map and step 2's URL is `blob:<uuid>` that is **revoked the instant the import resolves**: a throw surfaced as
+  `blob:…:line:col` against a URL that no longer exists — no breakpoints, no original TSX. It was the sharpest
+  everyday pain and purely a function of the blob path; the §6 change adds an inline source map + stable
+  `//# sourceURL`.
 - **No stable module identity URL.** The realm's own module map is bypassed (every blob is a fresh, immediately
   revoked URL). Dedup works only because of the *parallel* hand-rolled `CompileCache`; any code path that
   imports a module URL without going through it gets a distinct instance.
@@ -157,7 +160,7 @@ needs app/DB state or keys.
 
 **Producer (in-thread, unchanged trust/compile core).** Extend `defaultInstantiateViaBlob`'s siblings with a
 cache-write path **inside the existing approval-gated load path** (`dynamicExtensions.ts` →
-`loadApprovedExtension`, `compileExtensionModule.ts:350`). The critical invariant: the producer operates on the
+`loadApprovedExtension`, `compileExtensionModule.ts:382`). The critical invariant: the producer operates on the
 **approved record**, never live `block.content`.
 1. **Compile the approved source, not the DB row.** As today, `loadApprovedExtension` instantiates
    `approval.compiled` (or recompiles `approval.approvedSource` on a compiler bump) — *never* live
@@ -213,7 +216,7 @@ cache**; (2) cacheable assets; (3) vendor; (4) passthrough.
   doesn't delete it (modules version on *edit*, not on `BUILD_ID`).
 - Prune stale versions: on each producer write, delete other `${BASE_URL}module/<blockId>?v=*` entries for that
   block (keep current). Cheap, bounds growth. Block delete/approval-revoke
-  (`revokeExtensionApproval`, `compileExtensionModule.ts:399`) should also drop the block's `km-modules`
+  (`revokeExtensionApproval`, `compileExtensionModule.ts:431`) should also drop the block's `km-modules`
   entries.
 
 ## 4. The first-load / controller-readiness gap (the sharpest issue)
@@ -234,14 +237,14 @@ This is the same hazard the media doc flags ("Render gates on SW readiness… `p
   a true first visit is *never* controlled until a reload. Gating would mean **plugins simply don't load on
   first visit**, which is unacceptable for a feature. Forcing a one-time reload on first activation is ugly and
   the existing update-prompt machinery doesn't even fire on first install (no prior controller —
-  `registerServiceWorker.ts:48` guards on `controller`).
+  `registerServiceWorker.ts:52` guards on `controller`).
 - **Adding `clients.claim()` — rejected.** It's omitted *on purpose* to prevent mid-session version skew
   (header comment, `public/sw.js:13-21`); claim is realm-global so you can't scope it to just `/module/`.
   Reintroducing it to serve modules would regress the generation-pinning design.
 - **Blob `import()` fallback on the uncontrolled load — recommended.** The producer already holds the compiled
   JS string in hand (it just wrote it to the cache), so when `!navigator.serviceWorker.controller` it
   instantiates via the **existing** `defaultInstantiateViaBlob` path instead of the `/module/` URL. Essentially
-  free, reuses today's code. Caveat: a blob-instantiated module that does `import "/module/<otherId>"` would
+  free, reuses today's code. Caveat: a blob-instantiated module that does `import "${BASE_URL}module/<otherId>"` would
   still hit the network → 404; so in fallback mode the producer must **also inline/rewrite transitive deps to
   blob URLs** (it is compiling them and has their bytes), accepting that on the *first uncontrolled load only*
   you lose native dedup for shared deps. That degradation is transitional (next load is controlled) and
@@ -255,9 +258,9 @@ path alive forever for first-load, so the SW route is *additive* complexity, nev
 Clean, and already satisfied by the existing in-thread decryption boundary:
 
 - **Keys never reach the SW.** Block content is decrypted **in-thread** by the sync observer:
-  `materializeStagingRows` runs `decodeFromWire` (`src/sync/transform.ts:112`) in the page/worker context and
-  writes **plaintext** into the local `blocks` table (`materialize.ts:314`). The loader reads
-  `block.content` (`dynamicExtensions.ts:176`) and never sees ciphertext. So the producer trivially "decrypts
+  `materializeStagingRows` runs `decodeFromWire` (`src/sync/transform.ts:112`, called at `materialize.ts:314`)
+  in the page/worker context and upserts **plaintext** into the local `blocks` table (`materialize.ts:365`). The
+  loader reads `block.content` (`dynamicExtensions.ts:160`) and never sees ciphertext. So the producer trivially "decrypts
   in-thread" — it doesn't even do the decryption; it consumes already-decrypted content. The SW gets only the
   compiled output. No `getCek`, no `km-e2ee-keys`, no mode pin in the SW — none of the SW-readable-state
   machinery the media SW-path needed (§7.1.1 there) applies, because the producer, not the SW, does the
