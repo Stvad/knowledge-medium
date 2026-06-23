@@ -260,7 +260,11 @@ const applyNavigation = async (
  *   - `navigationVerb.decorator` — wrap it: rewrite the intent (call `next` with
  *     a changed `input` — e.g. redirect by `input.origin` / `input.target` /
  *     the target block's type) or veto it (return `null` without calling
- *     `next`).
+ *     `next`). Rewrite by **spreading** the input (`{...req.input, …}`) — the
+ *     resolved `input.workspaceId` is required and must be carried; a decorator
+ *     that builds a fresh input and drops it fails closed (the result fails
+ *     `validateResult` → the navigation no-ops) rather than silently landing in
+ *     the wrong workspace. The type enforces this for typed plugins.
  * With no contributions, `run` returns `applyNavigation(request)`, so
  * `navigate()` behaves exactly as before the seam existed. Effectful verb on the
  * default `onError: 'rethrow'`: a throwing override fails that one navigation
