@@ -1,7 +1,10 @@
-/** Block content decorator that appends a live character count to any
+/** Block content decorator that overlays a live character count on any
  *  block tagged `CHAR_COUNTER_TYPE`. A decorator (not a renderer override)
  *  so it composes with whatever content renderer the block already uses —
- *  the count just rides below it.
+ *  the count is absolutely positioned at the content's bottom-right corner
+ *  so the block keeps its usual footprint (no extra row pushing siblings
+ *  down). `pointer-events-none` keeps the overlay from stealing clicks /
+ *  text selection from the editor underneath.
  *
  *  Reactive state (content + limit) is read inside the rendered component
  *  via hooks, per `BlockResolveContext`'s contract — the contribution
@@ -30,10 +33,10 @@ const CharacterCountDecorator = ({block, Inner}: CharacterCountDecoratorProps) =
   const [limit] = useProperty(block, charLimitProp)
   const {text, over} = charCountDisplay(content.length, limit)
   return (
-    <div className="flex w-full flex-col gap-1">
+    <div className="relative w-full">
       <Inner block={block}/>
       <span
-        className={`self-end text-xs tabular-nums ${over ? 'text-destructive' : 'text-muted-foreground'}`}
+        className={`pointer-events-none absolute bottom-0 right-0 select-none text-xs tabular-nums ${over ? 'text-destructive' : 'text-muted-foreground'}`}
         aria-label="Character count"
       >
         {text}
