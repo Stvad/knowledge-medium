@@ -221,8 +221,9 @@ const resolveDestination = async (
  *  decision is `resolveDestination` (shared with the read path); this is just
  *  the effect. The workspace comes from the resolved input — never a fresh
  *  `repo.activeWorkspaceId` read — so an async observer/decorator can't move the
- *  landing. Active-panel bookkeeping is fire-and-forget so a layout-session
- *  failure can't swallow the already-applied content swap. */
+ *  landing. Active-panel bookkeeping is awaited (so it can't outlive the
+ *  navigation and clobber a later one) but failure-isolated and after the swap,
+ *  so a layout-session failure can't swallow the already-applied content swap. */
 const applyNavigation = async (
   {repo, input}: NavigationRequest,
 ): Promise<NavigationResult | null> => {
