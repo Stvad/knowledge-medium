@@ -91,11 +91,12 @@ constraint is <strong>E2EE</strong>: for an encrypted workspace the server holds
 never the key, so bytes are sealed client-side with the workspace key and access becomes
 <em>entirely client-side</em>. We do <strong>not</strong> write two implementations — there is one
 byte transform parameterized by mode, where plaintext is the identity case, exactly as
-<code>src/sync/transform.ts</code> already does for text. Decryption happens in the
-<strong>service worker</strong> behind a self-describing binary envelope, so the renderer stays
-mode-agnostic (<code>&lt;img src="${BASE_URL}asset/&lt;ws&gt;/&lt;id&gt;"&gt;</code> "just works" for both
-modes — base-prefixed so it stays inside the SW scope, §7). The load-bearing work is the SW
-coordination it needs — a per-client session token and SW-readable mode/hash (§7).
+<code>src/sync/transform.ts</code> already does for text. Decryption happens <strong>in-thread</strong>
+(in the app / its data worker), keeping the keys, session, mode pin, and the already-decrypted block
+all in one context; the renderer is mode-aware (plaintext → a direct <code>&lt;img src&gt;</code>; E2EE
+→ fetch + decrypt + an object URL). A service-worker variant that would make
+<code>&lt;img src="${BASE_URL}asset/…"&gt;</code> uniform across modes was evaluated and
+<strong>rejected</strong> — its one benefit doesn't earn the app↔SW coordination tax (§7 / §7.3 / §18).
 </div>
 
 <div class="toc">
@@ -107,7 +108,7 @@ coordination it needs — a per-client session token and SW-readable mode/hash (
   <li><a href="#e2ee">The constraint that reshapes everything: E2EE</a></li>
   <li><a href="#onepath">One byte transform; plaintext is the identity case</a></li>
   <li><a href="#bytepath">The byte path, end to end</a></li>
-  <li><a href="#sw">Service-worker decryption (the unification)</a></li>
+  <li><a href="#sw">The decryption boundary (chosen: in-thread)</a></li>
   <li><a href="#cache">Local replication: byte replica &amp; display cache</a></li>
   <li><a href="#queue">The byte-replication subsystem (up-lane + down-lane)</a></li>
   <li><a href="#storage">Storage layout &amp; RLS</a></li>
@@ -281,12 +282,13 @@ content: 'image: screenshot.png'   // human-readable summary</code></pre>
 <strong>A signed Storage URL handed straight to <code>&lt;img src&gt;</code> — dead for E2EE.</strong>
 The object is ciphertext, so the browser can't render it directly; the bytes have to be fetched and
 <em>decrypted client-side with the WK</em> first. Note what this does <em>not</em> kill: signed URLs as
-a <em>fetch</em> mechanism are fine — what's dead is using one as the <em>render</em> URL. The fix is a
-<strong>proxy</strong> that does the fetch+decrypt and serves displayable bytes behind a stable virtual
-URL (<code>${BASE_URL}asset/&lt;ws&gt;/&lt;id&gt;</code>): the service worker (§7) or the app thread
-(§7.3). The byte fetch inside that proxy could use a signed URL <em>or</em> a bearer-token
-<code>GET</code> — §7.1 picks the bearer token and drops per-object signed URLs for the in-app case. So
-<code>&lt;img src&gt;</code> works again; it just points at the virtual URL, never the raw object.
+a <em>fetch</em> mechanism are fine — what's dead is using one as the <em>render</em> URL. The fix is to
+fetch + decrypt client-side and hand <code>&lt;img&gt;</code> the result: <strong>in-thread</strong>
+(the chosen path, §7.3 — fetch → decrypt → a <code>blob:</code> object URL), or via a
+<strong>service-worker proxy</strong> behind a virtual <code>${BASE_URL}asset/…</code> URL (§7, the
+rejected alternative). Either way the byte fetch can use a signed URL <em>or</em> a bearer-token
+<code>GET</code> (the in-app path uses the bearer token, §7.1). So <code>&lt;img src&gt;</code> works
+again — pointed at an object URL (in-thread) or the virtual URL (SW), never the raw ciphertext object.
 </div>
 
 <div class="reject">
@@ -407,7 +409,7 @@ no-overwrite precondition (reject if the object already exists). The old object 
   parallel path to the object store. The two arrive independently on other devices.</p>
 
 <figure class="diagram">
-<svg viewBox="0 0 820 300" role="img" aria-label="Two-lane diagram. On paste: bytes are hashed, written to the local cache, sealed, and queued for upload to Storage; in parallel the asset block is created and syncs through PowerSync. On render: the renderer requests a virtual asset URL, the service worker checks cache then fetches ciphertext, decrypts with the workspace key, and returns displayable bytes.">
+<svg viewBox="0 0 820 300" role="img" aria-label="Two-lane diagram. On paste: bytes are hashed, written to the local cache, sealed, and queued for upload to Storage; in parallel the asset block is created and syncs through PowerSync. On render: the renderer resolves the bytes in-thread — checks the local cache, fetches ciphertext, decrypts with the workspace key — and sets an object URL on the image.">
   <style>
     .b { fill: var(--code); stroke: var(--line); stroke-width: 1.3; }
     .acc { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; }
@@ -447,9 +449,9 @@ no-overwrite precondition (reject if the object already exists). The old object 
   <text class="ph" x="20" y="186">② READ (render on any device)</text>
   <rect class="b" x="20" y="198" width="150" height="44" rx="6"/>
   <text class="t" x="32" y="218">MediaBlockRenderer</text>
-  <text class="s mono" x="32" y="234">${BASE_URL}asset/ws/id</text>
+  <text class="s mono" x="32" y="234">&lt;img src=blob:…&gt;</text>
   <rect class="acc" x="200" y="198" width="150" height="44" rx="6"/>
-  <text class="t" x="212" y="218">service worker</text>
+  <text class="t" x="212" y="218">in-thread resolver</text>
   <text class="s" x="212" y="234">cache ▸ fetch ▸ decrypt</text>
   <rect class="inf" x="380" y="198" width="140" height="44" rx="6"/>
   <text class="t" x="392" y="220">Object store</text>
@@ -461,15 +463,28 @@ no-overwrite precondition (reject if the object already exists). The old object 
   <path class="ar" d="M350 214 L380 214"/>
   <path class="ar" d="M380 230 C 470 250, 500 240, 560 226"/>
 </svg>
-<figcaption>Metadata and bytes are independent lanes. The service worker is the single place that
+<figcaption>Metadata and bytes are independent lanes. An in-thread resolver is the single place that
   turns a stored (possibly encrypted) blob into displayable bytes.</figcaption>
 </figure>
 
-<h2 id="sw">7. Service-worker decryption (the unification)</h2>
+<h2 id="sw">7. The decryption boundary (chosen: in-thread)</h2>
 
-<p>The cleanest way to keep the renderer mode-agnostic is to decrypt in the service worker. This is
-  viable — the SW global scope has <code>crypto.subtle</code>, IndexedDB, and the Cache API — and it
-  collapses the entire plaintext/E2EE branch into one place the renderer never sees.</p>
+<div class="decision">
+<strong>Decision: decrypt in-thread (§7.3), not in the service worker.</strong> The byte cache is OPFS
++ object URLs; the renderer carries a small mode branch. The SW machinery documented in
+<strong>§7.1–§7.2</strong> below — the token handshake, the SW-readable mode-pin + per-asset hash
+mirror, per-<code>clientId</code> sessions, controller-readiness gating — is <em>not built</em>; it is
+retained as the analyzed-and-rejected alternative, because it is the cost side of the decision.
+<strong>§7.3</strong> is the chosen path and the full tally; <strong>§8–§10</strong> are
+boundary-agnostic except where they name the SW. (Earlier drafts led with the SW path; this section
+keeps that analysis, but the verdict is in-thread — see §7.3 / §18.)
+</div>
+
+<p>The case <em>for</em> the SW was that it keeps the renderer mode-agnostic: decrypt in the worker and
+  <code>&lt;img src="${BASE_URL}asset/…"&gt;</code> "just works" for plaintext and E2EE alike. It is
+  viable — the SW global scope has <code>crypto.subtle</code>, IndexedDB, and the Cache API. What sinks
+  it is not feasibility but the coordination tax of putting the decryptor in a context that can't read
+  app state and is shared across tabs:</p>
 
 <ul>
   <li><strong>The renderer emits a stable virtual URL — <code>BASE_URL</code>-prefixed.</strong>
@@ -669,8 +684,10 @@ signal.)
   and on a fetch the SW looks up the session for that request's <code>event.clientId</code> and issues
   <code>GET /storage/v1/object/attachments/&lt;ws&gt;/&lt;id&gt;</code> with
   <code>Authorization: Bearer</code>. This also <strong>eliminates per-object signed URLs</strong> for
-  the in-app case (signed URLs are only needed for the logged-out public case, §13). The token expires
-  hourly; the app re-posts on refresh.</p>
+  the in-app case (signed URLs are only needed for the logged-out public case, §13). Signed URLs would
+  not be cheaper anyway: minting one needs the user's JWT (which <em>is</em> this handshake), or the app
+  must push per-object expiring URLs to the SW — heavier than one hourly-refreshed bearer token. The
+  token expires hourly; the app re-posts on refresh.</p>
 
 <div class="warn">
 <strong>This auth scheme covers controlled-tab <em>subresource</em> fetches only — not raw
@@ -728,21 +745,21 @@ amount of wiping addresses.
 </div>
 
 <div class="decision">
-<strong>Working choice (the boundary itself is the one open fork — §7.3, §18).</strong> Decrypt in the
-service worker behind the self-describing <code>encb:v1:</code> envelope; the renderer stays
-mode-agnostic, and the Cache API doubles as the byte cache. If kept, the mandatory companion is the
-app→SW token handshake (§7.1) — there is no longer a wipe handshake, since destruction is coarse and
-system-level (§7.2). §7.3 lays out the app-thread alternative honestly; everything below in §8–§10 is
-boundary-agnostic except where it names the SW.
+<strong>That tax is why the SW path is rejected.</strong> Everything in §7.1–§7.2 — the token
+handshake, the SW-readable mode/hash mirror, per-<code>clientId</code> sessions, controller gating — is
+coordination the SW incurs <em>only</em> to buy one thing: a uniform mode-agnostic
+<code>&lt;img src&gt;</code>. The in-thread path (§7.3) gives that up for a small renderer mode-branch
+and pays none of the tax. See §7.3 for the full tally and §18 for the decision record. §8–§10 below are
+boundary-agnostic except where they name the SW.
 </div>
 
-<h3>7.3 The open alternative: app-thread decryption</h3>
+<h3>7.3 The chosen approach: in-thread decryption</h3>
 
-<p>The alternative is app-thread (or dedicated-Worker) decryption: the renderer fetches, decrypts via
-  <code>getCek</code> directly (zero duplication), caches plaintext, and sets an object URL. §7–§10 are
-  written for the SW path, but this fork is <strong>deliberately left open</strong> (§18) — and the
-  tally is more even than an earlier draft implied. What the app-thread path <em>avoids</em>, because
-  it runs in the context that owns app state:</p>
+<p>In-thread (app, or its dedicated data worker) decryption: the renderer fetches the ciphertext,
+  decrypts via <code>getCek</code> directly (zero duplication), caches plaintext bytes, and hands
+  <code>&lt;img&gt;</code> an object URL. Because it runs in the context that already owns the session,
+  the keys, the mode pin, and the decrypted block, it pays <em>none</em> of the SW's coordination tax.
+  What it avoids:</p>
 <ul>
   <li><strong>No mode-pin IDB store / no per-asset hash mirror.</strong> The app reads the mode pin
     synchronously and already holds the decrypted block (so the hash is just
@@ -759,16 +776,48 @@ boundary-agnostic except where it names the SW.
   <li><strong>No token handshake / no per-<code>clientId</code> session</strong> — the app already has
     the Supabase session.</li>
 </ul>
-<p>What it <em>costs</em>: a mode-aware renderer and manual object-URL lifecycle (two local, well-understood
-  concerns). What it does <strong>not</strong> cost, contrary to the earlier framing: native ranges —
-  whole-blob AEAD defeats <code>Range</code>/streaming for large E2EE media <em>regardless</em> of
-  boundary (both paths must fully materialize the plaintext; the fix is chunked encryption, §7 range
-  note), so "native streaming" is not a real SW advantage. The SW path's genuine win is a single
-  mode-agnostic <code>&lt;img src&gt;</code> for plaintext and E2EE alike; the app-thread path's win is
-  avoiding the SW token handshake + SW-readable mode/hash machinery (§7.1/§7.1.1) entirely. (The earlier
-  "don't make the SW a lock-wipe participant" argument is now moot — under the coarse clear there is no
-  wipe participation on either path.) Decide on that token / mode-readability axis, not on the illusory
-  range benefit.</p>
+<p>What it <em>costs</em>: a mode-aware renderer (plaintext sets <code>&lt;img src&gt;</code> directly;
+  E2EE fetches + decrypts + sets an object URL) and manual object-URL lifecycle
+  (<code>createObjectURL</code>/<code>revokeObjectURL</code>) — two local, well-understood concerns. Note
+  OPFS is <em>not</em> URL-addressable, so <code>&lt;img&gt;</code> needs an object URL either way; a
+  path-like stable URL is the <em>only</em> thing the SW route would have added.</p>
+
+<div class="decision">
+<strong>Why in-thread wins the tally.</strong> The SW concentrates ~5 distinct coordination mechanisms
+to buy exactly one benefit; in-thread pays two small local concerns and avoids all of them.
+<ul>
+  <li><strong>SW-only costs, each a boundary artifact:</strong> the app→SW token handshake (§7.1); the
+    SW-readable mode-pin + per-asset hash mirror, because the SW can't read the DB (§7.1.1);
+    per-<code>clientId</code> sessions + per-user cache keying, because one SW is shared across all
+    tabs/accounts of the origin; and the controller-readiness / route-ordering / clientId-less-navigation
+    lifecycle (§7, §11). The in-thread context has none of these — it reads the mode pin synchronously
+    and already holds the decrypted block (the hash is <code>block.properties.hash</code>), so the
+    mirror simply doesn't exist.</li>
+  <li><strong>The SW's one benefit is weak here:</strong> a uniform <code>&lt;img src&gt;</code> across
+    modes. But <code>&lt;img&gt;</code> takes an object URL just fine, so in-thread reproduces the result
+    with a one-line mode branch; the SW's interception isn't even fully uniform (clientId-less
+    navigations already route through the app, §7.1). It would only pay off if some media render site
+    emitted a raw <code>&lt;img src="…asset…"&gt;</code> the app can't funnel through its resolver — and
+    in a controlled markdown pipeline there is none.</li>
+  <li><strong>Signed URLs don't rescue the SW:</strong> minting one needs the user's JWT (which <em>is</em>
+    the handshake), or the app must feed per-object expiring URLs to the SW (heavier than one bearer
+    token). A viable <em>fetch</em> mechanism (§4), not a cheaper one.</li>
+  <li><strong>The DB isn't reachable from the SW even though a DB worker exists:</strong> PowerSync runs
+    a SharedWorker in multi-tab mode (<code>repoProvider.ts</code>), but it is internal and a
+    ServiceWorker can't connect to it; reading a row would mean a <code>BroadcastChannel</code>
+    round-trip through a live tab — and if a tab is alive to answer, decryption belongs in that tab. So
+    the hash mirror (or in-thread) is the only practical answer; in-thread makes it vanish.</li>
+  <li><strong>Not differentiators:</strong> native <code>Range</code>/streaming — whole-blob AEAD
+    defeats it on both paths (fix is chunked encryption); and wipe participation — destruction is the
+    coarse platform clear on both (§7.2).</li>
+</ul>
+The general rule, useful beyond media: <strong>a service worker earns its tax only when the consumer
+needs a real URL, not a blob.</strong> <code>&lt;img&gt;</code> takes a blob → in-thread. A consumer
+that consumes URLs — e.g. the JS module loader for user plugins (<code>import()</code> of a
+<code>/module/&lt;blockId&gt;</code>) — is where a SW-served URL genuinely pays off, and even there the
+clean shape keeps the privileged work in-thread and lets the SW serve a pre-populated cache (separate
+investigation).
+</div>
 
 <h2 id="cache">8. Local replication: byte replica &amp; display cache</h2>
 
@@ -811,19 +860,18 @@ boundary-agnostic except where it names the SW.
   re-fetch + decrypt round-trip, never data loss), and a real storage contest is always won by the DB.</p>
 
 <ul>
-  <li><strong>Backing store — secondary to the §7 decryption-boundary fork, not dictated by it.</strong>
-    The decryption boundary is the real choice; the store is a swappable detail. With SW decryption the
-    Cache API is the SW-native store (<code>cache.match → Response</code> drops straight into the fetch
-    handler); with app-thread decryption OPFS files are natural (handed to an object URL). Either path
-    <em>could</em> use OPFS for both — a SW reaches OPFS via the async API — at the cost of rebuilding
-    the <code>Response</code> by hand for no durability gain (both stores share one best-effort quota,
-    above). User-scoping (<code>assets:&lt;user_id&gt;</code>) is the access-isolation boundary (§7);
+  <li><strong>Backing store: OPFS</strong> (following the in-thread decryption choice, §7.3). The store
+    was always secondary to the decryption boundary, not dictated by it; with in-thread decryption OPFS
+    files are the natural fit (read the file → object URL → <code>&lt;img&gt;</code>). (The rejected SW
+    path would have used the Cache API as its SW-native store instead — same bytes, different shell.)
+    User-scoping (<code>assets:&lt;user_id&gt;</code>) is the access-isolation boundary (§7);
     workspace-scoping makes leave / lock evict only the affected bytes. Because assets are
     <strong>immutable write-once</strong> — an edit is a <em>new</em> block id at a fresh path
     (§5.1/§10.1) — a given block id's replica bytes never change, so the display cache carries the
     <code>hash</code> in its key (self-invalidating if a buggy path ever produced a mismatch), and a
-    fetched byte is accepted only if it matches the block's expected hash from the SW metadata mirror
-    (§7.1.1); never serve <code>&lt;ws&gt;/&lt;id&gt;</code> bytes for a different hash.</li>
+    fetched byte is accepted only if it matches the block's expected <code>hash</code> (read directly
+    from the decrypted block in-thread); never serve <code>&lt;ws&gt;/&lt;id&gt;</code> bytes for a
+    different hash.</li>
   <li><strong>Demand beats prefetch.</strong> The render path and the background replicator call the
     <em>same</em> fetch primitive (fetch ciphertext → verify hash → store in replica) over <em>one
     in-flight map</em>, so a demand fetch and a queued backlog item for the same asset <strong>coalesce
@@ -1323,16 +1371,13 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
     <td><code>attachments</code> bucket migration; membership storage RLS (with the explicit
       <code>private</code>-schema grants / wrapper, §10); the E2EE byte-ciphertext upload guard (§10.1);
       <code>BlobStore</code> over Supabase Storage. Post-create RLS audit per the Supabase rule.</td></tr>
-<tr><td>3 — cache + SW</td>
-    <td><strong>Prereq:</strong> move <code>modePin</code> from localStorage to IndexedDB (single source
-      of truth + boot-hydrated in-memory cache, §7.1.1), and extend that SW-readable mirror to per-asset
-      <code>{asset_block_id → expected hash}</code>, written on block materialization. Then: SW asset
-      route (<code>${BASE_URL}asset/&lt;ws&gt;/&lt;id&gt;</code>, clean — no <code>?h=</code>,
-      base-prefixed, matched FIRST — ahead of BOTH the navigation and image-cache branches, §11) with
-      mode-pin-driven
-      decrypt-or-passthrough and mirror-sourced hash verify; in-SW read cache for pin/WK/hash;
-      user-scoped Cache; per-<code>clientId</code> token handshake. (No per-store wipe purge — coarse
-      clear-all handles destruction, §7.2.)</td></tr>
+<tr><td>3 — cache + resolver (in-thread)</td>
+    <td>An in-thread asset resolver: fetch ciphertext (RLS-gated Storage <code>GET</code> with the app's
+      session) → decrypt-or-passthrough per the synchronously-read mode pin → verify against the block's
+      <code>hash</code> (§5.1) → write plaintext to the OPFS byte cache → hand <code>&lt;img&gt;</code> an
+      object URL (revoke on unmount). No SW route, token handshake, IDB hash mirror, or
+      per-<code>clientId</code> session — those were the rejected SW path (§7.1–§7.2 / §7.3). Destruction
+      is the coarse platform clear (§7.2), so no per-store wipe purge.</td></tr>
 <tr><td>4 — block model + renderer</td>
     <td><code>media</code> block type; <code>MediaBlockRenderer</code> (image branch) reusing the
       lightbox; markdown <code>img</code> override.</td></tr>
@@ -1379,12 +1424,12 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
 <h2 id="tradeoffs">17. Tradeoffs we're accepting</h2>
 <table>
 <tr><th>Choice</th><th>Cost</th><th>Why / exit</th></tr>
-<tr><td>SW decryption needs app→SW coordination</td>
-    <td>A per-client token handshake (§7.1) + SW-readable mode/hash IDB (§7.1.1); decrypted bytes in the
-      Cache API.</td>
-    <td>Buys a mode-agnostic renderer and native media semantics. Destruction is the coarse clear-all
-      (§7.2), so there is no per-store wipe to coordinate or test. Consistent with e2ee §15 #7; the
-      app-thread alternative (§7.3) trades the handshake for a mode-aware renderer.</td></tr>
+<tr><td>In-thread decryption → a mode-aware renderer</td>
+    <td>The renderer branches on mode (plaintext → direct <code>&lt;img src&gt;</code>; E2EE → fetch +
+      decrypt + object URL) and manages the object-URL lifecycle; decrypted bytes sit in OPFS.</td>
+    <td><strong>Chosen (§7.3)</strong> over SW decryption: it avoids the whole app→SW coordination tax
+      (token handshake, mode/hash mirror, per-client sessions, controller gating) for two small local
+      concerns. Destruction is the coarse platform clear (§7.2); consistent with e2ee §15 #7.</td></tr>
 <tr><td>Storage byte-length is visible to the server</td>
     <td>Exact encrypted-object size (≈ plaintext + 28&nbsp;B) + existence/count — a stronger known-file
       fingerprint than the accepted block-metadata leak (§4).</td>
@@ -1447,16 +1492,16 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
     (idempotent uploads, no dedup races) at the cost of an object→block mapping for shares. It's a real
     design fork to decide on merits —
     <em>not</em> on current fleet size; fleet size bears only on how cheap the migration to it is (§10).</li>
-  <li><strong>Open: the decryption boundary.</strong> The single biggest source of genuine (not
-    cosmetic) complexity is putting decryption in the <em>service worker</em> — a context that can't
-    read app state (→ IDB mode-pin + per-asset hash mirror, since a <code>?h=</code> URL would leak
-    the plaintext hash), is shared across tabs/accounts and respawned arbitrarily (→
-    per-<code>clientId</code> sessions, readiness gating). It also caches plaintext, but that is no
-    longer a lifecycle cost — the coarse clear-all removes it like every other store (§7.2). The
-    app-thread-decrypt alternative (§7.3)
-    trades all of that for a mode-aware renderer + manual object-URL lifecycle. This choice is
-    <em>deliberately left open</em> pending a focused re-evaluation; §7–§10 are written for the SW path
-    but most of the data model is boundary-agnostic.</li>
+  <li><strong>Decided: in-thread decryption (§7.3).</strong> The single biggest source of genuine (not
+    cosmetic) complexity was putting decryption in the <em>service worker</em> — a context that can't
+    read app state (→ IDB mode-pin + per-asset hash mirror) and is shared across tabs/accounts and
+    respawned arbitrarily (→ per-<code>clientId</code> sessions, controller-readiness gating). Those are
+    ~5 coordination mechanisms bought for one benefit — a uniform mode-agnostic
+    <code>&lt;img src&gt;</code> — that <code>&lt;img&gt;</code> doesn't actually need, since it takes an
+    object URL. In-thread trades all of it for a mode-aware renderer + object-URL lifecycle, so that is
+    the <strong>adopted</strong> approach. §7.1–§7.2 are retained as the rejected-alternative analysis;
+    §8–§10 are boundary-agnostic. (General lesson: a SW earns its tax only when the consumer needs a real
+    URL, not a blob — see the user-plugin <code>/module/&lt;id&gt;</code> case.)</li>
 </ul>
 
 <p><small>Grounded against: <code>src/sync/transform.ts</code>, <code>src/sync/crypto/</code>
