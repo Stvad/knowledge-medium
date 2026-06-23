@@ -59,7 +59,7 @@ already runs for that event.
 | `block:synced` (down-sync applied) | `{workspaceId, ids}` — **one emit per workspace** present in the window | `startBlocksSyncedObserver` → `applyOutcome` (`syncObserver/observer.ts:167`) — walks materialized snapshots | distinct from local-write `block:*`: these are *remote* rows landing. A drain window is **seq-ordered, not workspace-scoped** (`drainQueueOnce` reads `blocks_synced_changes ORDER BY seq`, `observer.ts:193`), so its `MaterializeOutcome.snapshots` can span workspaces — the bridge must **group by `after/before.workspaceId`** and emit one event per workspace, exactly as the observer already does for cycle scans (`cycleScanCandidatesByWorkspace`, `observer.ts:114`). A single `{ids, workspaceId}` payload would mislabel cross-workspace batches. Pairs with `invalidationRules`. |
 | `navigation:completed` | `{result: NavigationResult, input, origin}` | `navigationVerb.after` (`utils/navigation.ts:289`) — **already exists** as a Sum observer slot | bridge, don't re-emit: an internal `after` observer forwards onto the bus. But `after` fires for **every** outcome (`VerbOutcome<NavigationResult \| null>` — success, veto/`null`, throw), so emit `navigation:completed` **only when `outcome.ok && outcome.result !== null`**. A veto/`null`/failure becomes a separate `navigation:cancelled` (or is dropped) — never a `completed` carrying a missing/null result. |
 | `navigation:requested` (pre) | `{input}` | `navigationVerb.before` — **already exists** | optional; most demand is for `completed`. Fires *before* resolution for every gesture, so it does **not** imply the navigation will land (it may be vetoed/`null`) — purely an "about to attempt" hook. |
-| `workspace:ready` (a.k.a. switched-and-bootstrapped) | `{previousId, workspaceId, freshlyCreated}` | **end of `bootstrapWorkspace`** (`bootstrap/workspaceBootstrap.ts`, the `{kind:'ready'}` return) — past the access gate + bootstrap writes | the I3 lifecycle point: workspace is materializable, scoped pages exist. **Not** `setActiveWorkspaceId` — see the caveat below. |
+| `workspace:ready` (a.k.a. switched-and-bootstrapped) | `{previousId, workspaceId, freshlyCreated}` | **end of `bootstrapWorkspace`** (`workspaceBootstrap.ts`, after the page/ui-state writes, just before `return layoutSessionBlock` — equivalently the `{kind:'ready'}` branch of its caller `resolveInitialLayout`, `App.tsx:123`; `bootstrapWorkspace` itself returns a `Block`, not the layout union) — past the access gate + bootstrap writes | the I3 lifecycle point: workspace is materializable, scoped pages exist. **Not** `setActiveWorkspaceId` — see the caveat below. |
 | `workspace:active-changed` (low-level pin) | `{previousId, workspaceId}` | `Repo.setActiveWorkspaceId` (`repo.ts:943`) — **fires nothing today** | optional/secondary: reflects the *pin*, fires early (pre-gate, pre-bootstrap). For UI that just tracks "which workspace is selected", not for auto-create handlers. |
 | `workspace:created` | `{workspaceId}` | gate on `freshlyCreated` at the `bootstrapWorkspace` choke (fires per switch, but `freshlyCreated` is only true on actual creation) — **one** path | don't *also* emit from `CreateWorkspaceDialog.onCreated` (double-emit). `workspace:ready` already carries `freshlyCreated:true`, so this may be redundant — keep only if a "created but not yet landed-on" signal is genuinely needed. |
 | `sync:status` (online/offline/synced) | `{connected, hasSynced, uploading, downloading, …}` | PowerSync status listener — already consumed by `system-status` (`SyncIndicatorInput`) | the chip already derives this; the bus would expose the *transitions* to plugins. |
@@ -89,9 +89,13 @@ above:
 - **Gate one-shots per session.** `bootstrapWorkspace` re-runs per workspace switch,
   so `app:booted` needs a once-per-Repo latch; per-switch readiness is
   `workspace:ready`.
-- **Scope each payload to one workspace.** A sync drain window spans workspaces, so
-  `block:synced` emits once per workspace; the local commit choke is already
-  single-workspace (tx workspace pinning).
+- **Scope each *workspace-scoped* payload to one workspace.** A sync drain window
+  spans workspaces, so `block:synced` emits once per workspace; the local commit
+  choke is already single-workspace (tx workspace pinning). This applies to the
+  workspace-scoped events (`block:*`, `workspace:*`) — but **not** to the
+  connection-global ones: `sync:status` is a single PowerSync-wide signal (no
+  workspace dimension) and `app:booted` is session-global. Those carry no
+  `workspaceId` and their sticky entries are global, not workspace-keyed.
 
 Two structural observations from the table:
 
@@ -384,10 +388,41 @@ export interface AppEventBus {
   thin slice wouldn't actually close I3. Sticky replay closes that gap (and also
   serves plugins that load mid-session). Transient events (`block:*`,
   `navigation:*`, `workspace:active-changed`) are **not** sticky — replaying a
-  past block-create to a late subscriber would be wrong. Because a sticky handler
-  can receive the replayed value *and* a subsequent live emit, sticky-event
-  handlers must be **idempotent** — which auto-create handlers already are (they
-  check existence before writing).
+  past block-create to a late subscriber would be wrong.
+
+  **Sticky for a workspace-scoped event MUST be workspace-correct, not a single
+  global slot.** This is the subtle trap, and it's the same one
+  `ProjectorRuntime.dispose` exists to prevent: the bus lives on the *per-user
+  singleton* `Repo` (reused across workspace switches), so a naïve "retain the
+  one last `workspace:ready`" slot can replay **workspace A's** payload to a
+  subscriber that comes online while the app is switching to **B** — and since
+  §3.4 put the workspace *in the payload*, an auto-create handler keyed off
+  `payload.workspaceId` would then act on the wrong workspace. (The pure
+  Suspense-driven AppEffect path happens to be safe — A's effect unmounts, B's
+  resubscribes after B's emit — but a `useAppEvent` consumer above the
+  per-workspace boundary, or a module-singleton consumer, is not.) So sticky
+  replay for a workspace-scoped event must be **gated on the active workspace**:
+  replay the retained value only if `payload.workspaceId ===
+  repo.activeWorkspaceId` (equivalently, key the sticky store by workspace and
+  evict on switch — the projector's dispose-clears lesson applied to sticky
+  storage). `app:booted` is session-global and `sync:status` is connection-global
+  (§ note below), so only the *workspace-scoped* sticky events need this gate.
+- **Idempotency is necessary but NOT sufficient.** Because a sticky handler can
+  receive the replayed value *and* a later live emit, sticky-event handlers must
+  be **idempotent** (auto-create handlers already are — they check existence
+  before writing). But note: on the cold-start / switch path the realistic
+  delivery is **replay-only** (the live emit fires before any subscriber exists),
+  so the replay path is the primary case to get right, not the double-fire.
+  Idempotency does **not** rescue a replayed payload that names the *wrong*
+  workspace — that's why the active-workspace gate above is mandatory, not
+  optional.
+- **`workspace:ready` does not imply the workspace's bootstrap `block:*` events
+  were delivered.** Those fire from a *different* choke (the post-commit bridge)
+  on the unordered stream above, and `bootstrapWorkspace`'s page/tutorial/ui-state
+  writes each emit their own `block:created`/`block:updated`. With no cross-event
+  ordering, a subscriber can get `workspace:ready` before (or after) those — so a
+  lifecycle handler must **read current state** (query the repo), never assume it
+  has already observed the bootstrap data events.
 
 ### 3.6 How this avoids the B3 untyped-bus relapse
 
@@ -418,11 +453,17 @@ Do **not** widen `postCommitProcessorsFacet` into the general bus. Three reasons
 2. **The processor system can't see non-data events at all** — generalizing it
    would mean inventing a non-tx emit path *inside* a data-layer registry, which
    is a layering inversion (data importing navigation/app concepts).
-3. **The house already has the right primitives to assemble cheaply** — the
+3. **The house already has the right *patterns* to follow** — the
    declaration-merged registry (from `PostCommitProcessorRegistry` /
-   `SameTxEventRegistry`), `CallbackSet`, the verb-observer delivery contract,
-   and the AppEffect lifecycle. The bus is ~a registry + a `Map<name,
-   CallbackSet>` + a hook, not a new subsystem.
+   `SameTxEventRegistry`), the verb-observer delivery loop (`verbFacet.ts:197`),
+   the AppEffect lifecycle, and `CallbackSet`'s `Set` add/remove for storage. To
+   be honest about cost: only the `Set` *storage* is reused — the load-bearing
+   parts (the async sequential await-loop, the workspace-gated sticky
+   retain+replay, per-event sticky/transient classification, the filter option)
+   are **new code**, because §3.2 shows `CallbackSet.notify` itself can't be the
+   delivery path (it's sync, swallows in a non-awaiting try/catch). So it's a
+   *small, pattern-following* component, not "assembled from existing parts" —
+   but materially more than a `Map<name, CallbackSet>`.
 
 So: build a thin **parallel observer bus**, and **bridge data events into it**
 from the existing commit choke so a pure observer never has to author a
@@ -435,19 +476,24 @@ unit, zero existing seam, real demand (I3):
 - `AppEventBus` (`Map<name, Set<handler>>` storage + the async await-loop for
   delivery — §3.2), `repo.events`, typed `AppEventRegistry`.
 - One event declared: `workspace:ready`. One emit line at the **end of
-  `bootstrapWorkspace`** (the `{kind:'ready'}` return) — *not*
+  `bootstrapWorkspace`** (before `return layoutSessionBlock`; the `{kind:'ready'}`
+  shape is its caller `resolveInitialLayout`'s return, `App.tsx:123`) — *not*
   `setActiveWorkspaceId`, so handlers run post-gate/post-bootstrap (the timing
   caveat in §1).
-- **`workspace:ready` is sticky** (§3.5): the bus retains the last payload and
-  replays it on subscribe. This is mandatory for the slice to work — on cold
-  start the emit happens *before* `AppRuntimeProvider` registers AppEffects, so
-  without sticky replay the auto-create effect would never see it. So Phase 0
-  must include the sticky-replay mechanism, not just plain fan-out.
+- **`workspace:ready` is sticky AND workspace-gated** (§3.5): the bus retains the
+  last payload and replays it on subscribe, but replays only when
+  `payload.workspaceId === repo.activeWorkspaceId` so a switch can't hand a new
+  subscriber the previous workspace's payload. This is mandatory for the slice to
+  work — on cold start the emit happens *before* `AppRuntimeProvider` registers
+  AppEffects, so without sticky replay the auto-create effect would never see it;
+  without the workspace gate the replay can be stale. Phase 0 must include the
+  workspace-gated sticky-replay mechanism, not just plain fan-out.
 - `useAppEvent` hook. Tests: emit-on-ready (and *not* on a `locked`/`waiting`
   workspace), handler isolation (a throwing handler doesn't break the others or
   the bootstrap), async-sequential delivery (a slow handler doesn't overlap the
-  next), and **the cold-start replay** (an effect that subscribes *after* the
-  emit still receives the retained `workspace:ready`).
+  next), **the cold-start replay** (an effect that subscribes *after* the emit
+  still receives the retained `workspace:ready`), and **the switch gate** (after
+  A→B, a fresh subscriber does *not* get A's stale `workspace:ready`).
 - This validates the *entire* shape — registry, emit, async delivery, sticky
   replay, on, hook, lifecycle — against the event that has no other way to be
   observed and that plugins demonstrably need.
@@ -480,10 +526,11 @@ single event with *no* current observability, it is one emit line at one choke
 writes — see the §1 timing caveat for why the obvious `setActiveWorkspaceId`
 choke is wrong), and it directly closes gap I3's correctness hole ("plugins that
 auto-create blocks need a reliable active-workspace-is-ready signal rather than
-racing the async bootstrap"). It does require the **sticky-replay** mechanism in
-the same slice (the cold-start emit precedes AppEffect registration — §3.5/§4.2),
-so Phase 0 is "bus kernel + sticky events + one event," not the bare fan-out.
-Shipping just this proves the registry/emit/async-delivery/sticky-replay/
+racing the async bootstrap"). It does require the **workspace-gated sticky-replay**
+mechanism in the same slice (the cold-start emit precedes AppEffect registration,
+and the singleton bus must not replay a stale workspace's value — §3.5/§4.2), so
+Phase 0 is "bus kernel + workspace-gated sticky + one event," not the bare
+fan-out. Shipping just this proves the registry/emit/async-delivery/sticky-replay/
 subscribe/hook/lifecycle end to end with minimal blast radius, and every later
 event is additive.
 
@@ -495,7 +542,10 @@ event is additive.
   of the chokes). Alternative: a standalone module singleton like the toggle
   stores. Repo wins because subscriber lifecycle wants `AppEffectContext.repo`
   and because workspace/data/sync emit points already hold the repo — but a
-  module singleton would decouple the bus from data-layer tests. Decide when
+  module singleton would decouple the bus from data-layer tests. **Caveat either
+  way:** the bus is a per-user singleton reused across workspace switches, so its
+  sticky store for workspace-scoped events must be workspace-gated/evicted on
+  switch (§3.5) — the same hazard `ProjectorRuntime.dispose` guards. Decide when
   Phase 0 lands.
 - **Should `block:*` events ever be awaited by the committer?** Proposed no
   (fire-and-forget). If a future use case needs "tx isn't done until observers
@@ -504,10 +554,11 @@ event is additive.
   current-state events (`workspace:ready`, `app:booted`, latest `sync:status`)
   are **sticky** — the bus retains the last value and replays it on subscribe —
   because the cold-start emit precedes AppEffect registration, so plain fan-out
-  would drop it. `workspace:ready` brings sticky into Phase 0. Still open: the
-  exact opt-in API (a per-event `sticky: true` flag in the registry vs. a
-  hardcoded set) and whether `sync:status` should be sticky-per-field; settle
-  when Phase 2 adds it.
+  would drop it. For *workspace-scoped* sticky events the replay is **gated on
+  the active workspace** so a switch can't replay a stale workspace's payload
+  (§3.5). `workspace:ready` brings both into Phase 0. Still open: the exact opt-in
+  API (a per-event `sticky: true` flag in the registry vs. a hardcoded set) and
+  whether `sync:status` should be sticky-per-field; settle when Phase 2 adds it.
 - **Declarative facet vs AppEffect-only.** Start AppEffect-only; add
   `appEventSubscribersFacet` only on demand, and if added, dedup-by-id +
   live-handle re-subscribe like the projector services.
