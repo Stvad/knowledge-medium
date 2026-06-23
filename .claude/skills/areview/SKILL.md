@@ -9,7 +9,7 @@ Fan out several review agents **in parallel**, each told to break the work done 
 
 ## Argument
 
-`$ARGUMENTS` = number of agents **N** (default **2**), one perspective per agent. Trailing words are focus hints (e.g. `4 watch the sync path`). By default the skill implements the agreed improvements after presenting findings; add `--no-fix` to stop at the report.
+`$ARGUMENTS` = number of agents **N** (default **2**), one perspective per agent. Trailing words are focus hints (e.g. `4 watch the sync path`). By default the skill implements the agreed improvements after presenting findings; add `--no-fix` to stop at the report. Add `loop` (e.g. `/areview loop` or `/areview loop 4`) to repeat the review→fix cycle until it converges.
 
 ## What matters
 
@@ -18,3 +18,4 @@ Fan out several review agents **in parallel**, each told to break the work done 
 - **Use the Agent tool, parallel, read-only** — all N calls in one message; agents review only, never edit. Tell each to be adversarial: cite file:line, give the concrete failure scenario + severity + fix, confirm against the code before claiming a bug, and say plainly when a lens turns up nothing rather than inventing nits.
 - **Synthesize** — dedup (cross-agent agreement is a strong signal), drop false positives that don't hold against the code, rank by severity, surface real disagreements, end with a bottom line.
 - **Fix by default** — after presenting the report, go straight to implementing the findings you stand behind: blockers and majors first, skip the ones you overruled as false positives, and note anything you deliberately left for the user. Then verify (`yarn run check`). With `--no-fix`, stop at the report instead and let the user act on it.
+- **`loop` mode** — re-review the fixed state and fix again, repeating until a round turns up only nits (no blockers/majors). Each round reviews the *current* state, not the original diff. Stop when converged, and also stop (reporting why) if you hit ~4 rounds, if findings stop making progress (the same issues recur or a fix spawns new ones), or if `yarn run check` fails and you can't resolve it — don't loop forever. `loop` always fixes; it ignores `--no-fix`.
