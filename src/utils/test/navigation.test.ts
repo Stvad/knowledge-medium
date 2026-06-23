@@ -715,3 +715,47 @@ describe('openBlockFromEvent (useBlockOpener wiring)', () => {
     expect(e.preventDefault).not.toHaveBeenCalled()
   })
 })
+
+describe('mapNavigate', () => {
+  const nav = goTo({blockId: 'b', target: 'main', workspaceId: 'w'})
+  // Simulate an untyped/dynamic mapper (transpiled without type-checking).
+  type Mapper = Parameters<typeof mapNavigate>[1]
+
+  it('tweaks the navigate input; passes passthrough/suppress through untouched', () => {
+    expect(mapNavigate(nav, input => ({...input, target: 'active'})))
+      .toEqual(goTo({blockId: 'b', target: 'active', workspaceId: 'w'}))
+    expect(mapNavigate(PASSTHROUGH, () => ({blockId: 'x', target: 'main'}))).toBe(PASSTHROUGH)
+    expect(mapNavigate(SUPPRESS, () => ({blockId: 'x', target: 'main'}))).toBe(SUPPRESS)
+  })
+
+  it('treats an explicit null as a veto (SUPPRESS) but leaves a malformed result invalid', () => {
+    expect(mapNavigate(nav, () => null)).toBe(SUPPRESS)
+    // An untyped mapper with a missing `return` → undefined must NOT silently
+    // become a veto; it stays an invalid `navigate` so the verb can fall back.
+    expect(mapNavigate(nav, (() => undefined) as unknown as Mapper))
+      .toEqual({kind: 'navigate', input: undefined})
+  })
+
+  it('a decorator whose mapNavigate mapper returns undefined falls back to the default policy', () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    env.repo.setRuntimeContributions(navigationIntentVerb.decoratorsFacet, 'test-policy', [
+      next => gesture =>
+        mapNavigate(next(gesture) as NavigationDecision, (() => undefined) as unknown as Mapper),
+    ])
+    const runtime = env.repo.facetRuntime!
+    const gesture: NavigationGesture = {
+      role: 'follow-link',
+      modifiers: {shiftKey: false, altKey: false, metaKey: false, ctrlKey: false, button: 0},
+      panelId: 'panel-a',
+      blockId: 'b-x',
+      workspaceId: WS,
+      viewport: 'desktop',
+    }
+
+    // The invalid mapper result fails validateResult → onError:'fallback' → the
+    // default policy (navigate the source panel), NOT a silent SUPPRESS veto.
+    expect(navigationIntentVerb.runSync(runtime, gesture)).toEqual(defaultNavigationIntent(gesture))
+    expect(consoleError).toHaveBeenCalled()
+    consoleError.mockRestore()
+  })
+})

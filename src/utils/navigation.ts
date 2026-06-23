@@ -462,14 +462,18 @@ export const SUPPRESS: NavigationDecision = Object.freeze({kind: 'suppress'})
 
 /** Transform only the `navigate` case of a decision, passing `passthrough` /
  *  `suppress` through untouched — the ergonomic way for a plugin decorator to
- *  tweak the resolved `NavigateInput` (`f` returning `null` becomes a veto). */
+ *  tweak the resolved `NavigateInput`. `f` returning an explicit `null` is a
+ *  veto (→ `SUPPRESS`); ONLY `null`. Any other non-input result (e.g. an untyped
+ *  mapper with a missing `return` → `undefined`) is left as an invalid
+ *  `navigate` so the verb's `validateResult`/`onError` fall back to the default
+ *  policy — rather than silently turning a buggy mapper into a veto. */
 export const mapNavigate = (
   decision: NavigationDecision,
   f: (input: NavigateInput) => NavigateInput | null,
 ): NavigationDecision => {
   if (decision.kind !== 'navigate') return decision
   const next = f(decision.input)
-  return next ? goTo(next) : SUPPRESS
+  return next === null ? SUPPRESS : goTo(next)
 }
 
 /** The default navigation policy: pure, synchronous, reproducing the canonical
