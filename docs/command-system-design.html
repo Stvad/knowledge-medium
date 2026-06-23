@@ -214,7 +214,7 @@ Rewriting action <em>definitions</em> is possible — <code>actionTransformsFace
   </div>
   <div class="gap">
     <h4><span class="g">G4</span> One dispatch lifecycle</h4>
-    <p>Three entries with different <code>canDispatch</code> behaviour and return shapes. Collapse to one pipeline: resolve command → resolve deps (active <em>or</em> supplied) → gate → run middleware+handler → return typed result. Removes the divergence the code already flags as a TODO.</p>
+    <p>Three entries with different <code>canDispatch</code> behaviour and return shapes. Collapse to <em>one lifecycle</em> — a shared resolve command → resolve deps (active <em>or</em> supplied) → gate → middleware+handler skeleton — with <em>two execution faces</em> at the tail (async <code>dispatch</code> / sync <code>dispatchSync</code>, <a href="#sync">§6</a>). Removes the divergence the code already flags as a TODO.</p>
   </div>
 </div>
 
@@ -378,7 +378,7 @@ This is not hypothetical — the navigation work, this proposal's founding succe
   </tbody>
 </table>
 <p>
-They compose, but the boundary is sharp and easy to get wrong. The verb <code>after</code> slot runs <em>inline and awaited, inside the dispatch</em> — it is in the call path (per the table above). So it is the right home only for <b>in-path lifecycle hooks the caller awaits</b> (a command-log entry that must land before the result returns, a timing pair with <code>before</code>). It is the <em>wrong</em> tool for <b>fire-and-forget domain reactions</b> ("a block was created → reindex"), which belong off the call path on the event bus. So the two are complementary, not substitutes: don't reach for <code>after</code> to avoid building the event bus, and don't route a typed domain event through a decorator. The event bus is the broader reactive surface (domain + lifecycle events), tracked separately by the <b>typed domain-event/lifecycle bus investigation</b> task.
+They compose, but the boundary is sharp and easy to get wrong. The verb <code>after</code> slot runs <em>inline and awaited, inside the dispatch</em> — it is in the call path (per the table above). So it is the right home only for <b>in-path lifecycle hooks the caller awaits</b> (a command-log entry that must land before the result returns, a timing pair with <code>before</code>) — and only on the <em>async</em> face: on <code>dispatchSync</code> the outcome isn't awaited (<a href="#model">§5</a>), so a sync-path <code>after</code> sees <em>invocation</em>, not success/failure. A keyboard-command telemetry/command-log built on <code>after</code> records "fired", not "succeeded"; per-outcome surfacing on the unawaited path is the <a href="#open">§10</a> open question. It is the <em>wrong</em> tool for <b>fire-and-forget domain reactions</b> ("a block was created → reindex"), which belong off the call path on the event bus. So the two are complementary, not substitutes: don't reach for <code>after</code> to avoid building the event bus, and don't route a typed domain event through a decorator. The event bus is the broader reactive surface (domain + lifecycle events), tracked separately by the <b>typed domain-event/lifecycle bus investigation</b> task.
 </p>
 <div class="callout warn">
   <span class="label">Hard constraint (audit B3)</span>
@@ -397,7 +397,7 @@ Once commands carry a typed result <em>and</em> the id-keyed middleware slots ex
 <p class="footnote">The convergence tax doesn't vanish under "commands as foundation" — making a behaviour interceptable still means routing its callers through one choke. What changes is that the choke is <em>generic</em> and shared, so we pay it once for all behaviours instead of re-paying per feature.</p>
 
 <h2 id="migration"><span class="num">9</span>Migration path</h2>
-<p>Strictly incremental; each step is independently valuable and the existing callers keep working — and there are <b>60+</b> of them across the four dispatch entries (<code>runActionById</code> ≈29, <code>useRunAction</code> ≈16, <code>navigateFromGlobalCommand</code> ≈16, <code>dispatchActionWithDeps</code> ≈7), so each step must be source-compatible, not just behaviour-compatible.</p>
+<p>Strictly incremental; each step is independently valuable and the existing callers keep working — and there are <b>60+</b> dispatch-by-id call sites (<code>runActionById</code> ≈29, <code>useRunAction</code> ≈16, plus navigation's own <code>navigateFromGlobalCommand</code> ≈16 and <code>dispatchActionWithDeps</code> ≈7), so each step must be source-compatible, not just behaviour-compatible.</p>
 <div class="callout warn">
   <span class="label">Critical path (corrected)</span>
   G1 → G3 → G4 → G2 → navigate-fold. The earlier framing "G1 is the only blocker for navigate-as-command" was wrong: G1 alone unblocks <em>"navigate dispatch returns a typed result"</em>; <b>retiring the verb</b> (the §8 end-state) also needs G3 (a home for its middleware) and G4 (so the middleware applies on the keyboard path too).
