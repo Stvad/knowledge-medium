@@ -268,13 +268,17 @@ Rewriting action <em>definitions</em> is possible — <code>actionTransformsFace
 type In&lt;Args, Ctx&gt; = { args: Args; deps: DepsFor&lt;Ctx&gt;; trigger?: ActionTrigger }
 
 <span class="tok-c">// A command exposes EXACTLY ONE of run / runSync — a discriminated pair, not</span>
-<span class="tok-c">// an async fn that's "sometimes sync". This is the invariant §6 needs:</span>
-<span class="tok-c">// a command bindable to a chord/pointer MUST be synchronous, mirroring how</span>
-<span class="tok-c">// today's ActionHandlerResult forbids Promise&lt;false&gt; (types.ts).</span>
+<span class="tok-c">// an async fn that's "sometimes sync". The invariant §6 needs is NOT "the</span>
+<span class="tok-c">// effect is sync" (delete does an async repo.tx and is keyboard-bound — fine).</span>
+<span class="tok-c">// It is: the DECLINE *decision* is synchronous. The result may still be a</span>
+<span class="tok-c">// promise; the coordinator treats any non-DECLINE return as handled and does</span>
+<span class="tok-c">// NOT await it — exactly as today a Promise-returning handler is "handled"</span>
+<span class="tok-c">// while only a sync `false` falls through (types.ts forbids Promise&lt;false&gt;,</span>
+<span class="tok-c">// not Promise&lt;void&gt;). So runSync forbids Promise&lt;DECLINE&gt;, not Promise&lt;Result&gt;.</span>
 type Command&lt;Args, Result, Ctx extends ActionContextType&gt; = Base&lt;Args, Result, Ctx&gt; &amp; (
-  | { run:     (i: In&lt;Args, Ctx&gt;) =&gt; MaybePromise&lt;Result&gt; }            <span class="tok-c">// async: dispatch() only</span>
-  | { runSync: (i: In&lt;Args, Ctx&gt;) =&gt; Result | typeof DECLINE         <span class="tok-c">// sync: chord/pointer-bindable</span>
-      defaultBinding?: ...; pointerBinding?: ...; gestureBinding?: ... }
+  | { run:     (i: In&lt;Args, Ctx&gt;) =&gt; MaybePromise&lt;Result&gt; }                 <span class="tok-c">// async: dispatch() only</span>
+  | { runSync: (i: In&lt;Args, Ctx&gt;) =&gt; typeof DECLINE | MaybePromise&lt;Result&gt;  <span class="tok-c">// chord/pointer-bindable;</span>
+      defaultBinding?: ...; pointerBinding?: ...; gestureBinding?: ... }      <span class="tok-c">// DECLINE returned in-tick, result may be async</span>
 )
 interface Base&lt;Args, Result, Ctx&gt; {
   id: string
@@ -282,8 +286,8 @@ interface Base&lt;Args, Result, Ctx&gt; {
   canDispatch?: (deps: DepsFor&lt;Ctx&gt;) =&gt; boolean
   isVisible?: (deps: DepsFor&lt;Ctx&gt;) =&gt; boolean
 }
-<span class="tok-c">// The type forbids attaching a binding to an async-run command — so you</span>
-<span class="tok-c">// can't bind a chord to a command the coordinator can't resolve in-tick.</span>
+<span class="tok-c">// The type forbids binding a chord to a `run` (async-decision) command — the</span>
+<span class="tok-c">// coordinator must learn DECLINE-or-handled in-tick to fall through / preventDefault.</span>
 
 <span class="tok-c">// TWO dispatch entries, not one — see §6 for why the sync one is mandatory.</span>
 <span class="tok-c">// Async: imperative / surface callers that want a typed result.</span>
@@ -300,7 +304,7 @@ dispatchSync&lt;Args, Result&gt;(
   id: string,
   args: Args,
   opts?: { deps?: ...; trigger?: ActionTrigger },
-): Result | typeof DECLINE</code></pre>
+): typeof DECLINE | MaybePromise&lt;Result&gt;   <span class="tok-c">// === DECLINE checked in-tick; result not awaited here</span></code></pre>
 
 <h3>Middleware = the verb facet, generalized to the dispatch layer</h3>
 <p>We don't invent a new middleware mechanism — we lift the verb facet's three slots to the dispatch pipeline, keyed by command id:</p>
@@ -347,7 +351,7 @@ This is not hypothetical — the navigation work, this proposal's founding succe
 <div class="callout">
   <span class="label">What the design must commit to</span>
   <ol style="margin:6px 0 0">
-    <li><b>A first-class synchronous dispatch</b> (<code>dispatchSync → Result | DECLINE</code>) the coordinator uses, with the handler, the decline read, and <code>preventDefault</code> all in one tick. The async <code>dispatch</code> is for non-DOM callers.</li>
+    <li><b>A first-class synchronous dispatch</b> (<code>dispatchSync</code>) the coordinator uses, with the handler invoked, the <code>DECLINE</code>-or-handled decision read, and <code>preventDefault</code> all in one tick. Only the <em>decision</em> is synchronous — the command's effect may still resolve async (a keyboard delete's <code>repo.tx</code>), unawaited, just as today. The async <code>dispatch</code> is for non-DOM callers that want the result.</li>
     <li><b>Which middleware may run on the sync path.</b> A <code>before</code>/<code>decorator</code> that returns a Promise cannot run before a sync <code>preventDefault</code>; sync commands admit only sync-capable middleware (or middleware runs only on the async path).</li>
     <li><b>The narrowed thesis.</b> "Imperative / surface callers become commands; the keyboard/pointer coordinator keeps its sync path and merely <em>resolves</em> a command it dispatches synchronously" — carried through to the dispatch signature, not just asserted in one line.</li>
   </ol>
