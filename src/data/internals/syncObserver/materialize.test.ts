@@ -54,10 +54,14 @@ const stagingCiphertextParams = (
   meta: BlockData,
   wire: { content: string; properties_json: string; references_json: string },
 ): unknown[] => {
+  // Overlay the per-column ciphertext at each encrypted column's position.
+  // Derive indices from BLOCK_STORAGE_COLUMNS (don't hard-code) so adding a
+  // column — e.g. reference_target_id — can't silently misalign the overlay.
+  const colIndex = (name: string) => BLOCK_STORAGE_COLUMNS.findIndex(c => c.name === name)
   const params = blockToRowParams(meta)
-  params[4] = wire.content
-  params[5] = wire.properties_json
-  params[6] = wire.references_json
+  params[colIndex('content')] = wire.content
+  params[colIndex('properties_json')] = wire.properties_json
+  params[colIndex('references_json')] = wire.references_json
   return params
 }
 

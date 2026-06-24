@@ -77,7 +77,7 @@ describe('blockToRowParams / parseBlockRow round-trip', () => {
   it('encodes deleted=true as 1 and decodes back to boolean true', () => {
     const tombstone: BlockData = {...fixture, deleted: true}
     const params = blockToRowParams(tombstone)
-    expect(params[12]).toBe(1)
+    expect(params[BLOCK_STORAGE_COLUMNS.findIndex(c => c.name === 'deleted')]).toBe(1)
     expect(parseBlockRow(rowFromParams(params)).deleted).toBe(true)
   })
 

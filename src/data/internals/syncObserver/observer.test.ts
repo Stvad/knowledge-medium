@@ -6,7 +6,7 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams } from '@/data/blockSchema'
+import { BLOCKS_SYNCED_RAW_TABLE, BLOCK_STORAGE_COLUMNS, blockToRowParams } from '@/data/blockSchema'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { startBlocksSyncedObserver, type BlocksSyncedObserver } from './observer.js'
@@ -27,10 +27,14 @@ const stagingCiphertextParams = (
   meta: BlockData,
   wire: { content: string; properties_json: string; references_json: string },
 ): unknown[] => {
+  // Overlay per-column ciphertext at each encrypted column's position.
+  // Derive indices from BLOCK_STORAGE_COLUMNS (don't hard-code) so adding a
+  // column — e.g. reference_target_id — can't silently misalign the overlay.
+  const colIndex = (name: string) => BLOCK_STORAGE_COLUMNS.findIndex(c => c.name === name)
   const params = blockToRowParams(meta)
-  params[4] = wire.content
-  params[5] = wire.properties_json
-  params[6] = wire.references_json
+  params[colIndex('content')] = wire.content
+  params[colIndex('properties_json')] = wire.properties_json
+  params[colIndex('references_json')] = wire.references_json
   return params
 }
 
@@ -54,15 +58,17 @@ const blocks = () =>
 const queueLen = async () =>
   (await env.db.getAll('SELECT seq FROM blocks_synced_changes')).length
 
-const BLOCK_COLS =
-  'id, workspace_id, parent_id, order_key, content, properties_json, references_json, ' +
-  'created_at, updated_at, user_updated_at, created_by, updated_by, deleted'
+// Derived from BLOCK_STORAGE_COLUMNS so an added column (e.g.
+// reference_target_id) keeps the column list and placeholder count in lockstep
+// with blockToRowParams.
+const BLOCK_COLS = BLOCK_STORAGE_COLUMNS.map(c => c.name).join(', ')
+const BLOCK_PLACEHOLDERS = BLOCK_STORAGE_COLUMNS.map(() => '?').join(', ')
 /** Seed a row straight into the app-visible `blocks` table (source NULL → no
  *  ps_crud, i.e. non-pending) — the shape of a locally-minted bootstrap default
  *  the observer must let the server override. */
 const seedLocalBlock = (d: BlockData) =>
   env.db.execute(
-    `INSERT INTO blocks (${BLOCK_COLS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    `INSERT INTO blocks (${BLOCK_COLS}) VALUES (${BLOCK_PLACEHOLDERS})`,
     blockToRowParams(d),
   )
 
