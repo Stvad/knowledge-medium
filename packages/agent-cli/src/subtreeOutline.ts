@@ -31,6 +31,12 @@ const isSubtreeOutlineRow = (value: unknown): value is SubtreeOutlineRow =>
 const isDepth = (value: unknown): value is number =>
   typeof value === 'number' && Number.isInteger(value) && value >= 0
 
+/** SUBTREE_SQL caps recursion at depth < 100, so real rows never exceed
+ *  that. Clamp the indent anyway: `renderSubtreeOutline` is exported and
+ *  pure, and an out-of-range `depth` on a direct call must not blow up
+ *  `String.prototype.repeat` (OOM, or RangeError past 2**53). */
+const MAX_OUTLINE_DEPTH = 100
+
 /**
  * Render the flat `get-subtree` array as a depth-indented outline.
  *
@@ -41,11 +47,12 @@ const isDepth = (value: unknown): value is number =>
  * depth is already known). We never re-sort.
  *
  * Each block is rendered as exactly ONE line:
- *   `<indent>- <content>  [<id>]`
- * — content for reading, id for acting (get-block / update-block / …).
- * Internal newlines in content are collapsed to a `⏎` marker so a block
- * can't spill into id-less lines that masquerade as child bullets: line
- * count == block count, and the id is always the LAST `[…]` on the line.
+ *   `<indent>- [<id>] <content>`
+ * — the id comes first (right after the bullet) so arbitrary content can
+ * never push it off the line or forge a second id-shaped token where the
+ * real id is expected; content (for reading) follows. Internal line breaks
+ * in content are collapsed to a `⏎` marker so a block can't spill into
+ * id-less lines that masquerade as child bullets: line count == block count.
  */
 export const renderSubtreeOutline = (value: unknown): string => {
   if (!Array.isArray(value)) {
@@ -66,10 +73,13 @@ export const renderSubtreeOutline = (value: unknown): string => {
       : (depthById.get(row.parentId ?? '') ?? 0) + 1
     const depth = isDepth(row.depth) ? row.depth : derived
     depthById.set(row.id, depth)
-    const indent = '  '.repeat(depth)
+    const indent = '  '.repeat(Math.min(depth, MAX_OUTLINE_DEPTH))
     const content = typeof row.content === 'string' ? row.content : ''
-    const oneLine = content.replace(/\r?\n/g, ' ⏎ ')
-    return `${indent}- ${oneLine}  [${row.id}]`
+    // Collapse line breaks AND the vertical-motion controls a terminal
+    // renders as breaks (LF, CR, LS, PS, plus VT, FF, NEL) so content can't
+    // spill into an id-less line that masquerades as a child bullet.
+    const oneLine = content.replace(/[\r\n\v\f\u0085\u2028\u2029]+/g, ' ⏎ ')
+    return `${indent}- [${row.id}] ${oneLine}`
   })
   return lines.join('\n')
 }

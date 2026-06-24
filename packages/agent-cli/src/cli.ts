@@ -953,7 +953,7 @@ cli
       await runAndPrint({type: 'get-subtree', rootId})
       return
     }
-    // Default: a depth-indented `- content  [id]` outline. The subtree
+    // Default: a depth-indented `- [id] content` outline. The subtree
     // comes back already in pre-order / (order_key, id) order — we render
     // it verbatim and never re-sort (see renderSubtreeOutline).
     await ensureBridgeRunning()

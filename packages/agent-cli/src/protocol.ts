@@ -386,7 +386,7 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'get-subtree': {
     usage: 'kmagent subtree <rootId> [--json]',
-    description: 'Fetch the subtree rooted at <rootId> (root included). Prints a depth-indented `- content  [id]` outline by default; --json returns the raw flat array (each row carries its depth from the root). Both are a pre-order traversal with siblings in (order_key, id) order — already sorted; read top-to-bottom, do not re-sort.',
+    description: 'Fetch the subtree rooted at <rootId> (root included). Prints a depth-indented `- [id] content` outline by default (one line per block, id first); --json returns the raw flat array (each row carries its depth from the root). Both are a pre-order traversal with siblings in (order_key, id) order — already sorted; read top-to-bottom, do not re-sort.',
   },
   'create-block': {
     usage: 'kmagent create-block <json>',

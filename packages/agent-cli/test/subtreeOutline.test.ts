@@ -7,7 +7,7 @@ const row = (id: string, parentId: string | null, content: string): SubtreeOutli
   ({id, parentId, content})
 
 describe('renderSubtreeOutline', () => {
-  it('indents by depth and carries content + id on each line', () => {
+  it('indents by depth and leads each line with [id] then content', () => {
     const outline = renderSubtreeOutline([
       {id: 'root', parentId: null, content: 'Project Alpha', depth: 0},
       {id: 'a', parentId: 'root', content: 'Design notes', depth: 1},
@@ -16,10 +16,10 @@ describe('renderSubtreeOutline', () => {
     ])
     expect(outline).toBe(
       [
-        '- Project Alpha  [root]',
-        '  - Design notes  [a]',
-        '    - open question  [a1]',
-        '  - Tasks  [b]',
+        '- [root] Project Alpha',
+        '  - [a] Design notes',
+        '    - [a1] open question',
+        '  - [b] Tasks',
       ].join('\n'),
     )
   })
@@ -37,7 +37,7 @@ describe('renderSubtreeOutline', () => {
       row('second', 'root', 'apple'),
     ])
     expect(outline).toBe(
-      ['- root  [root]', '  - zebra  [first]', '  - apple  [second]'].join('\n'),
+      ['- [root] root', '  - [first] zebra', '  - [second] apple'].join('\n'),
     )
   })
 
@@ -49,7 +49,7 @@ describe('renderSubtreeOutline', () => {
       {id: 'a', parentId: 'root', content: 'a', depth: 1},
       {id: 'b', parentId: 'a', content: 'b', depth: 1},
     ])
-    expect(outline).toBe(['- root  [root]', '  - a  [a]', '  - b  [b]'].join('\n'))
+    expect(outline).toBe(['- [root] root', '  - [a] a', '  - [b] b'].join('\n'))
   })
 
   it('falls back to the parentId walk when depth is absent (unknown parent → depth 1)', () => {
@@ -57,7 +57,7 @@ describe('renderSubtreeOutline', () => {
       row('root', null, 'root'),
       row('orphan', 'missing-parent', 'orphan'),
     ])
-    expect(outline).toBe(['- root  [root]', '  - orphan  [orphan]'].join('\n'))
+    expect(outline).toBe(['- [root] root', '  - [orphan] orphan'].join('\n'))
   })
 
   it('collapses multi-line content to one line so it cannot forge a child bullet', () => {
@@ -65,15 +65,39 @@ describe('renderSubtreeOutline', () => {
       row('root', null, 'line one\nline two\n- not a real child'),
     ])
     // One line, internal newlines → ⏎, the embedded "- not a real child"
-    // stays inline (no phantom bullet), real id last.
-    expect(outline).toBe('- line one ⏎ line two ⏎ - not a real child  [root]')
+    // stays inline (no phantom bullet); the id leads the line.
+    expect(outline).toBe('- [root] line one ⏎ line two ⏎ - not a real child')
   })
 
-  it('keeps the real id as the LAST bracketed group even when content mimics an id suffix', () => {
+  it('collapses CR, LS and PS line terminators too, not just LF', () => {
+    const outline = renderSubtreeOutline([
+      row('root', null, 'a\rb\u2028c\u2029d'),
+    ])
+    expect(outline).toBe('- [root] a ⏎ b ⏎ c ⏎ d')
+  })
+
+  it('collapses VT, FF and NEL — vertical-motion controls a terminal breaks on', () => {
+    // U+000B (VT), U+000C (FF), U+0085 (NEL) between tokens.
+    const outline = renderSubtreeOutline([
+      row('root', null, 'a\u000bb\u000cc\u0085d'),
+    ])
+    expect(outline).toBe('- [root] a ⏎ b ⏎ c ⏎ d')
+  })
+
+  it('clamps the indent so a pathological depth cannot blow up String.repeat', () => {
+    const outline = renderSubtreeOutline([
+      {id: 'deep', parentId: null, content: 'x', depth: 100_000_000},
+    ])
+    expect(outline).toBe(`${'  '.repeat(100)}- [deep] x`)
+  })
+
+  it('leads with the real id so content cannot forge it', () => {
+    // Content mimics an id-shaped suffix; because the id comes FIRST, the
+    // structural token is unambiguous regardless of what content contains.
     const outline = renderSubtreeOutline([
       row('real-id', null, 'see [some-other-block]'),
     ])
-    expect(outline).toBe('- see [some-other-block]  [real-id]')
+    expect(outline).toBe('- [real-id] see [some-other-block]')
   })
 
   it('marks an empty result as root-missing-or-deleted', () => {
