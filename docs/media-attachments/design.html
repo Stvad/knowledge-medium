@@ -769,10 +769,11 @@ to evict. Ordinary eviction can't relieve this state
 (un-uploaded bytes are exempt), so the only offline release valve is the user deliberately abandoning a
 pending attachment — which requires the per-device pending up-lane records (§9) to be surfaced as
 <em>individually discardable</em> items, a required capture-surface affordance (§11), not just a
-&quot;bytes pending here&quot; indicator. A discard drops the up-lane record always, but its
-<strong>byte delete is content-refcount-gated</strong> like every other deleter (§8 eviction / §9 reap /
-§16 GC): the bytes go only if no live-or-soft-deleted block still carries the hash, so discarding one
-embed of a deduped object can't strip the bytes a co-referencing live block still needs.
+&quot;bytes pending here&quot; indicator. A discard is <strong>content-refcount-gated</strong> like every
+other deleter (§8 eviction / §9 reap / §16 GC) — the <em>record</em> as well as the bytes: it removes both
+only when no live-or-soft-deleted block still carries the hash (the last reference). While another live block
+(e.g. a block copy) still carries it, discard reclaims nothing — bytes and the upload obligation both stay —
+so it can't strip a co-referencing block's bytes or strand its route to the server.
 </div>
 
 <h2 id="queue">9. The byte-replication subsystem (up-lane + down-lane)</h2>
@@ -807,23 +808,32 @@ embed of a deduped object can't strip the bytes a co-referencing live block stil
   exemption</strong> — its bytes are un-uploaded, i.e. still the <em>only copy</em> <em>and</em> the self-heal
   source (the §9 server-side backstop / §16), so evicting them would be irreversible data loss. The
   <em>only</em> byte release is the user explicitly discarding the item from the §11 pending-attachments
-  affordance — and that discard is itself <strong>content-refcount-gated</strong> (§8/§16): it drops the
-  record always, but the bytes only if <em>no</em> live-or-soft-deleted block still carries the hash. When the
-  bytes are kept (a block still references the content), the <strong>upload obligation is retained too</strong>
-  — re-homed to the surviving reference rather than dropped — so discarding one embed of a deduped object
-  never strands another live block's route to the server; a discard fully reclaims (bytes <em>and</em>
-  obligation) only as the last reference. And
+  affordance — and that discard is itself <strong>content-refcount-gated</strong> (§8/§9/§16), the
+  <em>record</em> as well as the bytes: it removes the record and frees the bytes only when <em>no</em>
+  live-or-soft-deleted block still carries the hash (the last reference). If another live block still
+  references the content, there is nothing to reclaim — the bytes are still needed <em>and</em> the upload
+  obligation is still owed — so a discard of a still-shared attachment is a no-op for reclamation (the content
+  stays pending until its last carrier is gone or it uploads), which is also what stops it stranding a
+  co-referencing block's route to the server. In the common capture-dedup path the asset is a <em>single</em>
+  block with a single record (§11), so this gating is moot; the shared case arises only from a block copy /
+  import of a not-yet-uploaded asset. And
   <code>failed</code> is <strong>recoverable</strong>, not a dead end — but recovery is
-  <strong>opportunistic, not a dedicated reconciler loop or timed cadence</strong>: a <code>failed</code>
-  record is re-attempted on app start, on reconnect, or by an explicit user retry (so even against a
-  <em>persistent</em> poisoner the cost is one sparse re-attempt per such event — never the hot loop the
-  state exists to stop, and no new lane to walk it: the down-lane fetches bytes that are <em>absent</em>
+  <strong>bounded and cheap, never the hot loop the state exists to stop</strong>: a <code>failed</code>
+  record is re-attempted on app start, on reconnect, by an explicit user retry, and on a <strong>slow
+  periodic sweep</strong> (a bodiless <code>GET</code> every few hours — so a <em>long-lived online tab</em>
+  still heals once the path frees, rather than waiting on a restart it may never get). Even against a
+  <em>persistent</em> poisoner the cost is one sparse, bodiless probe per such event — never the tight
+  correction loop, and no new lane to walk it: the down-lane fetches bytes that are <em>absent</em>
   locally, whereas a <code>failed</code> record's bytes are <em>present</em>, so the down-lane would never
-  visit it). Each re-attempt first does a <strong>cheap direct RLS-gated <code>GET</code> of the content
-  path</strong> (reads are direct, §8 — it streams no body) and branches on what's there: object
-  <strong>absent</strong> → the path is free, drain normally → clears; <strong>present and
-  hash-verifies</strong> → another device already materialized it → just delete the record, no upload →
-  clears; <strong>present but hash-mismatches</strong> → still poisoned → stays <code>failed</code>. This
+  visit it; this re-attempt sweep is the up-lane's own. Each re-attempt first does a <strong>cheap direct
+  RLS-gated <code>GET</code> of the content path</strong> (reads are direct, §8 — it streams no body) and
+  branches on what's there: object <strong>absent</strong> → the path is free, drain normally → clears;
+  <strong>present and hash-verifies</strong> → another device already materialized it → delete the record,
+  no upload → clears (the bytes are now eviction-eligible like any replicated bytes; should the server object
+  later be removed — an active poisoner / writer-delete — this degrades to the §9 &quot;synced block outlives
+  its bytes&quot; backstop, a broken image recoverable from any device still holding the bytes, not a new
+  silent-loss path); <strong>present but hash-mismatches</strong> → still poisoned → stays
+  <code>failed</code>. This
   covers both causes without conflating them — a <em>poisoned</em> path heals when the probe finds it free or
   materialized; a <em>shape-rejected</em> body (a stale / buggy client) heals only once the client is fixed,
   whose post-upgrade re-attempt re-encodes correctly, so until then it stays surfaced-for-discard rather than
@@ -1105,7 +1115,11 @@ inspects the body bytes itself</em> and then writes them with service-role. Per 
     against its own <code>hash</code> — on a match it clears (genuine idempotent dedup), on a mismatch (a
     poisoned or buggy prior write) it keeps its bytes and runs the writer-delete + re-upload (below) rather
     than dropping the only good copy. The function must persist <strong>atomically</strong> (reject an
-    incomplete body, so a partial upload can't win the path). The guard can't verify the body <em>matches</em>
+    incomplete body, so a partial upload can't win the path) — a phase-2 task is to confirm the function →
+    service-role-Storage relay <em>can</em> write all-or-nothing (buffer-then-PUT with a <code>Content-Length</code>
+    check, or write-temp-then-server-copy); if it can't, a truncated body that wins the path simply degrades to
+    the poison case (the read-side hash check fail-closes it, correctable by writer-delete + re-PUT), never a
+    spoof. The guard can't verify the body <em>matches</em>
     the content key (no key, sees only ciphertext); a garbage or truncated PUT is caught fail-closed by the
     read-side hash check (§5.1). First-write-wins makes a bad first write <strong>sticky until the path is
     freed</strong> (not permanently terminal) — an accidentally corrupt path is correctable by a writer
@@ -1155,8 +1169,9 @@ acceptable for the guarantee, and reads stay direct/RLS-gated (the hot path). La
     <code>pending</code> and <code>failed</code> — surface as a small &quot;pending uploads&quot; list whose
     entries are <em>individually discardable</em> — this is the only offline release valve when intake
     backpressure hits (§8), so it's a required capture surface, not merely a &quot;bytes pending here&quot;
-    indicator. Discard drops the record but content-refcount-gates the byte delete (§8/§9), so abandoning one
-    embed of a deduped object can't strip a co-referencing live block's bytes.</li>
+    indicator. Discard is content-refcount-gated (§8/§9/§16) — record and bytes both go only as the last
+    reference — so discarding one media block's record can't strip a co-referencing block's bytes or strand
+    its upload.</li>
   <li><strong>On capture:</strong> client-side mime/size guard → hash → create the asset block at a
     <strong>deterministic, content-derived id</strong> (<code>media:&lt;content-key&gt;</code> — the keyed
     hash for E2EE, raw <code>sha256</code> for plaintext, workspace-scoped, exactly like the storage path
