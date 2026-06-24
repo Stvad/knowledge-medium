@@ -700,7 +700,8 @@ half the E2EE on-disk footprint, no decrypt-on-render, and one store instead of 
     the coarse clear-all (§7.2) — no per-store wipe participation. <em>Authorization</em> is separate: on
     per-workspace revoke/leave, purge that workspace's prefix (a serving-access control, not destruction) —
     and because a purge can race or miss, bound a stored entry's serving authority with a short freshness TTL
-    (minutes-scale) after which the resolver re-validates via the RLS-gated Storage <code>GET</code> (§7.3,
+    (a security parameter — pin a concrete default, e.g. ~5&nbsp;min; a longer TTL silently widens this
+    window) after which the resolver re-validates via the RLS-gated Storage <code>GET</code> (§7.3,
     403 for a removed member). The TTL revalidation, not the purge, is what <strong>bounds</strong> the
     window in which a removed member's bytes can still be served — shrunk to the TTL, not eliminated. (Lock
     alone does <em>not</em> scrub the store, exactly as it doesn't scrub the decrypted <code>blocks</code>
@@ -903,13 +904,18 @@ correlation). A <strong>plaintext</strong> workspace has no secret to protect, s
     the canary from content columns. The raw key bytes are briefly in scope at unlock/create
     (<code>parseWorkspaceKey</code> / <code>importWorkspaceKey</code>) before the non-extractable import;
     that is the only window to derive <code>K_id</code> — and the WK bytes are <strong>zeroed right
-    after import</strong> (<code>createEncryptedWorkspace.ts</code>; the <em>unlock</em> path
-    <code>unlockWorkspaceWithKey.ts</code> must add the same derive-then-zero step it lacks today), so
-    <code>K_id</code> can't be re-derived on a later reload. It must therefore be <strong>persisted</strong> as its own
-    non-extractable HMAC <code>CryptoKey</code> in the keyStore (keyed <code>(user_id, workspace_id)</code>
-    beside the WK handle), derived once at import/unlock. That adds a second stored key handle but no
-    WK-exposure widening — it can't recover the WK, and lives in the same IndexedDB the model already
-    trusts.</li>
+    after import</strong> (<code>createEncryptedWorkspace.ts</code>), so <code>K_id</code> can't be
+    re-derived on a later reload. (The <em>unlock</em> path <code>unlockWorkspaceWithKey.ts</code> has
+    <em>no</em> such derive window today — it doesn't even zero the parsed bytes, which drop to GC — so adding
+    derive-then-zero on unlock is a <strong>phase-1 prerequisite</strong>, and incidentally fixes that
+    standalone GC-leak.) It must therefore be <strong>persisted</strong> as its own non-extractable HMAC
+    <code>CryptoKey</code> in the keyStore, derived once at import/unlock. That adds a second stored handle but
+    no WK-exposure widening — it can't recover the WK, and lives in the same IndexedDB the model already
+    trusts. <strong>Co-locate it with the WK in one keyStore record</strong> (the store today holds a single
+    <code>CryptoKey</code> per <code>(user_id, workspace_id)</code>, so this widens the record shape):
+    IndexedDB is best-effort evictable, and losing <em>only</em> <code>K_id</code> while the WK handle
+    survives would silently fail-close media mid-session (text still working) — so they must evict together,
+    and any <code>K_id</code>-absence routes through the same re-paste affordance as the migration below.</li>
   <li><strong>Migration: existing E2EE devices have no <code>K_id</code> yet.</strong> A workspace
     unlocked before this feature ships holds a non-extractable WK handle but never derived
     <code>K_id</code> (the raw bytes are long since zeroed, and a non-extractable AES-GCM key can't be
@@ -1061,10 +1067,17 @@ acceptable for the guarantee, and reads stay direct/RLS-gated (the hot path). La
   <li><strong>On capture:</strong> client-side mime/size guard → hash → create the asset block at a
     <strong>deterministic, content-derived id</strong> (<code>media:&lt;content-key&gt;</code> — the keyed
     hash for E2EE, raw <code>sha256</code> for plaintext, workspace-scoped, exactly like the storage path
-    §10 and the <code>roam-import</code> deterministic-id convergence). Concurrent or repeat pastes of the
-    same image therefore <em>upsert onto the same block</em> and converge — <strong>capture-path block
-    dedup is an invariant, no lookup needed</strong> (and the keyed id avoids leaking a raw-hash content
-    oracle in the clear). Placement isn't load-bearing (a child of the containing block is the simple
+    §10). Mint it through the codebase's established deterministic-id helper
+    (<code>createOrRestoreTargetBlock</code> — the path daily-notes / roam-import / alias-seats already use),
+    <em>not</em> a bare <code>createOrGet</code>: that helper (a) <code>systemMint</code>s the row at the
+    pristine <code>updated_at = 0</code> sentinel, so two devices' first pastes reconcile to one row instead
+    of racing wall-clocks, and (b) catches <code>DeletedConflictError</code> and <code>restore</code>s — so
+    re-pasting an image you just undid (its block is soft-deleted, §9) <em>restores</em> the same block
+    rather than throwing. Repeat / concurrent pastes therefore dedup to <strong>one block id + one
+    object</strong>, no lookup (and the keyed id avoids leaking a raw-hash content oracle in the clear
+    <code>blocks.id</code> column — it does hand the server a free object↔block equality join, the same
+    content-key labelling both, but that correlation is timing-available anyway and stays workspace-local
+    since <code>K_id</code> differs per workspace). Placement isn't load-bearing (a child of the containing block is the simple
     default); the type is stamped via <code>repo.addTypeInTx(tx, id, 'media', …)</code> (the in-tx variant
     — the standalone <code>block.addType</code> wouldn't compose into the single tx; and the
     <code>media</code> <code>TypeContribution</code> must be registered via <code>typesFacet</code> first,
@@ -1097,15 +1110,19 @@ object is left in place (immutable, content-addressed) and owned by §16's refco
 on undo.</div>
 
 <div class="warn">
-<strong>Object dedup is an invariant; block dedup is too, on the capture path.</strong> The object path
-is content-addressed (<code>HMAC(K_id, sha256)</code>, §10), so concurrent pastes of the same image — two
-devices, two tabs, offline-then-reconnect — all compute the <em>same</em> path and converge on
+<strong>Object dedup is an invariant; block <em>identity</em> dedups too on the capture path.</strong> The
+object path is content-addressed (<code>HMAC(K_id, sha256)</code>, §10), so concurrent pastes of the same
+image — two devices, two tabs, offline-then-reconnect — all compute the <em>same</em> path and converge on
 <strong>one</strong> Storage object (first-write-wins idempotent, §10.1; keyed off the <em>plaintext</em>
 hash, so randomized GCM doesn't matter). No duplicate objects, ever. And because capture mints the block at a
-<em>deterministic content-derived id</em> (above), those same pastes <em>upsert onto one block</em> too —
-block dedup on the capture path is an <strong>invariant</strong>, not a best-effort lookup. The system still
-<em>tolerates</em> multiple blocks per object from <em>other</em> paths (a block copy, an import) — harmless:
-they share the one verified object and both render. So object GC stays content-reference-counted: GC the
+<em>deterministic content-derived id</em> (above), those same pastes resolve to <strong>one block id</strong>
+too — no duplicate block, no lookup. One honest caveat: the cross-device merge of that shared block is
+whole-row last-writer-wins, <em>not</em> a field merge, so a <em>non-hash</em> property that differs between
+two pastes (e.g. <code>filename</code>) LWW-resolves — cosmetic, and the render-critical fields
+(<code>hash</code>, <code>size</code>) are identical by construction; the user-authored caption / alt-text
+are <em>child</em> blocks, untouched by the parent upsert. The system still <em>tolerates</em> multiple
+blocks per object from <em>other</em> paths (a block copy, an import) — harmless: they share the one verified
+object and both render. So object GC stays content-reference-counted: GC the
 object only when <em>no</em> live-or-soft-deleted block carries the hash, behind §16's grace-windowed
 deferred sweep — <strong>never on a live zero-crossing</strong> (moving an embed, or a not-yet-synced
 cross-device add, transiently hits zero), preserving child content. Dedup is workspace-wide, deliberately
@@ -1221,9 +1238,10 @@ vNext; the v1 commitment is only the reserved property + audience flag.
       is the coarse platform clear (§7.2), so no per-store wipe purge.</td></tr>
 <tr><td>4 — block model + renderer</td>
     <td><code>media</code> block type; <code>MediaBlockRenderer</code> (image branch) reusing the
-      lightbox; markdown <code>img</code> override.</td></tr>
+      lightbox (external <code>![](url)</code> images keep the existing <code>MarkdownImage</code>, §11).</td></tr>
 <tr><td>5 — capture + up-lane</td>
-    <td>paste / drop / file-pick arms; the (optional) workspace-wide dedup lookup; optimistic write to the durable byte
+    <td>paste / drop / file-pick arms (through <code>pasteDecisionVerb</code>); deterministic content-derived
+      block id via <code>createOrRestoreTargetBlock</code> (dedup is automatic, §11); optimistic write to the durable byte
       store (§8); the up-lane drain to §10.1 (encode at drain) with the <code>staged → pending</code>
       lifecycle + boot reconciler (§9).</td></tr>
 <tr><td>6 — background replication (down-lane)</td>
@@ -1321,7 +1339,9 @@ vNext; the v1 commitment is only the reserved property + audience flag.
       WK bytes are zeroed post-import, so it can't be re-derived).</td>
     <td><strong>Chosen (§10):</strong> uploads are idempotent and object dedup is an invariant — removes
       the idempotency token, the write-once-race rule, and duplicate-object GC. Mapping cost is zero
-      today (sharing unshipped, §12). Block dedup stays best-effort but produces no duplicate objects. The
+      today (sharing unshipped, §12). Block dedup is also an invariant on the capture path (deterministic
+      content-derived id, §11) — other paths (copy, import) may still make multiple blocks per object,
+      harmlessly. The
       content-path oracle is closed only under <code>K_id</code> secrecy — <code>K_id</code> is static and
       never rotated, so its compromise reopens the known-file oracle <em>retroactively</em> for that
       workspace. Because <code>K_id</code> is a <em>non-extractable</em> handle its raw bytes never leak, so
@@ -1331,7 +1351,10 @@ vNext; the v1 commitment is only the reserved property + audience flag.
 <tr><td>First-write-wins is poisonable by a member</td>
     <td>Any member can compute <code>HMAC(K_id, sha256(x))</code> and pre-occupy a content path with
       garbage; first-write-wins then silently no-ops the honest upload of that exact content → a
-      workspace-wide broken image. A terminal, content-targeted primitive the block-id path lacked.</td>
+      workspace-wide broken image. The predictable <code>media:&lt;content-key&gt;</code> block id (§11) is a
+      second pre-occupiable target, but the consequence is identical and bounded (a member-authored,
+      soft-deletable / restorable block whose hash-mismatch renders fail-closed) — a widened DoS surface, not
+      a new spoof. A terminal, content-targeted primitive the block-id path lacked.</td>
     <td>Accepted &amp; named: read-side hash-verify (§5.1) makes it fail-closed (broken image, never
       spoofed content); the server (no <code>K_id</code>) can't do it; a writer delete + re-upload corrects
       an <em>accidentally</em> corrupt path but does <strong>not</strong> terminate against an <em>active</em>
