@@ -119,6 +119,18 @@ const highContextConfig: ActionContextConfig = {
     typeof deps === 'object' && deps !== null,
 }
 
+// Mirrors EDIT_MODE_CM: a context whose default is "don't preventDefault".
+// Used to test that a binding's eventOptions override the context default
+// (the precedence merge the Shift+Arrow regression got wrong).
+const NO_PREVENT_DEFAULT_CONTEXT = 'no-prevent-default-mode' as ActionContextType
+const noPreventDefaultContextConfig: ActionContextConfig = {
+  type: NO_PREVENT_DEFAULT_CONTEXT,
+  displayName: 'No-preventDefault Mode',
+  defaultEventOptions: {preventDefault: false},
+  validateDependencies: (deps): deps is BaseShortcutDependencies =>
+    typeof deps === 'object' && deps !== null,
+}
+
 interface MockDeps extends BaseShortcutDependencies {
   marker: string
 }
@@ -141,14 +153,18 @@ const codeFor = (key: string) => {
   return key.length === 1 && /[a-z]/i.test(key) ? `Key${key.toUpperCase()}` : key
 }
 
-const dispatchKey = (type: 'keydown' | 'keyup', key: string) => {
+const dispatchKey = (type: 'keydown' | 'keyup', key: string): KeyboardEvent => {
   // tinykeys matches via event.key / event.code. Synthesise both so
   // single-letter chords ('k') match event.key and code-form chords
   // ('KeyK') match event.code. Bare modifier names ('Shift') get the
   // matching code-form ('ShiftLeft') for keyup tests where event.key
   // is the modifier itself.
   const init: KeyboardEventInit = {key, code: codeFor(key), bubbles: true, cancelable: true}
-  window.dispatchEvent(new KeyboardEvent(type, init))
+  // Returned so callers can read event.defaultPrevented after dispatch (the
+  // event-options tests assert on it); existing callers ignore the return.
+  const event = new KeyboardEvent(type, init)
+  window.dispatchEvent(event)
+  return event
 }
 
 const dispatchKeydown = (key: string) => dispatchKey('keydown', key)
@@ -719,6 +735,146 @@ describe('HotkeyReconciler', () => {
       act(() => dispatchKeydown('k'))
       expect(declinedHandler).not.toHaveBeenCalled()
       expect(fallbackHandler).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  // The event-option application seam: a matched binding's eventOptions decide
+  // whether the keydown's native default is suppressed. Precedence is
+  // built-in default (preventDefault: true) -> context defaultEventOptions ->
+  // binding eventOptions. The Shift+Arrow text-selection regression lived
+  // exactly here: an EDIT_MODE_CM binding inherited preventDefault: true and
+  // swallowed CodeMirror's native shift-selection. These pin the contract
+  // end-to-end via event.defaultPrevented (only the binding-config value is
+  // unit-tested elsewhere).
+  describe('event options (preventDefault)', () => {
+    it('suppresses the native default when the binding asks for preventDefault: true', () => {
+      const handler = vi.fn()
+      const action = buildAction({
+        id: 'test.prevent-true',
+        handler,
+        defaultBinding: {keys: 'k', eventOptions: {preventDefault: true}},
+      })
+
+      render(
+        <Harness actions={[action]} contexts={[testContextConfig]}>
+          <Activator context={TEST_CONTEXT}/>
+        </Harness>,
+      )
+
+      let event!: KeyboardEvent
+      act(() => { event = dispatchKeydown('k') })
+      expect(handler).toHaveBeenCalledTimes(1)
+      expect(event.defaultPrevented).toBe(true)
+    })
+
+    it('leaves the native default intact when the binding asks for preventDefault: false', () => {
+      // The regression class: the handler runs, but the native key action
+      // (e.g. CodeMirror shift-selection) must survive.
+      const handler = vi.fn()
+      const action = buildAction({
+        id: 'test.prevent-false',
+        handler,
+        defaultBinding: {keys: 'k', eventOptions: {preventDefault: false}},
+      })
+
+      render(
+        <Harness actions={[action]} contexts={[testContextConfig]}>
+          <Activator context={TEST_CONTEXT}/>
+        </Harness>,
+      )
+
+      let event!: KeyboardEvent
+      act(() => { event = dispatchKeydown('k') })
+      expect(handler).toHaveBeenCalledTimes(1)
+      expect(event.defaultPrevented).toBe(false)
+    })
+
+    it('preventDefaults by default when a binding sets no eventOptions', () => {
+      // Documents the dangerous default that bit the regression: a binding
+      // with no eventOptions suppresses the native default.
+      const action = buildAction({
+        id: 'test.prevent-default-default',
+        handler: vi.fn(),
+        defaultBinding: {keys: 'k'},
+      })
+
+      render(
+        <Harness actions={[action]} contexts={[testContextConfig]}>
+          <Activator context={TEST_CONTEXT}/>
+        </Harness>,
+      )
+
+      let event!: KeyboardEvent
+      act(() => { event = dispatchKeydown('k') })
+      expect(event.defaultPrevented).toBe(true)
+    })
+
+    it('lets the context defaultEventOptions set the default (no preventDefault)', () => {
+      // Mirrors EDIT_MODE_CM: context default is preventDefault: false, and a
+      // binding without its own eventOptions inherits it.
+      const action = buildAction({
+        id: 'test.ctx-default',
+        context: NO_PREVENT_DEFAULT_CONTEXT,
+        handler: vi.fn(),
+        defaultBinding: {keys: 'k'},
+      })
+
+      render(
+        <Harness actions={[action]} contexts={[noPreventDefaultContextConfig]}>
+          <Activator context={NO_PREVENT_DEFAULT_CONTEXT}/>
+        </Harness>,
+      )
+
+      let event!: KeyboardEvent
+      act(() => { event = dispatchKeydown('k') })
+      expect(event.defaultPrevented).toBe(false)
+    })
+
+    it('lets a binding override the context defaultEventOptions (this is the regression mechanism)', () => {
+      // Exactly the shape of the bug: the context says "don't preventDefault",
+      // but the binding's eventOptions win and re-enable it. In the real bug
+      // EDIT_MODE_CM (default false) inherited a binding with preventDefault:
+      // true, so the native default was wrongly suppressed.
+      const action = buildAction({
+        id: 'test.binding-overrides-ctx',
+        context: NO_PREVENT_DEFAULT_CONTEXT,
+        handler: vi.fn(),
+        defaultBinding: {keys: 'k', eventOptions: {preventDefault: true}},
+      })
+
+      render(
+        <Harness actions={[action]} contexts={[noPreventDefaultContextConfig]}>
+          <Activator context={NO_PREVENT_DEFAULT_CONTEXT}/>
+        </Harness>,
+      )
+
+      let event!: KeyboardEvent
+      act(() => { event = dispatchKeydown('k') })
+      expect(event.defaultPrevented).toBe(true)
+    })
+
+    it('does not preventDefault when the matched handler declines (sync false)', () => {
+      // A declined candidate must not apply its event options: the coordinator
+      // only applies them for the handler it actually dispatches. Even with
+      // preventDefault: true on the binding, a decline leaves the default
+      // intact (and here no other candidate handles the key).
+      const declinedHandler = vi.fn(() => false as const)
+      const action = buildAction({
+        id: 'test.declined-no-prevent',
+        handler: declinedHandler,
+        defaultBinding: {keys: 'k', eventOptions: {preventDefault: true}},
+      })
+
+      render(
+        <Harness actions={[action]} contexts={[testContextConfig]}>
+          <Activator context={TEST_CONTEXT}/>
+        </Harness>,
+      )
+
+      let event!: KeyboardEvent
+      act(() => { event = dispatchKeydown('k') })
+      expect(declinedHandler).toHaveBeenCalledTimes(1)
+      expect(event.defaultPrevented).toBe(false)
     })
   })
 
