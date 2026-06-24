@@ -216,9 +216,7 @@ content: 'image: screenshot.png'   // human-readable summary</code></pre>
   schemas + a renderer but <em>no</em> type — and a bare property schema is insufficient: the capture
   path's <code>repo.addTypeInTx(tx, id, 'media', …)</code> looks the id up in the type registry
   (<code>types.get(typeId)</code>) and <strong>throws unless a <code>TypeContribution</code> was
-  registered</strong> through <code>typesFacet</code>. (Stamping a bare <code>properties.type</code>
-  scalar instead would also make blocks invisible to every <code>types</code>-array consumer —
-  <code>getBlockTypes</code> / <code>hasBlockType</code> / <code>block.hasType</code>.)</p>
+  registered</strong> through <code>typesFacet</code>.</p>
 
 <p>Why a block, not an <code>attachments</code> table:</p>
 <ul>
@@ -290,15 +288,10 @@ content: 'image: screenshot.png'   // human-readable summary</code></pre>
 
 <div class="reject">
 <strong>A signed Storage URL handed straight to <code>&lt;img src&gt;</code> — dead for E2EE.</strong>
-The object is ciphertext, so the browser can't render it directly; the bytes have to be fetched and
-<em>decrypted client-side with the WK</em> first. Note what this does <em>not</em> kill: signed URLs as
-a <em>fetch</em> mechanism are fine — what's dead is using one as the <em>render</em> URL. The fix is to
-fetch + decrypt client-side and hand <code>&lt;img&gt;</code> the result: <strong>in-thread</strong>
-(the chosen path, §7.3 — fetch → decrypt → a <code>blob:</code> object URL), or via a
-<strong>service-worker proxy</strong> behind a virtual <code>${BASE_URL}asset/…</code> URL (§7, the
-rejected alternative). Either way the byte fetch can use a signed URL <em>or</em> a bearer-token
-<code>GET</code> (the in-app path uses the bearer token, §7.1). So <code>&lt;img src&gt;</code> works
-again — pointed at an object URL (in-thread) or the virtual URL (SW), never the raw ciphertext object.
+The object is ciphertext, so the browser can't render it directly; the bytes must be fetched and
+<em>decrypted client-side with the WK</em> first, then handed to <code>&lt;img&gt;</code> as an object URL
+(the chosen in-thread path; resolution detailed in §7). Note what this does <em>not</em> kill: signed URLs
+as a <em>fetch</em> mechanism are fine — what's dead is using one as the <em>render</em> URL.
 </div>
 
 <div class="reject">
@@ -408,10 +401,10 @@ different content lands at a <em>different</em> path and identical content at th
 the &quot;two uploads race at one path / a stale upload overwrites a newer object&quot; hazard simply
 does not exist, and there is no &quot;older version&quot; for the server to replay. An edit is new bytes
 → a new content path → a new asset block; the old object becomes unreferenced and is GC'd (§16).
-<strong>First-write-wins at a path is the entire rule</strong> (§10.1) — a block-id path needed an
-immutability rule + a no-overwrite precondition + an idempotency token to reach the same place; the
-content-addressed path gets it for free. (Dedup reuses an existing asset block by hash — a read, not a
-rewrite.)</div>
+<strong>First-write-wins at a path is the entire rule</strong> (§10.1); the idempotency-token /
+write-once-rule / duplicate-object-GC machinery a block-id path would have needed is simply gone (the
+content-addressed path gets it for free — §10). (Dedup reuses an existing asset block by hash — a read, not
+a rewrite.)</div>
 
 <p>The <code>encb:v1:</code> magic is a <strong>format tag, not an authorization signal.</strong>
   Whether to decrypt is decided by the workspace's mode pin (§7), exactly as the text path decides via
@@ -592,14 +585,11 @@ amount of wiping addresses.
   the rejected framing:</p>
 <ul>
   <li><strong>Fail-closed decode, not two-way.</strong> When decoding a freshly-fetched object
-    <em>before it enters the store</em>, the resolver decides per a <em>three-valued</em>
-    materializability — decrypt (E2EE + WK present) / passthrough (plaintext-pinned) /
-    <strong>fail-closed placeholder</strong> (E2EE without WK, or an unpinned / <code>defer</code>
-    workspace) — read from <code>getMaterializability</code> (<code>src/sync/keys/resolver.ts</code>),
-    <em>never</em> the two-valued <code>SyncMode</code>/<code>getMode</code> the upload path uses.
-    Driving the ingest decision off <code>getMode</code> (which collapses unpinned → <code>none</code>)
-    would store and pass attacker-controlled bytes through to <code>&lt;img&gt;</code> for an E2EE
-    workspace whose pin was evicted — the exact downgrade §5.1 / e2ee §6 rule&nbsp;2 forbid.</li>
+    <em>before it enters the store</em>, the resolver drives the decision off the three-valued
+    <code>getMaterializability</code> (decrypt / passthrough / fail-closed placeholder), <em>never</em> the
+    two-valued <code>getMode</code> — that downgrade (an evicted-pin E2EE workspace served attacker
+    plaintext) is the §5.1 / e2ee §6 rule&nbsp;2 hazard, argued there. In-thread specifics: the pin read is
+    synchronous and WK-presence resolves on the already-async render path.</li>
   <li><strong>Hash mismatch is hard-fail.</strong> On a mismatch against
     <code>block.properties.hash</code> (§5.1) the resolver <em>discards</em> the bytes — never writes
     them to the OPFS byte store — and renders the broken-asset placeholder; unverified bytes are
@@ -619,13 +609,11 @@ amount of wiping addresses.
 </ul>
 
 <div class="decision">
-<strong>Why in-thread wins the tally.</strong> The SW concentrates ~5 coordination mechanisms (token
-handshake, SW-readable mode-pin + hash mirror, per-<code>clientId</code> sessions, controller gating) to buy
-one benefit — a uniform mode-agnostic <code>&lt;img src&gt;</code> — that <code>&lt;img&gt;</code> doesn't
-need, since it takes an object URL; in-thread pays two small local concerns and avoids all of it. The full
-cost tally lives in §7.1 and the <a href="./rejected-sw-decryption-boundary.html">decision-record sibling
-doc</a> — not re-proved here. The one portable lesson: <strong>a service worker earns its tax only when the
-consumer needs a real URL, not a blob.</strong> <code>&lt;img&gt;</code> takes a blob → in-thread. A consumer
+<strong>Why in-thread wins the tally.</strong> The SW would concentrate ~5 coordination mechanisms
+(tallied in §7.1 / the <a href="./rejected-sw-decryption-boundary.html">sibling doc</a>) to buy one benefit
+— a uniform mode-agnostic <code>&lt;img src&gt;</code> — that <code>&lt;img&gt;</code> doesn't need, since it
+takes an object URL; in-thread pays two small local concerns and avoids all of it. The one portable lesson:
+<strong>a service worker earns its tax only when the consumer needs a real URL, not a blob.</strong> <code>&lt;img&gt;</code> takes a blob → in-thread. A consumer
 that consumes URLs — e.g. the JS module loader for user plugins (<code>import()</code> of a
 <code>/module/&lt;blockId&gt;</code>) — is where a SW-served URL genuinely pays off, and even there the clean
 shape keeps the privileged work in-thread and lets the SW serve a pre-populated cache (separate
@@ -854,18 +842,13 @@ atomic). The bytes aren't in that tx and don't need to be: block delete is a res
 </ul>
 This is also what keeps it correct under <strong>dedup</strong>: one content object can back several blocks
 (§11), so deleting the object on undo of <em>one</em> of them would break the others' live images — the byte
-lane must <em>never</em> delete an object on undo; the refcounted §16 sweep is the sole deleter. (An earlier
-draft added an <code>undone</code> tombstone and a &quot;whichever of {upload-confirm, undo} lands second owns
-cleanup&quot; protocol purely to coordinate that object delete — removing the delete removes the race.)</div>
+lane must <em>never</em> delete an object on undo; the refcounted §16 sweep is the sole deleter.</div>
 
 <div class="warn">
-<strong>A synced asset block can outlive its only bytes — the server-side backstop.</strong> The byte
-stores are ordinary local storage, so the coarse clear-all (§7.2) removes the upload queue with
-everything else — there is no per-store wipe participation to coordinate, and no raw-bytes-survive-a-wipe
-hazard (plaintext bytes go with the DB). But that destruction model, like a lost / reinstalled device or
-a crash, means a device can lose its <em>un-uploaded</em> bytes while the asset block's <em>metadata</em>
-already synced (PowerSync was up; the byte upload wasn't) — leaving the server with a block whose
-content-addressed object can never materialize, a broken embed on peers that
+<strong>A synced asset block can outlive its only bytes — the server-side backstop.</strong> A device can
+lose its <em>un-uploaded</em> bytes — a coarse wipe (§7.2), a lost / reinstalled device, or a crash — while
+the asset block's <em>metadata</em> already synced (PowerSync was up; the byte upload wasn't), leaving the
+server with a block whose content-addressed object can never materialize, a broken embed on peers that
 did nothing wrong. There is no reliable client-side fix at that moment (the origin device is gone or
 offline) — but the handling must <strong>not</strong> be a destructive server-side reap of the block.
 Block deletion is a subtree-aware soft-delete (<code>src/data/mutators.ts</code>), so reaping the asset
@@ -1025,28 +1008,17 @@ inspects the body bytes itself</em> and then writes them with service-role. Per 
     permanent-failure discipline so a stale client quarantines rather than retries forever. Shape-only
     (the server has no key), sufficient to keep bare plaintext out.</li>
   <li><strong>Enforces write-once by content-addressing — no token.</strong> The path <em>is</em> the
-    content key (§10), so an honest client's path uniquely identifies its bytes and an edit is
-    automatically a <em>different</em> path: there is no same-path overwrite race and no &quot;older
-    version&quot; to strand the asset. The guard is therefore trivial — a PUT to a <em>new</em> path
-    writes; a PUT to an <em>existing</em> path is <strong>first-write-wins success</strong>
-    (<code>200</code>), never an overwrite. The path doubles as the idempotency key: if the function
-    wrote the object but the response was lost before §9 cleared the queue entry, the retry finds the
-    object present and returns success — so no random idempotency token is needed (the block-id path
-    needed one precisely because its path did <em>not</em> encode content). The guard can't verify the
-    body <em>matches</em> the content key (it has no key, sees only ciphertext): a member who mis-PUTs
-    garbage to a path, or a truncated PUT, is caught by the read-side hash check (§5.1) — it fails closed,
-    never serves corruption. But first-write-wins makes a bad first write <em>terminal</em> (the honest
-    re-PUT no-ops at the existing path), so two things are required: the function must persist
-    <strong>atomically</strong> (reject an incomplete body, so a partial upload can't win the path), and a
-    writer that hash-verify-rejects an object it <em>can</em> verify may <strong>delete it</strong> (the
-    §10 writer-delete RLS) and re-upload — the correction path for an <em>accidentally</em> corrupt path (a
-    truncated or mis-PUT body). Against an <em>active</em> member-poisoner, though, this delete-then-re-PUT
-    does <strong>not</strong> terminate — the poisoner re-occupies the freed path between the writer's delete
-    and re-PUT — so a member who wants to deny one known asset can deny it indefinitely; and because dedup is
-    workspace-wide (§11) one poisoned path breaks <em>every</em> embed of that image at once. That is inside
-    the &quot;members trusted for content correctness&quot; boundary, but it is a terminal, content-targeted
-    grief primitive the block-id path lacked. This member poisoning surface is new under content-addressing;
-    see §17.</li>
+    content key (§10), so an edit is automatically a <em>different</em> path: no same-path overwrite race, no
+    &quot;older version&quot; to strand the asset. A PUT to a <em>new</em> path writes; a PUT to an
+    <em>existing</em> path is <strong>first-write-wins success</strong> (<code>200</code>), never an
+    overwrite — which doubles as the idempotency key (a lost-response retry finds the object present and
+    succeeds, so no random token is needed). The function must persist <strong>atomically</strong> (reject an
+    incomplete body, so a partial upload can't win the path). The guard can't verify the body <em>matches</em>
+    the content key (no key, sees only ciphertext); a garbage or truncated PUT is caught fail-closed by the
+    read-side hash check (§5.1). First-write-wins does make a bad first write <em>terminal</em> — an
+    accidentally corrupt path is correctable by a writer delete + re-upload (§10 writer-delete RLS), but an
+    <em>active</em> member-poisoner can DoS a known asset (delete-then-re-PUT doesn't terminate against them):
+    a named tradeoff in §17.</li>
 </ol>
 <strong>Not a signed-upload token.</strong> Minting a one-shot signed upload URL would let the client
 <code>uploadToSignedUrl</code> the body <em>directly to Storage</em>, which Supabase accepts without
@@ -1055,15 +1027,6 @@ function. The §9 byte-upload queue therefore drains <em>to this function</em>, 
 Cost: every upload is one function invocation that streams the body (latency + per-call cost);
 acceptable for the guarantee, and reads stay direct/RLS-gated (the hot path). Lands in phase&nbsp;2
 (§15) with the bucket + RLS migration.</div>
-
-<div class="info">
-<strong>Share-join needs a small mapping under content-addressing.</strong> The path carries a
-<em>content key</em>, not <code>asset_block_id</code>, so a future share-RLS widening (&quot;membership
-<em>or</em> a share covers this block&quot;, join <code>storage.objects → blocks</code>) would need a
-separate <code>content_key → block(s)</code> mapping. That cost is <em>zero today</em> — subtree sharing
-is unshipped and not a design driver (§12) — and is the deliberate, minor price of content-addressing's
-idempotent uploads + invariant dedup.
-</div>
 
 <p>Per the project's Supabase rule, the bucket + its RLS land in one migration with
   <code>storage.objects</code> policies enabled; no public table is created without RLS.</p>
@@ -1404,24 +1367,18 @@ vNext; the v1 commitment is only the reserved property + audience flag.
     of one operation ("given an asset block + render context, produce displayable bytes"). Implement
     that as a single named function so those parameters can't drift apart; scattering them across call
     sites is what manufactured the drift.</li>
-  <li><strong>Content-addressing is the storage path, keyed for E2EE</strong> (§10): the object lives
-    at <code>HMAC(K_id, sha256)</code> (E2EE) / <code>sha256</code> (plaintext), so uploads are
-    idempotent and object dedup is an invariant — and the per-workspace HMAC keeps the server from
-    probing it as a content oracle. This is the simpler-correct choice, not merely the better-scaling
-    one: it <em>removes</em> the idempotency token, the write-once monotonicity rule, and duplicate-object
-    GC a block-id path would have needed (an earlier draft deferred keyed-hash as &quot;scale-only&quot; —
-    it isn't; it's fewer moving parts). The one cost — an <code>object→block</code> mapping if
-    subtree-share RLS is ever built — is zero today (§12).</li>
-  <li><strong>Decided: in-thread decryption (§7.3).</strong> The single biggest source of genuine (not
-    cosmetic) complexity was putting decryption in the <em>service worker</em> — a context that can't
-    read app state (→ IDB mode-pin + per-asset hash mirror) and is shared across tabs/accounts and
-    respawned arbitrarily (→ per-<code>clientId</code> sessions, controller-readiness gating). Those are
-    ~5 coordination mechanisms bought for one benefit — a uniform mode-agnostic
-    <code>&lt;img src&gt;</code> — that <code>&lt;img&gt;</code> doesn't actually need, since it takes an
-    object URL. In-thread trades all of it for a mode-aware renderer + object-URL lifecycle, so that is
-    the <strong>adopted</strong> approach. §7.1–§7.2 are retained as the rejected-alternative analysis;
-    §8–§10 are boundary-agnostic. (General lesson: a SW earns its tax only when the consumer needs a real
-    URL, not a blob — see the user-plugin <code>/module/&lt;id&gt;</code> case.)</li>
+  <li><strong>Content-addressing is the storage path, keyed for E2EE</strong> (§10): the keyed-hash path
+    makes uploads idempotent and object dedup an invariant, and <em>removes</em> the idempotency token, the
+    write-once monotonicity rule, and duplicate-object GC a block-id path would have needed — the
+    simpler-correct choice, not merely the better-scaling one. The one cost (an <code>object→block</code>
+    mapping if subtree-share RLS is ever built) is zero today (§12).</li>
+  <li><strong>Decided: in-thread decryption (§7.3).</strong> The biggest genuine-complexity call was
+    <em>not</em> putting decryption in a service worker — a context that can't read app state and is
+    shared/respawned, so it would need ~5 coordination mechanisms to buy a uniform <code>&lt;img src&gt;</code>
+    that <code>&lt;img&gt;</code> doesn't need (it takes an object URL). The full tally is §7.1 / the
+    <a href="./rejected-sw-decryption-boundary.html">sibling doc</a>; the portable lesson — a SW earns its
+    tax only when the consumer needs a real URL, not a blob (cf. the user-plugin <code>/module/&lt;id&gt;</code>
+    case) — is the keeper.</li>
 </ul>
 
 <p><small>Grounded against: <code>src/sync/transform.ts</code>, <code>src/sync/crypto/</code>
