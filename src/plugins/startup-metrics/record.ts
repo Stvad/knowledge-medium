@@ -151,20 +151,6 @@ export interface SyncStatusDb {
   registerListener?: (l: { statusChanged?: (s: { hasSynced?: boolean | null }) => void }) => () => void
 }
 
-/** Run `cb` on the next genuine idle frame; returns a disposer. */
-const onNextIdle = (cb: () => void): (() => void) => {
-  const g = globalThis as {
-    requestIdleCallback?: (cb: () => void) => number
-    cancelIdleCallback?: (id: number) => void
-  }
-  if (typeof g.requestIdleCallback === 'function') {
-    const id = g.requestIdleCallback(() => cb())
-    return () => g.cancelIdleCallback?.(id)
-  }
-  const t = setTimeout(cb, 0)
-  return () => clearTimeout(t)
-}
-
 /** Resolve once the initial sync has completed (or immediately if there's no
  *  sync layer, e.g. local-only / tests). Returns a disposer for the listener. */
 export const onFirstSync = (db: SyncStatusDb, cb: () => void): (() => void) => {
@@ -275,12 +261,14 @@ export const collectStartupMetricsEffect: AppEffect = {
         return
       }
       if (!longTasksSupported()) {
-        // No Long Tasks API (Safari/test): coarse proxy — one idle frame after paint.
-        cleanups.push(onNextIdle(() => {
+        // No Long Tasks API (Safari/test): coarse proxy — one idle frame after
+        // paint, via the shared scheduleIdle. The `done` guard makes a disposer
+        // unnecessary (a post-teardown callback no-ops).
+        scheduleIdle(() => {
           if (done) return
           markStartup('interactive')
           record()
-        }))
+        })
         return
       }
       cleanups.push(onLongTask(armQuietTimer))

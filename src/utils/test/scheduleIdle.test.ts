@@ -82,6 +82,17 @@ describe('scheduleDeepIdle (browser path)', () => {
     expect(ricCalls[1].opts?.timeout).toBe(25_000) // 30s − 5s, not a fresh 29s
   })
 
+  it('force-runs immediately when the floor elapses past the fallback deadline', () => {
+    const fn = vi.fn()
+    // Floor longer than the fallback ⇒ by the time watchForIdle runs the
+    // deadline has already passed (stands in for a long main-thread block that
+    // delayed the floor timer). It must force-run, not request idle.
+    scheduleDeepIdle(fn, { minDelayMs: 5_000, fallbackMs: 3_000 })
+    vi.advanceTimersByTime(5_000)
+    expect(fn).toHaveBeenCalledTimes(1)
+    expect(ricCalls).toHaveLength(0)
+  })
+
   it('falls back to a macrotask defer when requestIdleCallback is unavailable', () => {
     glob.requestIdleCallback = undefined
     const fn = vi.fn()

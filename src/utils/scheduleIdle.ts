@@ -88,13 +88,20 @@ export const scheduleDeepIdle = (fn: () => void, opts: DeepIdleOptions): void =>
   // can't push the force-run past `fallbackMs`.
   const deadline = opts.fallbackMs === undefined ? undefined : Date.now() + opts.fallbackMs
   const watchForIdle = (): void => {
-    const ricOpts = deadline === undefined ? undefined : {timeout: Math.max(0, deadline - Date.now())}
+    let remaining: number | undefined
+    if (deadline !== undefined) {
+      remaining = deadline - Date.now()
+      // Deadline already passed — e.g. the floor timer itself was delayed past it
+      // by a long main-thread block. Force-run now rather than rely on the
+      // ambiguous `requestIdleCallback` `timeout: 0`.
+      if (remaining <= 0) { fn(); return }
+    }
     ric((d) => {
       // Run when forced off the deadline, or on a genuine idle window — but
       // re-wait on a brief mid-load lull (low budget, no timeout).
       if (d.didTimeout || d.timeRemaining() >= minIdleBudget) fn()
       else watchForIdle()
-    }, ricOpts)
+    }, remaining === undefined ? undefined : {timeout: remaining})
   }
   setTimeout(watchForIdle, opts.minDelayMs)
 }

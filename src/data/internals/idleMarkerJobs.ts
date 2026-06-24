@@ -4,14 +4,16 @@
  * `Repo` runs three one-time-per-workspace maintenance passes off the
  * cold-start critical path — ref-typed-property reprojection, workspace
  * backfills, and the reconcile rescan. Each one hand-rolled the same two
- * mechanisms: a `requestIdleCallback`-with-2s-timeout scheduler tracking
- * its in-flight promises in a pending set (so tests can drain it), and a
- * lazy in-memory mirror of its completion markers in `client_schema_state`.
+ * mechanisms: an idle-deferred scheduler tracking its in-flight promises in
+ * a pending set (so tests can drain it), and a lazy in-memory mirror of its
+ * completion markers in `client_schema_state`.
  *
  * This module owns both mechanisms once:
- *   - `PendingIdleJobs` — `scheduleIdle` (the shared util) + a pending-set
- *     drain barrier. One instance per job kind so each `await*` test helper
- *     drains only its own work.
+ *   - `PendingIdleJobs` — a pending-set drain barrier over an injectable
+ *     idle scheduler (defaults to `scheduleIdle`; the data-layer callers all
+ *     inject `scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE)` so the catch-ups run on
+ *     genuine idle off the cold-start window). One instance per job kind so
+ *     each `await*` test helper drains only its own work.
  *   - `MarkerStore` — the lazy prefixed-key set: load once, then `has` /
  *     `set` / `clear` in memory + write-through to `client_schema_state`.
  */
