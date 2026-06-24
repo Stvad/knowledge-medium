@@ -1,0 +1,270 @@
+/**
+ * Startup-metrics persistence: assemble the cold-start timeline into a durable
+ * record and store it as a block-per-session under a hidden per-user ui-state
+ * subtree. Block-per-session (a fresh block id each boot) keeps the log
+ * conflict-free across devices — two devices booting never touch the same row,
+ * unlike a shared JSON-array property which would LWW-clobber. Each record
+ * carries the device + version so a fleet-wide history is groupable.
+ *
+ * Why a record exists at all: see `src/utils/startupTimeline.ts`. This is the
+ * "store it so we can see TTI trend, not just feel it" half.
+ */
+
+import { ChangeScope, codecs, defineBlockType, defineProperty } from '@/data/api'
+import type { Repo } from '@/data/repo'
+import type { AppEffect } from '@/extensions/core.js'
+import { getPluginUIStateBlock } from '@/data/stateBlocks.js'
+import { keyAtEnd } from '@/data/orderKey.js'
+import { appVersion } from '@/appVersion.js'
+import { isInstalledAppDisplayMode } from '@/utils/layoutSessionId.js'
+import { scheduleIdle } from '@/utils/scheduleIdle.js'
+import {
+  getLastLongTaskEndMs,
+  getStartupTimeline,
+  hasStartupMark,
+  longTasksSupported,
+  markStartup,
+  markStartupAt,
+  type StartupTimeline,
+} from '@/utils/startupTimeline.js'
+import { v4 as uuidv4 } from 'uuid'
+
+/** One persisted cold-start sample. All `*Ms` fields are ms-since-boot
+ *  (`performance.timeOrigin`); a field is absent if its phase wasn't reached
+ *  this session (e.g. `settled` on a session the user closed mid-sync). */
+export interface StartupRecordData {
+  /** Wall-clock epoch ms at which the record was written. */
+  recordedAt: number
+  /** Build id (`appVersion.display`) + short sha, so a regression can be tied
+   *  to a deploy. */
+  appVersion: string
+  appSha: string
+  /** Coarse device/surface label for grouping ("installed:MacIntel"). */
+  deviceLabel: string
+  /** Boot start as epoch ms (`performance.timeOrigin`). */
+  timeOriginMs: number
+  repoReadyMs?: number
+  workspaceResolvedMs?: number
+  bootstrapDoneMs?: number
+  /** First paint of the actual workspace layout — pixels appeared. NOT the
+   *  same as interactive: the thread can be hammered right after paint. */
+  firstContentPaintMs?: number
+  syncedMs?: number
+  drainedMs?: number
+  /** Time to interactivity — boot contention stopped and the UI became usable
+   *  (end of the last long task after first paint). The headline metric. */
+  interactiveMs?: number
+}
+
+/** The whole record rides one identity-codec property (an engine-controlled
+ *  blob), so the shape can evolve without per-field schema churn. A future
+ *  trend view reads the child blocks and parses these — fine at this volume. */
+export const startupRecordProp = defineProperty<StartupRecordData | undefined>('startupRecord', {
+  codec: codecs.optionalIdentity<StartupRecordData>('object'),
+  defaultValue: undefined,
+  changeScope: ChangeScope.UiState,
+})
+
+/** Parent ui-state container; each boot adds one child under it. */
+export const startupMetricsUIStateType = defineBlockType({
+  id: 'startup-metrics',
+  label: 'Startup metrics',
+  properties: [],
+})
+
+const startupDeviceLabel = (): string => {
+  const surface = isInstalledAppDisplayMode() ? 'installed' : 'browser'
+  if (typeof navigator === 'undefined') return `${surface}:unknown`
+  const platform = navigator.platform || navigator.userAgent.slice(0, 40)
+  return `${surface}:${platform}`
+}
+
+/** Pure: fold the timeline + metadata into a storable record. */
+export const buildStartupRecord = (
+  timeline: StartupTimeline,
+  meta: { recordedAt: number; appVersion: string; appSha: string; deviceLabel: string },
+): StartupRecordData => {
+  const { marks } = timeline
+  return {
+    recordedAt: meta.recordedAt,
+    appVersion: meta.appVersion,
+    appSha: meta.appSha,
+    deviceLabel: meta.deviceLabel,
+    timeOriginMs: timeline.timeOriginMs,
+    repoReadyMs: marks.repoReady,
+    workspaceResolvedMs: marks.workspaceResolved,
+    bootstrapDoneMs: marks.bootstrapDone,
+    firstContentPaintMs: marks.firstContentPaint,
+    syncedMs: marks.synced,
+    drainedMs: marks.drained,
+    interactiveMs: marks.interactive,
+  }
+}
+
+/** Append one startup record as a fresh child block under the per-user
+ *  startup-metrics ui-state block. Returns the new block id. */
+export const writeStartupRecord = async (repo: Repo, workspaceId: string): Promise<string> => {
+  const parent = await getPluginUIStateBlock(repo, workspaceId, repo.user, startupMetricsUIStateType)
+  const data = buildStartupRecord(getStartupTimeline(), {
+    recordedAt: Date.now(),
+    appVersion: appVersion.display,
+    appSha: appVersion.sha,
+    deviceLabel: startupDeviceLabel(),
+  })
+  const id = uuidv4()
+  await repo.tx(async tx => {
+    // Same order key for every sibling is fine: this is an unordered log read
+    // back by `recordedAt`, never by sibling order.
+    await tx.create(
+      {
+        id,
+        workspaceId,
+        parentId: parent.id,
+        orderKey: keyAtEnd(),
+        content: `startup ${new Date(data.recordedAt).toISOString()}`,
+        properties: {},
+      },
+      { systemMint: true },
+    )
+    await tx.setProperty(id, startupRecordProp, data)
+  }, { scope: ChangeScope.UiState, description: 'startup metrics record' })
+  return id
+}
+
+// ──── collection effect ────
+
+/** Minimal PowerSync status surface the collector reads (kept structural so the
+ *  module doesn't import PowerSync types). */
+export interface SyncStatusDb {
+  currentStatus?: { hasSynced?: boolean | null }
+  registerListener?: (l: { statusChanged?: (s: { hasSynced?: boolean | null }) => void }) => () => void
+}
+
+/** Run `cb` on the next genuine idle frame; returns a disposer. */
+const onNextIdle = (cb: () => void): (() => void) => {
+  const g = globalThis as {
+    requestIdleCallback?: (cb: () => void) => number
+    cancelIdleCallback?: (id: number) => void
+  }
+  if (typeof g.requestIdleCallback === 'function') {
+    const id = g.requestIdleCallback(() => cb())
+    return () => g.cancelIdleCallback?.(id)
+  }
+  const t = setTimeout(cb, 0)
+  return () => clearTimeout(t)
+}
+
+/** Resolve once the initial sync has completed (or immediately if there's no
+ *  sync layer, e.g. local-only / tests). Returns a disposer for the listener. */
+export const onFirstSync = (db: SyncStatusDb, cb: () => void): (() => void) => {
+  if (db.currentStatus?.hasSynced || typeof db.registerListener !== 'function') {
+    cb()
+    return () => {}
+  }
+  const dispose = db.registerListener({
+    statusChanged: (s) => {
+      if (s.hasSynced) {
+        dispose()
+        cb()
+      }
+    },
+  })
+  return dispose
+}
+
+/** A main thread quiet for this long (no long task) after first paint is treated
+ *  as "boot contention stopped" — the `interactive` mark lands at the end of the
+ *  last long task before this window. */
+const INTERACTIVE_QUIET_MS = 2_000
+
+/** If `interactive` is never reached (sync never completes, thread never quiets),
+ *  still persist what we have so the earlier marks aren't lost. */
+const SETTLE_FALLBACK_MS = 60_000
+
+const nowMs = (): number => (typeof performance !== 'undefined' ? performance.now() : 0)
+
+// Once per page session: boot happens once, and the marks are boot-relative, so
+// a later workspace switch must not record a second "startup".
+let recorded = false
+
+/** Test helper — re-arm the once-per-session guard. */
+export const resetStartupMetricsRecorded = (): void => { recorded = true; recorded = false }
+
+/**
+ * On first workspace open, detect time-to-interactivity and persist one record.
+ *
+ * The headline `interactive` mark is the end of the last long task after first
+ * paint — i.e. when boot contention stopped and the UI became usable — found by
+ * waiting for a sustained quiet window in the Long Tasks stream. (Without the
+ * Long Tasks API we fall back to a single post-paint idle frame, a coarser
+ * proxy.) `synced`/`drained` are captured alongside as warm-vs-cold diagnostics
+ * (both ~immediate on a warm start; on a cold start the materialization long
+ * tasks push `interactive` out on their own). The write itself is deferred to
+ * idle so the bookkeeping never re-adds boot contention.
+ */
+export const collectStartupMetricsEffect: AppEffect = {
+  id: 'startup-metrics.collect',
+  start: ({ repo, workspaceId }) => {
+    if (!workspaceId || recorded) return
+    let done = false
+    const cleanups: Array<() => void> = []
+    const runCleanups = () => { for (const c of cleanups.splice(0)) c() }
+
+    const record = () => {
+      if (done) return
+      done = true
+      runCleanups()
+      recorded = true
+      scheduleIdle(() => {
+        void writeStartupRecord(repo, workspaceId).catch(err =>
+          console.warn('[startup-metrics] failed to write record', err),
+        )
+      })
+    }
+
+    const fallback = setTimeout(record, SETTLE_FALLBACK_MS)
+    cleanups.push(() => clearTimeout(fallback))
+
+    // Diagnostics — sync complete + materialization caught up. Don't gate the
+    // record: warm starts hit both ~instantly; cold starts surface their cost
+    // through `interactive` (materialization long tasks) regardless.
+    cleanups.push(onFirstSync(repo.db as unknown as SyncStatusDb, () => {
+      if (done) return
+      markStartup('synced')
+      void repo.flushSyncObserver().then(() => { if (!done) markStartup('drained') })
+    }))
+
+    // Headline TTI — first sustained quiet window after first paint.
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const detectInteractive = () => {
+      timer = undefined
+      if (done) return
+      if (!hasStartupMark('firstContentPaint')) {
+        timer = setTimeout(detectInteractive, 100) // not painted yet — re-poll
+        return
+      }
+      if (!longTasksSupported()) {
+        // No Long Tasks API (Safari/test): coarse proxy — one idle frame after paint.
+        cleanups.push(onNextIdle(() => {
+          if (done) return
+          markStartup('interactive')
+          record()
+        }))
+        return
+      }
+      const fcp = getStartupTimeline().marks.firstContentPaint ?? 0
+      const lastBusyEnd = Math.max(getLastLongTaskEndMs() ?? 0, fcp)
+      const quietFor = nowMs() - lastBusyEnd
+      if (quietFor >= INTERACTIVE_QUIET_MS) {
+        markStartupAt('interactive', lastBusyEnd) // when it became usable, not now
+        record()
+      } else {
+        timer = setTimeout(detectInteractive, INTERACTIVE_QUIET_MS - quietFor)
+      }
+    }
+    cleanups.push(() => { if (timer) clearTimeout(timer) })
+    detectInteractive()
+
+    return () => { done = true; runCleanups() }
+  },
+}

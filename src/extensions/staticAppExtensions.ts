@@ -47,6 +47,7 @@ import { systemStatusPlugin } from '@/plugins/system-status'
 import { storagePersistencePlugin } from '@/plugins/storage-persistence'
 import { dataIntegrityPlugin } from '@/plugins/data-integrity'
 import { dbMaintenancePlugin } from '@/plugins/db-maintenance'
+import { startupMetricsPlugin } from '@/plugins/startup-metrics'
 import { extensionsSettingsPlugin } from '@/plugins/extensions-settings'
 import { keybindingsSettingsPlugin } from '@/plugins/keybindings-settings'
 import { colemakKeybindingsPlugin } from '@/plugins/colemak-keybindings'
@@ -130,6 +131,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   storagePersistencePlugin,
   dataIntegrityPlugin({repo}),
   dbMaintenancePlugin({repo}),
+  startupMetricsPlugin,
   updateIndicatorPlugin,
   agentRuntimePlugin,
   roamImportPlugin({repo}),

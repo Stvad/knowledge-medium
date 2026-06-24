@@ -11,6 +11,11 @@ import { BootstrapErrorFallback } from '@/components/util/error.js'
 import { registerServiceWorker } from '@/registerServiceWorker.js'
 import { requestPersistentStorage } from '@/requestPersistentStorage.js'
 import { setDevAssertionsEnabled } from '@/data/internals/devAssertions.js'
+import { startStartupObservers } from '@/utils/startupTimeline.js'
+
+// Begin tracking main-thread long tasks immediately, so the startup-metrics
+// plugin can later find when boot contention stopped (time to interactivity).
+startStartupObservers()
 
 // L2 data-integrity invariant assertions: on in dev builds, compiled-away to a
 // constant false in prod (import.meta.env.DEV is statically replaced by Vite).

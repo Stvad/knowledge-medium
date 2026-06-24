@@ -18,6 +18,7 @@ import { resolveWorkspaceEntry } from '@/sync/keys/resolveWorkspaceEntry.js'
 import { WorkspaceKeyGate } from '@/components/workspace/WorkspaceKeyGate.js'
 import { resolveWorkspace } from '@/bootstrap/resolveWorkspace.js'
 import { bootstrapWorkspace } from '@/bootstrap/workspaceBootstrap.js'
+import { markStartup } from '@/utils/startupTimeline.js'
 
 // `ready`: the workspace materialized and bootstrapped normally. `locked`: the
 // §6 gate intercepted before any bootstrap write — the workspace is e2ee
@@ -90,6 +91,7 @@ const resolveInitialLayout = async (
   const entry = await resolveWorkspaceEntry(repo.user.id, workspaceId, id =>
     getLocalWorkspace(repo, id),
   )
+  markStartup('workspaceResolved')
   if (entry.kind === 'waiting') {
     // The workspaces row hasn't replicated yet and the pin can't settle access
     // without it. Don't bootstrap (would write plaintext into a possibly-e2ee
@@ -118,6 +120,7 @@ const resolveInitialLayout = async (
     requestedHash,
     requestedWorkspaceId: route.workspaceId,
   })
+  markStartup('bootstrapDone')
 
   return {kind: 'ready', workspaceId, layoutSessionBlock}
 }
@@ -228,6 +231,22 @@ const App = () => {
     if (initial.kind !== 'ready' || !activeRole) return
     repo.setReadOnly(activeRole === 'viewer')
   }, [initial.kind, activeRole, repo])
+
+  // TTI: stamp the first paint of the actual workspace layout (not a gate /
+  // loading screen). A double rAF lands the mark after the browser has painted
+  // the committed content; markStartup is first-write-wins, so later re-renders
+  // (hash changes, role updates) don't move it.
+  useEffect(() => {
+    if (initial.kind !== 'ready') return
+    let inner = 0
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => markStartup('firstContentPaint'))
+    })
+    return () => {
+      cancelAnimationFrame(outer)
+      cancelAnimationFrame(inner)
+    }
+  }, [initial.kind])
 
   // Always watch the URL hash so navigating to a different workspace (Back
   // button / manual hash edit) re-resolves the layout — even while a gate or

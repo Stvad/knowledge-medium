@@ -10,6 +10,7 @@ import { memoize } from 'lodash-es'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
 import { surfaceProcessorRejection } from '@/extensions/processorRejectionToast.js'
+import { markStartup } from '@/utils/startupTimeline.js'
 
 // Memoize on (userId, useRemoteSync) so toggling local-only doesn't reuse a
 // previously-connected repo. In practice the toggle is followed by a reload
@@ -44,6 +45,7 @@ const initRepo = memoize(
     // rejections (data-only runtime) surface via the raw-message fallback.
     // The Repo is a process singleton; we don't unsubscribe.
     repo.onUserError(error => surfaceProcessorRejection(error, repo))
+    markStartup('repoReady')
     return repo
   },
   (user, useRemoteSync) => `${user.id}:${useRemoteSync ? 'remote' : 'local'}`,
