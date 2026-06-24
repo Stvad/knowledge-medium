@@ -738,7 +738,9 @@ not a silently non-durable one. (2) Because un-uploaded bytes can't be evicted, 
 (&quot;uploads pending — reconnect to drain them, or discard a pending attachment to reclaim its
 space&quot;) rather than accepting bytes you might have to evict. Ordinary eviction can't relieve this state
 (un-uploaded bytes are exempt), so the only offline release valve is the user deliberately abandoning a
-pending attachment.
+pending attachment — which requires the per-device pending up-lane records (§9) to be surfaced as
+<em>individually discardable</em> items, a required capture-surface affordance (§11), not just a
+&quot;bytes pending here&quot; indicator.
 </div>
 
 <h2 id="queue">9. The byte-replication subsystem (up-lane + down-lane)</h2>
@@ -1073,8 +1075,13 @@ acceptable for the guarantee, and reads stay direct/RLS-gated (the hot path). La
     pristine <code>updated_at = 0</code> sentinel, so two devices' first pastes reconcile to one row instead
     of racing wall-clocks, and (b) catches <code>DeletedConflictError</code> and <code>restore</code>s — so
     re-pasting an image you just undid (its block is soft-deleted, §9) <em>restores</em> the same block
-    rather than throwing. Repeat / concurrent pastes therefore dedup to <strong>one block id + one
-    object</strong>, no lookup (and the keyed id avoids leaking a raw-hash content oracle in the clear
+    rather than throwing — and re-paste re-stages the byte record from the bytes the paste holds in hand
+    (§8), so it doesn't depend on the undone asset's byte-store entry having survived eviction/GC. (On the
+    restore branch <code>systemMint</code> is inert — a restored block lands a <em>real</em>
+    <code>updated_at</code>, not 0, which is harmless: a real version only wins or ties, never spuriously
+    yields. No seat-probe is needed either, unlike alias seats: the id <em>is</em> the content key, so the
+    only id-collider is identical content — exactly the dedup we want.) Repeat / concurrent pastes therefore
+    dedup to <strong>one block id + one object</strong>, no lookup (and the keyed id avoids leaking a raw-hash content oracle in the clear
     <code>blocks.id</code> column — it does hand the server a free object↔block equality join, the same
     content-key labelling both, but that correlation is timing-available anyway and stays workspace-local
     since <code>K_id</code> differs per workspace). Placement isn't load-bearing (a child of the containing block is the simple
@@ -1287,7 +1294,12 @@ vNext; the v1 commitment is only the reserved property + audience flag.
     Today there is no horizon to gate on, and v1 errs toward <em>retention</em> (storage is cheap; a stranded
     live image is not). The accepted cost is monotonic Storage growth: an object stays referenced (so
     un-reclaimed) as long as <em>any</em> soft-deleted block or <code>blocks_history</code> row carries its
-    hash — which today is forever — so per-workspace object Storage only grows over v1's life. Dangling embeds render the existing
+    hash — which today is forever — so per-workspace object Storage only grows over v1's life. This is also an
+    <em>adversarial</em> lever, not just an honest-use cost: a member can pin unbounded unreclaimable storage
+    by uploading distinct-content garbage objects (each a new path, first-write-wins, never overwritten), and
+    even deleting the block doesn't reclaim them (the soft-deleted block + its history rows keep the hash
+    referenced) — an accepted residual at this fleet size that the deferred history horizon would bound.
+    Dangling embeds render the existing
     &quot;unresolved embed&quot; state. Beyond the <em>undo</em> case (which needs no byte-lane action — it's a
     soft-delete; the object is retained, §9), a
     vNext orphan sweep covers <strong>both</strong> directions, but they are <em>not</em> symmetric: orphan
