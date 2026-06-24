@@ -322,6 +322,34 @@ describe('repo.query.byType', () => {
   })
 })
 
+describe('repo.query.typedBlockCount', () => {
+  // The count projection must aggregate the SAME candidate set as the id
+  // projection — proven here on the non-referencedBy (types) path; the
+  // backlinks path is covered in plugins/backlinks/inline-counts.
+  it('equals typedBlockIds length, excluding tombstoned rows', async () => {
+    await create({id: 'a', type: 'note'})
+    await create({id: 'b', type: 'note'})
+    await create({id: 'c', type: 'task'})
+    await env.repo.tx(tx => tx.delete('b'), {scope: ChangeScope.BlockDefault})
+
+    const ids = await env.repo.query.typedBlockIds({workspaceId: WS, types: ['note']}).load()
+    const n = await env.repo.query.typedBlockCount({workspaceId: WS, types: ['note']}).load()
+    expect(n).toBe(ids.length)
+    expect(n).toBe(1)
+  })
+
+  it('scopes to workspaceId', async () => {
+    await create({id: 'a', type: 'note'})
+    await create({id: 'b', type: 'note', workspaceId: OTHER_WS})
+    expect(await env.repo.query.typedBlockCount({workspaceId: WS, types: ['note']}).load()).toBe(1)
+    expect(await env.repo.query.typedBlockCount({workspaceId: OTHER_WS, types: ['note']}).load()).toBe(1)
+  })
+
+  it('returns 0 for an empty workspaceId', async () => {
+    expect(await env.repo.query.typedBlockCount({workspaceId: '', types: ['note']}).load()).toBe(0)
+  })
+})
+
 describe('repo.query.searchByContent', () => {
   it('matches case-insensitive substring', async () => {
     await create({id: 'a', content: 'Hello World'})

@@ -470,6 +470,9 @@ const blockDataArraySchema: Schema<BlockData[]> = {
 const stringArraySchema: Schema<string[]> = {
   parse: (input) => input as string[],
 }
+const numberSchema: Schema<number> = {
+  parse: (input) => input as number,
+}
 const blockDataOrNullSchema: Schema<BlockData | null> = {
   parse: (input) => input as BlockData | null,
 }
@@ -956,6 +959,33 @@ export const typedBlockIdsQuery = defineQuery<ResolvedTypedBlockQuery, string[]>
   resolve: (query, ctx) => resolveTypedBlockIds(query, ctx),
 })
 
+/** Count projection for typed queries. Same membership semantics and
+ *  invalidation as `resolveTypedBlockIds` — it shares `collectTypedBlockAxisDeps`
+ *  and the compiler's candidate set — but aggregates to a single integer in
+ *  SQLite instead of marshalling the id list. Used by per-block count badges
+ *  (e.g. inline backlink counts) where only the cardinality is needed. */
+export const resolveTypedBlockCount = async (
+  query: ResolvedTypedBlockQuery,
+  ctx: QueryCtx,
+): Promise<number> => {
+  if (!query.workspaceId) return 0
+  const normalized = normalizeTypedBlockQuery(query)
+  const {matchPredicates, excludePredicates} = collectTypedBlockAxisDeps(normalized, ctx)
+  if (typedBlockNeedsAncestorChain(matchPredicates, excludePredicates)) {
+    await declareAncestorDeps(normalized, ctx, 'structure')
+  }
+  const compiled = compileTypedBlockQuery(normalized, ctx.repo.propertySchemas, {projection: 'count'})
+  const row = await ctx.db.get<{count: number}>(compiled.sql, [...compiled.params])
+  return row?.count ?? 0
+}
+
+export const typedBlockCountQuery = defineQuery<ResolvedTypedBlockQuery, number>({
+  name: 'core.typedBlockCount',
+  argsSchema: typedBlocksArgsSchema,
+  resultSchema: numberSchema,
+  resolve: (query, ctx) => resolveTypedBlockCount(query, ctx),
+})
+
 /** Substring-match content search. Empty `query` returns []. */
 export const searchByContentQuery = defineQuery<
   {workspaceId: string; query: string; limit?: number},
@@ -1233,6 +1263,7 @@ export const KERNEL_QUERIES: ReadonlyArray<AnyQuery> = [
   byTypeQuery,
   typedBlocksQuery,
   typedBlockIdsQuery,
+  typedBlockCountQuery,
   searchByContentQuery,
   recentBlocksQuery,
   firstChildByContentQuery,
@@ -1259,6 +1290,7 @@ declare module '@/data/api' {
     'core.byType': typeof byTypeQuery
     'core.typedBlocks': typeof typedBlocksQuery
     'core.typedBlockIds': typeof typedBlockIdsQuery
+    'core.typedBlockCount': typeof typedBlockCountQuery
     'core.searchByContent': typeof searchByContentQuery
     'core.recentBlocks': typeof recentBlocksQuery
     'core.firstChildByContent': typeof firstChildByContentQuery
