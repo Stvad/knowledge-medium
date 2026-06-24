@@ -172,12 +172,15 @@ describe('repo.query.subtree', () => {
     expect(out.map(b => b.id)).toEqual(['r', 'c1', 'gc', 'c2'])
   })
 
-  it('carries each row depth relative to the root (0 at the root)', async () => {
+  it('carries each row depth relative to the root, dropping back across branches', async () => {
     await create({id: 'r'})
     await create({id: 'c1', parentId: 'r', orderKey: 'a0'})
     await create({id: 'gc', parentId: 'c1', orderKey: 'a0'})
+    await create({id: 'c2', parentId: 'r', orderKey: 'a1'})
+    // Pre-order is [r, c1, gc, c2]; depth must drop from 2 (gc) back to 1
+    // (c2) — the shape where an out[i]↔rows[i] off-by-one would surface.
     const out = await env.repo.query.subtree({id: 'r'}).load()
-    expect(out.map(b => [b.id, b.depth])).toEqual([['r', 0], ['c1', 1], ['gc', 2]])
+    expect(out.map(b => [b.id, b.depth])).toEqual([['r', 0], ['c1', 1], ['gc', 2], ['c2', 1]])
   })
 
   it('excludes soft-deleted descendants', async () => {

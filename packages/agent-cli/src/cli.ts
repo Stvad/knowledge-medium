@@ -947,7 +947,7 @@ cli
 
 cli
   .command('subtree <rootId>', wireDescription('get-subtree'))
-  .option('--json', 'Print the raw flat BlockData[] instead of the indented outline')
+  .option('--json', 'Print the raw flat array (each row a block + its depth) instead of the indented outline')
   .action(async (rootId: string, options: {json?: boolean}) => {
     if (options.json) {
       await runAndPrint({type: 'get-subtree', rootId})

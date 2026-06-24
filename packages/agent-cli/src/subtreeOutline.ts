@@ -12,12 +12,15 @@
  */
 
 /** One node of the flat `get-subtree` result we read for the outline.
- *  The wire payload carries the full `BlockData`; the outline only needs
- *  these three fields. */
+ *  The wire payload carries the full `SubtreeRow`; the outline only needs
+ *  these. `depth` is the authoritative root-relative depth the runtime
+ *  computed (0 at the root); `parentId` is only a fallback for deriving
+ *  depth if `depth` is ever absent. */
 export interface SubtreeOutlineRow {
   id: string
   parentId: string | null
   content: string
+  depth?: number
 }
 
 const isSubtreeOutlineRow = (value: unknown): value is SubtreeOutlineRow =>
@@ -25,18 +28,24 @@ const isSubtreeOutlineRow = (value: unknown): value is SubtreeOutlineRow =>
   && value !== null
   && typeof (value as {id?: unknown}).id === 'string'
 
+const isDepth = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isInteger(value) && value >= 0
+
 /**
  * Render the flat `get-subtree` array as a depth-indented outline.
  *
- * Depth is a single pass over the given order: the root is depth 0, and
- * every other row's parent has already appeared (pre-order guarantees
- * it), so `depth = parentDepth + 1`. Same approach as the in-app
- * clipboard serializer (`src/utils/copy.ts`). We never re-sort.
+ * Depth comes from the authoritative `depth` field the payload carries
+ * (SUBTREE_SQL-computed, root-relative). For robustness against any
+ * producer that omits it, we fall back to a single pre-order pass over
+ * `parentId` (a parent always precedes its children in pre-order, so its
+ * depth is already known). We never re-sort.
  *
- * Each line is `<indent>- <content>  [<id>]` — content for reading, id
- * for acting (get-block / update-block / …). Multi-line content keeps
- * its continuation lines indented under the bullet; the id stays on the
- * first line.
+ * Each block is rendered as exactly ONE line:
+ *   `<indent>- <content>  [<id>]`
+ * — content for reading, id for acting (get-block / update-block / …).
+ * Internal newlines in content are collapsed to a `⏎` marker so a block
+ * can't spill into id-less lines that masquerade as child bullets: line
+ * count == block count, and the id is always the LAST `[…]` on the line.
  */
 export const renderSubtreeOutline = (value: unknown): string => {
   if (!Array.isArray(value)) {
@@ -45,23 +54,22 @@ export const renderSubtreeOutline = (value: unknown): string => {
     return JSON.stringify(value, null, 2)
   }
   const rows = value.filter(isSubtreeOutlineRow)
-  if (rows.length === 0) return '(empty subtree)'
+  // SUBTREE_SQL always emits the root when it exists and isn't deleted, so
+  // an empty result means the root is missing or soft-deleted — never a
+  // present-but-childless root (that yields one row, the root itself).
+  if (rows.length === 0) return '(no blocks — root not found or deleted)'
 
   const depthById = new Map<string, number>()
   const lines = rows.map((row, index) => {
-    const depth = index === 0
+    const derived = index === 0
       ? 0
       : (depthById.get(row.parentId ?? '') ?? 0) + 1
+    const depth = isDepth(row.depth) ? row.depth : derived
     depthById.set(row.id, depth)
     const indent = '  '.repeat(depth)
     const content = typeof row.content === 'string' ? row.content : ''
-    const [first = '', ...rest] = content.split('\n')
-    const head = `${indent}- ${first}  [${row.id}]`
-    // Continuation lines of a multi-line block hang under the bullet; the
-    // id stays on the first line.
-    return rest.length === 0
-      ? head
-      : `${head}\n${rest.map(line => `${indent}  ${line}`).join('\n')}`
+    const oneLine = content.replace(/\r?\n/g, ' ⏎ ')
+    return `${indent}- ${oneLine}  [${row.id}]`
   })
   return lines.join('\n')
 }
