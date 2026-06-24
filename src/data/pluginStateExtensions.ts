@@ -15,23 +15,26 @@ import { typesFacet } from '@/data/facets.js'
 import { appEffectsFacet, type AppEffect } from '@/extensions/core.js'
 import type { AppExtension } from '@/facets/facet.js'
 import { getPluginPrefsBlock, getPluginUIStateBlock } from '@/data/stateBlocks.js'
-import { scheduleIdle } from '@/utils/scheduleIdle.js'
+import { scheduleDeepIdle, LAZY_DEEP_IDLE } from '@/utils/scheduleIdle.js'
 
+// These sub-blocks only need to exist before the user navigates to Preferences /
+// the ui-state tree (and a hook lazily creates them on first use anyway), so the
+// eager bootstrap is pure convenience — defer it to genuine idle, never near boot.
 const pluginPrefsBootstrapEffect = (type: TypeContribution): AppEffect => ({
   id: `plugin-prefs.${type.id}.bootstrap`,
   start: ({repo, workspaceId}) => {
-    scheduleIdle(async () => {
-      await getPluginPrefsBlock(repo, workspaceId, repo.user, type)
-    })
+    scheduleDeepIdle(() => {
+      void getPluginPrefsBlock(repo, workspaceId, repo.user, type)
+    }, LAZY_DEEP_IDLE)
   },
 })
 
 const pluginUIStateBootstrapEffect = (type: TypeContribution): AppEffect => ({
   id: `plugin-ui-state.${type.id}.bootstrap`,
   start: ({repo, workspaceId}) => {
-    scheduleIdle(async () => {
-      await getPluginUIStateBlock(repo, workspaceId, repo.user, type)
-    })
+    scheduleDeepIdle(() => {
+      void getPluginUIStateBlock(repo, workspaceId, repo.user, type)
+    }, LAZY_DEEP_IDLE)
   },
 })
 

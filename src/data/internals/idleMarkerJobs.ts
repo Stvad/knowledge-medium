@@ -27,19 +27,27 @@ export interface MarkerDb {
 }
 
 /** Tracks idle-deferred jobs so deterministic tests can wait for them.
- *  `schedule` defers `task` to the next idle frame (browser) or task tick
- *  (Node/jsdom, where fake timers advance it); the task's promise is added
- *  to the pending set when the idle callback fires and removed on settle.
- *  `drain` awaits everything whose timer has already fired — it does NOT
- *  advance timers, so fake-timer callers must bump the clock first. */
+ *  `schedule` defers `task` via the configured scheduler — `scheduleIdle`
+ *  by default (next idle frame in the browser, task tick under Node/jsdom),
+ *  or a `scheduleDeepIdle` wrapper for work that must stay out of the
+ *  cold-start window. The task's promise is added to the pending set when
+ *  the deferred callback fires and removed on settle. `drain` awaits
+ *  everything whose timer has already fired — it does NOT advance timers,
+ *  so fake-timer callers must bump the clock first. */
 export class PendingIdleJobs {
   private readonly pending = new Set<Promise<void>>()
 
-  /** Defer `task` to idle. Fire-and-forget: the caller's path is not
-   *  blocked. The promise enters the pending set only once the idle
-   *  callback runs (mirroring the historical hand-rolled behavior). */
+  /** @param scheduler defers a callback off the critical path. Defaults to
+   *  `scheduleIdle`; pass a `scheduleDeepIdle(fn, opts)` wrapper for jobs
+   *  that should run only on genuine idle, never near boot. Both share the
+   *  Node/jsdom `setTimeout(0)` test path, so drain helpers are unaffected. */
+  constructor(private readonly scheduler: (fn: () => void) => void = scheduleIdle) {}
+
+  /** Defer `task` off the critical path. Fire-and-forget: the caller's path
+   *  is not blocked. The promise enters the pending set only once the
+   *  deferred callback runs (mirroring the historical hand-rolled behavior). */
   schedule(task: () => Promise<void>): void {
-    scheduleIdle(() => {
+    this.scheduler(() => {
       const p = task().finally(() => { this.pending.delete(p) })
       this.pending.add(p)
     })

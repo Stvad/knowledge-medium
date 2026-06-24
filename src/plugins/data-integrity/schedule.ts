@@ -7,6 +7,7 @@
 import { appEffectsFacet, type AppEffect } from '@/extensions/core.js'
 import type { Repo } from '@/data/repo'
 import { PendingIdleJobs } from '@/data/internals/idleMarkerJobs.js'
+import { scheduleDeepIdle, LAZY_DEEP_IDLE } from '@/utils/scheduleIdle.js'
 import { runConsistencyAudit, type ConsistencyAuditResult } from './audit.js'
 import { publishConsistencyAudit } from './store.js'
 
@@ -20,7 +21,12 @@ const DIVERGENCE_RECHECK_MS = 4000
 // the diagnostics store. A fresh session starts empty (always runs once).
 const lastRun = new Map<string, number>()
 // Shared idle-job queue so tests can drain in-flight audits deterministically.
-const jobs = new PendingIdleJobs()
+// The audit is the heaviest cold-start idle job (≈13 scan queries + bounded
+// decrypt spot-checks) and a 30-min-cadence smoke alarm with no urgency, so it
+// runs on GENUINE idle only (deep idle, no force-run fallback) — it must never
+// land in the time-to-interactivity window, and skipping a never-idle session
+// is fine.
+const jobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, LAZY_DEEP_IDLE))
 
 /** True if the workspace is due for a cadenced audit (never run this session, or
  *  older than the cadence window). Exposed for tests. */

@@ -105,6 +105,7 @@ import {
 } from './internals/raiseProtocol'
 import { UndoManager, type UndoEntry } from './internals/undoManager'
 import { CallbackSet } from '@/utils/callbackSet'
+import { scheduleDeepIdle, CATCHUP_DEEP_IDLE } from '@/utils/scheduleIdle'
 import type { TxImpl } from './internals/txEngine'
 import { ANCESTORS_SQL, CHILDREN_SQL, SUBTREE_SQL } from './internals/treeQueries'
 import {
@@ -404,8 +405,14 @@ export class Repo {
    *  `scheduleReprojection` is fire-and-forget (the cold-start path must
    *  not block on it); `awaitReprojections()` drains this for
    *  deterministic test quiescence and to keep a stray reprojection from
-   *  writing into the next test on a shared DB. */
-  private readonly reprojectionJobs = new PendingIdleJobs()
+   *  writing into the next test on a shared DB.
+   *
+   *  These three maintenance passes are one-time-per-workspace data-completeness
+   *  catch-ups (derived backlinks, daily-note:date etc., shadow-bug recovery),
+   *  so they run on deep idle off the cold-start window — but WITH a fallback so
+   *  a never-idle session still completes them this session (CATCHUP_DEEP_IDLE),
+   *  unlike the lazy data-integrity audit which may skip a session. */
+  private readonly reprojectionJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
   /** Registered workspace backfills (`workspaceBackfillsFacet` snapshot,
    *  refreshed by the `workspaceBackfills` rebuild step). Run once per
    *  workspace by `scheduleWorkspaceBackfills`. */
@@ -417,10 +424,10 @@ export class Repo {
   /** In-flight workspace-backfill runs whose deferral timer has fired —
    *  drained by `awaitWorkspaceBackfills()` for deterministic test quiescence,
    *  mirroring `reprojectionJobs`. */
-  private readonly workspaceBackfillJobs = new PendingIdleJobs()
+  private readonly workspaceBackfillJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
   /** In-flight one-time reconcile-rescan runs — drained by
    *  `awaitReconcileRescans()`, same pattern. */
-  private readonly reconcileRescanJobs = new PendingIdleJobs()
+  private readonly reconcileRescanJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
   /** Slowest writeTransaction observed since the last reset, by
    *  description (`opts.description` passed to `repo.tx`). Updated only
    *  when a tx exceeds the previous high-water mark, so the field is
