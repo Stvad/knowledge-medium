@@ -80,7 +80,6 @@ function LinkedReferencesInner({
 
   return (
     <>
-      {controls}
       <div className="mt-4 pt-3 border-t border-border">
         <div className="flex items-center justify-between gap-2">
           <button
@@ -92,18 +91,21 @@ function LinkedReferencesInner({
             <span>Linked References</span>
             <span className="text-xs text-muted-foreground/70">{countLabel}</span>
           </button>
-          <button
-            type="button"
-            onClick={() => setFiltersOpenOverride(prev => !(prev ?? filterActive))}
-            className={`rounded-sm p-1 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
-              filterActive ? 'bg-accent text-foreground' : ''
-            }`}
-            title="Filters"
-            aria-label="Filters"
-            aria-pressed={filtersOpen}
-          >
-            <Filter className="h-4 w-4" />
-          </button>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setFiltersOpenOverride(prev => !(prev ?? filterActive))}
+              className={`rounded-sm p-1 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
+                filterActive ? 'bg-accent text-foreground' : ''
+              }`}
+              title="Filters"
+              aria-label="Filters"
+              aria-pressed={filtersOpen}
+            >
+              <Filter className="h-4 w-4" />
+            </button>
+            {controls}
+          </div>
         </div>
 
         {open && (
