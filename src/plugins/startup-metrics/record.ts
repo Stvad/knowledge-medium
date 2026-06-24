@@ -14,7 +14,7 @@ import { ChangeScope, codecs, defineBlockType, defineProperty } from '@/data/api
 import type { Repo } from '@/data/repo'
 import type { AppEffect } from '@/extensions/core.js'
 import { getPluginUIStateBlock } from '@/data/stateBlocks.js'
-import { keyAtEnd } from '@/data/orderKey.js'
+import { keyAtStart } from '@/data/orderKey.js'
 import { appVersion } from '@/appVersion.js'
 import { isInstalledAppDisplayMode } from '@/utils/layoutSessionId.js'
 import { scheduleIdle } from '@/utils/scheduleIdle.js'
@@ -25,6 +25,7 @@ import {
   longTasksSupported,
   markStartup,
   markStartupAt,
+  onLongTask,
   type StartupTimeline,
 } from '@/utils/startupTimeline.js'
 import { v4 as uuidv4 } from 'uuid'
@@ -112,16 +113,25 @@ export const writeStartupRecord = async (repo: Repo, workspaceId: string): Promi
     deviceLabel: startupDeviceLabel(),
   })
   const id = uuidv4()
+  // Newest-first: read the current first sibling's order key and prepend before
+  // it, so the log reads reverse-chronologically in the tree.
+  const first = await repo.db.getOptional<{ order_key: string }>(
+    'SELECT order_key FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key LIMIT 1',
+    [parent.id],
+  )
   await repo.tx(async tx => {
-    // Same order key for every sibling is fine: this is an unordered log read
-    // back by `recordedAt`, never by sibling order.
     await tx.create(
       {
         id,
         workspaceId,
         parentId: parent.id,
-        orderKey: keyAtEnd(),
-        content: `startup ${new Date(data.recordedAt).toISOString()}`,
+        orderKey: keyAtStart(first?.order_key ?? null),
+        // The record itself rides the `startupRecord` property; content is just
+        // the ISO timestamp so the entry is legible in the tree. (Trade-off: a
+        // date-shaped content word is FTS-indexed, so these can surface in
+        // [[-link autocomplete when typing a date — see note to follow up on
+        // excluding the ui-state subtree from search.)
+        content: new Date(data.recordedAt).toISOString(),
         properties: {},
       },
       { systemMint: true },
@@ -181,14 +191,12 @@ const INTERACTIVE_QUIET_MS = 2_000
  *  still persist what we have so the earlier marks aren't lost. */
 const SETTLE_FALLBACK_MS = 60_000
 
-const nowMs = (): number => (typeof performance !== 'undefined' ? performance.now() : 0)
-
 // Once per page session: boot happens once, and the marks are boot-relative, so
 // a later workspace switch must not record a second "startup".
 let recorded = false
 
 /** Test helper — re-arm the once-per-session guard. */
-export const resetStartupMetricsRecorded = (): void => { recorded = true; recorded = false }
+export const resetStartupMetricsRecorded = (): void => { recorded = false }
 
 /**
  * On first workspace open, detect time-to-interactivity and persist one record.
@@ -234,13 +242,35 @@ export const collectStartupMetricsEffect: AppEffect = {
       void repo.flushSyncObserver().then(() => { if (!done) markStartup('drained') })
     }))
 
-    // Headline TTI — first sustained quiet window after first paint.
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const detectInteractive = () => {
-      timer = undefined
+    // Headline TTI — the boot contention stopping: a sustained quiet window (no
+    // long task for INTERACTIVE_QUIET_MS) after first paint. The window is
+    // DEBOUNCED off the long-task stream (reset on each task via onLongTask),
+    // not polled — so the quiet timer always resets from the same event that
+    // advances the last-long-task time, with no poll-vs-observer stale read.
+    let paintTimer: ReturnType<typeof setTimeout> | undefined
+    let quietTimer: ReturnType<typeof setTimeout> | undefined
+    cleanups.push(() => {
+      if (paintTimer) clearTimeout(paintTimer)
+      if (quietTimer) clearTimeout(quietTimer)
+    })
+
+    const acceptInteractive = () => {
+      if (done) return
+      const fcp = getStartupTimeline().marks.firstContentPaint ?? 0
+      // The instant it became usable (end of the last long task), not "now".
+      markStartupAt('interactive', Math.max(getLastLongTaskEndMs() ?? 0, fcp))
+      record()
+    }
+    const armQuietTimer = () => {
+      if (done) return
+      if (quietTimer) clearTimeout(quietTimer)
+      quietTimer = setTimeout(acceptInteractive, INTERACTIVE_QUIET_MS)
+    }
+    const waitForPaint = () => {
+      paintTimer = undefined
       if (done) return
       if (!hasStartupMark('firstContentPaint')) {
-        timer = setTimeout(detectInteractive, 100) // not painted yet — re-poll
+        paintTimer = setTimeout(waitForPaint, 250) // not painted yet — re-poll
         return
       }
       if (!longTasksSupported()) {
@@ -252,18 +282,10 @@ export const collectStartupMetricsEffect: AppEffect = {
         }))
         return
       }
-      const fcp = getStartupTimeline().marks.firstContentPaint ?? 0
-      const lastBusyEnd = Math.max(getLastLongTaskEndMs() ?? 0, fcp)
-      const quietFor = nowMs() - lastBusyEnd
-      if (quietFor >= INTERACTIVE_QUIET_MS) {
-        markStartupAt('interactive', lastBusyEnd) // when it became usable, not now
-        record()
-      } else {
-        timer = setTimeout(detectInteractive, INTERACTIVE_QUIET_MS - quietFor)
-      }
+      cleanups.push(onLongTask(armQuietTimer))
+      armQuietTimer()
     }
-    cleanups.push(() => { if (timer) clearTimeout(timer) })
-    detectInteractive()
+    waitForPaint()
 
     return () => { done = true; runCleanups() }
   },

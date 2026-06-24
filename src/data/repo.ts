@@ -1661,12 +1661,11 @@ export class Repo {
    *  processor handles every write that lands during the deferral
    *  window, so projection correctness is preserved.
    *
-   *  Browser path: `requestIdleCallback` with a 2 s safety timeout —
-   *  we want to wait until the main thread is idle, but never longer
-   *  than that (so a busy session still gets its catch-up scan).
-   *  Test / Node path: `setTimeout(0)` so vitest fake timers can
-   *  advance the call deterministically; `requestIdleCallback` is not
-   *  defined under jsdom / Node. */
+   *  Deferred via `scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE)` (see
+   *  `reprojectionJobs`): off the cold-start window (10 s floor) but
+   *  force-run by a 30 s fallback so a never-idle session still gets its
+   *  catch-up scan. Test / Node path is `setTimeout(0)` so vitest fake
+   *  timers can advance the call deterministically. */
   private scheduleReprojection(
     names: readonly string[],
     schemas: ReadonlyMap<string, AnyPropertySchema>,
@@ -1696,8 +1695,8 @@ export class Repo {
    * backfills: they write through `repo.tx`, so their rows carry
    * source='user' and actually upload — unlike a raw `db.execute`, which would
    * leave the rows local-only (the daily-note:date sync gap). Deferred off the
-   * workspace-open critical path (`requestIdleCallback`, 2 s cap; `setTimeout`
-   * under Node/jsdom — same scheme as `scheduleReprojection`) and gated so each
+   * workspace-open critical path (`scheduleDeepIdle` / `CATCHUP_DEEP_IDLE` —
+   * same scheme as `scheduleReprojection`) and gated so each
    * backfill runs at most once per workspace.
    *
    * Call AFTER the access gate confirms the workspace is materializable: a

@@ -93,6 +93,12 @@ describe('writeStartupRecord', () => {
       firstContentPaintMs: 120,
       repoReadyMs: 50,
     })
+    // Content is the ISO timestamp so the entry is legible in the tree.
+    const contentRow = await sharedDb.db.getOptional<{ content: string }>(
+      'SELECT content FROM blocks WHERE id = ?',
+      [id],
+    )
+    expect(contentRow?.content).toBe(new Date(1700).toISOString())
   })
 
   it('block-per-session: two writes create two distinct records (no clobber)', async () => {
@@ -105,6 +111,19 @@ describe('writeStartupRecord', () => {
       [parent.id],
     )
     expect(children.map(c => c.id).sort()).toEqual([first, second].sort())
+  })
+
+  it('orders records newest-first (reverse chronological) by prepending', async () => {
+    const first = await writeStartupRecord(repo, WS)
+    const second = await writeStartupRecord(repo, WS)
+    const third = await writeStartupRecord(repo, WS)
+    const parent = await getPluginUIStateBlock(repo, WS, USER, startupMetricsUIStateType)
+    // Same (order_key, id) ordering the block tree uses.
+    const ordered = await sharedDb.db.getAll<{ id: string }>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id',
+      [parent.id],
+    )
+    expect(ordered.map(c => c.id)).toEqual([third, second, first])
   })
 })
 

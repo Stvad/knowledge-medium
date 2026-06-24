@@ -77,6 +77,17 @@ export const getStartupTimeline = (): StartupTimeline =>
 let longTaskObserver: PerformanceObserver | null = null
 let longTasksObserving = false
 let lastLongTaskEndMs: number | null = null
+const longTaskSubscribers = new Set<() => void>()
+
+/** Subscribe to long-task occurrences. The callback fires AFTER
+ *  `lastLongTaskEndMs` is updated, so a debounced quiet-window detector can
+ *  reset its timer from the same event that advanced the value — avoiding the
+ *  poll-vs-observer ordering race a `setTimeout`-driven reader would hit.
+ *  Returns an unsubscribe. */
+export const onLongTask = (cb: () => void): (() => void) => {
+  longTaskSubscribers.add(cb)
+  return () => longTaskSubscribers.delete(cb)
+}
 
 /** Start observing main-thread long tasks (≥50 ms blocks) as early as possible,
  *  so the plugin can later find the first quiet window. Idempotent and a no-op
@@ -88,10 +99,15 @@ export const startStartupObservers = (): void => {
   longTasksObserving = true
   try {
     longTaskObserver = new PerformanceObserver((list) => {
+      let advanced = false
       for (const entry of list.getEntries()) {
         const end = entry.startTime + entry.duration
-        if (lastLongTaskEndMs === null || end > lastLongTaskEndMs) lastLongTaskEndMs = end
+        if (lastLongTaskEndMs === null || end > lastLongTaskEndMs) {
+          lastLongTaskEndMs = end
+          advanced = true
+        }
       }
+      if (advanced) for (const cb of longTaskSubscribers) cb()
     })
     longTaskObserver.observe({ type: 'longtask', buffered: true })
   } catch {
@@ -115,4 +131,5 @@ export const resetStartupTimeline = (): void => {
   longTaskObserver = null
   longTasksObserving = false
   lastLongTaskEndMs = null
+  longTaskSubscribers.clear()
 }
