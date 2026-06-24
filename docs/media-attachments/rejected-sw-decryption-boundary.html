@@ -330,6 +330,13 @@ freshness TTL after which the SW re-validates access (cheapest: re-issue the RLS
 signal is not locally authoritative, so the TTL-bounded revalidation — not just the purge — is what
 closes the plaintext-removal window. (E2EE leans on the same shape, with key-absence as the faster
 signal.)
+<p style="margin:8px 0 0"><strong>Superseded by the chosen design.</strong> This per-render TTL
+revalidation was <em>dropped</em> in the in-thread design (<a href="./design.html#cache">design.html §8</a>):
+revocation is a <strong>one-shot prefix-purge</strong> fired off the same membership-change signal that
+makes PowerSync drop the workspace's block rows from the local DB — matching how note text is clawed back
+(no per-render membership recheck), since gating the image on a recheck the surrounding <code>blocks</code>
+never get is not a coherent boundary. The reasoning here — a cached hit is not an independent authority —
+still holds; only the <em>backstop</em> changed from per-render TTL to the one-shot block-claw-back purge.</p>
 </div>
 
 

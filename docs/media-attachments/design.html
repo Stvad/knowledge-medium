@@ -597,18 +597,18 @@ amount of wiping addresses.
     <code>block.properties.hash</code> (§5.1) the resolver <em>discards</em> the bytes — never writes
     them to the OPFS byte store — and renders the broken-asset placeholder; unverified bytes are
     never served or stored.</li>
-  <li><strong>Stored bytes are not an independent authority.</strong> The OPFS byte store is
-    namespaced by <code>user_id</code> (account isolation); on workspace leave/revoke its prefix is
-    purged (primary, but can race / miss); and — the backstop that actually bounds the serving window —
-    a stored entry past a short freshness TTL is re-validated by re-issuing the RLS-gated Storage
-    <code>GET</code> (403 for a removed member) before serving — that revalidation GET must hit the
-    <em>origin</em> (auth-bearing, non-cacheable, and the private bucket sets no public
-    <code>cacheControl</code>) so a CDN <code>200</code> can't mask the 403. WK-absence gates the
-    <em>decode of new downloads</em> (fail-closed, above), <em>not</em> the serving of already-stored,
-    already-verified bytes — lock doesn't scrub the store, exactly as it doesn't scrub the decrypted
-    <code>blocks</code> table (§8). These are the same serving guarantees the rejected SW path stated for
-    the Cache API (the Cache-API authorization boxes in the rejected-SW doc), now for the in-thread OPFS
-    store.</li>
+  <li><strong>Stored bytes are not an independent authority — revocation rides the block claw-back.</strong>
+    The OPFS byte store is namespaced by <code>user_id</code> (account isolation); on workspace leave/revoke
+    its prefix is purged — driven by the <em>same membership-change signal</em> that makes PowerSync drop the
+    workspace's block rows from the local DB (the bytes live out-of-band in OPFS, so they don't ride that row
+    claw-back and need their own one-shot purge; offline, the purge completes on reconnect, exactly as the
+    rows fall out on the next sync). That purge — not a per-render membership recheck — is the claw-back, so
+    media revocation is handled <em>exactly</em> like note text: a revoked member's local <code>blocks</code>
+    are dropped and gets no per-render re-authorization either, and an already-synced member who keeps a copy
+    is the same accepted exposure for bytes as for text (§8). WK-absence gates the <em>decode of new
+    downloads</em> (fail-closed, above), <em>not</em> the serving of already-stored, already-verified bytes —
+    lock doesn't scrub the store, exactly as it doesn't scrub the decrypted <code>blocks</code> table
+    (§8).</li>
 </ul>
 
 <div class="decision">
@@ -704,20 +704,20 @@ half the E2EE on-disk footprint, no decrypt-on-render, and one store instead of 
     as object GC (§16).</li>
   <li><strong>Destroying local data:</strong> the byte store is ordinary local storage, removed wholesale by
     the coarse clear-all (§7.2) — no per-store wipe participation. <em>Authorization</em> is separate: on
-    per-workspace revoke/leave, purge that workspace's prefix (a serving-access control, not destruction) —
-    and because a purge can race or miss, bound a stored entry's serving authority with a short freshness TTL
-    (a security parameter — pin a concrete default, e.g. ~5&nbsp;min; a longer TTL silently widens this
-    window) after which the resolver re-validates via the RLS-gated Storage <code>GET</code> (§7.3,
-    403 for a removed member). The TTL revalidation, not the purge, is what <strong>bounds</strong> the
-    window in which a removed member's bytes can still be served — shrunk to the TTL, not eliminated.
-    <em>Offline</em>, the revalidation GET can't run; rather than break full-offline media (§1/§8) or serve
-    indefinitely, a stale-past-TTL entry is served from cache under an <strong>offline grace</strong> and
-    revalidated the instant connectivity returns — so the revocation gate is an <em>online</em> serving
-    control that degrades offline to grace (bounded by reconnect). For E2EE a removed-but-offline ex-member
-    retains the decrypted bytes locally anyway (lock ≠ scrub), so this is access-control politeness, not a
-    crypto boundary. (Lock alone does <em>not</em> scrub the store, exactly as it doesn't scrub the decrypted
-    <code>blocks</code> table — that's the coarse wipe's job; membership revoke, not WK-absence, is the
-    access gate.)</li>
+    per-workspace revoke/leave, purge that workspace's prefix (a serving-access control, not destruction),
+    driven by the <em>same membership-change signal</em> that makes PowerSync drop the workspace's block rows
+    from the local DB. This is a deliberate <strong>one-shot purge, not a per-render TTL revalidation</strong>:
+    media is clawed back exactly like note text. The block rows fall out of the local DB on revoke (offline,
+    on the next sync after reconnect); the bytes live out-of-band in OPFS so they don't ride that row
+    claw-back and need their own prefix-purge fired off the same signal (offline, it completes on reconnect —
+    the same window the rows themselves have). With the block gone there is no hash and nothing renders those
+    bytes anyway, so the leftover OPFS bytes are inert until the purge lands. We deliberately do <em>not</em>
+    re-validate every render against a freshness TTL: that would gate the image on a per-render membership
+    recheck that the far-more-sensitive note text never gets, for data the ex-member already downloaded — a
+    revoked-but-not-yet-synced member can read all the surrounding <code>blocks</code> too, so a media-only
+    recheck is not a coherent boundary, just render-path cost. (Lock alone does <em>not</em> scrub the store,
+    exactly as it doesn't scrub the decrypted <code>blocks</code> table — that's the coarse wipe's job;
+    membership revoke, not WK-absence, is the access gate.)</li>
   <li><strong>Optimistic local-first write:</strong> on paste, the plaintext bytes are written straight to
     the byte store (durable; the §9 up-lane drains from there). The image renders immediately from local
     bytes; the upload drains in the background. Whether the bytes have uploaded yet is a
