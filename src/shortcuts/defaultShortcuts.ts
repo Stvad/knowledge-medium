@@ -575,18 +575,27 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   // block selection. Vertical motion here relies on the browser's native
   // default action (see move_up_from_cm_start), so an unconditional
   // preventDefault would swallow intra-block shift-selection. Bind with
-  // preventDefault: false and call trigger.preventDefault() by hand only on
-  // the takeover path — mirroring move_up_from_cm_start. (The base
-  // extendSelection*Block actions keep preventDefault: true for NORMAL_MODE,
-  // where there's no editor caret to extend; bindBlockActionContext would
-  // inherit that here, hence the explicit override.)
+  // preventDefault: false and take over by hand only on the escalation path —
+  // mirroring move_up_from_cm_start. (The base extendSelection*Block actions
+  // keep preventDefault: true for NORMAL_MODE, where there's no editor caret to
+  // extend; bindBlockActionContext would inherit that here, hence the explicit
+  // override.)
+  //
+  // At the block edge the caret is already at head 0 / doc end, so the native
+  // Shift+Arrow is a no-op (nothing to select past the edge, and each block is
+  // its own editor) — which means preventDefault timing doesn't matter here. We
+  // can therefore resolve the escalation first and take over (suppress the key
+  // + leave edit mode) ONLY when there's actually a neighbour to select. At the
+  // first/last visible block there's no target, so we stay in edit mode rather
+  // than dropping the user into a dead state (out of edit mode, nothing
+  // selected, keystroke eaten).
   const extendSelectionUpEdit = {
     ...bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, extendSelectionUpBlock, {idPrefix: 'edit.cm'}),
     handler: async (deps: CodeMirrorEditModeDependencies, trigger: ActionTrigger) => {
       if (!cursorIsAtStart(deps.editorView)) return
+      if (!(await extendSelectionUp(deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen))) return
       trigger.preventDefault()
       setIsEditing(deps.uiStateBlock, false)
-      await extendSelectionUp(deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen)
     },
     defaultBinding: {
       keys: 'Shift+ArrowUp',
@@ -599,9 +608,9 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     ...bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, extendSelectionDownBlock, {idPrefix: 'edit.cm'}),
     handler: async (deps: CodeMirrorEditModeDependencies, trigger: ActionTrigger) => {
       if (!cursorIsAtEnd(deps.editorView)) return
+      if (!(await extendSelectionDown(deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen))) return
       trigger.preventDefault()
       setIsEditing(deps.uiStateBlock, false)
-      await extendSelectionDown(deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen)
     },
     defaultBinding: {
       keys: 'Shift+ArrowDown',

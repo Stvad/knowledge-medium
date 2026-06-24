@@ -285,6 +285,64 @@ describe('default CodeMirror shortcuts', () => {
     await waitFor(() => expect(uiStateBlock.peekProperty(isEditingProp)).toBe(false))
   })
 
+  it('stays in edit mode when Shift+ArrowUp at block start has no previous block to escalate into', async () => {
+    // Editing the surface root itself (e.g. a zoomed-in single block): there
+    // is no previous visible block, so escalation must NOT drop the user out
+    // of edit mode into a dead state with nothing selected.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'only', content: 'only'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'only')
+    await uiStateBlock.set(isEditingProp, true)
+
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+    await findEditModeAction(env.repo, 'edit.cm.extend_selection_up').handler({
+      block: env.repo.block('only'),
+      editorView: codeMirrorEditorView('only', 0), // caret at start
+      uiStateBlock,
+      scopeRootId: 'only', // focused block IS the surface root → no previous visible block
+    } satisfies CodeMirrorEditModeDependencies, trigger)
+
+    // No neighbour to escalate into → no takeover: the key is left for native
+    // (a no-op at head 0) and we stay in edit mode. preventDefault is the
+    // deterministic signal; isEditing is reliable here too because the
+    // no-target path issues no setIsEditing write to race the value set above.
+    expect(trigger.preventDefault).not.toHaveBeenCalled()
+    expect(uiStateBlock.peekProperty(isEditingProp)).toBe(true)
+  })
+
+  it('stays in edit mode when Shift+ArrowDown at block end has no next block to escalate into', async () => {
+    // Editing the last block in a panel: there is no next visible block, so
+    // escalation must NOT eject the user from edit mode with nothing selected.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'first', content: 'first'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'last', content: 'last'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'last')
+    await uiStateBlock.set(isEditingProp, true)
+
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+    await findEditModeAction(env.repo, 'edit.cm.extend_selection_down').handler({
+      block: env.repo.block('last'),
+      editorView: codeMirrorEditorView('last', 'last'.length), // caret at end
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, trigger)
+
+    expect(trigger.preventDefault).not.toHaveBeenCalled()
+    expect(uiStateBlock.peekProperty(isEditingProp)).toBe(true)
+  })
+
   it('opens the root preferences block from the global action', async () => {
     const action = findGlobalAction(env.repo, OPEN_PREFERENCES_ACTION_ID)
 

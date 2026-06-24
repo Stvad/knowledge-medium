@@ -112,38 +112,47 @@ export const enterEditMode = (uiStateBlock: Block, selection?: EditorSelectionSt
   requestEditorFocus(uiStateBlock)
 }
 
+/** Extend the block selection to the next visible block. Returns whether a
+ *  target was found and the selection was extended — false at the last visible
+ *  block in the surface, which lets edit-mode callers avoid leaving edit mode
+ *  for nothing (see extendSelectionDownEdit). */
 export const extendSelectionDown = async (
   uiStateBlock: Block,
   repo: Repo,
   scopeRootId: string | undefined,
   scopeRootForcesOpen = true,
-) => {
-  if (!scopeRootId) return
+): Promise<boolean> => {
+  if (!scopeRootId) return false
 
   const focusedId = peekFocusedBlockLocation(uiStateBlock)?.blockId
-  if (!focusedId) return
+  if (!focusedId) return false
 
   const nextBlock = await nextVisibleBlock(repo.block(focusedId), scopeRootId, scopeRootForcesOpen)
-  if (!nextBlock) return
+  if (!nextBlock) return false
 
   await extendSelection(nextBlock.id, uiStateBlock, repo, scopeRootId, scopeRootForcesOpen)
+  return true
 }
 
+/** Mirror of {@link extendSelectionDown} for the previous visible block.
+ *  Returns false at the first visible block in the surface (the focused block
+ *  is the scope root). */
 export const extendSelectionUp = async (
   uiStateBlock: Block,
   repo: Repo,
   scopeRootId: string | undefined,
   scopeRootForcesOpen = true,
-) => {
-  if (!scopeRootId) return
+): Promise<boolean> => {
+  if (!scopeRootId) return false
 
   const focusedId = peekFocusedBlockLocation(uiStateBlock)?.blockId
-  if (!focusedId) return
+  if (!focusedId) return false
 
   const prevBlock = await previousVisibleBlock(repo.block(focusedId), scopeRootId)
-  if (!prevBlock) return
+  if (!prevBlock) return false
 
   await extendSelection(prevBlock.id, uiStateBlock, repo, scopeRootId, scopeRootForcesOpen)
+  return true
 }
 
 export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockActions => {
@@ -392,8 +401,9 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
   const extendSelectionUpAction: BlockAction = {
     id: 'extend_selection_up',
     description: 'Extend selection up',
-    handler: async (deps: BlockShortcutDependencies) =>
-      await extendSelectionUp(deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen),
+    handler: async (deps: BlockShortcutDependencies) => {
+      await extendSelectionUp(deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen)
+    },
     defaultBinding: {
       keys: 'Shift+ArrowUp',
       eventOptions: {
@@ -405,8 +415,9 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
   const extendSelectionDownAction: BlockAction = {
     id: 'extend_selection_down',
     description: 'Extend selection down',
-    handler: async (deps: BlockShortcutDependencies) =>
-      await extendSelectionDown(deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen),
+    handler: async (deps: BlockShortcutDependencies) => {
+      await extendSelectionDown(deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen)
+    },
     defaultBinding: {
       keys: 'Shift+ArrowDown',
       eventOptions: {
