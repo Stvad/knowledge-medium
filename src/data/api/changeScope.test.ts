@@ -23,6 +23,7 @@ describe('change scope policies', () => {
     expect(sourceForScope(ChangeScope.References)).toBe('user')
     expect(sourceForScope(ChangeScope.UserPrefs)).toBe('user')
     expect(sourceForScope(ChangeScope.UiState)).toBe('user')
+    expect(sourceForScope(ChangeScope.Automation)).toBe('user')
   })
 
   it('every writable scope uploads to the server', () => {
@@ -30,16 +31,18 @@ describe('change scope policies', () => {
     expect(scopeUploadsToServer(ChangeScope.References)).toBe(true)
     expect(scopeUploadsToServer(ChangeScope.UserPrefs)).toBe(true)
     expect(scopeUploadsToServer(ChangeScope.UiState)).toBe(true)
+    expect(scopeUploadsToServer(ChangeScope.Automation)).toBe(true)
   })
 
-  it('read-only mode rejects document edits and allows UI/prefs writes', () => {
-    // UserPrefs and UiState writes still happen locally and queue to
+  it('read-only mode rejects document edits and allows UI/prefs/automation writes', () => {
+    // UserPrefs, UiState, and Automation writes still happen locally and queue to
     // ps_crud in read-only mode. The server will refuse them and the
     // rejection-quarantine surface lets the user see the noise.
     expect(scopeAllowedInReadOnly(ChangeScope.BlockDefault)).toBe(false)
     expect(scopeAllowedInReadOnly(ChangeScope.References)).toBe(false)
     expect(scopeAllowedInReadOnly(ChangeScope.UiState)).toBe(true)
     expect(scopeAllowedInReadOnly(ChangeScope.UserPrefs)).toBe(true)
+    expect(scopeAllowedInReadOnly(ChangeScope.Automation)).toBe(true)
   })
 
   it('centralizes undo behavior', () => {
@@ -47,5 +50,6 @@ describe('change scope policies', () => {
     expect(scopeIsUndoable(ChangeScope.References)).toBe(true)
     expect(scopeIsUndoable(ChangeScope.UiState)).toBe(false)
     expect(scopeIsUndoable(ChangeScope.UserPrefs)).toBe(false)
+    expect(scopeIsUndoable(ChangeScope.Automation)).toBe(false)
   })
 })

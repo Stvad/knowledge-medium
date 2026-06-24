@@ -63,7 +63,10 @@ export interface StartupRecordData {
 export const startupRecordProp = defineProperty<StartupRecordData | undefined>('startupRecord', {
   codec: codecs.optionalIdentity<StartupRecordData>('object'),
   defaultValue: undefined,
-  changeScope: ChangeScope.UiState,
+  // Automation scope (not UiState) so the record is VISIBLE in the property
+  // panel — it renders raw (no editor for an object blob), so the metrics are
+  // inspectable.
+  changeScope: ChangeScope.Automation,
 })
 
 /** Parent ui-state container; each boot adds one child under it. */
@@ -126,18 +129,16 @@ export const writeStartupRecord = async (repo: Repo, workspaceId: string): Promi
         workspaceId,
         parentId: parent.id,
         orderKey: keyAtStart(first?.order_key ?? null),
-        // The record itself rides the `startupRecord` property; content is just
-        // the ISO timestamp so the entry is legible in the tree. (Trade-off: a
-        // date-shaped content word is FTS-indexed, so these can surface in
-        // [[-link autocomplete when typing a date — see note to follow up on
-        // excluding the ui-state subtree from search.)
+        // Content is just the ISO timestamp so the entry is legible in the tree.
+        // FTS indexes it, so a timestamp can surface in (( block-ref autocomplete
+        // (not [[-link, which isn't FTS-backed) — acceptable.
         content: new Date(data.recordedAt).toISOString(),
         properties: {},
       },
       { systemMint: true },
     )
     await tx.setProperty(id, startupRecordProp, data)
-  }, { scope: ChangeScope.UiState, description: 'startup metrics record' })
+  }, { scope: ChangeScope.Automation, description: 'startup metrics record' })
   return id
 }
 
