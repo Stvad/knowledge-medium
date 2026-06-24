@@ -16,8 +16,12 @@ const numberSchema: Schema<number> = {
  *  the same indexed `block_references` candidate set via `core.typedBlockCount`,
  *  so its membership and invalidation match `backlinks.forBlock` exactly, and
  *  excludes the self-reference in SQL with a self-scope `exclude` predicate —
- *  the SQL analogue of `forBlock`'s `ids.filter(s => s !== id)` — so the badge
- *  count and the expanded list can never disagree.
+ *  the SQL analogue of `forBlock`'s `ids.filter(s => s !== id)`.
+ *
+ *  Intentionally UNFILTERED, even though the expanded `LinkedReferences` may
+ *  apply a page / daily-note backlink filter (rendered as "matched / total").
+ *  The badge tracks the *total* — i.e. the denominator the user sees on
+ *  expand — so "5" on the badge and "2 / 5" in the expanded header agree.
  *
  *  Explicit const type (like `backlinksForBlockQuery`) so `typeof` is knowable
  *  without inferring this initializer, which would loop through QueryRegistry

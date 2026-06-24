@@ -349,14 +349,16 @@ describe('repo.query.typedBlockCount', () => {
     expect(await env.repo.query.typedBlockCount({workspaceId: '', types: ['note']}).load()).toBe(0)
   })
 
-  it('matches typedBlockIds length on the ancestor-scope path (no row multiplication via ancestor_chain)', async () => {
-    // The recursive ancestor_chain CTE can yield several rows per candidate;
-    // a careless COUNT(*) over a JOIN would over-count. Ancestor predicates
-    // compile to EXISTS in the WHERE (not a FROM join), so the count must
-    // still equal the distinct candidate count.
+  it('matches typedBlockIds length on the ancestor-scope path (COUNT must not multiply per ancestor_chain row)', async () => {
+    // `child` has TWO ancestors (`parent` and `gp`) that each reference `tag`,
+    // so the ancestor predicate matches the one candidate via two distinct
+    // ancestor_chain rows. A COUNT(*) over a multiplying ancestor JOIN would
+    // return 2; the correct EXISTS-in-WHERE count is 1. A single-ancestor
+    // fixture can't tell those apart — it returns 1 either way.
     await create({id: 'target'})
     await create({id: 'tag'})
-    await create({id: 'parent', references: [{id: 'tag', alias: 'Tag'}]})
+    await create({id: 'gp', references: [{id: 'tag', alias: 'Tag'}]})
+    await create({id: 'parent', parentId: 'gp', references: [{id: 'tag', alias: 'Tag'}]})
     await create({id: 'child', parentId: 'parent', references: [{id: 'target', alias: 'T'}]})
     await create({id: 'sibling', references: [{id: 'target', alias: 'T'}]})
 
@@ -367,8 +369,8 @@ describe('repo.query.typedBlockCount', () => {
     }
     const ids = await env.repo.query.typedBlockIds(query).load()
     const n = await env.repo.query.typedBlockCount(query).load()
-    expect(ids).toEqual(['child'])
-    expect(n).toBe(ids.length)
+    expect(ids).toEqual(['child']) // one candidate, even with two matching ancestors
+    expect(n).toBe(ids.length) // 1, not 2 — no per-ancestor multiplication
   })
 })
 
