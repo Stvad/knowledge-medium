@@ -309,7 +309,11 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     icon: Copy,
     handler: ({block}: BlockShortcutDependencies) => copyBlockToClipboard(block),
     defaultBinding: {
-      keys: ['$mod+c', 'y'],
+      // Vim "yank" family — all copy variants share a `y` prefix:
+      // `y y` block, `y r` reference, `y e` embed (see copyBlockRef /
+      // copyBlockEmbed below). `y y` mirrors vim's `yy` (yank line).
+      // `$mod+c` stays as the platform-native copy.
+      keys: ['$mod+c', 'y y'],
       eventOptions: {preventDefault: true},
     },
   }
@@ -322,11 +326,14 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       writeToClipboard(`((${block.id}))`)
     },
     defaultBinding: {
-      // Plain logical-letter form — `withRecoveredLetterKey` in the
-      // reconciler restores event.key from event.keyCode for alt+letter
-      // chords, so this matches on every platform AND every layout
-      // (Mac/Linux/Windows × QWERTY/Colemak/Dvorak).
-      keys: 'Alt+y',
+      // `y r` ("yank reference") is the `y`-prefixed copy-family form;
+      // `Alt+y` is kept as the original alternate. Plain-letter sequences
+      // match on event.key directly (the logical letter the layout
+      // produces), so `y r` is correct on every platform AND layout. The
+      // `Alt+y` form relies on `withRecoveredLetterKey` in the reconciler
+      // restoring event.key from event.keyCode for alt+letter chords, so it
+      // too holds across Mac/Linux/Windows × QWERTY/Colemak/Dvorak.
+      keys: ['y r', 'Alt+y'],
     },
   }
 
@@ -338,7 +345,9 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       writeToClipboard(`!((${block.id}))`)
     },
     defaultBinding: {
-      keys: 'Shift+y',
+      // `y e` ("yank embed") is the `y`-prefixed copy-family form;
+      // `Shift+y` is kept as the original alternate.
+      keys: ['y e', 'Shift+y'],
     },
   }
 

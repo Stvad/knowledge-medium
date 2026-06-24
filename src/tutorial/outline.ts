@@ -91,8 +91,8 @@ const sharedKeys = {
   prevNextDay: '`Cmd+Shift+[` / `Cmd+Shift+]`',
   appendToday: '`Ctrl+Shift+N`',
   prefs: '`Cmd+,` (`Ctrl+,`)',
-  copyRef: '`Alt+Y`',
-  copyEmbed: '`Shift+Y`',
+  copyRef: '`Y R`',
+  copyEmbed: '`Y E`',
 }
 
 /**
@@ -171,7 +171,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
         children: [
           {
             id: refDemoTargetId,
-            content: '👋 I am the demo target. Focus me and press `Alt+Y` to copy a ref to me, or `Shift+Y` to copy an embed — then paste in a new bullet to see the result.',
+            content: '👋 I am the demo target. Focus me and press `Y R` to copy a ref to me, or `Y E` to copy an embed — then paste in a new bullet to see the result.',
             children: [
               { content: "I'm a child of the demo target. Embeds bring children along — so the bare-embed bullet further down will render me too." },
             ],
