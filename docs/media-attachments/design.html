@@ -364,14 +364,21 @@ encode/decode seam is mode-aware, and plaintext is its degenerate (identity) bra
     <code>contentAad(id, workspace_id, column)</code>, asset bytes bind
     <code>(content_hash, workspace_id, "asset-bytes", schema_version)</code> — the <em>content hash</em>,
     not a block id, because the object is content-addressed and shared by every block carrying those
-    bytes (§10); binding one block id would stop a co-referencing block from opening it. The content
-    hash still prevents cross-content / cross-workspace swaps — and it is the <em>same</em>
-    <code>sha256(plaintext)</code> stored as <code>block.properties.hash</code> and checked on read (the
-    warn box below), so the AAD term and the read-side check stay one identical hash. (Schema version stays in the AAD for the
-    same cheap-hierarchy-upgrade reason §13 of the e2ee doc keeps it there.)</li>
+    bytes (§10); binding one block id would stop a co-referencing block from opening it. <code>workspace_id</code>
+    + the content hash give cross-workspace / cross-content domain separation, but the <em>real</em> defense
+    against an untrusted server returning arbitrary or stale bytes is the <strong>read-side hash check</strong>
+    (warn box below): the AAD's <code>content_hash</code> is the <em>same</em> <code>sha256(plaintext)</code>
+    the read path verifies against <code>block.properties.hash</code>, so it is redundant-but-cheap
+    defense-in-depth (it fails at GCM-open, a hair earlier, and survives a hypothetical read-check
+    regression), <em>not</em> the load-bearing check. (<code>schema_version</code> stays in the AAD to
+    cryptographically bind the format version — the <code>encb:v1:</code> magic is unauthenticated framing, so
+    the AAD term is what would make a future cross-version swap fail the tag; same reason the text path binds
+    it.)</li>
   <li><strong>A binary envelope, not the base64url text envelope.</strong> The <code>enc:v1:</code>
-    envelope is base64url (≈33% bloat) — wrong for bytes. Add a sibling
-    <strong><code>encb:v1:</code></strong> binary framing (<code>magic ‖ nonce ‖ ciphertext‖tag</code>
+    envelope is a <em>string</em> (base64url), and the text <code>seal</code>/<code>open</code> seam is typed
+    <code>string→string</code> over <code>TextEncoder</code>/<code>TextDecoder</code> — which corrupts raw
+    bytes (invalid UTF-8 is replaced). So bytes need their own framing regardless of the ≈33% base64 bloat:
+    a sibling <strong><code>encb:v1:</code></strong> binary framing (<code>magic ‖ nonce ‖ ciphertext‖tag</code>
     as raw bytes) sharing the nonce/tag layout. Small new module next to <code>aead.ts</code>.</li>
 </ul>
 
@@ -547,16 +554,6 @@ absence) are independent of destruction and stay — they gate <em>serving</em> 
 amount of wiping addresses.
 </div>
 
-<div class="decision">
-<strong>That tax is why the SW path is rejected.</strong> Everything in §7.1–§7.2 — the token
-handshake, the SW-readable mode/hash mirror, per-<code>clientId</code> sessions, controller gating — is
-coordination the SW incurs <em>only</em> to buy one thing: a uniform mode-agnostic
-<code>&lt;img src&gt;</code>. The in-thread path (§7.3) gives that up for a small renderer mode-branch
-and pays none of the tax. See §7.3 for the full tally, §18 for the design-notes recap, and
-<a href="./rejected-sw-decryption-boundary.html">rejected-sw-decryption-boundary.html</a> for the full
-decision record. §8–§10 below are boundary-agnostic except where they name the SW.
-</div>
-
 <h3>7.3 The chosen approach: in-thread decryption</h3>
 
 <p>In-thread (app, or its dedicated data worker) decryption: the renderer fetches the ciphertext,
@@ -622,39 +619,16 @@ decision record. §8–§10 below are boundary-agnostic except where they name t
 </ul>
 
 <div class="decision">
-<strong>Why in-thread wins the tally.</strong> The SW concentrates ~5 distinct coordination mechanisms
-to buy exactly one benefit; in-thread pays two small local concerns and avoids all of them.
-<ul>
-  <li><strong>SW-only costs, each a boundary artifact:</strong> the app→SW token handshake (§7.1); the
-    SW-readable mode-pin + per-asset hash mirror, because the SW can't read the DB (§7.1);
-    per-<code>clientId</code> sessions + per-user cache keying, because one SW is shared across all
-    tabs/accounts of the origin; and the controller-readiness / route-ordering / clientId-less-navigation
-    lifecycle (§7, §11). The in-thread context has none of these — it reads the mode pin synchronously
-    (resolving WK-presence on the already-async render path) and already holds the decrypted block (the
-    hash is <code>block.properties.hash</code>), so the mirror simply doesn't exist.</li>
-  <li><strong>The SW's one benefit is weak here:</strong> a uniform <code>&lt;img src&gt;</code> across
-    modes. But <code>&lt;img&gt;</code> takes an object URL just fine, so in-thread reproduces the result
-    with a one-line mode branch; the SW's interception isn't even fully uniform (clientId-less
-    navigations already route through the app, §7.1). It would only pay off if some media render site
-    emitted a raw <code>&lt;img src="…asset…"&gt;</code> the app can't funnel through its resolver — and
-    in a controlled markdown pipeline there is none.</li>
-  <li><strong>Signed URLs don't rescue the SW:</strong> minting one needs the user's JWT (which <em>is</em>
-    the handshake), or the app must feed per-object expiring URLs to the SW (heavier than one bearer
-    token). A viable <em>fetch</em> mechanism (§4), not a cheaper one.</li>
-  <li><strong>The DB isn't reachable from the SW even though a DB worker exists:</strong> PowerSync runs
-    a SharedWorker in multi-tab mode (<code>repoProvider.ts</code>), but it is internal and a
-    ServiceWorker can't connect to it; reading a row would mean a <code>BroadcastChannel</code>
-    round-trip through a live tab — and if a tab is alive to answer, decryption belongs in that tab. So
-    the hash mirror (or in-thread) is the only practical answer; in-thread makes it vanish.</li>
-  <li><strong>Not differentiators:</strong> native <code>Range</code>/streaming — whole-blob AEAD
-    defeats it on both paths (fix is chunked encryption); and wipe participation — destruction is the
-    coarse platform clear on both (§7.2).</li>
-</ul>
-The general rule, useful beyond media: <strong>a service worker earns its tax only when the consumer
-needs a real URL, not a blob.</strong> <code>&lt;img&gt;</code> takes a blob → in-thread. A consumer
+<strong>Why in-thread wins the tally.</strong> The SW concentrates ~5 coordination mechanisms (token
+handshake, SW-readable mode-pin + hash mirror, per-<code>clientId</code> sessions, controller gating) to buy
+one benefit — a uniform mode-agnostic <code>&lt;img src&gt;</code> — that <code>&lt;img&gt;</code> doesn't
+need, since it takes an object URL; in-thread pays two small local concerns and avoids all of it. The full
+cost tally lives in §7.1 and the <a href="./rejected-sw-decryption-boundary.html">decision-record sibling
+doc</a> — not re-proved here. The one portable lesson: <strong>a service worker earns its tax only when the
+consumer needs a real URL, not a blob.</strong> <code>&lt;img&gt;</code> takes a blob → in-thread. A consumer
 that consumes URLs — e.g. the JS module loader for user plugins (<code>import()</code> of a
-<code>/module/&lt;blockId&gt;</code>) — is where a SW-served URL genuinely pays off, and even there the
-clean shape keeps the privileged work in-thread and lets the SW serve a pre-populated cache (separate
+<code>/module/&lt;blockId&gt;</code>) — is where a SW-served URL genuinely pays off, and even there the clean
+shape keeps the privileged work in-thread and lets the SW serve a pre-populated cache (separate
 investigation).
 </div>
 
@@ -816,9 +790,11 @@ pending attachment.
   durable copy of B's un-uploaded bytes — manufacturing the very &quot;synced block outlives its bytes&quot; loss
   this lane exists to prevent. A profile account that is never re-opened simply leaves its records inert —
   they keep their bytes and neither drain nor reap, costing bounded storage, never loss.
-  To shrink the inferred set to the genuine crash window, a <em>caught</em> tx rollback also stamps the
-  record <code>staged → reapable</code> directly, and records carry a session/generation stamp so a
-  reaper never races an in-flight capture. Entries drain (to the §10.1 function) when connectivity returns, retrying with
+  A <em>caught</em> tx rollback shrinks the inferred set to the genuine crash window by
+  <strong>deleting the orphan record (and its un-uploaded bytes) inline</strong> — it ran in-process and
+  knows the block didn't commit, so it needs no deferred reap state; the boot reconciler then only has to
+  cover the residue where a crash lands between the throw and that cleanup. Records carry a session/generation
+  stamp so a reaper never races an in-flight capture. Entries drain (to the §10.1 function) when connectivity returns, retrying with
   backoff; on a confirmed upload the <em>queue entry</em> is deleted, but the <strong>bytes remain in
   the byte store</strong> (§8, budget-bounded) — full replication keeps them on disk for offline; they
   simply lose the un-uploaded eviction-exemption.
@@ -878,13 +854,13 @@ offline) — but the handling must <strong>not</strong> be a destructive server-
 Block deletion is a subtree-aware soft-delete (<code>src/data/mutators.ts</code>), so reaping the asset
 block would <em>cascade-delete the user-authored caption / alt-text / transcript children</em> — turning
 a missing image into lost text — and elapsed time alone can't distinguish &quot;author offline, still
-intends to upload&quot; from &quot;author gone forever&quot;. So instead: (a) while a <code>staged</code>
-/<code>pending</code> up-lane entry exists, the origin refreshes a tiny server-side <strong>upload-intent
-marker</strong> (a non-byte write), so a device returning from offline re-asserts intent before any
-window matters; (b) a peer that has the block but not the object runs a <em>bounded</em> down-lane retry,
-then surfaces a terminal <strong>&quot;image not yet uploaded by its author&quot;</strong> state (not an
-indefinite spinner, and it stops re-hitting Storage with 404s); (c) the embed <strong>self-heals</strong>
-if the origin ever uploads. Automatic destruction is reserved for orphan <em>objects</em> (bytes with no
+intends to upload&quot; from &quot;author gone forever&quot;. So instead — with <em>no</em> new server
+write-path, because §16 never timed-reaps the block (its mere existence is the cross-device
+&quot;intended here&quot; signal, §8): (a) a peer that has the block but not the object runs a
+<em>bounded</em> down-lane retry, then surfaces a terminal <strong>&quot;image not yet uploaded&quot;</strong>
+state (not an indefinite spinner, and it stops re-hitting Storage with 404s); (b) the embed
+<strong>self-heals</strong> if the origin ever uploads — the origin's own durable local
+<code>staged</code>/<code>pending</code> record carries the intent and drains on reconnect. Automatic destruction is reserved for orphan <em>objects</em> (bytes with no
 block — safe to delete); an orphan <em>block</em> is never auto-deleted (its children are real content),
 so the only unrecoverable case — origin gone before upload — is honestly shown as unavailable, never
 papered over by deleting user content.</div>
@@ -1096,8 +1072,8 @@ idempotent uploads + invariant dedup.
     parallel to today's <code>text/plain</code> handlers in
     <code>CodeMirrorContentRenderer.tsx</code> / <code>DefaultBlockRenderer.tsx</code>; and a
     <code>/image</code> command + file-picker action through the existing action/shortcut system.</li>
-  <li><strong>On capture:</strong> client-side mime/size guard → hash → <em>workspace-wide</em>
-    best-effort dedup lookup (see the caveat below) → otherwise create the asset block (placement isn't
+  <li><strong>On capture:</strong> client-side mime/size guard → hash → an <em>optional</em> workspace-wide
+    best-effort dedup lookup (a miss only costs a cosmetic duplicate block — see box) → otherwise create the asset block (placement isn't
     load-bearing — a child of the containing block is the simple default), stamping the type with
     <code>repo.addTypeInTx(tx, id, 'media', …)</code> (the in-tx variant — the standalone
     <code>block.addType</code> wouldn't compose into the single tx; and the <code>media</code>
@@ -1131,39 +1107,23 @@ object is left in place (immutable, content-addressed) and owned by §16's refco
 on undo.</div>
 
 <div class="warn">
-<strong>Dedup is workspace-wide.</strong> Reuse <em>any</em> same-hash asset block in the workspace —
-the embed is just a <code>!((id))</code> to it, wherever that asset block lives. This is the natural
-model and rides content-addressing directly: a reused asset keeps the <em>same</em> block id and the
-<em>same</em> content-addressed object, so "paste the same image again" creates <strong>no new block and
-no new upload</strong> — and even a fresh paste that <em>misses</em> the block lookup still lands on the
-same content-addressed object (§10), so it never produces a duplicate upload, only at worst a duplicate
-block (next box). A deduped asset therefore has <em>multiple</em> embed referrers,
-so its lifetime rides the existing block-reference machinery (§3): GC the asset block + its object when
-the referrer count reaches zero, not when any single embed is removed. But <strong>never reap on the
-live zero-crossing</strong> — moving an embed (cut then paste), or a cross-device add that hasn't synced
-yet, transiently drops the count to zero and would reap an asset about to be re-referenced. Reap only
-assets that stay referrer-less <em>past a grace window</em>, behind the same deferred sweep as orphan
-objects (§16), preserving any child content. No new refcount system — just no synchronous reap. <strong>We deliberately do not scope dedup to a "containing
-subtree":</strong> the data model isn't strictly tree-shaped, and subtree sharing is unshipped (§12), so
-scoping dedup to it would pay for a feature that doesn't exist and doesn't map cleanly onto today's
-blocks. If subtree sharing is ever built, retargeting a workspace-wide asset into a shared scope (e.g.
-copy under the shared root at share time) is <em>that</em> feature's job; the content-addressed path
-leaves it possible (via the §10.1 <code>content_key → block</code> mapping).</div>
-
-<div class="warn">
-<strong>Object dedup is an invariant; only <em>block</em> dedup is best-effort.</strong> Because the
-object path is content-addressed (<code>HMAC(K_id, sha256)</code>, §10), concurrent pastes of the same
-image — two devices, two tabs, offline-then-reconnect — all compute the <em>same</em> path and converge
-on <strong>one</strong> Storage object (the PUT is first-write-wins idempotent, §10.1); there are no
-duplicate objects to reconcile, even though GCM is randomized (the path is keyed off the
-<em>plaintext</em> hash the client holds, not the ciphertext). What can still diverge is the
-<em>block</em>: the dedup lookup reads local synced state, so concurrent pastes may create two
-<code>media</code> blocks that both reference that one object. Harmless — both render, both verify
-against the same content, and object GC is content-reference-counted but <em>conservative</em> —
-deferred, hydration-gated, counting live + recently-deleted blocks, and recoverable (§16) — so a
-duplicate block costs nothing and resolves as sync
-converges. No duplicate-object GC, no idempotency token, no &quot;tolerate multiple objects per hash.&quot;
-</div>
+<strong>Object dedup is an invariant; block dedup is a best-effort optimization.</strong> The object path
+is content-addressed (<code>HMAC(K_id, sha256)</code>, §10), so concurrent pastes of the same image — two
+devices, two tabs, offline-then-reconnect — all compute the <em>same</em> path and converge on
+<strong>one</strong> Storage object (first-write-wins idempotent, §10.1; the path is keyed off the
+<em>plaintext</em> hash, so randomized GCM doesn't matter). There are <em>no</em> duplicate objects to
+reconcile — ever; no duplicate-object GC, no idempotency token, no &quot;tolerate multiple objects per
+hash.&quot; The capture-time same-hash <strong>block</strong> lookup — reuse an existing <code>media</code>
+block by hash, anywhere in the workspace, so a re-paste is just another <code>!((id))</code> embed — is
+therefore a pure nice-to-have: a <em>miss</em> (or a concurrent paste on another device) costs at most a
+cosmetic duplicate <em>block</em> pointing at that one shared object, which both render, both verify against
+the same content, and which §16's conservative GC tolerates. So the lookup can be deferred or kept simple;
+it never risks a duplicate upload. A deduped object has <em>multiple</em> embed referrers, so its lifetime
+rides the existing block-reference machinery (§3): GC the object only when <em>no</em> live-or-soft-deleted
+block carries the hash, behind §16's grace-windowed deferred sweep — <strong>never on a live
+zero-crossing</strong> (moving an embed, or a not-yet-synced cross-device add, transiently hits zero), and
+preserving child content. Dedup is workspace-wide, deliberately <em>not</em> subtree-scoped (the model isn't
+tree-shaped and subtree sharing is unshipped — §12).</div>
 
 <h2 id="sharing">12. Subtree sharing (deferred — not a design driver)</h2>
 
@@ -1207,26 +1167,17 @@ e2ee §15 #2; E2EE sharing stays out-of-band whole-workspace WK transfer). Don't
 </table>
 
 <div class="reject">
-<strong>The fragment key MUST be a fresh per-asset key, NEVER the workspace key.</strong> The §5.1
-crypto seals bytes with the WK <em>directly</em> — there is no per-asset key in the v1 design. So a
-naïve "put the decrypt key in the fragment" would put the <em>WK</em> in a URL, exposing the
-<em>entire workspace</em>, not one image. Key-in-fragment therefore requires its own step: generate a
-one-off key, re-encrypt the bytes under it, upload that to a <em>public</em> bucket, and put only that
-per-asset key in the fragment. The WK never leaves the device (preserving the e2ee §5 invariant). The
-share producer must also <strong>hash-verify the source object against <code>block.properties.hash</code>
-before re-encrypting</strong> — a public viewer has no block hash to check (the §5.1 read-side check
-lives in the authenticated app), so a poisoned or corrupt object (§10.1/§17) must not be laundered into
-a public artifact.
-</div>
-
-<div class="warn">
-<strong>Document the fragment's leak surface and irrevocability.</strong> "Not sent in the HTTP
-request" is necessary but not sufficient: a fragment persists in history, is readable as
-<code>location.hash</code> by any script on the share page, and can ride a <code>Referer</code> or a
-third-party resource off-page. A public share page that loads a key into the DOM is a far softer
-target than the authenticated app (which is CSP-hardened). And it is <strong>irrevocable</strong> —
-once the link leaks, the asset leaks, permanently, short of re-encrypting under a new key. Both
-escape hatches are vNext; neither ships without these stated as accepted, explicit tradeoffs.
+<strong>If built, key-in-fragment requires a fresh per-asset key — NEVER the WK.</strong> The §5.1 crypto
+seals with the WK <em>directly</em> (no per-asset key in v1), so a naïve "put the decrypt key in the
+fragment" would put the <em>WK</em> in a URL and expose the <em>whole workspace</em>. The mechanism (vNext):
+generate a one-off key, hash-verify the source object against <code>block.properties.hash</code> first (a
+public viewer can't — §5.1's read-side check lives in the authed app — so a poisoned object §10.1/§17 isn't
+laundered into a public artifact), re-encrypt under the one-off key, upload to a <em>public</em> bucket, and
+put only that key in the fragment; the WK never leaves the device (e2ee §5). Two tradeoffs to state when it
+ships: the fragment is a softer target than the CSP-hardened app (it persists in history, is readable as
+<code>location.hash</code>, can ride a <code>Referer</code>), and a key-in-link share is
+<strong>irrevocable</strong> — once the link leaks, the asset leaks, permanently. Both escape hatches are
+vNext; the v1 commitment is only the reserved property + audience flag.
 </div>
 
 <p>Reserving the property + the audience flag costs almost nothing now and avoids a content migration
@@ -1282,7 +1233,7 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
     <td><code>media</code> block type; <code>MediaBlockRenderer</code> (image branch) reusing the
       lightbox; markdown <code>img</code> override.</td></tr>
 <tr><td>5 — capture + up-lane</td>
-    <td>paste / drop / file-pick arms; workspace-wide dedup; optimistic write to the durable byte
+    <td>paste / drop / file-pick arms; the (optional) workspace-wide dedup lookup; optimistic write to the durable byte
       store (§8); the up-lane drain to §10.1 (encode at drain) with the <code>staged → pending</code>
       lifecycle + boot reconciler (§9).</td></tr>
 <tr><td>6 — background replication (down-lane)</td>
@@ -1337,8 +1288,8 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
     completed before the origin device was cleared / lost / reinstalled) are <strong>never</strong>
     auto-deleted — their caption/transcript children are real content and a block delete cascades (§9),
     and elapsed time can't tell an offline-but-intending author from a gone one. The block direction is
-    handled by the §9 upload-intent marker + the peer's bounded &quot;not yet uploaded by its
-    author&quot; terminal state, with removal left to the user — not a timed server reap.</li>
+    handled by the peer's bounded &quot;not yet uploaded&quot; terminal state + self-heal (§9), with removal
+    left to the user — not a timed server reap (which is why no server-side intent marker is needed).</li>
 </ul>
 
 <h2 id="tradeoffs">17. Tradeoffs we're accepting</h2>
