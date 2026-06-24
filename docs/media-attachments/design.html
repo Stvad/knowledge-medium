@@ -726,7 +726,7 @@ flag. The synced block's mere existence is the only cross-device signal needed.
 <div class="warn">
 <strong>Un-uploaded bytes are the only copy — keep them durable and exempt from eviction.</strong> If a
 paste happens offline, or the eviction budget is hit before the up-lane drains, evicting a not-yet-uploaded
-entry would leave a synced asset block stuck in <code>uploading</code> forever with no bytes to send. So
+entry would leave a synced asset block stuck <code>pending</code> forever with no bytes to send. So
 un-uploaded bytes are <strong>exempt from eviction</strong>, and the durable write is on the capture path
 itself. Two corollaries: (1) the durable write at capture must <em>actually</em> be durable — if it fails,
 or <code>persist()</code> is denied so the write lands in best-effort storage, capture <strong>fails with a
@@ -758,10 +758,13 @@ pending attachment.
   wrong workspace membership. The upload target is the <em>content-addressed</em> path
   (<code>&lt;ws&gt;/HMAC(K_id, hash)</code>, §10) computed from the block's hash — so a retry, even
   after a reload, re-PUTs to the same path and is first-write-wins idempotent (§10.1); no random
-  idempotency token is needed (that was the block-id path's workaround). The <code>status</code> field has a lifecycle that closes the metadata-commit / byte-stage
-  ordering gap (§11): <code>staged</code> (durable but <em>not</em> drainable) → <code>pending</code>
-  (drainable) → <code>uploading</code> → uploaded (entry cleared; bytes <em>retained</em> in the
-  byte store, §8, now eviction-eligible like any replicated bytes). Capture writes the record as
+  idempotency token is needed (that was the block-id path's workaround). The record carries one persisted
+  bit — committed-or-not — closing the metadata-commit / byte-stage ordering gap (§11):
+  <code>staged</code> (durable but <em>not</em> drainable) → <code>pending</code> (drainable; the entry is
+  cleared on a confirmed upload, bytes <em>retained</em> in the byte store, §8, now eviction-eligible like
+  any replicated bytes). &quot;Upload in progress&quot; is an <em>in-memory</em> single-flight guard, not a
+  persisted state — a crash mid-PUT leaves the record <code>pending</code> and the single-owner drain (§8)
+  re-PUTs (first-write-wins idempotent, §10.1), so no persisted <code>uploading</code> state is needed. Capture writes the record as
   <code>staged</code> <em>before</em> the metadata <code>repo.tx</code>, so a committed asset block
   always has its source bytes already on disk; the post-commit step flips it to <code>pending</code>
   and arms the drain. The drain acts only on <code>pending</code>+ records, so the "block still
