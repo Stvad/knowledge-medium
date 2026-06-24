@@ -688,9 +688,13 @@ half the E2EE on-disk footprint, no decrypt-on-render, and one store instead of 
     same reasoning as the "don't touch unopened workspaces" sync-flood lesson); <strong>(b)
     budget-capped</strong> — replicate eagerly up to a budget, beyond which the long tail stays
     lazy-re-fetchable rather than quota-thrashing; <strong>(c) polite</strong> — idle / low priority,
-    viewport-proximity first, and metered / mobile aware (wifi-only or a user toggle). Reads are direct
-    RLS-gated Storage GETs (only <em>uploads</em> go through the §10.1 function), so the down-lane is
-    plain egress.</li>
+    viewport-proximity first, and metered / mobile aware (wifi-only or a user toggle); <strong>(d)
+    single-owner across tabs</strong> — one tab is elected via a <strong>Web Lock</strong>
+    (<code>navigator.locks.request</code>) to run the background replicator, so N open tabs of the same
+    workspace don't multiply the egress these controls bound (the lock auto-hands-off when that tab closes;
+    no SharedWorker needed). The viewport-driven <em>demand</em> lane stays per-tab — each tab fetches what
+    its own user is looking at. Reads are direct RLS-gated Storage GETs (only <em>uploads</em> go through
+    the §10.1 function), so the down-lane is plain egress.</li>
   <li><strong>Eviction is for quota pressure, not a fixed cap.</strong> The store is
     <code>navigator.storage.persist()</code>-backed (the lever that exempts it from best-effort eviction —
     spun out as its own investigation) and <strong>preserved by default for full offline operation</strong>.
@@ -813,6 +817,19 @@ pending attachment.
   up-lane drains local→server, down-lane reconciles server→local, and the demand lane (§8) lets a render
   jump the backlog. So the §9 up-lane and the §8 byte store are one store + its per-device upload-status
   records; the bytes exist <em>once</em>, not a second copy.</p>
+
+<div class="info">
+<strong>Cross-tab execution: the background lanes are single-owner; capture is per-tab.</strong> The
+<em>background</em> work — the down-lane replicator, the up-lane drain, and the boot reconciler — runs under
+one tab elected by a <strong>Web Lock</strong> (<code>navigator.locks.request</code>, §8), so multiple open
+tabs don't multiply egress or redundantly re-PUT (the lock hands off automatically when that tab closes; no
+SharedWorker required). <em>Capture</em> stays per-tab: any tab can paste, staging its byte record and
+committing its <code>repo.tx</code> locally. That split is exactly why the up-lane keeps its
+session/generation stamp — single-owning the reconciler does <em>not</em> remove the reconciler-vs-capture
+race, because a capture in <em>another</em> tab can be mid-tx (staged record written, block not yet
+committed) while the owner's reconciler runs; the stamp is what stops it reaping a live capture's record.
+(A dedicated worker for the lane is a later perf option, not needed for this.)
+</div>
 
 <div class="warn">
 <strong>Undo / delete need no byte-lane compensation — the lane self-heals.</strong> §11 puts the
