@@ -172,6 +172,14 @@ describe('repo.query.subtree', () => {
     expect(out.map(b => b.id)).toEqual(['r', 'c1', 'gc', 'c2'])
   })
 
+  it('carries each row depth relative to the root (0 at the root)', async () => {
+    await create({id: 'r'})
+    await create({id: 'c1', parentId: 'r', orderKey: 'a0'})
+    await create({id: 'gc', parentId: 'c1', orderKey: 'a0'})
+    const out = await env.repo.query.subtree({id: 'r'}).load()
+    expect(out.map(b => [b.id, b.depth])).toEqual([['r', 0], ['c1', 1], ['gc', 2]])
+  })
+
   it('excludes soft-deleted descendants', async () => {
     await create({id: 'r'})
     await create({id: 'c1', parentId: 'r'})

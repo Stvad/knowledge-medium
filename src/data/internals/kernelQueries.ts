@@ -26,6 +26,7 @@ import {
   type QueryCtx,
   type ResolvedTypedBlockQuery,
   type Schema,
+  type SubtreeRow,
 } from '@/data/api'
 import { SELECT_BLOCK_COLUMNS_SQL, buildQualifiedBlockColumnsSql, type BlockRow } from '@/data/blockSchema'
 import { ANCESTORS_SQL, CHILDREN_IDS_SQL, CHILDREN_SQL, manyAncestorsSql, SUBTREE_SQL } from './treeQueries'
@@ -476,16 +477,21 @@ const numberSchema: Schema<number> = {
 const blockDataOrNullSchema: Schema<BlockData | null> = {
   parse: (input) => input as BlockData | null,
 }
+const subtreeRowArraySchema: Schema<SubtreeRow[]> = {
+  parse: (input) => input as SubtreeRow[],
+}
 
 // ──── Tree queries ────
 
-/** Subtree rooted at `id`, includeRoot=true (spec §11). Identity-stable
- *  via the dispatcher's handle-store key. Dep declaration mirrors the
- *  legacy `repo.subtree(id)` factory in `repo.ts`. */
-export const subtreeQuery = defineQuery<{id: string}, BlockData[]>({
+/** Subtree rooted at `id`, includeRoot=true (spec §11). Returns
+ *  {@link SubtreeRow}s — each block plus its `depth` relative to the root —
+ *  in pre-order, siblings by `(order_key, id)`. Identity-stable via the
+ *  dispatcher's handle-store key. Dep declaration mirrors the legacy
+ *  `repo.subtree(id)` factory in `repo.ts`. */
+export const subtreeQuery = defineQuery<{id: string}, SubtreeRow[]>({
   name: 'core.subtree',
   argsSchema: z.object({id: z.string()}),
-  resultSchema: blockDataArraySchema,
+  resultSchema: subtreeRowArraySchema,
   resolve: async ({id}, ctx) => {
     // Upfront deps — declared before SQL so the empty-result case (root
     // missing on first load) and any mid-load invalidations have
@@ -495,10 +501,16 @@ export const subtreeQuery = defineQuery<{id: string}, BlockData[]>({
     ctx.depend({kind: 'parent-edge', parentId: id})
     const rows = await ctx.db.getAll<BlockRow & {depth: number}>(SUBTREE_SQL, [id])
     const out = ctx.hydrateBlocks(asBlockRows(rows))
-    for (const data of out) {
+    // SUBTREE_SQL already computes depth (0 at the root, +1 per level) and
+    // hydrateBlocks preserves row order, so `out[i]` ↔ `rows[i]`. depth is
+    // root-relative — a property of position in THIS subtree, not of the
+    // block — so it goes onto a fresh result wrapper, never onto the
+    // cached BlockData that hydrateBlocks just stored.
+    const withDepth = out.map((data, i): SubtreeRow => ({...data, depth: rows[i].depth}))
+    for (const data of withDepth) {
       ctx.depend({kind: 'parent-edge', parentId: data.id})
     }
-    return out
+    return withDepth
   },
 })
 

@@ -2,7 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom'
 import type { Repo } from '@/data/repo'
 import type { Block } from '@/data/block'
-import { ChangeScope, type BlockData, type BlockReference } from '@/data/api'
+import { ChangeScope, type BlockData, type BlockReference, type SubtreeRow } from '@/data/api'
 import { aliasesProp, extensionDescriptionProp, extensionNameProp, getBlockTypes, topLevelBlockIdProp } from '@/data/properties.js'
 import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { BACKLINKS_FOR_BLOCK_QUERY, type BacklinksFilter } from '@/plugins/backlinks/query.js'
@@ -1059,7 +1059,7 @@ export const createAgentRuntimeContext = ({
     sql: (sql, params, mode) => runSql(repo, sql, params, mode),
     block: id => repo.block(id),
     getBlock: id => repo.load(id),
-    getSubtree: async rootId => await repo.query.subtree({id: rootId}).load() as BlockData[],
+    getSubtree: async rootId => await repo.query.subtree({id: rootId}).load() as SubtreeRow[],
     createBlock: input => createRuntimeBlock(repo, input),
     updateBlock: input => updateRuntimeBlock(repo, input),
     installExtension: input => installRuntimeExtension(repo, input, context),

@@ -178,9 +178,10 @@ The convenience commands above wrap the starred ones (★) and add hydration.
 - \`yarn agent get-block <id>\` — fetch one block.
 - \`yarn agent subtree <rootId>\` — fetch a subtree (root included). Prints a
   depth-indented \`- content  [id]\` outline; add \`--json\` for the raw flat
-  \`BlockData[]\`. Either way it's a **pre-order** traversal with siblings in
-  \`(order_key, id)\` order — already sorted; read it top-to-bottom, don't
-  re-sort (see "Sibling order").
+  array (each row also carries its \`depth\` from the root — 0 at the root).
+  Either way it's a **pre-order** traversal with siblings in \`(order_key, id)\`
+  order — already sorted; read it top-to-bottom, don't re-sort (see "Sibling
+  order").
 - \`yarn agent sql <all|get|optional|execute> <sql> [paramsJson]\` — raw SQL.
 - \`yarn agent eval <code>\` — run JS in the app; the named queries above are
   callable directly. The dedicated commands wrap them with config
