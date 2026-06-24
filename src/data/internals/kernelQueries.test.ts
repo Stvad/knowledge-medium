@@ -348,6 +348,28 @@ describe('repo.query.typedBlockCount', () => {
   it('returns 0 for an empty workspaceId', async () => {
     expect(await env.repo.query.typedBlockCount({workspaceId: '', types: ['note']}).load()).toBe(0)
   })
+
+  it('matches typedBlockIds length on the ancestor-scope path (no row multiplication via ancestor_chain)', async () => {
+    // The recursive ancestor_chain CTE can yield several rows per candidate;
+    // a careless COUNT(*) over a JOIN would over-count. Ancestor predicates
+    // compile to EXISTS in the WHERE (not a FROM join), so the count must
+    // still equal the distinct candidate count.
+    await create({id: 'target'})
+    await create({id: 'tag'})
+    await create({id: 'parent', references: [{id: 'tag', alias: 'Tag'}]})
+    await create({id: 'child', parentId: 'parent', references: [{id: 'target', alias: 'T'}]})
+    await create({id: 'sibling', references: [{id: 'target', alias: 'T'}]})
+
+    const query = {
+      workspaceId: WS,
+      referencedBy: {id: 'target'},
+      match: [{scope: 'ancestor' as const, referencedBy: {id: 'tag'}}],
+    }
+    const ids = await env.repo.query.typedBlockIds(query).load()
+    const n = await env.repo.query.typedBlockCount(query).load()
+    expect(ids).toEqual(['child'])
+    expect(n).toBe(ids.length)
+  })
 })
 
 describe('repo.query.searchByContent', () => {
