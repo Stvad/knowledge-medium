@@ -203,10 +203,15 @@ describe('default CodeMirror shortcuts', () => {
   })
 
   it('does not preventDefault block-selection shortcuts in edit mode (leaves native text selection to CodeMirror)', () => {
-    // Regression: an inherited preventDefault: true here swallowed
-    // CodeMirror's native Shift+ArrowUp/Down text selection. Edit mode must
-    // let the editor select text and only escalate to block selection at the
-    // block edge (see the handlers' takeover path).
+    // This is the end-to-end regression guard. The dispatcher applies a
+    // matched binding's eventOptions.preventDefault for async handlers
+    // regardless of what the handler does (runOrderedCandidates ->
+    // applyEventOptions in HotkeyReconciler), so an inherited preventDefault:
+    // true here swallowed CodeMirror's native Shift+ArrowUp/Down text
+    // selection on EVERY press. preventDefault: false is what actually keeps
+    // native selection working; the handler then escalates to block selection
+    // at the block edge via its own trigger.preventDefault(). If this flips
+    // back to true the regression returns — hence the explicit assertion.
     const extendSelectionUpAction = findEditModeAction(env.repo, 'edit.cm.extend_selection_up')
     const extendSelectionDownAction = findEditModeAction(env.repo, 'edit.cm.extend_selection_down')
 
@@ -214,7 +219,12 @@ describe('default CodeMirror shortcuts', () => {
     expect(extendSelectionDownAction.defaultBinding?.eventOptions?.preventDefault).toBe(false)
   })
 
-  it('keeps native text selection (no preventDefault, stays in edit mode) when the caret is mid-text', async () => {
+  // The two tests below pin the HANDLER contract (when it takes over vs.
+  // stands aside); the binding-contract test above owns the dispatcher-level
+  // "native selection is not suppressed" guarantee. Kept separate on purpose:
+  // these call the handler directly and so can't observe the dispatcher's
+  // preventDefault, only the handler's own trigger.preventDefault().
+  it('does not take over (no manual preventDefault, stays in edit mode) when the caret is mid-text', async () => {
     await env.repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
       await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
@@ -242,7 +252,10 @@ describe('default CodeMirror shortcuts', () => {
 
     expect(upTrigger.preventDefault).not.toHaveBeenCalled()
     expect(downTrigger.preventDefault).not.toHaveBeenCalled()
-    // Block selection was not triggered — still editing the current block.
+    // Still editing — block selection was not triggered. Safe to peek
+    // synchronously: the mid-text path returns before any setIsEditing write,
+    // so nothing races the value set above (the edge test, which does write,
+    // uses waitFor).
     expect(uiStateBlock.peekProperty(isEditingProp)).toBe(true)
   })
 
