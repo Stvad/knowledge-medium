@@ -1045,23 +1045,30 @@ acceptable for the guarantee, and reads stay direct/RLS-gated (the hot path). La
     <code>priority</code> above the default. Branches on <code>mime</code>: image → the existing
     <code>MarkdownImage</code> lightbox fed the object URL the in-thread resolver produces (§7.3); later, PDF / audio / video / generic
     file-chip.</li>
-  <li><strong>Markdown <code>img</code> override</strong> via <code>markdownExtensionsFacet</code>
-    (alongside <code>defaultMarkdownExtension.ts</code>) for any inline image whose <code>src</code>
-    is an asset reference (an app-internal sentinel, not an SW-intercepted URL) — route it through the
-    in-thread resolver (§7.3) to an object URL and delegate to the lightbox.</li>
-  <li><strong>Capture surfaces:</strong> a CodeMirror <code>domEventHandlers</code> extension via
-    <code>codeMirrorExtensionsFacet</code> intercepting <code>paste</code> / <code>drop</code> with
-    <code>clipboardData.files</code> / <code>dataTransfer.files</code>; a block-shell paste/drop arm
-    parallel to today's <code>text/plain</code> handlers in
-    <code>CodeMirrorContentRenderer.tsx</code> / <code>DefaultBlockRenderer.tsx</code>; and a
-    <code>/image</code> command + file-picker action through the existing action/shortcut system.</li>
-  <li><strong>On capture:</strong> client-side mime/size guard → hash → an <em>optional</em> workspace-wide
-    best-effort dedup lookup (a miss only costs a cosmetic duplicate block — see box) → otherwise create the asset block (placement isn't
-    load-bearing — a child of the containing block is the simple default), stamping the type with
-    <code>repo.addTypeInTx(tx, id, 'media', …)</code> (the in-tx variant — the standalone
-    <code>block.addType</code> wouldn't compose into the single tx; and the <code>media</code>
-    <code>TypeContribution</code> must be registered via <code>typesFacet</code> first, §3, or this
-    throws). The asset-block create + the <code>!((id))</code> insert go in one
+  <li><strong>No second image representation.</strong> An attachment is always a <code>media</code> block
+    rendered through its <code>!((id))</code> embed (above) — there is <em>no</em> <code>![](asset-ref)</code>
+    markdown form to special-case (that would side-step the block model for no gain). Plain <em>external</em>
+    <code>![](url)</code> images keep today's <code>MarkdownImage</code> lightbox unchanged; ingesting one
+    into our storage means converting it to a <code>media</code> block + embed, not rewriting its
+    <code>src</code> to an internal sentinel.</li>
+  <li><strong>Capture routes through the existing paste verb.</strong> Image paste / drop is a branch of
+    the established <code>pasteDecisionVerb</code> (<code>src/paste/decision.ts</code> — already the seam
+    both <code>CodeMirrorContentRenderer</code> and <code>DefaultBlockRenderer</code> route paste through),
+    by extending its input to carry <code>clipboardData.files</code> / <code>dataTransfer.files</code> so a
+    file payload decides &quot;create a media block&quot; — <em>not</em> a parallel
+    <code>domEventHandlers</code> interceptor. The <code>/image</code> command + file-picker is the
+    explicit-invocation path through the existing action / shortcut system.</li>
+  <li><strong>On capture:</strong> client-side mime/size guard → hash → create the asset block at a
+    <strong>deterministic, content-derived id</strong> (<code>media:&lt;content-key&gt;</code> — the keyed
+    hash for E2EE, raw <code>sha256</code> for plaintext, workspace-scoped, exactly like the storage path
+    §10 and the <code>roam-import</code> deterministic-id convergence). Concurrent or repeat pastes of the
+    same image therefore <em>upsert onto the same block</em> and converge — <strong>capture-path block
+    dedup is an invariant, no lookup needed</strong> (and the keyed id avoids leaking a raw-hash content
+    oracle in the clear). Placement isn't load-bearing (a child of the containing block is the simple
+    default); the type is stamped via <code>repo.addTypeInTx(tx, id, 'media', …)</code> (the in-tx variant
+    — the standalone <code>block.addType</code> wouldn't compose into the single tx; and the
+    <code>media</code> <code>TypeContribution</code> must be registered via <code>typesFacet</code> first,
+    §3, or this throws). The asset-block create + the <code>!((id))</code> insert go in one
     <code>repo.tx({scope: ChangeScope.BlockDefault})</code> so they share an undo bucket. The
     <strong>durable byte record is staged (non-drainable) BEFORE that tx, and the drain is armed only
     AFTER it resolves</strong> — not inside it (see the box below).</li>
@@ -1090,23 +1097,19 @@ object is left in place (immutable, content-addressed) and owned by §16's refco
 on undo.</div>
 
 <div class="warn">
-<strong>Object dedup is an invariant; block dedup is a best-effort optimization.</strong> The object path
+<strong>Object dedup is an invariant; block dedup is too, on the capture path.</strong> The object path
 is content-addressed (<code>HMAC(K_id, sha256)</code>, §10), so concurrent pastes of the same image — two
 devices, two tabs, offline-then-reconnect — all compute the <em>same</em> path and converge on
-<strong>one</strong> Storage object (first-write-wins idempotent, §10.1; the path is keyed off the
-<em>plaintext</em> hash, so randomized GCM doesn't matter). There are <em>no</em> duplicate objects to
-reconcile — ever; no duplicate-object GC, no idempotency token, no &quot;tolerate multiple objects per
-hash.&quot; The capture-time same-hash <strong>block</strong> lookup — reuse an existing <code>media</code>
-block by hash, anywhere in the workspace, so a re-paste is just another <code>!((id))</code> embed — is
-therefore a pure nice-to-have: a <em>miss</em> (or a concurrent paste on another device) costs at most a
-cosmetic duplicate <em>block</em> pointing at that one shared object, which both render, both verify against
-the same content, and which §16's conservative GC tolerates. So the lookup can be deferred or kept simple;
-it never risks a duplicate upload. A deduped object has <em>multiple</em> embed referrers, so its lifetime
-rides the existing block-reference machinery (§3): GC the object only when <em>no</em> live-or-soft-deleted
-block carries the hash, behind §16's grace-windowed deferred sweep — <strong>never on a live
-zero-crossing</strong> (moving an embed, or a not-yet-synced cross-device add, transiently hits zero), and
-preserving child content. Dedup is workspace-wide, deliberately <em>not</em> subtree-scoped (the model isn't
-tree-shaped and subtree sharing is unshipped — §12).</div>
+<strong>one</strong> Storage object (first-write-wins idempotent, §10.1; keyed off the <em>plaintext</em>
+hash, so randomized GCM doesn't matter). No duplicate objects, ever. And because capture mints the block at a
+<em>deterministic content-derived id</em> (above), those same pastes <em>upsert onto one block</em> too —
+block dedup on the capture path is an <strong>invariant</strong>, not a best-effort lookup. The system still
+<em>tolerates</em> multiple blocks per object from <em>other</em> paths (a block copy, an import) — harmless:
+they share the one verified object and both render. So object GC stays content-reference-counted: GC the
+object only when <em>no</em> live-or-soft-deleted block carries the hash, behind §16's grace-windowed
+deferred sweep — <strong>never on a live zero-crossing</strong> (moving an embed, or a not-yet-synced
+cross-device add, transiently hits zero), preserving child content. Dedup is workspace-wide, deliberately
+<em>not</em> subtree-scoped (the model isn't tree-shaped and subtree sharing is unshipped — §12).</div>
 
 <h2 id="sharing">12. Subtree sharing (deferred — not a design driver)</h2>
 
@@ -1163,8 +1166,12 @@ ships: the fragment is a softer target than the CSP-hardened app (it persists in
 vNext; the v1 commitment is only the reserved property + audience flag.
 </div>
 
-<p>Reserving the property + the audience flag costs almost nothing now and avoids a content migration
-  later. The renderer's URL resolver branches on <em>both</em> workspace mode and render audience.</p>
+<p>&quot;Reserve&quot; here is light, and worth being honest about: block properties are a schemaless map, so
+  <code>publicUrl</code> can simply be added when the feature ships — that's not a migration — and the
+  render-audience branch is renderer code, also addable later. So v1 pre-provisions <em>nothing</em>
+  mechanical; it just names the plug-in points (a <code>publicUrl</code> property + an audience-aware URL
+  resolver branching on workspace mode × render audience) so the design doesn't accidentally foreclose the
+  vNext escape hatch. Practically: don't repurpose the <code>publicUrl</code> key for anything else.</p>
 
 <h2 id="portability">14. Vendor portability (the <code>BlobStore</code> seam)</h2>
 
