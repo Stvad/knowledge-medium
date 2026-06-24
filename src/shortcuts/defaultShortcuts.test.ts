@@ -202,12 +202,74 @@ describe('default CodeMirror shortcuts', () => {
     expect(moveBlockDownAction.defaultBinding?.eventOptions?.preventDefault).toBe(true)
   })
 
-  it('prevents native CodeMirror text selection for block selection expansion shortcuts', () => {
+  it('does not preventDefault block-selection shortcuts in edit mode (leaves native text selection to CodeMirror)', () => {
+    // Regression: an inherited preventDefault: true here swallowed
+    // CodeMirror's native Shift+ArrowUp/Down text selection. Edit mode must
+    // let the editor select text and only escalate to block selection at the
+    // block edge (see the handlers' takeover path).
     const extendSelectionUpAction = findEditModeAction(env.repo, 'edit.cm.extend_selection_up')
     const extendSelectionDownAction = findEditModeAction(env.repo, 'edit.cm.extend_selection_down')
 
-    expect(extendSelectionUpAction.defaultBinding?.eventOptions?.preventDefault).toBe(true)
-    expect(extendSelectionDownAction.defaultBinding?.eventOptions?.preventDefault).toBe(true)
+    expect(extendSelectionUpAction.defaultBinding?.eventOptions?.preventDefault).toBe(false)
+    expect(extendSelectionDownAction.defaultBinding?.eventOptions?.preventDefault).toBe(false)
+  })
+
+  it('keeps native text selection (no preventDefault, stays in edit mode) when the caret is mid-text', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'prev', content: 'previous'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: 'current text'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'next', content: 'next'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'current')
+    await uiStateBlock.set(isEditingProp, true)
+
+    const deps = {
+      block: env.repo.block('current'),
+      editorView: codeMirrorEditorView('current text', 4), // caret mid-text
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies
+
+    const upTrigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+    const downTrigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+    await findEditModeAction(env.repo, 'edit.cm.extend_selection_up').handler(deps, upTrigger)
+    await findEditModeAction(env.repo, 'edit.cm.extend_selection_down').handler(deps, downTrigger)
+
+    expect(upTrigger.preventDefault).not.toHaveBeenCalled()
+    expect(downTrigger.preventDefault).not.toHaveBeenCalled()
+    // Block selection was not triggered — still editing the current block.
+    expect(uiStateBlock.peekProperty(isEditingProp)).toBe(true)
+  })
+
+  it('escalates to block selection (preventDefault, exits edit mode) when the caret is at the block edge', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'prev', content: 'previous'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: 'current'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'next', content: 'next'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'current')
+    await uiStateBlock.set(isEditingProp, true)
+
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+    await findEditModeAction(env.repo, 'edit.cm.extend_selection_up').handler({
+      block: env.repo.block('current'),
+      editorView: codeMirrorEditorView('current', 0), // caret at block start
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, trigger)
+
+    expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(uiStateBlock.peekProperty(isEditingProp)).toBe(false))
   })
 
   it('opens the root preferences block from the global action', async () => {
