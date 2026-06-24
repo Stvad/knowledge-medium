@@ -14,6 +14,7 @@ import {
   isCollapsedProp,
   isEditingProp,
   peekFocusedBlockLocation,
+  selectionStateProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
 import { getLayoutSessionBlock, getUIStateBlock, getUserPrefsBlock } from '@/data/stateBlocks'
@@ -202,28 +203,13 @@ describe('default CodeMirror shortcuts', () => {
     expect(moveBlockDownAction.defaultBinding?.eventOptions?.preventDefault).toBe(true)
   })
 
-  it('does not preventDefault block-selection shortcuts in edit mode (leaves native text selection to CodeMirror)', () => {
-    // This is the end-to-end regression guard. The dispatcher applies a
-    // matched binding's eventOptions.preventDefault for async handlers
-    // regardless of what the handler does (runOrderedCandidates ->
-    // applyEventOptions in HotkeyReconciler), so an inherited preventDefault:
-    // true here swallowed CodeMirror's native Shift+ArrowUp/Down text
-    // selection on EVERY press. preventDefault: false is what actually keeps
-    // native selection working; the handler then escalates to block selection
-    // at the block edge via its own trigger.preventDefault(). If this flips
-    // back to true the regression returns — hence the explicit assertion.
-    const extendSelectionUpAction = findEditModeAction(env.repo, 'edit.cm.extend_selection_up')
-    const extendSelectionDownAction = findEditModeAction(env.repo, 'edit.cm.extend_selection_down')
-
-    expect(extendSelectionUpAction.defaultBinding?.eventOptions?.preventDefault).toBe(false)
-    expect(extendSelectionDownAction.defaultBinding?.eventOptions?.preventDefault).toBe(false)
-  })
-
-  // The two tests below pin the HANDLER contract (when it takes over vs.
-  // stands aside); the binding-contract test above owns the dispatcher-level
-  // "native selection is not suppressed" guarantee. Kept separate on purpose:
-  // these call the handler directly and so can't observe the dispatcher's
-  // preventDefault, only the handler's own trigger.preventDefault().
+  // The tests below pin the edit-mode HANDLER contract (when it takes over vs.
+  // stands aside). They call the handler directly, so they observe only the
+  // handler's own trigger.preventDefault() — NOT the dispatcher's event-option
+  // application. The dispatcher-level guarantee (a binding's preventDefault:
+  // false leaves the native default intact, which is what makes Shift+Arrow
+  // text-selection survive) is covered end-to-end in HotkeyReconciler.test.tsx
+  // ('event options (preventDefault)').
   it('does not take over (no manual preventDefault, stays in edit mode) when the caret is mid-text', async () => {
     await env.repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
@@ -283,6 +269,9 @@ describe('default CodeMirror shortcuts', () => {
 
     expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
     await waitFor(() => expect(uiStateBlock.peekProperty(isEditingProp)).toBe(false))
+    // Escalation actually committed a block selection (and clearEditing folded
+    // the edit-mode exit into the same transaction) — not just exited edit mode.
+    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['prev', 'current'])
   })
 
   it('stays in edit mode when Shift+ArrowUp at block start has no previous block to escalate into', async () => {

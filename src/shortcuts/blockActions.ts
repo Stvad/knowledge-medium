@@ -113,14 +113,16 @@ export const enterEditMode = (uiStateBlock: Block, selection?: EditorSelectionSt
 }
 
 /** Extend the block selection to the next visible block. Returns whether a
- *  target was found and the selection was extended — false at the last visible
- *  block in the surface, which lets edit-mode callers avoid leaving edit mode
- *  for nothing (see extendSelectionDownEdit). */
+ *  selection was actually extended — false at the last visible block in the
+ *  surface (no next block) or if the range resolved empty. Edit-mode callers
+ *  use this to avoid leaving edit mode for nothing, and pass `clearEditing` so
+ *  the exit folds into the selection's transaction (see extendSelectionDownEdit). */
 export const extendSelectionDown = async (
   uiStateBlock: Block,
   repo: Repo,
   scopeRootId: string | undefined,
   scopeRootForcesOpen = true,
+  clearEditing = false,
 ): Promise<boolean> => {
   if (!scopeRootId) return false
 
@@ -130,18 +132,18 @@ export const extendSelectionDown = async (
   const nextBlock = await nextVisibleBlock(repo.block(focusedId), scopeRootId, scopeRootForcesOpen)
   if (!nextBlock) return false
 
-  await extendSelection(nextBlock.id, uiStateBlock, repo, scopeRootId, scopeRootForcesOpen)
-  return true
+  return extendSelection(nextBlock.id, uiStateBlock, repo, scopeRootId, scopeRootForcesOpen, clearEditing)
 }
 
 /** Mirror of {@link extendSelectionDown} for the previous visible block.
  *  Returns false at the first visible block in the surface (the focused block
- *  is the scope root). */
+ *  is the scope root) or if the range resolved empty. */
 export const extendSelectionUp = async (
   uiStateBlock: Block,
   repo: Repo,
   scopeRootId: string | undefined,
   scopeRootForcesOpen = true,
+  clearEditing = false,
 ): Promise<boolean> => {
   if (!scopeRootId) return false
 
@@ -151,8 +153,7 @@ export const extendSelectionUp = async (
   const prevBlock = await previousVisibleBlock(repo.block(focusedId), scopeRootId)
   if (!prevBlock) return false
 
-  await extendSelection(prevBlock.id, uiStateBlock, repo, scopeRootId, scopeRootForcesOpen)
-  return true
+  return extendSelection(prevBlock.id, uiStateBlock, repo, scopeRootId, scopeRootForcesOpen, clearEditing)
 }
 
 export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockActions => {

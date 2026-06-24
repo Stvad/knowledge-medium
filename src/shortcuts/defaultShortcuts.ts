@@ -588,14 +588,17 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   // + leave edit mode) ONLY when there's actually a neighbour to select. At the
   // first/last visible block there's no target, so we stay in edit mode rather
   // than dropping the user into a dead state (out of edit mode, nothing
-  // selected, keystroke eaten).
+  // selected, keystroke eaten). The `clearEditing` flag folds the
+  // isEditing→false write into the selection's transaction, so there's no
+  // intermediate render where the block is both editing and selected.
   const extendSelectionUpEdit = {
     ...bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, extendSelectionUpBlock, {idPrefix: 'edit.cm'}),
     handler: async (deps: CodeMirrorEditModeDependencies, trigger: ActionTrigger) => {
       if (!cursorIsAtStart(deps.editorView)) return
-      if (!(await extendSelectionUp(deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen))) return
-      trigger.preventDefault()
-      setIsEditing(deps.uiStateBlock, false)
+      const extended = await extendSelectionUp(
+        deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen, /* clearEditing */ true,
+      )
+      if (extended) trigger.preventDefault()
     },
     defaultBinding: {
       keys: 'Shift+ArrowUp',
@@ -608,9 +611,10 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     ...bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, extendSelectionDownBlock, {idPrefix: 'edit.cm'}),
     handler: async (deps: CodeMirrorEditModeDependencies, trigger: ActionTrigger) => {
       if (!cursorIsAtEnd(deps.editorView)) return
-      if (!(await extendSelectionDown(deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen))) return
-      trigger.preventDefault()
-      setIsEditing(deps.uiStateBlock, false)
+      const extended = await extendSelectionDown(
+        deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen, /* clearEditing */ true,
+      )
+      if (extended) trigger.preventDefault()
     },
     defaultBinding: {
       keys: 'Shift+ArrowDown',
