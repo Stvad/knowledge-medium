@@ -103,7 +103,8 @@ byte transform parameterized by mode, where plaintext is the identity case, exac
 (in the app / its data worker), keeping the keys, session, mode pin, and the already-decrypted block
 all in one context; the renderer resolves <em>both</em> modes through one fetch-with-session → object-URL
 path — the bucket is private/RLS-gated (§10), so a bare <code>&lt;img src&gt;</code> can't authenticate —
-with E2EE adding the decrypt step and plaintext not (§7.3 / §8). A service-worker variant that would make
+with E2EE adding the decrypt step that plaintext skips (both still fetch with the session and both still
+produce an object URL, §7.3 / §8). A service-worker variant that would make
 <code>&lt;img src="${BASE_URL}asset/…"&gt;</code> uniform across modes was evaluated and
 <strong>rejected</strong> — its one benefit doesn't earn the app↔SW coordination tax (§7 / §7.3 / §18).
 </div>
@@ -547,7 +548,7 @@ absence) are independent of destruction and stay — they gate <em>serving</em> 
 amount of wiping addresses.
 </div>
 
-<h3>7.3 The chosen approach: in-thread decryption</h3>
+<h3 id="inthread">7.3 The chosen approach: in-thread decryption</h3>
 
 <p>In-thread (app, or its dedicated data worker) decryption: the renderer fetches the ciphertext,
   decrypts via <code>getCek</code> directly (zero duplication), caches plaintext bytes, and hands
@@ -587,7 +588,8 @@ amount of wiping addresses.
 <ul>
   <li><strong>Fail-closed decode, not two-way.</strong> When decoding a freshly-fetched object
     <em>before it enters the store</em>, the resolver drives the decision off the three-valued
-    <code>getMaterializability</code> (decrypt / passthrough / fail-closed placeholder), <em>never</em> the
+    <code>getMaterializability</code> — its values <code>decrypt</code> / <code>copy</code> / <code>defer</code>
+    (decrypt with the WK / pass plaintext through / fail-closed placeholder) — <em>never</em> the
     two-valued <code>getMode</code> — that downgrade (an evicted-pin E2EE workspace served attacker
     plaintext) is the §5.1 / e2ee §6 rule&nbsp;2 hazard, argued there. In-thread specifics: the pin read is
     synchronous and WK-presence resolves on the already-async render path.</li>
@@ -669,7 +671,10 @@ half the E2EE on-disk footprint, no decrypt-on-render, and one store instead of 
     lane</strong> (the user is looking at it now) that jumps ahead, and a <strong>throttled, idle,
     low-concurrency backlog lane</strong> (the drip) deliberately slow enough never to saturate the link or
     starve a demand fetch. So opening not-yet-replicated media triggers an immediate high-priority fetch (a
-    brief spinner if online); the only hard failure is <em>offline AND not-yet-replicated</em>.</li>
+    brief spinner if online); the only <em>transient, self-resolving</em> hard failure on the happy path is
+    <em>offline AND not-yet-replicated</em>. The <em>terminal</em> failures — origin gone before upload (§9),
+    a poisoned content path (§17), a hash mismatch (§5.1) — are separate, and each is called out where it
+    arises.</li>
   <li><strong>Eager replication is budgeted and scoped, or it backfires.</strong> Metadata is cheap to
     fully replicate; media can be gigabytes, and unbounded eager replication would blow the origin quota
     and trigger the very eviction it is meant to prevent. So the down-lane (§9) is bounded:
@@ -740,10 +745,14 @@ itself. Two corollaries: (1) the durable write at capture must <em>actually</em>
 or <code>persist()</code> is denied so the write lands in best-effort storage, capture <strong>fails with a
 clear error</strong> (&quot;can't attach — local storage is full or not durable&quot;) rather than
 committing metadata over evictable bytes; the §11 staged-before-tx ordering catches a <em>thrown</em> stage,
-not a silently non-durable one. (2) Because un-uploaded bytes can't be evicted, the budget must constrain
-<em>intake</em>, not retention — when pending bytes would exceed a safety budget, apply backpressure at paste
-(&quot;uploads pending — reconnect to drain them, or discard a pending attachment to reclaim its
-space&quot;) rather than accepting bytes you might have to evict. Ordinary eviction can't relieve this state
+not a silently non-durable one. (2) Because un-uploaded bytes can't be evicted, there are really <em>two</em> distinct bounds, not one
+number: a <strong>retention budget</strong> over replicated (uploaded, evictable) bytes, and a separate
+<strong>pending-intake ceiling</strong> over un-uploaded (exempt) bytes. A new paste first evicts replicated
+bytes under the retention budget (DB &gt; replicated bytes, §8) to make room — so a workspace already full of
+<em>replicated</em> bytes never blocks a new capture. Only when the un-evictable <em>pending</em> bytes alone
+would breach the intake ceiling does paste apply backpressure (&quot;uploads pending — reconnect to drain
+them, or discard a pending attachment to reclaim its space&quot;) rather than accepting bytes you might have
+to evict. Ordinary eviction can't relieve this state
 (un-uploaded bytes are exempt), so the only offline release valve is the user deliberately abandoning a
 pending attachment — which requires the per-device pending up-lane records (§9) to be surfaced as
 <em>individually discardable</em> items, a required capture-surface affordance (§11), not just a
@@ -768,11 +777,19 @@ pending attachment — which requires the per-device pending up-lane records (§
   wrong workspace membership. The upload target is the <em>content-addressed</em> path
   (<code>&lt;ws&gt;/HMAC(K_id, hash)</code>, §10) computed from the block's hash — so a retry, even
   after a reload, re-PUTs to the same path and is first-write-wins idempotent (§10.1); no random
-  idempotency token is needed (that was the block-id path's workaround). The record carries one persisted
-  bit — committed-or-not — closing the metadata-commit / byte-stage ordering gap (§11):
-  <code>staged</code> (durable but <em>not</em> drainable) → <code>pending</code> (drainable; the entry is
-  cleared on a confirmed upload, bytes <em>retained</em> in the byte store, §8, now eviction-eligible like
-  any replicated bytes). &quot;Upload in progress&quot; is an <em>in-memory</em> single-flight guard, not a
+  idempotency token is needed (that was the block-id path's workaround). The record carries a small persisted
+  status closing the metadata-commit / byte-stage ordering gap (§11):
+  <code>staged</code> (durable but <em>not</em> drainable) → <code>pending</code> (drainable) → one of two
+  <em>terminal</em> exits — <strong>cleared</strong> on a confirmed upload (bytes <em>retained</em> in the
+  byte store, §8, now eviction-eligible like any replicated bytes), or <strong><code>failed</code></strong>
+  on a <em>permanent</em> rejection (§10.1: a shape-rejected body, or a content path an active poisoner keeps
+  re-occupying so writer-delete + re-upload can't terminate). A <code>failed</code> record <strong>stops
+  draining</strong> (so a permanently-rejected or poisoned upload never retries forever) and <strong>drops
+  its eviction exemption</strong> so its bytes stop pinning the §8 intake budget — but only <em>after</em> it
+  surfaces in the §11 pending-attachments affordance as an individually actionable / discardable item, so
+  bytes are released only once the failure is shown to the user, never silently. Only <em>permanent</em>
+  rejections land in <code>failed</code>; transient failures stay <code>pending</code> and retry with
+  backoff (below). &quot;Upload in progress&quot; is an <em>in-memory</em> single-flight guard, not a
   persisted state — a crash mid-PUT leaves the record <code>pending</code> and the single-owner drain (§8)
   re-PUTs (first-write-wins idempotent, §10.1), so no persisted <code>uploading</code> state is needed. Capture writes the record as
   <code>staged</code> <em>before</em> the metadata <code>repo.tx</code>, so a committed asset block
@@ -784,9 +801,14 @@ pending attachment — which requires the per-device pending up-lane records (§
   not misread a not-yet-hydrated DB: it runs <em>after</em> PowerSync reports initial sync settled, so an
   absent block means truly-absent (not merely not-yet-loaded — otherwise it would reap the only durable
   copy of a committed-and-synced block's un-uploaded bytes). It then promotes any <code>staged</code>
-  record whose asset block is present, and reaps one whose block is absent <em>past that checkpoint</em>
-  (reaping a record also deletes its un-uploaded byte-store bytes — they back a block that never committed,
-  so they are orphan bytes, not a live-block's only copy).
+  record whose asset block is present, and reaps one whose block is absent <em>past that checkpoint</em>.
+  Reaping a record also deletes its un-uploaded byte-store bytes — but that byte delete is gated on the
+  <strong>content-refcount</strong>, exactly as object GC (§16) and local eviction (§8) are: the bytes are
+  dropped only if <em>no</em> live-or-soft-deleted block in the workspace carries their hash. They are orphan
+  bytes (a block that never committed) only when nothing else references the content; under dedup a
+  <em>different</em> committed embed may be the live carrier of the same content key, so the record is dropped
+  but its bytes are kept whenever any block still references the hash — the same single rule that keeps GC and
+  eviction from evicting a shared object out from under a live block.
   <strong>That presence test is scoped to the record's own <code>user_id</code></strong>: the up-lane store is
   shared across the profile's accounts (above), and the hydrated DB belongs to the <em>active</em> account — so a
   record is reap-eligible only against the DB hydrated for <em>its own</em> account, and only once <em>that</em>
@@ -871,7 +893,9 @@ intends to upload&quot; from &quot;author gone forever&quot;. So instead — wit
 write-path, because §16 never timed-reaps the block (its mere existence is the cross-device
 &quot;intended here&quot; signal, §8): (a) a peer that has the block but not the object runs a
 <em>bounded</em> down-lane retry, then surfaces a terminal <strong>&quot;image not yet uploaded&quot;</strong>
-state (not an indefinite spinner, and it stops re-hitting Storage with 404s); (b) the embed
+state (not an indefinite spinner, and it stops re-hitting Storage with 404s) — but that terminal entry is re-attempted on the next down-lane
+reconcile pass (which re-walks the workspace's <code>media</code> blocks), so a <em>transient</em> 404 (e.g.
+the §10.1 writer-delete → re-PUT correction window) self-heals rather than sticking; (b) the embed
 <strong>self-heals</strong> if the origin ever uploads — the origin's own durable local
 <code>staged</code>/<code>pending</code> record carries the intent and drains on reconnect. Automatic destruction is reserved for orphan <em>objects</em> (bytes with no
 block — safe to delete); an orphan <em>block</em> is never auto-deleted (its children are real content),
@@ -1022,8 +1046,9 @@ inspects the body bytes itself</em> and then writes them with service-role. Per 
     <code>blocks_write</code> / storage policies deny.</li>
   <li><strong>Inspects the bytes</strong> — for an object under an <strong>E2EE-workspace
     prefix</strong>, rejects bodies not beginning with the <code>encb:v1:</code> magic + the minimum
-    nonce(12)+tag(16) length (the binary analog of <code>is_enc_v1_envelope</code>), with the same
-    permanent-failure discipline so a stale client quarantines rather than retries forever. Shape-only
+    nonce(12)+tag(16) length (the binary analog of <code>is_enc_v1_envelope</code>), with a
+    <em>permanent</em>-failure response that moves the client's §9 record to the terminal
+    <code>failed</code> state — it quarantines rather than retries forever. Shape-only
     (the server has no key), sufficient to keep bare plaintext out.</li>
   <li><strong>Enforces write-once by content-addressing — no token.</strong> The path <em>is</em> the
     content key (§10), so an edit is automatically a <em>different</em> path: no same-path overwrite race, no
@@ -1039,8 +1064,10 @@ inspects the body bytes itself</em> and then writes them with service-role. Per 
     the content key (no key, sees only ciphertext); a garbage or truncated PUT is caught fail-closed by the
     read-side hash check (§5.1). First-write-wins does make a bad first write <em>terminal</em> — an
     accidentally corrupt path is correctable by a writer delete + re-upload (§10 writer-delete RLS), but an
-    <em>active</em> member-poisoner can DoS a known asset (delete-then-re-PUT doesn't terminate against them):
-    a named tradeoff in §17.</li>
+    <em>active</em> member-poisoner can DoS a known asset (delete-then-re-PUT doesn't terminate against them,
+    so after a bounded number of correction cycles the client stops looping and moves its §9 record to the
+    terminal <code>failed</code> state — burning neither egress nor function invocations indefinitely): a
+    named tradeoff in §17.</li>
 </ol>
 <strong>Not a signed-upload token.</strong> Minting a one-shot signed upload URL would let the client
 <code>uploadToSignedUrl</code> the body <em>directly to Storage</em>, which Supabase accepts without

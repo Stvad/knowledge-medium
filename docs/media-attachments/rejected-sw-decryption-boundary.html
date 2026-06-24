@@ -83,10 +83,11 @@
 
 <aside class="doc-status" style="border:1px solid var(--line); border-left:3px solid var(--reject); background:var(--reject-soft); border-radius:0 6px 6px 0; padding:8px 14px; margin:12px 0 18px; font-size:0.9em;">
 <strong>Status:</strong> <strong>REJECTED</strong> — not built; last verified against code 2026-06-23. The chosen design decrypts
-<em>in-thread</em>; see <a href="./design.html#sw">design.html §7.3</a> for the verdict and the full
+<em>in-thread</em>; see <a href="./design.html#inthread">design.html §7.3</a> for the verdict and the full
 in-thread-vs-SW tally. This document is the decision record: the complete SW coordination-tax analysis
-the rejection rests on. Every <code>§N</code> reference <em>except</em> this document's own §7.1 / §7.1.1 (e.g. §4, §5.1, §7.2,
-§7.3, §8, §10, §11, §13, §16) points to <a href="./design.html">design.html</a>.
+the rejection rests on. Every bare <code>§N</code> reference <em>except</em> this document's own §7.1 / §7.1.1 (e.g. §4, §5.1, §7.2,
+§7.3, §8, §10, §11, §13, §16) points to <a href="./design.html">design.html</a>; explicit
+<code>e2ee §N</code> citations point to <a href="../e2ee-design.html">e2ee-design.html</a>.
 </aside>
 
 <div class="reject">
@@ -95,7 +96,7 @@ mechanisms — token handshake, SW-readable mode-pin + per-asset hash mirror, pe
 sessions + per-user cache keying, controller-readiness / route-ordering / clientId-less-navigation
 lifecycle — to buy a single benefit (a uniform mode-agnostic <code>&lt;img src&gt;</code>) that
 <code>&lt;img&gt;</code> doesn't need, since it takes an object URL. In-thread decryption
-(<a href="./design.html#sw">design.html §7.3</a>) pays none of it.
+(<a href="./design.html#inthread">design.html §7.3</a>) pays none of it.
 </div>
 
 <p>The case <em>for</em> the SW was that it keeps the renderer mode-agnostic: decrypt in the worker and
