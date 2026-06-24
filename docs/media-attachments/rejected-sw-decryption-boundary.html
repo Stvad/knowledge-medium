@@ -82,7 +82,7 @@
   media-attachments design so the main doc can lead with the chosen design. 2026-06-23.</p>
 
 <aside class="doc-status" style="border:1px solid var(--line); border-left:3px solid var(--reject); background:var(--reject-soft); border-radius:0 6px 6px 0; padding:8px 14px; margin:12px 0 18px; font-size:0.9em;">
-<strong>Status:</strong> <strong>REJECTED</strong> — not built; last verified against code 2026-06-23. The chosen design decrypts
+<strong>Status:</strong> <strong>REJECTED</strong> — not built; last verified against code 2026-06-24. The chosen design decrypts
 <em>in-thread</em>; see <a href="./design.html#inthread">design.html §7.3</a> for the verdict and the full
 in-thread-vs-SW tally. This document is the decision record: the complete SW coordination-tax analysis
 the rejection rests on. Every bare <code>§N</code> reference <em>except</em> this document's own §7.1 / §7.1.1 (e.g. §4, §5.1, §7.2,
@@ -185,7 +185,8 @@ global token would break the multi-account isolation this whole section preserve
 asset navigations are not a supported auth path</strong>: "download" / "open original" is an
 <em>app-mediated</em> action (the app resolves the bytes through the same path and triggers the
 download from an in-memory blob), never a raw navigation to <code>${BASE_URL}asset/…</code>. The route
-still sits ahead of the navigation branch (§11) so such a request can't return the SPA shell — but for
+still sits ahead of the SW's own navigation route (the lifecycle bullets above) so such a request can't
+return the SPA shell — but for
 a clientId-less navigation it returns a <em>placeholder/redirect into the app</em>, not bytes and not
 the shell. (If first-class direct navigations are ever wanted, they need an opaque app-minted
 capability token in the URL — deferred; the public-share path §13 is the related case.)</div>
