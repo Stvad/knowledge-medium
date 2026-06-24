@@ -155,59 +155,74 @@ export const bootstrapWorkspace = async ({
     await seedTutorial(repo, workspaceId)
   }
 
-  // Ensure the Properties page exists (idempotent, deterministic id).
-  // User-defined property-schema blocks live under it.
-  await getOrCreatePropertiesPage(repo, workspaceId)
+  // Resolve the layout-session block the app paints — the warm-start critical
+  // path. This chain is genuinely serial: each ui-state child's deterministic id
+  // derives from its parent (user-page → ui-state → layout-sessions → session),
+  // so it can't be collapsed, and the URL→layout projection + landing decision
+  // depend on the session block. Runs concurrently with the kernel pages below.
+  const resolveLayoutSession = async (): Promise<Block> => {
+    const uiState = await getUIStateBlock(repo, workspaceId, repo.user, {})
+    const layoutSessionBlock = await getLayoutSessionBlock(uiState, getLayoutSessionId())
+    const hashForResolvedWorkspace = requestedWorkspaceId && requestedWorkspaceId !== workspaceId
+      ? buildLayout(workspaceId)
+      : requestedHash
 
-  // Ensure the Types page exists (idempotent, deterministic id).
-  // User-defined block-type blocks live under it.
-  await getOrCreateTypesPage(repo, workspaceId)
+    const applyResult = await applyCurrentLayoutUrl({
+      repo,
+      workspaceId,
+      layoutSessionBlock,
+      hash: hashForResolvedWorkspace,
+      replaceHash,
+    })
 
-  // Ensure the Recents page exists. The recents plugin renders a
-  // recently-edited list on it via `repo.query.recentBlocks`.
-  await getOrCreateRecentsPage(repo, workspaceId)
-
-  const uiState = await getUIStateBlock(repo, workspaceId, repo.user, {})
-  const layoutSessionBlock = await getLayoutSessionBlock(uiState, getLayoutSessionId())
-  const hashForResolvedWorkspace = requestedWorkspaceId && requestedWorkspaceId !== workspaceId
-    ? buildLayout(workspaceId)
-    : requestedHash
-
-  const applyResult = await applyCurrentLayoutUrl({
-    repo,
-    workspaceId,
-    layoutSessionBlock,
-    hash: hashForResolvedWorkspace,
-    replaceHash,
-  })
-
-  if (applyResult.kind === 'empty') {
-    // Empty layout — ask plugins via `workspaceLandingFacet` what block
-    // to land on. The daily-notes plugin contributes the historical
-    // "open today's note (and seed a [[Tutorial]] bullet on first
-    // run)" behavior; other plugins (or none) can override. We resolve
-    // the static-extension runtime here SYNCHRONOUSLY rather than
-    // waiting for AppRuntimeProvider's full async resolution because
-    // the landing decision blocks the first paint — dynamic
-    // user-defined plugins shouldn't be able to redirect the bootstrap
-    // before we've even built a layout, and the sync runtime carries
-    // the same kernel + static plugin contributions
-    // AppRuntimeProvider's initial render uses.
-    const landingId = await resolveLandingBlockId(repo, workspaceId, freshlyCreated)
-    if (landingId) {
-      replaceHash(buildLayout(workspaceId, [landingId]))
-      await repo.tx(async tx => {
-        const parent = await tx.get(layoutSessionBlock.id)
-        if (!parent) throw new Error(`getInitialLayout: layout session block ${layoutSessionBlock.id} not found`)
-        await createPanelRowInTx(repo, tx, {
-          workspaceId,
-          parentId: layoutSessionBlock.id,
-          orderKey: keyAtEnd(null),
-          blockId: landingId,
-        })
-      }, {scope: ChangeScope.UiState, description: 'bootstrap landing panel'})
+    if (applyResult.kind === 'empty') {
+      // Empty layout — ask plugins via `workspaceLandingFacet` what block
+      // to land on. The daily-notes plugin contributes the historical
+      // "open today's note (and seed a [[Tutorial]] bullet on first
+      // run)" behavior; other plugins (or none) can override. We resolve
+      // the static-extension runtime here SYNCHRONOUSLY rather than
+      // waiting for AppRuntimeProvider's full async resolution because
+      // the landing decision blocks the first paint — dynamic
+      // user-defined plugins shouldn't be able to redirect the bootstrap
+      // before we've even built a layout, and the sync runtime carries
+      // the same kernel + static plugin contributions
+      // AppRuntimeProvider's initial render uses.
+      const landingId = await resolveLandingBlockId(repo, workspaceId, freshlyCreated)
+      if (landingId) {
+        replaceHash(buildLayout(workspaceId, [landingId]))
+        await repo.tx(async tx => {
+          const parent = await tx.get(layoutSessionBlock.id)
+          if (!parent) throw new Error(`getInitialLayout: layout session block ${layoutSessionBlock.id} not found`)
+          await createPanelRowInTx(repo, tx, {
+            workspaceId,
+            parentId: layoutSessionBlock.id,
+            orderKey: keyAtEnd(null),
+            blockId: landingId,
+          })
+        }, {scope: ChangeScope.UiState, description: 'bootstrap landing panel'})
+      }
     }
+
+    return layoutSessionBlock
   }
+
+  // The Properties/Types/Recents kernel pages (idempotent, deterministic ids —
+  // hosting user property-schema blocks, block-type blocks, and the recents
+  // list respectively) are independent of each other AND of the layout chain:
+  // distinct ids, no row-level overlap, and the single SQLite write lock
+  // serializes the rare cold-start create txs safely. None is needed to *paint*
+  // the layout, so all four resolve concurrently instead of in a strict
+  // sequence. On a warm start each get-or-create is one cached read, so the
+  // pages finish inside the longer (serial) layout chain and add no latency to
+  // `bootstrapDone`; on a cold start their create txs overlap the layout writes
+  // rather than queueing ahead of them. Promise.all (not a floating page
+  // promise) keeps every rejection handled.
+  const [, , , layoutSessionBlock] = await Promise.all([
+    getOrCreatePropertiesPage(repo, workspaceId),
+    getOrCreateTypesPage(repo, workspaceId),
+    getOrCreateRecentsPage(repo, workspaceId),
+    resolveLayoutSession(),
+  ])
 
   return layoutSessionBlock
 }
