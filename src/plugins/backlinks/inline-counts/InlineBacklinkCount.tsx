@@ -1,0 +1,113 @@
+/** Inline backlink count badge + click-to-expand, for ordinary outline
+ *  blocks (see `inlineBacklinksApplies` for the gate).
+ *
+ *  Two cooperating facet contributions, sharing one ephemeral expansion
+ *  store (`expansionStore.ts`):
+ *
+ *    - a `blockContentDecorators` contribution overlays a small count pill
+ *      on the block's content line. The pill shows only when the block has
+ *      ≥1 backlink; clicking it toggles the expansion.
+ *    - a `blockChildrenFooter` contribution renders the usual flat
+ *      `LinkedReferences` section *after the block's children* (same place
+ *      the focal block shows them) when this block is expanded.
+ *
+ *  The count reuses the `backlinks.forBlock` handle (ids only, no
+ *  hydration); the expensive list render happens only on expand. */
+import type { Block } from '@/data/block'
+import { useRepo } from '@/context/repo.js'
+import { useWorkspaceId } from '@/hooks/block.js'
+import {
+  type BlockContentDecorator,
+  type BlockContentDecoratorContribution,
+  type BlockChildrenFooterContribution,
+} from '@/extensions/blockInteraction.js'
+import type { BlockRenderer } from '@/types.js'
+import { LinkedReferences } from '../LinkedReferences.tsx'
+import { inlineBacklinksApplies } from './applies.ts'
+import { useBacklinkCount } from './useBacklinkCount.ts'
+import { toggleBacklinkExpansion, useBacklinkExpansion } from './expansionStore.ts'
+
+// ──── Count pill (content decorator) ────
+
+const InlineBacklinkCountBadge = ({
+  block,
+  Inner,
+}: {
+  block: Block
+  Inner: BlockRenderer
+}) => {
+  const repo = useRepo()
+  const workspaceId = useWorkspaceId(block, repo.activeWorkspaceId ?? '')
+  const count = useBacklinkCount(block, workspaceId)
+  const expanded = useBacklinkExpansion(block.id)
+
+  // Reserve a right gutter (flex column) rather than absolutely overlaying
+  // the count, so it never covers text at the end of a long line. With no
+  // badge the content is the sole flex child and stays full width.
+  return (
+    <div className="flex w-full items-start gap-1">
+      <div className="min-w-0 flex-1">
+        <Inner block={block} />
+      </div>
+      {count > 0 && (
+        <button
+          type="button"
+          onClick={() => toggleBacklinkExpansion(block.id)}
+          aria-expanded={expanded}
+          aria-label={`${count} linked reference${count === 1 ? '' : 's'}`}
+          title={`${count} linked reference${count === 1 ? '' : 's'}`}
+          className={`mt-0.5 inline-flex h-4 min-w-4 shrink-0 select-none items-center justify-center rounded-full px-1 text-xs leading-none tabular-nums transition-colors ${
+            expanded
+              ? 'bg-accent text-accent-foreground'
+              : 'bg-muted text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+          }`}
+        >
+          {count}
+        </button>
+      )}
+    </div>
+  )
+}
+
+const decoratorCache = new WeakMap<BlockRenderer, BlockRenderer>()
+
+const decorate: BlockContentDecorator = (inner) => {
+  const existing = decoratorCache.get(inner)
+  if (existing) return existing
+  const Decorated: BlockRenderer = ({ block }) => (
+    <InlineBacklinkCountBadge block={block} Inner={inner} />
+  )
+  Decorated.displayName = 'WithInlineBacklinkCount'
+  decoratorCache.set(inner, Decorated)
+  return Decorated
+}
+
+export const inlineBacklinkCountDecoratorContribution: BlockContentDecoratorContribution = (ctx) =>
+  inlineBacklinksApplies(ctx) ? decorate : null
+
+// ──── Expanded references (children footer) ────
+
+// Mounts (and subscribes to the shared count handle) only once expanded, so
+// non-expanded blocks pay nothing here beyond the cheap expansion-store read.
+const ExpandedBacklinks: BlockRenderer = ({ block }) => {
+  const repo = useRepo()
+  const workspaceId = useWorkspaceId(block, repo.activeWorkspaceId ?? '')
+  const count = useBacklinkCount(block, workspaceId)
+  // Removing the last backlink while expanded also removes the badge pill
+  // (count 0). Gate the section on count too, so we never strand
+  // LinkedReferences' "No backlinks" empty state inline with no pill left to
+  // collapse it — the section just disappears with its last reference.
+  if (count === 0) return null
+  return <LinkedReferences block={block} />
+}
+ExpandedBacklinks.displayName = 'ExpandedBacklinks'
+
+const InlineBacklinkExpansion: BlockRenderer = ({ block }) => {
+  const expanded = useBacklinkExpansion(block.id)
+  if (!expanded) return null
+  return <ExpandedBacklinks block={block} />
+}
+InlineBacklinkExpansion.displayName = 'InlineBacklinkExpansion'
+
+export const inlineBacklinkExpansionFooterContribution: BlockChildrenFooterContribution = (ctx) =>
+  inlineBacklinksApplies(ctx) ? InlineBacklinkExpansion : null

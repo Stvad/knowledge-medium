@@ -322,6 +322,58 @@ describe('repo.query.byType', () => {
   })
 })
 
+describe('repo.query.typedBlockCount', () => {
+  // The count projection must aggregate the SAME candidate set as the id
+  // projection — proven here on the non-referencedBy (types) path; the
+  // backlinks path is covered in plugins/backlinks/inline-counts.
+  it('equals typedBlockIds length, excluding tombstoned rows', async () => {
+    await create({id: 'a', type: 'note'})
+    await create({id: 'b', type: 'note'})
+    await create({id: 'c', type: 'task'})
+    await env.repo.tx(tx => tx.delete('b'), {scope: ChangeScope.BlockDefault})
+
+    const ids = await env.repo.query.typedBlockIds({workspaceId: WS, types: ['note']}).load()
+    const n = await env.repo.query.typedBlockCount({workspaceId: WS, types: ['note']}).load()
+    expect(n).toBe(ids.length)
+    expect(n).toBe(1)
+  })
+
+  it('scopes to workspaceId', async () => {
+    await create({id: 'a', type: 'note'})
+    await create({id: 'b', type: 'note', workspaceId: OTHER_WS})
+    expect(await env.repo.query.typedBlockCount({workspaceId: WS, types: ['note']}).load()).toBe(1)
+    expect(await env.repo.query.typedBlockCount({workspaceId: OTHER_WS, types: ['note']}).load()).toBe(1)
+  })
+
+  it('returns 0 for an empty workspaceId', async () => {
+    expect(await env.repo.query.typedBlockCount({workspaceId: '', types: ['note']}).load()).toBe(0)
+  })
+
+  it('matches typedBlockIds length on the ancestor-scope path (COUNT must not multiply per ancestor_chain row)', async () => {
+    // `child` has TWO ancestors (`parent` and `gp`) that each reference `tag`,
+    // so the ancestor predicate matches the one candidate via two distinct
+    // ancestor_chain rows. A COUNT(*) over a multiplying ancestor JOIN would
+    // return 2; the correct EXISTS-in-WHERE count is 1. A single-ancestor
+    // fixture can't tell those apart — it returns 1 either way.
+    await create({id: 'target'})
+    await create({id: 'tag'})
+    await create({id: 'gp', references: [{id: 'tag', alias: 'Tag'}]})
+    await create({id: 'parent', parentId: 'gp', references: [{id: 'tag', alias: 'Tag'}]})
+    await create({id: 'child', parentId: 'parent', references: [{id: 'target', alias: 'T'}]})
+    await create({id: 'sibling', references: [{id: 'target', alias: 'T'}]})
+
+    const query = {
+      workspaceId: WS,
+      referencedBy: {id: 'target'},
+      match: [{scope: 'ancestor' as const, referencedBy: {id: 'tag'}}],
+    }
+    const ids = await env.repo.query.typedBlockIds(query).load()
+    const n = await env.repo.query.typedBlockCount(query).load()
+    expect(ids).toEqual(['child']) // one candidate, even with two matching ancestors
+    expect(n).toBe(ids.length) // 1, not 2 — no per-ancestor multiplication
+  })
+})
+
 describe('repo.query.searchByContent', () => {
   it('matches case-insensitive substring', async () => {
     await create({id: 'a', content: 'Hello World'})
