@@ -87,10 +87,25 @@ export const inlineBacklinkCountDecoratorContribution: BlockContentDecoratorCont
 
 // ──── Expanded references (children footer) ────
 
+// Mounts (and subscribes to the shared count handle) only once expanded, so
+// non-expanded blocks pay nothing here beyond the cheap expansion-store read.
+const ExpandedBacklinks: BlockRenderer = ({ block }) => {
+  const repo = useRepo()
+  const workspaceId = useWorkspaceId(block, repo.activeWorkspaceId ?? '')
+  const count = useBacklinkCount(block, workspaceId)
+  // Removing the last backlink while expanded also removes the badge pill
+  // (count 0). Gate the section on count too, so we never strand
+  // LinkedReferences' "No backlinks" empty state inline with no pill left to
+  // collapse it — the section just disappears with its last reference.
+  if (count === 0) return null
+  return <LinkedReferences block={block} />
+}
+ExpandedBacklinks.displayName = 'ExpandedBacklinks'
+
 const InlineBacklinkExpansion: BlockRenderer = ({ block }) => {
   const expanded = useBacklinkExpansion(block.id)
   if (!expanded) return null
-  return <LinkedReferences block={block} />
+  return <ExpandedBacklinks block={block} />
 }
 InlineBacklinkExpansion.displayName = 'InlineBacklinkExpansion'
 

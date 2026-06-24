@@ -191,10 +191,15 @@ describe('backlinks.countForBlock — handle behaviour', () => {
     handle.subscribe(value => { fired.push(value) })
     await vi.waitFor(() => expect(fired).toEqual([0]))
 
-    // A content edit that doesn't touch references must not re-fire the count.
+    // A content edit on an unrelated block must not invalidate the count loader.
+    // Assert the loader-invalidation counter directly (per AGENTS.md): the
+    // subscriber path sits downstream of structural-diff dedup, so an erroneous
+    // re-resolve to the same number is suppressed and `fired` alone can't see it.
+    // The counter increments before any dedup, synchronously inside the post-
+    // commit walk. The real reference writes below are the liveness fence.
+    const beforeNoop = env.repo.handleStore.metrics.loaderInvalidations
     await env.repo.mutate.setContent({ id: 'unrelated', content: 'noise' })
-    await Promise.resolve()
-    await Promise.resolve()
+    expect(env.repo.handleStore.metrics.loaderInvalidations).toBe(beforeNoop)
     expect(fired).toEqual([0])
 
     // Adding a reference to the target bumps the count.
