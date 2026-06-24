@@ -7,7 +7,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { BlockCache } from '@/data/blockCache'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { getPluginUIStateBlock } from '@/data/stateBlocks'
+import { getPluginUIStateBlock, getPluginUIStateChild } from '@/data/stateBlocks'
+import { getClientId, resetClientIdCache } from '@/utils/clientId'
 import type { User } from '@/data/api'
 import type { FacetRuntime } from '@/facets/facet'
 import {
@@ -39,6 +40,7 @@ beforeEach(async () => {
   await resetTestDb(sharedDb.db)
   resetStartupTimeline()
   resetStartupMetricsRecorded()
+  resetClientIdCache()
   txSeq = 0
   repo = new Repo({ db: sharedDb.db, cache: new BlockCache(), user: USER, newTxSeq: () => ++txSeq })
   repo.setActiveWorkspaceId(WS)
@@ -52,12 +54,13 @@ describe('buildStartupRecord', () => {
   it('folds the marks into ms-since-boot fields, leaving unreached phases absent', () => {
     const record = buildStartupRecord(
       { timeOriginMs: 1000, marks: { repoReady: 50, firstContentPaint: 120, interactive: 300 } },
-      { recordedAt: 1700, appVersion: '2026.06.23', appSha: 'abc123', deviceLabel: 'installed:MacIntel' },
+      { recordedAt: 1700, appVersion: '2026.06.23', appSha: 'abc123', clientId: 'client-9', deviceLabel: 'installed:MacIntel' },
     )
     expect(record).toEqual({
       recordedAt: 1700,
       appVersion: '2026.06.23',
       appSha: 'abc123',
+      clientId: 'client-9',
       deviceLabel: 'installed:MacIntel',
       timeOriginMs: 1000,
       repoReadyMs: 50,
@@ -72,7 +75,15 @@ describe('buildStartupRecord', () => {
 })
 
 describe('writeStartupRecord', () => {
-  it('appends a record as a fresh child block under the per-user startup-metrics block', async () => {
+  // Records nest under a per-client group block, not directly under the
+  // per-user startup-metrics root; resolve the same group the writer uses.
+  const resolveGroup = async (): Promise<{ root: string; group: string }> => {
+    const root = await getPluginUIStateBlock(repo, WS, USER, startupMetricsUIStateType)
+    const group = await getPluginUIStateChild(root, getClientId())
+    return { root: root.id, group: group.id }
+  }
+
+  it('appends a record as a fresh child block under this client\'s group block', async () => {
     vi.spyOn(performance, 'now').mockReturnValueOnce(50).mockReturnValueOnce(120)
     markStartup('repoReady')        // 50
     markStartup('firstContentPaint') // 120
@@ -80,12 +91,12 @@ describe('writeStartupRecord', () => {
 
     const id = await writeStartupRecord(repo, WS)
 
-    const parent = await getPluginUIStateBlock(repo, WS, USER, startupMetricsUIStateType)
+    const { group } = await resolveGroup()
     const row = await sharedDb.db.getOptional<{ parent_id: string }>(
       'SELECT parent_id FROM blocks WHERE id = ?',
       [id],
     )
-    expect(row?.parent_id).toBe(parent.id)
+    expect(row?.parent_id).toBe(group)
 
     const block = repo.block(id)
     await block.load()
@@ -93,6 +104,7 @@ describe('writeStartupRecord', () => {
       recordedAt: 1700,
       firstContentPaintMs: 120,
       repoReadyMs: 50,
+      clientId: getClientId(),
     })
     // Content is the ISO timestamp so the entry is legible in the tree.
     const contentRow = await sharedDb.db.getOptional<{ content: string }>(
@@ -102,14 +114,28 @@ describe('writeStartupRecord', () => {
     expect(contentRow?.content).toBe(new Date(1700).toISOString())
   })
 
+  it('groups records under a per-client block (child of the root, titled with the device label)', async () => {
+    await writeStartupRecord(repo, WS)
+    const { root, group } = await resolveGroup()
+    // The group hangs off the per-user root, not the record directly.
+    const groupRow = await sharedDb.db.getOptional<{ parent_id: string; content: string }>(
+      'SELECT parent_id, content FROM blocks WHERE id = ?',
+      [group],
+    )
+    expect(groupRow?.parent_id).toBe(root)
+    // Title carries the short client-id suffix so peers on the same platform
+    // string stay distinguishable.
+    expect(groupRow?.content).toContain(getClientId().slice(0, 8))
+  })
+
   it('block-per-session: two writes create two distinct records (no clobber)', async () => {
     const first = await writeStartupRecord(repo, WS)
     const second = await writeStartupRecord(repo, WS)
     expect(first).not.toBe(second)
-    const parent = await getPluginUIStateBlock(repo, WS, USER, startupMetricsUIStateType)
+    const { group } = await resolveGroup()
     const children = await sharedDb.db.getAll<{ id: string }>(
       'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0',
-      [parent.id],
+      [group],
     )
     expect(children.map(c => c.id).sort()).toEqual([first, second].sort())
   })
@@ -118,11 +144,11 @@ describe('writeStartupRecord', () => {
     const first = await writeStartupRecord(repo, WS)
     const second = await writeStartupRecord(repo, WS)
     const third = await writeStartupRecord(repo, WS)
-    const parent = await getPluginUIStateBlock(repo, WS, USER, startupMetricsUIStateType)
+    const { group } = await resolveGroup()
     // Same (order_key, id) ordering the block tree uses.
     const ordered = await sharedDb.db.getAll<{ id: string }>(
       'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id',
-      [parent.id],
+      [group],
     )
     expect(ordered.map(c => c.id)).toEqual([third, second, first])
   })
@@ -145,10 +171,14 @@ describe('collectStartupMetricsEffect', () => {
   }
 
   const countRecords = async (): Promise<number> => {
-    const parent = await getPluginUIStateBlock(repo, WS, USER, startupMetricsUIStateType)
+    const root = await getPluginUIStateBlock(repo, WS, USER, startupMetricsUIStateType)
+    // Records nest one level down, under per-client group blocks — count the
+    // grandchildren (no side-effect group creation).
     const rows = await sharedDb.db.getAll<{ n: number }>(
-      'SELECT count(*) AS n FROM blocks WHERE parent_id = ? AND deleted = 0',
-      [parent.id],
+      `SELECT count(*) AS n FROM blocks
+       WHERE deleted = 0
+         AND parent_id IN (SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0)`,
+      [root.id],
     )
     return rows[0]?.n ?? 0
   }

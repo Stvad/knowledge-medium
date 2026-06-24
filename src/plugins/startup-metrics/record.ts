@@ -14,9 +14,10 @@ import { ChangeScope, codecs, defineBlockType, defineProperty } from '@/data/api
 import type { Repo } from '@/data/repo'
 import type { AppEffect } from '@/extensions/core.js'
 import { onFirstSync, type SyncStatusDb } from '@/data/internals/firstSync.js'
-import { getPluginUIStateBlock } from '@/data/stateBlocks.js'
+import { getPluginUIStateBlock, getPluginUIStateChild } from '@/data/stateBlocks.js'
 import { keyAtStart } from '@/data/orderKey.js'
 import { appVersion } from '@/appVersion.js'
+import { getClientId } from '@/utils/clientId.js'
 import { isInstalledAppDisplayMode } from '@/utils/layoutSessionId.js'
 import { scheduleIdle } from '@/utils/scheduleIdle.js'
 import {
@@ -41,6 +42,10 @@ export interface StartupRecordData {
    *  to a deploy. */
   appVersion: string
   appSha: string
+  /** Stable per-installation client id (see `@/utils/clientId`). Records are
+   *  grouped under one block per client so a single browser/device's history is
+   *  legible; the id rides the record too so it's self-describing. */
+  clientId: string
   /** Coarse device/surface label for grouping ("installed:MacIntel"). */
   deviceLabel: string
   /** Boot start as epoch ms (`performance.timeOrigin`). */
@@ -87,13 +92,14 @@ const startupDeviceLabel = (): string => {
 /** Pure: fold the timeline + metadata into a storable record. */
 export const buildStartupRecord = (
   timeline: StartupTimeline,
-  meta: { recordedAt: number; appVersion: string; appSha: string; deviceLabel: string },
+  meta: { recordedAt: number; appVersion: string; appSha: string; clientId: string; deviceLabel: string },
 ): StartupRecordData => {
   const { marks } = timeline
   return {
     recordedAt: meta.recordedAt,
     appVersion: meta.appVersion,
     appSha: meta.appSha,
+    clientId: meta.clientId,
     deviceLabel: meta.deviceLabel,
     timeOriginMs: timeline.timeOriginMs,
     repoReadyMs: marks.repoReady,
@@ -106,29 +112,38 @@ export const buildStartupRecord = (
   }
 }
 
-/** Append one startup record as a fresh child block under the per-user
- *  startup-metrics ui-state block. Returns the new block id. */
+/** Append one startup record as a fresh child block under this client's group
+ *  block (one per browser/device installation) inside the per-user
+ *  startup-metrics ui-state subtree. Returns the new block id. */
 export const writeStartupRecord = async (repo: Repo, workspaceId: string): Promise<string> => {
-  const parent = await getPluginUIStateBlock(repo, workspaceId, repo.user, startupMetricsUIStateType)
+  const root = await getPluginUIStateBlock(repo, workspaceId, repo.user, startupMetricsUIStateType)
+  const clientId = getClientId()
+  const deviceLabel = startupDeviceLabel()
+  // Group records by client: a per-installation block keyed by the opaque
+  // clientId (so every device converges on its own group, distinct from peers
+  // even after sync) but titled with the device label + a short id suffix so two
+  // browsers sharing a platform string stay distinguishable in the tree.
+  const group = await getPluginUIStateChild(root, clientId, `${deviceLabel} · ${clientId.slice(0, 8)}`)
   const data = buildStartupRecord(getStartupTimeline(), {
     recordedAt: Date.now(),
     appVersion: appVersion.display,
     appSha: appVersion.sha,
-    deviceLabel: startupDeviceLabel(),
+    clientId,
+    deviceLabel,
   })
   const id = uuidv4()
   // Newest-first: read the current first sibling's order key and prepend before
-  // it, so the log reads reverse-chronologically in the tree.
+  // it, so the log reads reverse-chronologically within this client's group.
   const first = await repo.db.getOptional<{ order_key: string }>(
     'SELECT order_key FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key LIMIT 1',
-    [parent.id],
+    [group.id],
   )
   await repo.tx(async tx => {
     await tx.create(
       {
         id,
         workspaceId,
-        parentId: parent.id,
+        parentId: group.id,
         orderKey: keyAtStart(first?.order_key ?? null),
         // Content is just the ISO timestamp so the entry is legible in the tree.
         // FTS indexes it, so a timestamp can surface in (( block-ref autocomplete
