@@ -599,10 +599,14 @@ amount of wiping addresses.
     never served or stored.</li>
   <li><strong>Stored bytes are not an independent authority — revocation rides the block claw-back.</strong>
     The OPFS byte store is namespaced by <code>user_id</code> (account isolation); on workspace leave/revoke
-    its prefix is purged — driven by the <em>same membership-change signal</em> that makes PowerSync drop the
-    workspace's block rows from the local DB (the bytes live out-of-band in OPFS, so they don't ride that row
-    claw-back and need their own one-shot purge; offline, the purge completes on reconnect, exactly as the
-    rows fall out on the next sync). That purge — not a per-render membership recheck — is the claw-back, so
+    its prefix is purged — fired off the <em>same membership change</em> that makes PowerSync drop the
+    workspace's block rows from the local DB. (Concretely: the purge is a <em>new subscriber</em> the feature
+    wires — there is no existing membership-change callback to reuse; the clean reactive fact to hook is the
+    user's own <code>workspace_members</code> row leaving the local DB, the same change that causes PowerSync
+    to claw back the workspace's <code>blocks</code> rows. The bytes live out-of-band in OPFS, so they don't
+    ride that row claw-back and need their own one-shot purge; offline, the purge fires on reconnect, exactly
+    as the rows fall out on the next sync.) That purge — not a per-render membership recheck — is the
+    claw-back, so
     media revocation is handled <em>exactly</em> like note text: a revoked member's local <code>blocks</code>
     are dropped and gets no per-render re-authorization either, and an already-synced member who keeps a copy
     is the same accepted exposure for bytes as for text (§8). WK-absence gates the <em>decode of new
@@ -705,13 +709,18 @@ half the E2EE on-disk footprint, no decrypt-on-render, and one store instead of 
   <li><strong>Destroying local data:</strong> the byte store is ordinary local storage, removed wholesale by
     the coarse clear-all (§7.2) — no per-store wipe participation. <em>Authorization</em> is separate: on
     per-workspace revoke/leave, purge that workspace's prefix (a serving-access control, not destruction),
-    driven by the <em>same membership-change signal</em> that makes PowerSync drop the workspace's block rows
-    from the local DB. This is a deliberate <strong>one-shot purge, not a per-render TTL revalidation</strong>:
+    fired off the <em>same membership change</em> that makes PowerSync drop the workspace's block rows
+    from the local DB — concretely, a <em>new subscriber</em> the feature wires to the user's own
+    <code>workspace_members</code> row leaving the local DB (there is no existing membership-change callback to
+    reuse). This is a deliberate <strong>one-shot purge, not a per-render TTL revalidation</strong>:
     media is clawed back exactly like note text. The block rows fall out of the local DB on revoke (offline,
     on the next sync after reconnect); the bytes live out-of-band in OPFS so they don't ride that row
-    claw-back and need their own prefix-purge fired off the same signal (offline, it completes on reconnect —
-    the same window the rows themselves have). With the block gone there is no hash and nothing renders those
-    bytes anyway, so the leftover OPFS bytes are inert until the purge lands. We deliberately do <em>not</em>
+    claw-back and need their own prefix-purge fired off the same change (offline, it fires on reconnect —
+    the same window the rows themselves have). Ordering between the row-drop and the purge is
+    <em>immaterial</em>: with the block gone there is no hash and nothing renders the bytes anyway; and in the
+    reverse window (purge lands first, rows still present) a render misses OPFS and the demand-fetch fails
+    closed against the now-revoked Storage RLS (reads re-evaluate membership per GET, §10) — so neither order
+    ever serves stale bytes. We deliberately do <em>not</em>
     re-validate every render against a freshness TTL: that would gate the image on a per-render membership
     recheck that the far-more-sensitive note text never gets, for data the ex-member already downloaded — a
     revoked-but-not-yet-synced member can read all the surrounding <code>blocks</code> too, so a media-only
@@ -738,8 +747,9 @@ flag. The synced block's mere existence is the only cross-device signal needed.
 
 <div class="warn">
 <strong>Un-uploaded bytes are the only copy — keep them durable and exempt from eviction.</strong> If a
-paste happens offline, or the eviction budget is hit before the up-lane drains, evicting a not-yet-uploaded
-entry would leave a synced asset block stuck <code>pending</code> forever with no bytes to send. So
+paste happens offline, or the intake ceiling (below) is hit before the up-lane drains, evicting a
+not-yet-uploaded entry would leave a synced asset block stuck <code>pending</code> forever with no bytes to
+send. So
 un-uploaded bytes are <strong>exempt from eviction</strong>, and the durable write is on the capture path
 itself. Two corollaries: (1) the durable write at capture must <em>actually</em> be durable — if it fails,
 or <code>persist()</code> is denied so the write lands in best-effort storage, capture <strong>fails with a
@@ -756,7 +766,10 @@ to evict. Ordinary eviction can't relieve this state
 (un-uploaded bytes are exempt), so the only offline release valve is the user deliberately abandoning a
 pending attachment — which requires the per-device pending up-lane records (§9) to be surfaced as
 <em>individually discardable</em> items, a required capture-surface affordance (§11), not just a
-&quot;bytes pending here&quot; indicator.
+&quot;bytes pending here&quot; indicator. A discard drops the up-lane record always, but its
+<strong>byte delete is content-refcount-gated</strong> like every other deleter (§8 eviction / §9 reap /
+§16 GC): the bytes go only if no live-or-soft-deleted block still carries the hash, so discarding one
+embed of a deduped object can't strip the bytes a co-referencing live block still needs.
 </div>
 
 <h2 id="queue">9. The byte-replication subsystem (up-lane + down-lane)</h2>
@@ -778,18 +791,28 @@ pending attachment — which requires the per-device pending up-lane records (§
   (<code>&lt;ws&gt;/HMAC(K_id, hash)</code>, §10) computed from the block's hash — so a retry, even
   after a reload, re-PUTs to the same path and is first-write-wins idempotent (§10.1); no random
   idempotency token is needed (that was the block-id path's workaround). The record carries a small persisted
-  status closing the metadata-commit / byte-stage ordering gap (§11):
-  <code>staged</code> (durable but <em>not</em> drainable) → <code>pending</code> (drainable) → one of two
-  <em>terminal</em> exits — <strong>cleared</strong> on a confirmed upload (bytes <em>retained</em> in the
-  byte store, §8, now eviction-eligible like any replicated bytes), or <strong><code>failed</code></strong>
-  on a <em>permanent</em> rejection (§10.1: a shape-rejected body, or a content path an active poisoner keeps
-  re-occupying so writer-delete + re-upload can't terminate). A <code>failed</code> record <strong>stops
-  draining</strong> (so a permanently-rejected or poisoned upload never retries forever) and <strong>drops
-  its eviction exemption</strong> so its bytes stop pinning the §8 intake budget — but only <em>after</em> it
-  surfaces in the §11 pending-attachments affordance as an individually actionable / discardable item, so
-  bytes are released only once the failure is shown to the user, never silently. Only <em>permanent</em>
-  rejections land in <code>failed</code>; transient failures stay <code>pending</code> and retry with
-  backoff (below). &quot;Upload in progress&quot; is an <em>in-memory</em> single-flight guard, not a
+  status closing the metadata-commit / byte-stage ordering gap (§11). The persisted values are
+  <code>staged</code> / <code>pending</code> / <code>failed</code>:
+  <code>staged</code> (durable but <em>not</em> drainable) → <code>pending</code> (drainable) → then either it
+  <strong>clears</strong> — the record is <strong>deleted</strong> on a confirmed upload (the bytes stay in
+  the byte store, §8, now eviction-eligible like any replicated bytes; &quot;eviction-eligible&quot; is simply
+  the <em>absence</em> of an up-lane record, not a retained <code>cleared</code> value) — or it moves to
+  <strong><code>failed</code></strong> on a <em>permanent</em> rejection (§10.1: a shape-rejected body, or a
+  content path an active poisoner keeps re-occupying so writer-delete + re-upload can't terminate). A
+  <code>failed</code> record <strong>stops the tight correction loop</strong> (so a poisoned or rejected
+  upload never burns egress / function invocations in a hot retry) but <strong>keeps its eviction
+  exemption</strong> — its bytes are un-uploaded, i.e. still the <em>only copy</em> <em>and</em> the self-heal
+  source (the §9 server-side backstop / §16), so evicting them would be irreversible data loss. The
+  <em>only</em> byte release is the user explicitly discarding the item from the §11 pending-attachments
+  affordance — and that discard is itself <strong>content-refcount-gated</strong> (§8/§16): it drops the
+  record always, but the bytes only if <em>no</em> live-or-soft-deleted block still carries the hash. And
+  <code>failed</code> is <strong>not a dead end</strong>: the down-lane reconcile re-examines it on a backoff
+  cadence and <strong>re-arms it to <code>pending</code></strong> once the blocking condition clears — the
+  poisoned path is writer-deleted / freed, or the object materialized from another device (the re-armed PUT
+  then finds it present-and-verifying and immediately clears) — so a later-recoverable failure self-heals
+  rather than stranding. Only <em>permanent</em> rejections land in <code>failed</code>; transient failures
+  stay <code>pending</code> and retry with backoff (below). &quot;Upload in progress&quot; is an
+  <em>in-memory</em> single-flight guard, not a
   persisted state — a crash mid-PUT leaves the record <code>pending</code> and the single-owner drain (§8)
   re-PUTs (first-write-wins idempotent, §10.1), so no persisted <code>uploading</code> state is needed. Capture writes the record as
   <code>staged</code> <em>before</em> the metadata <code>repo.tx</code>, so a committed asset block
@@ -896,8 +919,9 @@ write-path, because §16 never timed-reaps the block (its mere existence is the 
 state (not an indefinite spinner, and it stops re-hitting Storage with 404s) — but that terminal entry is re-attempted on the next down-lane
 reconcile pass (which re-walks the workspace's <code>media</code> blocks), so a <em>transient</em> 404 (e.g.
 the §10.1 writer-delete → re-PUT correction window) self-heals rather than sticking; (b) the embed
-<strong>self-heals</strong> if the origin ever uploads — the origin's own durable local
-<code>staged</code>/<code>pending</code> record carries the intent and drains on reconnect. Automatic destruction is reserved for orphan <em>objects</em> (bytes with no
+<strong>self-heals</strong> if the origin ever uploads — the origin's own durable local up-lane record
+(<code>staged</code>/<code>pending</code>, or a <code>failed</code> record, which keeps its exempt bytes and
+re-arms once a poisoned path frees, §9) carries the intent and drains on reconnect. Automatic destruction is reserved for orphan <em>objects</em> (bytes with no
 block — safe to delete); an orphan <em>block</em> is never auto-deleted (its children are real content),
 so the only unrecoverable case — origin gone before upload — is honestly shown as unavailable, never
 papered over by deleting user content.</div>
@@ -1048,7 +1072,8 @@ inspects the body bytes itself</em> and then writes them with service-role. Per 
     prefix</strong>, rejects bodies not beginning with the <code>encb:v1:</code> magic + the minimum
     nonce(12)+tag(16) length (the binary analog of <code>is_enc_v1_envelope</code>), with a
     <em>permanent</em>-failure response that moves the client's §9 record to the terminal
-    <code>failed</code> state — it quarantines rather than retries forever. Shape-only
+    <code>failed</code> state — it quarantines the upload rather than retrying forever in a hot loop
+    (a shape rejection only clears when the client is fixed; §9 covers the re-arm path). Shape-only
     (the server has no key), sufficient to keep bare plaintext out.</li>
   <li><strong>Enforces write-once by content-addressing — no token.</strong> The path <em>is</em> the
     content key (§10), so an edit is automatically a <em>different</em> path: no same-path overwrite race, no
@@ -1066,7 +1091,8 @@ inspects the body bytes itself</em> and then writes them with service-role. Per 
     accidentally corrupt path is correctable by a writer delete + re-upload (§10 writer-delete RLS), but an
     <em>active</em> member-poisoner can DoS a known asset (delete-then-re-PUT doesn't terminate against them,
     so after a bounded number of correction cycles the client stops looping and moves its §9 record to the
-    terminal <code>failed</code> state — burning neither egress nor function invocations indefinitely): a
+    <code>failed</code> state (§9 — keeps its exempt bytes, surfaces for discard, and re-arms if the path is
+    later freed; burning neither egress nor function invocations in a hot loop meanwhile): a
     named tradeoff in §17.</li>
 </ol>
 <strong>Not a signed-upload token.</strong> Minting a one-shot signed upload URL would let the client
@@ -1104,10 +1130,12 @@ acceptable for the guarantee, and reads stay direct/RLS-gated (the hot path). La
     file payload decides &quot;create a media block&quot; — <em>not</em> a parallel
     <code>domEventHandlers</code> interceptor. The <code>/image</code> command + file-picker is the
     explicit-invocation path through the existing action / shortcut system.</li>
-  <li><strong>Pending-attachments affordance.</strong> The per-device up-lane records (§9) surface as a
-    small &quot;pending uploads&quot; list whose entries are <em>individually discardable</em> — this is the
-    only offline release valve when intake backpressure hits (§8), so it's a required capture surface, not
-    merely a &quot;bytes pending here&quot; indicator.</li>
+  <li><strong>Pending-attachments affordance.</strong> The per-device up-lane records (§9) — both
+    <code>pending</code> and <code>failed</code> — surface as a small &quot;pending uploads&quot; list whose
+    entries are <em>individually discardable</em> — this is the only offline release valve when intake
+    backpressure hits (§8), so it's a required capture surface, not merely a &quot;bytes pending here&quot;
+    indicator. Discard drops the record but content-refcount-gates the byte delete (§8/§9), so abandoning one
+    embed of a deduped object can't strip a co-referencing live block's bytes.</li>
   <li><strong>On capture:</strong> client-side mime/size guard → hash → create the asset block at a
     <strong>deterministic, content-derived id</strong> (<code>media:&lt;content-key&gt;</code> — the keyed
     hash for E2EE, raw <code>sha256</code> for plaintext, workspace-scoped, exactly like the storage path
@@ -1422,7 +1450,11 @@ vNext; the v1 commitment is only the reserved property + audience flag.
       poisoner (who re-occupies the freed path), so a member can permanently DoS a known asset — and
       workspace-wide dedup makes that break every embed of it at once (§10.1). Members are inside the
       content-correctness trust boundary, and the server-side
-      &quot;verify body matches path&quot; defense is foreclosed (the guard has no key).</td></tr>
+      &quot;verify body matches path&quot; defense is foreclosed (the guard has no key). It stays a
+      <em>broken image, never data loss</em>: the honest uploader's bytes are un-uploaded, so their up-lane
+      record lands in <code>failed</code> which <strong>keeps the exempt bytes</strong> (§9) — and re-arms to
+      finish the upload the instant the poisoned path is freed, so the asset self-heals rather than being
+      lost.</td></tr>
 <tr><td>Concurrent offline replace of one embed</td>
     <td>Two devices replacing the same image offline each mint a new immutable asset block; on reconnect
       the embed pointer (plain block content) resolves last-writer-wins, so one replacement is silently

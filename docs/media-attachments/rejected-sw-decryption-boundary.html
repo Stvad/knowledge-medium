@@ -311,7 +311,10 @@ state</strong> — for E2EE, treat the workspace's WK being absent from IndexedD
 than serve). There is no in-app lock action racing the SW (destruction is the coarse clear, §7.2), so
 WK-absence is an eventually-consistent signal, made robust by the TTL revalidation below; it also
 doesn't gate plaintext-workspace cached bytes, so neither check stands alone — the revoke/leave purge +
-the TTL revalidation are the real defense. Note the cross-account case is the subtle one (§16): the
+the TTL revalidation are the real defense. <em>(Superseded — see the membership-revocation box below: the
+chosen design drops the per-render TTL revalidation in favor of a one-shot purge fired off the block-row
+claw-back; the &quot;cached hit is not an independent authority&quot; reasoning still holds.)</em> Note the
+cross-account case is the subtle one (§16): the
 cache namespace isolates <em>reads</em>, while the per-client session keying is what isolates the
 <em>fetch token</em>.
 </div>
