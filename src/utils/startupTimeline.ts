@@ -107,7 +107,10 @@ export const startStartupObservers = (): void => {
           advanced = true
         }
       }
-      if (advanced) for (const cb of longTaskSubscribers) cb()
+      // A throwing subscriber must not break the observer or its peers.
+      if (advanced) for (const cb of longTaskSubscribers) {
+        try { cb() } catch { /* best-effort notification */ }
+      }
     })
     longTaskObserver.observe({ type: 'longtask', buffered: true })
   } catch {
