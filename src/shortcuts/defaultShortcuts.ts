@@ -209,6 +209,8 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     copyBlock,
     copyBlockRef,
     copyBlockEmbed,
+    copyBlockContent,
+    copyBlockLink,
   } = createSharedBlockActions({repo})
 
   const indentBlockAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, indentBlock)
@@ -235,6 +237,8 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   const copyBlockAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, copyBlock)
   const copyBlockRefAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, copyBlockRef)
   const copyBlockEmbedAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, copyBlockEmbed)
+  const copyBlockContentAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, copyBlockContent)
+  const copyBlockLinkAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, copyBlockLink)
 
   // Block-bound actions that operate on the focused/edited block in a
   // panel. Declared as BlockActions and bound below to both NORMAL_MODE
@@ -325,6 +329,8 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     copyBlockAction,
     copyBlockRefAction,
     copyBlockEmbedAction,
+    copyBlockContentAction,
+    copyBlockLinkAction,
   ]
 
   // CodeMirror versions of move actions

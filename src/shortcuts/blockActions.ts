@@ -1,8 +1,9 @@
-import { ChevronsDownUp, ClipboardCopy, Copy, Link2, SlidersHorizontal, Trash2 } from 'lucide-react'
+import { ChevronsDownUp, ClipboardCopy, Copy, Link, Link2, SlidersHorizontal, Text, Trash2 } from 'lucide-react'
 import { Block } from '../data/block'
 import { Repo } from '../data/repo'
 import { resetBlockSelection } from '@/data/stateBlocks.js'
 import { copyBlockToClipboard } from '@/utils/copy.js'
+import { buildLayout } from '@/utils/routing.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
 import {
   editorSelection,
@@ -55,6 +56,8 @@ export interface SharedBlockActions {
   copyBlock: BlockAction
   copyBlockRef: BlockAction
   copyBlockEmbed: BlockAction
+  copyBlockContent: BlockAction
+  copyBlockLink: BlockAction
 }
 
 export const bindBlockActionContext = <T extends ActionContextType>(
@@ -351,6 +354,42 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     },
   }
 
+  const copyBlockContent: BlockAction = {
+    id: 'copy_block_content',
+    description: 'Copy block text only',
+    icon: Text,
+    // `y c` ("yank content") — just this block's own text, WITHOUT its
+    // subtree. `y y` (copy_block) serializes the whole subtree as
+    // indented markdown; this is the single-line counterpart.
+    handler: async ({block}: BlockShortcutDependencies) => {
+      const data = block.peek() ?? await block.load()
+      writeToClipboard(data?.content ?? '')
+    },
+    defaultBinding: {
+      keys: 'y c',
+    },
+  }
+
+  const copyBlockLink: BlockAction = {
+    id: 'copy_block_link',
+    description: 'Copy link to block',
+    icon: Link,
+    // `y l` ("yank link") — an in-app URL that opens this block. Built from
+    // the live hash-routing scheme (`#<workspaceId>/<blockId>`, see
+    // utils/routing). origin+pathname only: drops the current query string
+    // and old hash so the copied link never carries the agent-runtime
+    // pairing secret that can ride along in the hash.
+    handler: ({block}: BlockShortcutDependencies) => {
+      const workspaceId = repo.activeWorkspaceId
+      if (!workspaceId || typeof window === 'undefined') return
+      const base = `${window.location.origin}${window.location.pathname}`
+      writeToClipboard(`${base}${buildLayout(workspaceId, [block.id])}`)
+    },
+    defaultBinding: {
+      keys: 'y l',
+    },
+  }
+
   const extendSelectionUpAction: BlockAction = {
     id: 'extend_selection_up',
     description: 'Extend selection up',
@@ -390,5 +429,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     copyBlock,
     copyBlockRef,
     copyBlockEmbed,
+    copyBlockContent,
+    copyBlockLink,
   }
 }
