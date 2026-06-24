@@ -829,10 +829,12 @@ so it can't strip a co-referencing block's bytes or strand its route to the serv
   RLS-gated <code>GET</code> of the content path</strong> (reads are direct, §8 — it streams no body) and
   branches on what's there: object <strong>absent</strong> → the path is free, drain normally → clears;
   <strong>present and hash-verifies</strong> → another device already materialized it → delete the record,
-  no upload → clears (the bytes are now eviction-eligible like any replicated bytes; should the server object
+  no upload → clears (the bytes are now eviction-eligible like any replicated bytes — note this drops the
+  durability floor for this content from &quot;a guaranteed un-evictable copy&quot; to the same best-effort
+  every replicated byte has, since no device is now obligated to keep an exempt copy; should the server object
   later be removed — an active poisoner / writer-delete — this degrades to the §9 &quot;synced block outlives
-  its bytes&quot; backstop, a broken image recoverable from any device still holding the bytes, not a new
-  silent-loss path); <strong>present but hash-mismatches</strong> → still poisoned → stays
+  its bytes&quot; backstop, a shown-as-unavailable broken image recoverable only while some replica survives,
+  never a silent loss); <strong>present but hash-mismatches</strong> → still poisoned → stays
   <code>failed</code>. This
   covers both causes without conflating them — a <em>poisoned</em> path heals when the probe finds it free or
   materialized; a <em>shape-rejected</em> body (a stale / buggy client) heals only once the client is fixed,
@@ -893,7 +895,8 @@ so it can't strip a co-referencing block's bytes or strand its route to the serv
 
 <div class="info">
 <strong>Cross-tab execution: the background lanes are single-owner; capture is per-tab.</strong> The
-<em>background</em> work — the down-lane replicator, the up-lane drain, and the boot reconciler — runs under
+<em>background</em> work — the down-lane replicator, the up-lane drain (<em>and its periodic
+re-attempt sweep</em> for <code>failed</code> records, §9), and the boot reconciler — runs under
 one tab elected by a <strong>Web Lock</strong> (<code>navigator.locks.request</code>, §8), so multiple open
 tabs don't multiply egress or redundantly re-PUT (the lock hands off automatically when that tab closes; no
 SharedWorker required). <em>Capture</em> stays per-tab: any tab can paste, staging its byte record and
@@ -1171,7 +1174,11 @@ acceptable for the guarantee, and reads stay direct/RLS-gated (the hot path). La
     backpressure hits (§8), so it's a required capture surface, not merely a &quot;bytes pending here&quot;
     indicator. Discard is content-refcount-gated (§8/§9/§16) — record and bytes both go only as the last
     reference — so discarding one media block's record can't strip a co-referencing block's bytes or strand
-    its upload.</li>
+    its upload. When a discard reclaims nothing because the content is still shared (the rare copy/import
+    case), the affordance must <em>say so</em> and point at the co-carrier — a silent no-op would leave a
+    user under intake backpressure with no model for why the space didn't free. (This differs from the §9
+    boot-reconciler reap, which drops a record whose <em>own</em> block is absent-past-checkpoint while
+    keeping shared bytes — different antecedent, same content-refcount gate.)</li>
   <li><strong>On capture:</strong> client-side mime/size guard → hash → create the asset block at a
     <strong>deterministic, content-derived id</strong> (<code>media:&lt;content-key&gt;</code> — the keyed
     hash for E2EE, raw <code>sha256</code> for plaintext, workspace-scoped, exactly like the storage path
